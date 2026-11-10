@@ -255,6 +255,48 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     }
   });
 
+  it('refuses an internal .. instead of letting express.static normalise it away', async () => {
+    for (const route of [
+      // Each normalises inside express.static to a refused file below the root.
+      `/pkg/${manifest.buildId}/../../ui-build-manifest.json`,
+      '/pkg/%2e%2e/ui-build-manifest.json',
+      '/pkg/%2E%2E/ui-build-manifest.json',
+      `/index.html/../${manifest.wasm.path}.br`,
+      `/index.html/../${manifest.wasm.path}.gz`,
+      // Backslash separators (review 622ba7d0 F3): send normalises them like slashes on a
+      // Windows host and would serve the file; everywhere these answer 404, never a redirect.
+      '/pkg%5C..%5Cui-build-manifest.json',
+      `/index.html%5C..%5C${manifest.wasm.path.replace(/\//g, '%5C')}.br`,
+    ]) {
+      const response = await raw('GET', route, { 'Accept-Encoding': 'br, gzip' });
+      expect([route, response.status]).toEqual([route, 404]);
+      expect(response.headers['content-encoding']).toBeUndefined();
+      expect(response.body.toString()).not.toMatch(/8fb5e3de|buildId/);
+      expect(response.body.equals(variant('br'))).toBe(false);
+      expect(response.body.equals(variant('gzip'))).toBe(false);
+    }
+  });
+
+  it('refuses a trailing /. that normalises to a refused file (review 622ba7d0 F2)', async () => {
+    for (const route of [
+      // express.static folds these to the addressed .br/.gz file and serves the encoded bytes.
+      `${wasmUrl()}.br/.`,
+      `${wasmUrl()}.gz/.`,
+      `${wasmUrl()}.br%2f.`,
+      `${wasmUrl()}.gz%2F%2E`,
+      // The manifest refusal already normalised; these stay refused.
+      '/ui-build-manifest.json/.',
+      '/./ui-build-manifest.json',
+    ]) {
+      const response = await raw('GET', route, { 'Accept-Encoding': 'br, gzip' });
+      expect([route, response.status]).toEqual([route, 404]);
+      expect(response.headers['content-encoding']).toBeUndefined();
+      expect(response.body.equals(variant('br'))).toBe(false);
+      expect(response.body.equals(variant('gzip'))).toBe(false);
+      expect(response.body.toString()).not.toMatch(/8fb5e3de|buildId/);
+    }
+  });
+
   it('disables a tampered variant at startup and serves identity instead', async () => {
     await stop();
     const brFile = path.join(staticDir, `${manifest.wasm.path}.br`);

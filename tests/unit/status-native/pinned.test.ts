@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { nativeStatusModuleName } from '../../../src/status-native/native-loader';
-import { readPinnedThreads } from '../../../src/status-native/pinned';
+import { mergePins, readPinnedThreads } from '../../../src/status-native/pinned';
 
 /** The module `bun run status:build` leaves behind; the fixture tests need the real reader. */
 const PREBUILT = path.join(
@@ -70,6 +70,57 @@ describe('pinned threads through the native module', () => {
       },
     });
     expect(thrown).toEqual({ unavailable: "T3's state file could not be read" });
+  });
+
+  it('a null pinOrderKey is a pin without a key, never an unreadable answer', async () => {
+    // A pinned row with no pinOrderKey (pinned.ts accepts `null`, the row sorts after every
+    // keyed pin) passes both wrappers' shape checks: the read hands it through, and the
+    // merge keeps it beside keyed rows, each tagged with its machine.
+    const keyed = {
+      id: 'keyed',
+      title: 'Keyed',
+      pinnedAt: '2026-11-08T10:00:00Z',
+      pinOrderKey: 'a',
+    };
+    const noKey = { id: 'no-key', title: 'No key', pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: null };
+    const read = await readPinnedThreads({
+      handle: {
+        call: async () => JSON.stringify({ pinned: [keyed, noKey] }),
+      },
+    });
+    expect(read).toEqual({ pinned: [keyed, noKey] });
+
+    const merged = await mergePins(
+      [
+        { machine: 'vm', pinned: [keyed] },
+        { machine: 'mac', pinned: [noKey] },
+      ],
+      {
+        handle: {
+          call: async (method, args) => {
+            expect(method).toBe('mergePins');
+            expect(JSON.parse(args)).toEqual({
+              lists: [
+                { machine: 'vm', pinned: [keyed] },
+                { machine: 'mac', pinned: [noKey] },
+              ],
+            });
+            return JSON.stringify({
+              pinned: [
+                { ...keyed, machine: 'vm' },
+                { ...noKey, machine: 'mac' },
+              ],
+            });
+          },
+        },
+      }
+    );
+    expect(merged).toEqual({
+      pinned: [
+        { ...keyed, machine: 'vm' },
+        { ...noKey, machine: 'mac' },
+      ],
+    });
   });
 
   withModule('reads the pinned top-level threads from a fixture database, in pin order', async () => {

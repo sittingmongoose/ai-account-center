@@ -247,7 +247,7 @@ impl Engine {
                     _ => "redb_unreadable",
                 };
                 quarantine(dir, &db_path, reason)?;
-                findings.push(finding("redb_quarantined", &e.to_string()));
+                findings.push(finding("", "redb_quarantined", &e.to_string()));
                 create_database(dir, &config)?;
                 open_database(&db_path, &config).map_err(|e| Error::new("db_unavailable", e.to_string()))?
             }
@@ -285,7 +285,11 @@ impl Engine {
             };
             let clean = db::get_meta(&txn, "clean_shutdown")?;
             if clean.as_deref() == Some("false") {
-                findings.push(finding("unclean_shutdown", "the previous run did not close the store"));
+                findings.push(finding(
+                    "",
+                    "unclean_shutdown",
+                    "the previous run did not close the store",
+                ));
             }
             db::set_meta(&txn, "clean_shutdown", "false")?;
             txn.commit()?;
@@ -468,6 +472,7 @@ impl Engine {
                     start = start.min(damaged.max(lower));
                 }
                 findings.push(Finding {
+                    log: log_id.name().into(),
                     kind: kind.into(),
                     detail,
                     start_seq: Some(start.clamp(lower, end)),
@@ -518,7 +523,7 @@ impl Engine {
                     for log in LogId::ALL {
                         table.remove(Self::checkpoint_name(projector.as_ref(), log).as_str())?;
                     }
-                    findings.push(finding("projector_rebuilt", projector.name()));
+                    findings.push(finding("", "projector_rebuilt", projector.name()));
                 }
             }
             db::create_tables(&txn)?;
@@ -761,7 +766,7 @@ impl Engine {
                     .findings
                     .lock()
                     .unwrap()
-                    .push(finding("compress_failed", &e.message)),
+                    .push(finding(id.name(), "compress_failed", &e.message)),
             }
         }
         Ok(json!({ "compressed": compressed }))
@@ -776,8 +781,24 @@ impl Engine {
                 found.append(&mut logs.get(id).verify_sealed()?);
             }
         }
-        if !found.is_empty() {
-            let events = found.clone();
+        // Log each detection once, keyed by log, kind and bounds: a loss already in findings
+        // must stay disclosed but must not be re-ledgered by its first verification, while a
+        // different log's loss at the same bounds still gets its own event.
+        let known: Vec<String> = self
+            .findings
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|f| is_loss(&f.kind))
+            .map(finding_key)
+            .collect();
+        let fresh: Vec<Finding> = found
+            .iter()
+            .filter(|f| !known.contains(&finding_key(f)))
+            .cloned()
+            .collect();
+        if !fresh.is_empty() {
+            let events = fresh.clone();
             self.commit(LogId::Ledger, |batch| {
                 for f in &events {
                     batch.push(Event::new(
@@ -788,7 +809,7 @@ impl Engine {
                 }
                 Ok(())
             })?;
-            self.findings.lock().unwrap().extend(found.iter().cloned());
+            merge_findings(&mut self.findings.lock().unwrap(), fresh);
         }
         self.set_meta("last_verify_ms", &now_ms().to_string())?;
         // A later check must still disclose previously detected loss.
@@ -1054,8 +1075,9 @@ pub fn is_loss(kind: &str) -> bool {
     kind.contains("degraded") || kind.contains("missing") || kind == "segment_unreadable"
 }
 
-pub fn finding(kind: &str, detail: &str) -> Finding {
+pub fn finding(log: &str, kind: &str, detail: &str) -> Finding {
     Finding {
+        log: log.into(),
         kind: kind.into(),
         detail: detail.into(),
         start_seq: None,
@@ -1063,9 +1085,17 @@ pub fn finding(kind: &str, detail: &str) -> Finding {
     }
 }
 
-/// The key a finding is kept under: one entry per kind and range.
+/// The key a finding is kept under: one entry per log, kind and range. The log is part of the
+/// identity because readings and ledger number their sequences independently: a readings loss
+/// and a ledger loss can share bounds and must stay separate disclosures.
 fn finding_key(f: &Finding) -> String {
-    format!("{}:{}:{}", f.kind, f.start_seq.unwrap_or(0), f.end_seq.unwrap_or(0))
+    format!(
+        "{}:{}:{}:{}",
+        f.log,
+        f.kind,
+        f.start_seq.unwrap_or(0),
+        f.end_seq.unwrap_or(0)
+    )
 }
 
 /// Keeps a disclosed finding in redb, in the projection's own transaction. `ledgered` says the
@@ -1098,9 +1128,11 @@ fn kept_findings(db: &Database) -> Result<Vec<(Finding, bool)>> {
     Ok(out)
 }
 
-/// A finding read back from the ledger or from redb.
+/// A finding read back from the ledger or from redb. Findings persisted before the log identity
+/// was kept read back with an empty log, which keys apart from every named log's findings.
 pub fn finding_from_json(v: &Json) -> Finding {
     Finding {
+        log: v["log"].as_str().unwrap_or_default().to_string(),
         kind: v["kind"].as_str().unwrap_or_default().to_string(),
         detail: v["detail"].as_str().unwrap_or_default().to_string(),
         start_seq: v["start_seq"].as_u64(),

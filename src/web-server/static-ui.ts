@@ -247,10 +247,28 @@ function relativeUiPath(root: string, requestPath: string): string | null {
     return null;
   }
   if (decoded.includes('\0') || decoded.includes('\\')) return null;
-  if (decoded.split('/').some((segment) => segment === '..')) return null;
+  if (hasParentSegment(decoded)) return null;
   const relative = decoded.replace(/^\/+/, '');
   if (relative && !isInside(root, path.resolve(root, relative))) return null;
   return relative;
+}
+
+/**
+ * Whether a request path holds a `..` segment once decoded. `express.static` normalises
+ * such a path to whatever it points at inside the UI folder, so serving must refuse it
+ * before that: the deny rules (.br/.gz, the build manifest) would otherwise never see
+ * the normalised path they are meant to judge.
+ */
+export function hasParentSegment(requestPath: string): boolean {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(requestPath);
+  } catch {
+    return false;
+  }
+  // Both separators: on a Windows host send normalises a backslash path the same way, so a
+  // %5C-encoded '..' must be refused there too, not only the slash form (review 622ba7d0 F3).
+  return decoded.split(/[\\/]/).some((segment) => segment === '..');
 }
 
 /**
@@ -262,9 +280,10 @@ function relativeUiPath(root: string, requestPath: string): string | null {
 export function isStaticUiFileRequest(root: string, requestPath: string): boolean {
   const relative = relativeUiPath(root, requestPath);
   if (!relative) return false;
-  const lower = relative.toLowerCase();
-  if (lower.endsWith('.br') || lower.endsWith('.gz') || UNSERVED.has(path.posix.normalize(lower)))
-    return false;
+  // The denied names are judged on the normalised path: a trailing `/.` or `/.`-in-disguise
+  // segment normalises to the refused file inside express.static, so it is refused here too.
+  const denied = path.posix.normalize(relative.toLowerCase());
+  if (denied.endsWith('.br') || denied.endsWith('.gz') || UNSERVED.has(denied)) return false;
   try {
     return fs.statSync(path.resolve(root, relative)).isFile();
   } catch {
@@ -355,8 +374,9 @@ function withoutVariantHeaders(res: Response): void {
 
 /**
  * Mounted before express.static. GET and HEAD only; .br/.gz and the build
- * manifest are never addressed directly; paths with a listed variant are
- * negotiated, the rest fall through.
+ * manifest are never addressed directly, and a path with an internal `..`
+ * segment is refused here rather than left for express.static to normalise;
+ * paths with a listed variant are negotiated, the rest fall through.
  */
 export function precompressedStatic(ui: StaticUi): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -366,16 +386,20 @@ export function precompressedStatic(ui: StaticUi): RequestHandler {
     }
     const relative = relativeUiPath(ui.root, req.path);
     if (relative === null) {
+      // Only the paths express.static would normalise into a served file are
+      // refused here; the others (undecodable, outside the root) keep falling
+      // through as before.
+      if (hasParentSegment(req.path)) {
+        res.status(404).json({ error: 'Not found.' });
+        return;
+      }
       next();
       return;
     }
-    const lower = relative.toLowerCase();
-    // `./` segments are folded first, so `/./ui-build-manifest.json` is refused too.
-    if (
-      lower.endsWith('.br') ||
-      lower.endsWith('.gz') ||
-      UNSERVED.has(path.posix.normalize(lower))
-    ) {
+    // The denied names are judged on the normalised path: `./` segments fold, and a trailing
+    // `/.` (raw or encoded) would otherwise normalise to the refused file inside express.static.
+    const denied = path.posix.normalize(relative.toLowerCase());
+    if (denied.endsWith('.br') || denied.endsWith('.gz') || UNSERVED.has(denied)) {
       res.status(404).json({ error: 'Not found.' });
       return;
     }
