@@ -370,14 +370,14 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
 });
 
 describe('the Leptos pages', () => {
-  it('answers /app/status and /app/scoreboard with app/index.html once a build has them', async () => {
+  it('answers the app frame\'s five /app pages with app/index.html once a build has them', async () => {
     const entry = path.join(staticDir, 'app', 'index.html');
     const page =
       '<!doctype html><title>AI Account Center</title><script type="module">/* leptos */</script>';
     fs.mkdirSync(path.dirname(entry), { recursive: true });
     fs.writeFileSync(entry, page);
     try {
-      for (const route of ['/app/status', '/app/scoreboard']) {
+      for (const route of ['/app/home', '/app/analytics', '/app/accounts', '/app/status', '/app/scoreboard']) {
         const response = await raw('GET', route);
         expect(response.status).toBe(200);
         expect(response.body.toString()).toBe(page);

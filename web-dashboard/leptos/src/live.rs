@@ -4,9 +4,10 @@
 //! failed read keeps the last good view on screen, marked as old; nothing is ever shown as live after a failure.
 
 use crate::api::{FetchError, StatusView, fetch_status};
+use crate::owned;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 use wasm_bindgen::JsCast;
@@ -32,12 +33,17 @@ impl Live {
 
     pub fn reload(&self) {
         let live = *self;
-        if live.loading.get_untracked() {
+        // A page the frame has unmounted (at sign-out) reads nothing: its signals are gone.
+        if live.loading.try_get_untracked().unwrap_or(true) {
             return;
         }
         live.loading.set(true);
         spawn_local(async move {
-            match fetch_status().await {
+            let result = fetch_status().await;
+            if live.loading.try_get_untracked().is_none() {
+                return;
+            }
+            match result {
                 Ok(view) => {
                     let now = js_sys::Date::now();
                     live.view.set(Some(view));
@@ -59,7 +65,7 @@ impl Live {
 }
 
 fn visible() -> bool {
-    crate::on_screen()
+    crate::page_on_screen(crate::Page::Status)
 }
 
 pub fn start() -> Live {
@@ -102,33 +108,39 @@ pub fn start() -> Live {
         Duration::from_secs(5),
     );
 
-    // Coming back to the page reads at once.
-    let on_visible = Closure::<dyn Fn()>::new(move || {
+    // Coming back to the page reads at once. These, and the hint socket, stop with the page (owned.rs).
+    owned::listen(&document(), "visibilitychange", move || {
         if visible() {
             live.reload();
         }
     });
-    let _ = document()
-        .add_event_listener_with_callback("visibilitychange", on_visible.as_ref().unchecked_ref());
-    on_visible.forget();
 
     // Shown again by the shell, or back online: read at once.
     for event in [crate::SHOWN_EVENT, "online"] {
-        let again = Closure::<dyn Fn()>::new(move || {
+        owned::listen(&window(), event, move || {
             if visible() {
                 live.reload();
             }
         });
-        let _ = window().add_event_listener_with_callback(event, again.as_ref().unchecked_ref());
-        again.forget();
     }
 
-    connect_hints(live, 1_000);
+    let socket: Rc<RefCell<Option<web_sys::WebSocket>>> = Rc::new(RefCell::new(None));
+    connect_hints(live, socket.clone(), 1_000);
+    owned::on_owner_cleanup(move || {
+        if let Some(socket) = socket.borrow_mut().take() {
+            socket.set_onclose(None);
+            let _ = socket.close();
+        }
+    });
     live
 }
 
-/// The /ws socket only carries hints ("re-read the API"); it reconnects with a growing delay, up to a minute.
-fn connect_hints(live: Live, delay_ms: u32) {
+/// The /ws socket only carries hints ("re-read the API"); it reconnects with a growing delay, up to a minute, while
+/// the page lasts. `slot` holds the current socket so the page's cleanup can close it.
+fn connect_hints(live: Live, slot: Rc<RefCell<Option<web_sys::WebSocket>>>, delay_ms: u32) {
+    if live.loading.try_get_untracked().is_none() {
+        return;
+    }
     let location = window().location();
     let scheme = if location.protocol().unwrap_or_default() == "https:" {
         "wss"
@@ -161,13 +173,16 @@ fn connect_hints(live: Live, delay_ms: u32) {
     socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
     on_open.forget();
 
+    let again = slot.clone();
     let on_close = Closure::<dyn Fn()>::new(move || {
         let next = (delay_ms * 2).min(60_000);
+        let again = again.clone();
         let _ = set_timeout(
-            move || connect_hints(live, next),
+            move || connect_hints(live, again, next),
             Duration::from_millis(delay_ms as u64),
         );
     });
     socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
     on_close.forget();
+    *slot.borrow_mut() = Some(socket);
 }

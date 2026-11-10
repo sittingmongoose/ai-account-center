@@ -1,4 +1,4 @@
-import init, { start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_theme_ready, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, report_content_area, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
+import init, { set_content_only, start_dashboard, resize_dashboard, set_dashboard, set_chrome, set_auth, set_busy, set_theme_mode, set_system_dark, set_theme_ready, set_reduced_motion, set_safe_area, set_input_profile, set_keyboard, set_online, pop_overlay, push_toast, show_details, close_details, set_update_status, show_activation_confirmation, close_activation_confirmation, set_analytics, set_analytics_loading, set_analytics_head, set_analytics_trend_paths, set_current_page, report_content_area, set_refresh_interval, set_accounts, set_signin_strength, set_accounts_strength, set_login_fields, set_login_setup, set_login_pointer, probe_tick } from './pkg/ccs_account_dashboard.js';
 import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel, isCatalogPending } from './view-model.mjs';
 import { needToasts } from './claude-signins.mjs';
 import { accountsViewModel, transportOf, transportNote } from './accounts-view.mjs';
@@ -76,6 +76,26 @@ if (e2e) {
   globalThis.__aacProbe = probeRects;
   globalThis.__aacProbeNow = () => { probeRects.clear(); try { probe_tick(); } catch {} };
 }
+/**
+ * The app frame (PLAN step 4, web-dashboard/leptos/src/frame.rs) shows this dashboard in its iframe for Home,
+ * Analytics and Accounts (`/?content=1`). The frame draws the header, tab bar, sign-in and toasts; this draws its pages
+ * only and talks to the frame by postMessage: it runs the frame's actions (navigate, refresh, update-apps, theme,
+ * logout, auth-recheck) as its own, and tells the frame its page, toasts, header line and sign-in state.
+ */
+const contentMode = (() => {
+  try {
+    return /[?&]content=1(&|$)/.test(location.search) && globalThis.top !== globalThis.self && globalThis.parent?.__aacFrame === true;
+  } catch { return false; }
+})();
+const FRAME_ACTIONS = new Set(['navigate', 'refresh', 'update-apps', 'theme', 'logout', 'auth-recheck']);
+/** Why the last session ended (ended, expired, revoked), for the app frame's sign-in page. */
+let endedWith = '';
+/** The ids of the app frame's commands this page has run (each runs once in this page's life). */
+const frameCommandsRun = new Set();
+function tellFrame(kind, fields = {}) {
+  if (!contentMode) return;
+  try { globalThis.parent.postMessage({ ...fields, type: 'aac-content', kind }, origin); } catch {}
+}
 /** URL state: the page routes /, /analytics and /accounts (page-route.mjs); ?view= still works as an alias. */
 function pageFromLocation() { return pageFromUrl(location.pathname, location.search); }
 let currentPage = pageFromLocation();
@@ -97,6 +117,8 @@ function setBusy(value) { busy = value; set_busy(value); }
 /** Results and failures appear as toasts on any page, never buried at the bottom. */
 function toast(kind, title, body = '', ms = 4800) {
   if (e2e) (globalThis.__aacToasts ||= []).push({ kind, title, body });
+  // inside the app frame the frame shows toasts, over every tab
+  if (contentMode) { tellFrame('toast', { toastKind: kind, title, body, ms }); return; }
   push_toast(kind, title, body, ms);
 }
 function failure(message, title = 'That did not work') { toast('err', title, message, 6400); }
@@ -142,6 +164,10 @@ function auth(signedIn, state, extra = {}) {
   // sign-in pauses (signin.slint forgets the typed password in the limited state).
   if (signedIn || state === 'limited') { try { loginBridge?.clearPassword(); } catch {} }
   set_auth(signedIn, JSON.stringify(view));
+  // The frame shows its own sign-in. An ended session goes with this page's reason: the time it was last seen is
+  // already forgotten (sessionEnded), so the frame could not work it out again.
+  tellFrame('auth', { signedIn, state, ...(state === 'expired' && endedWith ? { reason: endedWith } : {}) });
+  if (signedIn) endedWith = '';
   syncThemeColor();
   // the Status and Scoreboard iframes live only while signed in (shell-frame.mjs)
   shellFrames?.setSignedIn(signedIn);
@@ -311,6 +337,7 @@ function renderChrome(isRefreshing = false) {
     // 4.6: the connection dropped; the readings stay on screen and the status line says so
     if (!onlineState && !isRefreshing && chrome.statusLead === 'Updated') chrome.statusLead = 'Offline';
     pushModel('chrome', JSON.stringify(chrome), set_chrome);
+    tellFrame('chrome', { statusLead: chrome.statusLead, statusStrong: chrome.statusStrong, statusMore: chrome.statusMore });
   }
 }
 function renderDetails(id) {
@@ -740,6 +767,8 @@ async function updateStatus() {
 }
 function navigate(page, { replace = false } = {}) {
   if (!PAGES.includes(page)) page = 'home';
+  // Status and Scoreboard are the app frame's own tabs; the frame moves there.
+  if (contentMode && (page === 'status' || page === 'scoreboard')) { tellFrame('page', { page }); return; }
   const wasHome = currentPage === 'home';
   currentPage = page;
   set_current_page(page);
@@ -749,7 +778,9 @@ function navigate(page, { replace = false } = {}) {
   // Back/history (3.9): Home to another page pushes one entry; between non-Home pages, and back
   // to Home, it replaces, so Back from Analytics or Accounts goes Home and Back from Home leaves.
   const method = replace || !wasHome || page === 'home' ? 'replaceState' : 'pushState';
-  try { globalThis.history?.[method]?.(null, '', url); } catch {}
+  // Inside the app frame the frame owns the address and Back: this page keeps its own address in place.
+  if (contentMode) { try { globalThis.history?.replaceState?.(null, '', `${url}?content=1`); } catch {} tellFrame('page', { page }); }
+  else try { globalThis.history?.[method]?.(null, '', url); } catch {}
   shellFrames?.setPage(page);
   askContentArea();
   if (page === 'analytics' && authenticated) enterAnalytics();
@@ -790,6 +821,7 @@ function showSignedOut(state, extra) {
 }
 /** The server no longer knows this browser's session: say whether it ran out, ended early or was revoked. */
 function sessionEnded(reason = endedReason(lastSeenAt(globalThis.localStorage), sessionHours) || 'ended') {
+  endedWith = reason;
   forgetSignIn(globalThis.localStorage);
   claudeOpen.reset();
   accounts.reset();
@@ -1370,9 +1402,28 @@ try {
   // The stored theme and the system scheme go in with the start: the first frame is drawn in them.
   const startDark = typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches === true;
   startSlintDashboard(() => start_dashboard(initialVp.width, initialVp.height, devicePixelRatio, THEMES[storedTheme()], startDark));
+  if (contentMode) {
+    set_content_only(true);
+    addEventListener('message', (event) => {
+      if (event.origin !== origin || event.source !== globalThis.parent) return;
+      const message = event.data;
+      if (!message || message.type !== 'aac-frame' || !FRAME_ACTIONS.has(message.action)) return;
+      // The frame holds each command until this page has started and signed in, and keeps it until this answer, so a
+      // command is never lost to a page that was still loading. A command id this page has already run is only
+      // answered again, never run twice.
+      const id = Number.isSafeInteger(message.id) ? message.id : null;
+      if (id !== null && frameCommandsRun.has(id)) { tellFrame('done', { id }); return; }
+      if (id !== null) frameCommandsRun.add(id);
+      void Promise.resolve()
+        .then(() => window.ccsDashboardAction(message.action, typeof message.value === 'string' ? message.value : ''))
+        .catch(() => {})
+        .finally(() => { if (id !== null) tellFrame('done', { id }); });
+    });
+  }
   // The login form's real HTML inputs lie over the Slint fields (login-bridge.mjs): what is typed or filled lands
   // in the Slint fields too, their focus and hover reach the Slint boxes, and a submit runs the same login as Sign in.
-  try {
+  // Inside the app frame the frame's own form signs in; the login inputs and the Status iframes are its too.
+  if (!contentMode) try {
     loginBridge = installLoginBridge({
       document,
       canvas: document.querySelector('#canvas'),
@@ -1393,7 +1444,7 @@ try {
       onPointer: ({ focus, hover }) => { try { set_login_pointer(focus, hover); } catch {} },
     });
   } catch {}
-  try {
+  if (!contentMode) try {
     shellFrames = createShellFrames({
       doc: document, win: window, origin,
       onNavigate: page => { if (authenticated && PAGES.includes(page)) navigate(page); },
@@ -1452,6 +1503,7 @@ try {
   const headless = /HeadlessChrome/.test(navigator.userAgent) && !/[?&]motion\b/.test(location.search);
   watchMedia('(prefers-reduced-motion: reduce)', reduced => { motionReduced = reduced || headless; set_reduced_motion(motionReduced); });
   document.querySelector('#loading').hidden = true;
+  tellFrame('ready');
   auth(false, 'loading');
   await checkSession({ setup: earlySetup, check: earlyCheck });
   applyRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);

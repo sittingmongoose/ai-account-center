@@ -33,6 +33,14 @@ export const tests = {
 	async 'scoreboard without the by-model view'(t) {
 		await t.viewport(1440, 900);
 		await t.app.signIn();
+		// The server's own answer without `byModel`: a server whose aac-status native module is built sends it
+		// (scoreboard-service.ts), one without the module does not, and this is the page's word for the second.
+		await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', async (r) => {
+			const response = await r.fetch();
+			const json = await response.json();
+			delete json.byModel;
+			await r.fulfill({ response, json });
+		});
 		await t.goto('/app/scoreboard', { settleMs: 300 });
 		await t.page.waitForSelector('.sb-unavail');
 		await t.text('.sb-unavail', /isn't available from this server yet/);

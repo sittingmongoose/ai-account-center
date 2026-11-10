@@ -996,3 +996,62 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .plan-change > p { overflow-wrap: anywhere; }
 .pc-label { display: block; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ==========================================================================
+   The app frame (PLAN step 4): tabs, the dashboard's content host, toasts, the account menu, sign-in
+   ========================================================================== */
+[hidden] { display: none !important; }
+.upd-btn { cursor: pointer; }
+.brand { text-decoration: none; }
+/* Home, Analytics and Accounts: the dashboard scrolls inside its own frame, so the page is exactly one screen tall. */
+.shell.slint-route { height: 100dvh; min-height: 0; }
+.shell.slint-route .content { min-height: 0; overflow: hidden; }
+.slint-host { height: 100%; }
+.slint-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--bg); }
+
+.toasts { position: fixed; z-index: 60; top: 72px; right: calc(16px + var(--safe-right)); width: min(380px, calc(100vw - 32px)); display: grid; gap: 8px; pointer-events: none; }
+:root[data-chrome='phone'] .toasts, :root[data-chrome='band'] .toasts { top: calc(var(--safe-top) + 56px); left: calc(12px + var(--safe-left)); right: calc(12px + var(--safe-right)); width: auto; }
+:root[data-chrome='rail'] .toasts { top: 12px; right: calc(var(--safe-right) + 12px); }
+.toast { pointer-events: auto; display: flex; gap: 10px; align-items: flex-start; padding: 10px 8px 10px 14px; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); font-size: 13px; }
+.toast-text { flex: 1 1 0; min-width: 0; display: grid; gap: 2px; }
+.toast-text span { color: var(--ink-2); }
+.toast .icon-btn { width: 28px; height: 28px; }
+
+.menu-scrim { position: fixed; inset: 0; z-index: 40; }
+.acct-menu { position: fixed; z-index: 41; top: 66px; right: 32px; width: min(300px, calc(100vw - 24px)); background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); padding: 6px; display: grid; gap: 2px; }
+:root[data-chrome='phone'] .acct-menu { top: calc(var(--safe-top) + 52px); right: calc(12px + var(--safe-right)); }
+:root[data-chrome='band'] .acct-menu { top: calc(var(--safe-top) + 50px); right: 10px; }
+:root[data-chrome='rail'] .acct-menu { top: auto; bottom: calc(var(--safe-bottom) + 12px); right: calc(var(--safe-right) + 8px); }
+.menu-head { padding: 8px 10px; color: var(--ink-3); font-size: 12.5px; border-bottom: 1px solid var(--rule-2); margin-bottom: 2px; }
+.menu-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; }
+.menu-row .seg button { display: inline-flex; align-items: center; gap: 4px; padding: 0 9px; }
+.menu-row .seg .ic { width: 14px; height: 14px; }
+.menu-item { text-align: left; background: none; border: 0; padding: 10px; min-height: 40px; border-radius: 8px; font: inherit; font-size: 13.5px; color: var(--ink); cursor: pointer; }
+.menu-item:hover { background: var(--row-hover); }
+
+.signin-page { min-height: 100dvh; display: grid; place-items: center; padding: calc(var(--safe-top) + 24px) calc(var(--safe-right) + 16px) calc(var(--safe-bottom) + 24px) calc(var(--safe-left) + 16px); }
+.signin-card { width: min(400px, 100%); padding: 24px; display: grid; gap: 14px; }
+.signin-brand { display: flex; align-items: center; gap: 10px; color: var(--ink); }
+.signin-brand .brand-name { font-weight: 640; font-variation-settings: 'wght' 640; font-size: 15.5px; }
+.signin-title { font-size: 22px; line-height: 1.2; font-weight: 620; font-variation-settings: 'wght' 620; letter-spacing: -.01em; }
+.signin-host { margin-top: -8px; font-size: 12.5px; }
+.signin-banner { display: grid; gap: 4px; font-size: 13px; line-height: 1.45; padding: 10px 0; border-top: 1px solid var(--rule-2); border-bottom: 1px solid var(--rule-2); color: var(--ink-2); }
+.signin-banner b { color: var(--ink); }
+.field { display: grid; gap: 6px; font-size: 12.5px; color: var(--ink-2); }
+.field input { height: 44px; border: 1px solid var(--rule); border-radius: var(--r-ctl); background: var(--paper); color: var(--ink); padding: 0 12px; font-family: var(--font); font-size: 16px; }
+.field input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.field input:disabled { opacity: .55; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+.signin-message { font-size: 13px; line-height: 1.45; }
+.signin-note { font-size: 12px; line-height: 1.45; }
+.signin-card .btn.lg { width: 100%; }
+.strength { display: grid; gap: 4px; font-size: 12px; }
+
+/* The classic app's way into the frame (on its Status tab). */
+.frame-offer { margin-top: 16px; font-size: var(--fs-small); color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.frame-offer b { color: var(--ink-2); }
+/* The band's tab row is 46 px tall: each tab and tool takes the row's whole height to tap, around its 36 px pill. */
+.band-tabs a, .band-tabs .icon-btn { position: relative; }
+.band-tabs a::after { content: ''; position: absolute; inset: -5px 0; }
+.band-tabs .icon-btn::after { content: ''; position: absolute; inset: -6px -2px; }

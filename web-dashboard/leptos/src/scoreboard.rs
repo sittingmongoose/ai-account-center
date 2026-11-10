@@ -453,12 +453,17 @@ struct Board {
 
 impl Board {
     fn reload(self) {
-        if self.loading.get_untracked() {
+        // A page the frame has unmounted (at sign-out) reads nothing: its signals are gone.
+        if self.loading.try_get_untracked().unwrap_or(true) {
             return;
         }
         self.loading.set(true);
         spawn_local(async move {
-            match fetch_scoreboard().await {
+            let result = fetch_scoreboard().await;
+            if self.loading.try_get_untracked().is_none() {
+                return;
+            }
+            match result {
                 Ok(view) => {
                     let now = js_sys::Date::now();
                     self.view.set(Some(view));
@@ -487,6 +492,18 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         loading: RwSignal::new(false),
     };
     board.reload();
+    // In the app frame a read the server refused (the session ended) brings the frame's sign-in, as Status does.
+    // Inside the classic shell (`embedded`) the shell's own sign-in follows the session, as before.
+    if !embedded {
+        Effect::new(move |_| {
+            if board
+                .error
+                .with(|e| matches!(e, Some(FetchError::SignedOut)))
+            {
+                crate::session::dashboard_signed_out("expired", None);
+            }
+        });
+    }
     // The scoreboard moves slowly: re-read on its own poll while the page is visible, and keep ages running.
     let ticks = RwSignal::new(0u32);
     let _ = set_interval(
@@ -504,7 +521,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
             let t = ticks.get_untracked() + 15;
             if t >= every {
                 ticks.set(0);
-                if crate::on_screen() {
+                if crate::page_on_screen(crate::Page::Scoreboard) {
                     board.reload();
                 }
             } else {
@@ -513,18 +530,13 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         },
         Duration::from_secs(15),
     );
-    // Shown again by the shell, or back online: read at once.
+    // Shown again by the shell, or back online: read at once (until the page is unmounted, owned.rs).
     for event in [crate::SHOWN_EVENT, "online"] {
-        let again = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
-            if crate::on_screen() {
+        crate::owned::listen(&window(), event, move || {
+            if crate::page_on_screen(crate::Page::Scoreboard) {
                 board.reload();
             }
         });
-        let _ = window().add_event_listener_with_callback(
-            event,
-            wasm_bindgen::JsCast::unchecked_ref(again.as_ref()),
-        );
-        again.forget();
     }
     let by_model = Memo::new(move |_| {
         board
@@ -571,6 +583,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
             }]
         }),
         refresh: Callback::new(move |_| board.reload()),
+        lead: None,
     };
     let banner = move || {
         let error = board.error.get()?;
@@ -591,7 +604,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
     let selected = RwSignal::new(None::<String>);
     let on_row = Callback::new(move |key: String| selected.set(Some(key)));
     view! {
-        <Shell embedded=embedded page="Scoreboard" title="Model Scoreboard" info=info>
+        <PageShell page=crate::Page::Scoreboard embedded=embedded info=info>
             <div class="page" data-stale=move || board.error.with(|e| e.is_some()).then_some("1")>
                 <div class="page-head sb-head">
                     <div class="sb-title">
@@ -631,7 +644,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                 </Show>
                 {move || sheet.get().map(|m| view! { <ModelSheet model=m on_close=close_sheet/> })}
             </div>
-        </Shell>
+        </PageShell>
     }
 }
 
