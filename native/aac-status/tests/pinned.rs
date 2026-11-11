@@ -861,7 +861,8 @@ fn the_loop_rule_matches_fail_wording_by_prefix() {
     let prefix_update = one_update(&prefix_only);
     assert_eq!(prefix_update.looping.answer, "yes");
     assert_eq!(prefix_update.looping.task.as_deref(), Some("S-01"));
-    // A board whose only reviews are unclear stays "No.", not a loop: unknown never counts.
+    // A board whose only reviews are unclear says "Can't tell", never "No.": unknown
+    // verdicts prove nothing either way (F7).
     let unclear = input(json!({
         "pins": [pin("t1", json!("a"))],
         "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
@@ -876,7 +877,7 @@ fn the_loop_rule_matches_fail_wording_by_prefix() {
         })]
     }));
     let update = one_update(&unclear);
-    assert_eq!(update.looping.answer, "no");
+    assert_eq!(update.looping.answer, "cantTell");
 }
 
 #[test]

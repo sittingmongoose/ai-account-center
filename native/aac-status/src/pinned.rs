@@ -976,12 +976,16 @@ fn compose_update(
     } else if tasks.is_some() {
         // D8: a board with no review inside the loop window proves nothing about looping —
         // "No." there was an invented all-clear. Only a review in the window, or the thread's
-        // own answer, may say no.
+        // own answer, may say no — and only a review that says pass or fail counts: a board
+        // whose only reviews are unclear ("cannot verify") says "Can't tell", not "No." (F7).
         let reviewed_in_window = tasks.is_some_and(|board| {
             board.items.iter().any(|item| {
-                item.reviews.iter().any(|review| match review.at_ms {
-                    Some(at) => input.now_ms - at <= LOOP_WINDOW_MS,
-                    None => true,
+                item.reviews.iter().any(|review| {
+                    let in_window = match review.at_ms {
+                        Some(at) => input.now_ms - at <= LOOP_WINDOW_MS,
+                        None => true,
+                    };
+                    in_window && classify_verdict(&review.verdict) != Verdict::Unknown
                 })
             })
         });
