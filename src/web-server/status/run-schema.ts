@@ -90,7 +90,7 @@ export interface RunDoc extends DocHead {
   review: {
     of: string;
     verdict: 'pass' | 'fail' | 'cannot-verify';
-    findings: { high: number; medium: number; low: number };
+    findings: { high: number | null; medium: number | null; low: number | null };
     overturned: boolean;
     by: string | null;
     disputed: boolean;
@@ -220,9 +220,10 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
         of: text(r.of, 'review.of', 200),
         verdict: oneOf(r.verdict, 'review.verdict', ['pass', 'fail', 'cannot-verify'] as const),
         findings: {
-          high: count(findings.high, 'review.findings.high'),
-          medium: count(findings.medium, 'review.findings.medium'),
-          low: count(findings.low, 'review.findings.low'),
+          high: findings.high === null ? null : count(findings.high, 'review.findings.high'),
+          medium:
+            findings.medium === null ? null : count(findings.medium, 'review.findings.medium'),
+          low: findings.low === null ? null : count(findings.low, 'review.findings.low'),
         },
         overturned: r.overturned,
         by: optText(r.by, 'review.by', 120),
