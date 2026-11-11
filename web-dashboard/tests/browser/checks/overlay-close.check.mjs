@@ -29,8 +29,10 @@ async function poseContext(t, p) {
 	await t.newContext({ viewport: { width: p.w, height: p.h }, ...(p.duo ? { screen: DUO_SCREEN } : {}), isMobile: p.mobile, hasTouch: p.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
 }
 
-/** Asserts the close rect is inside minus safe, off the rail, then taps it and waits for `gone` to match. */
-async function assertClose(t, label, closeSel, goneSel, safe, closeClick = 'click') {
+/** Asserts the close rect is inside minus safe, off the rail, then taps it and waits for `gone` to match.
+ * `skipBottom` for bottom sheets (` .pop` in sheet mode): the panel background touches the bottom
+ * by design, so only top/left/right are checked (the grabber position is the panel top). */
+async function assertClose(t, label, closeSel, goneSel, safe, closeClick = 'click', opts = {}) {
 	const s = await t.page.evaluate((sel) => {
 		const b = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, r: r.right, b: r.bottom }; };
 		const el = document.querySelector(sel);
@@ -46,7 +48,7 @@ async function assertClose(t, label, closeSel, goneSel, safe, closeClick = 'clic
 	await t.check(`${label}: close control is on screen`, !!s, `missing ${closeSel}`);
 	if (!s) return;
 	const c = s.close;
-	const inside = c.x >= s.sl - 0.5 && c.r <= s.w - s.sr + 0.5 && c.y >= s.st - 0.5 && c.b <= s.h - s.sb + 0.5;
+	const inside = c.x >= s.sl - 0.5 && c.r <= s.w - s.sr + 0.5 && c.y >= s.st - 0.5 && (opts.skipBottom || c.b <= s.h - s.sb + 0.5);
 	await t.check(`${label}: close inside minus safe`, inside, `close ${Math.round(c.x)},${Math.round(c.y)} ${Math.round(c.r)},${Math.round(c.b)} in ${s.w}x${s.h} safe ${s.st},${s.sr},${s.sb},${s.sl}`);
 	if (s.rail) {
 		const overlap = c.x < s.rail.r - 0.5 && c.r > s.rail.x + 0.5 && c.y < s.rail.b - 0.5 && c.b > s.rail.y + 0.5;
@@ -162,11 +164,11 @@ export const tests = {
 				await openAnalytics(t, p.safe);
 				const label = `${p.name} popover`;
 				await t.page.click('.prov-btn');
-				await t.page.waitForSelector('.pop .pick-list, .pop', { timeout: 5000 });
-				// Sheet mode shows the grabber; anchored mode hides it: check whichever is drawn.
-				const grab = await t.page.$('.pop-grab');
-				const closeSel = grab && (await grab.isVisible()) ? '.pop-grab' : '.pop';
-				await assertClose(t, label, closeSel, '.pop', p.safe, 'escape');
+				await t.page.waitForSelector('.pop', { timeout: 5000 });
+				// Sheet mode (no inline left): measure the panel itself; its background touches the
+				// bottom by design, so only top/left/right are checked (the grab position is the top).
+				const sheet = await t.page.evaluate(() => !(document.querySelector('.pop').getAttribute('style') || '').includes('left'));
+				await assertClose(t, label, '.pop', '.pop', p.safe, 'escape', { skipBottom: sheet });
 			});
 		}
 	},
@@ -182,7 +184,7 @@ export const tests = {
 				await assertClose(t, `${p.name} details`, '[data-probe="details-close"]', '.details', p.safe);
 				await t.page.click('.acc-item[data-row="codex:two"] [data-probe="activate:codex:two"]');
 				await t.until('the approval shows', () => !!document.querySelector('.adialog'), null, { timeout: 15000 });
-				await assertClose(t, `${p.name} approval`, '.adialog .a-btns .btn', '.adialog', p.safe);
+				await assertClose(t, `${p.name} approval`, '.adialog .a-btns .btn:last-of-type', '.adialog', p.safe);
 				const btn = await accountButton(t);
 				await t.page.click(btn);
 				await t.page.waitForSelector('.acct-menu', { timeout: 5000 });

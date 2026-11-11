@@ -421,6 +421,24 @@ pub(crate) fn pop_left(anchor_left: f64, anchor_right: f64, w: f64, lo: f64, hi:
         .min(hi - w)
 }
 
+/// The anchored panel's max heights (below, above), each cleared of the bottom inset (review N3).
+pub(crate) fn pop_max_heights(vh: f64, top: f64, anchor_top: f64, safe_bottom: f64) -> (f64, f64) {
+    (
+        (vh - top - 8.0 - safe_bottom).max(160.0),
+        (anchor_top - 16.0 - safe_bottom).max(160.0),
+    )
+}
+
+/// Reads the bottom safe inset from the page (`--safe-bottom`).
+fn page_safe_bottom() -> f64 {
+    document()
+        .document_element()
+        .and_then(|r| window().get_computed_style(&r).ok().flatten())
+        .and_then(|st| st.get_property_value("--safe-bottom").ok())
+        .map(|v| v.trim_end_matches("px").parse::<f64>().unwrap_or(0.0))
+        .unwrap_or(0.0)
+}
+
 /// Reads the content bounds from the page's chrome (`data-chrome`, `data-rail-side`, `--rail-w`).
 fn page_bounds(vw: f64) -> (f64, f64) {
     let root = document().document_element();
@@ -574,16 +592,13 @@ pub fn Popover(
         let w = width.min((hi - lo).max(0.0));
         let left = pop_left(rect.left(), rect.right(), w, lo, hi);
         let top = rect.bottom() + 8.0;
+        let (below_max, above_max) = pop_max_heights(vh, top, rect.top(), page_safe_bottom());
         let at = if top + 240.0 <= vh || rect.top() < vh / 2.0 {
-            format!(
-                "top:{top:.0}px;max-height:{:.0}px",
-                (vh - top - 8.0).max(160.0)
-            )
+            format!("top:{top:.0}px;max-height:{below_max:.0}px")
         } else {
             format!(
-                "bottom:{:.0}px;max-height:{:.0}px",
-                vh - rect.top() + 8.0,
-                (rect.top() - 16.0).max(160.0)
+                "bottom:{:.0}px;max-height:{above_max:.0}px",
+                vh - rect.top() + 8.0
             )
         };
         style.set(format!(
@@ -714,6 +729,14 @@ mod tests {
         // no rail (phone 402): the window bounds, as before
         let (lo, hi) = content_bounds(402.0, "phone", "", 0.0);
         assert_eq!((lo, hi), (8.0, 394.0));
+    }
+
+    #[test]
+    fn the_popover_height_clears_the_bottom_inset() {
+        // vh 669, top 200, anchor top 500, safe-bottom 34: below max-height is 669-200-8-34
+        let (below, above) = pop_max_heights(669.0, 200.0, 500.0, 34.0);
+        assert_eq!(below, 427.0);
+        assert_eq!(above, 450.0);
     }
 
     #[test]
