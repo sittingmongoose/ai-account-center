@@ -33,13 +33,23 @@ export function belowBar(column: Pick<Column, 'n' | 'source' | 'reviews'>, minRu
 }
 
 /**
- * The review bar a Recommended or Avoid verdict must clear: one review alone never lifts a row to
- * either (a 1-of-1 quality share reads 100%), so an observed column needs `minRuns` decisive blind
- * reviews — the same bar runs already follow. A Fine can stand on fewer; a benchmark column needs
- * no review.
+ * The reviewed count behind the bar: the pass rate's decided item count when the column carries a
+ * quality measure — fix rounds on one item count once — else the count of decisive review runs.
+ * A task type with no quality pass rate (like plan) has no item share for the bar to protect,
+ * so it keeps the review-run count.
  */
-function belowReviewBar(column: Pick<Column, 'source' | 'reviews'>, minRuns: number): boolean {
-  return column.source === 'observed' && column.reviews < minRuns;
+function reviewedCount(column: Pick<Column, 'reviews' | 'measures'>): number {
+  return column.measures.quality?.per ?? column.reviews;
+}
+
+/**
+ * The review bar a Recommended or Avoid verdict must clear: one reviewed item alone never lifts
+ * a row to either (a 1-of-1 quality share reads 100%), so an observed column needs `minRuns`
+ * reviewed items — the same bar runs already follow. Five fix rounds on one item are one item,
+ * not five. A Fine can stand on fewer; a benchmark column needs no review.
+ */
+function belowReviewBar(column: Pick<Column, 'source' | 'reviews' | 'measures'>, minRuns: number): boolean {
+  return column.source === 'observed' && reviewedCount(column) < minRuns;
 }
 
 interface Scored {

@@ -283,7 +283,7 @@ describe('verdict rules', () => {
       benchmarkLabel: null,
       n: 10,
       imported: 0,
-      // Above minRuns (5), so the Recommended/Avoid tests exercise scoring, not the review bar.
+      // Above the bar (minRuns, 5 reviewed items), so these tests exercise scoring, not the bar.
       reviews: 6,
       ranked: false,
       rank: null,
@@ -367,16 +367,19 @@ describe('verdict rules', () => {
     ]);
   });
 
-  it('one review alone is never enough for Recommended or Avoid', () => {
-    const judged = judge([
-      column('a', 1, 0, 10, { reviews: 1 }),
-      column('cheat', 1, 0.4, 10, { reviews: 1 }),
-    ]);
+  it('one reviewed item alone is never enough for Recommended or Avoid', () => {
+    // Fix rounds on one task: 5 runs, 5 reviews, but the pass rate stands on one item (1 of 1).
+    const oneItem = (local: string, quality: number, cheating: number) => {
+      const held = column(local, quality, cheating, 10, { reviews: 5 });
+      held.measures.quality = value(quality, 1);
+      return held;
+    };
+    const judged = judge([oneItem('a', 1, 0), oneItem('cheat', 1, 0.4)]);
     expect(judged.map((c) => [c.ranked, c.verdict, c.why])).toEqual([
       [false, 'not-enough-data', 'too few blind reviews yet (n = 10)'],
       [false, 'not-enough-data', 'too few blind reviews yet (n = 10)'],
     ]);
-    // minRuns reviews clear the bar: the same columns then get their scored verdicts.
+    // minRuns reviewed items clear the bar: the same columns then get their scored verdicts.
     const cleared = judge([
       column('a', 1, 0, 10, { reviews: 5 }),
       column('cheat', 1, 0.4, 10, { reviews: 5 }),
@@ -385,11 +388,38 @@ describe('verdict rules', () => {
       [true, 'recommended'],
       [true, 'avoid'],
     ]);
-    // A Fine may stand on fewer reviews, and a benchmark column needs none.
-    expect(judge([column('fine', 1, 0, 10, { reviews: 1 })])[0]).toMatchObject({
-      ranked: true,
-      verdict: 'fine',
+    // A Fine may stand on fewer items, and a benchmark column needs none.
+    const fine = column('fine', 1, 0, 10, { reviews: 5 });
+    fine.measures.quality = value(1, 1);
+    expect(judge([fine])[0]).toMatchObject({ ranked: true, verdict: 'fine' });
+  });
+
+  it('five fix rounds on one item are not enough for Recommended', () => {
+    // One item, five reviewed rounds (quality 1 of 1): without the item bar it tops the group.
+    const thin = column('thin', 1, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const deep = column('deep', 0.6, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({
+      ranked: false,
+      verdict: 'not-enough-data',
+      why: 'too few blind reviews yet (n = 10)',
     });
+    expect(judged[1]).toMatchObject({ ranked: true });
+  });
+
+  it('five fix rounds on one item are not enough for Avoid', () => {
+    // The heavy-share Avoid on one item (quality 40%, weight 3) is held by the same bar.
+    const thin = column('thin', 0.4, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(0.4, 1);
+    const deep = column('deep', 0.9, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({
+      ranked: false,
+      verdict: 'not-enough-data',
+      why: 'too few blind reviews yet (n = 10)',
+    });
+    expect(judged[1]).toMatchObject({ ranked: true });
   });
 
   it('says preliminary when a weighted value is', () => {
