@@ -115,13 +115,22 @@ Claude row as, for example:
 - `location` is one fixed word: `usr-local`, `homebrew`, `bun`, `user-npm` (an npm package under the
   home folder) or `other`. The folder itself is never reported.
 - `version` is the copy's own version, or `null` when its probe could not read one.
-- `shadows` is `true` when the copy comes before the managed install on the helper's PATH, or
-  when the managed install is not on that PATH at all.
+- `shadows` is `true` when the copy comes before the managed install on the computer's effective
+  PATH, or when the managed install is not on it at all. On the Mac the effective PATH also counts
+  the system folders in `/etc/paths` and `/etc/paths.d`: the helper arrives over ssh with a PATH
+  holding neither `~/.local/bin` nor `/usr/local/bin`, while ordinary processes inherit the system
+  PATH (`/usr/local/bin` first, no `~/.local/bin`), so the helper PATH alone would call the
+  `/usr/local` copy harmless when it is the copy that actually runs.
 
 When a shadowing copy is older than the row's version, the row's message gains one fixed sentence:
 "An older Codex CLI copy (0.145.0) in /usr/local/bin comes first on some PATHs; remove it so it
 never runs instead." A copy that is newer, or the same version, is listed but never named as
 older. Strays are never updated, stopped or removed: the update runs only the managed install.
+An update that leaves the managed version unchanged is therefore never reported `current` while
+an older copy shadows it: the row is `action_required` / `older_copy_first`, because the version
+a bare command runs is still the older one. When a shadowing copy's version could not be read,
+the running version cannot be told either, so the row is `unknown` / `readiness_unknown` instead
+of `current`.
 Windows and the other CLIs have no managed layout, so they report no strays.
 
 ## T3 Code nightly updates

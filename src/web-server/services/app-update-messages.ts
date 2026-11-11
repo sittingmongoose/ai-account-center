@@ -67,6 +67,8 @@ export const MESSAGES = {
     'The published package is not the version its release feed names, so nothing was installed.',
   package_in_use:
     'Windows still reports the app package in use after the close; the update was attempted but did not install.',
+  older_copy_first:
+    'Not current: the copy that runs first on this computer is older than the managed install.',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 

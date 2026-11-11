@@ -3619,9 +3619,9 @@ class ManagedCliStrayTests(unittest.TestCase):
     def stray(self, folder, version):
         return _script(self.root / folder / 'codex', f'echo "codex-cli {version}"')
 
-    def detect(self, folders, app_id='codex-cli'):
+    def detect(self, folders, app_id='codex-cli', platform='ubuntu'):
         with _isolated_candidates(), mock.patch.dict(os.environ, {'PATH': os.pathsep.join(str(folder) for folder in folders)}):
-            return updater.detect_cli(app_id, 'ubuntu')
+            return updater.detect_cli(app_id, platform)
 
     def test_managed_install_wins_over_an_earlier_path_copy(self):
         link = self.managed_codex()
@@ -3641,6 +3641,38 @@ class ManagedCliStrayTests(unittest.TestCase):
         install = self.detect([self.stray('stale', '0.153.4').parent])
         self.assertEqual(install.path, link)
         self.assertEqual(install.strays, [{'location': 'other', 'version': '0.153.4', 'shadows': True}])
+
+    def test_mac_system_path_copy_shadows_managed_install_absent_from_helper_path(self):
+        # The Mac helper arrives over ssh with a PATH holding neither ~/.local/bin nor /usr/local/bin,
+        # while the system PATH (/etc/paths) puts the older /usr/local copy first: it is the one that runs.
+        # The fixture copy sits in ~/.bun/bin, a fixed candidate folder found without any PATH help,
+        # exactly as the real /usr/local/bin candidate is found.
+        link = self.managed_codex(release='0.167.0-aarch64-apple-darwin', version='0.167.0')
+        stale = _script(self.home / '.bun/bin/codex', 'echo "codex-cli 0.145.0"')
+        with mock.patch.object(updater, '_mac_system_path_folders', return_value=[str(stale.parent), '/usr/bin', '/bin']):
+            install = self.detect([pathlib.Path('/usr/bin'), pathlib.Path('/bin')], platform='mac')
+        self.assertEqual((install.path, install.version), (link, '0.167.0'))
+        self.assertEqual(install.strays, [{'location': 'bun', 'version': '0.145.0', 'shadows': True}])
+
+    def test_older_shadowing_copy_never_reports_current(self):
+        strays = [{'location': 'usr-local', 'version': '0.145.0', 'shadows': True}]
+        install = common.Install('codex-cli', 'mac', pathlib.Path('/fixture/codex'), '0.167.0', strays=strays)
+        refreshed = common.Install('codex-cli', 'mac', pathlib.Path('/fixture/codex'), '0.167.0', strays=strays)
+        with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_instances', return_value=([], [], [])), \
+                mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'perform_cli_update'), \
+                mock.patch.object(updater, 'detect_cli', return_value=refreshed):
+            value = updater.update_cli(install, time.monotonic() + 60)
+        self.assertEqual((value['status'], value['messageCode']), ('action_required', 'older_copy_first'))
+
+    def test_shadowing_copy_with_unknown_version_never_reports_current(self):
+        strays = [{'location': 'usr-local', 'version': None, 'shadows': True}]
+        install = common.Install('codex-cli', 'mac', pathlib.Path('/fixture/codex'), '0.167.0', strays=strays)
+        refreshed = common.Install('codex-cli', 'mac', pathlib.Path('/fixture/codex'), '0.167.0', strays=strays)
+        with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_instances', return_value=([], [], [])), \
+                mock.patch.object(updater, 'check_terminal'), mock.patch.object(updater, 'perform_cli_update'), \
+                mock.patch.object(updater, 'detect_cli', return_value=refreshed):
+            value = updater.update_cli(install, time.monotonic() + 60)
+        self.assertEqual((value['status'], value['messageCode']), ('unknown', 'readiness_unknown'))
 
     def test_without_a_managed_install_detection_keeps_the_first_path_copy(self):
         first = self.stray('first', '0.153.4')

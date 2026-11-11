@@ -242,6 +242,9 @@ def claude_current(install, newest=None):
     before = install.version
     if install.app_id != "claude-code" or install.manager != "native" or not CLAUDE_VERSION.fullmatch(before or ""):
         return None
+    # A shadowing older or unreadable copy is the version that actually runs; let update_cli say so.
+    if _current_block(install) is not None:
+        return None
     if (pathlib.Path.home() / ".ccs/app-updates/claude-code-pending-restart.json").exists():
         return None
     newest = (newest or latest_claude_version)()
@@ -291,10 +294,42 @@ def _path_copies(name):
     return [pathlib.Path(folder) / name for folder in _path_folders()]
 
 
-def _path_position(path):
-    """Where path's folder sits on this process's PATH (0 first), or None when it is not on PATH."""
+def _mac_system_path_folders():
+    """macOS system PATH folders from /etc/paths and /etc/paths.d, in order. Bounded reads only.
+
+    The helper reaches the Mac over ssh with a PATH holding neither ~/.local/bin nor /usr/local/bin,
+    while launchd and path_helper give ordinary processes the system PATH (/usr/local/bin first, no
+    ~/.local/bin). Judging shadowing from the helper PATH alone therefore calls the /usr/local copy
+    harmless when it is the copy that actually runs.
+    """
+    folders = []
+    try:
+        files = [pathlib.Path("/etc/paths"), *sorted(pathlib.Path("/etc/paths.d").glob("*"))[:32]]
+    except OSError:
+        return folders
+    for file in files:
+        try:
+            lines = file.read_text(encoding="utf-8", errors="ignore").splitlines()[:64]
+        except OSError:
+            continue
+        folders.extend(line.strip() for line in lines if os.path.isabs(line.strip()))
+    return folders[:64]
+
+
+def _effective_path_folders(platform):
+    """Process PATH folders, plus the Mac system folders ordinary processes inherit, first occurrence wins."""
+    folders = _path_folders()
+    if platform == "mac":
+        for folder in _mac_system_path_folders():
+            if folder not in folders:
+                folders.append(folder)
+    return folders
+
+
+def _path_position(path, folders=None):
+    """Where path's folder sits on `folders` (0 first), or None when it is not there."""
     folder = os.path.realpath(path.parent)
-    for index, entry in enumerate(_path_folders()):
+    for index, entry in enumerate(_path_folders() if folders is None else folders):
         if os.path.realpath(entry) == folder:
             return index
     return None
@@ -331,12 +366,13 @@ def _stray_location(path, resolved):
     return "other"
 
 
-def _strays(found, managed):
+def _strays(found, managed, platform="ubuntu"):
     """The other copies that resolve to a file different from the managed install.
 
     Each kept copy gets one bounded, read-only version probe, run side by side.
     At most STRAY_LIMIT are kept, in PATH order. `shadows` is true when a copy comes
-    before the managed install on this PATH, or when that install is not on PATH at all.
+    before the managed install on the computer's effective PATH (see
+    _effective_path_folders), or when that install is not on it at all.
     """
     from concurrent.futures import ThreadPoolExecutor
     target = managed.resolve()
@@ -348,15 +384,46 @@ def _strays(found, managed):
             copies.append((path, real))
     if not copies:
         return []
-    managed_at = _path_position(managed)
+    folders = _effective_path_folders(platform)
+    managed_at = _path_position(managed, folders)
     with ThreadPoolExecutor(max_workers=len(copies)) as pool:
         versions = list(pool.map(lambda item: _stray_version(item[0], item[1]), copies))
     strays = []
     for (path, real), version in zip(copies, versions):
-        at = _path_position(path)
+        at = _path_position(path, folders)
         strays.append({"location": _stray_location(path, real), "version": version,
                        "shadows": at is not None and (managed_at is None or at < managed_at)})
     return strays
+
+
+def _current_block(install):
+    """Why this install must not be called current, or None when it may.
+
+    The version a bare command runs is the shadowing copy's, not the managed
+    install's. An older shadowing copy means the running version is older than
+    the managed one (`older`); a shadowing copy whose version could not be read
+    leaves the running version unknown (`unknown`). Either way, reporting the
+    managed copy as current would name a version the user does not run.
+    """
+    for stray in getattr(install, "strays", None) or []:
+        if not stray.get("shadows"):
+            continue
+        version = stray.get("version")
+        if not version or not install.version or not version_tuple(version) or not version_tuple(install.version):
+            return "unknown"
+        if version_tuple(version) < version_tuple(install.version):
+            return "older"
+    return None
+
+
+def _blocked_current(install, before, attempted, restarted=0):
+    """The non-current row a shadowing copy earns, or None when `current` is honest."""
+    block = _current_block(install)
+    if block == "older":
+        return result(install.app_id, install.platform, "action_required", before, install.version, install.manager, "older_copy_first", attempted, restarted)
+    if block == "unknown":
+        return result(install.app_id, install.platform, "unknown", before, install.version, install.manager, "readiness_unknown", attempted, restarted)
+    return None
 
 
 # An npm global Codex CLI on Ubuntu or Mac is `<prefix>/bin/codex` linking into
@@ -458,7 +525,7 @@ def detect_cli(app_id, platform):
         root = home / ".local/share/claude/versions"
     elif npm_root is not None:
         manager, root = "npm", npm_root
-    strays = _strays(found, managed) if managed is not None else []
+    strays = _strays(found, managed, platform) if managed is not None else []
     return Install(app_id, platform, path, version, manager, package_root=root, strays=strays)
 
 
@@ -750,6 +817,13 @@ def update_cli(install, deadline, restart_managed=False):
                     pending.unlink(missing_ok=True)
                 except (UpdateFailure, OSError):
                     payload.update(status="restart_failed", messageCode="restart_failed")
+            if payload.get("status") == "current":
+                # The bridge judged only the managed copy; a shadowing copy is the one that runs.
+                block = _current_block(install)
+                if block == "older":
+                    payload.update(status="action_required", messageCode="older_copy_first")
+                elif block == "unknown":
+                    payload.update(status="unknown", messageCode="readiness_unknown")
             return payload
         if install.app_id == "muse-code" and install.platform == "windows":
             # T3's muse-acp adapter hosts `muse serve` from this folder: never stop or restart it.
@@ -845,7 +919,7 @@ def update_cli(install, deadline, restart_managed=False):
                 except (UpdateFailure, OSError):
                     write_private_json(pending, {"version": refreshed.version})
                     return outcome(result(install.app_id, install.platform, "restart_failed", before, refreshed.version, install.manager, "restart_failed", True))
-                value = result(install.app_id, install.platform, "current", before, before, install.manager, attempted=True, restarted=len(contexts))
+                value = _blocked_current(refreshed, before, True, len(contexts)) or result(install.app_id, install.platform, "current", before, before, install.manager, attempted=True, restarted=len(contexts))
                 value.update(restartTargets=sessions, forcedStops=pre_forced)
                 return outcome(value)
             if install.app_id == "muse-code" and not muse_catalog_fresh(install.platform, install_started):
@@ -859,6 +933,10 @@ def update_cli(install, deadline, restart_managed=False):
                 # keeps a later run from reporting "updated" for a version
                 # that never changed.
                 pending.unlink(missing_ok=True)
+            # An older or unreadable copy that runs first is never "current": say so, or say it cannot be told.
+            blocked = _blocked_current(refreshed, before, True)
+            if blocked is not None:
+                return blocked
             return result(install.app_id, install.platform, "current", before, before, install.manager, attempted=True)
         changed = True
         write_private_json(pending, {"version": refreshed.version})
