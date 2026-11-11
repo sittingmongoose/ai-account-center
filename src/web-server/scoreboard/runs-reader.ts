@@ -189,10 +189,31 @@ export class RunsReader {
     candidates.sort((a, b) => b.date.localeCompare(a.date) || a.rel.localeCompare(b.rel));
     let visited = 0;
     let bytes = 0;
-    for (const candidate of candidates) {
-      if (visited >= limits.runs || bytes >= limits.bytes) break;
-      bytes += await this.files.visit(candidate.absolute, candidate.rel, seen);
-      visited += 1;
+    // Preflight in bounded batches, then admit the same sorted prefix under
+    // the byte cap before parallel reads. Completion order never chooses winners.
+    for (
+      let offset = 0;
+      offset < candidates.length && visited < limits.runs && bytes < limits.bytes;
+      offset += 16
+    ) {
+      const batch = candidates.slice(offset, Math.min(offset + 16, limits.runs));
+      const sizes = await Promise.all(
+        batch.map((candidate) =>
+          this.fs.stat(candidate.absolute).then(
+            (stat) => (stat.isFile() && stat.size <= REPORT_SIZE_CAPS.run ? stat.size : 0),
+            () => 0
+          )
+        )
+      );
+      const admitted = [];
+      for (let index = 0; index < batch.length && bytes < limits.bytes; index++) {
+        admitted.push(batch[index]);
+        bytes += sizes[index];
+        visited++;
+      }
+      await Promise.all(
+        admitted.map((candidate) => this.files.visit(candidate.absolute, candidate.rel, seen))
+      );
     }
     if (visited < candidates.length)
       folderProblem(

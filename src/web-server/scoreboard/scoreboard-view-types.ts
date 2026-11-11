@@ -182,6 +182,9 @@ export interface ScoreboardUse {
 }
 
 export interface ScoreboardView {
+  cached?: boolean;
+  cacheAgeSeconds?: number;
+  refreshing?: boolean;
   version: 1;
   generatedAt: string;
   refresh: { pollSeconds: number };

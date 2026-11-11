@@ -1,7 +1,7 @@
 /**
  * Serves the Model Scoreboard view. Runs and the catalog are rescanned on demand: a read older than
- * the short cache starts a rescan (stat first, read only changed files) and waits for it a bounded
- * time, so a hung share answers with the last good data and a Source that turns stale. Nothing runs
+ * minute cache starts a background rescan (stat first, read only changed files). A cold read
+ * waits a bounded time; a warm read immediately serves the measured cached view. Nothing runs
  * while nobody is reading. At server start AAC writes the catalog seeds the share has no file for.
  */
 import {
@@ -22,7 +22,7 @@ import { openStatusHandle } from '../../status-native/pinned';
 import type { NativeStatusHandle } from '../../status-native/native-loader';
 
 /** A read within this long of the last view gets that view. */
-export const SCOREBOARD_CACHE_MS = 10_000;
+export const SCOREBOARD_CACHE_MS = 60_000;
 /** How long a read waits for the share before answering with what it has. */
 export const SCOREBOARD_SCAN_WAIT_MS = 8_000;
 
@@ -107,7 +107,12 @@ export class ScoreboardService {
     // The by-model matrix is the native composer's own words over the view just built;
     // when it cannot be had (no module, a refused input) the view carries no field.
     const byModel = this.native ? await composeByModel(view, { handle: this.native }) : null;
-    const withByModel: ScoreboardView = byModel ? { ...view, byModel } : view;
+    const withByModel: ScoreboardView = {
+      ...(byModel ? { ...view, byModel } : view),
+      cached: true,
+      cacheAgeSeconds: 0,
+      refreshing: false,
+    };
     this.cached = { at: now, view: withByModel };
     return withByModel;
   }
@@ -115,10 +120,29 @@ export class ScoreboardService {
   /** The view now, rescanning when the last one is older than the cache. Overlapping reads share one. */
   view(): Promise<ScoreboardView> {
     if (this.cached && this.now() - this.cached.at < SCOREBOARD_CACHE_MS)
-      return Promise.resolve(this.cached.view);
+      return Promise.resolve({
+        ...this.cached.view,
+        cacheAgeSeconds: Math.max(0, this.now() - this.cached.at) / 1000,
+      });
     this.building ??= this.build().finally(() => {
       this.building = null;
     });
+    if (this.cached) {
+      // The source timestamps keep their measured age while a rescan runs.
+      void this.building.catch(() => {});
+      const age = Math.max(0, this.now() - this.cached.at) / 1000;
+      return Promise.resolve({
+        ...this.cached.view,
+        cacheAgeSeconds: age,
+        refreshing: true,
+        sources: this.cached.view.sources.map((source) => ({
+          ...source,
+          state: source.state === 'ok' ? 'stale' : source.state,
+          ageSeconds: source.ageSeconds === null ? null : source.ageSeconds + age,
+          detail: `${source.detail} Cached view; rescan running.`,
+        })),
+      });
+    }
     return this.building;
   }
 

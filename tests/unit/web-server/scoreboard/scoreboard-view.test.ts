@@ -558,7 +558,7 @@ describe('verdict rules', () => {
 });
 
 describe('service', () => {
-  it('serves a short cache, then rescans', async () => {
+  it('serves a minute cache, then stale-serves while rescanning', async () => {
     const root = dirs.make('ccs-scoreboard-');
     writeScoreboardFixture(root, { now: NOW });
     let now = NOW;
@@ -568,11 +568,15 @@ describe('service', () => {
       timeZone: () => 'UTC',
     });
     const first = await service.view();
-    expect(await service.view()).toBe(first);
+    expect((await service.view()).generatedAt).toBe(first.generatedAt);
     now += 11_000;
+    expect((await service.view()).generatedAt).toBe(first.generatedAt);
+    now += 50_000;
     const second = await service.view();
-    expect(second).not.toBe(first);
-    expect(second.generatedAt).toBe(new Date(now).toISOString());
+    expect(second.generatedAt).toBe(first.generatedAt);
+    expect(second.sources.some((source) => source.detail.includes('Cached view'))).toBe(true);
+    await (service as unknown as { building: Promise<unknown> }).building;
+    expect((await service.view()).generatedAt).toBe(new Date(now).toISOString());
   });
 
   it('answers on a hung share with what it has, and the source says so', async () => {
