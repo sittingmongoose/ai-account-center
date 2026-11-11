@@ -7,17 +7,24 @@
  * fallback (CONTRACT-registry-lifecycle 3.1). Callers ask this module which store is active;
  * none of them compares registry states or mode strings itself.
  */
-import type { AccountRegistryRead, AccountRegistryV2 } from './account-registry-v2';
+/**
+ * The shape of one registry read (see AccountRegistryRead in account-registry-v2.ts). Generic over
+ * the registry type so this module imports nothing from the registry module, which asks it in turn.
+ */
+type RegistryRead<Registry> =
+  { state: 'absent' } | { state: 'invalid' } | { state: 'ok'; registry: Registry };
 
 /** Which store listed the accounts: v1 manifest, valid v2 registry, or an unreadable v2 file. */
 export type AdditionalRegistryMode = 'v1' | 'v2' | 'v2-invalid';
 
 /** One registry read classified: the active store, and its accounts when it is a valid v2. */
-export type AccountRegistryClassification =
-  { mode: 'v2'; registry: AccountRegistryV2 } | { mode: 'v2-invalid' } | { mode: 'v1' };
+export type AccountRegistryClassification<Registry> =
+  { mode: 'v2'; registry: Registry } | { mode: 'v2-invalid' } | { mode: 'v1' };
 
 /** Answers which account store one registry read leaves active. */
-export function classifyAccountRegistry(read: AccountRegistryRead): AccountRegistryClassification {
+export function classifyAccountRegistry<Registry>(
+  read: RegistryRead<Registry>
+): AccountRegistryClassification<Registry> {
   if (read.state === 'ok') return { mode: 'v2', registry: read.registry };
   if (read.state === 'invalid') return { mode: 'v2-invalid' };
   return { mode: 'v1' };
