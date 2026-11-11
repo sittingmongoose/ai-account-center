@@ -696,7 +696,8 @@ fn PinCard(update: PinnedUpdate) -> impl IntoView {
     } else if cached {
         view! { {refusal_notice(&update)}{cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 4, 2, false)}</div> }.into_any()
     } else {
-        pin_body(&update, 4, 2, false).into_any()
+        // A standalone refusal rides on a fresh pin too (the composer keeps it fresh when no good copy is held).
+        view! { {refusal_notice(&update)}{pin_body(&update, 4, 2, false)} }.into_any()
     };
     view! {
         <article class="pin" class:quiet=quiet>
@@ -746,7 +747,7 @@ fn PinSheet(update: Memo<Option<PinnedUpdate>>, on_close: Callback<()>) -> impl 
             } else if cached {
                 view! { {refusal_notice(&update)}{cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 500, 500, false)}</div> }.into_any()
             } else {
-                pin_body(&update, 500, 500, true).into_any()
+                view! { {refusal_notice(&update)}{pin_body(&update, 500, 500, true)} }.into_any()
             };
             view! {
                 <div><h3 class="pin-name" style="font-size:18px">{update.title.clone()}</h3>{who.map(|w| view! { <p class="pin-who">{w}</p> })}</div>
@@ -1617,7 +1618,8 @@ mod tests {
 
     #[test]
     fn a_refused_pin_from_the_composer_is_a_card_that_says_why() {
-        // the composer sends a pin's refusal only with its cached last good copy (reportState "unreadable")
+        // the composer sends a pin's refusal with its cached last good copy (reportState "unreadable"), or on its own
+        // with reportState "fresh" when no good copy is held (package S, F13); both draw the notice
         let json = r#"{"updates":[{"id":"t1","title":"One","reportState":"unreadable","unreadableNote":"Can't read the newest report.",
             "refusal":{"file":"mac.flash/status.json","reason":"looping.state is missing or not valid.","sinceMs":1}},
             {"id":"t2","title":"Two","reportState":"stale"},{"id":"t3","title":"Three","reportState":"none"}],
@@ -1641,6 +1643,23 @@ mod tests {
             refused_head("mac.flash/status.json"),
             "mac.flash/status.json was refused:"
         );
+    }
+
+    #[test]
+    fn a_fresh_pin_with_a_standalone_refusal_is_a_card_with_its_notice() {
+        // package S F13: a refused status.json with no good copy held keeps the pin "fresh" and attaches the refusal
+        let json = r#"{"updates":[{"id":"t1","title":"One","reportState":"fresh",
+            "refusal":{"file":"writers/vm.one/status.json","reason":"seq went backwards.","sinceMs":1}}],
+            "statusProblems":[{"file":"writers/vm.one/status.json","reason":"seq went backwards."}]}"#;
+        let panel: PinnedPanel = serde_json::from_str(json).expect("panel reads");
+        let pin = &panel.updates[0];
+        assert!(!is_quiet(pin) && !is_unreadable(pin) && !is_silent(pin));
+        assert!(
+            refusal_notice(pin).is_some(),
+            "the fresh branch has a notice to draw"
+        );
+        assert_eq!(refusal_reason(pin).as_deref(), Some("seq went backwards"));
+        assert_eq!(card_pins(&panel.updates).len(), 1);
     }
 
     #[test]
