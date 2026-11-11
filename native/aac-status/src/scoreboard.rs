@@ -776,8 +776,9 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
                     }
                 ),
                 note: format!(
-                    "With {} reviews the true rate is likely between {} and {}.",
+                    "With {} {} the true rate is likely between {} and {}.",
                     fmt_opt(q.per),
+                    if q.per == Some(1) { "review" } else { "reviews" },
                     pct_json(&q.low)?,
                     pct_json(&q.high)?
                 ),

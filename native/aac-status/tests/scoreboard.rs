@@ -670,13 +670,16 @@ fn speed_note_bounds_never_print_zero_times() {
 
 #[test]
 fn a_count_of_one_reads_singular() {
-    // L-new-2: "has 1 runs" and "1 blind reviews" read singular for one.
+    // L-new-2/L-new-5: "has 1 runs", "1 blind reviews" and "With 1 reviews" all read
+    // singular for one.
     let view = by_model(&golden_view()).unwrap();
     let text = serde_json::to_string(&view).unwrap();
     assert!(text.contains("GLM 5.3 · max has 1 run"), "{text}");
     assert!(!text.contains("has 1 runs"), "{text}");
     assert!(text.contains("1 blind review"), "{text}");
     assert!(!text.contains("1 blind reviews"), "{text}");
+    assert!(text.contains("With 1 review the true rate"), "{text}");
+    assert!(!text.contains("With 1 reviews"), "{text}");
 }
 
 #[test]

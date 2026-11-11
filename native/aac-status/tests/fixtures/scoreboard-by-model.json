@@ -724,7 +724,7 @@
                   "label": "Passed review",
                   "value": "100%",
                   "sub": "1 of 1, 1 on the first try",
-                  "note": "With 1 reviews the true rate is likely between 27% and 100%.",
+                  "note": "With 1 review the true rate is likely between 27% and 100%.",
                   "range": {
                     "low": 0.2699,
                     "high": 1,
@@ -1726,7 +1726,7 @@
                   "label": "Passed review",
                   "value": "100%",
                   "sub": "1 of 1, 1 on the first try",
-                  "note": "With 1 reviews the true rate is likely between 27% and 100%.",
+                  "note": "With 1 review the true rate is likely between 27% and 100%.",
                   "range": {
                     "low": 0.2699,
                     "high": 1,
