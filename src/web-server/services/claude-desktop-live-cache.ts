@@ -3,7 +3,27 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { ConfigError } from '../../errors/error-types';
 import { CLAUDE_PROFILE_ID_PATTERN } from './claude-desktop-profile-service';
-import type { ClaudeDesktopLiveUsage } from './claude-desktop-live-service';
+import type { DashboardAccountWindow } from './account-dashboard-types';
+
+/** Identity-bound quota, independent of the computer selected for launching the account. */
+export interface ClaudeDesktopLiveUsage {
+  profileId: string;
+  email: string;
+  platform: 'windows';
+  source: 'Claude Desktop live quota on Windows';
+  /** The plan Claude itself names, whatever it names it now ("max", "Ultra"). */
+  plan: string | null;
+  /** Claude only: the entitlement class the Fable column gates on ("max"/"pro"); the display name may not carry the word. */
+  planClass?: 'max' | 'pro' | null;
+  fetchedAt: string;
+  windows: DashboardAccountWindow[];
+  /** Private transport/cache binding; never projected into the account dashboard DTO. */
+  sourceContextFingerprint?: string;
+  optionalExtras?: {
+    resetCredits: 'ok' | 'unavailable';
+    prepaidBalance: 'ok' | 'unavailable';
+  };
+}
 
 const MAX_BYTES = 64 * 1024;
 const DIRECTORY = 'claude-desktop-live-cache';

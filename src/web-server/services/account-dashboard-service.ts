@@ -17,7 +17,7 @@ import {
   getCachedCodexProfileQuotaRows,
   getCodexProfileQuotaRows,
 } from '../usage/native-quota-collector';
-import type { BarSummaryRow } from '../routes/bar-routes';
+import type { BarSummaryRow } from './account-dashboard-types';
 import {
   listClaudeDesktopProfiles,
   type ClaudeDesktopProfile,

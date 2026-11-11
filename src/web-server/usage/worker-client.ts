@@ -4,11 +4,7 @@ import { Worker } from 'worker_threads';
 import { getCcsDir } from '../../config/config-loader-facade';
 import { CCSError } from '../../errors/error-types';
 import { withDeadline } from '../../utils/settle-deadline';
-import type { DailyUsage, HourlyUsage, MonthlyUsage, SessionUsage } from './types';
-import type {
-  AccountActivityScanOptions,
-  CodexPartitionFileResult,
-} from './account-activity-collector';
+import type { CompactEntry, DailyUsage, HourlyUsage, MonthlyUsage, SessionUsage } from './types';
 
 /**
  * Dot paths into a generic JSONL record (`usage.input_tokens`), from a saved
@@ -65,6 +61,51 @@ const LARGE_CODEX_STOP_DEADLINE_MS = 5_000;
  */
 let lingeringLargeReader: Promise<void> | null = null;
 const LARGE_CODEX_RETRY_MS = 24 * 60 * 60 * 1000;
+
+export interface AccountActivityScanOptions {
+  minDate: number;
+  cacheDir: string;
+  /** Testable inner budget, always less than the HTTP service worker deadline. */
+  budgetMs?: number;
+  maxBytesPerFile?: number;
+  /** Discovery is still running or hit a bound; found logs remain readable but partial. */
+  discoveryTruncated?: boolean;
+  /** Real subtrees already read by another request (saved parent sources). */
+  excludeRoots?: string[];
+  /** Experiment file cap, reducible for fixtures without raising the production ceiling. */
+  maxFiles?: number;
+  /** Smaller fixture/embedding budgets cannot raise the production ceilings. */
+  traversalLimits?: { maxDepth?: number; maxDirectories?: number; maxEntries?: number };
+  /**
+   * Unread codex bytes that trigger a fanned-out scan (N14). Below it the
+   * worker reads inline, exactly as before, so warm cycles never pay for a
+   * fan-out they do not need. Defaults to CODEX_FANOUT_THRESHOLD_BYTES.
+   */
+  fanoutThresholdBytes?: number;
+  /**
+   * Internal: set only by a codex partition reader. The default per-file byte
+   * cap (256 MB) exists so one giant file cannot starve the other files of a
+   * single reader's pass; a partition reader owns its chunk alone, so it is
+   * bounded by the shared scan deadline instead and the byte cap is lifted.
+   * An explicitly set maxBytesPerFile is still honored (see
+   * collectCodexPartition).
+   */
+  codexPartitionRead?: boolean;
+}
+
+/** One file's outcome: what the inline loop tallies per file, as data. */
+export interface CodexPartitionFileResult {
+  file: string;
+  rows: CompactEntry[];
+  complete: boolean;
+  skippedLines: number;
+  readBytes: number;
+  unfinishedTail: boolean;
+  failed: boolean;
+  compressedReplayStalled?: boolean;
+  compressedReplayTerminal?: boolean;
+  largeCodexRead?: LargeCodexReadSpec;
+}
 
 export type UsageWorkerRequest =
   /**

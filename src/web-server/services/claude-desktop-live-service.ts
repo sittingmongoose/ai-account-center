@@ -15,27 +15,10 @@ import type { DashboardAccountWindow } from './account-dashboard-types';
 import {
   readClaudeDesktopLiveSnapshot,
   writeClaudeDesktopLiveSnapshot,
+  type ClaudeDesktopLiveUsage,
 } from './claude-desktop-live-cache';
 
-/** Identity-bound quota, independent of the computer selected for launching the account. */
-export interface ClaudeDesktopLiveUsage {
-  profileId: string;
-  email: string;
-  platform: 'windows';
-  source: 'Claude Desktop live quota on Windows';
-  /** The plan Claude itself names, whatever it names it now ("max", "Ultra"). */
-  plan: string | null;
-  /** Claude only: the entitlement class the Fable column gates on ("max"/"pro"); the display name may not carry the word. */
-  planClass?: 'max' | 'pro' | null;
-  fetchedAt: string;
-  windows: DashboardAccountWindow[];
-  /** Private transport/cache binding; never projected into the account dashboard DTO. */
-  sourceContextFingerprint?: string;
-  optionalExtras?: {
-    resetCredits: 'ok' | 'unavailable';
-    prepaidBalance: 'ok' | 'unavailable';
-  };
-}
+export type { ClaudeDesktopLiveUsage };
 
 /** The entitlement class a display may carry, narrowed to what the collector emits. */
 export function livePlanClass(value: unknown): 'max' | 'pro' | null {

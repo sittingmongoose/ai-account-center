@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { CodexActivationError } from '../../../src/codex-auth/activate-codex-profile';
 import type { CodexAuthProfilesSummary } from '../../../src/codex-auth/codex-auth-dashboard-service';
-import type { BarSummaryRow } from '../../../src/web-server/routes/bar-routes';
+import type { BarSummaryRow } from '../../../src/web-server/services/account-dashboard-types';
 import {
   CodexAutoSwitchService,
   getCodexAutoSwitchService,

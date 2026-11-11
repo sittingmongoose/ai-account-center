@@ -3,7 +3,7 @@ import {
   getCachedCodexProfileQuotaRows,
   getCodexProfileQuotaRows,
 } from '../usage/native-quota-collector';
-import type { BarSummaryRow } from '../routes/bar-routes';
+import type { BarSummaryRow } from './account-dashboard-types';
 import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
 import { readingPredatesReset } from './account-window-reset';
 import { readCodexRenewalEntries } from './codex-renewal-entries';

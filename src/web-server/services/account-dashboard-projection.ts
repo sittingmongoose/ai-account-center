@@ -1,7 +1,7 @@
 import type { CodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashboard-service';
 import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
 import { antigravityPlanDisplay } from '../../antigravity/plan';
-import type { BarSummaryRow } from '../routes/bar-routes';
+import type { BarSummaryRow } from './account-dashboard-types';
 import { codexRenewalNote } from './codex-renewal-notes';
 import {
   canOpenClaudeMacProfile,

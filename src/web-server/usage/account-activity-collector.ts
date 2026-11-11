@@ -42,11 +42,13 @@ import { filesUnderT3Root } from './t3-usage-roots';
 import type { AccountAnalyticsActivityProvider } from '../services/account-analytics-types';
 import { getModelPricingWithSource, type ModelPricingResolution } from '../model-pricing';
 import { getModelsUsed, normalizeUsageProvider } from './model-identity';
-import type { ModelBreakdown } from './types';
+import type { CompactEntry, ModelBreakdown } from './types';
 import {
   CodexPartitionError,
   spawnCodexPartitionReader,
   codexFileRevision,
+  type AccountActivityScanOptions,
+  type CodexPartitionFileResult,
   type LargeCodexReadSpec,
   type LargeCodexCompletion,
   type CodexPartitionSpec,
@@ -56,10 +58,8 @@ import {
 } from './worker-client';
 import { availableCpus } from './collector-concurrency';
 
-export interface CompactEntry {
-  entry: RawUsageEntry;
-  events: number;
-}
+export type { CompactEntry, AccountActivityScanOptions, CodexPartitionFileResult };
+
 interface Checkpoint {
   version: 2;
   /** Source path lets an incomplete directory walk recover this file's contribution. */
@@ -128,36 +128,6 @@ type ReadMode = 'keyed' | 'keys';
 interface KeyedEntry {
   k: string;
   e: RawUsageEntry;
-}
-export interface AccountActivityScanOptions {
-  minDate: number;
-  cacheDir: string;
-  /** Testable inner budget, always less than the HTTP service worker deadline. */
-  budgetMs?: number;
-  maxBytesPerFile?: number;
-  /** Discovery is still running or hit a bound; found logs remain readable but partial. */
-  discoveryTruncated?: boolean;
-  /** Real subtrees already read by another request (saved parent sources). */
-  excludeRoots?: string[];
-  /** Experiment file cap, reducible for fixtures without raising the production ceiling. */
-  maxFiles?: number;
-  /** Smaller fixture/embedding budgets cannot raise the production ceilings. */
-  traversalLimits?: { maxDepth?: number; maxDirectories?: number; maxEntries?: number };
-  /**
-   * Unread codex bytes that trigger a fanned-out scan (N14). Below it the
-   * worker reads inline, exactly as before, so warm cycles never pay for a
-   * fan-out they do not need. Defaults to CODEX_FANOUT_THRESHOLD_BYTES.
-   */
-  fanoutThresholdBytes?: number;
-  /**
-   * Internal: set only by a codex partition reader. The default per-file byte
-   * cap (256 MB) exists so one giant file cannot starve the other files of a
-   * single reader's pass; a partition reader owns its chunk alone, so it is
-   * bounded by the shared scan deadline instead and the byte cap is lifted.
-   * An explicitly set maxBytesPerFile is still honored (see
-   * collectCodexPartition).
-   */
-  codexPartitionRead?: boolean;
 }
 /** Collector diagnostics cross the worker boundary without changing the shared worker protocol. */
 export type AccountActivityScanResult = UsageWorkerResult & {
@@ -2584,20 +2554,6 @@ export function partitionCodexFiles(
   }
   chunks.push(entries.slice(start).map((entry) => entry.file));
   return chunks;
-}
-
-/** One file's outcome: what the inline loop tallies per file, as data. */
-export interface CodexPartitionFileResult {
-  file: string;
-  rows: CompactEntry[];
-  complete: boolean;
-  skippedLines: number;
-  readBytes: number;
-  unfinishedTail: boolean;
-  failed: boolean;
-  compressedReplayStalled?: boolean;
-  compressedReplayTerminal?: boolean;
-  largeCodexRead?: LargeCodexReadSpec;
 }
 
 /**

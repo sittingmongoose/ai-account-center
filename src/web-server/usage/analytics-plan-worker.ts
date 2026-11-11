@@ -1,6 +1,6 @@
 /** Find the local log roots away from the dashboard's HTTP event loop (analytics-request-plan.ts). */
 import { parentPort, workerData } from 'worker_threads';
-import type { AccountAnalyticsActivityRequest } from '../services/account-analytics-activity';
+import type { AccountAnalyticsActivityRequest } from '../services/account-analytics-types';
 import {
   laterActivityRequests,
   readyActivityRequests,

@@ -1,11 +1,11 @@
 import type { IncomingMessage } from 'http';
 import type { TLSSocket } from 'tls';
 import * as net from 'net';
-import { isLoopbackRemoteAddress } from './auth-middleware';
 import {
   formatAddress,
   isAddressInNetworks,
   isLoopbackAddress,
+  isLoopbackRemoteAddress,
   normalizePeerAddress,
   parseAddress,
   type ParsedAddress,

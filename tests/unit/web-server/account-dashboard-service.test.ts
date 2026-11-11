@@ -6,7 +6,7 @@ import { createHash } from 'crypto';
 import type { CodexAuthProfilesSummary } from '../../../src/codex-auth/codex-auth-dashboard-service';
 import { CODEX_RENEWAL_MESSAGES } from '../../../src/codex-auth/codex-renewal-types';
 import { renewalEntry } from './codex-renewal-entry-fixture';
-import type { BarSummaryRow } from '../../../src/web-server/routes/bar-routes';
+import type { BarSummaryRow } from '../../../src/web-server/services/account-dashboard-types';
 import {
   AccountDashboardService,
   type AccountDashboardDeps,
