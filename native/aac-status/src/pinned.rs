@@ -474,6 +474,8 @@ pub struct LoopingView {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ItemOut {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
     #[serde(rename = "blockedOn", skip_serializing_if = "Option::is_none")]
     pub blocked_on: Option<Json>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -613,6 +615,7 @@ fn item_out(item: &ItemIn) -> ItemOut {
     ]
     .contains(&item.state.as_str());
     ItemOut {
+        state: Some(item.state.clone()),
         note: item.note.clone(),
         blocked_on: item
             .blocked_on
@@ -680,6 +683,7 @@ fn same_thread_id(reported: &str, pin: &str) -> bool {
 
 fn lite_out(item: &ItemLiteIn) -> ItemOut {
     ItemOut {
+        state: None,
         note: None,
         blocked_on: None,
         id: item.id.clone(),
@@ -739,6 +743,12 @@ fn compose_update(
             "blockers".into(),
             serde_json::to_value(&doc.blockers).unwrap_or(Json::Null),
         );
+    }
+    if let Some(thread) = thread {
+        if !thread.state.is_empty() {
+            additions.insert("state".into(), Json::String(thread.state.clone()));
+        }
+        additions.insert("writer".into(), Json::String(thread.writer.clone()));
     }
     let mut update = PinnedUpdate {
         additions,
