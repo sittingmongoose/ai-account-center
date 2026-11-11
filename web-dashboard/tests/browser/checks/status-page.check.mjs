@@ -162,7 +162,9 @@ export const tests = {
   // Jared, 2026-11-11: "The cards arent labeled so idk which are the ones you are referring to." Every open card
   // shows its label where he looks, the index groups by batch, and a missing label is never made up.
   async 'status every open card shows its label'(t) {
-    const view = fixture('server-view.json');
+    // Videos left out: on the Mac's Chrome a card video's request is not caught by the page route (TOOL-ISSUES 39).
+    const noVideo = (x) => (Array.isArray(x) ? x.filter((v) => v?.kind !== 'video').map(noVideo) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, noVideo(v)])) : x);
+    const view = noVideo(fixture('server-view.json'));
     view.cards.open = view.cards.open.map((c, i) => (i === 1 ? { ...c, label: '' } : c));
     const labelled = view.cards.open.map((c) => c.label).filter(Boolean);
     for (const [w, h] of [[1760, 1000], [390, 844]]) {
@@ -185,6 +187,9 @@ export const tests = {
       await t.check(`${w}: every labelled open card shows its label in its head`, labelled.every((l) => seen.includes(l)), seen.join(', '));
       await t.equal(`${w}: the card without a label shows none`, unlabelled, 1);
       if (w === 1760) {
+        // Fresh, on the first card: the index's first page holds the F batch.
+        await openStatus(t, view);
+        await t.page.waitForSelector(CARD);
         await t.text('.q-list .q-index-items', /F questions · Nov 5 · from /);
         await t.check('index rows lead with the label', async () =>
           (await t.page.$$eval('.q-list .q-item .q-label', (l) => l.map((x) => x.textContent))).includes('F-Q4'));
@@ -298,7 +303,9 @@ export const tests = {
     await t.count('.q-list .q-item.sel[data-label="F-Q4"]', 1);
     await t.visible('text=The judges split', 'split judges are flagged');
     await t.page.click('.q-seg .seg button >> text=All');
-    await t.page.click('.q-list .q-item[data-label="C-S1"]');
+    // C-S1 is last in the grouped deck (its thread's only card), on the index's second page: reach it by its label.
+    await t.page.fill('.q-list input[type="search"]', 'C-S1');
+    await t.text(`${CARD} .q-title .q-label`, 'C-S1');
     await t.visible('.sample-banner', 'a sample card says no answer is wanted');
     await t.check('a sample card cannot be answered', async () =>
       t.page.evaluate(() =>
