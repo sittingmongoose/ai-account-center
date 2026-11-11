@@ -12,6 +12,12 @@ use super::model::{Action, Flow};
 use crate::ui::*;
 use leptos::prelude::*;
 
+/// Whether Enter may send the flow's submit: enabled, and not busy – neither the page nor the
+/// submit itself (review L2). The button keeps its own rule; Enter never re-sends a running submit.
+pub(crate) fn can_submit_action(enabled: bool, action_busy: bool, page_busy: bool) -> bool {
+    enabled && !action_busy && !page_busy
+}
+
 #[component]
 pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -> impl IntoView {
     let input = RwSignal::new(String::new());
@@ -37,6 +43,15 @@ pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -
         k
     });
     let busy = page.busy;
+    // Enter in a field sends only when the submit is enabled and not busy (review L2).
+    let can_submit = move || {
+        flow.with_untracked(|f| {
+            f.actions
+                .iter()
+                .find(|a| a.act == "flow-submit")
+                .is_some_and(|a| can_submit_action(a.enabled, a.busy, busy.get_untracked()))
+        })
+    };
     let prov = provider.clone();
     let submit = Callback::new(move |_: ()| {
         page.send(
@@ -104,7 +119,7 @@ pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -
                                 data-probe=move || format!("flow-input:{}", name.get_value())
                                 prop:value=move || input.get()
                                 on:input=move |e| input.set(event_target_value(&e))
-                                on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { e.prevent_default(); submit.run(()); }/>
+                                on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { e.prevent_default(); if can_submit() { submit.run(()); } }/>
                         </label>
                         <Show when=move || field_kind.with(|k| k.4)>
                             <label class="field label-field">
@@ -113,7 +128,7 @@ pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -
                                     disabled=move || busy.get()
                                     prop:value=move || label.get()
                                     on:input=move |e| label.set(event_target_value(&e))
-                                    on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { e.prevent_default(); submit.run(()); }/>
+                                    on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { e.prevent_default(); if can_submit() { submit.run(()); } }/>
                             </label>
                         </Show>
                     </div>
@@ -291,4 +306,18 @@ fn copy_by_selection(text: &str) -> bool {
         .unwrap_or(false);
     area.remove();
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enter_sends_only_when_enabled_and_not_busy() {
+        assert!(can_submit_action(true, false, false));
+        // The submit itself running must not send again (review L2).
+        assert!(!can_submit_action(true, true, true));
+        assert!(!can_submit_action(true, false, true));
+        assert!(!can_submit_action(false, false, false));
+    }
 }

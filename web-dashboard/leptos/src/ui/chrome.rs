@@ -107,6 +107,11 @@ fn theme_icon(mode: &str) -> &'static str {
     }
 }
 
+/// Whether Escape closes the account menu: only for the Escape key while the menu is open (review N1).
+pub(crate) fn menu_escapes(key: &str, open: bool) -> bool {
+    key == "Escape" && open
+}
+
 /// The account menu: who is signed in, the theme, the way back to the classic app, and Sign out.
 #[component]
 fn AccountMenu(ctx: FrameCtx) -> impl IntoView {
@@ -114,6 +119,13 @@ fn AccountMenu(ctx: FrameCtx) -> impl IntoView {
     let pick = move |mode: &'static str| {
         ctx.set_theme(mode);
     };
+    // Escape closes the menu, like the other overlays (review N1).
+    let esc = window_event_listener(leptos::ev::keydown, move |e| {
+        if menu_escapes(&e.key(), ctx.menu_open.get_untracked()) {
+            ctx.menu_open.set(false);
+        }
+    });
+    on_cleanup(move || esc.remove());
     view! {
         <Show when=move || ctx.menu_open.get()>
             <div class="menu-scrim" on:click=move |_| ctx.menu_open.set(false)></div>
@@ -134,6 +146,7 @@ fn AccountMenu(ctx: FrameCtx) -> impl IntoView {
                 </div>
                 <button class="menu-item" role="menuitem" on:click=move |_| { ctx.menu_open.set(false); ctx.go(Page::Accounts); }>"Accounts & Settings"</button>
                 <button class="menu-item" role="menuitem" on:click=move |_| ctx.classic()>"Classic app"<span class="q3">" · the previous look"</span></button>
+                <button class="menu-item" role="menuitem" on:click=move |_| { let _ = window().location().reload(); }>"Reload app"<span class="q3">" · get the newest version"</span></button>
                 <button class="menu-item" role="menuitem" on:click=move |_| {
                     ctx.menu_open.set(false);
                     let _ = window().alert_with_message(&super::device::device_report());
@@ -231,4 +244,16 @@ pub fn PageShell(
         on_cleanup(move || ctx.unregister(page, id));
     }
     children().into_any()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_closes_an_open_menu() {
+        assert!(menu_escapes("Escape", true));
+        assert!(!menu_escapes("Escape", false));
+        assert!(!menu_escapes("Enter", true));
+    }
 }

@@ -5,13 +5,13 @@
 
 import { fakeServer, serve, changes } from '../accounts-fixture.mjs';
 
-async function open(t, server, { width = 1440, height = 900, phone = false } = {}) {
+async function open(t, server, { width = 1440, height = 900, phone = false, duo = false, safe = '' } = {}) {
 	await t.newContext(phone
-		? { viewport: { width, height }, isMobile: true, hasTouch: true, serviceWorkers: 'block' }
-		: { viewport: { width, height }, serviceWorkers: 'block' });
+		? { viewport: { width, height }, ...(duo ? { screen: { width: 466, height: 678 } } : {}), isMobile: true, hasTouch: true, serviceWorkers: 'block' }
+		: { viewport: { width, height }, ...(duo ? { screen: { width: 466, height: 678 } } : {}), serviceWorkers: 'block' });
 	await t.app.signIn();
 	await serve(t, server);
-	await t.goto('/app/accounts?e2e', { settleMs: 300 });
+	await t.goto(`/app/accounts?e2e${safe ? `&safe=${safe}` : ''}`, { settleMs: 300 });
 	await t.until('the Accounts page is drawn from the dashboard', () => document.querySelectorAll('.prov[data-provider]').length >= 9, null, { timeout: 45000, hard: true });
 }
 
@@ -184,5 +184,18 @@ export const tests = {
 			const d = document.querySelector('.details');
 			return !!d && Math.abs(d.getBoundingClientRect().bottom - innerHeight) < 2 && d.getBoundingClientRect().left === 0;
 		}, null, { timeout: 10000 });
+	},
+
+	async 'accounts: Details reaches the right edge beside a left rail'(t) {
+		const server = fakeServer();
+		await open(t, server, { width: 678, height: 466, phone: true, duo: true, safe: '0,0,34,84' });
+		await t.page.click(`${row('codex:two')} .acc-email`);
+		await t.until('Details shows the account', () => document.querySelector('.details .dt-title')?.textContent === 'codex.second@example.invalid', null, { timeout: 10000 });
+		const rect = await t.page.evaluate(() => {
+			const box = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, r: r.right, y: r.y, w: r.width }; };
+			return { details: box(document.querySelector('.details')), rail: box(document.querySelector('.rail')), w: innerWidth };
+		});
+		await t.check('Details starts at the rail and reaches the right edge, with no rail-width gap', rect.details.x >= rect.rail.r - 0.5 && Math.abs(rect.details.r - rect.w) < 1, JSON.stringify(rect));
+		await t.page.keyboard.press('Escape');
 	},
 };

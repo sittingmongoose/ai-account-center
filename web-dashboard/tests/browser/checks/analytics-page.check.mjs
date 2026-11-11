@@ -24,9 +24,10 @@ const FORMATS = [
 	{ name: 'desktop-1024', width: 1024, height: 800, safe: '0,0,0,0', mobile: false },
 	{ name: 'desktop-1440', width: 1440, height: 900, safe: '0,0,0,0', mobile: false },
 	{ name: 'desktop-2560', width: 2560, height: 1300, safe: '0,0,0,0', mobile: false },
-	{ name: 'iphone', width: 402, height: 874, safe: '62,0,34,0', mobile: true },
+	{ name: 'iphone', width: 402, height: 812, safe: '0,0,34,0', mobile: true },
 	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true },
-	{ name: 'duo-portrait', width: 669, height: 951, safe: '82,0,34,0', mobile: true },
+	{ name: 'duo-open-upright', width: 669, height: 869, safe: '0,0,34,0', mobile: true },
+	{ name: 'duo-folded-turned', width: 678, height: 466, safe: '0,84,34,0', mobile: true },
 	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
 ];
 

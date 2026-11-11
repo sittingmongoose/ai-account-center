@@ -14,8 +14,11 @@ const TYPES = { '.jpg': 'image/jpeg', '.png': 'image/png', '.mp4': 'video/mp4', 
 const PHONE = { viewport: { width: 402, height: 874 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 };
 const FORMATS = [
 	{ name: 'desktop', w: 1440, h: 900, safe: '0,0,0,0', mobile: false, chrome: 'desk' },
-	{ name: 'iphone', w: 402, h: 874, safe: '62,0,34,0', mobile: true, chrome: 'phone' },
+	// The installed app's real poses (review U7): no top inset on the iPhone or the open Duo, the folded Duo turned.
+	{ name: 'iphone', w: 402, h: 812, safe: '0,0,34,0', mobile: true, chrome: 'phone' },
 	{ name: 'duo-folded', w: 466, h: 678, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
+	{ name: 'duo-folded-turned', w: 678, h: 466, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
+	{ name: 'duo-open-upright', w: 669, h: 869, safe: '0,0,34,0', mobile: true, chrome: 'phone' },
 	{ name: 'duo-portrait', w: 669, h: 951, safe: '82,0,34,0', mobile: true, chrome: 'band' },
 	{ name: 'duo-landscape', w: 951, h: 669, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
 	// The Duo open on its side while iOS reports no strip (a rotated open app): still the rail (owner, 2026-11-10).

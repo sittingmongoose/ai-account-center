@@ -101,8 +101,9 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
     }
 }
 
-/// The way into the new app frame from today's app (PLAN step 4): off until this device turns it on here. The installed
-/// app keeps its own storage on iOS, so it is turned on from inside the installed app.
+/// The way back into the app frame from the classic app, for a device that chose Classic app (the frame is the default,
+/// FRAME_DEFAULT in index.html). The installed app keeps its own storage on iOS, so it is chosen from inside the installed
+/// app.
 fn frame_offer() -> impl IntoView {
     let turn_on = move |_| {
         if let Some(s) = window().local_storage().ok().flatten() {
@@ -113,7 +114,7 @@ fn frame_offer() -> impl IntoView {
     };
     view! {
         <p class="frame-offer">
-            <b>"New app frame (preview)"</b>
+            <b>"New app frame"</b>
             <span>"Every tab in the new layout, with the Duo strip and band. Classic app in its account menu brings this one back."</span>
             <button class="link" on:click=turn_on>"Try it"</button>
         </p>

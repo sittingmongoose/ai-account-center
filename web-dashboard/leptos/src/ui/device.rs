@@ -209,6 +209,68 @@ pub fn rail_width(insets: Insets) -> f64 {
     strip(insets).max(84.0)
 }
 
+/// While a text field has focus the on-screen keyboard shortens the window (open upright 669x869 can become 669x560),
+/// which would read as "not upright" and swap the bars for the rail in the middle of a note. So while typing, a change
+/// that keeps the window's width and the rail's side keeps the chrome; a rotation (a new width, or a folded Duo
+/// turned 180 to the same width with the strip on the other side) still chooses again (review L1).
+pub fn keep_chrome_while_typing(
+    typing: bool,
+    last_width: Option<f64>,
+    width: f64,
+    last_side: Option<&'static str>,
+    side: &'static str,
+) -> bool {
+    typing && last_width.is_some_and(|w| (w - width).abs() < 1.0) && last_side == Some(side)
+}
+
+/// Whether a reload would steal the screen (review L5): a field has focus, the dashboard iframe
+/// has focus, its raised confirmation shows, or the frame's own switch dialog is open.
+pub(crate) fn busy_for_reload(
+    field_typing: bool,
+    iframe_focused: bool,
+    dashboard_raised: bool,
+    dialog_open: bool,
+) -> bool {
+    field_typing || iframe_focused || dashboard_raised || dialog_open
+}
+
+/// A text field or editable element has the focus (the keyboard is, or is about to be, up), the dashboard iframe
+/// has the focus, or a switch confirmation (the dashboard's raised one, or the frame's own dialog) is open: a
+/// resume reload offers instead of reloading over any of them (review L5).
+pub fn typing() -> bool {
+    let (field_typing, iframe_focused) = document()
+        .active_element()
+        .map(|el| {
+            let tag = el.tag_name().to_ascii_lowercase();
+            let editable = js_sys::Reflect::get(&el, &"isContentEditable".into())
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            (
+                editable
+                    || tag == "textarea"
+                    || (tag == "input"
+                        && !matches!(
+                            el.get_attribute("type").unwrap_or_default().as_str(),
+                            "checkbox" | "radio" | "button" | "submit" | "range"
+                        )),
+                tag == "iframe",
+            )
+        })
+        .unwrap_or((false, false));
+    let dashboard_raised = document()
+        .query_selector(".slint-host.raised")
+        .ok()
+        .flatten()
+        .is_some();
+    let dialog_open = document()
+        .query_selector(".adialog")
+        .ok()
+        .flatten()
+        .is_some();
+    busy_for_reload(field_typing, iframe_focused, dashboard_raised, dialog_open)
+}
+
 fn parse_override(search: &str) -> Option<Insets> {
     let safe = web_sys::UrlSearchParams::new_with_str(search)
         .ok()?
@@ -273,6 +335,9 @@ pub fn start(embed: bool) {
             )
         })
         .unwrap_or(false);
+    // The width, chrome and rail side last chosen, so typing can keep them (keep_chrome_while_typing).
+    let last: std::rc::Rc<std::cell::Cell<Option<(f64, &'static str, &'static str)>>> =
+        std::rc::Rc::new(std::cell::Cell::new(None));
     let apply = move || {
         let insets = forced
             .or_else(|| probe.as_ref().filter(|_| !embed).map(measure))
@@ -282,11 +347,23 @@ pub fn start(embed: bool) {
         };
         let width = size(window().inner_width(), 1440.0);
         let height = size(window().inner_height(), 900.0);
+        let previous = last.get();
+        let side = rail_side(insets);
+        if keep_chrome_while_typing(
+            typing(),
+            previous.map(|(w, _, _)| w),
+            width,
+            previous.map(|(_, _, s)| s),
+            side,
+        ) {
+            return;
+        }
         let chrome = chrome_for(embed, duo, width, height, insets);
+        last.set(Some((width, chrome, side)));
         let _ = root.set_attribute("data-chrome", chrome);
         // The rail sits in the strip, on whichever side iOS puts it (app.css mirrors the rail's layout for the left).
         if chrome == "rail" {
-            let _ = root.set_attribute("data-rail-side", rail_side(insets));
+            let _ = root.set_attribute("data-rail-side", side);
         } else {
             let _ = root.remove_attribute("data-rail-side");
         }
@@ -326,6 +403,7 @@ pub fn start(embed: bool) {
     // iOS reports a fold's or a rotation's new insets after the resize, so the chrome is worked out again on every
     // change of the window, the visual viewport or the orientation, and twice more while iOS settles.
     let settle = Closure::<dyn Fn()>::new(apply.clone());
+    let blur_apply = Closure::<dyn Fn()>::new(apply.clone());
     let on_change = Closure::<dyn Fn()>::new(move || {
         // A pinch-zoom resizes the visual viewport too: the chrome is chosen at the page's own scale only.
         let zoomed = window()
@@ -350,6 +428,18 @@ pub fn start(embed: bool) {
     if let Some(viewport) = window().visual_viewport() {
         let _ =
             viewport.add_event_listener_with_callback("resize", on_change.as_ref().unchecked_ref());
+    }
+    {
+        // Blur may outrun the keyboard-close resize: re-choose on the next tick (review L1).
+        let on_blur = Closure::<dyn Fn()>::new(move || {
+            let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(
+                blur_apply.as_ref().unchecked_ref(),
+                0,
+            );
+        });
+        let _ = document()
+            .add_event_listener_with_callback("focusout", on_blur.as_ref().unchecked_ref());
+        on_blur.forget();
     }
     on_change.forget();
 }
@@ -436,6 +526,43 @@ mod tests {
     }
 
     #[test]
+    fn typing_keeps_the_chrome_until_the_width_changes() {
+        // the keyboard shortens open upright from 669x869: same width, so the bars stay
+        assert!(keep_chrome_while_typing(
+            true,
+            Some(669.0),
+            669.0,
+            Some("right"),
+            "right"
+        ));
+        // turned while typing: a new width chooses again
+        assert!(!keep_chrome_while_typing(
+            true,
+            Some(669.0),
+            951.0,
+            Some("right"),
+            "right"
+        ));
+        // turned 180 the same width (the folded Duo 678): the strip moves side, so choose again (review L1)
+        assert!(!keep_chrome_while_typing(
+            true,
+            Some(678.0),
+            678.0,
+            Some("right"),
+            "left"
+        ));
+        // not typing, or nothing chosen yet: choose as usual
+        assert!(!keep_chrome_while_typing(
+            false,
+            Some(669.0),
+            669.0,
+            Some("right"),
+            "right"
+        ));
+        assert!(!keep_chrome_while_typing(true, None, 669.0, None, "right"));
+    }
+
+    #[test]
     fn inside_the_shell_the_page_draws_no_chrome() {
         assert_eq!(
             chrome_for(true, true, 466.0, 678.0, insets(0.0, 84.0, 34.0, 0.0)),
@@ -477,5 +604,26 @@ mod tests {
         assert_eq!(rail_width(insets(0.0, 62.0, 21.0, 62.0)), 84.0);
         // a left inset too small to be a strip does not move the rail
         assert_eq!(rail_side(insets(0.0, 0.0, 34.0, 30.0)), "right");
+    }
+
+    #[test]
+    fn an_iframe_or_open_confirmation_keeps_the_screen() {
+        assert!(!busy_for_reload(false, false, false, false));
+        assert!(
+            busy_for_reload(true, false, false, false),
+            "a field has focus"
+        );
+        assert!(
+            busy_for_reload(false, true, false, false),
+            "the dashboard iframe has focus (review L5)"
+        );
+        assert!(
+            busy_for_reload(false, false, true, false),
+            "a raised dashboard confirmation"
+        );
+        assert!(
+            busy_for_reload(false, false, false, true),
+            "the frame's switch dialog is open"
+        );
     }
 }

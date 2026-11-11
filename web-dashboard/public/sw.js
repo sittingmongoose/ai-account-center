@@ -25,22 +25,32 @@ var OFFLINE_PAGE =
   '<p>The app shell has not been downloaded yet, and there is no connection.</p>' +
   '<p><a href="/">Try again</a></p></main></body></html>';
 
-function fromNetwork(request, timeoutMs) {
-  if (!(timeoutMs > 0)) return fetch(request);
-  var controller = new AbortController();
-  var timer = setTimeout(function () {
-    controller.abort();
-  }, timeoutMs);
-  return fetch(request, { signal: controller.signal }).then(
-    function (response) {
-      clearTimeout(timer);
-      return response;
-    },
-    function (error) {
-      clearTimeout(timer);
-      throw error;
-    }
-  );
+// The network's answer, never aborted: when a slow start is answered from the cache, the answer that arrives later
+// still refreshes the cache, so the next start is current (an aborted fetch left an old build in place for days).
+function fromNetwork(event, request) {
+  var network = fetch(request).then(function (response) {
+    if (response.status < 500 || response.status > 599) storeFor(event, request, response);
+    return response;
+  });
+  try {
+    event.waitUntil(
+      network.catch(function () {
+        // offline: the cache answers
+      })
+    );
+  } catch {
+    // The event already finished; the fetch still runs while the worker lives.
+  }
+  return network;
+}
+
+/** Rejects after `ms`, so a slow network can give way to the cached shell. */
+function giveUpAfter(ms) {
+  return new Promise(function (resolve, reject) {
+    setTimeout(function () {
+      reject(new Error('The network was too slow; the cached shell answers.'));
+    }, ms);
+  });
 }
 
 // Stores a copy of a fetched response. The copies are cloned right away, before
@@ -202,19 +212,23 @@ function networkFirst(event, request, timeoutMs) {
       : Promise.resolve(0);
   return waited
     .then(function (ms) {
-      return fromNetwork(request, ms);
+      var network = fromNetwork(event, request);
+      return ms > 0 ? Promise.race([network, giveUpAfter(ms)]) : network;
     })
     .then(
       function (response) {
         if (response.status >= 500 && response.status <= 599) {
+          // A no-store check (the frame's build check) never reads the cache: a proxy 5xx
+          // must not read as the server's newer build.
+          if (request.cache === 'no-store') return response;
           return cachedShell(request).then(function (cached) {
             return cached || response;
           });
         }
-        storeFor(event, request, response);
         return response;
       },
       function () {
+        if (request.cache === 'no-store') throw new Error('The network could not answer.');
         return caches.match(request).then(function (cached) {
           if (cached) return cached;
           if (request.mode === 'navigate') {

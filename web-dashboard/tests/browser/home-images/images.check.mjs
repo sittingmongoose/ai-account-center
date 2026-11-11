@@ -5,15 +5,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
 
+const DUO_SCREEN = { width: 466, height: 678 };
 const FORMATS = [
 	{ name: 'desktop-1024', width: 1024, height: 800, safe: '0,0,0,0', mobile: false },
 	{ name: 'desktop-1440', width: 1440, height: 900, safe: '0,0,0,0', mobile: false },
 	{ name: 'desktop-2560', width: 2560, height: 1300, safe: '0,0,0,0', mobile: false },
-	{ name: 'iphone', width: 402, height: 874, safe: '62,0,34,0', mobile: true },
-	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true },
-	{ name: 'duo-folded-rotated', width: 678, height: 466, safe: '0,84,21,0', mobile: true },
-	{ name: 'duo-portrait', width: 669, height: 951, safe: '82,0,34,0', mobile: true },
-	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
+	{ name: 'iphone', width: 402, height: 812, safe: '0,0,34,0', mobile: true },
+	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true, duo: true },
+	{ name: 'duo-open-upright', width: 669, height: 869, safe: '0,0,34,0', mobile: true, duo: true },
+	{ name: 'duo-folded-turned-strip-right', width: 678, height: 466, safe: '0,84,34,0', mobile: true, duo: true },
+	{ name: 'duo-folded-turned-strip-left', width: 678, height: 466, safe: '0,0,34,84', mobile: true, duo: true },
+	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true, duo: true },
 ];
 const UNPIN = `html { scrollbar-width: none; }
 .rail, .tabbar, .topbar, .chrome, .band-head { position: static !important; }
@@ -21,7 +23,7 @@ const UNPIN = `html { scrollbar-width: none; }
 const only = (t) => (t.args.only ? new RegExp(t.args.only) : null);
 
 async function prepare(t, f, theme) {
-	await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
+	await t.newContext({ viewport: { width: f.width, height: f.height }, ...(f.duo ? { screen: DUO_SCREEN } : {}), isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
 	await t.page.addInitScript((mode) => { try { localStorage.setItem('aac-theme', mode); } catch {} }, theme);
 	await t.app.signIn();
 	await t.app.stub('/api/accounts/dashboard', homeAccounts());
