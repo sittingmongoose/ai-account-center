@@ -1,8 +1,9 @@
-"""Read-only, identity-bound Claude Desktop quota and reset timestamps.
+"""Identity-bound Claude Desktop quota and reset timestamps.
 
 Windows decrypts its existing OAuth cache as the same signed-in OS user. Tokens
-stay in memory; this helper never refreshes, writes auth, follows HTTP
-redirects, or emits upstream response bodies or exception text.
+stay in memory. The public collector never writes. The private reset_host seam
+can send an explicitly confirmed exact-grant claim. Neither path refreshes or
+writes auth, follows redirects, or emits raw provider bodies or exceptions.
 Optional web extras read the Desktop profile's own live web session cookie in
 memory (same user, read-only, identity re-verified) and fall back to the legacy
 same-user DPAPI session capsule, verified again against this native account
@@ -1247,7 +1248,7 @@ def claude_plan_class(account, organization=None, name=None):
 SAFE_FLAG = re.compile(r"has_claude_[a-z0-9_]{1,40}")
 
 
-def collect(profile_id, platform, home=None, expected_email=None, profile_dir=None, is_default=False):
+def collect(profile_id, platform, home=None, expected_email=None, profile_dir=None, is_default=False, private_reset_sink=None):
     result = {
         "schemaVersion": 1, "provider": "claude", "profileId": profile_id,
         "platform": platform, "status": "unavailable", "email": None,
@@ -1302,7 +1303,7 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 raise UsageUnavailable()
             optional_extras = {"resetCredits": "unavailable", "prepaidBalance": "unavailable"}
             oauth_has_reset = any(w["key"] == "reset_credits_available" or w["key"].startswith("reset_credit_") for w in windows)
-            web_windows = optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected, cooldown, profile_root=profile_root)
+            web_windows = [] if private_reset_sink is not None else optional_web_windows(profile_id, account_uuid, organization["uuid"], home, optional_extras, expected, cooldown, profile_root=profile_root)
             # The web helper resets availability to unavailable on entry; if
             # the OAuth payload already supplied the grants, the account is
             # not in an unavailable web state — preserve the OAuth verdict.
@@ -1331,6 +1332,10 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 ], separators=(",", ":")).encode("ascii")).hexdigest(),
             )
             result.update(cooldown)
+            if private_reset_sink is not None:
+                # Internal host seam only. Never put this on result/public usage or a cache.
+                private_reset_sink({"account": account_uuid, "organization": organization["uuid"],
+                                    "usage": usage, "token": token, "verifyRoot": verify_root})
             return result
         raise UsageUnavailable("needs_sign_in")
     except UsageUnavailable as error:
@@ -1341,6 +1346,79 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
         result["status"] = "unavailable"
     result.update(cooldown)
     return result
+
+
+def reset_host(request):
+    """Private stdin host RPC. Credentials stay on this host, including during writes.
+
+    The server must already have durably consumed the caller's exact confirmation.
+    No public collector CLI, refresh or switch calls this function.
+    """
+    try:
+        profile_id = request["profile"]
+        captured = []
+        result = collect(profile_id, "windows", expected_email=request["expectedEmail"],
+                         profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
+                         private_reset_sink=captured.append)
+        if result.get("status") != "ok" or len(captured) != 1:
+            return {"unavailable": True}
+        private = captured[0]
+        cedar = private["usage"].get("cedar_ember")
+        if not isinstance(cedar, dict) or cedar.get("eligible") is not True or not isinstance(cedar.get("grants"), list):
+            return {"unavailable": True}
+        identity = {"provider": "claude", "account": private["account"],
+                    "organization": private["organization"], "profile": profile_id, "host": request["host"]}
+        binding = hashlib.sha256(json.dumps([identity, cedar], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        windows = {key: value.get("utilization") for key, value in private["usage"].items()
+                   if isinstance(value, dict) and isinstance(value.get("utilization"), (int, float))
+                   and not isinstance(value.get("utilization"), bool)}
+        expiries = []
+        for grant in cedar["grants"]:
+            raw = grant.get("ends_at") if isinstance(grant, dict) else None
+            end = reset_at(raw)
+            if raw is not None and end is None:
+                return {"unavailable": True}
+            expiries.append(int(dt.datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp() * 1000) if end else None)
+        if request.get("action") == "read":
+            return {"identity": identity, "observedAtMs": int(time.time() * 1000), "raw": cedar,
+                    "expiries": expiries, "windows": windows, "sourceBinding": binding, "accountLabel": request["expectedEmail"]}
+        write = request.get("write", {})
+        body = write.get("body", {})
+        if (request.get("action") != "claim" or write.get("identity") != identity or
+            write.get("sourceBinding") != binding or write.get("method") != "claude.reset_rate_limits" or
+            set(body) != {"program", "grant_id", "request_id"} or body.get("program") != "cedar_ember" or
+            not isinstance(body.get("grant_id"), str) or re.fullmatch(r"[a-z0-9_-]{1,40}", body["grant_id"]) is None or
+            not isinstance(body.get("request_id"), str) or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", body["request_id"]) is None):
+            return {"outcome": "identity-changed"}
+        matches = [g for g in cedar["grants"] if isinstance(g, dict) and g.get("id") == body["grant_id"]]
+        if len(matches) != 1 or matches[0].get("usable_now") is not True or matches[0].get("paused") is not False:
+            return {"outcome": "unavailable"}
+        if re.fullmatch(UUID, private["organization"]) is None:
+            return {"outcome": "identity-changed"}
+        private["verifyRoot"]()
+        client = Client()
+        req = urllib.request.Request(
+            "https://api.anthropic.com/api/organizations/" + private["organization"] + "/reset_rate_limits",
+            data=json.dumps(body, separators=(",", ":")).encode("ascii"), method="POST",
+            headers={"Authorization": "Bearer " + private["token"], "anthropic-beta": "oauth-2025-04-20",
+                     "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "CCS-ReadOnly-Usage/1.0"})
+        try:
+            with client.opener.open(req, timeout=8) as response:
+                raw = response.read(MAX_BYTES + 1)
+                if len(raw) > MAX_BYTES:
+                    return {"outcome": "ambiguous"}
+                answer = json.loads(raw)
+                outcome = {"reset": "reset", "not_limited": "nothingToReset", "already_used": "already-used",
+                           "ineligible": "noCredit", "cooldown": "cooldown"}.get(answer.get("result"), "ambiguous")
+                return {"outcome": outcome}
+        except urllib.error.HTTPError as error:
+            if error.code == 429:
+                return {"outcome": "rate-limited", "retryAfterMs": (retry_after_seconds(error.headers.get("Retry-After")) or 60) * 1000}
+            return {"outcome": "signed-out" if error.code in (401, 403) else "ambiguous"}
+    except Exception:
+        # Neither exception text nor provider response bodies cross the helper boundary.
+        pass
+    return {"unavailable": True, "outcome": "ambiguous"}
 
 
 def profile_arg(value):

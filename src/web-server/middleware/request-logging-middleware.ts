@@ -24,6 +24,13 @@ function decodeAsciiEscapes(value: string): string {
  * URL, and then the decoded URL is logged with the token replaced.
  */
 export function scrubLoggedUrl(url: string): string {
+  // Reset URLs can contain legacy account aliases and rejected query payloads.
+  // Keep none of them in logs, even when authentication/body validation fails.
+  let resetUrl = url;
+  for (let pass = 0; pass < 3; pass += 1) resetUrl = decodeAsciiEscapes(resetUrl);
+  if (/^\/api\/accounts\/[\s\S]*\/reset-claims(?:[/?]|$)/i.test(resetUrl)) {
+    return '/api/accounts/[account]/reset-claims';
+  }
   const scrubbed = url.replace(TOKEN_IN_URL, REDACTED_TOKEN);
   let decoded = scrubbed;
   for (let pass = 0; pass < 3; pass += 1) {

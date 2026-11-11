@@ -250,11 +250,12 @@ export function usageHelperDeadlineMs(action: UsageHelperRequest['action']): num
   return usageHelperProcessTimeoutMs(action) + PROCESS_SETTLE_GRACE_MS;
 }
 
-export async function runUsageHelper(
+export async function runPrivateUsageHelper(
   host: UsageHost,
   request: UsageHelperRequest,
+  privateSource?: string,
   callerDeadlineAt?: number
-): Promise<UsageHelperResponse> {
+): Promise<string> {
   if (host.sshHost !== null && !isSafeUsageSshAlias(host.sshHost))
     throw new ValidationError('Invalid usage host.');
   if (host.sshHost === null && host.platform !== localUsageHost().platform)
@@ -266,7 +267,7 @@ export async function runUsageHelper(
   );
   const run = async (): Promise<string> => {
     if (Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
-    const helperSource = await usageHelperBundle();
+    const helperSource = privateSource ?? (await usageHelperBundle());
     if (expired || Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
     const input = JSON.stringify({ helperSource, request });
     const executable = host.sshHost ? 'ssh' : localUsagePython(request);
@@ -307,6 +308,15 @@ export async function runUsageHelper(
       ? new NetworkError('Usage source unavailable.')
       : error;
   });
+  return stdout;
+}
+
+export async function runUsageHelper(
+  host: UsageHost,
+  request: UsageHelperRequest,
+  callerDeadlineAt?: number
+): Promise<UsageHelperResponse> {
+  const stdout = await runPrivateUsageHelper(host, request, undefined, callerDeadlineAt);
   const response = parseUsageHelperResponse(stdout);
   if (response.action !== request.action) throw new ValidationError('Invalid usage response.');
   if (

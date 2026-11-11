@@ -141,6 +141,11 @@ fn parse_status(args: &str) -> Result<Json> {
 
 pub fn dispatch(method: &str, args: &str) -> Result<String> {
     let answer = match method {
+        "resetNormalizeClaude" => crate::reset_inventory::normalize_claude(args)
+            .map_err(|code| crate::error::Error::new(code, "Reset inventory unavailable."))?,
+        "resetClaims" => {
+            crate::reset::dispatch(args).map_err(|code| crate::error::Error::new(code, "Reset operation refused."))?
+        }
         "pins" => pins(args)?,
         "parseRemotePins" => parse_remote_pins(args)?,
         "mergePins" => merge_pins_method(args)?,

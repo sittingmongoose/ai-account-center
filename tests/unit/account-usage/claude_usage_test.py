@@ -1607,5 +1607,68 @@ class LiveSessionCookieTests(unittest.TestCase):
             self.assertTrue(any(w["key"] == "session_reset_allowance" for w in windows))
             self.assertFalse(any(w["key"] == "reset_credits_available" for w in windows))
 
+
+class ResetHostOfflineTests(unittest.TestCase):
+    def setup_host(self):
+        private = {"account": ACCOUNT, "organization": ORG,
+                   "usage": {"seven_day": {"utilization": 100}, "cedar_ember": {
+                       "eligible": True, "grants": [{"id": "selected_grant", "resets_left": 1,
+                       "resets_total": 1, "paused": False, "usable_now": True,
+                       "clears": ["seven_day"]}]}},
+                   "token": os.urandom(24).hex(), "verifyRoot": mock.Mock()}
+        def collect(*args, **kwargs):
+            kwargs["private_reset_sink"](private)
+            return {"status": "ok"}
+        request = {"profile": "synthetic", "expectedEmail": "synthetic-principal", "host": "windows:fixture", "action": "read"}
+        return private, collect, request
+
+    def test_private_read_keeps_credentials_out_and_carries_exact_grant(self):
+        private, collect, request = self.setup_host()
+        with mock.patch.object(usage, "collect", side_effect=collect):
+            result = usage.reset_host(request)
+        self.assertEqual(result["raw"]["grants"][0]["id"], "selected_grant")
+        self.assertNotIn(private["token"], json.dumps(result))
+        self.assertNotIn("expectedEmail", result)
+
+    def test_only_exact_bound_write_reaches_fake_endpoint(self):
+        private, collect, request = self.setup_host()
+        sent = []
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self, limit): return b'{"result":"reset"}'
+        opener = mock.Mock()
+        opener.open.side_effect = lambda req, **kwargs: (sent.append(req) or Response())
+        with mock.patch.object(usage, "collect", side_effect=collect), mock.patch.object(usage, "Client") as client:
+            client.return_value.opener = opener
+            read = usage.reset_host(request)
+            write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"],
+                     "method": "claude.reset_rate_limits", "body": {"program": "cedar_ember",
+                     "grant_id": "selected_grant", "request_id": "a" * 64}}
+            request.update(action="claim", write=write)
+            for mutation in ("grant", "identity", "binding"):
+                bad = json.loads(json.dumps(write))
+                if mutation == "grant": bad["body"]["grant_id"] = "other_grant"
+                elif mutation == "identity": bad["identity"]["account"] = OTHER
+                else: bad["sourceBinding"] = "b" * 64
+                self.assertNotEqual(usage.reset_host(dict(request, write=bad)).get("outcome"), "reset")
+            self.assertEqual(sent, [])
+            self.assertEqual(usage.reset_host(request)["outcome"], "reset")
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(json.loads(sent[0].data)["grant_id"], "selected_grant")
+        self.assertTrue(sent[0].full_url.endswith("/" + ORG + "/reset_rate_limits"))
+        private["verifyRoot"].assert_called_once()
+
+    def test_grant_drift_and_unknown_answers_are_not_success(self):
+        private, collect, request = self.setup_host()
+        with mock.patch.object(usage, "collect", side_effect=collect):
+            read = usage.reset_host(request)
+            private["usage"]["cedar_ember"]["grants"][0]["resets_left"] = 0
+            write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"], "method": "claude.reset_rate_limits",
+                     "body": {"program": "cedar_ember", "grant_id": "selected_grant", "request_id": "a" * 64}}
+            with mock.patch.object(usage, "Client") as client:
+                self.assertEqual(usage.reset_host(dict(request, action="claim", write=write))["outcome"], "identity-changed")
+                client.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

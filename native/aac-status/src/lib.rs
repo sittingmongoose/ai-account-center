@@ -1,10 +1,11 @@
 //! AI Account Center status readers, as a native module like native/aac-store (owner rule
 //! 2026-11-08: every new server piece is Rust; the TypeScript server stays as it is).
 //!
-//! Readers only: T3's pinned threads from its state database, opened read-only, and the
+//! Status readers: T3's pinned threads from its state database, opened read-only, and the
 //! `agent-reports/status@1` documents agents write on the share. Routes, authentication,
-//! share scanning (list first, last good copy, `seq` ordering) and every product rule stay
-//! in the TypeScript server; this crate validates and projects, it never guesses.
+//! share scanning (list first, last good copy, `seq` ordering) stay in the TypeScript
+//! server. Reset inventory, guarded claim coordination and the profile-bound Codex
+//! transport also live here; only their route and collector adapters are TypeScript.
 //!
 //! TypeScript checks status reports for secrets; the native module only reads reports
 //! TypeScript accepted (owner decision 2026-11-09). There is exactly one secret filter,
@@ -16,6 +17,7 @@ pub mod error;
 pub mod ops;
 pub mod pinned;
 pub mod pins;
+pub mod reset;
 pub mod reset_inventory;
 pub mod scoreboard;
 pub mod spend;
