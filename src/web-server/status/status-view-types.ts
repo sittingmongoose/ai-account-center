@@ -354,7 +354,8 @@ export interface PinnedUpdateView {
   /** The sentence beside the percent: the estimate fallback, the disagreement, "No task list." */
   percentNote: string | null;
   now: string | null;
-  blocked: { text: string; waitingOnYou: boolean };
+  /** Null when no task list and no report names a blocker: the page says "No task lists yet". */
+  blocked: { text: string; waitingOnYou: boolean } | null;
   looping: {
     answer: 'yes' | 'no' | 'cantTell';
     text: string;
@@ -363,8 +364,9 @@ export interface PinnedUpdateView {
     /** The failing rounds behind a rule "yes"; 0 otherwise. */
     rounds?: number;
   };
-  left: Array<{ id: string; title: string }>;
-  done: Array<{ id: string; title: string }>;
+  /** Null with no list to show (D8), never an empty "0 of 0". */
+  left: Array<{ id: string; title: string }> | null;
+  done: Array<{ id: string; title: string }> | null;
   updated: { text: string; at: string; ageSeconds: number } | null;
   reportNote: string | null;
   staleNote: string | null;

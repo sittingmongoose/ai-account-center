@@ -81,16 +81,28 @@ fn the_full_update_from_a_reporting_thread() {
     assert_eq!(update.percent.as_ref().unwrap().done, Some(2));
     assert_eq!(update.percent.as_ref().unwrap().of, Some(3));
     assert_eq!(update.now.as_deref(), Some("Windows 10 sweep for stream F, batch 9."));
-    assert_eq!(update.blocked.text, "None.");
+    assert_eq!(update.blocked.as_ref().unwrap().text, "None.");
     assert_eq!(update.looping.answer, "yes");
     assert_eq!(
         update.looping.text,
         "Yes. F-07 has gone back for fixes 3 times without a passing review."
     );
     // Left has the looping item first; done is newest landed first.
-    let left: Vec<&str> = update.left.iter().map(|item| item.id.as_str()).collect();
+    let left: Vec<&str> = update
+        .left
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
     assert_eq!(left, ["F-07"]);
-    let done: Vec<&str> = update.done.iter().map(|item| item.id.as_str()).collect();
+    let done: Vec<&str> = update
+        .done
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
     assert_eq!(done, ["F-08", "F-01"]);
     assert_eq!(update.updated.as_ref().unwrap().text, "Updated 3 min ago");
     assert_eq!(view.counts.looping, 1);
@@ -126,9 +138,9 @@ fn waiting_on_you_comes_from_every_source_that_names_it() {
         })]
     }));
     let update = one_update(&built);
-    assert!(update.blocked.waiting_on_you);
+    assert!(update.blocked.as_ref().unwrap().waiting_on_you);
     assert_eq!(
-        update.blocked.text,
+        update.blocked.as_ref().unwrap().text,
         "Waiting on you: Pick the reviewers for batch B09; Choose the icon set; \
          Say yes or no to the tray icon; Which tray icon?. Blocked: A reviewer for F-02 (waiting on review)."
     );
@@ -143,8 +155,11 @@ fn a_blocked_state_without_a_reason_stays_blocked() {
         "threads": [thread(json!({ "t3Thread": "t1", "state": "blocked" }))]
     }));
     let update = one_update(&built);
-    assert_eq!(update.blocked.text, "Blocked; the report does not say on what.");
-    assert!(!update.blocked.waiting_on_you);
+    assert_eq!(
+        update.blocked.as_ref().unwrap().text,
+        "Blocked; the report does not say on what."
+    );
+    assert!(!update.blocked.as_ref().unwrap().waiting_on_you);
 
     // A blocked item without a reason names the item, still never "None."
     let built = input(json!({
@@ -157,8 +172,11 @@ fn a_blocked_state_without_a_reason_stays_blocked() {
         })]
     }));
     let update = one_update(&built);
-    assert_eq!(update.blocked.text, "Blocked on B-1; the report does not say on what.");
-    assert!(!update.blocked.waiting_on_you);
+    assert_eq!(
+        update.blocked.as_ref().unwrap().text,
+        "Blocked on B-1; the report does not say on what."
+    );
+    assert!(!update.blocked.as_ref().unwrap().waiting_on_you);
 
     // A blocked thread and a named blocker together: the named one reads as before, the
     // unexplained one says so beside it.
@@ -176,7 +194,7 @@ fn a_blocked_state_without_a_reason_stays_blocked() {
     }));
     let update = one_update(&built);
     assert_eq!(
-        update.blocked.text,
+        update.blocked.as_ref().unwrap().text,
         "Blocked: A reviewer for B-2 (waiting on review). Blocked on B-2; the report does not say on what."
     );
 }
@@ -191,8 +209,12 @@ fn a_thread_with_no_report_says_so_and_stops() {
         Some("This thread doesn't report its status yet.")
     );
     assert_eq!(update.percent, None);
-    assert_eq!(update.percent_note.as_deref(), Some("No task list."));
-    assert_eq!(update.blocked.text, "Not reported.");
+    // D8: with no report there is no invented "No task list." sentence or blocker
+    // either: null, and the page says "No task lists yet".
+    assert_eq!(update.percent_note, None);
+    assert_eq!(update.blocked, None);
+    assert_eq!(update.left, None);
+    assert_eq!(update.done, None);
     assert_eq!(update.looping.answer, "cantTell");
     assert_eq!(update.updated, None);
     assert_eq!(update.who, None);
@@ -305,8 +327,8 @@ fn no_task_list_and_an_estimate_shows_the_estimate_by_its_own_words() {
     assert_eq!(update.percent.as_ref().unwrap().text, "50%");
     assert_eq!(update.percent_note.as_deref(), Some("About 50%, by its own estimate."));
     // Without a task list, the status document's own left and done stand in.
-    assert_eq!(update.left[0].id, "F-07");
-    assert_eq!(update.done[0].id, "F-08");
+    assert_eq!(update.left.as_ref().unwrap()[0].id, "F-07");
+    assert_eq!(update.done.as_ref().unwrap()[0].id, "F-08");
     assert_eq!(update.now.as_deref(), Some("Half done."));
 }
 
@@ -431,7 +453,9 @@ fn reviews_outside_the_loop_window_do_not_loop_and_undated_ones_do() {
                 ] } ]
         })]
     }));
-    assert_eq!(one_update(&outside).looping.answer, "no");
+    // D8: with every review outside the window the board proves nothing about looping now,
+    // so it says "Can't tell.", never an invented "No.".
+    assert_eq!(one_update(&outside).looping.answer, "cantTell");
 
     let undated = input(json!({
         "pins": [pin("t1", json!("a"))],
@@ -567,7 +591,13 @@ fn dropped_items_never_count_against_the_percent_or_the_left_list() {
     let update = one_update(&built);
     assert_eq!(update.percent.as_ref().unwrap().text, "50%");
     assert_eq!(update.percent.as_ref().unwrap().of, Some(2));
-    let left: Vec<&str> = update.left.iter().map(|item| item.id.as_str()).collect();
+    let left: Vec<&str> = update
+        .left
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
     assert_eq!(left, ["F-04"]);
 }
 
@@ -623,10 +653,10 @@ fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
     }));
     let update = one_update(&built);
     assert_eq!(update.report_state, "fresh");
-    assert_eq!(update.blocked.waiting_on_you, true);
+    assert_eq!(update.blocked.as_ref().unwrap().waiting_on_you, true);
     // NOW - 90 min reads 11:03 PM in the dashboard's zone (offset -300).
     assert_eq!(
-        update.blocked.text,
+        update.blocked.as_ref().unwrap().text,
         "Waiting on you since 11:03 PM: Approve the redesign."
     );
     // A heartbeat that lapsed while it waits says nothing either.
@@ -640,7 +670,10 @@ fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
     }));
     let update = one_update(&lapsed);
     assert_eq!(update.report_state, "fresh");
-    assert_eq!(update.blocked.text, "Waiting on you: Pick the reviewers.");
+    assert_eq!(
+        update.blocked.as_ref().unwrap().text,
+        "Waiting on you: Pick the reviewers."
+    );
 }
 
 #[test]
@@ -792,4 +825,68 @@ fn the_pin_match_tolerates_the_id_forms_reports_carry() {
         update.report_note.as_deref(),
         Some("This thread doesn't report its status yet.")
     );
+}
+
+#[test]
+fn a_board_with_no_review_in_the_window_cannot_say_no_about_looping() {
+    // D8: "Looping: No." appeared whenever a task list existed, even with no review recorded
+    // anywhere. Only a review inside the window - or the thread's own answer - may say no.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
+            "project": "pm7", "stream": "f",
+            "items": [
+                { "id": "F-01", "title": "First", "state": "todo", "reviews": [] },
+                { "id": "F-02", "title": "Second", "state": "working", "reviews": [] }
+            ]
+        })]
+    }));
+    let update = one_update(&built);
+    assert_eq!(update.looping.answer, "cantTell");
+    assert_eq!(update.looping.text, "Can't tell.");
+    // One review inside the window, and the board may answer.
+    let with_review = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 41,
+            "project": "pm7", "stream": "f",
+            "items": [ { "id": "F-01", "title": "First", "state": "review",
+                "reviews": [ { "atMs": NOW - 3_600_000, "verdict": "pass" } ] } ]
+        })]
+    }));
+    assert_eq!(one_update(&with_review).looping.answer, "no");
+}
+
+#[test]
+fn a_thread_with_no_task_list_sends_nulls_not_invented_all_clears() {
+    // D8: with no task list the update carried "None." / "No task list." / empty lists, which
+    // the page drew as "Nothing blocked" and "0 of 0 tasks". Null now, and the page says
+    // "No task lists yet"; a real blocker still arrives with no board at all.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "doing": "Sweeping.", "state": "working" }))]
+    }));
+    let update = one_update(&built);
+    assert_eq!(update.percent, None);
+    assert_eq!(update.percent_note, None);
+    assert_eq!(update.blocked, None);
+    assert_eq!(update.left, None);
+    assert_eq!(update.done, None);
+    // A blocker named by the thread itself still shows without any board.
+    let blocked = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "state": "blocked", "doing": "Waiting.",
+            "blockedOn": { "kind": "owner", "what": "Approve the plan", "sinceMs": null }
+        }))]
+    }));
+    let update = one_update(&blocked);
+    assert_eq!(
+        update.blocked.as_ref().unwrap().text,
+        "Waiting on you: Approve the plan."
+    );
+    assert!(update.blocked.as_ref().unwrap().waiting_on_you);
 }

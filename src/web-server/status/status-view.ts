@@ -680,7 +680,7 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   // first, then waiting on Jared. Built from the composed panel, never from fixture text.
   const pinnedView = inputs.pinned && !('unavailable' in inputs.pinned) ? inputs.pinned : null;
   const loopingPins = pinnedView?.updates.filter((update) => update.looping.answer === 'yes') ?? [];
-  const waitingPins = pinnedView?.updates.filter((update) => update.blocked.waitingOnYou) ?? [];
+  const waitingPins = pinnedView?.updates.filter((update) => update.blocked?.waitingOnYou) ?? [];
   const roundsOf = (update: (typeof loopingPins)[number]) => update.looping.rounds ?? 0;
   const worstLoop = loopingPins.reduce<(typeof loopingPins)[number] | null>(
     (worst, update) => (worst === null || roundsOf(update) > roundsOf(worst) ? update : worst),

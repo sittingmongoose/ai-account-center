@@ -364,14 +364,17 @@ pub struct PinnedUpdate {
     /// What it is doing now (`thread@1.doing`, else the status document's summary).
     #[serde(default)]
     pub now: Option<String>,
-    pub blocked: BlockedView,
+    /// Null when no task list and no report names a blocker (D8): the page says "No task lists
+    /// yet", never an invented "Nothing blocked".
+    #[serde(default)]
+    pub blocked: Option<BlockedView>,
     pub looping: LoopingView,
-    /// Not yet landed or done, blocked and looping ones first.
+    /// Not yet landed or done, blocked and looping ones first; null with no list to show.
     #[serde(default)]
-    pub left: Vec<ItemOut>,
-    /// Landed and done, newest first.
+    pub left: Option<Vec<ItemOut>>,
+    /// Landed and done, newest first; null with no list to show.
     #[serde(default)]
-    pub done: Vec<ItemOut>,
+    pub done: Option<Vec<ItemOut>>,
     /// "Updated 6 min ago" (clock time in `at` for hover and tap).
     #[serde(default)]
     pub updated: Option<UpdatedView>,
@@ -644,18 +647,15 @@ fn compose_update(
         percent: None,
         percent_note: None,
         now: None,
-        blocked: BlockedView {
-            text: "None.".to_string(),
-            waiting_on_you: false,
-        },
+        blocked: None,
         looping: LoopingView {
             answer: "cantTell",
             text: "Can't tell.".to_string(),
             task: None,
             rounds: 0,
         },
-        left: Vec::new(),
-        done: Vec::new(),
+        left: None,
+        done: None,
         updated: None,
         report_note: None,
         stale_note: None,
@@ -695,11 +695,6 @@ fn compose_update(
         // guessing, so the update says exactly that and stops.
         update.report_state = "none";
         update.report_note = Some("This thread doesn't report its status yet.".to_string());
-        update.percent_note = Some("No task list.".to_string());
-        update.blocked = BlockedView {
-            text: "Not reported.".to_string(),
-            waiting_on_you: false,
-        };
         return update;
     }
 
@@ -848,9 +843,9 @@ fn compose_update(
             });
             update.percent_note = Some(format!("About {estimate}%, by its own estimate."));
         }
-        (None, None) => {
-            update.percent_note = Some("No task list.".to_string());
-        }
+        // (None, None): no board and no estimate. Null, never an invented sentence — the page
+        // says "No task lists yet" (D8).
+        (None, None) => {}
     }
 
     // ---- Left and done -------------------------------------------------------------------
@@ -869,7 +864,7 @@ fn compose_update(
             let looping = loop_ids.contains(&item.id);
             !(blocked || looping)
         });
-        update.left = left.into_iter().map(item_out).collect();
+        update.left = Some(left.into_iter().map(item_out).collect());
         let mut done: Vec<&ItemIn> = board
             .items
             .iter()
@@ -884,10 +879,10 @@ fn compose_update(
                     .unwrap_or(0),
             )
         });
-        update.done = done.into_iter().map(item_out).collect();
+        update.done = Some(done.into_iter().map(item_out).collect());
     } else if let Some(doc) = status {
-        update.left = doc.left.iter().map(lite_out).collect();
-        update.done = doc.done.iter().map(lite_out).collect();
+        update.left = Some(doc.left.iter().map(lite_out).collect());
+        update.done = Some(doc.done.iter().map(lite_out).collect());
     }
 
     // ---- Looping (section 3) --------------------------------------------------------------
@@ -934,11 +929,31 @@ fn compose_update(
             },
         };
     } else if tasks.is_some() {
-        update.looping = LoopingView {
-            answer: "no",
-            text: "No.".to_string(),
-            task: None,
-            rounds: 0,
+        // D8: a board with no review inside the loop window proves nothing about looping —
+        // "No." there was an invented all-clear. Only a review in the window, or the thread's
+        // own answer, may say no.
+        let reviewed_in_window = tasks.is_some_and(|board| {
+            board.items.iter().any(|item| {
+                item.reviews.iter().any(|review| match review.at_ms {
+                    Some(at) => input.now_ms - at <= LOOP_WINDOW_MS,
+                    None => true,
+                })
+            })
+        });
+        update.looping = if reviewed_in_window {
+            LoopingView {
+                answer: "no",
+                text: "No.".to_string(),
+                task: None,
+                rounds: 0,
+            }
+        } else {
+            LoopingView {
+                answer: "cantTell",
+                text: "Can't tell.".to_string(),
+                task: None,
+                rounds: 0,
+            }
         };
     } else {
         update.looping = LoopingView {
@@ -1026,10 +1041,17 @@ fn compose_update(
     }
     parts.extend(unexplained);
     if !parts.is_empty() {
-        update.blocked = BlockedView {
+        update.blocked = Some(BlockedView {
             text: parts.join(" "),
             waiting_on_you: !waiting.is_empty(),
-        };
+        });
+    } else if tasks.is_some() {
+        // A board where nothing is blocked may say "None."; without one there is nothing to
+        // draw the sentence from, so it stays null (D8).
+        update.blocked = Some(BlockedView {
+            text: "None.".to_string(),
+            waiting_on_you: false,
+        });
     }
 
     update
@@ -1079,7 +1101,10 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
         updates.push(compose_update(pin, input, thread, tasks, status));
     }
     let looping = updates.iter().filter(|update| update.looping.answer == "yes").count();
-    let waiting = updates.iter().filter(|update| update.blocked.waiting_on_you).count();
+    let waiting = updates
+        .iter()
+        .filter(|update| update.blocked.as_ref().is_some_and(|blocked| blocked.waiting_on_you))
+        .count();
     let mut head = format!("{} pinned in T3", input.pins.len());
     if looping > 0 {
         head.push_str(&format!(" · {looping} looping"));

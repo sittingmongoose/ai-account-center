@@ -387,7 +387,8 @@ command over the dashboard's ssh aliases) plus the agent reports above and the `
 accepted — one secret filter, the TypeScript one. The TypeScript side passes the module's answer
 through. A machine that does not answer keeps its last good pins for one scan, then the panel names it in
 `machineProblems` while the other machines' pins still show. Every word is the module's; a missing piece is said in
-words ("No task list.", "Can't tell."), never invented.
+words or left null for the page to word ("No task lists yet." when there is no task list;
+"Can't tell." when nothing proves looping either way), never invented.
 ```jsonc
 { "asOfMs": 1762608600000, "head": "5 pinned in T3 · 1 looping · 2 waiting on you",
   "counts": { "pinned": 5, "looping": 1, "waitingOnYou": 2 },
@@ -396,12 +397,12 @@ words ("No task list.", "Can't tell."), never invented.
                  "who": "Puppet Master · pm7-build · Opus 5.5 xhigh" | null,
                  "reportState": "fresh" | "stale" | "unreadable" | "none",
                  "percent": { "text": "58%", "done": 14, "of": 24 } | { "text": "70%", "done": null, "of": null } | null,
-                 "percentNote": "About 70%, by its own estimate." | "Its task list says 14 of 24 (58%); the thread estimates 70%." | "No task list." | null,
+                 "percentNote": "About 70%, by its own estimate." | "Its task list says 14 of 24 (58%); the thread estimates 70%." | null,
                  "now": "Windows 10 sweep for stream F, batch 9." | null,
-                 "blocked": { "text": "Waiting on you: pick the reviewers for B09.", "waitingOnYou": true },
-                 "looping": { "answer": "yes" | "no" | "cantTell", "text": "Yes. F-07 has gone back for fixes 5 times without a passing review." },
-                 "left": [ { "id": "F-07", "title": "Tray icon sharp at 125% scale" } ],
-                 "done": [ { "id": "F-08", "title": "Sticker block landed" } ],
+                 "blocked": { "text": "Waiting on you: pick the reviewers for B09.", "waitingOnYou": true } | null,
+                 "looping": { "answer": "yes" | "no" | "cantTell", "text": "Yes. F-07 has gone back for fixes 5 times without a passing review.", "task": "F-07" | null, "rounds": 5 },
+                 "left": [ { "id": "F-07", "title": "Tray icon sharp at 125% scale" } ] | null,
+                 "done": [ { "id": "F-08", "title": "Sticker block landed" } ] | null,
                  "updated": { "text": "Updated 6 min ago", "at": "ISO", "ageSeconds": 360 } | null,
                  "reportNote": "This thread doesn't report its status yet." | null,
                  "staleNote": "No status update for 25 days. If it is finished, unpin it in T3." | null,
