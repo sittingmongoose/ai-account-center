@@ -7,21 +7,22 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const src = fs.readFileSync(path.resolve(here, '../leptos/src/status.rs'), 'utf8');
+const src = fs.readFileSync(path.resolve(here, '../leptos/src/pins.rs'), 'utf8').split('#[cfg(test)]')[0];
 
-function body(name) {
-	const start = src.indexOf(`fn ${name}(`);
-	assert.ok(start >= 0, `fn ${name} exists`);
-	const next = src.indexOf('\n#[component]', start + 1);
-	return src.slice(start, next < 0 ? undefined : next);
-}
+// Concept C v2: the wide pane and the phone sheet both draw one sheet_body, which draws the refusal notice before
+// any branch (quiet, cached or fresh), so no branch can draw the thread without it.
+test('the thread sheet draws its refusal notice before every branch of its body', () => {
+	const start = src.indexOf('fn sheet_body(');
+	assert.ok(start >= 0, 'fn sheet_body exists');
+	const fn = src.slice(start, src.indexOf('\n// ----', start));
+	const notice = fn.indexOf('{refusal_notice(&p.u)}');
+	const body = fn.lastIndexOf('{body}');
+	assert.ok(notice >= 0, 'sheet_body draws refusal_notice');
+	assert.ok(body > notice, 'the notice comes before the body it belongs to');
+	assert.match(fn, /cached_notice\(&p\.u\)/, 'a cached copy says so');
+});
 
-for (const name of ['PinCard', 'PinSheet']) {
-	test(`${name}: every branch that draws the pin body also draws its refusal notice`, () => {
-		const fn = body(name);
-		const bodies = (fn.match(/pin_body\(&update/g) || []).length;
-		const notices = (fn.match(/refusal_notice\(&update\)/g) || []).length;
-		assert.ok(bodies >= 2, `${name} draws the pin body on its cached and fresh branches`);
-		assert.equal(notices, bodies, `${name}: ${notices} refusal notices for ${bodies} pin bodies`);
-	});
-}
+test('the pane and the phone sheet both draw sheet_body', () => {
+	const uses = (src.match(/sheet_body\(&p,/g) || []).length;
+	assert.equal(uses, 2, 'one use for the wide pane, one for the phone sheet');
+});

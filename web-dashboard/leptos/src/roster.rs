@@ -298,7 +298,10 @@ pub fn cut(text: &str, max: usize) -> String {
         return text.to_string();
     }
     let head: String = text.chars().take(max).collect();
-    let at = head.rfind(' ').filter(|&i| i > max / 2).unwrap_or(head.len());
+    let at = head
+        .rfind(' ')
+        .filter(|&i| i > max / 2)
+        .unwrap_or(head.len());
     format!(
         "{}…",
         head[..at].trim_end_matches(|c: char| c == ',' || c == ';' || c == ':' || c == ' ')
@@ -308,10 +311,7 @@ pub fn cut(text: &str, max: usize) -> String {
 /// The first sentence of a text, cut at `max`.
 pub fn first_sentence(text: &str, max: usize) -> String {
     let t = text.trim();
-    let end = t
-        .find(". ")
-        .map(|i| i + 1)
-        .unwrap_or(t.len());
+    let end = t.find(". ").map(|i| i + 1).unwrap_or(t.len());
     cut(&t[..end], max)
 }
 
@@ -421,10 +421,7 @@ pub fn share_relative(path: &str, allow_media: bool) -> Option<String> {
 }
 
 pub fn route_href(relative: &str) -> String {
-    format!(
-        "/api/status/deliverable?path={}",
-        js_encode(relative)
-    )
+    format!("/api/status/deliverable?path={}", js_encode(relative))
 }
 
 /// encodeURIComponent, without needing a browser (native tests).
@@ -432,9 +429,18 @@ fn js_encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {
-                out.push(b as char)
-            }
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => out.push(b as char),
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -590,18 +596,13 @@ pub fn board_for<'a>(u: &PinnedUpdate, projects: &'a [Project]) -> Option<&'a St
     if pin.is_empty() {
         return None;
     }
-    let mut hits = projects
-        .iter()
-        .flat_map(|p| p.streams.iter())
-        .filter(|s| {
-            let items: Vec<&Item> = s.items.iter().filter(|i| i.state != "dropped").collect();
-            items.len() == pin.len()
-                && pin.iter().all(|(id, title)| {
-                    items
-                        .iter()
-                        .any(|i| i.id == *id && i.title == *title)
-                })
-        });
+    let mut hits = projects.iter().flat_map(|p| p.streams.iter()).filter(|s| {
+        let items: Vec<&Item> = s.items.iter().filter(|i| i.state != "dropped").collect();
+        items.len() == pin.len()
+            && pin
+                .iter()
+                .all(|(id, title)| items.iter().any(|i| i.id == *id && i.title == *title))
+    });
     let first = hits.next()?;
     hits.next().is_none().then_some(first)
 }
@@ -620,18 +621,22 @@ fn blocked_note(b: &BlockedOn) -> String {
 /// unknown state still in its own group.
 pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
     let mut groups: Vec<TaskGroup> = Vec::new();
-    let mut push = |label: &'static str, row: TaskRow| {
-        match groups.iter_mut().find(|g| g.label == label) {
+    let mut push =
+        |label: &'static str, row: TaskRow| match groups.iter_mut().find(|g| g.label == label) {
             Some(g) => g.rows.push(row),
             None => groups.push(TaskGroup {
                 label,
                 warn: matches!(label, "Waits on you" | "State not recognised"),
                 rows: vec![row],
             }),
-        }
-    };
+        };
     let all_stated = !u.left.is_empty() || !u.done.is_empty();
-    if all_stated && u.left.iter().chain(u.done.iter()).all(|i| i.state.is_some()) {
+    if all_stated
+        && u.left
+            .iter()
+            .chain(u.done.iter())
+            .all(|i| i.state.is_some())
+    {
         // The server passed each item's own state: no board needed.
         for item in u.left.iter().chain(u.done.iter()) {
             let state = item.state.clone().unwrap_or_default();
@@ -655,12 +660,11 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
             let owner = it.blocked_on.as_ref().is_some_and(|b| b.kind == "owner");
             let label = group_of(&it.state, owner, it.blocked_on.is_some());
             let odd = (!KNOWN.contains(&it.state.as_str())).then(|| it.state.clone());
-            let note = item.note.clone().filter(|n| !n.is_empty()).or_else(|| {
-                it.blocked_on
-                    .as_ref()
-                    .filter(|_| !owner)
-                    .map(blocked_note)
-            });
+            let note = item
+                .note
+                .clone()
+                .filter(|n| !n.is_empty())
+                .or_else(|| it.blocked_on.as_ref().filter(|_| !owner).map(blocked_note));
             push(
                 label,
                 TaskRow {
@@ -755,14 +759,20 @@ mod tests {
 
     #[test]
     fn state_words_follow_the_rules_order() {
-        let ready = update(json!({"deliverables": [{"id": "a", "name": "A", "kind": "concept", "version": "v1", "for": "owner", "state": "ready"}], "state": "working"}));
+        let ready = update(
+            json!({"deliverables": [{"id": "a", "name": "A", "kind": "concept", "version": "v1", "for": "owner", "state": "ready"}], "state": "working"}),
+        );
         assert_eq!(state_word(&ready, &reported(&ready), 0), Word::ReadyForYou);
         let card = update(json!({"state": "working"}));
         assert_eq!(state_word(&card, &reported(&card), 2), Word::WaitingOnYou);
         let mut waiting = update(json!({"state": "working"}));
         waiting.blocked.text = "Waiting on an agent: B lands".into();
         assert_eq!(state_word(&waiting, &reported(&waiting), 0), Word::Waiting);
-        for (s, w) in [("working", Word::Working), ("idle", Word::Idle), ("done", Word::Done)] {
+        for (s, w) in [
+            ("working", Word::Working),
+            ("idle", Word::Idle),
+            ("done", Word::Done),
+        ] {
             let u = update(json!({ "state": s }));
             assert_eq!(state_word(&u, &reported(&u), 0), w);
         }
@@ -800,8 +810,20 @@ mod tests {
         );
         assert!(share_relative("/Volumes/Cursor/share/../etc/passwd", false).is_none());
         assert!(share_relative("/home/me/state.json", false).is_none());
-        assert!(share_relative("/mnt/Cursor/agent-reports/v1/writers/vm.a/media/x.png", false).is_none());
-        assert!(share_relative("/mnt/Cursor/agent-reports/v1/writers/vm.a/media/x.png", true).is_some());
+        assert!(
+            share_relative(
+                "/mnt/Cursor/agent-reports/v1/writers/vm.a/media/x.png",
+                false
+            )
+            .is_none()
+        );
+        assert!(
+            share_relative(
+                "/mnt/Cursor/agent-reports/v1/writers/vm.a/media/x.png",
+                true
+            )
+            .is_some()
+        );
         assert_eq!(
             route_href("share/a b/c.html"),
             "/api/status/deliverable?path=share%2Fa%20b%2Fc.html"
@@ -810,7 +832,10 @@ mod tests {
             opener(Some("/home/me/lead-state.md"), None),
             Opener::CopyPath("/home/me/lead-state.md".into())
         );
-        assert!(matches!(opener(None, Some("https://x.test/a")), Opener::Link(_)));
+        assert!(matches!(
+            opener(None, Some("https://x.test/a")),
+            Opener::Link(_)
+        ));
         assert_eq!(opener(None, Some("javascript:alert(1)")), Opener::Nothing);
     }
 
@@ -831,29 +856,67 @@ mod tests {
     fn one_unknown_task_state_marks_one_row_and_the_list_still_shows() {
         let u = PinnedUpdate {
             left: vec![
-                PinnedItem { id: "a".into(), title: "Sweep".into(), ..Default::default() },
-                PinnedItem { id: "b".into(), title: "Second review (state not recognised: queued)".into(), ..Default::default() },
+                PinnedItem {
+                    id: "a".into(),
+                    title: "Sweep".into(),
+                    ..Default::default()
+                },
+                PinnedItem {
+                    id: "b".into(),
+                    title: "Second review (state not recognised: queued)".into(),
+                    ..Default::default()
+                },
             ],
-            done: vec![PinnedItem { id: "c".into(), title: "Study".into(), ..Default::default() }],
+            done: vec![PinnedItem {
+                id: "c".into(),
+                title: "Study".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let plain = task_groups(&u, None);
         assert_eq!(
-            plain.iter().map(|g| (g.label, g.rows.len())).collect::<Vec<_>>(),
+            plain
+                .iter()
+                .map(|g| (g.label, g.rows.len()))
+                .collect::<Vec<_>>(),
             vec![("Left", 1), ("State not recognised", 1), ("Done", 1)]
         );
         assert_eq!(plain[1].rows[0].odd_state.as_deref(), Some("queued"));
         // with the board's states each item goes to its own group
         let stream = Stream {
             items: vec![
-                Item { id: "a".into(), title: "Sweep".into(), state: "working".into(), ..Default::default() },
-                Item { id: "b".into(), title: "Second review".into(), state: "queued".into(), ..Default::default() },
-                Item { id: "c".into(), title: "Study".into(), state: "done".into(), ..Default::default() },
-                Item { id: "d".into(), title: "Gone".into(), state: "dropped".into(), ..Default::default() },
+                Item {
+                    id: "a".into(),
+                    title: "Sweep".into(),
+                    state: "working".into(),
+                    ..Default::default()
+                },
+                Item {
+                    id: "b".into(),
+                    title: "Second review".into(),
+                    state: "queued".into(),
+                    ..Default::default()
+                },
+                Item {
+                    id: "c".into(),
+                    title: "Study".into(),
+                    state: "done".into(),
+                    ..Default::default()
+                },
+                Item {
+                    id: "d".into(),
+                    title: "Gone".into(),
+                    state: "dropped".into(),
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         };
-        let projects = vec![Project { streams: vec![stream], ..Default::default() }];
+        let projects = vec![Project {
+            streams: vec![stream],
+            ..Default::default()
+        }];
         let board = board_for(&u, &projects);
         assert!(board.is_some());
         let grouped = task_groups(&u, board);
@@ -867,12 +930,74 @@ mod tests {
     }
 
     #[test]
+    fn the_servers_own_item_states_group_without_a_board() {
+        let item = |id: &str, state: &str| PinnedItem {
+            id: id.into(),
+            title: format!("Task {id}"),
+            state: Some(state.into()),
+            ..Default::default()
+        };
+        let u = PinnedUpdate {
+            left: vec![
+                item("a", "working"),
+                item("b", "queued"),
+                item("c", "review"),
+                item("d", "todo"),
+            ],
+            done: vec![item("e", "landed")],
+            ..Default::default()
+        };
+        let groups = task_groups(&u, None);
+        assert_eq!(
+            groups.iter().map(|g| g.label).collect::<Vec<_>>(),
+            vec![
+                "In work",
+                "State not recognised",
+                "To do",
+                "In review",
+                "Done"
+            ]
+        );
+        assert_eq!(groups[1].rows[0].odd_state.as_deref(), Some("queued"));
+        // the writer the server matched finds that thread's open cards
+        let r = Reported {
+            writer: Some("vm.a".into()),
+            ..Default::default()
+        };
+        let cards = vec![
+            Card {
+                id: "1".into(),
+                writer: "vm.a".into(),
+                ..Default::default()
+            },
+            Card {
+                id: "2".into(),
+                writer: "vm.b".into(),
+                ..Default::default()
+            },
+        ];
+        assert_eq!(open_cards_for(&r, &cards).len(), 1);
+    }
+
+    #[test]
     fn big_groups_fold() {
-        let g = TaskGroup { label: "In review", warn: false, rows: vec![TaskRow::default(); 7] };
+        let g = TaskGroup {
+            label: "In review",
+            warn: false,
+            rows: vec![TaskRow::default(); 7],
+        };
         assert!(g.folds());
-        let d = TaskGroup { label: "Done", warn: false, rows: vec![TaskRow::default(); 4] };
+        let d = TaskGroup {
+            label: "Done",
+            warn: false,
+            rows: vec![TaskRow::default(); 4],
+        };
         assert!(d.folds());
-        let s = TaskGroup { label: "To do", warn: false, rows: vec![TaskRow::default(); 6] };
+        let s = TaskGroup {
+            label: "To do",
+            warn: false,
+            rows: vec![TaskRow::default(); 6],
+        };
         assert!(!s.folds());
     }
 
@@ -894,7 +1019,10 @@ mod tests {
         ]))
         .unwrap();
         let o = ordered(&list);
-        assert_eq!(o.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["c", "b", "a"]);
+        assert_eq!(
+            o.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            ["c", "b", "a"]
+        );
         assert_eq!(o.iter().filter(|d| d.main == Some(true)).count(), 1);
     }
 }

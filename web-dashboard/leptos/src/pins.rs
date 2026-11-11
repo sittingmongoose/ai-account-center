@@ -24,7 +24,10 @@ pub struct Pin {
 impl Pin {
     fn title(&self) -> String {
         if self.u.title.trim().is_empty() {
-            self.r.title.clone().unwrap_or_else(|| "Untitled pin".into())
+            self.r
+                .title
+                .clone()
+                .unwrap_or_else(|| "Untitled pin".into())
         } else {
             self.u.title.clone()
         }
@@ -38,7 +41,8 @@ impl Pin {
     }
     fn needs_you(&self) -> bool {
         matches!(self.word, Word::ReadyForYou | Word::WaitingOnYou)
-            || (owner_stage_waiting(&self.r) && !matches!(self.word, Word::Quiet | Word::NotReporting))
+            || (owner_stage_waiting(&self.r)
+                && !matches!(self.word, Word::Quiet | Word::NotReporting))
     }
     fn group(&self) -> &'static str {
         if self.needs_you() {
@@ -70,7 +74,11 @@ impl Pin {
         if self.u.looping.answer == "yes" {
             let text = self.u.looping.text.trim();
             let text = text.strip_prefix("Yes.").unwrap_or(text).trim();
-            let full = if text.is_empty() { "Looping.".to_string() } else { format!("Looping: {text}") };
+            let full = if text.is_empty() {
+                "Looping.".to_string()
+            } else {
+                format!("Looping: {text}")
+            };
             out.push((cut(&full, 72), full));
         }
         if self.r.readme_questions && self.cards.is_empty() {
@@ -154,26 +162,27 @@ fn lead(p: &Pin) -> String {
             None => format!("{}.", questions(p.cards.len())),
         },
         Word::WaitingOnYou | Word::Waiting => waiting_words(p).unwrap_or_default(),
-        Word::Quiet => p
-            .u
-            .stale_note
-            .as_deref()
-            .map(|n| first_sentence(n, 60))
+        Word::Quiet => {
+            p.u.stale_note
+                .as_deref()
+                .map(|n| first_sentence(n, 60))
+                .unwrap_or_default()
+        }
+        _ => now_text(p)
+            .map(|n| first_sentence(&n, 60))
             .unwrap_or_default(),
-        _ => now_text(p).map(|n| first_sentence(&n, 60)).unwrap_or_default(),
     };
     cut(&text, 60)
 }
 
 /// What it waits on, in one line: the report's own blocker, else the composer's words after their head.
 fn waiting_words(p: &Pin) -> Option<String> {
-    let reported = p
-        .r
-        .blockers
-        .iter()
-        .chain(p.r.blocked_on.iter())
-        .map(Blocker::words)
-        .find(|w| !w.is_empty());
+    let reported =
+        p.r.blockers
+            .iter()
+            .chain(p.r.blocked_on.iter())
+            .map(Blocker::words)
+            .find(|w| !w.is_empty());
     reported.or_else(|| {
         let t = p.u.blocked.text.trim();
         (!t.is_empty() && t != "None." && t != "None").then(|| {
@@ -185,9 +194,12 @@ fn waiting_words(p: &Pin) -> Option<String> {
 }
 
 fn now_text(p: &Pin) -> Option<String> {
-    p.r.now
-        .clone()
-        .or_else(|| p.u.now.clone().filter(|n| !n.trim().is_empty()).map(|n| first_sentence(&n, 140)))
+    p.r.now.clone().or_else(|| {
+        p.u.now
+            .clone()
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| first_sentence(&n, 140))
+    })
 }
 
 fn foot_words(p: &Pin) -> String {
@@ -201,8 +213,15 @@ fn foot_words(p: &Pin) -> String {
             _ => "No stages reported".into(),
         },
         None => match p.r.progress.as_ref() {
-            Some(crate::roster::Progress { done: Some(d), total: Some(t), unit }) => {
-                format!("{d} of {t} {}", unit.clone().unwrap_or_else(|| "done".into()))
+            Some(crate::roster::Progress {
+                done: Some(d),
+                total: Some(t),
+                unit,
+            }) => {
+                format!(
+                    "{d} of {t} {}",
+                    unit.clone().unwrap_or_else(|| "done".into())
+                )
             }
             _ => "No stages reported".into(),
         },
@@ -248,8 +267,12 @@ impl OpenedStore {
             all.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             all.truncate(400);
         });
-        let map: std::collections::BTreeMap<String, f64> = self.0.get_untracked().into_iter().collect();
-        if let (Some(s), Ok(text)) = (window().local_storage().ok().flatten(), serde_json::to_string(&map)) {
+        let map: std::collections::BTreeMap<String, f64> =
+            self.0.get_untracked().into_iter().collect();
+        if let (Some(s), Ok(text)) = (
+            window().local_storage().ok().flatten(),
+            serde_json::to_string(&map),
+        ) {
             let _ = s.set_item(OPENED_KEY, &text);
         }
     }
@@ -268,7 +291,8 @@ fn mark_view(m: Mark) -> AnyView {
 
 fn copy_text(text: String, done: RwSignal<Option<bool>>) {
     let navigator = window().navigator();
-    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into()).unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
+    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into())
+        .unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
     let write = js_sys::Reflect::get(&clipboard, &"writeText".into())
         .ok()
         .and_then(|f| wasm_bindgen::JsCast::dyn_into::<js_sys::Function>(f).ok());
@@ -277,7 +301,9 @@ fn copy_text(text: String, done: RwSignal<Option<bool>>) {
         .and_then(|p| wasm_bindgen::JsCast::dyn_into::<js_sys::Promise>(p).ok())
     {
         Some(promise) => leptos::task::spawn_local(async move {
-            done.set(Some(wasm_bindgen_futures::JsFuture::from(promise).await.is_ok()));
+            done.set(Some(
+                wasm_bindgen_futures::JsFuture::from(promise).await.is_ok(),
+            ));
         }),
         None => done.set(Some(false)),
     }
@@ -314,7 +340,12 @@ fn media_of(list: &[ReportedMedia]) -> (Vec<Media>, usize) {
             .url
             .clone()
             .filter(|u| u.starts_with("https://"))
-            .or_else(|| m.path.as_deref().and_then(|p| share_relative(p, true)).map(|r| route_href(&r)));
+            .or_else(|| {
+                m.path
+                    .as_deref()
+                    .and_then(|p| share_relative(p, true))
+                    .map(|r| route_href(&r))
+            });
         match url {
             Some(url) => out.push(Media {
                 kind: m.kind.clone(),
@@ -367,7 +398,11 @@ fn ToOpenRow(pin: String, d: Deliverable) -> impl IntoView {
     let on_open = Callback::new(move |_| store.record(key.clone()));
     let o = opener(d.path.as_deref(), d.url.as_deref());
     let outside = matches!(o, Opener::CopyPath(_));
-    let updated = d.updated_at.as_deref().map(fmt::clock).filter(|c| !c.is_empty());
+    let updated = d
+        .updated_at
+        .as_deref()
+        .map(fmt::clock)
+        .filter(|c| !c.is_empty());
     let show_old = RwSignal::new(false);
     let older = d.versions.clone();
     let n_old = older.len();
@@ -494,8 +529,15 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     let now = js_sys::Date::now();
     let mut waits: Vec<AnyView> = Vec::new();
     let mut wait_when: Vec<AnyView> = Vec::new();
-    for b in p.r.blockers.iter().chain(p.r.blocked_on.iter()).filter(|b| b.who() != "owner") {
-        waits.push(view! { <p><b>{who_words(b.who())}</b>{format!(" {}", b.words())}</p> }.into_any());
+    for b in
+        p.r.blockers
+            .iter()
+            .chain(p.r.blocked_on.iter())
+            .filter(|b| b.who() != "owner")
+    {
+        waits.push(
+            view! { <p><b>{who_words(b.who())}</b>{format!(" {}", b.words())}</p> }.into_any(),
+        );
         let late = b.until.as_deref().and_then(iso_ms).filter(|u| *u < now);
         wait_when.push(match (late, b.since.as_deref().and_then(iso_ms)) {
             (Some(_), _) => view! { <span data-tone="warn">{format!("was due {}", fmt::clock(b.until.as_deref().unwrap_or_default()))}</span> }.into_any(),
@@ -510,8 +552,11 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
         }
     }
     let waiting_view = if waits.is_empty() {
-        let unknown = p.u.blocked.text.trim().is_empty() && p.r.blockers.is_empty() && p.r.blocked_on.is_none();
-        view! { <span class="q3">{if unknown { "Not reported" } else { "Nothing else" }}</span> }.into_any()
+        let unknown = p.u.blocked.text.trim().is_empty()
+            && p.r.blockers.is_empty()
+            && p.r.blocked_on.is_none();
+        view! { <span class="q3">{if unknown { "Not reported" } else { "Nothing else" }}</span> }
+            .into_any()
     } else {
         waits.into_iter().collect_view().into_any()
     };
@@ -526,9 +571,13 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     let (upd, upd_age) = match p.u.updated.as_ref() {
         Some(u) => (
             view! { <span>{fmt::clock(&u.at)}</span> }.into_any(),
-            u.age_seconds.map(|a| view! { <span>{fmt::long_age(a + elapsed)}</span> }.into_any()),
+            u.age_seconds
+                .map(|a| view! { <span>{fmt::long_age(a + elapsed)}</span> }.into_any()),
         ),
-        None => (view! { <span class="q3">"Not reported"</span> }.into_any(), None),
+        None => (
+            view! { <span class="q3">"Not reported"</span> }.into_any(),
+            None,
+        ),
     };
     view! {
         <dl class="fx">
@@ -566,9 +615,17 @@ fn mini_track(stages: &[Stage]) -> Option<AnyView> {
 }
 
 fn stages_section(p: &Pin) -> AnyView {
-    let shown: Vec<Stage> = p.r.stages.iter().filter(|s| s.state != "skipped").cloned().collect();
+    let shown: Vec<Stage> =
+        p.r.stages
+            .iter()
+            .filter(|s| s.state != "skipped")
+            .cloned()
+            .collect();
     let line = stage_line(&p.r.stages);
-    let yours = shown.iter().filter(|s| s.by.as_deref() == Some("owner")).count();
+    let yours = shown
+        .iter()
+        .filter(|s| s.by.as_deref() == Some("owner"))
+        .count();
     view! {
         <section class="c2-sec">
             <div class="c2-sec-head"><h4 class="cap">"Stages"</h4>
@@ -601,7 +658,11 @@ fn TaskGroupView(g: TaskGroup) -> impl IntoView {
     let folds = g.folds();
     let n = g.rows.len();
     let rows = g.rows.clone();
-    let label = if g.label == "Left" { "Not done" } else { g.label };
+    let label = if g.label == "Left" {
+        "Not done"
+    } else {
+        g.label
+    };
     view! {
         <div class="tg">
             <h5 class="cap" data-tone=g.warn.then_some("warn")>{label}" "<span class="n">{n.to_string()}</span></h5>
@@ -631,13 +692,20 @@ fn TaskGroupView(g: TaskGroup) -> impl IntoView {
 }
 
 fn plural_tasks(n: usize) -> String {
-    if n == 1 { "1 task".into() } else { format!("{n} tasks") }
+    if n == 1 {
+        "1 task".into()
+    } else {
+        format!("{n} tasks")
+    }
 }
 
 fn tasks_section(p: &Pin) -> AnyView {
     let count = p.u.left.len() + p.u.done.len();
     if count == 0 {
-        let words = p.u.percent_note.clone().unwrap_or_else(|| "No task list reported.".into());
+        let words =
+            p.u.percent_note
+                .clone()
+                .unwrap_or_else(|| "No task list reported.".into());
         return view! {
             <section class="c2-sec">
                 <div class="c2-sec-head"><h4 class="cap">"Tasks"</h4></div>
@@ -687,13 +755,15 @@ fn sheet_body(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     .collect::<Vec<_>>();
     let problems = p.problems();
     let body = if quiet {
-        let note = p
-            .u
-            .stale_note
-            .clone()
-            .or_else(|| p.u.report_note.clone())
-            .unwrap_or_default();
-        let last = p.u.summary.clone().map(|s| format!(" The last one said: {s}"));
+        let note =
+            p.u.stale_note
+                .clone()
+                .or_else(|| p.u.report_note.clone())
+                .unwrap_or_default();
+        let last =
+            p.u.summary
+                .clone()
+                .map(|s| format!(" The last one said: {s}"));
         view! { <p class="c2-quiet"><span class="w-ink">{note}</span>{last}</p> }.into_any()
     } else {
         view! {
@@ -741,10 +811,21 @@ fn pins_of(view: &StatusView) -> Option<(PinnedPanel, Vec<Pin>)> {
             let cards: Vec<Card> = open_cards_for(&r, open).into_iter().cloned().collect();
             let word = state_word(u, &r, cards.len());
             let board = board_for(u, &view.projects).cloned();
-            Pin { u: u.clone(), r, word, cards, board }
+            Pin {
+                u: u.clone(),
+                r,
+                word,
+                cards,
+                board,
+            }
         })
         .collect();
-    pins.sort_by_key(|p| (ORDER.iter().position(|g| *g == p.group()).unwrap_or(9), p.word));
+    pins.sort_by_key(|p| {
+        (
+            ORDER.iter().position(|g| *g == p.group()).unwrap_or(9),
+            p.word,
+        )
+    });
     Some((panel, pins))
 }
 
@@ -753,9 +834,18 @@ fn is_silent(p: &Pin) -> bool {
 }
 
 #[component]
-fn RosterRow(p: Pin, selected: Signal<bool>, open: Signal<bool>, on_pick: Callback<String>) -> impl IntoView {
+fn RosterRow(
+    p: Pin,
+    selected: Signal<bool>,
+    open: Signal<bool>,
+    on_pick: Callback<String>,
+) -> impl IntoView {
     let id = p.u.id.clone();
-    let age = p.u.updated.as_ref().and_then(|u| u.age_seconds).map(short_age);
+    let age =
+        p.u.updated
+            .as_ref()
+            .and_then(|u| u.age_seconds)
+            .map(short_age);
     let model = model_of(p.u.who.as_deref());
     let problem = p.problems().into_iter().next().map(|(short, _)| short);
     let mute = matches!(p.word, Word::Quiet);
@@ -792,7 +882,10 @@ pub fn PinnedPanelView() -> impl IntoView {
     });
     let pin_of = move |id: Option<String>| {
         let id = id?;
-        data.with(|d| d.as_ref().and_then(|(_, pins)| pins.iter().find(|p| p.u.id == id).cloned()))
+        data.with(|d| {
+            d.as_ref()
+                .and_then(|(_, pins)| pins.iter().find(|p| p.u.id == id).cloned())
+        })
     };
     let shown = Memo::new(move |_| pin_of(shown_id.get()));
     let sheet_pin = Memo::new(move |_| pin_of(sheet_id.get()));
@@ -801,12 +894,13 @@ pub fn PinnedPanelView() -> impl IntoView {
             sheet_id.set(None);
         }
     });
+    // Narrow is whenever the CSS hides the wide pane (its container query decides), so the two never disagree.
     let narrow = move || {
         document()
-            .query_selector(".sec-pinned")
+            .query_selector(".sec-pinned .c2-pane")
             .ok()
             .flatten()
-            .map(|el| el.client_width() < 900)
+            .map(|el| el.client_width() == 0)
             .unwrap_or(true)
     };
     let on_pick = Callback::new(move |id: String| {

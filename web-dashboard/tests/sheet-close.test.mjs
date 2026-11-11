@@ -17,7 +17,7 @@ function rule(selector) {
 	return m ? m[2] : null;
 }
 
-for (const file of ['src/status.rs', 'src/scoreboard.rs']) {
+for (const file of ['src/pins.rs', 'src/scoreboard.rs']) {
 	test(`${file}: the sheet's close button sits in the sticky top strip with the grabber`, () => {
 		const src = fs.readFileSync(path.join(leptos, file), 'utf8');
 		const strip = src.match(/<div class="sheet-top">([\s\S]*?)<\/div>/);
