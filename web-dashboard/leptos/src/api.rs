@@ -741,7 +741,8 @@ pub struct Reply {
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SentNote {
-    /// "note", or "object" (an objection, in the owner's words; the card stays open).
+    /// "note" (the owner's written response, sent without a choice: it closes the card), or "object" (an objection,
+    /// in the owner's words; the card stays open).
     #[serde(deserialize_with = "nullable")]
     pub kind: String,
     #[serde(deserialize_with = "nullable")]
@@ -775,15 +776,15 @@ pub struct Answer {
 }
 
 impl Answer {
-    /// The answered row's first line: a completed action says Done; an answer names its choices (`labels`); a
-    /// legacy record with neither says it was a note.
+    /// The answered row's first line: a completed action says Done; an answer names its choices (`labels`); words
+    /// sent without a choice are a written response (never shown as an option).
     pub fn label(&self, labels: &str) -> String {
         if self.kind == "done" {
             "Done".to_string()
         } else if !labels.is_empty() {
             labels.to_string()
         } else {
-            "Note only".to_string()
+            "Written response".to_string()
         }
     }
 }
@@ -2170,7 +2171,7 @@ mod tests {
         assert_eq!(chosen.label("b · Keep it"), "b · Keep it");
         // A legacy record with no kind and no choice was a note.
         let legacy = answer(serde_json::json!({"choice": null, "note": "Just a thought."}));
-        assert_eq!(legacy.label(""), "Note only");
+        assert_eq!(legacy.label(""), "Written response");
     }
 
     #[test]
