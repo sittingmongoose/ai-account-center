@@ -582,12 +582,16 @@ fn a_demoted_row_with_reviews_names_how_many_in_the_cell() {
             .and_then(|cell| cell.as_ref())
             .map(|cell| cell.sub.clone())
     };
-    // The bar's count: review runs where no decided items (3), items where they exist (2).
-    assert_eq!(haiku_sub(&view.views[0]).unwrap(), vec!["5 runs, 3 reviewed, needs 5"]);
+    // The bar's count: zero decided items where none are decided (review runs don't
+    // count), the items where they exist (2).
+    assert_eq!(haiku_sub(&view.views[0]).unwrap(), vec!["5 runs, 0 reviewed, needs 5"]);
     assert_eq!(haiku_sub(&view.views[1]).unwrap(), vec!["5 runs, 2 reviewed, needs 5"]);
-    // None at all still reads none (the golden's own Haiku before the edit).
+    // The golden's own Haiku (no decided items either) reads the same.
     let golden = by_model(&golden_view()).unwrap();
-    assert_eq!(haiku_sub(&golden.views[0]).unwrap(), vec!["5 runs, none reviewed yet"]);
+    assert_eq!(
+        haiku_sub(&golden.views[0]).unwrap(),
+        vec!["5 runs, 0 reviewed, needs 5"]
+    );
 }
 
 #[test]

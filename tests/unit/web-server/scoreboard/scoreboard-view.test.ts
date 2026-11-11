@@ -408,6 +408,21 @@ describe('verdict rules', () => {
     expect(judged[1]).toMatchObject({ ranked: true });
   });
 
+  it('one item over five rounds whose last review is disputed is not enough for Recommended', () => {
+    // Every item's latest review disputed: quality decides nothing (per null) while 5
+    // review runs accrue. The bar holds zero decided items, never the run count.
+    const thin = column('thin', 1, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(1, 1, { per: null });
+    const deep = column('deep', 0.6, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({
+      ranked: false,
+      verdict: 'not-enough-data',
+      why: 'too few blind reviews yet (0 of 5 needed, n = 10)',
+    });
+    expect(judged[1]).toMatchObject({ ranked: true });
+  });
+
   it('five fix rounds on one item are not enough for Avoid', () => {
     // The heavy-share Avoid on one item (quality 40%, weight 3) is held by the same bar.
     const thin = column('thin', 0.4, 0, 10, { reviews: 5 });

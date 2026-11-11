@@ -39,7 +39,10 @@ export function belowBar(column: Pick<Column, 'n' | 'source' | 'reviews'>, minRu
  * so it keeps the review-run count.
  */
 function reviewedCount(column: Pick<Column, 'reviews' | 'measures'>): number {
-  return column.measures.quality?.per ?? column.reviews;
+  const quality = column.measures.quality;
+  // A null per means no item is decided (every latest review disputed): the count is
+  // zero, never a fallback to review runs, which would clear the bar on rounds alone.
+  return quality ? (quality.per ?? 0) : column.reviews;
 }
 
 /**
