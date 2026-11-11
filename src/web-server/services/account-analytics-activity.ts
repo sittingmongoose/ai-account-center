@@ -1749,10 +1749,9 @@ export class AccountAnalyticsActivityService {
         Math.max(elapsed() - projectionStart, state.projectionMs / 2)
       );
       const result = { ...activity, coverage };
-      projections.set(projectionKey, {
-        ...result,
-        status: result.status === 'ok' ? 'cached' : result.status,
-      });
+      // Reusing a projection does not make its completed source scan stale.
+      // In particular, background re-projection must publish the settled status.
+      projections.set(projectionKey, result);
       while (projections.size > 32) {
         const oldest = projections.keys().next().value;
         if (oldest === undefined) break;

@@ -545,6 +545,8 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       let pass = 0;
       const started = Date.parse('2026-10-02T16:01:00Z');
       const deps = {
+        // Each pass exercises a real scan, bypassing the ordinary five-minute TTL.
+        force: true,
         cacheDir: path.join(home, 'cache'),
         hosts: async () => ({ mac: 'fixture', windows: null, nas1: null }),
         now: () => started + pass * 60_000,
@@ -668,6 +670,8 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
       for (pass = 0; pass < 4; pass++) {
         const broken = pass === 1 || pass === 2;
         const answer = await loadAnalyticsRemoteSources(MIN_DATE, {
+          // Exercise failure/recovery even while the previous successful scan is recent.
+          force: true,
           cacheDir: path.join(home, 'cache'),
           hosts: async () => ({ mac: 'fixture', windows: null, nas1: null }),
           now: () => started + pass * 60_000,
