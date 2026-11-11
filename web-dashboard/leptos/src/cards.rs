@@ -297,16 +297,35 @@ fn Deck(
             verdict.set(None);
         }
     });
+    // Cards of one batch (or, outside a batch, of one thread) stay together in the deck and the index.
     let shown = Memo::new(move |_| {
         let pick = verdict.get();
         open.with(|cards| {
-            cards
+            let kept = cards
                 .iter()
                 .filter(|c| pick.is_none() || c.verdict == pick)
                 .cloned()
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            crate::question_index::grouped(&kept)
         })
     });
+    let batches = Memo::new(move |_| {
+        live.view.with(|v| {
+            v.as_ref()
+                .map(|v| v.cards.batches.clone())
+                .unwrap_or_default()
+        })
+    });
+    let heading = move |i: usize| {
+        shown.with(|cards| {
+            batches.with(|b| {
+                cards
+                    .get(i)
+                    .map(|c| crate::question_index::group_heading(c, cards, b))
+                    .unwrap_or_default()
+            })
+        })
+    };
     // The deck follows a card, not a position: when cards close or a filter changes, the owner stays on the same
     // card if it is still shown, else the nearest one.
     let current_id = RwSignal::new(None::<String>);
@@ -448,7 +467,7 @@ fn Deck(
     };
     let list_items = move || {
         view! {
-            <crate::question_index::QuestionIndex cards=shown selected=at meta=item_meta
+            <crate::question_index::QuestionIndex cards=shown selected=at meta=item_meta heading=heading
                 ready=move |card| drafts.with(|d| drafts::standing(d, card) == Standing::Ready)
                 on_select=Callback::new(move |i| { list_open.set(false); go_card(i); })/>
         }
@@ -691,13 +710,14 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
     view! {
         <article class="q-card" data-urgency=c.urgency.clone() data-kind=c.kind.clone()>
             <div class="q-kicker">
-                <span class="cap">{if place.is_empty() { c.short() } else { place.clone() }}</span>
+                // Where the card belongs; without a place, its batch in words. Never a label made up from the id.
+                <span class="cap">{if place.is_empty() { c.batch.as_deref().map(crate::question_index::batch_words).unwrap_or_default() } else { place.clone() }}</span>
                 <span class="when" title=fmt::clock(&c.asked_at)>
                     <span class="nw">{let asked_at = c.asked_at.clone(); move || format!("{} ·", fmt::age_words_since(&asked_at, live.now_ms.get()))}</span>
                     " "<span class="nw">{format!("from {asker}")}</span>
                 </span>
             </div>
-            <h3 class="q-title">{c.title.clone()}</h3>
+            <h3 class="q-title">{label_lead(&c)}{c.title.clone()}</h3>
             <div class="q-why">
                 {(c.kind == "sample").then(|| view! {
                     <p class="sample-banner">"Format sample · no answer wanted. Nothing on this card is sent."</p>
@@ -996,7 +1016,7 @@ fn Review(
                     view! {
                         <li>
                             <button class="review-row" on:click=move |_| go_card(i)>
-                                <span class="review-title">{c.title.clone()}</span>
+                                <span class="review-title">{label_lead(&c)}{c.title.clone()}</span>
                                 <span class="review-what" data-tone=(!tone.is_empty()).then_some(tone)>{what}</span>
                                 {(!note.is_empty()).then(|| view! { <span class="review-note">{format!("\u{201c}{note}\u{201d}")}</span> })}
                             </button>
@@ -1160,6 +1180,12 @@ fn copy_words(text: String, done: RwSignal<Option<bool>>) {
     }
 }
 
+/// "WL2 · " before a card's title: the short name agents use for it. A card without a label gets nothing.
+fn label_lead(c: &Card) -> Option<AnyView> {
+    let label = c.label.trim().to_string();
+    (!label.is_empty()).then(|| view! { <span class="q-label">{label}</span>" · " }.into_any())
+}
+
 #[component]
 fn AnsweredView(answered: AnsweredCard) -> impl IntoView {
     let a = answered.answer;
@@ -1181,7 +1207,7 @@ fn AnsweredView(answered: AnsweredCard) -> impl IntoView {
     let delivery = a.delivery.told();
     view! {
         <li data-delivery=a.delivery.state.clone()>
-            <div><b>{c.title.clone()}</b></div>
+            <div><b>{label_lead(&c)}{c.title.clone()}</b></div>
             <div>{a.label(&labels)}{(a.via == "recommended").then_some(" (recommended)")}</div>
             {a.note.clone().filter(|n| !n.is_empty()).map(|n| view! { <blockquote>{n}</blockquote> })}
             <div class="q3">{format!("{} · {} · {delivery}", c.asked_by, fmt::clock(&a.answered_at))}</div>

@@ -159,6 +159,41 @@ export const tests = {
       await t.text(`${CARD} .q-title`, /Inbox question 72/);
     }
   },
+  // Jared, 2026-11-11: "The cards arent labeled so idk which are the ones you are referring to." Every open card
+  // shows its label where he looks, the index groups by batch, and a missing label is never made up.
+  async 'status every open card shows its label'(t) {
+    const view = fixture('server-view.json');
+    view.cards.open = view.cards.open.map((c, i) => (i === 1 ? { ...c, label: '' } : c));
+    const labelled = view.cards.open.map((c) => c.label).filter(Boolean);
+    for (const [w, h] of [[1760, 1000], [390, 844]]) {
+      await t.viewport(w, h);
+      await openStatus(t, view);
+      await t.page.waitForSelector(CARD);
+      const seen = [];
+      let unlabelled = 0;
+      for (let i = 0; i < view.cards.open.length; i++) {
+        const got = await t.page.evaluate(() => {
+          const el = document.querySelector('article.q-card .q-title .q-label');
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { text: el.textContent, shown: r.width > 0 && r.height > 0 && r.left >= 0 && r.right <= innerWidth };
+        });
+        if (got?.shown) seen.push(got.text);
+        if (!got) unlabelled++;
+        if (i < view.cards.open.length - 1) await t.page.click(NEXT);
+      }
+      await t.check(`${w}: every labelled open card shows its label in its head`, labelled.every((l) => seen.includes(l)), seen.join(', '));
+      await t.equal(`${w}: the card without a label shows none`, unlabelled, 1);
+      if (w === 1760) {
+        await t.text('.q-list .q-index-items', /F questions · Nov 5 · from /);
+        await t.check('index rows lead with the label', async () =>
+          (await t.page.$$eval('.q-list .q-item .q-label', (l) => l.map((x) => x.textContent))).includes('F-Q4'));
+        await t.page.fill('.q-list input[type="search"]', 'F-Q4');
+        await t.text(`${CARD} .q-title .q-label`, 'F-Q4');
+      }
+    }
+  },
+
   // No stubs: the real server reads the kit's fixture reports folder, serves card media with byte ranges, records the
   // answer in the temporary home's store, signs it into the temporary reports folder, and rings nobody (doorbell off).
   async 'status end to end on the server'(t) {
@@ -270,8 +305,9 @@ export const tests = {
         [...document.querySelectorAll('article.q-card .opt-pick')].every((b) => b.disabled)
       )
     );
-    // The index shows 8 rows a page: ST-Q2, the ninth, is on the second.
-    await t.page.click('.q-list .q-index-pages button >> text=More');
+    // Typing a card's label goes straight to it (ST-Q2 sits with ST-D1, its thread's other card).
+    await t.page.fill('.q-list input[type="search"]', 'st-q2');
+    await t.text(`${CARD} .q-title .q-label`, 'ST-Q2');
     await t.page.click('.q-list .q-item[data-label="ST-Q2"]');
     await t.count(`${CARD} .quote`, 1);
     await t.count(`${CARD} .plan-change`, 1);
@@ -736,13 +772,14 @@ export const tests = {
     await t.page.click('.opt-pick >> nth=0');
     await t.page.click(NEXT); // S-Q1 (Scout comparison)
     await t.page.waitForSelector('.block[data-type="compare"]');
-    await t.page.click(NEXT); // C-Q5a (exception)
+    await t.page.click(NEXT); // C-Q5a (exception), first of its batch
     await t.visible('.q-rule', 'an exception to a standing rule shows first');
-    await t.page.click(NEXT); // C-Q5b (objection)
+    await t.page.click(NEXT); // C-Q5c, the rest of the batch stays together
+    await t.text(`${CARD} .q-title .q-label`, 'C-Q5c');
+    await t.page.click(NEXT); // C-Q5b (objection), outside the batch
     await t.page.click('.q-actions .btn');
     await t.visible('text=An objection needs a reason', 'an objection asks for words');
     await t.page.fill('textarea.note', 'Keep whole-file hashes for the audit folder only.');
-    await t.page.click(NEXT); // C-Q5c
     await t.page.click(NEXT); // T-A1 (action)
     await t.page.click('.q-actions .btn');
     await t.text('.q-actions .btn', /Marked done/);

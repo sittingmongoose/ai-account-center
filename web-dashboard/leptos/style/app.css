@@ -2679,3 +2679,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .q-unsent { padding: 0 16px 8px; }
 .q-unsent .answered { margin-top: 6px; }
 .q-unsent-actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+/* Card labels (the short names agents use, "WL2") lead the title in the same weight; the index groups by batch. */
+.q-label { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.q-index-items .q-group { list-style: none; padding: 12px 12px 4px; font-size: 12px; line-height: 1.35; color: var(--ink-2); font-weight: 600; font-variation-settings: 'wght' 600; }
+.q-index-items .q-group:first-child { padding-top: 4px; }
