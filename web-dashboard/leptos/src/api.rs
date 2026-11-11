@@ -125,6 +125,9 @@ pub struct PinnedUpdate {
     pub summary: Option<String>,
     /// The refused status@1 file behind this pin, when its writer's last file was refused.
     pub refusal: Option<StatusProblem>,
+    /// What the reports said in the optional v2 fields (stages, deliverables, now, next...), as the server validated
+    /// them. Read field by field in roster.rs, so one field this page can't read never fails the view.
+    pub reported: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -161,6 +164,10 @@ pub struct PinnedItem {
     pub id: String,
     #[serde(deserialize_with = "nullable")]
     pub title: String,
+    /// The report's one short fact for this task ("running since 9:19 AM"), when it gave one.
+    pub note: Option<String>,
+    /// The item's own state, when the server passes it on.
+    pub state: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
