@@ -15,6 +15,7 @@ Do not restore retired features to satisfy outdated prose.
 | Source ownership and current inputs | [Codebase summary](codebase-summary.md) |
 | Engineering and validation | [Code standards](code-standards.md) |
 | Data/credential boundaries | [System architecture](system-architecture/index.md) |
+| Exact-grant reset backend, confirmation and audit | [Reset claims](reset-claims.md) |
 | Existing provider collectors | [Provider flows](system-architecture/provider-flows.md) |
 | Codex profiles and guarded activation | [Codex account contract](codex-auth.md), [activation](activate-in-place.md) |
 | Antigravity profiles, sign-in and the switching release | [Antigravity on Ubuntu](antigravity-runtime.md) |
