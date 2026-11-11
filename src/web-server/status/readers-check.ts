@@ -253,7 +253,7 @@ export class ReadersCheckWriter {
         /* Already there (or not creatable): leave it; the writes below fail the same way. */
       }
     }
-    let logged = false;
+    let failed = false;
     for (const [writer, files] of this.rows()) {
       const body = `${JSON.stringify(
         {
@@ -272,13 +272,20 @@ export class ReadersCheckWriter {
         await target.writeFile(temp, body, { mode: 0o644 });
         await target.rename(temp, file);
       } catch (error) {
-        // The check is a courtesy, never load-bearing: one log per flush, never thrown.
-        if (!logged) {
-          logged = true;
+        // The check is a courtesy, never load-bearing: logged once per failure run (N5),
+        // never thrown, never per scan.
+        failed = true;
+        const root = this.root();
+        if (!loggedFailureByRoot.has(root)) {
+          loggedFailureByRoot.add(root);
           console.error('readers check flush failed:', error);
         }
         await target.rm(temp, { force: true }).catch(() => undefined);
       }
+    }
+    // A flush with no failed write clears the run: the next failure logs again (N5).
+    if (!failed) {
+      loggedFailureByRoot.delete(this.root());
     }
   }
 
@@ -360,3 +367,6 @@ const storesByRoot = new Map<string, Map<string, Map<string, ReaderFileRow>>>();
  * most one flush per root, never one per rebuild.
  */
 const flushingByRoot = new Map<string, Promise<void>>();
+
+/** Roots whose check-file failure has been logged, until a write succeeds again (N5). */
+const loggedFailureByRoot = new Set<string>();

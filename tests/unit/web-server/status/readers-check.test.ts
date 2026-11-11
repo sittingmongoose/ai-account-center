@@ -662,4 +662,65 @@ describe('the readers check file', () => {
       console.error = original;
     }
   });
+
+  it('a failing share logs once per run, not per scan (N5)', async () => {
+    const logged: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    try {
+      let fail = true;
+      let writes = 0;
+      const files = {
+        stat: async () => ({ isDirectory: () => true }),
+        mkdir: async () => {},
+        writeFile: async () => {
+          writes += 1;
+          if (fail) throw new Error('share refused the write');
+        },
+        rename: async () => {},
+        rm: async () => {},
+      };
+      const check = new ReadersCheckWriter({ root: () => '/read-only', now: () => NOW, files });
+      check.recordStatusScan(
+        {
+          root: '/read-only',
+          state: 'ok',
+          scannedAt: NOW,
+          complete: true,
+          threads: [],
+          tasks: [],
+          cards: [
+            {
+              writer: 'vm.lead',
+              doc: cardDoc('vm.lead', 'q1'),
+              sha256: 'ab'.repeat(32),
+              firstSeenAt: NOW,
+              problem: null,
+            } as never,
+          ],
+          problems: [],
+          boards: new Map(),
+        },
+        { state: 'ok', scannedAt: NOW, docs: [], problems: [] },
+        []
+      );
+      await check.flush();
+      await check.flush();
+      expect(writes).toBe(2);
+      // Two scans, one log line.
+      expect(logged).toHaveLength(1);
+      // A successful flush clears the run: the next failure logs again.
+      fail = false;
+      await check.flush();
+      expect(logged).toHaveLength(1);
+      fail = true;
+      await check.flush();
+      expect(writes).toBe(4);
+      expect(logged).toHaveLength(2);
+    } finally {
+      console.error = original;
+    }
+  });
 });
