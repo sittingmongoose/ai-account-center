@@ -1119,3 +1119,14 @@ fn v2_fields_reach_the_view_without_changing_existing_rendered_fields() {
     assert_eq!(update["reported"]["next"], "Land");
     assert_eq!(update["title"], "Thread t1");
 }
+
+#[test]
+fn thread_only_progress_reaches_reported() {
+    let progress = json!({ "done": 2, "total": 5, "unit": "items" });
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "progress": progress }))]
+    }));
+    let update = serde_json::to_value(one_update(&built)).unwrap();
+    assert_eq!(update["reported"]["progress"], progress);
+}

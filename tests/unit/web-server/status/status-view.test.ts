@@ -26,6 +26,18 @@ const dirs = tempDirs();
 afterEach(() => dirs.cleanup());
 
 const GIB = 1024 ** 3;
+it('retains accepted top-level card media in the Status API view', async () => {
+  const root = dirs.make();
+  writeCard(
+    root,
+    cardDoc('vm.lead', 'media', {
+      media: [{ kind: 'image', path: '/mnt/Cursor/share/example.png', label: 'built' }],
+    })
+  );
+  const view = buildStatusView(await inputs(root));
+  expect(view.cards.open[0].media).toHaveLength(1);
+  expect(view.cards.open[0].media[0].path).toBe('/mnt/Cursor/share/example.png');
+});
 const none = <T>(): Collected<T> => ({ data: null, asOf: null, error: null });
 
 function sample(fields: Partial<MachineSample> = {}): MachineSample {

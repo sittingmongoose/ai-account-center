@@ -183,7 +183,7 @@ pub struct BlockedIn {
     pub since_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressIn {
     pub done: u64,
@@ -719,6 +719,13 @@ fn compose_update(
             if let Some(value) = source.get(key) {
                 additions.insert(key.to_string(), value.clone());
             }
+        }
+    }
+    // Thread progress is a typed field, so serde does not include it in additions.
+    // Preserve the same tasks < thread < status precedence as the additive fields.
+    if !status.is_some_and(|d| d.additions.contains_key("progress")) {
+        if let Some(progress) = thread.and_then(|d| d.progress.as_ref()) {
+            additions.insert("progress".into(), serde_json::to_value(progress).unwrap_or(Json::Null));
         }
     }
     if let Some(blocker) = thread

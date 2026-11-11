@@ -411,6 +411,7 @@ function cardView(
   const anchored = doc.kind === 'judgement' && Boolean(doc.recommendation);
   return {
     id: doc.id,
+    media: doc.media ?? [],
     label: doc.label ?? doc.id.slice(doc.id.indexOf('--') + 2),
     writer: doc.writer,
     seq: doc.seq,

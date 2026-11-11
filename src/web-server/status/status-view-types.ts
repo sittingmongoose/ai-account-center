@@ -204,6 +204,7 @@ export interface CardNoteView {
 }
 
 export interface CardView {
+  media: Record<string, unknown>[];
   id: string;
   label: string;
   writer: string;
