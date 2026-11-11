@@ -46,10 +46,11 @@ function reviewedCount(column: Pick<Column, 'reviews' | 'measures'>): number {
 }
 
 /**
- * The review bar a Recommended or Avoid verdict must clear: one reviewed item alone never lifts
- * a row to either (a 1-of-1 quality share reads 100%), so an observed column needs `minRuns`
+ * The review bar an observed column must clear to be ranked at all: one reviewed item alone
+ * never ranks a row (a 1-of-1 quality share reads 100%), so an observed column needs `minRuns`
  * reviewed items — the same bar runs already follow. Five fix rounds on one item are one item,
- * not five. A Fine can stand on fewer; a benchmark column needs no review.
+ * not five. Below the bar a row reads "Not enough data yet", never Fine; a benchmark column
+ * needs no review.
  */
 function belowReviewBar(
   column: Pick<Column, 'source' | 'reviews' | 'measures'>,
