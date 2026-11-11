@@ -952,8 +952,11 @@ fn ModelSheet(
         <div class="sheet-host" role="dialog" aria-modal="true">
             <button class="sheet-scrim" aria-label="Close" on:click=move |_| on_close.run(())></button>
             <div class="sheet" style=move || sheet_drag_style(offset.get())>
-                <SheetGrab offset=offset on_close=on_close/>
-                <button class="icon-btn bare sheet-close" aria-label="Close" on:click=move |_| on_close.run(())><Icon name="close"/></button>
+                // The grabber and the close button stay at the top while the sheet scrolls (pkg P recheck N2).
+                <div class="sheet-top">
+                    <SheetGrab offset=offset on_close=on_close/>
+                    <button class="icon-btn bare sheet-close" aria-label="Close" on:click=move |_| on_close.run(())><Icon name="close"/></button>
+                </div>
                 {move || model.get().map(|m| view! {
                     <div class="sheet-title">
                         <Mark name=m.mark.clone() size=24/>
