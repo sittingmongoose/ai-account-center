@@ -1,4 +1,4 @@
-//! Update apps, redesigned (Jared, 2026-11-10: "the update card is super long and after other cards"): a compact table
+//! Update apps, redesigned (owner, 2026-11-10: "the update card is super long and after other cards"): a compact table
 //! with one row per app and a column per computer, first on the page. The head line and every result word come from
 //! `updateResultsView` (accounts-view.mjs); this only arranges them. A row opens to each computer's details (the
 //! message and versions the Slint page showed as a tip). The table is open on wide pages and folded to its head line on
