@@ -160,41 +160,45 @@ export function judgeGroup(
   });
   const totalWeight = weighted.reduce((sum, { weight }) => sum + weight, 0);
   const eligible = columns.filter((column) => belowBar(column, minRuns) === null);
-  const best = new Map<string, number>();
-  for (const { def } of weighted) {
-    const known = eligible.flatMap((column) => column.measures[def.id]?.value ?? []);
-    if (known.length > 0)
-      best.set(def.id, def.better === 'lower' ? Math.min(...known) : Math.max(...known));
-  }
-  const scored: Scored[] = [];
-  for (const column of eligible) {
-    const marks: Scored['marks'] = [];
-    for (const { def, weight } of weighted) {
-      const value = column.measures[def.id];
-      if (value?.value === null || value?.value === undefined) continue;
-      marks.push({ def, weight, value, mark: markOf(def, value.value, best.get(def.id) ?? 0) });
+  /** The best each measure has over these columns alone, and their marks and scores against it. */
+  const scoreSet = (set: Column[]): Scored[] => {
+    const best = new Map<string, number>();
+    for (const { def } of weighted) {
+      const known = set.flatMap((column) => column.measures[def.id]?.value ?? []);
+      if (known.length > 0)
+        best.set(def.id, def.better === 'lower' ? Math.min(...known) : Math.max(...known));
     }
-    const knownWeight = marks.reduce((sum, mark) => sum + mark.weight, 0);
-    if (knownWeight === 0) continue;
-    scored.push({
-      column,
-      marks,
-      coverage: knownWeight / totalWeight,
-      score: marks.reduce((sum, mark) => sum + mark.mark * mark.weight, 0) / knownWeight,
-    });
-  }
-  scored.sort(
-    (a, b) =>
-      b.score - a.score ||
-      b.column.n - a.column.n ||
-      JSON.stringify(a.column.runs[0]?.id).localeCompare(JSON.stringify(b.column.runs[0]?.id))
-  );
+    const scored: Scored[] = [];
+    for (const column of set) {
+      const marks: Scored['marks'] = [];
+      for (const { def, weight } of weighted) {
+        const value = column.measures[def.id];
+        if (value?.value === null || value?.value === undefined) continue;
+        marks.push({ def, weight, value, mark: markOf(def, value.value, best.get(def.id) ?? 0) });
+      }
+      const knownWeight = marks.reduce((sum, mark) => sum + mark.weight, 0);
+      if (knownWeight === 0) continue;
+      scored.push({
+        column,
+        marks,
+        coverage: knownWeight / totalWeight,
+        score: marks.reduce((sum, mark) => sum + mark.mark * mark.weight, 0) / knownWeight,
+      });
+    }
+    scored.sort(
+      (a, b) =>
+        b.score - a.score ||
+        b.column.n - a.column.n ||
+        JSON.stringify(a.column.runs[0]?.id).localeCompare(JSON.stringify(b.column.runs[0]?.id))
+    );
+    return scored;
+  };
   // Settle the review bar before the comparison: a row the bar demotes must not set
-  // the top score, the peer count or the ranks of the rows that stay. Pull every
-  // demoted row out and judge the rest again, until a pass pulls nothing (each pass
-  // pulls at least one, so at most scored.length passes).
+  // the top score, the peer count, the ranks, or the best values the speed and cost
+  // marks are measured against. Pull every demoted row out and re-score the rest
+  // against each other, until a pass pulls nothing (each pass pulls at least one).
   const judged = new Map<Column, Column>();
-  let remaining = scored;
+  let remaining = scoreSet(eligible);
   while (remaining.length > 0) {
     const top = remaining[0].score;
     const peers = remaining.length;
@@ -214,7 +218,9 @@ export function judgeGroup(
         )
       );
     }
-    remaining = remaining.filter((entry) => !pulled.includes(entry));
+    remaining = scoreSet(
+      remaining.filter((entry) => !pulled.includes(entry)).map((entry) => entry.column)
+    );
   }
   const top = remaining[0]?.score ?? 0;
   remaining.forEach((entry, position) => {

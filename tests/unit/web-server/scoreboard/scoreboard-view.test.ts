@@ -468,6 +468,19 @@ describe('verdict rules', () => {
     });
   });
 
+  it('a pulled row does not set the best marks are measured against', () => {
+    // The demoted row is the fastest by far. Measured against it, deep's speed mark
+    // collapses and deep reads Avoid; measured only against the survivors, it is Fine.
+    const thin = column('thin', 1, 0, 1, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const deep = column('deep', 0.52, 0.15, 100, { reviews: 5 });
+    const mid = column('mid', 0.9, 0, 100, { reviews: 5 });
+    const judged = judge([thin, deep, mid]);
+    expect(judged[0]).toMatchObject({ ranked: false, verdict: 'not-enough-data' });
+    expect(judged[1]).toMatchObject({ ranked: true, verdict: 'fine' });
+    expect(judged[2]).toMatchObject({ ranked: true });
+  });
+
   it('a weak survivor of a pull is the only ranked row, not behind the demoted top', () => {
     const thin = column('thin', 1, 0, 10, { reviews: 5 });
     thin.measures.quality = value(1, 1);
