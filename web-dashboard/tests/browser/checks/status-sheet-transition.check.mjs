@@ -87,17 +87,18 @@ export const tests = {
 	},
 
 	async 'status open pin sheet shows newer figures and keeps its place'(t) {
-		const view = withPins(fixture('status-design-view.json').pinned);
+		// The C2 fixture's first row (Needs you) has a long sheet: facts, things to open, stages and tasks.
+		const c2 = fixture('status-c2-pins.json');
+		const view = { ...fixture('status-design-view.json'), pinned: c2.pinned, projects: c2.projects };
 		const newer = structuredClone(view);
-		newer.pinned.updates[0].percent = { text: '62%', done: 15, of: 24 };
-		newer.pinned.updates[0].updated = { ...newer.pinned.updates[0].updated, text: 'Updated 1 min ago', ageSeconds: 60 };
+		newer.pinned.updates.find((u) => u.id === 'c2-ready').reported.now = 'The second round-2 review started.';
 		const sheet = await openSheet(t, view);
 		const scroller = t.page.locator('.sheet');
 		await scroller.evaluate((el) => { el.scrollTop = 200; });
 		const before = await scroller.evaluate((el) => el.scrollTop);
 		await t.check('the sheet is long enough to scroll', before > 0, `scrollTop ${before}`);
-		await sheet.change(newer, rowSays, [ROW, '15 of 24']);
-		await t.text(SHEET, /15 of 24 tasks done/);
+		await sheet.change(newer, rowSays, [SHEET, 'The second round-2 review started']);
+		await t.text(SHEET, /The second round-2 review started\./);
 		await t.equal('the sheet stays where it was scrolled', await scroller.evaluate((el) => el.scrollTop), before);
 		await t.page.locator('.sheet-close').click();
 		await t.count('.sheet', 0);

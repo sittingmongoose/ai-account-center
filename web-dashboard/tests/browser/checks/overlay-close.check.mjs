@@ -56,7 +56,7 @@ async function assertClose(t, label, closeSel, goneSel, safe, closeClick = 'clic
 	}
 	if (closeClick === 'escape') await t.page.keyboard.press('Escape');
 	else await t.page.click(closeSel);
-	await t.until(`${label}: tap closes`, () => !document.querySelector(goneSel), null, { timeout: 5000 });
+	await t.until(`${label}: tap closes`, (sel) => !document.querySelector(sel), goneSel, { timeout: 5000 });
 }
 
 async function stubMedia(t) {

@@ -53,7 +53,8 @@ async function stubStatus(t, view) {
   );
   await stubMedia(t);
   // Things to open: the read-only deliverable route, stubbed (a fixture image for pictures, a page otherwise).
-  await t.page.route(
+  // On the context, so the tab an Open button opens is served too.
+  await t.page.context().route(
     (u) => new URL(u).pathname === '/api/status/deliverable',
     (r) => {
       const wanted = new URL(r.request().url()).searchParams.get('path') || '';
@@ -165,7 +166,8 @@ export const tests = {
     await t.app.signIn();
     await t.goto('/app/status', { settleMs: 300 });
     await t.page.waitForSelector(CARD);
-    await t.text('.sec-questions .plate-meta', /9 open/);
+    // The fixture's note-only answer is a written response: it closed its card (owner, 2026-11-11), so 8 stay open.
+    await t.text('.sec-questions .plate-meta', /\b8 open/);
     await t.check('card video plays from the server (byte ranges)', async () =>
       t.page.evaluate(async () => {
         const v = [...document.querySelectorAll('.media video')][0];
@@ -182,7 +184,7 @@ export const tests = {
     );
     // Answer the first question card in the deck, then send from the review.
     let found = false;
-    for (let i = 0; i < 9 && !found; i++) {
+    for (let i = 0; i < 8 && !found; i++) {
       found = await t.page.evaluate(() => {
         const card = document.querySelector('article.q-card');
         return (
@@ -209,7 +211,7 @@ export const tests = {
     );
     await t.until(
       'the answered card leaves the deck',
-      () => /8 open/.test(document.querySelector('.sec-questions .plate-meta')?.textContent || ''),
+      () => /\b7 open/.test(document.querySelector('.sec-questions .plate-meta')?.textContent || ''),
       null,
       { timeout: 15000 }
     );
@@ -242,7 +244,8 @@ export const tests = {
     await t.viewport(1440, 900);
     await openStatus(t, fixture('server-view.json'));
     await t.page.waitForSelector(CARD);
-    await t.text('.sec-questions .plate-meta', /9 open/);
+    // The fixture's note-only answer is a written response: it closed its card (owner, 2026-11-11), so 8 stay open.
+    await t.text('.sec-questions .plate-meta', /\b8 open/);
     await t.text('.sec-machines', /ssh refused/);
     await t.text('.sec-machines', /under the 50 GB floor/);
     await t.text('.sec-questions .plate-note', /unreadable/i);
@@ -267,6 +270,8 @@ export const tests = {
         [...document.querySelectorAll('article.q-card .opt-pick')].every((b) => b.disabled)
       )
     );
+    // The index shows 8 rows a page: ST-Q2, the ninth, is on the second.
+    await t.page.click('.q-list .q-index-pages button >> text=More');
     await t.page.click('.q-list .q-item[data-label="ST-Q2"]');
     await t.count(`${CARD} .quote`, 1);
     await t.count(`${CARD} .plan-change`, 1);
