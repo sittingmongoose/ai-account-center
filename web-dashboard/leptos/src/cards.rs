@@ -196,7 +196,11 @@ pub fn CardsPanel() -> impl IntoView {
             .view
             .with_untracked(|v| v.as_ref().is_some_and(|v| v.cards.proves_closed()));
         if complete {
-            drafts.update(|d| drafts::prune(d, &cards));
+            // Only empty drafts, and words the answered history holds, go: unsent words of a closed card stay below.
+            let answered = live
+                .view
+                .with_untracked(|v| v.as_ref().map(|v| v.cards.answered.clone()).unwrap_or_default());
+            drafts.update(|d| drafts::prune(d, &cards, &answered));
         }
     });
 
@@ -227,6 +231,7 @@ pub fn CardsPanel() -> impl IntoView {
             >
                 <Deck open=open drafts=drafts at=at deck_view=deck_view sending=sending problem=problem source=source history_problem=Signal::derive(history_problem)/>
             </Show>
+            <UnsentClosed open=open drafts=drafts/>
             <Show when=move || !answered().is_empty()>
                 <div class="q-foot-actions">
                     <Disclosure open=answered_open label=format!("Answered ({})", answered().len())/>
@@ -1055,6 +1060,86 @@ fn Sent(summary: SentSummary, back: impl Fn() + Copy + Send + Sync + 'static) ->
             })}
             <button class="btn" on:click=move |_| back()>"Back to the questions"</button>
         </div>
+    }
+}
+
+/// Words or a choice this device holds for a question that has closed, which no record holds (another tab or device
+/// closed it first, or an older response did while newer words were written). They were not sent, and a closed
+/// question takes no answer, so the owner can copy them or discard them; nothing drops them silently.
+#[component]
+fn UnsentClosed(open: Memo<Vec<Card>>, drafts: RwSignal<Drafts>) -> impl IntoView {
+    let live = expect_context::<Live>();
+    let rows = Memo::new(move |_| {
+        // Only a complete card list proves a card closed; a short one says nothing here.
+        if !live.view.with(|v| v.as_ref().is_some_and(|v| v.cards.proves_closed())) {
+            return Vec::new();
+        }
+        let answered = live.view.with(|v| v.as_ref().map(|v| v.cards.answered.clone()).unwrap_or_default());
+        open.with(|cards| {
+            drafts.with(|d| {
+                drafts::unsent_closed(d, cards)
+                    .into_iter()
+                    .map(|(id, draft)| {
+                        let title = answered
+                            .iter()
+                            .find(|a| &a.card.id == id)
+                            .map(|a| a.card.title.clone())
+                            .unwrap_or_else(|| id.rsplit("--").next().unwrap_or(id).to_string());
+                        (id.clone(), title, draft.choice.clone(), draft.note.trim().to_string())
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+    });
+    move || {
+        let list = rows.get();
+        (!list.is_empty()).then(|| view! {
+            <div class="q-unsent" role="status">
+                <p class="plate-note problem">{if list.len() == 1 {
+                    "Unsent words for a question that has closed. They were not sent; copy them to keep them, or discard them.".to_string()
+                } else {
+                    format!("Unsent words for {} questions that have closed. They were not sent; copy them to keep them, or discard them.", list.len())
+                }}</p>
+                <ul class="answered">
+                    {list.into_iter().map(|(id, title, choice, note)| {
+                        let copied = RwSignal::new(None::<bool>);
+                        let words = note.clone();
+                        view! {
+                            <li>
+                                <div><b>{title}</b></div>
+                                {(!choice.is_empty()).then(|| view! { <div>{format!("Chosen, not sent: {}", choice.join(", "))}</div> })}
+                                {(!note.is_empty()).then(|| view! { <blockquote>{note.clone()}</blockquote> })}
+                                <div class="q-unsent-actions">
+                                    {(!words.is_empty()).then(|| view! {
+                                        <button class="btn sm" on:click=move |_| copy_words(words.clone(), copied)>
+                                            {move || match copied.get() { Some(true) => "Copied", Some(false) => "Copy failed: select the words", None => "Copy words" }}
+                                        </button>
+                                    })}
+                                    <button class="btn sm" on:click=move |_| drafts.update(|d| drafts::discard(d, &id))>"Discard"</button>
+                                </div>
+                            </li>
+                        }
+                    }).collect_view()}
+                </ul>
+            </div>
+        })
+    }
+}
+
+fn copy_words(text: String, done: RwSignal<Option<bool>>) {
+    use wasm_bindgen::JsCast;
+    let navigator = window().navigator();
+    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into()).unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
+    let promise = js_sys::Reflect::get(&clipboard, &"writeText".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .and_then(|f| f.call1(&clipboard, &text.into()).ok())
+        .and_then(|p| p.dyn_into::<js_sys::Promise>().ok());
+    match promise {
+        Some(p) => spawn_local(async move {
+            done.set(Some(wasm_bindgen_futures::JsFuture::from(p).await.is_ok()));
+        }),
+        None => done.set(Some(false)),
     }
 }
 
