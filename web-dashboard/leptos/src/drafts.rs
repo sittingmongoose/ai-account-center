@@ -6,7 +6,7 @@
 //! version: the first tap on a changed card starts its choice afresh, and editing the note re-dates only the note. A
 //! note never re-dates a choice, so an old choice can't ride along on a changed question.
 
-use crate::api::{AnswerEntry, Card};
+use crate::api::{AnswerEntry, AnsweredCard, Card};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -238,8 +238,44 @@ fn refresh_nonce(drafts: &mut Drafts, card: &Card) {
 }
 
 /// Drop drafts for cards that are no longer open.
-pub fn prune(drafts: &mut Drafts, cards: &[Card]) {
-    drafts.retain(|id, _| cards.iter().any(|c| &c.id == id));
+pub fn prune(drafts: &mut Drafts, cards: &[Card], answered: &[AnsweredCard]) {
+    // A closed card proves only that the card closed, not that these words were recorded: another tab may have
+    // written newer words while an older response was on its way. Words leave only once a record holds them.
+    drafts.retain(|id, d| {
+        cards.iter().any(|c| &c.id == id) || (d.has_answer() && !proven_recorded(id, d, answered))
+    });
+}
+
+/// Whether the answered history holds exactly this draft's words (and choice) for its card: then the draft was
+/// recorded, by this tab or another, and nothing unsent is lost by dropping it.
+pub fn proven_recorded(id: &str, d: &Draft, answered: &[AnsweredCard]) -> bool {
+    answered.iter().any(|a| {
+        if a.card.id != id {
+            return false;
+        }
+        let kind = entry_kind(&a.card, d);
+        let mut sent = if kind == "answer" { d.choice.clone() } else { Vec::new() };
+        let mut held = a.answer.choice.clone().unwrap_or_default();
+        sent.sort();
+        held.sort();
+        a.answer.kind == kind
+            && sent == held
+            && a.answer.note.as_deref().unwrap_or("").trim() == d.note.trim()
+    })
+}
+
+/// Drafts with words or a choice for cards that are no longer open and that no record holds: the owner's unsent
+/// work, shown so it can be copied or discarded, never dropped silently.
+pub fn unsent_closed<'a>(drafts: &'a Drafts, cards: &[Card]) -> Vec<(&'a String, &'a Draft)> {
+    drafts
+        .iter()
+        .filter(|(id, d)| d.has_answer() && !cards.iter().any(|c| &c.id == *id))
+        .collect()
+}
+
+/// The owner discarded the unsent words of a closed card.
+pub fn discard(drafts: &mut Drafts, id: &str) {
+    drafts.remove(id);
 }
 
 /// Before a send: a draft whose entry would remake an id already recorded from its nonce (an edit back to recorded
@@ -812,13 +848,71 @@ mod tests {
     }
 
     #[test]
-    fn pruning_drops_closed_cards() {
+    fn pruning_drops_only_empty_or_recorded_drafts_of_closed_cards() {
         let cards = vec![card("a", 1, None)];
         let mut d = Drafts::new();
         toggle(&mut d, &card("gone", 1, None), "A");
+        toggle(&mut d, &card("empty", 1, None), "A");
+        toggle(&mut d, &card("empty", 1, None), "A");
         toggle(&mut d, &cards[0], "A");
-        prune(&mut d, &cards);
+        prune(&mut d, &cards, &[]);
+        // the emptied marker goes; the unsent choice on a closed card stays, shown as unsent
+        assert_eq!(d.keys().collect::<Vec<_>>(), vec!["a", "gone"]);
+        assert_eq!(unsent_closed(&d, &cards).len(), 1);
+        // once the history holds that very choice it was recorded, and it goes
+        let held = AnsweredCard {
+            card: card("gone", 1, None),
+            answer: crate::api::Answer {
+                kind: "answer".into(),
+                choice: Some(vec!["A".into()]),
+                ..Default::default()
+            },
+        };
+        prune(&mut d, &cards, &[held]);
         assert_eq!(d.keys().collect::<Vec<_>>(), vec!["a"]);
+    }
+
+    /// Review R1 (2026-11-11): tab A sends "Use the third way." with no option; while the POST is held, tab B's
+    /// newer words reach this tab; the server records only the first words, which close the card. The newer words
+    /// survive the result, the complete reload that drops the card, and a browser restart.
+    #[test]
+    fn newer_words_survive_an_older_response_closing_the_card() {
+        let q1 = card("vm.lead--Q1", 1, None);
+        let open = vec![q1.clone()];
+        let mut ours = Drafts::new();
+        set_note(&mut ours, &q1, "Use the third way.".into());
+        let sent = entries(&ours, &open).remove(0);
+        assert_eq!(sent.kind, "note");
+        // the POST is held; tab B changes the stored draft and this tab imports it
+        let base = ours.clone();
+        let mut theirs = ours.clone();
+        set_note(&mut theirs, &q1, "Use the fourth way instead.".into());
+        ours = merge(&theirs, &base, &ours);
+        assert_eq!(ours["vm.lead--Q1"].note, "Use the fourth way instead.");
+        // the first words come back recorded: the newer draft is not the one sent, so it stays
+        forget_sent(&mut ours, &open, &sent);
+        assert_eq!(ours["vm.lead--Q1"].note, "Use the fourth way instead.");
+        // the complete reload: Q1 is closed, and the history holds only the first words
+        let history = vec![AnsweredCard {
+            card: q1.clone(),
+            answer: crate::api::Answer {
+                kind: "note".into(),
+                choice: Some(vec![]),
+                note: Some("Use the third way.".into()),
+                ..Default::default()
+            },
+        }];
+        prune(&mut ours, &[], &history);
+        assert_eq!(ours["vm.lead--Q1"].note, "Use the fourth way instead.");
+        assert_eq!(unsent_closed(&ours, &[]).len(), 1);
+        // a browser restart: what storage holds reads back with the same words, and survives the next prune
+        let stored = serde_json::to_string(&ours).unwrap();
+        let mut restarted: Drafts = serde_json::from_str(&stored).unwrap();
+        prune(&mut restarted, &[], &history);
+        assert_eq!(restarted["vm.lead--Q1"].note, "Use the fourth way instead.");
+        // only the owner's Discard removes them
+        discard(&mut restarted, "vm.lead--Q1");
+        assert!(restarted.is_empty());
     }
 
     #[test]

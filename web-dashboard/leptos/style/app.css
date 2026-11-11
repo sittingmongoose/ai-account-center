@@ -2532,3 +2532,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
     .q-wrap > .q-list { display: block; }
   }
 }
+/* Unsent words of a closed question (review R1): kept until the owner copies or discards them. */
+.q-unsent { padding: 0 16px 8px; }
+.q-unsent .answered { margin-top: 6px; }
+.q-unsent-actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
