@@ -41,7 +41,10 @@ pub struct FrameCtx {
     next_info: RwSignal<u64>,
     pub menu_open: RwSignal<bool>,
     /// The server has a newer build than the one running (`watch_build`): the frame offers "New version · Reload".
-    pub new_build: RwSignal<bool>,
+    /// Holds the offered build id; empty means no notice.
+    pub new_build: RwSignal<String>,
+    /// The build "Later" dismissed (review L6): the poll offers again only for a different one.
+    pub dismissed_build: RwSignal<String>,
     pub toasts: RwSignal<Vec<Toast>>,
     pub username: RwSignal<String>,
     next_toast: RwSignal<u64>,
@@ -118,7 +121,8 @@ impl FrameCtx {
             infos: RwSignal::new(Vec::new()),
             next_info: RwSignal::new(0),
             menu_open: RwSignal::new(false),
-            new_build: RwSignal::new(false),
+            new_build: RwSignal::new(String::new()),
+            dismissed_build: RwSignal::new(String::new()),
             toasts: RwSignal::new(Vec::new()),
             username: RwSignal::new(String::new()),
             next_toast: RwSignal::new(0),
@@ -563,6 +567,12 @@ fn warm_runtime(served: &str) {
     }
 }
 
+/// Whether the check may offer a served build: only when it differs from the one "Later" dismissed
+/// (review L6: the 10-minute poll must not bring the same notice back).
+pub(crate) fn should_offer(served: &str, dismissed: &str) -> bool {
+    served != dismissed
+}
+
 /// An installed app that iOS resumes keeps the build it started with, for days. So whenever the app comes back on
 /// screen, and every 10 minutes while it is open, the frame asks the server for its page (no cache) and compares the
 /// build. Coming back on screen with nothing being typed, it reloads at once; otherwise it offers "New version ·
@@ -610,13 +620,17 @@ fn watch_build(ctx: FrameCtx) {
             };
             match build_id(&html) {
                 Some(served) if served != running => {
+                    let dismissed = ctx.dismissed_build.with_untracked(|d| d.clone());
+                    if !should_offer(&served, &dismissed) {
+                        return;
+                    }
                     if resumed && !crate::ui::device::typing() {
                         let _ = window().location().reload();
                     } else {
                         // Store the runtime behind the page the worker just stored, so an
                         // offline start finds it too (review M1).
                         warm_runtime(&served);
-                        let _ = ctx.new_build.try_set(true);
+                        ctx.new_build.set(served);
                     }
                 }
                 _ => {}
@@ -720,11 +734,14 @@ pub fn Frame(initial: Page) -> impl IntoView {
             <ActivationDialog/>
         </Show>
         <Toasts ctx=ctx/>
-        <Show when=move || ctx.new_build.get()>
+        <Show when=move || !ctx.new_build.get().is_empty()>
             <div class="new-build" role="status">
                 <span>"New version"</span>
                 <button class="btn primary sm" on:click=move |_| { let _ = window().location().reload(); }>"Reload"</button>
-                <button class="icon-btn bare" aria-label="Later" on:click=move |_| ctx.new_build.set(false)><Icon name="close"/></button>
+                <button class="icon-btn bare" aria-label="Later" on:click=move |_| {
+                    ctx.dismissed_build.set(ctx.new_build.get_untracked());
+                    ctx.new_build.set(String::new());
+                }><Icon name="close"/></button>
             </div>
         </Show>
     }
@@ -866,6 +883,14 @@ mod tests {
             refresh: Callback::new(|_| {}),
             lead: None,
         }
+    }
+
+    #[test]
+    fn later_remembers_the_dismissed_build() {
+        // The same build never offers again; only a different one does (review L6).
+        assert!(should_offer("newbuild01", ""));
+        assert!(!should_offer("newbuild01", "newbuild01"));
+        assert!(should_offer("newer00001", "newbuild01"));
     }
 
     #[test]
