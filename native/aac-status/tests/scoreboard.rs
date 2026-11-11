@@ -395,15 +395,15 @@ fn the_rounds_each_item_took_to_pass_reach_the_cell_and_the_report() {
         vec![
             vec![
                 "7 runs".to_string(),
-                "passed review 6 of 6, 4 on the first try".to_string()
+                "passed review 6 of 6, 5 on the first try".to_string()
             ],
             vec![
                 "7 runs".to_string(),
-                "passed review 6 of 6, 4 on the first try".to_string()
+                "passed review 6 of 6, 5 on the first try".to_string()
             ],
         ]
     );
-    assert_eq!(report_subs, vec!["6 of 6, 4 on the first try".to_string(); 2]);
+    assert_eq!(report_subs, vec!["6 of 6, 5 on the first try".to_string(); 2]);
 }
 
 #[test]
