@@ -283,6 +283,29 @@ fn a_five_hour_cell_under_one_is_a_percent_and_a_weekly_cell_above_one_stays_one
 }
 
 #[test]
+fn an_unlabelled_stream_has_no_sub_label_and_a_marked_lone_thread_keeps_its_phrase() {
+    // D2a: a stream the reports never labelled has `label` equal to its id, and gets no
+    // sub-label at all — the page draws nothing for it. A label the input genuinely
+    // carries, including the phrase for a lone thread, is kept verbatim.
+    let streams = json!([
+        stream("E", "E", false, json!([row("claude:me", "seven_day", json!(20.0))])),
+        stream(
+            "solo",
+            "a thread with no stream",
+            false,
+            json!([row("claude:me", "seven_day", json!(10.0))])
+        )
+    ]);
+    let view = compose(&view_of(spend_doc(json!([week(streams)]), json!([]))));
+    let rows = &view.periods[0].rows;
+    // Rows by peak share: E (20%) before the lone thread (10%).
+    assert_eq!(rows[0].stream, "E");
+    assert_eq!(rows[0].label, "");
+    assert_eq!(rows[1].stream, "solo");
+    assert_eq!(rows[1].label, "a thread with no stream");
+}
+
+#[test]
 fn one_non_bucket_row_gives_no_next_sentence() {
     let only = json!([stream(
         "only",
@@ -304,6 +327,74 @@ fn one_non_bucket_row_gives_no_next_sentence() {
         ]
     );
     assert!(view.periods[0].more.is_none());
+}
+
+#[test]
+fn when_the_untied_row_beats_the_top_stream_the_lead_says_so() {
+    // D2c: the bucket's peak uses the same rule as any row; when it beats the top
+    // stream's, the lead names it. An unknown bucket peak (or a tie) says nothing.
+    let lead_of = |streams: Value| -> String {
+        let view = compose(&view_of(spend_doc(json!([week(streams)]), json!([]))));
+        view.periods[0]
+            .lead
+            .iter()
+            .map(|run| run.text.clone())
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let winning = json!([
+        stream("F", "F", false, json!([row("claude:me", "seven_day", json!(31.0))])),
+        stream(
+            "(no stream)",
+            "(no stream)",
+            true,
+            json!([row("claude:me", "seven_day", json!(44.0))])
+        )
+    ]);
+    let lead = lead_of(winning);
+    assert!(
+        lead == "This week F used the most: about 31% of Claude me’s weekly limit. Not tied to a stream used more: about 44% of Claude me’s weekly limit.",
+        "lead was: {lead}"
+    );
+
+    // The untied row does not beat the top stream: nothing extra is said.
+    let losing = json!([
+        stream("F", "F", false, json!([row("claude:me", "seven_day", json!(31.0))])),
+        stream(
+            "(no stream)",
+            "(no stream)",
+            true,
+            json!([row("claude:me", "seven_day", json!(20.0))])
+        )
+    ]);
+    let losing_lead = lead_of(losing);
+    assert!(!losing_lead.contains("used more"), "losing lead: {losing_lead}");
+
+    // The untied row matches the top stream (a tie is not "more"): nothing extra.
+    let tied = json!([
+        stream("F", "F", false, json!([row("claude:me", "seven_day", json!(31.0))])),
+        stream(
+            "(no stream)",
+            "(no stream)",
+            true,
+            json!([row("claude:me", "seven_day", json!(31.0))])
+        )
+    ]);
+    let tied_lead = lead_of(tied);
+    assert!(!tied_lead.contains("used more"), "tied lead: {tied_lead}");
+
+    // The untied row's only reading was not read: unknown stays unspoken.
+    let unread = json!([
+        stream("F", "F", false, json!([row("claude:me", "seven_day", json!(31.0))])),
+        stream(
+            "(no stream)",
+            "(no stream)",
+            true,
+            json!([row("claude:me", "seven_day", Value::Null)])
+        )
+    ]);
+    let unread_lead = lead_of(unread);
+    assert!(!unread_lead.contains("used more"), "unread lead: {unread_lead}");
 }
 
 #[test]

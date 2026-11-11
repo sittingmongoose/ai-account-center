@@ -470,6 +470,18 @@ describe('catalog', () => {
     }
   });
 
+  it('packs Fable 5.2 in the models seed', () => {
+    const parsed = parseCatalogFile(
+      'models.json',
+      fs.readFileSync(path.join(packagedCatalogDir(), 'models.json'))
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const fable = parsed.value.models.find((model) => model.model === 'anthropic/claude-fable-5-2');
+    expect(fable?.label).toBe('Fable 5.2');
+    expect(fable?.runtimes).toEqual(['claude-code']);
+  });
+
   it('refuses bad files with fixed words that never echo the file', () => {
     const parse = (value: unknown) =>
       parseCatalogFile('task-types.json', Buffer.from(JSON.stringify(value)));

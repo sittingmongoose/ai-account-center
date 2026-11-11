@@ -723,8 +723,11 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Result
         .map(|stream| -> Result<RowWork> {
             let cells = build_cells(&[stream])?;
             Ok(RowWork {
+                // A stream with no label from the reports (`label` is the id itself) has
+                // no sub-label: the page draws nothing for it (2026-11-11, D2a). A label the
+                // input carries — say the phrase for a lone thread — is kept verbatim.
                 label: if stream.label == stream.stream {
-                    "a thread with no stream".to_string()
+                    String::new()
                 } else {
                     stream.label.clone()
                 },
@@ -745,14 +748,16 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Result
     let buckets: Vec<&StreamIn> = period.streams.iter().filter(|s| s.bucket).collect();
     if !buckets.is_empty() {
         let cells = build_cells(&buckets)?;
+        // The bucket gets the same peak rule as any row (2026-11-11, D2c): the lead
+        // compares it with the top stream below.
         rows.push(RowWork {
             stream: "Not tied to a stream".to_string(),
             label: "sessions no stream rule claims".to_string(),
             bucket: true,
             block_order: block_order(&cells),
             credits: credits_of(&buckets)?,
+            peak: peak(&cells),
             cells,
-            peak: None,
         });
     }
 
@@ -843,6 +848,25 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Result
                 lead.push(strong(pct_text(bshare)?));
                 lead.push(run(format!(" of {}.", tail(cb))));
             }
+        }
+        // When the use tied to no stream beats the top stream, the lead says so
+        // (2026-11-11, D2c). An unknown bucket peak (or no bucket) says nothing.
+        if let Some(bucket) = rows.iter().find(|row| row.bucket)
+            && let Some((bi, bshare)) = bucket.peak
+            && bshare > peak_share
+        {
+            let bcol = &columns[bi];
+            lead.push(run(" "));
+            lead.push(strong("Not tied to a stream"));
+            lead.push(run(" used more: about "));
+            lead.push(strong(pct_text(bshare)?));
+            lead.push(run(format!(
+                " of {}.",
+                of_account(
+                    bcol,
+                    &format!("{} limit", if is_five(&bcol.meter) { "5-hour" } else { "weekly" })
+                )
+            )));
         }
     }
 

@@ -63,6 +63,8 @@ export interface MeasureValue {
   disputed?: number;
   cannotVerify?: number;
   rounds?: Stat;
+  /** quality: items that passed on their first review round. */
+  firstTry?: number;
   overturns?: Overturn[];
   /** thoroughness */
   files?: Stat;

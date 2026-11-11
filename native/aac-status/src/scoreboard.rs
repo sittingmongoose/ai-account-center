@@ -22,6 +22,11 @@
 //!
 //! Fix round 2: "at the same speed and cost" is said only when both models' speed and
 //! cost are known finite numbers and each pair matches. Two unknown values are not a tie.
+//!
+//! Amendments of 2026-11-11 (pkg M, D3): the pick draws on the same row as the cell and
+//! the sheet (one row per model per job), so it never compares a model with itself or
+//! another process of the same model; a speed that formats to a zero time reads "–"
+//! (unknown), never a measured zero; "1 models" reads "1 model".
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -143,6 +148,9 @@ pub struct MeasureIn {
     pub of: Option<i64>,
     #[serde(default)]
     pub per: Option<i64>,
+    /// quality: the items that passed on their first review round, when the view says.
+    #[serde(default)]
+    pub first_try: Option<i64>,
     #[serde(default)]
     pub per_task: Option<StatIn>,
     #[serde(default)]
@@ -464,6 +472,17 @@ fn seconds(value: f64) -> Result<String> {
     }
 }
 
+/// A figure that formats to a zero time ("0.0 s", "0 s", "0 min") holds no usable figure: it reads
+/// "–" (unknown), never a measured zero — for the speed value and for the bounds its note quotes
+/// (2026-11-11, D3/L5).
+fn zero_time(text: &str) -> bool {
+    matches!(text, "0.0 s" | "0 s" | "0 min")
+}
+
+fn honest(text: String) -> String {
+    if zero_time(&text) { "–".to_string() } else { text }
+}
+
 /// One decimal from 1 up, two below it.
 fn round1(value: f64) -> Result<String> {
     if value >= 1.0 {
@@ -575,10 +594,24 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
                 sub: vec![format!("needs {min_runs}")],
             });
         }
+        // A demoted row names how many reviews were read, in the bar's own count
+        // (reviewed items where a quality pass rate exists, else review runs); a row
+        // with no review runs at all says "none reviewed yet" (2026-11-11, M3/L-new-4).
+        let quality = c.measures.get("quality");
+        // A null per means no item is decided (every latest review disputed): the count is
+        // zero, never a fallback to review runs, which would clear the bar on rounds alone.
+        let reviewed = match quality {
+            Some(q) => q.per.unwrap_or(0),
+            None => c.reviews,
+        };
         return Ok(CellOut {
             verdict: "not-enough-data".to_string(),
             word,
-            sub: vec![format!("{n} runs, none reviewed yet")],
+            sub: vec![if c.reviews == 0 {
+                format!("{n} runs, none reviewed yet")
+            } else {
+                format!("{n} runs, {reviewed} reviewed, needs {min_runs}")
+            }],
         });
     }
     if row.basis.as_deref() == Some("benchmark") {
@@ -602,16 +635,21 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
     if let Some(q) = quality
         && q.per.is_some_and(|per| per >= 2)
     {
+        // The rounds each item took to pass reach the cell: how many needed no fix round.
         return Ok(CellOut {
             verdict: row.verdict.clone(),
             word,
             sub: vec![
                 format!("{n} runs"),
                 format!(
-                    "{} {} of {}",
+                    "{} {} of {}{}",
                     if ranked1 { "passed review" } else { "passed" },
                     fmt_opt(q.of),
-                    fmt_opt(q.per)
+                    fmt_opt(q.per),
+                    match q.first_try {
+                        Some(first_try) => format!(", {first_try} on the first try"),
+                        None => String::new(),
+                    }
                 ),
             ],
         });
@@ -728,10 +766,19 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
             out.push(MeasureOut {
                 label: "Passed review".to_string(),
                 value: pct_json(&q.value)?,
-                sub: format!("{} of {}", fmt_opt(q.of), fmt_opt(q.per)),
-                note: format!(
-                    "With {} reviews the true rate is likely between {} and {}.",
+                sub: format!(
+                    "{} of {}{}",
+                    fmt_opt(q.of),
                     fmt_opt(q.per),
+                    match q.first_try {
+                        Some(first_try) => format!(", {first_try} on the first try"),
+                        None => String::new(),
+                    }
+                ),
+                note: format!(
+                    "With {} {} the true rate is likely between {} and {}.",
+                    fmt_opt(q.per),
+                    if q.per == Some(1) { "review" } else { "reviews" },
                     pct_json(&q.low)?,
                     pct_json(&q.high)?
                 ),
@@ -752,31 +799,39 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
     let speed = m.get("speed");
     if let Some(sp) = speed.filter(|sp| sp.has_value()) {
         let per_task = sp.per_task.as_ref().filter(|_| job.unit == "task");
-        let value = match per_task {
+        let formatted = match per_task {
             Some(stat) => minutes(stat.value.ok_or_else(|| shape("a per-task speed with no value"))?)?,
             None => seconds(sp.value.as_f64().ok_or_else(|| shape("a speed with no usable value"))?)?,
         };
+        let value = honest(formatted);
         let note = if let Some(stat) = per_task {
             // A missing bound is not zero: the reference's number check refuses it.
-            format!(
-                "Fastest {}, slowest {}, over {} runs.",
-                minutes(stat.low.ok_or_else(|| shape("a per-task speed with no value"))?)?,
-                minutes(stat.high.ok_or_else(|| shape("a per-task speed with no value"))?)?,
-                stat.n
-            )
+            let lo = minutes(stat.low.ok_or_else(|| shape("a per-task speed with no value"))?)?;
+            let hi = minutes(stat.high.ok_or_else(|| shape("a per-task speed with no value"))?)?;
+            if zero_time(&lo) && zero_time(&hi) {
+                format!("Over {} runs.", stat.n)
+            } else {
+                format!("Fastest {}, slowest {}, over {} runs.", honest(lo), honest(hi), stat.n)
+            }
         } else if job.id == "scout"
             && sp.low.as_f64().is_some()
             && sp.high.as_f64().is_some()
             && sp.low.as_f64() != sp.high.as_f64()
         {
-            format!(
-                "Range {} to {} s.",
-                to_fixed(sp.low.as_f64().ok_or_else(|| shape("a speed with no usable value"))?, 1)?,
-                to_fixed(
-                    sp.high.as_f64().ok_or_else(|| shape("a speed with no usable value"))?,
-                    1
-                )?
-            )
+            let lo = to_fixed(sp.low.as_f64().ok_or_else(|| shape("a speed with no usable value"))?, 1)?;
+            let hi = to_fixed(
+                sp.high.as_f64().ok_or_else(|| shape("a speed with no usable value"))?,
+                1,
+            )?;
+            if lo == "0.0" && hi == "0.0" {
+                format!("Over {} runs.", sp.n)
+            } else {
+                format!(
+                    "Range {} to {} s.",
+                    if lo == "0.0" { "–" } else { &lo },
+                    if hi == "0.0" { "–" } else { &hi }
+                )
+            }
         } else {
             format!("Over {} runs.", sp.n)
         };
@@ -1038,13 +1093,23 @@ fn report_basis(row: &RowIn) -> Result<String> {
 
 /// The pick for one job: the top recommended row, or why there is none.
 fn pick_for(job: &TaskIn, min_runs: MinRuns) -> Result<PickOut> {
-    let mut ranked: Vec<usize> = job
-        .rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.ranked)
-        .map(|(i, _)| i)
-        .collect();
+    // One row per model for this job — the same row the model's cell and sheet draw on
+    // (ranked first, then the newest process, then the most runs). The pick therefore
+    // never compares a model with itself or with another process of the same model
+    // (2026-11-11, D3).
+    let mut chosen: Vec<usize> = Vec::new();
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    for (i, row) in job.rows.iter().enumerate() {
+        match groups.iter_mut().find(|(k, _)| *k == row_key(row)) {
+            Some((_, indexes)) => indexes.push(i),
+            None => groups.push((row_key(row), vec![i])),
+        }
+    }
+    for (_, mut indexes) in groups {
+        sort_best(&job.rows, &mut indexes);
+        chosen.push(indexes[0]);
+    }
+    let mut ranked: Vec<usize> = chosen.iter().copied().filter(|i| job.rows[*i].ranked).collect();
     sort_by_rank(&job.rows, &mut ranked);
     let recommended: Vec<usize> = ranked
         .iter()
@@ -1052,16 +1117,15 @@ fn pick_for(job: &TaskIn, min_runs: MinRuns) -> Result<PickOut> {
         .filter(|i| job.rows[*i].verdict == "recommended")
         .collect();
     if recommended.is_empty() {
-        let tried: usize = job.rows.iter().map(row_key).collect::<HashSet<_>>().len();
-        let obs_top: Vec<usize> = job
-            .rows
+        // One chosen row per model, so the count of models tried is the count of these.
+        let tried = chosen.len();
+        let obs_top: Vec<usize> = chosen
             .iter()
-            .enumerate()
-            .filter(|(_, r)| r.n.observed >= min_runs)
-            .map(|(i, _)| i)
+            .copied()
+            .filter(|i| job.rows[*i].n.observed >= min_runs)
             .collect();
         let why = if tried == 1 {
-            let x = &job.rows[0];
+            let x = &job.rows[chosen[0]];
             vec![run(format!(
                 "{} is the only model tried ({} runs, {}).",
                 name(&x.label, &x.effort),
@@ -1403,14 +1467,18 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                 head_runs: vec![
                     strong(runs.to_string()),
                     run(format!(
-                        " runs: {} real work, {} benchmark · {} blind reviews",
-                        model.real, model.bench, model.reviews
+                        " runs: {} real work, {} benchmark · {} blind {}",
+                        model.real,
+                        model.bench,
+                        model.reviews,
+                        if model.reviews == 1 { "review" } else { "reviews" }
                     )),
                 ],
                 sheet_head: format!(
-                    "{} · {runs} runs · {} blind reviews",
+                    "{} · {runs} runs · {} blind {}",
                     model.runtime.as_deref().map(runtime_word).unwrap_or(""),
-                    model.reviews
+                    model.reviews,
+                    if model.reviews == 1 { "review" } else { "reviews" }
                 ),
                 cells,
                 report,
@@ -1438,12 +1506,16 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                     .iter()
                     .find(|x| x.n.observed + x.n.benchmark > 0 && x.label != "example/example-1")
             }) {
-                Some(some) => format!(
-                    "{} ({} has {} runs)",
-                    t.label,
-                    name(&some.label, &some.effort),
-                    some.n.observed + some.n.benchmark
-                ),
+                Some(some) => {
+                    let n = some.n.observed + some.n.benchmark;
+                    format!(
+                        "{} ({} has {} {})",
+                        t.label,
+                        name(&some.label, &some.effort),
+                        n,
+                        if n == 1 { "run" } else { "runs" }
+                    )
+                }
                 None => t.label.clone(),
             }
         })
@@ -1462,6 +1534,40 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
         .filter(|m| !tested.contains(m.model.as_str()))
         .map(|m| m.label.clone())
         .collect();
+    // A run naming a model the catalog does not list is flagged in the foot, with its runs
+    // counted once per task type and process, the way a model row's own runs are (B11).
+    let catalog_models: HashSet<&str> = view.catalog.models.iter().map(|m| m.model.as_str()).collect();
+    let mut unknown: BTreeMap<String, (String, i64)> = BTreeMap::new();
+    let mut seen_dedupe: HashSet<String> = HashSet::new();
+    for use_in in &view.uses {
+        for task in &use_in.task_types {
+            for row in &task.rows {
+                if catalog_models.contains(row.model.as_str()) {
+                    continue;
+                }
+                // Runs count once per task type, model row and process: the uses repeat the
+                // same rows, but one model run at two runtimes or efforts is two rows (L1).
+                let dedupe = format!(
+                    "{}|{}|{}|{}",
+                    task.id,
+                    row_key(row),
+                    row.process.as_ref().map(|p| p.id.as_str()).unwrap_or(""),
+                    row.process.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("")
+                );
+                if !seen_dedupe.insert(dedupe) {
+                    continue;
+                }
+                let entry = unknown
+                    .entry(row.model.clone())
+                    .or_insert_with(|| (row.label.clone(), 0));
+                entry.1 += row.n.observed + row.n.benchmark;
+            }
+        }
+    }
+    let unknown_models: Vec<String> = unknown
+        .into_values()
+        .map(|(label, runs)| format!("{label} ({runs} {})", if runs == 1 { "run" } else { "runs" }))
+        .collect();
 
     Ok(ViewOut {
         id: id.to_string(),
@@ -1470,7 +1576,8 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
         meta: vec![
             strong(out_models.len().to_string()),
             run(format!(
-                " models with runs · a verdict needs {min_runs} runs of that job"
+                " {} with runs · a verdict needs {min_runs} runs of that job",
+                if out_models.len() == 1 { "model" } else { "models" }
             )),
         ],
         picks,
@@ -1482,12 +1589,23 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
             })
             .collect(),
         models: out_models,
-        foot: vec![
-            strong("No verdicts yet:"),
-            run(format!(" {}. ", no_verdict.join(", "))),
-            strong("In the catalog with no runs:"),
-            run(format!(" {}.", no_runs.join(", "))),
-        ],
+        foot: [
+            vec![
+                strong("No verdicts yet:"),
+                run(format!(" {}. ", no_verdict.join(", "))),
+                strong("In the catalog with no runs:"),
+                run(format!(" {}.", no_runs.join(", "))),
+            ],
+            if unknown_models.is_empty() {
+                Vec::new()
+            } else {
+                vec![
+                    strong("Models in runs but not in the catalog:"),
+                    run(format!(" {}.", unknown_models.join(", "))),
+                ]
+            },
+        ]
+        .concat(),
     })
 }
 
@@ -1585,8 +1703,16 @@ pub fn by_model(view: &ViewIn) -> Result<ByModel> {
         &["planning", "building", "pm-users"],
     )?;
     let band_summary = match &summary {
-        Some(summary) => format!("{} models with runs · {summary}", pipeline.models.len()),
-        None => format!("{} models with runs", pipeline.models.len()),
+        Some(summary) => format!(
+            "{} {} with runs · {summary}",
+            pipeline.models.len(),
+            if pipeline.models.len() == 1 { "model" } else { "models" }
+        ),
+        None => format!(
+            "{} {} with runs",
+            pipeline.models.len(),
+            if pipeline.models.len() == 1 { "model" } else { "models" }
+        ),
     };
     Ok(ByModel {
         default_view: "pipeline",

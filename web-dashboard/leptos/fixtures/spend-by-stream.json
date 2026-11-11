@@ -124,7 +124,7 @@
       "rows": [
         {
           "stream": "gap-fixer",
-          "label": "a thread with no stream",
+          "label": "",
           "bucket": false,
           "cells": [
             {
@@ -301,7 +301,7 @@
         },
         {
           "stream": "coordinator",
-          "label": "a thread with no stream",
+          "label": "",
           "bucket": false,
           "cells": [
             {
@@ -520,7 +520,7 @@
       "rows": [
         {
           "stream": "gap-fixer",
-          "label": "a thread with no stream",
+          "label": "",
           "bucket": false,
           "cells": [
             {
@@ -697,7 +697,7 @@
         },
         {
           "stream": "coordinator",
-          "label": "a thread with no stream",
+          "label": "",
           "bucket": false,
           "cells": [
             {
@@ -907,7 +907,7 @@
       "rows": [
         {
           "stream": "gap-fixer",
-          "label": "a thread with no stream",
+          "label": "",
           "bucket": false,
           "cells": [
             {

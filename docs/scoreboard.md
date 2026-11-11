@@ -71,13 +71,13 @@ such outcome with its count.
 - **speed**: median wall seconds per unit (`wallSeconds / task.size.<unit>s`) with its range, and `perTask`, the median
   wall seconds per run. Only `done` runs with a known size count. A run with no `task.size.tasks` is one
   task in a task type counted in `task`; other units stay unknown.
-- **quality**: share of items whose latest decisive blind review did not overturn them
-  (`review.overturned == false`), 90% Wilson interval. An item is one `project` + `task.id`, so fix rounds on it count
-  once. `rounds` is the median reviews until the first pass. A latest review that is a disputed overturn leaves the item
+- **quality**: share of items whose latest decisive blind review passed them
+  (`review.verdict == "pass"` and not overturned), 90% Wilson interval. An item is one `project` + `task.id`, so fix rounds on it count
+  once. `rounds` is the median reviews until the first pass. A `fail` verdict counts as not passed whatever `overturned`
+  says, so a failed review (`--verdict fail`, `overturned: false`) never reads as a pass. A latest review that is a disputed overturn leaves the item
   out of the share and adds to `disputed`; `cannot-verify` decides nothing and adds to `cannotVerify`. `overturns` lists
   every overturn: run, review, reviewer model (`review.by`, else the review run's model), disputed, first evidence link.
-  `overturned` (the reviewer found the work wrong) decides, not `verdict`: a `fail` with `overturned: false` is not an
-  overturn. `overturned` is required: a review without it is refused rather than read as a pass.
+  `overturned` is required: a review without it is refused rather than read as a pass.
 - **Review rule:** a review is a run with `task.type: "review"` whose `review.of` names a known run and which did not
   end before that run. The format has no "blind" field: every such review counts as blind, so a reporter must not
   report a non-blind check as a review. Others are ignored and counted in the runs Source.
@@ -110,6 +110,12 @@ such outcome with its count.
 - A column is **ranked** in a task type only with at least `minRuns` runs there (catalog setting, default 5). An observed
   column also needs at least one decisive blind review. Below that its `why` is "too little data (n = 2)" or "no blind
   review yet (n = 7)", with its runs, unranked. A benchmark column needs no review.
+- One reviewed item alone is never enough for **Recommended** or **Avoid**: an observed column needs `minRuns`
+  reviewed items for either (fix rounds on one item count once; a 1-of-1 quality share reads 100%). A task type
+  with no quality pass rate keeps the decisive review-run count. Cheating flags do not depend on reviews, so a
+  cheating-floor **Avoid** stands on any number. Below the bar the row is never ranked — it reads "Not enough
+  data yet", `why` "too few blind reviews yet (1 of 5 needed, n = 11)" — and never sets the top score, peer
+  count, ranks or best values of the rows that stay; the comparison is decided on those rows once, before scoring.
 - Observed and benchmark data are separate columns; they are never averaged together. Benchmark columns are ranked only
   against other columns of the same benchmark.
 - Models are compared only within a task type: harder work goes to stronger models, so a pooled pass rate flatters the

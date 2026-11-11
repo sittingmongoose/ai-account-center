@@ -194,8 +194,11 @@ function speed(runs: readonly RunDoc[], unit: TaskUnit): MeasureValue {
 
 /**
  * Share of items a blind review passed. Fix rounds on one item (same project and task id) count
- * once, by the item's latest decisive review; an item whose latest review is a disputed overturn is
- * left out of the share and counted as disputed. `cannot-verify` decides nothing.
+ * once, by the item's latest decisive review. An item passes only when that review's `verdict` is
+ * `pass` and it was not overturned: a `fail` counts as not passed whatever `overturned` says
+ * (`agent-report run --verdict fail` writes `overturned: false`). A latest review that is a
+ * disputed overturn leaves the item out of the share, counted as disputed. `cannot-verify` decides
+ * nothing.
  */
 function quality(runs: readonly RunDoc[], index: ReviewIndex, unit: string): MeasureValue {
   const items = new Map<string, { run: RunDoc; review: RunDoc }[]>();
@@ -224,17 +227,22 @@ function quality(runs: readonly RunDoc[], index: ReviewIndex, unit: string): Mea
   let passed = 0;
   let failed = 0;
   let disputed = 0;
+  let firstTry = 0;
   const rounds: number[] = [];
+  const firstPass = ({ review }: { review: RunDoc }) =>
+    review.review?.verdict === 'pass' && !review.review.overturned;
   for (const reviews of items.values()) {
     reviews.sort((a, b) => Date.parse(a.review.endedAt) - Date.parse(b.review.endedAt));
     const last = reviews[reviews.length - 1].review.review;
     if (last?.overturned && last.disputed) {
       disputed += 1;
-    } else if (last?.overturned) {
+    } else if (last?.verdict === 'fail' || last?.overturned) {
       failed += 1;
     } else {
       passed += 1;
-      rounds.push(reviews.findIndex(({ review }) => !review.review?.overturned) + 1);
+      const round = reviews.findIndex(firstPass) + 1;
+      if (round === 1) firstTry += 1;
+      rounds.push(round);
     }
   }
   return {
@@ -242,6 +250,7 @@ function quality(runs: readonly RunDoc[], index: ReviewIndex, unit: string): Mea
     disputed,
     cannotVerify,
     rounds: stat(rounds),
+    firstTry,
     overturns,
   };
 }

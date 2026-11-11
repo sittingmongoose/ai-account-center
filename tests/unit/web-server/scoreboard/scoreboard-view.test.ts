@@ -145,7 +145,12 @@ describe('the fixture view', () => {
     const sol = build.find((r) => r.model.includes('sol'));
     expect(opus).toMatchObject({ verdict: 'recommended', verdictLabel: 'Recommended' });
     expect(opus?.why).toContain('(n = 7)');
-    expect(sol).toMatchObject({ verdict: 'fine', verdictLabel: 'Fine' });
+    // Four decided items are below the five-item bar: never ranked, whatever its score.
+    expect(sol).toMatchObject({
+      verdict: 'not-enough-data',
+      verdictLabel: 'Not enough data yet',
+      why: 'too few blind reviews yet (4 of 5 needed, n = 7)',
+    });
     expect(glm).toMatchObject({ verdict: 'avoid', verdictLabel: 'Avoid for this' });
     expect(glm?.why).toBe('Flagged for cheating in 2 of 5 runs (n = 5).');
     expect(glm?.observed?.flags.map((flag) => [flag.kind, flag.run, flag.evidence])).toEqual([
@@ -283,7 +288,8 @@ describe('verdict rules', () => {
       benchmarkLabel: null,
       n: 10,
       imported: 0,
-      reviews: 3,
+      // Above the bar (minRuns, 5 reviewed items), so these tests exercise scoring, not the bar.
+      reviews: 6,
       ranked: false,
       rank: null,
       score: null,
@@ -364,6 +370,184 @@ describe('verdict rules', () => {
       [false, 'no blind review yet (n = 10)'],
       [true, 'The only ranked row here, so nothing to compare it with (n = 10).'],
     ]);
+  });
+
+  it('one reviewed item alone is never enough for Recommended or Avoid', () => {
+    // Fix rounds on one task: 5 runs, 5 reviews, but the pass rate stands on one item (1 of 1).
+    const oneItem = (local: string, quality: number, cheating: number) => {
+      const held = column(local, quality, cheating, 10, { reviews: 5 });
+      held.measures.quality = value(quality, 1);
+      return held;
+    };
+    const judged = judge([oneItem('a', 1, 0), oneItem('poor', 0.4, 0)]);
+    expect(judged.map((c) => [c.ranked, c.verdict, c.why])).toEqual([
+      [false, 'not-enough-data', 'too few blind reviews yet (1 of 5 needed, n = 10)'],
+      [false, 'not-enough-data', 'too few blind reviews yet (1 of 5 needed, n = 10)'],
+    ]);
+    // minRuns reviewed items clear the bar: the same columns then get their scored verdicts.
+    const cleared = judge([
+      column('a', 1, 0, 10, { reviews: 5 }),
+      column('poor', 0.4, 0, 10, { reviews: 5 }),
+    ]);
+    expect(cleared.map((c) => [c.ranked, c.verdict])).toEqual([
+      [true, 'recommended'],
+      [true, 'avoid'],
+    ]);
+    // A lone thin row is never Fine and never ranked, and a benchmark column needs none.
+    const thin = column('fine', 1, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    expect(judge([thin])[0]).toMatchObject({
+      ranked: false,
+      verdict: 'not-enough-data',
+      why: 'too few blind reviews yet (1 of 5 needed, n = 10)',
+    });
+    expect(
+      judge([column('bench', 1, 0, 10, { source: 'benchmark', benchmark: 'b' })])[0]
+    ).toMatchObject({
+      ranked: true,
+      verdict: 'fine',
+    });
+  });
+
+  it('exactly minRuns reviewed items still ranks', () => {
+    const exact = column('exact', 1, 0, 10, { reviews: 5 });
+    exact.measures.quality = value(1, 5);
+    expect(judge([exact])[0]).toMatchObject({ ranked: true, rank: 1 });
+  });
+
+  it('two identical thin rows get identical verdicts in either run order', () => {
+    // Twins (M-new-1): two identical one-item perfect rows. Pull order must not
+    // decide between them: both read Not enough data yet.
+    const twin = (local: string, n: number) => {
+      const held = column(local, 1, 0, 10, { reviews: 5, n });
+      held.measures.quality = value(1, 1);
+      return held;
+    };
+    const ab = judge([twin('a-run', 10), twin('b-run', 10)]);
+    const ba = judge([twin('b-run', 10), twin('a-run', 10)]);
+    for (const judged of [ab, ba]) {
+      expect(judged.map((c) => [c.verdict, c.ranked])).toEqual([
+        ['not-enough-data', false],
+        ['not-enough-data', false],
+      ]);
+    }
+  });
+
+  it('five fix rounds on one item are not enough for Recommended', () => {
+    // One item, five reviewed rounds (quality 1 of 1): without the item bar it tops the group.
+    const thin = column('thin', 1, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const deep = column('deep', 0.6, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({
+      ranked: false,
+      verdict: 'not-enough-data',
+      why: 'too few blind reviews yet (1 of 5 needed, n = 10)',
+    });
+    expect(judged[1]).toMatchObject({ ranked: true });
+  });
+
+  it('one item over five rounds whose last review is disputed is not enough for Recommended', () => {
+    // Every item's latest review disputed: quality decides nothing (per null) while 5
+    // review runs accrue. The bar holds zero decided items, never the run count.
+    const thin = column('thin', 1, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(1, 1, { per: null });
+    const deep = column('deep', 0.6, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({
+      ranked: false,
+      verdict: 'not-enough-data',
+      why: 'too few blind reviews yet (0 of 5 needed, n = 10)',
+    });
+    expect(judged[1]).toMatchObject({ ranked: true });
+  });
+
+  it('five fix rounds on one item are not enough for Avoid', () => {
+    // The heavy-share Avoid on one item (quality 40%, weight 3) is held by the same bar.
+    const thin = column('thin', 0.4, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(0.4, 1);
+    const deep = column('deep', 0.9, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({
+      ranked: false,
+      verdict: 'not-enough-data',
+      why: 'too few blind reviews yet (1 of 5 needed, n = 10)',
+    });
+    expect(judged[1]).toMatchObject({ ranked: true });
+  });
+
+  it('a cheating Avoid is exempt from the review bar', () => {
+    // Cheating flags are per-run and do not depend on reviews: one reviewed item is
+    // enough for a cheating-floor Avoid. A quality Avoid on one item is still held.
+    const cheat = column('cheat', 1, 0.4, 10, { reviews: 1 });
+    cheat.measures.quality = value(1, 1);
+    const peer = column('peer', 1, 0, 10, { reviews: 5 });
+    const judged = judge([cheat, peer]);
+    expect(judged[0]).toMatchObject({
+      ranked: true,
+      verdict: 'avoid',
+      why: 'Flagged for cheating in 4 of 10 runs (n = 10).',
+    });
+  });
+
+  it('a demoted row does not set the top score, the peers or the ranks', () => {
+    // The one-item column (quality 1 of 1) tops the group and is pulled by the bar. The
+    // survivor is then the only ranked row: rank 1, fine — never Recommended at rank 2
+    // with no rank 1, and never "Behind the top row" behind a demoted row.
+    const thin = column('thin', 1, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const deep = column('deep', 0.97, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({ ranked: false, verdict: 'not-enough-data' });
+    expect(judged[1]).toMatchObject({
+      ranked: true,
+      rank: 1,
+      verdict: 'fine',
+      why: 'The only ranked row here, so nothing to compare it with (n = 10).',
+    });
+  });
+
+  it('a pulled row does not set the best marks are measured against', () => {
+    // The demoted row is the fastest by far. Measured against it, deep's speed mark
+    // collapses and deep reads Avoid; measured only against the survivors, it is Fine.
+    const thin = column('thin', 1, 0, 1, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const deep = column('deep', 0.52, 0.15, 100, { reviews: 5 });
+    const mid = column('mid', 0.9, 0, 100, { reviews: 5 });
+    const judged = judge([thin, deep, mid]);
+    expect(judged[0]).toMatchObject({ ranked: false, verdict: 'not-enough-data' });
+    expect(judged[1]).toMatchObject({ ranked: true, verdict: 'fine' });
+    expect(judged[2]).toMatchObject({ ranked: true });
+  });
+
+  it('below the bar is never ranked: the SAMEPASS rows demote, the deep row stands alone', () => {
+    // One fast one-item row and a two-item row sit below the item bar (1 and 2 of 5),
+    // so both are never ranked; the well-reviewed row is judged alone (Fine).
+    const thin = column('thin', 1, 0, 1, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const sonnet = column('sonnet', 0.5, 1 / 7, 1000, { reviews: 5 });
+    sonnet.measures.quality = value(0.5, 2);
+    sonnet.measures.cheating = value(1 / 7, 7);
+    const opus = column('opus', 1, 0, 1000, { reviews: 5 });
+    const judged = judge([thin, sonnet, opus]);
+    expect(judged[0]).toMatchObject({ ranked: false, verdict: 'not-enough-data' });
+    expect(judged[1]).toMatchObject({ ranked: false, verdict: 'not-enough-data' });
+    // Alone above the bar: ranked first, Fine without a peer (peers < 2).
+    expect(judged[2]).toMatchObject({ ranked: true, rank: 1, verdict: 'fine' });
+  });
+
+  it('a weak survivor of a pull is the only ranked row, not behind the demoted top', () => {
+    const thin = column('thin', 1, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const deep = column('deep', 0.5, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({ ranked: false, verdict: 'not-enough-data' });
+    expect(judged[1]).toMatchObject({
+      ranked: true,
+      rank: 1,
+      verdict: 'fine',
+      why: 'The only ranked row here, so nothing to compare it with (n = 10).',
+    });
   });
 
   it('says preliminary when a weighted value is', () => {

@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
 import { hasOnlyKeys, sendError } from './account-route-guards';
+import { isDashboardAuthEnabled } from '../../config/config-loader-facade';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { authKind } from '../middleware/request-auth';
 import { getStatusService, type StatusService } from '../status/status-service';
@@ -118,6 +119,12 @@ export function requireBrowserSession(req: Request, res: Response, next: NextFun
     return;
   }
   if (kind !== 'session') {
+    // With dashboard sign-in off no session can exist, so a 401 would ask for one nobody can
+    // start: say what these tabs need instead (B12).
+    if (!isDashboardAuthEnabled()) {
+      sendError(res, 403, 'signin_required', 'These tabs need dashboard sign-in turned on.');
+      return;
+    }
     sendError(res, 401, 'auth_required', 'Authentication required');
     return;
   }

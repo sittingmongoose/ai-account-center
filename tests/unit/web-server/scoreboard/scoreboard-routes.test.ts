@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import express from 'express';
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
@@ -9,10 +9,17 @@ import { NOW, tempDirs } from '../status/status-test-helpers';
 
 const dirs = tempDirs();
 let server: Server | undefined;
+// The 401 path exists only with dashboard sign-in on; the sign-in-off answer has its own test.
+const authEnv = process.env.CCS_DASHBOARD_AUTH_ENABLED;
+beforeEach(() => {
+  process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+});
 afterEach(async () => {
   if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
   server = undefined;
   dirs.cleanup();
+  if (authEnv === undefined) delete process.env.CCS_DASHBOARD_AUTH_ENABLED;
+  else process.env.CCS_DASHBOARD_AUTH_ENABLED = authEnv;
 });
 
 async function start(service: ScoreboardService) {
@@ -66,6 +73,19 @@ describe('scoreboard route', () => {
       'scoreboard-runs',
       'scoreboard-catalog',
     ]);
+  });
+
+  it('with dashboard sign-in off, says these tabs need it, not a bare 401', async () => {
+    process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+    const url = await start(service());
+    const anonymous = await fetch(url);
+    expect(anonymous.status).toBe(403);
+    expect(await anonymous.json()).toEqual({
+      error: 'These tabs need dashboard sign-in turned on.',
+      code: 'signin_required',
+    });
+    // A kept session still works.
+    expect((await fetch(url, { headers: session })).status).toBe(200);
   });
 
   it('takes no query string', async () => {

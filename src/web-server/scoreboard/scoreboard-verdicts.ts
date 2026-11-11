@@ -32,6 +32,37 @@ export function belowBar(column: Pick<Column, 'n' | 'source' | 'reviews'>, minRu
   return null;
 }
 
+/**
+ * The reviewed count behind the bar: the pass rate's decided item count when the column carries a
+ * quality measure — fix rounds on one item count once — else the count of decisive review runs.
+ * A task type with no quality pass rate (like plan) has no item share for the bar to protect,
+ * so it keeps the review-run count.
+ */
+function reviewedCount(column: Pick<Column, 'reviews' | 'measures'>): number {
+  const quality = column.measures.quality;
+  // A null per means no item is decided (every latest review disputed): the count is
+  // zero, never a fallback to review runs, which would clear the bar on rounds alone.
+  return quality ? (quality.per ?? 0) : column.reviews;
+}
+
+/**
+ * The review bar a Recommended or Avoid verdict must clear: one reviewed item alone never lifts
+ * a row to either (a 1-of-1 quality share reads 100%), so an observed column needs `minRuns`
+ * reviewed items — the same bar runs already follow. Five fix rounds on one item are one item,
+ * not five. A Fine can stand on fewer; a benchmark column needs no review.
+ */
+function belowReviewBar(
+  column: Pick<Column, 'source' | 'reviews' | 'measures'>,
+  minRuns: number
+): boolean {
+  if (column.source !== 'observed') return false;
+  // Cheating flags are per-run and do not depend on reviews: a cheating-floor Avoid stands
+  // on any number of reviewed items, and its cell keeps the "cheated in … runs" wording.
+  const cheatingValue = column.measures.cheating?.value;
+  if (typeof cheatingValue === 'number' && cheatingValue >= CHEATING_FLOOR) return false;
+  return reviewedCount(column) < minRuns;
+}
+
 interface Scored {
   column: Column;
   score: number;
@@ -128,7 +159,12 @@ export function judgeGroup(
     return def && weight > 0 ? [{ def, weight }] : [];
   });
   const totalWeight = weighted.reduce((sum, { weight }) => sum + weight, 0);
-  const eligible = columns.filter((column) => belowBar(column, minRuns) === null);
+  // An observed row below the review bar is never ranked (2026-11-11, M-new-1): the
+  // comparison's set is decided once, before scoring, so a demoted row can never set
+  // the top score, peer count, ranks or the best values marks are measured against.
+  const eligible = columns.filter(
+    (column) => belowBar(column, minRuns) === null && !belowReviewBar(column, minRuns)
+  );
   const best = new Map<string, number>();
   for (const { def } of weighted) {
     const known = eligible.flatMap((column) => column.measures[def.id]?.value ?? []);
@@ -158,8 +194,8 @@ export function judgeGroup(
       b.column.n - a.column.n ||
       JSON.stringify(a.column.runs[0]?.id).localeCompare(JSON.stringify(b.column.runs[0]?.id))
   );
-  const top = scored[0]?.score ?? 0;
   const judged = new Map<Column, Column>();
+  const top = scored[0]?.score ?? 0;
   scored.forEach((entry, position) => {
     const { verdict, why } = judge(entry, top, scored.length);
     const preliminary = entry.marks.some((mark) => mark.value.preliminary);
@@ -179,7 +215,10 @@ export function judgeGroup(
       judged.get(column) ??
       unranked(
         column,
-        belowBar(column, minRuns) ?? `None of this use's measures is known yet (n = ${column.n}).`
+        belowBar(column, minRuns) ??
+          (belowReviewBar(column, minRuns)
+            ? `too few blind reviews yet (${reviewedCount(column)} of ${minRuns} needed, n = ${column.n})`
+            : `None of this use's measures is known yet (n = ${column.n}).`)
       )
   );
 }
