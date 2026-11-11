@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import express from 'express';
 import http, { type Server } from 'http';
 import type { AddressInfo } from 'net';
@@ -14,10 +14,17 @@ import { cardDoc, NOW, tempDirs, writeCard } from './status-test-helpers';
 
 const dirs = tempDirs();
 let server: Server | undefined;
+// The 401 path exists only with dashboard sign-in on; the sign-in-off answer has its own test.
+const authEnv = process.env.CCS_DASHBOARD_AUTH_ENABLED;
+beforeEach(() => {
+  process.env.CCS_DASHBOARD_AUTH_ENABLED = 'true';
+});
 afterEach(async () => {
   if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
   server = undefined;
   dirs.cleanup();
+  if (authEnv === undefined) delete process.env.CCS_DASHBOARD_AUTH_ENABLED;
+  else process.env.CCS_DASHBOARD_AUTH_ENABLED = authEnv;
 });
 
 async function start(options: { ringOk?: boolean } = {}) {
@@ -336,6 +343,22 @@ describe('status routes', () => {
       'quota-watch',
     ]);
     expect((await fetch(`${base}/api/status?x=1`, { headers: session })).status).toBe(400);
+  });
+
+  it('with dashboard sign-in off, says these tabs need it, not a bare 401', async () => {
+    process.env.CCS_DASHBOARD_AUTH_ENABLED = 'false';
+    const { base } = await start();
+    const anonymous = await fetch(`${base}/api/status`);
+    expect(anonymous.status).toBe(403);
+    expect(await anonymous.json()).toEqual({
+      error: 'These tabs need dashboard sign-in turned on.',
+      code: 'signin_required',
+    });
+    // The message is the same on the routes below the guard, and a kept session still works.
+    const answers = await fetch(`${base}/api/status/answers`);
+    expect(answers.status).toBe(403);
+    expect((await answers.json()).code).toBe('signin_required');
+    expect((await fetch(`${base}/api/status`, { headers: session })).status).toBe(200);
   });
 
   it('takes an answer set only with the dashboard origin, JSON, no query and a strict body', async () => {
