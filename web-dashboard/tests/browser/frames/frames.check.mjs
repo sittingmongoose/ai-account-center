@@ -4,15 +4,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const PAGES = ['status', 'scoreboard'];
+// The poses an installed app really gets (REAL-DEVICE-INFO.md, the 2026-11-11 review's U7): no top inset on the
+// iPhone or the open Duo (iOS keeps its status bar or band outside the page), and the folded Duo turned either way
+// with its strip on the right or the left. The Duo poses report the Duo's screen (466x678 in every pose).
+const DUO_SCREEN = { width: 466, height: 678 };
 const FORMATS = [
 	{ name: 'desktop', width: 1440, height: 900, safe: '0,0,0,0', mobile: false },
-	{ name: 'iphone', width: 402, height: 874, safe: '62,0,34,0', mobile: true },
-	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true },
-	{ name: 'duo-portrait', width: 669, height: 951, safe: '82,0,34,0', mobile: true },
-	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
-	// Open and upright as the installed app gets it today: iOS keeps its band outside the page (the start page's
-	// status-bar style is "default"), so the frame shows its top and tab bars below it.
-	{ name: 'duo-portrait-below-band', width: 669, height: 869, safe: '0,0,34,0', mobile: true },
+	{ name: 'iphone', width: 402, height: 812, safe: '0,0,34,0', mobile: true },
+	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true, duo: true },
+	{ name: 'duo-folded-turned-strip-right', width: 678, height: 466, safe: '0,84,34,0', mobile: true, duo: true },
+	{ name: 'duo-folded-turned-strip-left', width: 678, height: 466, safe: '0,0,34,84', mobile: true, duo: true },
+	{ name: 'duo-open-upright', width: 669, height: 869, safe: '0,0,34,0', mobile: true, duo: true },
+	{ name: 'duo-open-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true, duo: true },
 ];
 const THEMES = ['light', 'dark'];
 const UNPIN = `html { scrollbar-width: none; }
@@ -36,7 +39,7 @@ export const tests = Object.fromEntries(
 			THEMES.map((theme) => [
 				`${page} ${f.name} ${theme}`,
 				async (t) => {
-					await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1 });
+					await t.newContext({ viewport: { width: f.width, height: f.height }, ...(f.duo ? { screen: DUO_SCREEN } : {}), isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1 });
 					await t.goto(`/app/${page}?safe=${f.safe}`, { settleMs: 300 });
 					if (page === 'status') await openQuestions(t);
 					else await t.page.waitForSelector('.picks');

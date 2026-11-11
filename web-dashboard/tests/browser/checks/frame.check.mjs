@@ -15,12 +15,17 @@ const NATIVE = { status: '.status-grid, .q-card', home: '.home .hsec', scoreboar
 /** The dashboard's own header and tab bar probes: none may report inside the frame. */
 const HEADER_PROBES = /^(nav|tab)-|^update-apps$|^status-(line|block)$/;
 const NAV = { desk: '.chrome .nav a', phone: '.tabbar a', rail: '.rail > a', band: '.band-nav a' };
+// The poses an installed app really gets (REAL-DEVICE-INFO.md; review U7): no top inset on the iPhone or the open Duo,
+// the folded Duo turned with its strip on the right (the strip on the left has its own test below). The band layout
+// (82 pt top inset) is kept as one pose: the frame still supports it if iOS ever puts the page under the band.
 const FORMATS = [
 	{ name: 'desktop', width: 1440, height: 900, safe: '0,0,0,0', mobile: false, chrome: 'desk' },
-	{ name: 'iphone', width: 402, height: 874, safe: '62,0,34,0', mobile: true, chrome: 'phone' },
-	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
-	{ name: 'duo-portrait', width: 669, height: 951, safe: '82,0,34,0', mobile: true, chrome: 'band' },
-	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
+	{ name: 'iphone', width: 402, height: 812, safe: '0,0,34,0', mobile: true, chrome: 'phone' },
+	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true, duo: true, chrome: 'rail' },
+	{ name: 'duo-folded-turned', width: 678, height: 466, safe: '0,84,34,0', mobile: true, duo: true, chrome: 'rail' },
+	{ name: 'duo-open-upright', width: 669, height: 869, safe: '0,0,34,0', mobile: true, duo: true, chrome: 'phone' },
+	{ name: 'duo-open-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true, duo: true, chrome: 'rail' },
+	{ name: 'band (not reached on iOS today)', width: 669, height: 951, safe: '82,0,34,0', mobile: true, chrome: 'band' },
 ];
 
 async function slintFrame(t) {
@@ -206,15 +211,48 @@ export const tests = {
 				await t.check(`${label}: the page's first lines clear the 55 pt rounded corner by 12 pt`, near.every((r) => cornerClear(r.dx, r.dy)),
 					near.map((r) => `"${r.text}" at ${Math.round(r.dx)},${Math.round(r.dy)}`).join('; ') || 'no text near the corner');
 				await t.check(`${label}: no sideways scroll`, s.scrollW <= s.w + 1, `${s.scrollW} > ${s.w}`);
+				// A pinned thread's sheet ends at the rail: never under the strip, its clock or the camera (review U1).
+				if (await t.page.$('.pin-row')) {
+					await t.page.click('.pin-row');
+					await t.page.waitForSelector('.sheet-host .sheet', { timeout: 5000 });
+					const sheet = await t.page.evaluate(() => {
+						const r = document.querySelector('.sheet-host .sheet').getBoundingClientRect();
+						const c = document.querySelector('.sheet-host .sheet-close')?.getBoundingClientRect();
+						return { x: r.x, r: r.right, y: r.y, close: c ? { x: c.x, r: c.right, y: c.y } : null };
+					});
+					const inside = p.side === 'left' ? sheet.x >= s.rail.r - 0.5 : sheet.r <= s.rail.x + 0.5;
+					await t.check(`${label}: the sheet and its close button stay beside the rail`, inside && (!sheet.close || (p.side === 'left' ? sheet.close.x >= s.rail.r : sheet.close.r <= s.rail.x)) && sheet.y >= 28,
+						JSON.stringify(sheet));
+					await t.page.keyboard.press('Escape');
+				}
 			});
 		}
+	},
+
+	async 'frame: a newer build on the server is offered, never forced over a note'(t) {
+		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+		await t.app.signIn();
+		await openFrame(t, 'status');
+		// The server now serves another build of the page (review U2): its runtime address names another id.
+		const html = await t.page.evaluate(async () => (await fetch('/app/status', { cache: 'no-store' })).text());
+		await t.page.route((u) => new URL(u).pathname === '/app/status', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: html.replace(/\/pkg\/[A-Za-z0-9_-]+\//g, '/pkg/kitnewbuild01/') }));
+		const note = await t.page.$('textarea.note');
+		await t.check('a note box to type in', !!note);
+		await note.focus();
+		await t.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+		await t.until('the frame offers the new version', () => !!document.querySelector('.new-build'), null, { timeout: 8000 });
+		await t.check('and did not reload over the note', await t.page.evaluate(() => document.activeElement?.matches('textarea.note') === true));
+		await t.page.click('.new-build button[aria-label="Later"]');
+		await t.until('Later puts it away', () => !document.querySelector('.new-build'), null, { timeout: 3000 });
+		await t.page.click('.chrome .select-btn[aria-label="Account"]');
+		await t.check('the account menu has Reload app', await t.page.locator('.acct-menu .menu-item', { hasText: 'Reload app' }).count() === 1);
 	},
 
 	async 'frame: each format draws its own chrome, and the Duo keeps its strip and band rules'(t) {
 		for (const f of FORMATS) {
 			for (const page of ['status', 'home', 'analytics']) {
 				await t.step(`${f.name} ${page}`, async () => {
-					await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
+					await t.newContext({ viewport: { width: f.width, height: f.height }, ...(f.duo ? { screen: { width: 466, height: 678 } } : {}), isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
 					await t.app.signIn();
 					await openFrame(t, page, f.safe);
 					const label = `${f.name} ${page}`;
