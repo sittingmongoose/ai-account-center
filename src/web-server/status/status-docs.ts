@@ -32,6 +32,8 @@ export interface SeenStatus {
   writer: string;
   doc: Record<string, unknown>;
   sha256: string;
+  /** When AAC first saw this version (epoch ms), for the readers check file. */
+  firstSeenAt: number;
   /** The document's own `seq`, kept out of the record for ordering. */
   seq: number;
   /** When this version was written (`writtenAt` in the document), epoch ms. */
@@ -246,6 +248,7 @@ export class StatusDocsReader {
           sha256: '',
           seq: 0,
           writtenAtMs: 0,
+          firstSeenAt: now,
           problem: { reason: folderRowProblem(reason), since },
           statKey: null,
           missingSince: null,
@@ -325,6 +328,7 @@ export class StatusDocsReader {
       sha256: parsed.sha256,
       seq: parsed.seq,
       writtenAtMs: parsed.writtenAtMs ?? now,
+      firstSeenAt: now,
       problem: null,
       statKey,
       missingSince: null,
@@ -362,6 +366,7 @@ export class StatusDocsReader {
         sha256: '',
         seq: 0,
         writtenAtMs: 0,
+        firstSeenAt: since,
         problem,
         statKey: null,
         missingSince: null,
@@ -389,6 +394,7 @@ export class StatusDocsReader {
         sha256: entry.sha256,
         seq: entry.seq,
         writtenAtMs: entry.writtenAtMs,
+        firstSeenAt: entry.firstSeenAt,
         problem: entry.problem,
       }));
     const problems = entries

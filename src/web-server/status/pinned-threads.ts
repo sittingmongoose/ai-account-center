@@ -24,6 +24,7 @@ import { CLOSING_KINDS } from './answer-entries';
 import type { BlockedOn, MachineId } from './report-schema';
 import type { PinnedPanel, PinnedView } from './status-view-types';
 import { readRemotePins, runCommand, type CommandRunner } from './status-collectors';
+import type { ReadersCheckWriter } from './readers-check';
 import { StatusDocsReader, type StatusDocsState } from './status-docs';
 
 export type PinsMachine = 'vm' | 'mac' | 'windows' | 'nas1';
@@ -55,6 +56,8 @@ export interface PinnedThreadsDeps {
   timeZone?: () => string;
   /** The reports share root, for the status@1 documents. */
   reportsRoot?: () => string;
+  /** Written the readers check file after each compose (null in tests that fake the module). */
+  readersCheck?: ReadersCheckWriter | null;
 }
 
 export class PinnedThreadsCollector {
@@ -279,6 +282,19 @@ export class PinnedThreadsCollector {
     const composed = await composePinned(input, { handle: this.handle });
     if ('view' in composed) this.composed = composed.view as unknown as PinnedView;
     // A refused compose keeps the last good view; its own asOfMs shows its age.
+    // The check file says what the dashboard did with every write this scan read: the same
+    // rows the pinned updates were composed from, plus the pin each report is shown under.
+    try {
+      this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
+      await this.deps.readersCheck?.flush();
+    } catch {
+      /* A check file that cannot be written must never fail the compose. */
+    }
+  }
+
+  /** The merged pins of the last collect, for the pin match the check file reports. */
+  pins(): MergedPin[] {
+    return this.merged;
   }
 }
 

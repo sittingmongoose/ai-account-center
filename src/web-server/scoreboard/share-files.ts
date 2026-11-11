@@ -6,6 +6,7 @@
  * next scan, and the same error on the next scan too is a named problem (since the first failure);
  * a file absent from its listing counts as removed only after the grace period.
  */
+import { createHash } from 'crypto';
 import {
   isTransientShareError,
   MISSING_GRACE_MS,
@@ -22,6 +23,8 @@ export interface ShareFile<T> {
   doc: T;
   /** When AAC first saw this version (epoch ms). */
   firstSeenAt: number;
+  /** Hex digest of the bytes read (the readers check file quotes it back to the writer). */
+  sha256: string;
 }
 
 interface Entry<T> {
@@ -125,7 +128,7 @@ export class ShareFiles<T> {
     entry.statKey = statKey;
     entry.problem = null;
     if (entry.good && seq && seq(parsed.value) < seq(entry.good.doc)) return size;
-    entry.good = { file, doc: parsed.value, firstSeenAt: now() };
+    entry.good = { file, doc: parsed.value, firstSeenAt: now(), sha256: sha256Hex(bytes) };
     return size;
   }
 
@@ -159,6 +162,11 @@ export class ShareFiles<T> {
   problems(): ReportProblem[] {
     return [...this.entries.values()].flatMap((entry) => (entry.problem ? [entry.problem] : []));
   }
+}
+
+/** Hex sha256 of the bytes as read (one place, for the good copies and the readers check). */
+export function sha256Hex(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 /** Problems sorted by file, for the view. */

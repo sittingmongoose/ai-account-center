@@ -375,7 +375,7 @@ describe('agent reports reader', () => {
     const root = dirs.make();
     const created = await ensureReportsLayout(root);
     expect(created.sort()).toEqual(
-      ['v1', 'v1/answers', 'v1/catalog', 'v1/keys', 'v1/schemas', 'v1/writers'].sort()
+      ['v1', 'v1/answers', 'v1/catalog', 'v1/keys', 'v1/readers', 'v1/schemas', 'v1/writers'].sort()
     );
     expect(fs.statSync(path.join(root, 'v1', 'writers')).mode & 0o777).toBe(0o777);
     expect(await ensureReportsLayout(root)).toEqual([]);

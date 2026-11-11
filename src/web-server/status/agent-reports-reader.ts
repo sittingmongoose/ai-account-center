@@ -33,7 +33,14 @@ export function agentReportsRoot(): string {
 }
 
 /** The folders AAC owns under `<reports>/v1`. `writers/` is writable by every agent. */
-export const REPORT_FOLDERS = ['writers', 'answers', 'keys', 'schemas', 'catalog'] as const;
+export const REPORT_FOLDERS = [
+  'writers',
+  'answers',
+  'keys',
+  'schemas',
+  'catalog',
+  'readers',
+] as const;
 
 /**
  * Creates `<reports>/v1/` and its folders when missing (`writers/` mode 0777). The reports root

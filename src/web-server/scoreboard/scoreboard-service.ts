@@ -15,6 +15,7 @@ import {
 } from '../services/dashboard-preferences';
 import { CatalogReader, seedCatalog, type SeedFailure } from './catalog';
 import { RunsReader } from './runs-reader';
+import { ReadersCheckWriter } from '../status/readers-check';
 import { buildScoreboardView, type ScoreboardView } from './scoreboard-view';
 import { composeByModel } from './by-model';
 import { openStatusHandle } from '../../status-native/pinned';
@@ -33,6 +34,8 @@ export interface ScoreboardServiceDeps {
   scanWaitMs?: number;
   /** The aac-status handle for the by-model composer; null means no module (tests). */
   native?: NativeStatusHandle | null;
+  /** Writes the runs rows of the readers check file; the default follows this service's root. */
+  readersCheck?: ReadersCheckWriter;
 }
 
 export class ScoreboardService {
@@ -82,6 +85,11 @@ export class ScoreboardService {
     });
     await Promise.race([Promise.all([this.catalog.scan(), this.runs.scan()]), waited]);
     if (timer) clearTimeout(timer);
+    // The check file's runs rows, from the same snapshot the view builds on. The Status
+    // scan's rows live under the same root, so one file per writer carries both.
+    const check = this.deps.readersCheck ?? new ReadersCheckWriter({ root: () => this.root });
+    check.recordRuns(this.runs.snapshot());
+    await check.flush().catch(() => undefined);
   }
 
   private async build(): Promise<ScoreboardView> {
