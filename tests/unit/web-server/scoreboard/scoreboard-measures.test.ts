@@ -188,6 +188,7 @@ describe('measures', () => {
     );
     expect(value).toMatchObject({ value: 1, n: 2, of: 2, per: 2 });
     expect(value.rounds).toEqual({ value: 1.5, n: 2, low: 1, high: 2 });
+    expect(value.firstTry).toBe(1);
     expect(value.overturns).toHaveLength(1);
   });
 

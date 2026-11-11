@@ -608,6 +608,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "facts-kept": {
@@ -2702,6 +2703,7 @@
                       "low": 1,
                       "high": 2
                     },
+                    "firstTry": 4,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-6-a",
@@ -3005,6 +3007,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 3,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-14",
@@ -3325,6 +3328,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-21",
@@ -4588,7 +4592,7 @@
                 "benchmarkLabel": null,
                 "n": 15,
                 "imported": 0,
-                "reviews": 1,
+                "reviews": 6,
                 "ranked": true,
                 "rank": 1,
                 "score": 1,
@@ -4632,6 +4636,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -4901,7 +4906,7 @@
                 "benchmarkLabel": null,
                 "n": 8,
                 "imported": 0,
-                "reviews": 1,
+                "reviews": 6,
                 "ranked": true,
                 "rank": 2,
                 "score": 1,
@@ -4945,6 +4950,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -5286,6 +5292,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "facts-kept": {
@@ -7356,6 +7363,7 @@
                       "low": 1,
                       "high": 2
                     },
+                    "firstTry": 4,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-6-a",
@@ -7659,6 +7667,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 3,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-14",
@@ -7979,6 +7988,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-21",
@@ -9206,7 +9216,7 @@
                 "benchmarkLabel": null,
                 "n": 15,
                 "imported": 0,
-                "reviews": 1,
+                "reviews": 6,
                 "ranked": true,
                 "rank": 1,
                 "score": 1,
@@ -9250,6 +9260,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -9519,7 +9530,7 @@
                 "benchmarkLabel": null,
                 "n": 8,
                 "imported": 0,
-                "reviews": 1,
+                "reviews": 6,
                 "ranked": true,
                 "rank": 2,
                 "score": 1,
@@ -9563,6 +9574,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -9894,6 +9906,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {

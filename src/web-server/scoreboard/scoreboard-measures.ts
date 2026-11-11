@@ -227,6 +227,7 @@ function quality(runs: readonly RunDoc[], index: ReviewIndex, unit: string): Mea
   let passed = 0;
   let failed = 0;
   let disputed = 0;
+  let firstTry = 0;
   const rounds: number[] = [];
   const firstPass = ({ review }: { review: RunDoc }) =>
     review.review?.verdict === 'pass' && !review.review.overturned;
@@ -239,7 +240,9 @@ function quality(runs: readonly RunDoc[], index: ReviewIndex, unit: string): Mea
       failed += 1;
     } else {
       passed += 1;
-      rounds.push(reviews.findIndex(firstPass) + 1);
+      const round = reviews.findIndex(firstPass) + 1;
+      if (round === 1) firstTry += 1;
+      rounds.push(round);
     }
   }
   return {
@@ -247,6 +250,7 @@ function quality(runs: readonly RunDoc[], index: ReviewIndex, unit: string): Mea
     disputed,
     cannotVerify,
     rounds: stat(rounds),
+    firstTry,
     overturns,
   };
 }

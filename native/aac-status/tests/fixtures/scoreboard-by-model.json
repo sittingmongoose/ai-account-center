@@ -163,17 +163,17 @@
               "strong": true
             },
             {
-              "text": " runs: 20 real work, 8 benchmark · 9 blind reviews"
+              "text": " runs: 20 real work, 8 benchmark · 14 blind reviews"
             }
           ],
-          "sheetHead": "Claude Code · 28 runs · 9 blind reviews",
+          "sheetHead": "Claude Code · 28 runs · 14 blind reviews",
           "cells": {
             "worknode-build": {
               "verdict": "recommended",
               "word": "Recommended",
               "sub": [
                 "7 runs",
-                "passed review 6 of 6"
+                "passed review 6 of 6, 4 on the first try"
               ]
             },
             "review": {
@@ -205,7 +205,7 @@
                 {
                   "label": "Passed review",
                   "value": "100%",
-                  "sub": "6 of 6",
+                  "sub": "6 of 6, 4 on the first try",
                   "note": "With 6 reviews the true rate is likely between 69% and 100%.",
                   "range": {
                     "low": 0.6892,
@@ -405,17 +405,17 @@
               "strong": true
             },
             {
-              "text": " runs: 24 real work, 5 benchmark · 6 blind reviews"
+              "text": " runs: 24 real work, 5 benchmark · 11 blind reviews"
             }
           ],
-          "sheetHead": "Codex · 29 runs · 6 blind reviews",
+          "sheetHead": "Codex · 29 runs · 11 blind reviews",
           "cells": {
             "worknode-build": {
               "verdict": "fine",
               "word": "Fine",
               "sub": [
                 "7 runs",
-                "passed 3 of 4"
+                "passed 3 of 4, 3 on the first try"
               ]
             },
             "review": {
@@ -497,7 +497,7 @@
                 {
                   "label": "Passed review",
                   "value": "75%",
-                  "sub": "3 of 4",
+                  "sub": "3 of 4, 3 on the first try",
                   "note": "With 4 reviews the true rate is likely between 36% and 94%.",
                   "range": {
                     "low": 0.3562,
@@ -755,7 +755,7 @@
                 {
                   "label": "Passed review",
                   "value": "20%",
-                  "sub": "1 of 5",
+                  "sub": "1 of 5, 1 on the first try",
                   "note": "With 5 reviews the true rate is likely between 5% and 56%.",
                   "range": {
                     "low": 0.04596,
@@ -866,7 +866,7 @@
                 {
                   "label": "Passed review",
                   "value": "100%",
-                  "sub": "1 of 1",
+                  "sub": "1 of 1, 1 on the first try",
                   "note": "With 1 reviews the true rate is likely between 27% and 100%.",
                   "range": {
                     "low": 0.2699,
@@ -1228,17 +1228,17 @@
               "strong": true
             },
             {
-              "text": " runs: 24 real work, 5 benchmark · 6 blind reviews"
+              "text": " runs: 24 real work, 5 benchmark · 11 blind reviews"
             }
           ],
-          "sheetHead": "Codex · 29 runs · 6 blind reviews",
+          "sheetHead": "Codex · 29 runs · 11 blind reviews",
           "cells": {
             "worknode-build": {
               "verdict": "fine",
               "word": "Fine",
               "sub": [
                 "7 runs",
-                "passed 3 of 4"
+                "passed 3 of 4, 3 on the first try"
               ]
             },
             "review": {
@@ -1377,7 +1377,7 @@
                 {
                   "label": "Passed review",
                   "value": "75%",
-                  "sub": "3 of 4",
+                  "sub": "3 of 4, 3 on the first try",
                   "note": "With 4 reviews the true rate is likely between 36% and 94%.",
                   "range": {
                     "low": 0.3562,
@@ -1467,17 +1467,17 @@
               "strong": true
             },
             {
-              "text": " runs: 20 real work, 8 benchmark · 9 blind reviews"
+              "text": " runs: 20 real work, 8 benchmark · 14 blind reviews"
             }
           ],
-          "sheetHead": "Claude Code · 28 runs · 9 blind reviews",
+          "sheetHead": "Claude Code · 28 runs · 14 blind reviews",
           "cells": {
             "worknode-build": {
               "verdict": "recommended",
               "word": "Recommended",
               "sub": [
                 "7 runs",
-                "passed review 6 of 6"
+                "passed review 6 of 6, 4 on the first try"
               ]
             },
             "review": {
@@ -1509,7 +1509,7 @@
                 {
                   "label": "Passed review",
                   "value": "100%",
-                  "sub": "6 of 6",
+                  "sub": "6 of 6, 4 on the first try",
                   "note": "With 6 reviews the true rate is likely between 69% and 100%.",
                   "range": {
                     "low": 0.6892,
@@ -1897,7 +1897,7 @@
                 {
                   "label": "Passed review",
                   "value": "20%",
-                  "sub": "1 of 5",
+                  "sub": "1 of 5, 1 on the first try",
                   "note": "With 5 reviews the true rate is likely between 5% and 56%.",
                   "range": {
                     "low": 0.04596,
@@ -2008,7 +2008,7 @@
                 {
                   "label": "Passed review",
                   "value": "100%",
-                  "sub": "1 of 1",
+                  "sub": "1 of 1, 1 on the first try",
                   "note": "With 1 reviews the true rate is likely between 27% and 100%.",
                   "range": {
                     "low": 0.2699,

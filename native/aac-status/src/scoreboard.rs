@@ -143,6 +143,9 @@ pub struct MeasureIn {
     pub of: Option<i64>,
     #[serde(default)]
     pub per: Option<i64>,
+    /// quality: the items that passed on their first review round, when the view says.
+    #[serde(default)]
+    pub first_try: Option<i64>,
     #[serde(default)]
     pub per_task: Option<StatIn>,
     #[serde(default)]
@@ -602,16 +605,21 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
     if let Some(q) = quality
         && q.per.is_some_and(|per| per >= 2)
     {
+        // The rounds each item took to pass reach the cell: how many needed no fix round.
         return Ok(CellOut {
             verdict: row.verdict.clone(),
             word,
             sub: vec![
                 format!("{n} runs"),
                 format!(
-                    "{} {} of {}",
+                    "{} {} of {}{}",
                     if ranked1 { "passed review" } else { "passed" },
                     fmt_opt(q.of),
-                    fmt_opt(q.per)
+                    fmt_opt(q.per),
+                    match q.first_try {
+                        Some(first_try) => format!(", {first_try} on the first try"),
+                        None => String::new(),
+                    }
                 ),
             ],
         });
@@ -728,7 +736,15 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
             out.push(MeasureOut {
                 label: "Passed review".to_string(),
                 value: pct_json(&q.value)?,
-                sub: format!("{} of {}", fmt_opt(q.of), fmt_opt(q.per)),
+                sub: format!(
+                    "{} of {}{}",
+                    fmt_opt(q.of),
+                    fmt_opt(q.per),
+                    match q.first_try {
+                        Some(first_try) => format!(", {first_try} on the first try"),
+                        None => String::new(),
+                    }
+                ),
                 note: format!(
                     "With {} reviews the true rate is likely between {} and {}.",
                     fmt_opt(q.per),

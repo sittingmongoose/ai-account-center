@@ -330,6 +330,70 @@ fn an_avoid_row_without_cheating_says_how_many_runs() {
 }
 
 #[test]
+fn the_rounds_each_item_took_to_pass_reach_the_cell_and_the_report() {
+    // The golden's Opus worknode-build quality carries firstTry: the cell and the report say how
+    // many items needed no fix round (B6).
+    let parsed: ViewIn = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    let view = by_model(&parsed).expect("the golden view composes");
+    let mut cell_subs = Vec::new();
+    let mut report_subs = Vec::new();
+    for panel in &view.views {
+        for model in &panel.models {
+            if model.label == "Opus 5.5" && model.effort.as_deref() == Some("xhigh") {
+                if let Some(cell) = model.cells.get("worknode-build").and_then(|cell| cell.as_ref()) {
+                    cell_subs.push(cell.sub.clone());
+                }
+                for report in &model.report {
+                    if report.job == "worknode-build" {
+                        for measure in &report.measures {
+                            if measure.label == "Passed review" {
+                                report_subs.push(measure.sub.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        cell_subs,
+        vec![
+            vec![
+                "7 runs".to_string(),
+                "passed review 6 of 6, 4 on the first try".to_string()
+            ],
+            vec![
+                "7 runs".to_string(),
+                "passed review 6 of 6, 4 on the first try".to_string()
+            ],
+        ]
+    );
+    assert_eq!(report_subs, vec!["6 of 6, 4 on the first try".to_string(); 2]);
+}
+
+#[test]
+fn a_view_without_first_try_keeps_the_plain_passed_sentence() {
+    // An older view that carries no firstTry adds no clause, never a 0 (B6).
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    edit_objects(&mut doc, &mut |map| {
+        if let Some(Value::Object(quality)) = map.get_mut("quality") {
+            quality.remove("firstTry");
+        }
+    });
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let view = by_model(&parsed).expect("a view without firstTry composes");
+    let text = serde_json::to_string(&view).unwrap();
+    assert!(
+        !text.contains("on the first try"),
+        "a first-try clause was invented: {text}"
+    );
+    assert!(
+        text.contains("passed review 6 of 6"),
+        "the plain sentence must stay: {text}"
+    );
+}
+
+#[test]
 fn a_scout_row_missing_its_facts_kept_measure_is_still_refused() {
     let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
     edit_objects(&mut doc, &mut |map| {
