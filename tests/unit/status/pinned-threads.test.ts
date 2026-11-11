@@ -397,6 +397,57 @@ describe('PinnedThreadsCollector', () => {
     }
   });
 
+  it('a hung check-file write never stalls the compose (F2)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-pinned-hung-'));
+    try {
+      writeReport(dir, 'vm.lead', 'thread.json', threadDoc('vm.lead'));
+      const reader = new AgentReportsReader({
+        root: () => dir,
+        now: () => 1_794_116_000_000,
+      });
+      await reader.scan();
+      expect(reader.snapshot().problems).toEqual([]);
+      let release: (() => void) | null = null;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const { ReadersCheckWriter } = await import(
+        '../../../src/web-server/status/readers-check'
+      );
+      const check = new ReadersCheckWriter({
+        root: () => dir,
+        now: () => 1_794_116_000_000,
+        files: {
+          mkdir: async () => {},
+          writeFile: async () => {
+            await gate;
+          },
+          rename: async () => {},
+          rm: async () => {},
+        },
+      });
+      const { handle } = fakeHandle({ vm: () => ({ pinned: [pin('t1')] }) });
+      const collector = new PinnedThreadsCollector({
+        handle,
+        run: neverRun,
+        readRemote: async () => '[]',
+        now: () => 1_794_116_000_000,
+        reportsRoot: () => dir,
+        readersCheck: check,
+      });
+      await collector.collect();
+      const done = collector.compose(reader.snapshot(), []);
+      const winner = await Promise.race([
+        done.then(() => 'composed' as const),
+        new Promise<'timed out'>((resolve) => setTimeout(() => resolve('timed out'), 3000).unref?.()),
+      ]);
+      expect(winner).toBe('composed');
+      release?.();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('the dashboard zone becomes the offset the composer needs', () => {
     const november = Date.parse('2026-11-08T05:00:00Z');
     expect(zoneOffsetMinutes('UTC', november)).toBe(0);

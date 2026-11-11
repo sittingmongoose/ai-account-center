@@ -5,7 +5,8 @@
  *
  * One row per file AAC last read, the reason vocabulary identical to the readers' own refusal
  * words and never the file's text. Written atomically (temporary file, then rename); the
- * folder is AAC's own (`v1/readers`), and a write that cannot happen is skipped silently — the
+ * folder is AAC's own (`v1/readers`), and a write that hangs or fails never stalls a scan (a
+ * flush is fired and forgotten behind a single in-flight guard, failures logged once) — the
  * check is a courtesy to writers, never a load-bearing part of a scan. Rows live in memory
  * between scans: the status scan holds thread.json, tasks.json, status.json and cards, the
  * Scoreboard's runs scan holds runs, and one flush merges both.
@@ -36,6 +37,29 @@ export interface ReaderFileRow {
   pin?: { t3Thread: string; title: string } | null;
 }
 
+/** The share writes one flush performs, so tests can hang or fail them (F2). */
+export interface CheckFiles {
+  mkdir(dir: string, options?: { recursive?: boolean }): Promise<void>;
+  writeFile(file: string, body: string, options?: { mode?: number }): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
+  rm(file: string, options?: { force?: boolean }): Promise<void>;
+}
+
+const nodeCheckFiles: CheckFiles = {
+  mkdir: async (dir, options) => {
+    await fs.promises.mkdir(dir, options);
+  },
+  writeFile: async (file, body, options) => {
+    await fs.promises.writeFile(file, body, options);
+  },
+  rename: async (from, to) => {
+    await fs.promises.rename(from, to);
+  },
+  rm: async (file, options) => {
+    await fs.promises.rm(file, options);
+  },
+};
+
 /**
  * Writes the per-writer check files. The rows are held per reports root, not per instance, so
  * the Status scan and the Scoreboard's runs scan merge into one file per writer wherever they
@@ -47,6 +71,8 @@ export class ReadersCheckWriter {
       /** The reports root; defaults to the same root the agent-reports reader uses. */
       root?: () => string;
       now?: () => number;
+      /** The share writes; defaults to the real filesystem (tests hang or reject them). */
+      files?: CheckFiles;
     } = {}
   ) {}
 
@@ -56,6 +82,10 @@ export class ReadersCheckWriter {
 
   private root(): string {
     return this.options.root?.() ?? defaultReadersCheckRoot();
+  }
+
+  private files(): CheckFiles {
+    return this.options.files ?? nodeCheckFiles;
   }
 
   /** The rows of one root: writer -> file -> row (the newest row per file wins). */
@@ -181,11 +211,13 @@ export class ReadersCheckWriter {
   async flush(): Promise<void> {
     const dir = path.join(this.root(), 'v1', 'readers', 'aac');
     const writtenAt = new Date(this.now()).toISOString();
+    const target = this.files();
     try {
-      await fs.promises.mkdir(dir, { recursive: true });
+      await target.mkdir(dir, { recursive: true });
     } catch {
       return; // The share is not there for us: skip, the next scan tries again.
     }
+    let logged = false;
     for (const [writer, files] of this.rows()) {
       const body = `${JSON.stringify(
         {
@@ -201,12 +233,36 @@ export class ReadersCheckWriter {
       const file = path.join(dir, `${writer}.json`);
       const temp = path.join(dir, `.${writer}.tmp-${process.pid}-${Date.now()}`);
       try {
-        await fs.promises.writeFile(temp, body, { mode: 0o644 });
-        await fs.promises.rename(temp, file);
-      } catch {
-        await fs.promises.rm(temp, { force: true }).catch(() => undefined);
+        await target.writeFile(temp, body, { mode: 0o644 });
+        await target.rename(temp, file);
+      } catch (error) {
+        // The check is a courtesy, never load-bearing: one log per flush, never thrown.
+        if (!logged) {
+          logged = true;
+          console.error('readers check flush failed:', error);
+        }
+        await target.rm(temp, { force: true }).catch(() => undefined);
       }
     }
+  }
+
+  /** The one flush in flight, if any; skipped while one runs so scans never pile up behind it. */
+  private flushing: Promise<void> | null = null;
+
+  /**
+   * Starts one flush and returns at once (F2): a hung share must never stall a scan or a
+   * build. A flush already in flight is not queued behind; it is skipped. A failed write is
+   * logged once per flush, never thrown.
+   */
+  flushSoon(): void {
+    if (this.flushing) return;
+    this.flushing = this.flush()
+      .catch((error: unknown) => {
+        console.error('readers check flush failed:', error);
+      })
+      .finally(() => {
+        this.flushing = null;
+      });
   }
 }
 

@@ -89,7 +89,8 @@ export class ScoreboardService {
     // scan's rows live under the same root, so one file per writer carries both.
     const check = this.deps.readersCheck ?? new ReadersCheckWriter({ root: () => this.root });
     check.recordRuns(this.runs.snapshot());
-    await check.flush().catch(() => undefined);
+    // Fire and forget (F2): a hung share must never stall the build; the next scan retries.
+    check.flushSoon();
   }
 
   private async build(): Promise<ScoreboardView> {

@@ -243,4 +243,95 @@ describe('the readers check file', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('never waits for a hung share: one flush in flight, the next is skipped', async () => {
+    let writes = 0;
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const files = {
+      mkdir: async () => {},
+      writeFile: async () => {
+        writes += 1;
+        await gate;
+      },
+      rename: async () => {},
+      rm: async () => {},
+    };
+    const check = new ReadersCheckWriter({ root: () => '/hung', now: () => NOW, files });
+    check.recordStatusScan(
+      {
+        root: '/hung',
+        state: 'ok',
+        scannedAt: NOW,
+        complete: true,
+        threads: [],
+        tasks: [],
+        cards: [{ writer: 'vm.lead', doc: cardDoc('vm.lead', 'q1'), sha256: 'ab'.repeat(32), firstSeenAt: NOW, problem: null } as never],
+        problems: [],
+        boards: new Map(),
+      },
+      { state: 'ok', scannedAt: NOW, docs: [], problems: [] },
+      []
+    );
+    const first = check.flushSoon();
+    expect(first).toBeUndefined();
+    // Let the background flush reach the hung write.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(writes).toBe(1);
+    // A second flush while one is in flight starts nothing new.
+    check.flushSoon();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(writes).toBe(1);
+    expect(release).not.toBeNull();
+    release?.();
+  });
+
+  it('a failed write is logged once and never thrown', async () => {
+    const logged: unknown[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    try {
+      let writes = 0;
+      const files = {
+        mkdir: async () => {},
+        writeFile: async () => {
+          writes += 1;
+          throw new Error('share refused the write');
+        },
+        rename: async () => {},
+        rm: async () => {},
+      };
+      const check = new ReadersCheckWriter({ root: () => '/failing', now: () => NOW, files });
+      check.recordStatusScan(
+        {
+          root: '/failing',
+          state: 'ok',
+          scannedAt: NOW,
+          complete: true,
+          threads: [],
+          tasks: [],
+          cards: [
+            { writer: 'vm.a', doc: cardDoc('vm.a', 'q1'), sha256: 'ab'.repeat(32), firstSeenAt: NOW, problem: null } as never,
+            { writer: 'vm.b', doc: cardDoc('vm.b', 'q2'), sha256: 'cd'.repeat(32), firstSeenAt: NOW, problem: null } as never,
+          ],
+          problems: [],
+          boards: new Map(),
+        },
+        { state: 'ok', scannedAt: NOW, docs: [], problems: [] },
+        []
+      );
+      await check.flush();
+      expect(writes).toBe(2);
+      // Two failing files, one log line, nothing thrown.
+      expect(logged).toHaveLength(1);
+    } finally {
+      console.error = original;
+    }
+  });
 });

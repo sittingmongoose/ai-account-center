@@ -290,12 +290,9 @@ export class PinnedThreadsCollector {
     // A refused compose keeps the last good view; its own asOfMs shows its age.
     // The check file says what the dashboard did with every write this scan read: the same
     // rows the pinned updates were composed from, plus the pin each report is shown under.
-    try {
-      this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
-      await this.deps.readersCheck?.flush();
-    } catch {
-      /* A check file that cannot be written must never fail the compose. */
-    }
+    this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
+    // Fire and forget (F2): a hung share must never stall the collect; the next scan retries.
+    this.deps.readersCheck?.flushSoon();
   }
 
   /** The merged pins of the last collect, for the pin match the check file reports. */
