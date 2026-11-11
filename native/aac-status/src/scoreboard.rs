@@ -472,6 +472,17 @@ fn seconds(value: f64) -> Result<String> {
     }
 }
 
+/// A figure that formats to a zero time ("0.0 s", "0 s", "0 min") holds no usable figure: it reads
+/// "–" (unknown), never a measured zero — for the speed value and for the bounds its note quotes
+/// (2026-11-11, D3/L5).
+fn zero_time(text: &str) -> bool {
+    matches!(text, "0.0 s" | "0 s" | "0 min")
+}
+
+fn honest(text: String) -> String {
+    if zero_time(&text) { "–".to_string() } else { text }
+}
+
 /// One decimal from 1 up, two below it.
 fn round1(value: f64) -> Result<String> {
     if value >= 1.0 {
@@ -785,34 +796,35 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
             Some(stat) => minutes(stat.value.ok_or_else(|| shape("a per-task speed with no value"))?)?,
             None => seconds(sp.value.as_f64().ok_or_else(|| shape("a speed with no usable value"))?)?,
         };
-        // A speed that formats to a zero time ("0.0 s", "0 s") holds no usable figure: it
-        // reads "–" (unknown), never a measured zero (2026-11-11, D3).
-        let value = if matches!(formatted.as_str(), "0.0 s" | "0 s" | "0 min") {
-            "–".to_string()
-        } else {
-            formatted
-        };
+        let value = honest(formatted);
         let note = if let Some(stat) = per_task {
             // A missing bound is not zero: the reference's number check refuses it.
-            format!(
-                "Fastest {}, slowest {}, over {} runs.",
-                minutes(stat.low.ok_or_else(|| shape("a per-task speed with no value"))?)?,
-                minutes(stat.high.ok_or_else(|| shape("a per-task speed with no value"))?)?,
-                stat.n
-            )
+            let lo = minutes(stat.low.ok_or_else(|| shape("a per-task speed with no value"))?)?;
+            let hi = minutes(stat.high.ok_or_else(|| shape("a per-task speed with no value"))?)?;
+            if zero_time(&lo) && zero_time(&hi) {
+                format!("Over {} runs.", stat.n)
+            } else {
+                format!("Fastest {}, slowest {}, over {} runs.", honest(lo), honest(hi), stat.n)
+            }
         } else if job.id == "scout"
             && sp.low.as_f64().is_some()
             && sp.high.as_f64().is_some()
             && sp.low.as_f64() != sp.high.as_f64()
         {
-            format!(
-                "Range {} to {} s.",
-                to_fixed(sp.low.as_f64().ok_or_else(|| shape("a speed with no usable value"))?, 1)?,
-                to_fixed(
-                    sp.high.as_f64().ok_or_else(|| shape("a speed with no usable value"))?,
-                    1
-                )?
-            )
+            let lo = to_fixed(sp.low.as_f64().ok_or_else(|| shape("a speed with no usable value"))?, 1)?;
+            let hi = to_fixed(
+                sp.high.as_f64().ok_or_else(|| shape("a speed with no usable value"))?,
+                1,
+            )?;
+            if lo == "0.0" && hi == "0.0" {
+                format!("Over {} runs.", sp.n)
+            } else {
+                format!(
+                    "Range {} to {} s.",
+                    if lo == "0.0" { "–" } else { &lo },
+                    if hi == "0.0" { "–" } else { &hi }
+                )
+            }
         } else {
             format!("Over {} runs.", sp.n)
         };

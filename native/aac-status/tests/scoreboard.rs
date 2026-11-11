@@ -619,6 +619,58 @@ fn unknown_model_runs_count_every_runtime_and_effort() {
 }
 
 #[test]
+fn speed_note_bounds_never_print_zero_times() {
+    // L5: a bound that formats to a zero time reads "–"; when both bounds read "–" the
+    // ranged note drops to the plain Over sentence.
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    for use_in in doc["uses"].as_array_mut().unwrap() {
+        let use_id = use_in["id"].as_str().unwrap_or("").to_string();
+        for task in use_in["taskTypes"].as_array_mut().unwrap() {
+            let task_id = task["id"].as_str().unwrap_or("").to_string();
+            for row in task["rows"].as_array_mut().unwrap() {
+                let opus = row["model"].as_str() == Some("anthropic/claude-opus-5-5")
+                    && row["effort"].as_str() == Some("xhigh")
+                    && row["observed"].is_object();
+                if !opus {
+                    continue;
+                }
+                // Scout's ranged note: both bounds sub-centisecond.
+                if use_id == "planning" && task_id == "scout" {
+                    let speed = &mut row["observed"]["measures"]["speed"];
+                    speed["low"] = json!(0.01);
+                    speed["high"] = json!(0.04);
+                }
+                // WorkNode build's per-task note: a sub-second fastest.
+                if use_id == "building" && task_id == "worknode-build" {
+                    row["observed"]["measures"]["speed"]["perTask"]["low"] = json!(0.1);
+                }
+            }
+        }
+    }
+    let view = by_model(&serde_json::from_value(doc).unwrap()).unwrap();
+    let opus = view.views[0]
+        .models
+        .iter()
+        .find(|m| m.key == "anthropic/claude-opus-5-5|claude-code|xhigh")
+        .unwrap();
+    let note = |job: &str| {
+        opus.report
+            .iter()
+            .find(|r| r.job == job)
+            .unwrap()
+            .measures
+            .iter()
+            .find(|m| m.label.starts_with("Time per"))
+            .map(|m| m.note.clone())
+    };
+    assert_eq!(note("scout").as_deref(), Some("Over 5 runs."));
+    assert_eq!(
+        note("worknode-build").as_deref(),
+        Some("Fastest –, slowest 27 min, over 7 runs.")
+    );
+}
+
+#[test]
 fn unknown_speed_and_cost_are_not_called_the_same() {
     // The review fixture builder's review runs, with wallSeconds and cost set to null.
     // Both models stay Recommended. Unknown speed and unknown cost are not a tie. R1.
