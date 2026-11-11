@@ -540,7 +540,7 @@ describe('bounded native account activity checkpoints', () => {
       tokens(100, 20, 10),
       model('gpt-5.3-codex'),
       // The cumulative total grows only in cached reads: a cache-only delta.
-      tokens(120, 40, 15),
+      tokens(120, 40, 10),
     ]);
     const data = await collect();
     expect(data.hourly).toHaveLength(1);
@@ -554,7 +554,8 @@ describe('bounded native account activity checkpoints', () => {
           modelName: 'gpt-5.3-codex',
           inputTokens: 0,
           cacheReadTokens: 20,
-          outputTokens: 5,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
         }),
       ])
     );
