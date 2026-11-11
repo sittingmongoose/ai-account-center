@@ -21,7 +21,7 @@ import type { NativeStatusHandle } from '../../status-native/native-loader';
 import type { AnswerHistoryEntry } from './answers';
 import type { AgentReportsState } from './agent-reports-reader';
 import { CLOSING_KINDS } from './answer-entries';
-import type { MachineId } from './report-schema';
+import type { BlockedOn, MachineId } from './report-schema';
 import type { PinnedPanel, PinnedView } from './status-view-types';
 import { readRemotePins, runCommand, type CommandRunner } from './status-collectors';
 import { StatusDocsReader, type StatusDocsState } from './status-docs';
@@ -221,7 +221,7 @@ export class PinnedThreadsCollector {
         stream: row.doc.stream,
         state: row.doc.state,
         doing: row.doc.doing,
-        blockedOn: row.doc.blockedOn,
+        blockedOn: blockedOnIn(row.doc.blockedOn),
         progress: row.doc.progress,
         ttlSeconds: row.doc.ttlSeconds,
         problem: row.problem?.reason ?? null,
@@ -244,7 +244,7 @@ export class PinnedThreadsCollector {
             verdict: review.verdict,
           })),
           landed: item.landed ? { atMs: item.landed.at ? Date.parse(item.landed.at) : null } : null,
-          blockedOn: item.blockedOn,
+          blockedOn: blockedOnIn(item.blockedOn),
           updatedAtMs: item.updatedAt ? Date.parse(item.updatedAt) : null,
         })),
       })),
@@ -280,6 +280,11 @@ export class PinnedThreadsCollector {
     if ('view' in composed) this.composed = composed.view as unknown as PinnedView;
     // A refused compose keeps the last good view; its own asOfMs shows its age.
   }
+}
+
+/** `blockedOn` with its `since` parsed once, for the composer's "waiting since" clock words. */
+function blockedOnIn(blocked: BlockedOn | null) {
+  return blocked ? { ...blocked, sinceMs: blocked.since ? Date.parse(blocked.since) : null } : null;
 }
 
 /** The open cards (questions the owner has not answered), the same rule as the cards panel. */

@@ -211,7 +211,7 @@
       ]
     },
     "ttlSeconds": {
-      "description": "Seconds after writtenAt before the thread shows as stale. May be null when state is waiting, idle, done or paused.",
+      "description": "Seconds after writtenAt before the thread shows as stale. May be null for any state: a thread that ended its turn cannot heartbeat, whatever state it ended in.",
       "minimum": 0,
       "type": [
         "integer",

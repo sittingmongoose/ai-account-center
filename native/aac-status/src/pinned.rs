@@ -165,6 +165,10 @@ pub struct BlockedIn {
     pub what: String,
     #[serde(default)]
     pub since: Option<String>,
+    /// The same moment as `since`, in epoch ms (the TypeScript side parses it once); used for
+    /// clock words, never recomputed here.
+    #[serde(default)]
+    pub since_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -681,6 +685,31 @@ fn compose_update(
         .and_then(|doc| doc.ttl_seconds)
         .map(|seconds| seconds * 1000)
         .unwrap_or(0);
+    // A thread whose last report says it waits on the owner is never stale: it ended its turn to
+    // wait for him, so the longer it waits the more the page must keep saying so (B2), whatever
+    // its heartbeat said. The `updated` line above still shows its true age.
+    let waiting_on_owner = [
+        thread
+            .and_then(|doc| doc.blocked_on.as_ref())
+            .map(|kind| kind.kind.as_str()),
+        tasks.and_then(|board| {
+            board
+                .items
+                .iter()
+                .filter(|item| !matches!(item.state.as_str(), "landed" | "done" | "dropped"))
+                .find(|item| item.blocked_on.as_ref().is_some_and(|kind| kind.kind == "owner"))
+                .map(|_| "owner")
+        }),
+        status.and_then(|doc| {
+            doc.blockers
+                .iter()
+                .find(|blocker| blocker.waiting_on == "owner")
+                .map(|_| "owner")
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|kind| kind == "owner");
     if let Some(since) = unreadable_since {
         update.report_state = "unreadable";
         update.unreadable_note = Some(format!(
@@ -694,7 +723,7 @@ fn compose_update(
         // never invent a moment.
         update.report_state = "unreadable";
         update.unreadable_note = Some("Could not be read since the last scan.".to_string());
-    } else if age > DAY_MS || (ttl_ms > 0 && age > ttl_ms) {
+    } else if !waiting_on_owner && (age > DAY_MS || (ttl_ms > 0 && age > ttl_ms)) {
         update.report_state = "stale";
         update.stale_note = Some(format!(
             "No status update for {}. If it is finished, unpin it in T3.",
@@ -844,12 +873,21 @@ fn compose_update(
     // ---- Blocked / waiting on you ----------------------------------------------------------
     let mut waiting: Vec<String> = Vec::new();
     let mut blocked: Vec<String> = Vec::new();
+    // The earliest moment one of the waiting-on-you reports names, for "since <clock>".
+    let mut waiting_since: Option<i64> = None;
+    let mut note_waiting_since = |kind: &BlockedIn| {
+        if kind.kind == "owner" && kind.since_ms.is_some() {
+            waiting_since =
+                Some(waiting_since.map_or(kind.since_ms.unwrap(), |held: i64| held.min(kind.since_ms.unwrap())));
+        }
+    };
     // Blocked in so many words with no `blockedOn` to name: the state is known, the reason
     // is not, and neither may be dropped — the update says blocked and that the report does
     // not say on what, never "None.".
     let mut unexplained: Vec<String> = Vec::new();
     if let Some(kind) = thread.and_then(|doc| doc.blocked_on.as_ref()) {
         if kind.kind == "owner" {
+            note_waiting_since(kind);
             waiting.push(kind.what.clone());
         } else {
             blocked.push(format!("{} (waiting on {})", kind.what, kind.kind));
@@ -865,6 +903,7 @@ fn compose_update(
             // An item that names a blocker is a blocked item, whatever its state column says.
             if let Some(kind) = &item.blocked_on {
                 if kind.kind == "owner" {
+                    note_waiting_since(kind);
                     waiting.push(kind.what.clone());
                 } else {
                     blocked.push(format!("{} (waiting on {})", kind.what, kind.kind));
@@ -896,7 +935,12 @@ fn compose_update(
     blocked.dedup();
     let mut parts: Vec<String> = Vec::new();
     if !waiting.is_empty() {
-        parts.push(format!("Waiting on you: {}.", waiting.join("; ")));
+        // "Waiting on you since 6:55 PM: pick the reviewers." — the since is the earliest moment
+        // a waiting report names; without one the sentence stays as it was.
+        let since = waiting_since
+            .map(|at| format!(" since {}", clock_text(at, input.utc_offset_minutes)))
+            .unwrap_or_default();
+        parts.push(format!("Waiting on you{since}: {}.", waiting.join("; ")));
     }
     if !blocked.is_empty() {
         parts.push(format!("Blocked: {}.", blocked.join("; ")));

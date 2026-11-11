@@ -334,9 +334,9 @@ of the share are mapped); elsewhere `ageSeconds` is null.
 source: "report" | "pm-mail", lastSeen, ageSeconds, stale, clockAheadSeconds, problem, registrySource }`. Threads quiet for more than
 a day are left out unless they report `blocked`. `lastSeen` is the older of the writer's `writtenAt` and when AAC first
 saw that version, so a writer whose clock runs ahead cannot look fresh; `clockAheadSeconds` says by how much when over
-2 minutes. A report is `stale` after its `ttlSeconds` or while its file is unreadable. `ttlSeconds` may be null only
-when `state` is `waiting`, `idle`, `done` or `paused` (a thread that ended its turn cannot heartbeat): such a thread
-shows its age and is never stale for lack of a heartbeat (null with `working` or `blocked` makes the file unreadable). pm-mail rows (registry threads
+2 minutes. A report is `stale` after its `ttlSeconds` or while its file is unreadable. `ttlSeconds` may be null for any
+state (a thread that ended its turn cannot heartbeat, whatever state it ended in): such a thread
+shows its age and is never stale for lack of a heartbeat. pm-mail rows (registry threads
 with no report, seen in the last day) have `state: null`, `doing` = their about line, and are stale after 30 minutes.
 Their `registrySource` is the pm-mail registry's `SourceRef` (null on report rows): while the registry fails, its rows
 are the last good scan, shown as cached with the registry's problem. While only some registry files fail, each row

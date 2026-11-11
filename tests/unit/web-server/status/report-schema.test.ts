@@ -53,6 +53,21 @@ describe('agent report documents', () => {
     });
   });
 
+
+  it('accepts ttlSeconds null for blocked and every other state (B2)', () => {
+    // A thread that ended its turn to wait on the owner cannot heartbeat, whatever state it
+    // ended in; refusing the null hid the blocker once the heartbeat lapsed.
+    for (const state of ['blocked', 'waiting', 'working', 'paused', 'idle', 'done']) {
+      const parsed = parseReportFile(
+        'thread',
+        json(threadDoc('vm.lead', { state, ttlSeconds: null })),
+        'vm.lead'
+      );
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.value.doc.ttlSeconds).toBeNull();
+    }
+  });
+
   it('refuses a file whose writer or card id does not match its folder', () => {
     expect(parseReportFile('thread', json(threadDoc('vm.other')), 'vm.lead')).toEqual({
       ok: false,

@@ -594,3 +594,41 @@ fn a_task_board_that_cannot_be_read_says_so_beside_its_counts() {
         Some("Its task list could not be read; these counts are its last good copy.")
     );
 }
+
+#[test]
+fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
+    // B2: a thread that ended its turn to wait on the owner cannot heartbeat; the older its
+    // last report, the more the update must keep saying it waits. Stale would hide exactly
+    // that, so it is never stale while the report says "waiting on you", whatever its ttl.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "state": "blocked", "ttlSeconds": null,
+            "writtenAtMs": NOW - 3 * 24 * 60 * 60 * 1000,
+            "blockedOn": {
+                "kind": "owner", "what": "Approve the redesign",
+                "since": "2026-11-07T04:03:20Z", "sinceMs": NOW - 90 * 60 * 1000
+            }
+        }))]
+    }));
+    let update = one_update(&built);
+    assert_eq!(update.report_state, "fresh");
+    assert_eq!(update.blocked.waiting_on_you, true);
+    // NOW - 90 min reads 11:03 PM in the dashboard's zone (offset -300).
+    assert_eq!(
+        update.blocked.text,
+        "Waiting on you since 11:03 PM: Approve the redesign."
+    );
+    // A heartbeat that lapsed while it waits says nothing either.
+    let lapsed = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "state": "waiting", "ttlSeconds": 1800,
+            "writtenAtMs": NOW - 3 * 60 * 60 * 1000,
+            "blockedOn": { "kind": "owner", "what": "Pick the reviewers", "sinceMs": null }
+        }))]
+    }));
+    let update = one_update(&lapsed);
+    assert_eq!(update.report_state, "fresh");
+    assert_eq!(update.blocked.text, "Waiting on you: Pick the reviewers.");
+}

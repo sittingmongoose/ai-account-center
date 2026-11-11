@@ -46,13 +46,6 @@ export * from './run-schema';
 
 export const THREAD_STATES = ['working', 'waiting', 'blocked', 'paused', 'idle', 'done'] as const;
 export type ThreadState = (typeof THREAD_STATES)[number];
-/** States that may carry `ttlSeconds: null` (shown by age, never stale). */
-export const QUIET_STATES: ReadonlySet<ThreadState> = new Set([
-  'waiting',
-  'idle',
-  'done',
-  'paused',
-]);
 /**
  * Documented kinds: owner, agent, review, lock, resource, quota. Any short slug is accepted and
  * shown as written, so a new kind needs no rebuild.
@@ -75,7 +68,10 @@ function blockedOn(value: unknown, field: string): BlockedOn | null {
 }
 
 export interface ThreadDoc extends DocHead {
-  /** Null only for waiting, idle, done or paused: a thread that ended its turn cannot heartbeat. */
+  /**
+   * Null for any state: a thread that ended its turn cannot heartbeat, whatever state it ended in
+   * (blocked on the owner included). Such a thread is shown by age, never stale for lack of one.
+   */
   ttlSeconds: number | null;
   agent: {
     name: string | null;
@@ -101,7 +97,6 @@ function thread(doc: Record<string, unknown>, writer: string): ThreadDoc {
   const state = oneOf(doc.state, 'state', THREAD_STATES);
   let ttl: number | null = 1800;
   if (doc.ttlSeconds === null) {
-    if (!QUIET_STATES.has(state)) fail('ttlSeconds');
     ttl = null;
   } else if (doc.ttlSeconds !== undefined) {
     ttl = count(doc.ttlSeconds, 'ttlSeconds');
