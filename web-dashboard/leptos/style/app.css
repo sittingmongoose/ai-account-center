@@ -2673,3 +2673,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .c2-stages .st { display: block; font-size: 12px; color: var(--ink-3); text-align: right; }
   .c2-stages li[data-st='you'] .st { color: var(--warn-text); }
 }
+/* Unsent words of a closed question (review R1): kept until the owner copies or discards them. */
+.q-unsent { padding: 0 16px 8px; }
+.q-unsent .answered { margin-top: 6px; }
+.q-unsent-actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
