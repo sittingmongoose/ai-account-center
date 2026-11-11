@@ -723,8 +723,11 @@ fn period_view(period: &PeriodIn, input: &SpendInput, spend: &SpendIn) -> Result
         .map(|stream| -> Result<RowWork> {
             let cells = build_cells(&[stream])?;
             Ok(RowWork {
+                // A stream with no label from the reports (`label` is the id itself) has
+                // no sub-label: the page draws nothing for it (2026-11-11, D2a). A label the
+                // input carries — say the phrase for a lone thread — is kept verbatim.
                 label: if stream.label == stream.stream {
-                    "a thread with no stream".to_string()
+                    String::new()
                 } else {
                     stream.label.clone()
                 },

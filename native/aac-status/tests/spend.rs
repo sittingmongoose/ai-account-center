@@ -283,6 +283,29 @@ fn a_five_hour_cell_under_one_is_a_percent_and_a_weekly_cell_above_one_stays_one
 }
 
 #[test]
+fn an_unlabelled_stream_has_no_sub_label_and_a_marked_lone_thread_keeps_its_phrase() {
+    // D2a: a stream the reports never labelled has `label` equal to its id, and gets no
+    // sub-label at all — the page draws nothing for it. A label the input genuinely
+    // carries, including the phrase for a lone thread, is kept verbatim.
+    let streams = json!([
+        stream("E", "E", false, json!([row("claude:me", "seven_day", json!(20.0))])),
+        stream(
+            "solo",
+            "a thread with no stream",
+            false,
+            json!([row("claude:me", "seven_day", json!(10.0))])
+        )
+    ]);
+    let view = compose(&view_of(spend_doc(json!([week(streams)]), json!([]))));
+    let rows = &view.periods[0].rows;
+    // Rows by peak share: E (20%) before the lone thread (10%).
+    assert_eq!(rows[0].stream, "E");
+    assert_eq!(rows[0].label, "");
+    assert_eq!(rows[1].stream, "solo");
+    assert_eq!(rows[1].label, "a thread with no stream");
+}
+
+#[test]
 fn one_non_bucket_row_gives_no_next_sentence() {
     let only = json!([stream(
         "only",
