@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1409,
-    "filesAffected": 143,
-    "hotpathOccurrences": 750,
-    "hotpathFilesAffected": 84,
+    "totalOccurrences": 1371,
+    "filesAffected": 137,
+    "hotpathOccurrences": 712,
+    "hotpathFilesAffected": 78,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -359,8 +359,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 225,
-    "filesAffected": 78,
+    "totalMarkers": 221,
+    "filesAffected": 75,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -541,17 +541,17 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 747,
+      "totalThrows": 744,
       "typedThrows": 215,
-      "plainThrows": 72,
+      "plainThrows": 69,
       "otherThrows": 460,
-      "adoptionRatio": 0.2878,
+      "adoptionRatio": 0.289,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 383,
+          "count": 380,
           "typed": 149,
-          "plain": 10
+          "plain": 7
         },
         {
           "subdomain": "antigravity",
@@ -623,8 +623,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 45,
-      "totalSourceFiles": 509,
-      "coverageRatio": 0.0884,
+      "totalSourceFiles": 504,
+      "coverageRatio": 0.0893,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -652,7 +652,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 229,
+          "count": 224,
           "withLogger": 28
         },
         {
@@ -771,16 +771,16 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 73,
-      "countOver600": 29,
+      "countOver400": 69,
+      "countOver600": 27,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 3724
+          "loc": 3680
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1807
+          "loc": 1805
         },
         {
           "file": "src/web-server/status/answers.ts",
@@ -791,12 +791,12 @@
           "loc": 1340
         },
         {
-          "file": "src/web-server/model-pricing.ts",
-          "loc": 1322
-        },
-        {
           "file": "src/antigravity/registry.ts",
           "loc": 1104
+        },
+        {
+          "file": "src/web-server/model-pricing-data.ts",
+          "loc": 1023
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
@@ -816,11 +816,7 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 940
-        },
-        {
-          "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",
-          "loc": 924
+          "loc": 941
         },
         {
           "file": "src/cliproxy/model-catalog.ts",
@@ -833,6 +829,10 @@
         {
           "file": "src/web-server/status/status-view.ts",
           "loc": 849
+        },
+        {
+          "file": "src/web-server/usage/native-quota-collector.ts",
+          "loc": 848
         }
       ]
     }

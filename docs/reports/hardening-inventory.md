@@ -6,12 +6,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1409 |
-| Sync fs files affected (all) | 143 |
-| Sync fs occurrences (runtime hotpaths) | 750 |
-| Sync fs files affected (runtime hotpaths) | 84 |
-| Legacy shim markers | 225 |
-| Legacy shim files affected | 78 |
+| Sync fs occurrences (all) | 1371 |
+| Sync fs files affected (all) | 137 |
+| Sync fs occurrences (runtime hotpaths) | 712 |
+| Sync fs files affected (runtime hotpaths) | 78 |
+| Legacy shim markers | 221 |
+| Legacy shim files affected | 75 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -53,14 +53,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 28.8% (215/747) |
+| typed-error adoption (typed/total throws) | 28.9% (215/744) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 72 (279 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 18 |
-| files with createLogger | 45/509 |
+| files with createLogger | 45/504 |
 | subdomains with zero createLogger | 22 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, status-native, targets, types) |
-| files > 400 LOC | 73 |
-| files > 600 LOC | 29 |
+| files > 400 LOC | 69 |
+| files > 600 LOC | 27 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -86,19 +86,19 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | File | LOC |
 |---|---:|
-| `src/web-server/usage/account-activity-collector.ts` | 3724 |
-| `src/web-server/services/account-analytics-activity.ts` | 1807 |
+| `src/web-server/usage/account-activity-collector.ts` | 3680 |
+| `src/web-server/services/account-analytics-activity.ts` | 1805 |
 | `src/web-server/status/answers.ts` | 1743 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1340 |
-| `src/web-server/model-pricing.ts` | 1322 |
 | `src/antigravity/registry.ts` | 1104 |
+| `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/status/status-collectors.ts` | 1010 |
 | `src/web-server/services/usage-failover-service.ts` | 993 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 990 |
 | `src/web-server/services/analytics-remote-sources.ts` | 957 |
-| `src/web-server/services/account-dashboard-service.ts` | 940 |
-| `src/web-server/agent-usage/agent-usage-snapshot.ts` | 924 |
+| `src/web-server/services/account-dashboard-service.ts` | 941 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
 | `src/web-server/status/status-view.ts` | 849 |
+| `src/web-server/usage/native-quota-collector.ts` | 848 |
 
