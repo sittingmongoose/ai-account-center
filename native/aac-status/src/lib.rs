@@ -16,6 +16,7 @@ pub mod error;
 pub mod ops;
 pub mod pinned;
 pub mod pins;
+pub mod reset_inventory;
 pub mod scoreboard;
 pub mod spend;
 pub mod status_doc;
