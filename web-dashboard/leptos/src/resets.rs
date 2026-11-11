@@ -1127,23 +1127,35 @@ impl ResetCtx {
         out
     }
 
+    fn read_lock(&self, account: &str, pending: Option<String>, started_ms: f64) {
+        let cleared = self.update_lock(account, |u| u.read(pending, started_ms));
+        if cleared && self.said_of(account).is_some_and(|s| s.check) {
+            let said = Said {
+                text: SETTLED_ELSEWHERE.into(),
+                bad: false,
+                check: false,
+            };
+            let key = self.remember_said(account, &said);
+            // Reconcile the account's saved result even while a changed-login notice is visible.
+            if self
+                .account
+                .try_get_untracked()
+                .is_some_and(|shown| self.lock_key(&shown) == key)
+                && self
+                    .said
+                    .try_with_untracked(|s| s.as_ref().is_some_and(|s| s.check))
+                    == Some(true)
+            {
+                let _ = self.said.try_set(Some(said));
+            }
+        }
+    }
+
     fn take(&self, account: &str, inv: Inventory, started_ms: f64) {
         if let Some(key) = &inv.canonical_account_key {
             self.bind_alias(account, key);
         }
-        let cleared =
-            self.update_lock(account, |u| u.read(inv.pending_attempt.clone(), started_ms));
-        if cleared
-            && self
-                .said
-                .with_untracked(|s| s.as_ref().is_some_and(|s| s.check))
-        {
-            self.say(Said {
-                text: SETTLED_ELSEWHERE.into(),
-                bad: false,
-                check: false,
-            });
-        }
+        self.read_lock(account, inv.pending_attempt.clone(), started_ms);
         self.load.set(Load::Ready(inv));
     }
 
@@ -1170,7 +1182,7 @@ impl ResetCtx {
                     if let Some(key) = &inv.canonical_account_key {
                         me.bind_alias(&account, key);
                     }
-                    me.update_lock(&account, |u| u.read(inv.pending_attempt.clone(), started));
+                    me.read_lock(&account, inv.pending_attempt.clone(), started);
                     return;
                 }
             }
@@ -1201,12 +1213,17 @@ impl ResetCtx {
         })
     }
 
-    fn say_for(&self, account: &str, said: Said) {
+    fn remember_said(&self, account: &str, said: &Said) -> String {
         let key = self.lock_key(account);
         let _ = self.results.try_update_value(|r| {
             r.retain(|(k, _)| *k != key);
             r.push((key.clone(), said.clone()));
         });
+        key
+    }
+
+    fn say_for(&self, account: &str, said: Said) {
+        let key = self.remember_said(account, &said);
         if self
             .account
             .try_get_untracked()

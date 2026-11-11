@@ -129,3 +129,63 @@ fn reassignment_in_both_directions_keeps_results_and_locks_with_canonical_accoun
         });
     }
 }
+
+#[test]
+fn account_change_notice_does_not_leave_the_replacement_accounts_result_unconfirmed() {
+    Owner::new().with(|| {
+        let rc = ResetCtx::new();
+        rc.show("stable-y", "codex", false);
+        rc.take("stable-y", inventory("canonical-y", Some("attempt-y")), 1.);
+        rc.say(Said {
+            text: "Y is unconfirmed".into(),
+            bad: true,
+            check: true,
+        });
+        rc.show("reused", "codex", false);
+        rc.take("reused", inventory("canonical-x", Some("attempt-x")), 2.);
+        rc.say(Said {
+            text: "X is unconfirmed".into(),
+            bad: true,
+            check: true,
+        });
+        rc.bind_alias("stable-x", "canonical-x");
+        // This null can settle Y only. The view still needs to disclose the changed login.
+        rc.take("reused", inventory("canonical-y", None), 20.);
+        assert_eq!(rc.said.get_untracked().unwrap().text, ACCOUNT_CHANGED);
+        assert!(rc.lock_of("stable-x").blocks());
+        assert!(!rc.lock_of("stable-y").blocks());
+        rc.show("stable-y", "codex", false);
+        let result = rc.said.get_untracked().unwrap();
+        assert_eq!(result.text, SETTLED_ELSEWHERE);
+        assert!(!result.check);
+    });
+}
+
+#[test]
+fn a_background_settlement_updates_only_its_canonical_accounts_saved_result() {
+    Owner::new().with(|| {
+        let rc = ResetCtx::new();
+        rc.show("route-x", "codex", false);
+        rc.take("route-x", inventory("canonical-x", Some("attempt-x")), 1.);
+        rc.say(Said {
+            text: "X is unconfirmed".into(),
+            bad: true,
+            check: true,
+        });
+        rc.show("route-y", "codex", false);
+        rc.take("route-y", inventory("canonical-y", None), 2.);
+        let shown = Said {
+            text: "Y is unchanged".into(),
+            bad: false,
+            check: false,
+        };
+        rc.say(shown.clone());
+        rc.read_lock("route-x", None, 20.);
+        assert_eq!(rc.said.get_untracked(), Some(shown));
+        rc.show("route-x", "codex", false);
+        let result = rc.said.get_untracked().unwrap();
+        assert_eq!(result.text, SETTLED_ELSEWHERE);
+        assert!(!result.check);
+        assert!(!rc.unresolved.get_untracked().blocks());
+    });
+}
