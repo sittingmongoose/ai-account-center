@@ -12,7 +12,7 @@ import { getClaudeProjectsDirForAnalytics } from '../../utils/claude-config-path
 import { listAccountInstancePaths } from '../../management/instance-directory';
 import { resolveCodexConfigPaths } from '../services/compatible-cli-config-paths';
 import { readDashboardPreferences, type UsageLogSource } from '../services/dashboard-preferences';
-import type { AccountAnalyticsActivityRequest } from '../services/account-analytics-activity';
+import type { AccountAnalyticsActivityRequest } from '../services/account-analytics-types';
 import { resolveOmpSessionRoots } from './omp-native-usage-collector';
 import { resolveMuseSessionsDir } from './muse-native-usage-collector';
 import { resolveZcodeDbPath } from './zcode-native-usage-collector';

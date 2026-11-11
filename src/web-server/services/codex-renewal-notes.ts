@@ -1,6 +1,6 @@
 import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
 import type { CodexRenewalReason } from '../../codex-auth/codex-renewal-types';
-import type { BarSummaryRow } from '../routes/bar-routes';
+import type { BarSummaryRow } from './account-dashboard-types';
 
 const HOUR_MS = 60 * 60_000;
 /** A retrying saved login is named on its row once its access token is this close to expiry. */

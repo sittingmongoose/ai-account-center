@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { getCodexProfileQuotas } from '../../../src/web-server/services/codex-profile-quota-service';
-import type { BarSummaryRow } from '../../../src/web-server/routes/bar-routes';
+import type { BarSummaryRow } from '../../../src/web-server/services/account-dashboard-types';
 import { CODEX_RENEWAL_MESSAGES } from '../../../src/codex-auth/codex-renewal-types';
 import { renewalEntry } from './codex-renewal-entry-fixture';
 

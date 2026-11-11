@@ -5,6 +5,14 @@
  * Compatible with better-ccusage interfaces for drop-in replacement.
  */
 
+import type { RawUsageEntry } from '../jsonl-parser';
+
+/** One priced usage row kept while a scan aggregates a file. */
+export interface CompactEntry {
+  entry: RawUsageEntry;
+  events: number;
+}
+
 // ============================================================================
 // MODEL BREAKDOWN
 // ============================================================================

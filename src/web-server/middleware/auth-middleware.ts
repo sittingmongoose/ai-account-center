@@ -22,8 +22,11 @@ import { bearerToken, guardApiRequest, settleSessionEpoch } from './api-request-
 import { rateLimitClientKey } from './rate-limit-keys';
 import { authKind } from './request-auth';
 import { credentialAllowedOnRequest, isLanProxyPeer, isSecureTransport } from './secure-transport';
+import { isLoopbackRemoteAddress } from './trusted-networks';
 import { isSessionEpochCurrent, settleCredentialStamp } from '../services/dashboard-auth-state';
 import { DashboardSessionStore } from './dashboard-session-store';
+
+export { isLoopbackRemoteAddress };
 
 // Extend Express Request with session
 declare module 'express-session' {
@@ -374,18 +377,6 @@ export function requireDashboardSession(
 
   res.status(401).json({ error: 'Authentication required' });
   return false;
-}
-
-export function isLoopbackRemoteAddress(value: string | undefined): boolean {
-  if (!value) return false;
-  const normalized = value.trim().replace(/^\[|\]$/g, '');
-  return (
-    normalized === '::1' ||
-    normalized === '127.0.0.1' ||
-    normalized.startsWith('127.') ||
-    normalized === '::ffff:127.0.0.1' ||
-    normalized.startsWith('::ffff:127.')
-  );
 }
 
 function isLoopbackHostname(value: string | undefined): boolean {

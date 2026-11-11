@@ -29,7 +29,7 @@ import { fetchCodexQuotaWithToken } from '../../cliproxy/quota/quota-fetcher-cod
 import { getProviderAccounts } from '../../cliproxy/accounts/query';
 import { getCodexLocalQuota, type CodexLocalQuota } from './codex-local-quota-collector';
 import type { CodexQuotaResult } from '../../cliproxy/quota/quota-types';
-import type { BarSummaryRow, QuotaWindowDetail } from '../routes/bar-routes';
+import type { BarSummaryRow, QuotaWindowDetail } from '../services/account-dashboard-types';
 import { getCodexAdditionalUsageWindows } from './codex-network-extra-windows';
 
 import * as fs from 'node:fs';

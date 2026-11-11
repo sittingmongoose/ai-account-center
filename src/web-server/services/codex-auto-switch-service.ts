@@ -18,7 +18,7 @@ import type { CodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashb
 import { getCcsDir, runWithScopedConfigDir } from '../../utils/config-manager';
 import { createLogger } from '../../services/logging';
 import { getCodexProfileQuotaRows } from '../usage/native-quota-collector';
-import type { BarSummaryRow } from '../routes/bar-routes';
+import type { BarSummaryRow } from './account-dashboard-types';
 import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
 import { readCodexRenewalEntries } from './codex-renewal-entries';
 

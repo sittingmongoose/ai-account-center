@@ -11,7 +11,7 @@ import type { Server } from 'http';
 import os from 'os';
 import path from 'path';
 import type { CodexAuthProfilesSummary } from '../../../src/codex-auth/codex-auth-dashboard-service';
-import type { BarSummaryRow } from '../../../src/web-server/routes/bar-routes';
+import type { BarSummaryRow } from '../../../src/web-server/services/account-dashboard-types';
 import {
   AccountDashboardService,
   type AccountDashboardDeps,

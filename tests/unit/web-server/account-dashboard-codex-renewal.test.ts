@@ -6,7 +6,7 @@ import {
   type CodexRenewalState,
 } from '../../../src/codex-auth/codex-renewal-types';
 import type { CodexProfileRenewalProfileStatus } from '../../../src/codex-auth/codex-profile-renewal';
-import type { BarSummaryRow } from '../../../src/web-server/routes/bar-routes';
+import type { BarSummaryRow } from '../../../src/web-server/services/account-dashboard-types';
 import { codexAccount } from '../../../src/web-server/services/account-dashboard-projection';
 import { renewalEntry } from './codex-renewal-entry-fixture';
 

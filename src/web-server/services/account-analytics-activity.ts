@@ -44,9 +44,12 @@ import type {
   AccountAnalyticsActivity,
   AccountAnalyticsActivityCoverage,
   AccountAnalyticsActivityProvider,
+  AccountAnalyticsActivityRequest,
   AccountAnalyticsQuery,
   AccountAnalyticsSource,
 } from './account-analytics-types';
+
+export type { AccountAnalyticsActivityRequest };
 
 export {
   accountAnalyticsActivityCoverage,
@@ -92,11 +95,6 @@ interface ActivityState {
   /** Recent cost of projecting this snapshot, reserved out of the response budget. */
   projectionMs: number;
 }
-
-export type AccountAnalyticsActivityRequest = {
-  provider: AccountAnalyticsActivityProvider;
-  request: UsageWorkerRequest;
-};
 
 type RemoteAnswer = {
   /** Re-elect mirrors against the inventory at publication, after local workers settle. */

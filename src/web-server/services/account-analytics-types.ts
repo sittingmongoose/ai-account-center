@@ -10,6 +10,7 @@ import type { AccountAnalyticsRangePreset } from './account-analytics-range';
 import type { AnalyticsRemoteHost } from './analytics-remote-transport';
 import type { DashboardHost } from './dashboard-hosts';
 import type { ModelPricingSource } from '../model-pricing';
+import type { UsageWorkerRequest } from '../usage/worker-client';
 
 export type AccountAnalyticsRange = AccountAnalyticsRangePreset;
 export interface AccountAnalyticsQuery {
@@ -98,6 +99,12 @@ export interface AccountAnalyticsModelRates {
 /** A tool whose CLI usage logs the server reads (a collection source, not a provider). */
 export type AccountAnalyticsActivityProvider =
   'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl' | 'antigravity';
+
+/** One worker request the analytics activity service runs for a tool. */
+export type AccountAnalyticsActivityRequest = {
+  provider: AccountAnalyticsActivityProvider;
+  request: UsageWorkerRequest;
+};
 
 /**
  * The dashboard provider that served a usage row: the tool's own provider for Claude Code, Codex and the Muse

@@ -257,6 +257,22 @@ export function isLoopbackAddress(address: ParsedAddress | null): boolean {
   return address.bytes.every((byte, index) => byte === (index === 15 ? 1 : 0));
 }
 
+/**
+ * Socket `remoteAddress` text, before it is parsed: 127.0.0.0/8, ::1, and
+ * IPv4-mapped loopback. `isLoopbackAddress` is the parsed-byte check.
+ */
+export function isLoopbackRemoteAddress(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().replace(/^\[|\]$/g, '');
+  return (
+    normalized === '::1' ||
+    normalized === '127.0.0.1' ||
+    normalized.startsWith('127.') ||
+    normalized === '::ffff:127.0.0.1' ||
+    normalized.startsWith('::ffff:127.')
+  );
+}
+
 export function networkContains(network: TrustedNetwork, address: ParsedAddress): boolean {
   if (network.family !== address.family) return false;
   const candidate = masked(address.bytes, network.prefix);
