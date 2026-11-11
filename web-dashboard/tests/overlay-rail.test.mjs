@@ -57,3 +57,11 @@ test('rail sheets take the safe inset on the side away from the rail (review N2)
 	assert.match(css, /:root\[data-chrome='rail'\]\[data-rail-side='left'\] \.pop[\s\S]*?right: var\(--safe-right/, 'pop sheet right takes safe');
 	assert.match(css, /calc\(100% - var\(--rail-w[^)]*\) - var\(--safe-left[^)]*\)\)/, 'details panel width takes safe');
 });
+
+test("an iPhone's rail keeps its buttons inside the safe area, out of the island's band (wave-2 device M4)", () => {
+	const device = fs.readFileSync(path.join(dir, '../leptos/src/ui/device.rs'), 'utf8').split('#[cfg(test)]')[0];
+	assert.match(device, /set_property\(\s*"--rail-pad"/, 'the frame sets the rail padding');
+	assert.match(device, /fn rail_pad\(insets: Insets, duo: bool\)/, 'the padding depends on the device');
+	assert.match(css, /:root\[data-chrome='rail'\] \.rail \{[^}]*padding-right: var\(--rail-pad, 0px\)/, 'right rail padded on the edge side');
+	assert.match(css, /:root\[data-chrome='rail'\]\[data-rail-side='left'\] \.rail \{[^}]*padding-left: var\(--rail-pad, 0px\)/, 'left rail padded on the edge side');
+});

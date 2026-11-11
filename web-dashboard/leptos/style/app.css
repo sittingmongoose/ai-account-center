@@ -1320,11 +1320,12 @@ body { min-height: 100dvh; }
 /* The rail's page keeps clear of the left and top insets (an iPhone on its side, the Duo with its strip on the left). */
 :root[data-chrome='rail'] .content { padding-left: var(--safe-left); padding-top: var(--safe-top); }
 @media (min-width: 760px) { :root[data-chrome='rail'] .content { padding-left: max(16px, var(--safe-left)); padding-top: max(10px, var(--safe-top)); } }
-:root[data-chrome='rail'] .rail { display: flex; position: sticky; top: 0; height: 100dvh; align-self: start; overflow-y: auto; }
+:root[data-chrome='rail'] .rail { display: flex; position: sticky; top: 0; height: 100dvh; align-self: start; overflow-y: auto; padding-right: var(--rail-pad, 0px); }
+/* On a phone on its side the rail pads by the safe inset on the edge, so no button sits in the island's band (--rail-pad). */
 /* The strip on the left (the folded Duo turned the other way): the rail sits in it, the page to its right with no left
    gutter (the rail covers the strip), and the screen's right edge gets the side padding instead. */
 :root[data-chrome='rail'][data-rail-side='left'] .shell { grid-template-columns: var(--rail-w, var(--safe-left)) minmax(0, 1fr); }
-:root[data-chrome='rail'][data-rail-side='left'] .rail { grid-column: 1; grid-row: 1; border-left: 0; border-right: 1px solid var(--rule); }
+:root[data-chrome='rail'][data-rail-side='left'] .rail { grid-column: 1; grid-row: 1; border-left: 0; border-right: 1px solid var(--rule); padding-right: 0; padding-left: var(--rail-pad, 0px); }
 :root[data-chrome='rail'][data-rail-side='left'] .content { grid-column: 2; grid-row: 1; padding-left: 0; padding-right: var(--safe-right); }
 @media (min-width: 760px) { :root[data-chrome='rail'][data-rail-side='left'] .content { padding-right: max(16px, var(--safe-right)); } }
 /* The folded Duo's screen corners are round (about 55 pt). Beside the rail the page's first line starts 16 pt from the

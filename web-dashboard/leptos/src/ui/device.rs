@@ -204,9 +204,21 @@ pub fn rail_reserve(width: f64, height: f64, insets: Insets) -> f64 {
     }
 }
 
-/// The rail's width: the status strip on its side when iOS reports one, else the strip's usual 84 px.
-pub fn rail_width(insets: Insets) -> f64 {
-    strip(insets).max(84.0)
+/// The rail's width. On the Duo the rail sits in the status strip: the strip on its side when iOS reports one, else
+/// the strip's usual 84 px. On a phone on its side the inset is the Dynamic Island's band, not a strip, so the rail's
+/// 84 px sit inside the safe area, after the inset (rail_pad).
+pub fn rail_width(insets: Insets, duo: bool) -> f64 {
+    if duo {
+        strip(insets).max(84.0)
+    } else {
+        strip(insets) + 84.0
+    }
+}
+
+/// The rail's padding on the screen's edge: the safe inset on a phone, so no button sits in the island's band; none on
+/// the Duo, whose rail belongs in its strip.
+pub fn rail_pad(insets: Insets, duo: bool) -> f64 {
+    if duo { 0.0 } else { strip(insets) }
 }
 
 /// While a text field has focus the on-screen keyboard shortens the window (open upright 669x869 can become 669x560),
@@ -417,7 +429,15 @@ pub fn start(embed: bool) {
             let _ = style.set_property(
                 "--rail-w",
                 &px(if chrome == "rail" {
-                    rail_width(insets)
+                    rail_width(insets, duo)
+                } else {
+                    0.0
+                }),
+            );
+            let _ = style.set_property(
+                "--rail-pad",
+                &px(if chrome == "rail" {
+                    rail_pad(insets, duo)
                 } else {
                     0.0
                 }),
@@ -548,8 +568,9 @@ mod tests {
         ] {
             assert_eq!(chrome_for(false, true, w, h, i), "rail", "{w}x{h} {i:?}");
         }
-        assert_eq!(rail_width(Insets::default()), 84.0);
-        assert_eq!(rail_width(insets(0.0, 90.0, 0.0, 0.0)), 90.0);
+        assert_eq!(rail_width(Insets::default(), true), 84.0);
+        assert_eq!(rail_width(insets(0.0, 90.0, 0.0, 0.0), true), 90.0);
+        assert_eq!(rail_pad(insets(0.0, 90.0, 0.0, 0.0), true), 0.0);
     }
 
     #[test]
@@ -644,14 +665,16 @@ mod tests {
     fn the_rail_goes_on_the_side_of_the_strip() {
         // the real Duo folded and turned the other way (2026-11-10, log 18:56:23)
         assert_eq!(rail_side(insets(0.0, 0.0, 34.0, 84.0)), "left");
-        assert_eq!(rail_width(insets(0.0, 0.0, 34.0, 84.0)), 84.0);
-        assert_eq!(rail_width(insets(0.0, 0.0, 34.0, 96.0)), 96.0);
+        assert_eq!(rail_width(insets(0.0, 0.0, 34.0, 84.0), true), 84.0);
+        assert_eq!(rail_width(insets(0.0, 0.0, 34.0, 96.0), true), 96.0);
         // folded upright, open on its side, folded turned the usual way
         assert_eq!(rail_side(insets(0.0, 84.0, 34.0, 0.0)), "right");
         // no strip yet, or one on each side (an iPhone on its side): the right, as before
         assert_eq!(rail_side(Insets::default()), "right");
         assert_eq!(rail_side(insets(0.0, 62.0, 21.0, 62.0)), "right");
-        assert_eq!(rail_width(insets(0.0, 62.0, 21.0, 62.0)), 84.0);
+        // an iPhone on its side: the rail's 84 px sit inside the 62 px band the island may take, on either side
+        assert_eq!(rail_width(insets(0.0, 62.0, 21.0, 62.0), false), 146.0);
+        assert_eq!(rail_pad(insets(0.0, 62.0, 21.0, 62.0), false), 62.0);
         // a left inset too small to be a strip does not move the rail
         assert_eq!(rail_side(insets(0.0, 0.0, 34.0, 30.0)), "right");
     }
