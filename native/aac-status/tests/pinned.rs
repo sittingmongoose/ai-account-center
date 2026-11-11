@@ -1117,6 +1117,8 @@ fn v2_fields_reach_the_view_without_changing_existing_rendered_fields() {
     let update = serde_json::to_value(one_update(&built)).unwrap();
     assert_eq!(update["reported"]["stages"], stages);
     assert_eq!(update["reported"]["next"], "Land");
+    assert_eq!(update["reported"]["state"], "working");
+    assert_eq!(update["reported"]["writer"], "vm.pm7-build");
     assert_eq!(update["title"], "Thread t1");
 }
 

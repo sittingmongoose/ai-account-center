@@ -161,8 +161,7 @@ describe('status routes', () => {
           await fetch(`${base}/api/status/answers`, { headers: session })
         ).json();
         return [
-          view.cards.open[0].notes[0].delivery,
-          view.cards.answered[0].answer.delivery,
+          ...view.cards.answered.map((a: any) => a.answer.delivery),
           ...history.answers.map((a: any) => a.answer.delivery),
         ];
       };
@@ -226,20 +225,22 @@ describe('status routes', () => {
   }
   async function noteDeliveries(base: string) {
     const view = await (await fetch(`${base}/api/status`, { headers: session })).json();
-    expect(view.cards.answered).toEqual([]);
-    const notes = ['vm.lead--Q1', 'vm.lead--O1'].map(
-      (id) => view.cards.open.find((c: any) => c.id === id).notes
-    );
-    expect(notes.map((n: any[]) => n.map((x) => x.kind))).toEqual([['note'], ['object']]);
+    expect(view.cards.answered).toHaveLength(1);
+    const response = view.cards.answered[0];
+    expect(response.answer).toMatchObject({ kind: 'note', choice: [], note: 'A note.' });
+    expect(view.cards.open.some((c: any) => c.id === 'vm.lead--Q1')).toBe(false);
+    const objection = view.cards.open.find((c: any) => c.id === 'vm.lead--O1').notes[0];
+    expect(objection.kind).toBe('object');
     const history = await (await fetch(`${base}/api/status/answers`, { headers: session })).json();
     expect(history.answers).toHaveLength(2);
     return [
-      ...notes.map((n: any[]) => n[0].delivery),
+      response.answer.delivery,
+      objection.delivery,
       ...history.answers.map((a: any) => a.answer.delivery),
     ];
   }
 
-  it("shows a note's and an objection's failed share write on the open card while their summary is written", async () => {
+  it('shows a written response and an objection with failed share delivery while their summary is written', async () => {
     const { root, base, service, rings } = await start();
     // Real permissions: the batches folder takes the summary, its parent refuses the signed note files.
     const answersDir = path.join(root, 'v1', 'answers');
@@ -273,7 +274,7 @@ describe('status routes', () => {
     }
   });
 
-  it("shows a note's and an objection's failed ring on the open card while their summary is written", async () => {
+  it('shows a written response and an objection with failed notification delivery while their summary is written', async () => {
     const { root, base, service, rings } = await start({ ringOk: false });
     await noteAndObjection(root, service);
     let seen = await noteDeliveries(base);

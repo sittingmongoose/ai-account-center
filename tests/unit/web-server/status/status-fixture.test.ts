@@ -65,14 +65,14 @@ describe('status fixture', () => {
     const streams = view.projects.flatMap((p) => p.streams);
     expect(streams.filter((s) => s.source === 'tasks')).toHaveLength(4);
     expect(streams.filter((s) => s.source === 'board-only')).toHaveLength(1);
-    expect(view.cards.open).toHaveLength(5);
-    expect(view.cards.answered).toHaveLength(2);
+    expect(view.cards.open).toHaveLength(4);
+    expect(view.cards.answered).toHaveLength(3);
     expect(view.cards.batches).toHaveLength(1);
     expect(view.cards.batches[0].cardIds).toHaveLength(3);
-    expect(view.cards.open.filter((c) => c.recommendation)).toHaveLength(4);
-    const noted = view.cards.open.find((c) => c.id === 'vm.aac-status-lead--Q2');
-    expect(noted?.notes.map((n) => n.note)).toEqual(['Could you show both side by side first?']);
-    expect(noted?.replies).toHaveLength(1);
+    expect(view.cards.open.filter((c) => c.recommendation)).toHaveLength(3);
+    const noted = view.cards.answered?.find((c) => c.card.id === 'vm.aac-status-lead--Q2');
+    expect(noted?.answer.note).toBe('Could you show both side by side first?');
+    expect(noted?.card.replies).toHaveLength(1);
     const q3 = view.cards.open.find((c) => c.id === 'vm.pm-fo-lead--Q3');
     expect(q3?.options.map((o) => o.media[0]?.url)).toEqual([
       '/api/status/files/vm.pm-fo-lead/images/fo33-inside.png',
@@ -88,7 +88,11 @@ describe('status fixture', () => {
     const image = await openCardFile(root, 'vm.pm-fo-lead', 'images/fo33-inside.png');
     expect(image.ok && image.contentType).toBe('image/png');
     if (image.ok) await image.handle.close();
-    expect(view.cards.answered.map((a) => a.answer.via).sort()).toEqual(['deck', 'recommended']);
+    expect(view.cards.answered.map((a) => a.answer.via).sort()).toEqual([
+      'deck',
+      'deck',
+      'recommended',
+    ]);
     expect(view.threads.rows.filter((t) => t.source === 'report')).toHaveLength(8);
     expect(
       view.threads.rows

@@ -317,7 +317,7 @@ reads its answers file." (doorbell step `skipped`). While a share write or ring 
 `summary` is the step of the record's send summary (null for a record from before sends), shown beside `state`
 without changing it: `summaryWarning` is null once it is written, else says it is not on the share yet, is being
 retried ("attempt N of 20"), or gave up after 20 attempts. The same `delivery` is on each `notes` entry and in
-`GET /api/status/answers`; the page shows a note's or objection's own failed `detail` on its open card, beside any
+`GET /api/status/answers`; the page shows a written response's failed `detail` in answered history and an objection's on its open card, beside any
 `summaryWarning`, since those records never appear in `answered`.
 
 **Batch**: `{ id, label, cardIds: [...] }`: open cards that share `batch`, kept together in the deck.
@@ -522,23 +522,21 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
 - **Time limits:** one card read has 5 s, one signed file 10 s, one ring 40 s, one whole send 30 s and one retry pass 45 s,
   so a hung share cannot hold the answers queue. A record already stored when time runs out stays pending and the retry
   writes it. A write that outlives its deadline is dropped before its rename.
-- Record kinds: `answer` (a choice, `question` and `judgement` cards), `note` (a note alone, any answerable card),
+- Record kinds: `answer` (a choice, `question` and `judgement` cards), `note` (a written response without a selected option, any answerable card),
   `object` (`objection` cards: no choice, the owner's words required) and `done` (`action` cards: no choice, words
   optional). Without `kind`, an entry with a choice is an `answer` and one with only a note is a `note`; `object` and
-  `done` must be sent as `kind`. `answer` and `done` close the card version; `note` and `object` leave it open (the
-  agent replies on the card or withdraws it), and both show on the open card in `notes[]`.
+  `done` must be sent as `kind`. `answer`, `note` and `done` close the exact card version. A written response can be a question or an alternative solution: it is the owner's response, never a made-up option choice. It remains verbatim in answered history and is delivered to the asking agent. Only `object` remains on the open card in `notes[]`.
 - The card must not be older than a `seq` the reader has already read or any record the store holds for that card (an
   older copy can land on the share and read fresh; it is `card_changed`, and the card shows `answerable: false`, also
   after a restart). Publishing checks again: `<card>.json` is never renamed over a file with this server's signature and
   a higher `cardSeq` (that record then reads as superseded). Only this server's own closing answer to the same card
-  counts: one signed by another key, a signed file copied from another card, a note, or a file the server can't read
+  counts: one signed by another key, a signed file copied from another card, an objection, or a file the server can't read
   does not, so a file dropped on the share cannot block a real answer.
 - The card must be open on disk at that `seq` and hash (read fresh, not from the last scan) and that version not yet
   answered. Otherwise that entry is `card_changed` and the page reloads the card.
 - `choice` keys must be the card's option keys, without repeats (one unless `multiple`).
 - One note box serves a different answer, a comment and a question. With a choice, the record is `kind: "answer"` and
-  the card closes. With only a note, the record is `kind: "note"`: it is signed and delivered the same way, but the
-  card stays open, showing the note (`notes[]`); the agent replies on the card (`replies[]`) or withdraws the card
+  the card closes. With only a note, the record remains `kind: "note"` for compatibility: it is signed and delivered, closes that card version, and appears in answered history. The agent acts on the response or files a new card if clarification is needed. The agent may withdraw the source card
   with `reason` (for example "Settled by your note"). Agents never write an answer.
 - `via: "recommended"` marks an answer filled by "Use the recommendations" and not changed by the owner; the server
   checks the choice is exactly the card's recommendation (`invalid_via` otherwise).
