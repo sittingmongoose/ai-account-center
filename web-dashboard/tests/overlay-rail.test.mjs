@@ -32,3 +32,11 @@ test('the help popover and the tip stay inside the content', () => {
 	assert.match(css, /:root\[data-chrome='rail'\] \.hpop/, 'hpop rail offset');
 	assert.match(css, /:root\[data-chrome='rail'\] \.tip-card/, 'tip rail width');
 });
+
+test('rail sheets take the safe inset on the side away from the rail (review N2)', () => {
+	assert.match(css, /:root\[data-chrome='rail'\] \.sheet-host \.sheet \{ right: var\(--rail-w\); left: var\(--safe-left/, 'sheet left takes safe');
+	assert.match(css, /:root\[data-chrome='rail'\]\[data-rail-side='left'\] \.sheet-host \.sheet \{ right: var\(--safe-right/, 'sheet right takes safe');
+	assert.match(css, /:root\[data-chrome='rail'\] \.pop[\s\S]*?left: var\(--safe-left/, 'pop sheet left takes safe');
+	assert.match(css, /:root\[data-chrome='rail'\]\[data-rail-side='left'\] \.pop[\s\S]*?right: var\(--safe-right/, 'pop sheet right takes safe');
+	assert.match(css, /calc\(100% - var\(--rail-w[^)]*\) - var\(--safe-left[^)]*\)\)/, 'details panel width takes safe');
+});

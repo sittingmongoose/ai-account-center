@@ -1104,7 +1104,8 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 .da-sub { font-size: 11.5px; }
 @media (min-width: 760px) {
   .details-scrim { background: transparent; pointer-events: none; }
-  .details { left: auto; top: 0; right: var(--rail-w, 0px); bottom: 0; max-height: none; width: clamp(420px, 34vw, 580px); border-radius: 0; border-left: 1px solid var(--rule); animation-name: dt-in; padding-top: var(--safe-top); }
+  .details { left: auto; top: 0; right: var(--rail-w, 0px); bottom: 0; max-height: none; width: min(clamp(420px, 34vw, 580px), calc(100% - var(--rail-w, 0px) - var(--safe-left, 0px))); border-radius: 0; border-left: 1px solid var(--rule); animation-name: dt-in; padding-top: var(--safe-top); }
+  :root[data-chrome='rail'][data-rail-side='left'] .details { width: min(clamp(420px, 34vw, 580px), calc(100% - var(--safe-right, 0px) - var(--safe-left, 0px))); }
   .sheet-grab { display: none; }
   .dt-head { padding: 16px 12px 12px 20px; }
   .dt-title { font-size: 18px; }
@@ -1929,14 +1930,14 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-vis
 .side-panel { position: absolute; right: 0; top: 0; bottom: 0; width: min(560px, 100%); background: var(--paper); box-shadow: var(--shadow-pop); padding: 20px; overflow: auto; }
 /* Beside the rail a sheet or side panel ends at the rail, never under the status strip, its clock or the camera island,
    and a tall sheet starts low enough to clear the screen's top corner. */
-:root[data-chrome='rail'] .sheet-host .sheet { right: var(--rail-w); max-height: calc(100dvh - max(var(--safe-top), 28px) - 12px); }
-:root[data-chrome='rail'][data-rail-side='left'] .sheet-host .sheet { right: 0; left: var(--rail-w); }
-:root[data-chrome='rail'] .side-host .side-panel { right: var(--rail-w); width: min(560px, calc(100% - var(--rail-w))); }
-:root[data-chrome='rail'][data-rail-side='left'] .side-host .side-panel { right: 0; }
+:root[data-chrome='rail'] .sheet-host .sheet { right: var(--rail-w); left: var(--safe-left, 0px); max-height: calc(100dvh - max(var(--safe-top), 28px) - 12px); }
+:root[data-chrome='rail'][data-rail-side='left'] .sheet-host .sheet { right: var(--safe-right, 0px); left: var(--rail-w); }
+:root[data-chrome='rail'] .side-host .side-panel { right: var(--rail-w); width: min(560px, calc(100% - var(--rail-w) - var(--safe-left, 0px))); }
+:root[data-chrome='rail'][data-rail-side='left'] .side-host .side-panel { right: var(--safe-right, 0px); }
 /* The popover sheet (charts.rs Popover on phones) ends at the rail like the other sheets. Anchored popovers are
    clamped by the script to the content bounds (content_bounds). */
-:root[data-chrome='rail'] .pop:not([style*='left']) { right: var(--rail-w); }
-:root[data-chrome='rail'][data-rail-side='left'] .pop:not([style*='left']) { left: var(--rail-w); right: 0; }
+:root[data-chrome='rail'] .pop:not([style*='left']) { right: var(--rail-w); left: var(--safe-left, 0px); }
+:root[data-chrome='rail'][data-rail-side='left'] .pop:not([style*='left']) { left: var(--rail-w); right: var(--safe-right, 0px); }
 /* The viewer and the switch approval keep clear of the rail even when iOS reports no strip inset. */
 :root[data-chrome='rail'] .viewer { padding-right: max(var(--safe-right), var(--rail-w)); }
 :root[data-chrome='rail'][data-rail-side='left'] .viewer { padding-left: max(var(--safe-left), var(--rail-w)); padding-right: var(--safe-right); }
