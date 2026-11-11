@@ -1,5 +1,5 @@
 // The classic page's first script sends this device to the app frame (/app/<tab>) when it chose the frame, or when it
-// chose nothing and FRAME_DEFAULT is 'new' (the flip, once Home, Accounts and Analytics are native). Runs the script
+// chose nothing and FRAME_DEFAULT is 'new' (flipped once Home, Accounts and Analytics were native). Runs the script
 // itself against a stubbed location and storage.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,25 +16,27 @@ function run(source, { stored = null, path = '/', search = '' } = {}) {
   return to;
 }
 
-test('the classic page has one FRAME_DEFAULT, set to classic until the native pages land', () => {
+test('the classic page has one FRAME_DEFAULT, and it is the frame', () => {
   assert.ok(script, 'the redirect script with FRAME_DEFAULT');
   assert.equal((html.match(/FRAME_DEFAULT='/g) || []).length, 1);
-  assert.match(script, /^var FRAME_DEFAULT='classic';/);
+  assert.match(script, /^var FRAME_DEFAULT='new';/);
 });
 
-test('today: only a device that chose the frame goes to it', () => {
-  assert.equal(run(script), null);
-  assert.equal(run(script, { stored: 'new' }), '/app/home');
+test('a fresh install opens the frame; a device that chose classic stays; ?classic=1, ?content=1 and ?e2e stay', () => {
+  assert.equal(run(script), '/app/home');
+  assert.equal(run(script, { path: '/accounts' }), '/app/accounts');
+  assert.equal(run(script, { search: '?view=scoreboard' }), '/app/scoreboard');
   assert.equal(run(script, { stored: 'new', path: '/analytics' }), '/app/analytics');
   assert.equal(run(script, { stored: 'classic' }), null);
+  assert.equal(run(script, { search: '?classic=1' }), null);
+  assert.equal(run(script, { search: '?content=1' }), null);
+  assert.equal(run(script, { search: '?e2e' }), null);
+  assert.equal(run(script, { search: '?e2e&view=accounts' }), null);
 });
 
-test('after the flip: a fresh install opens the frame, a device that chose classic stays, ?classic=1 and ?content=1 stay', () => {
-  const flipped = script.replace("var FRAME_DEFAULT='classic';", "var FRAME_DEFAULT='new';");
-  assert.equal(run(flipped), '/app/home');
-  assert.equal(run(flipped, { path: '/accounts' }), '/app/accounts');
-  assert.equal(run(flipped, { search: '?view=scoreboard' }), '/app/scoreboard');
-  assert.equal(run(flipped, { stored: 'classic' }), null);
-  assert.equal(run(flipped, { search: '?classic=1' }), null);
-  assert.equal(run(flipped, { search: '?content=1' }), null);
+test('with the constant set back to classic only a device that chose the frame goes to it (the way back)', () => {
+  const back = script.replace("var FRAME_DEFAULT='new';", "var FRAME_DEFAULT='classic';");
+  assert.equal(run(back), null);
+  assert.equal(run(back, { stored: 'new' }), '/app/home');
+  assert.equal(run(back, { stored: 'classic' }), null);
 });

@@ -324,12 +324,33 @@ export const tests = {
 		}
 	},
 
-	async 'frame: off by default, turned on from the classic app, and one tap back'(t) {
+	async 'frame: on by default, Classic app one tap away, and Try it brings it back'(t) {
 		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
 		await t.app.signIn();
-		await t.equal('off by default', await t.page.evaluate(() => localStorage.getItem('aac-frame')), null);
-		await t.goto('/', { settleMs: 1500 });
-		await t.equal('off: the start page stays the classic app', await t.page.evaluate(() => location.pathname), '/');
+		await t.page.evaluate(() => localStorage.removeItem('aac-frame'));
+		await t.goto('/', { settleMs: 300 });
+		await t.until('nothing chosen: the start page opens the frame (FRAME_DEFAULT)', () => location.pathname === '/app/home', null, { timeout: 15000, hard: true });
+
+		await t.step('every classic address opens the frame', async () => {
+			for (const [from, page] of [['/', 'home'], ['/analytics', 'analytics'], ['/accounts', 'accounts'], ['/?view=scoreboard', 'scoreboard'], ['/status', 'status']]) {
+				await t.goto(from, { settleMs: 200 });
+				await t.until(`${from} opens /app/${page}`, (p) => location.pathname === `/app/${p}`, page, { timeout: 15000 });
+			}
+			await t.goto('/?classic=1', { settleMs: 1200 });
+			await t.equal('?classic=1 still opens the classic app', await t.page.evaluate(() => location.pathname), '/');
+			const manifest = await t.page.evaluate(async () => (await (await fetch('/manifest.webmanifest')).json()).start_url);
+			await t.equal('the installed app starts at /, so a fresh install opens the frame', manifest, '/');
+		});
+
+		await t.step('Classic app in the account menu', async () => {
+			await openFrame(t, 'home');
+			await t.page.click('.chrome .select-btn[aria-label="Account"]');
+			await t.page.locator('.acct-menu .menu-item', { hasText: 'Classic app' }).click();
+			await t.until('Classic app opens /', () => location.pathname === '/' && !!document.querySelector('#canvas'), null, { timeout: 15000, hard: true });
+			await t.page.waitForTimeout(1500);
+			await t.equal('and stays there', await t.page.evaluate(() => location.pathname), '/');
+			await t.equal('the setting is classic for this device', await t.page.evaluate(() => localStorage.getItem('aac-frame')), 'classic');
+		});
 
 		await t.step('Try it on the classic Status tab', async () => {
 			await t.goto('/status?e2e', { settleMs: 500 });
@@ -342,28 +363,7 @@ export const tests = {
 			await status.click('.frame-offer button');
 			await t.until('Try it opens the frame on Status', () => location.pathname === '/app/status', null, { timeout: 15000, hard: true });
 			await routeShown(t, 'status');
-			await t.equal('the setting is on for this device', await t.page.evaluate(() => localStorage.getItem('aac-frame')), 'new');
-		});
-
-		await t.step('on: every classic address opens the frame', async () => {
-			for (const [from, page] of [['/', 'home'], ['/analytics', 'analytics'], ['/accounts', 'accounts'], ['/?view=scoreboard', 'scoreboard'], ['/status', 'status']]) {
-				await t.goto(from, { settleMs: 200 });
-				await t.until(`${from} opens /app/${page}`, (p) => location.pathname === `/app/${p}`, page, { timeout: 15000 });
-			}
-			await t.goto('/?classic=1', { settleMs: 1200 });
-			await t.equal('?classic=1 still opens the classic app', await t.page.evaluate(() => location.pathname), '/');
-			const manifest = await t.page.evaluate(async () => (await (await fetch('/manifest.webmanifest')).json()).start_url);
-			await t.equal('the installed app starts at /, so it follows the setting', manifest, '/');
-		});
-
-		await t.step('Classic app in the account menu', async () => {
-			await openFrame(t, 'home');
-			await t.page.click('.chrome .select-btn[aria-label="Account"]');
-			await t.page.locator('.acct-menu .menu-item', { hasText: 'Classic app' }).click();
-			await t.until('Classic app opens /', () => location.pathname === '/' && !!document.querySelector('#canvas'), null, { timeout: 15000, hard: true });
-			await t.page.waitForTimeout(1500);
-			await t.equal('and stays there', await t.page.evaluate(() => location.pathname), '/');
-			await t.equal('the setting is off for this device', await t.page.evaluate(() => localStorage.getItem('aac-frame')), 'classic');
+			await t.equal('the setting is the frame again', await t.page.evaluate(() => localStorage.getItem('aac-frame')), 'new');
 		});
 	},
 
