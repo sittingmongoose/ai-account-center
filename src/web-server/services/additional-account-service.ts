@@ -18,6 +18,11 @@ import {
   type AccountRegistryRead,
 } from './account-registry-v2';
 import {
+  classifyAccountRegistry,
+  isUnreadableAccountRegistry,
+  type AdditionalRegistryMode,
+} from './account-registry-mode';
+import {
   AdditionalUsageTransportError,
   isCollectableSource,
   runAdditionalUsageSource,
@@ -64,9 +69,6 @@ export interface AdditionalAccountDeps {
   /** Overrides LOCAL_FILE_DEADLINE_MS for the account list read, so tests need not wait. */
   manifestDeadlineMs?: number;
 }
-
-/** Which store listed the accounts: v1 manifest, valid v2 registry, or an unreadable v2 file. */
-export type AdditionalRegistryMode = 'v1' | 'v2' | 'v2-invalid';
 
 export interface AdditionalAccountsSnapshot {
   registry: AdditionalRegistryMode;
@@ -427,19 +429,19 @@ export class AdditionalAccountService {
       (this.deps.readManifest
         ? async (): Promise<AccountRegistryRead> => ({ state: 'absent' })
         : () => readAccountRegistry(this.ccsDir));
-    const registry = await readRegistry();
-    if (registry.state === 'ok') {
+    const active = classifyAccountRegistry(await readRegistry());
+    if (active.mode === 'v2') {
       return {
-        mode: 'v2',
+        mode: active.mode,
         // Accounts own their caches, so editing the list keeps unchanged accounts' samples.
         fingerprint: 'account-registry-v2',
         valid: true,
-        sources: registry.registry.accounts.map(registrySource),
+        sources: active.registry.accounts.map(registrySource),
       };
     }
-    if (registry.state === 'invalid') {
+    if (isUnreadableAccountRegistry(active.mode)) {
       return {
-        mode: 'v2-invalid',
+        mode: active.mode,
         fingerprint: 'invalid-account-registry',
         valid: false,
         sources: DEFAULT_SOURCES,
@@ -625,7 +627,7 @@ export class AdditionalAccountService {
       this.fingerprint = config.fingerprint;
       this.caches = new Map();
     }
-    if (config.mode === 'v2-invalid') {
+    if (isUnreadableAccountRegistry(config.mode)) {
       return {
         registry: config.mode,
         accounts: config.sources.map((source) =>
@@ -692,7 +694,7 @@ export class AdditionalAccountService {
           const placeholder = unavailable(
             source,
             'unavailable',
-            config.mode === 'v2-invalid'
+            isUnreadableAccountRegistry(config.mode)
               ? 'Account list could not be read safely.'
               : 'Account usage is temporarily unavailable.'
           );

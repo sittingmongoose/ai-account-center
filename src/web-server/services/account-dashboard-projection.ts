@@ -19,6 +19,7 @@ import type {
   DashboardAccountWindow,
   DashboardProvider,
 } from './account-dashboard-types';
+import { keepsProviderPlaceholderRow, type AdditionalRegistryMode } from './account-registry-mode';
 
 export const ADDITIONAL_PROVIDERS: Array<[DashboardProvider, string]> = [
   ['antigravity', 'Antigravity'],
@@ -328,7 +329,7 @@ const MAX_WALLET_ROWS = 4;
  */
 export function additionalAccounts(
   rows: DashboardAccount[],
-  registry: 'v1' | 'v2' | 'v2-invalid' = 'v1'
+  registry: AdditionalRegistryMode = 'v1'
 ): DashboardAccount[] {
   const wallets = rows.filter(
     (row) =>
@@ -416,7 +417,7 @@ export function additionalAccounts(
       accounts.push(account);
       count += 1;
     }
-    if (count === 0 && registry !== 'v2') {
+    if (count === 0 && keepsProviderPlaceholderRow(registry)) {
       const fallback = additionalFallback(provider, providerLabel);
       if (!ids.has(fallback.id)) {
         ids.add(fallback.id);

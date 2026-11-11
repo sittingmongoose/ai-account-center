@@ -17,6 +17,7 @@ import {
   withPrivateFileLock,
   writePrivateJsonFile,
 } from './private-json-store';
+import { classifyAccountRegistry, isUnreadableAccountRegistry } from './account-registry-mode';
 
 /**
  * Account registry v2 for the seven additional providers
@@ -266,13 +267,13 @@ export function updateAccountRegistry(
 ): Promise<AccountRegistryV2> {
   const file = accountRegistryPath(ccsDir);
   return withPrivateFileLock(file, async () => {
-    const current = await readAccountRegistry(ccsDir);
-    if (current.state === 'invalid') {
+    const active = classifyAccountRegistry(await readAccountRegistry(ccsDir));
+    if (isUnreadableAccountRegistry(active.mode)) {
       throw new ConfigError('Account list could not be read safely.');
     }
     let base: AccountRegistryV2;
-    if (current.state === 'ok') {
-      base = current.registry;
+    if (active.mode === 'v2') {
+      base = active.registry;
     } else {
       const contents = await (deps.readSourceManifest ?? (() => readSourceManifestFile(ccsDir)))();
       const manifest = parseSourceManifest(contents);
