@@ -10,6 +10,7 @@ use crate::Page;
 use crate::api::Run;
 use crate::dash::nullable;
 use crate::frame::FrameCtx;
+use crate::resets::{ReadingRow, ResetCtx, ResetDialog, ResetHistory, ResetsGroup};
 use crate::status::{SheetGrab, sheet_drag_style};
 use crate::ui::*;
 use leptos::prelude::*;
@@ -79,6 +80,51 @@ pub struct FactView {
     pub mono: bool,
 }
 
+/// A fact group's words: the head's end, the answer (bold lead, then the rest) and label/value rows.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FactGroup {
+    #[serde(deserialize_with = "nullable")]
+    pub head: String,
+    #[serde(deserialize_with = "nullable")]
+    pub lead: String,
+    #[serde(deserialize_with = "nullable")]
+    pub rest: String,
+    #[serde(deserialize_with = "nullable")]
+    pub rows: Vec<FactView>,
+}
+
+/// One sign-in: `claudeSignInGroup` in claude-signins.mjs.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SignInRow {
+    #[serde(deserialize_with = "nullable")]
+    pub computer: String,
+    #[serde(deserialize_with = "nullable")]
+    pub profile: String,
+    #[serde(deserialize_with = "nullable")]
+    pub ends: String,
+    #[serde(deserialize_with = "nullable")]
+    pub renews: String,
+    #[serde(deserialize_with = "nullable")]
+    pub problem: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SignInGroup {
+    #[serde(deserialize_with = "nullable")]
+    pub head: String,
+    #[serde(deserialize_with = "nullable")]
+    pub lead: String,
+    #[serde(deserialize_with = "nullable")]
+    pub rest: String,
+    #[serde(deserialize_with = "nullable")]
+    pub rows: Vec<SignInRow>,
+    #[serde(deserialize_with = "nullable")]
+    pub browser_session: String,
+}
+
 /// `detailsViewModel` in view-model.mjs.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -120,6 +166,24 @@ pub struct DetailsView {
     pub amounts: Vec<AmountView>,
     #[serde(deserialize_with = "nullable")]
     pub facts: Vec<FactView>,
+    /// "claim" (Claude, Codex), "zai" (listed only), "qwen" (none on the plan) or "".
+    #[serde(deserialize_with = "nullable")]
+    pub resets_mode: String,
+    /// The resets the usage reading lists (shown until, or unless, the reset inventory is read).
+    #[serde(deserialize_with = "nullable")]
+    pub reset_rows: Vec<ReadingRow>,
+    /// Every other balance, pack and credit, as label/value pairs.
+    #[serde(deserialize_with = "nullable")]
+    pub balances: Vec<AmountView>,
+    pub reading: Option<FactGroup>,
+    pub sign_ins: Option<SignInGroup>,
+}
+
+impl DetailsView {
+    /// Whether the panel reads the reset inventory: only where AAC can use a reset and the reading lists some.
+    pub fn reads_resets(&self) -> bool {
+        self.resets_mode == "claim" && !self.reset_rows.is_empty()
+    }
 }
 
 /// Details as the dashboard sent it; `None` while closed (or unreadable).
@@ -218,6 +282,16 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
     let data = Memo::new(move |_| dash.details.with(|json| parse(json)));
     let open = Memo::new(move |_| data.with(|d| d.is_some()));
     let confirming = RwSignal::new(false);
+    // The reset claims of the account on show: its inventory, the confirm dialog and the result line.
+    let rc = ResetCtx::new();
+    Effect::new(move |_| {
+        let (id, provider, reads) = data.with(|d| {
+            d.as_ref()
+                .map(|d| (d.id.clone(), d.provider.clone(), d.reads_resets()))
+                .unwrap_or_default()
+        });
+        rc.show(&id, &provider, reads);
+    });
     // a different account, or a closed panel, drops the question
     Effect::new(move |_| {
         data.with(|d| d.as_ref().map(|d| d.id.clone()));
@@ -236,7 +310,7 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
     };
     // Escape, and a click anywhere else (desktop: the scrim lets clicks through, as the Slint slide-over did)
     let on_close = Callback::new(move |_| {
-        if dash.activation.with_untracked(|a| a.is_empty()) {
+        if dash.activation.with_untracked(|a| a.is_empty()) && !rc.dialog_open() {
             close();
         }
     });
@@ -247,7 +321,10 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
     let pressed: StoredValue<Option<(u64, u64)>> = StoredValue::new(None);
     let presses = StoredValue::new(0u64);
     let finish = move |before: u64| {
-        if asks() == before && dash.activation.try_with_untracked(|a| a.is_empty()) == Some(true) {
+        if asks() == before
+            && dash.activation.try_with_untracked(|a| a.is_empty()) == Some(true)
+            && !rc.dialog_open()
+        {
             close();
         }
     };
@@ -259,7 +336,8 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
             let calm = dash
                 .activation
                 .try_with_untracked(|a| a.is_empty())
-                .unwrap_or(false);
+                .unwrap_or(false)
+                && !rc.dialog_open();
             let n = presses.try_get_value().unwrap_or(0) + 1;
             let _ = presses.try_set_value(n);
             let _ = pressed
@@ -342,7 +420,6 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                     };
                     let slot = d.switchable && (d.can_switch || d.active);
                     let n_meters = d.meters.len();
-                    let n_amounts = d.amounts.len();
                     view! {
                         <div class="dt-grab"><SheetGrab offset=drag on_close=grab_close/></div>
                         <header class="dt-head">
@@ -384,8 +461,8 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                                     on_keep=Callback::new(move |_| confirming.set(false))
                                     on_confirm=Callback::new({ let d = d3.clone(); move |_| { confirming.set(false); dash.act(&d.activate_kind, &d.profile); } })/>
                             </Show>
-                            <section class="dt-sec">
-                                <span class="cap dt-cap">{format!("Usage windows · {n_meters}")}</span>
+                            <section class="fg">
+                                <div class="fg-cap"><h3 class="cap">"Usage windows"</h3><span class="end"><b>{n_meters}</b></span></div>
                                 {if n_meters == 0 {
                                     view! { <p class="q3">"No usage windows reported yet."</p> }.into_any()
                                 } else {
@@ -393,32 +470,91 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                                 }}
                                 {(!d.note.is_empty()).then(|| view! { <p class="icon-note q3"><Icon name="info"/><span>{d.note.clone()}</span></p> })}
                             </section>
-                            {(n_amounts > 0).then(|| view! {
-                                <section class="dt-sec">
-                                    <span class="cap dt-cap">{format!("Balances, packs and credits · {n_amounts}")}</span>
-                                    <div class="dt-amounts">
-                                        {d.amounts.iter().cloned().map(|a| view! {
-                                            <div class="da">
-                                                <span class="da-label q3">{a.label.clone()}</span>
-                                                <span class="da-value tnum" class:w-crit=a.spent>{a.value.clone()}{(!a.unit.is_empty()).then(|| view! { " "<span class="q3">{a.unit.clone()}</span> })}</span>
-                                                {(!a.sub.is_empty()).then(|| view! { <span class="da-sub q3">{a.sub.clone()}</span> })}
-                                            </div>
-                                        }).collect_view()}
-                                    </div>
-                                </section>
+                            {(!d.resets_mode.is_empty() || !d.reset_rows.is_empty() || !d.balances.is_empty()).then(|| view! {
+                                <ResetsGroup rc=rc mode=d.resets_mode.clone() reading_rows=d.reset_rows.clone() balances=d.balances.clone()/>
                             })}
-                            <section class="dt-sec">
-                                <span class="cap dt-cap">"Reading"</span>
-                                <dl class="facts ac-facts">
-                                    {d.facts.iter().cloned().map(|f| view! { <dt>{f.label.clone()}</dt><dd class:mono=f.mono>{f.value.clone()}</dd> }).collect_view()}
-                                </dl>
-                            </section>
+                            {match d.reading.clone() {
+                                Some(g) => view! { <ReadingGroup g=g/> }.into_any(),
+                                // a dashboard that sends no groups yet: the old label/value list
+                                None => view! {
+                                    <section class="dt-sec">
+                                        <span class="cap dt-cap">"Reading"</span>
+                                        <dl class="facts ac-facts">
+                                            {d.facts.iter().map(|f| view! { <dt>{f.label.clone()}</dt><dd class:mono=f.mono>{f.value.clone()}</dd> }).collect_view()}
+                                        </dl>
+                                    </section>
+                                }.into_any(),
+                            }}
+                            {d.sign_ins.clone().map(|g| view! { <SignInsGroup g=g/> })}
+                            <ResetHistory rc=rc/>
                         </div>
                     }
                 })}
             </aside>
+            <ResetDialog rc=rc/>
             </OverlayPortal>
         </Show>
+    }
+}
+
+/// The "Reading" fact group: when it was sampled, the status as the answer, then Read from and Profile.
+#[component]
+fn ReadingGroup(g: FactGroup) -> impl IntoView {
+    view! {
+        <section class="fg" data-probe="details-reading">
+            <div class="fg-cap"><h3 class="cap">"Reading"</h3><span class="end tnum">{g.head.clone()}</span></div>
+            <p class="fg-sum"><b>{g.lead.clone()}</b>{(!g.rest.is_empty()).then(|| format!(" {}", g.rest))}</p>
+            <dl class="fp top">
+                {g.rows.into_iter().map(|f| view! { <dt>{f.label.clone()}</dt><dd class:mono=f.mono>{f.value.clone()}</dd> }).collect_view()}
+            </dl>
+        </section>
+    }
+}
+
+/// Rows a fact group's table shows before "and N more" (the facts pattern).
+const FOLD_AFTER: usize = 6;
+
+/// The "Sign-ins" fact group: how many are good, the answer, then one row per computer and profile.
+#[component]
+fn SignInsGroup(g: SignInGroup) -> impl IntoView {
+    let all = RwSignal::new(false);
+    let n = g.rows.len();
+    let rows = StoredValue::new(g.rows.clone());
+    view! {
+        <section class="fg" data-probe="details-signins">
+            <div class="fg-cap"><h3 class="cap">"Sign-ins"</h3><span class="end">{g.head.clone()}</span></div>
+            <p class="fg-sum"><b>{g.lead.clone()}</b>{(!g.rest.is_empty()).then(|| format!(" {}", g.rest))}</p>
+            <table class="ft">
+                <thead><tr><th class="cap">"Computer"</th><th class="cap">"Profile"</th><th class="cap">"Ends"</th><th class="cap r">"Renews"</th></tr></thead>
+                <tbody>
+                    {move || {
+                        let take = if all.get() { usize::MAX } else { FOLD_AFTER };
+                        rows.get_value().into_iter().take(take).map(|r| {
+                            let bad = !r.problem.is_empty();
+                            view! {
+                                <tr class:bad=bad>
+                                    <td class="w">{r.computer.clone()}{bad.then(|| view! { <small class="w-crit">{r.problem.clone()}</small> })}</td>
+                                    <td class="mono">{r.profile.clone()}</td>
+                                    <td class="nw">{r.ends.clone()}</td>
+                                    <td class="r nw">{r.renews.clone()}</td>
+                                </tr>
+                            }
+                        }).collect_view()
+                    }}
+                </tbody>
+            </table>
+            {(n > FOLD_AFTER).then(|| view! {
+                <p class="fg-line">
+                    {move || (!all.get()).then(|| format!("and {} more", n - FOLD_AFTER))}
+                    <button type="button" class="btn sm ghost" on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); all.update(|v| *v = !*v); }>
+                        {move || if all.get() { "Show fewer" } else { "Show" }}
+                    </button>
+                </p>
+            })}
+            {(!g.browser_session.is_empty()).then(|| view! {
+                <dl class="fp"><dt>"Browser session"</dt><dd>{g.browser_session.clone()}</dd></dl>
+            })}
+        </section>
     }
 }
 
@@ -435,5 +571,25 @@ mod tests {
         assert_eq!(severity(&d.meters[0]), "crit");
         assert!(d.amounts.is_empty());
         assert_eq!(d.facts[0].value, "OK");
+        assert!(d.reading.is_none() && d.sign_ins.is_none() && !d.reads_resets());
+    }
+
+    #[test]
+    fn the_fact_groups_read_from_the_view_model() {
+        let d = parse(r#"{"id":"claude:p","provider":"claude","resetsMode":"claim",
+            "resetRows":[{"key":"k","refills":"Weekly","state":"ready","left":1,"count":1,"expiresAtMs":5}],
+            "balances":[{"key":"b","label":"Extra usage","value":"Off","unit":"","sub":"","spent":false}],
+            "reading":{"head":"9:47 AM, 1m ago","lead":"Cached.","rest":"This is the last successful reading.","rows":[{"label":"Read from","value":"Verified quota, on Windows","mono":false}]},
+            "signIns":{"head":"1 of 2 good","lead":"1 of 2 needs a look.","rest":"","rows":[{"computer":"Mac","profile":"party","ends":"Nov 30","renews":"","problem":"Logged out"}],"browserSession":null}}"#).unwrap();
+        assert!(d.reads_resets());
+        assert_eq!(d.reset_rows[0].expires_at_ms, Some(5.0));
+        assert_eq!(d.balances[0].label, "Extra usage");
+        assert_eq!(d.reading.unwrap().rows[0].label, "Read from");
+        let s = d.sign_ins.unwrap();
+        assert_eq!(s.rows[0].problem, "Logged out");
+        assert!(s.browser_session.is_empty());
+        // a Z.ai or Qwen account never reads the claim inventory
+        let z = parse(r#"{"id":"zai:a","provider":"zai","resetsMode":"zai","resetRows":[{"key":"z","state":"ready","left":2}]}"#).unwrap();
+        assert!(!z.reads_resets());
     }
 }

@@ -135,6 +135,83 @@ export function claudeSignInFacts(data, email, now = Date.now()) {
   return facts;
 }
 
+/** What is wrong with one sign-in, in two or three words; '' when nothing is. */
+function rowProblem(row, now) {
+  if (row.state === 'logged_out' || row.state === 'no_refresh_token') return 'Logged out';
+  if (row.state === 'unreadable') return 'Not readable';
+  if (row.state === 'not_signed_in') return 'Not signed in';
+  if (!valid(row.signInEndsAt)) return 'End not reported';
+  if (Date.parse(row.signInEndsAt) <= now) return 'Ended';
+  if (row.lastResult && row.lastResult !== 'renewed') return `Last try: ${resultWord(row.lastResult)}`;
+  return '';
+}
+
+/**
+ * The Details "Sign-ins" fact group: the count that is good, the answer as one sentence, one table row per computer
+ * and profile (problems first, then the soonest end) and the browser session. Null without a runner or sign-ins.
+ */
+export function claudeSignInGroup(data, email, now = Date.now()) {
+  const renewal = renewalOf(data);
+  const signIns = signInsFor(data, email);
+  if (!renewal || signIns.length === 0) return null;
+  const rows = signIns
+    .map((row) => {
+      const end = valid(row.signInEndsAt) ? Date.parse(row.signInEndsAt) : null;
+      const problem = rowProblem(row, now);
+      return {
+        computer: hostWord(row.host),
+        profile: typeof row.profile === 'string' && row.profile ? row.profile : 'default',
+        ends: end === null ? 'Not reported' : when.format(new Date(end)),
+        renews:
+          row.autoRenew === false
+            ? 'Not automatic'
+            : valid(row.renewFrom) && Date.parse(row.renewFrom) > now
+              ? day.format(new Date(Date.parse(row.renewFrom)))
+              : row.state === 'ok' && !problem
+                ? 'Now'
+                : '',
+        problem,
+        end,
+      };
+    })
+    .sort((a, b) => Number(!a.problem) - Number(!b.problem) || (a.end ?? Infinity) - (b.end ?? Infinity));
+  const good = rows.filter((row) => !row.problem).length;
+  const needs = needsFor(data, email).map((need) => NEED_WORDS[need.reason] || resultWord(need.reason));
+  const first = rows.find((row) => !row.problem && row.end !== null);
+  const runner = hostWord(renewal.runner);
+  let lead;
+  let rest;
+  if (needs.length) {
+    lead = 'Needs you.';
+    rest = `${needs.join('. ')}.`;
+  } else if (renewal.stale) {
+    lead = 'Renewal stopped.';
+    rest = `The runner on the ${runner} last reported ${valid(renewal.generatedAt) ? when.format(new Date(renewal.generatedAt)) : 'long ago'}.`;
+  } else if (good < rows.length) {
+    lead = `${rows.length - good} of ${rows.length} ${rows.length - good === 1 ? 'needs' : 'need'} a look.`;
+    rest = `The runner on the ${runner} renews the others automatically.`;
+  } else {
+    lead = 'Renewed automatically';
+    rest = `by the runner on the ${runner}.${first ? ` The first ends ${day.format(new Date(first.end))}${first.renews && first.renews !== 'Now' && first.renews !== 'Not automatic' ? ` and renews from ${first.renews}` : ''}.` : ''}`;
+  }
+  const session = (renewal.browserSessions || []).find(
+    (b) => b?.email === String(email || '').trim().toLowerCase()
+  );
+  return {
+    head: `${good} of ${rows.length} good`,
+    lead,
+    rest,
+    rows: rows.map(({ end, ...row }) => row),
+    browserSession: !session
+      ? ''
+      : session.signedIn === false
+        ? 'Signed out: the next renewal needs one CAPTCHA'
+        : valid(session.sessionEndsAt)
+          ? `Signed in until ${when.format(new Date(session.sessionEndsAt))}`
+          : 'Signed in',
+  };
+}
+
 /** The Details note: what exactly to do, in the runner's own words ('' when nothing is needed). */
 export function claudeSignInNote(data, email) {
   return needsFor(data, email)

@@ -1125,6 +1125,45 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 .da-label { font-size: 11.5px; }
 .da-value { font-size: 14px; font-weight: 600; font-variation-settings: 'wght' 600; }
 .da-sub { font-size: 11.5px; }
+/* Details fact groups (the facts pattern): a caps head with its count at the end, the answer as one sentence, then
+   an aligned table (.ft) or label/value pairs (.fp). Used or spent rows turn grey and sink to the bottom; a problem
+   marks its own row in words. */
+.fg { display: grid; align-content: start; min-width: 0; }
+.fg-cap { display: flex; align-items: baseline; gap: 8px; padding-bottom: 5px; min-width: 0; }
+.fg-cap .end { margin-left: auto; font-size: var(--fs-small, 12px); color: var(--ink-3); text-align: right; }
+.fg-cap .end b { color: var(--ink); font-weight: 620; font-variation-settings: 'wght' 620; }
+.fg-sum { font-size: 13px; line-height: 1.45; color: var(--ink-2); padding-bottom: 9px; overflow-wrap: anywhere; }
+.fg-sum b { color: var(--ink); font-weight: 630; font-variation-settings: 'wght' 630; }
+.ft { width: 100%; border-collapse: collapse; font-size: var(--fs-small, 12px); border-top: 1px solid var(--rule); }
+.ft th { text-align: left; font-weight: 400; font-variation-settings: 'wght' 400; padding: 6px 12px 5px 0; border-bottom: 1px solid var(--rule-2); white-space: nowrap; }
+.ft td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--rule-2); vertical-align: top; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ft th:last-child, .ft td:last-child { padding-right: 0; }
+.ft .r { text-align: right; }
+.ft td small { display: block; color: var(--ink-3); font-size: 11px; line-height: 1.35; margin-top: 1px; font-weight: 400; font-variation-settings: 'wght' 400; }
+.ft td small.w-crit { color: var(--crit-text); font-weight: 600; font-variation-settings: 'wght' 600; }
+.ft .w { font-weight: 620; font-variation-settings: 'wght' 620; white-space: nowrap; }
+.ft tr.spent td, .ft tr.spent .w { color: var(--ink-3); font-weight: 400; font-variation-settings: 'wght' 400; }
+.ft .mono, .fp .mono { font-family: var(--mono); font-size: 11px; }
+.ft .nw { white-space: nowrap; }
+.ft .ft-act { margin-top: 6px; }
+.fp { display: grid; grid-template-columns: minmax(96px, max-content) minmax(0, 1fr); font-size: var(--fs-small, 12px); }
+.fg .ft + .fp, .fp.top { border-top: 1px solid var(--rule); }
+.fg .ft + .fp { margin-top: 10px; }
+.fp dt, .fp dd { padding: 7px 0; border-bottom: 1px solid var(--rule-2); }
+.fp dt { color: var(--ink-3); padding-right: 16px; }
+.fp dt small { display: block; font-size: 11px; line-height: 1.35; }
+.fp dd { color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.fp.num dd { text-align: right; font-weight: 620; font-variation-settings: 'wght' 620; font-variant-numeric: tabular-nums; }
+.fp.num dd span { font-weight: 400; font-variation-settings: 'wght' 400; color: var(--ink-3); }
+.fg-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-top: 8px; font-size: var(--fs-small, 12px); line-height: 1.45; color: var(--ink-2); }
+.fg-line > span { flex: 1 1 200px; min-width: 0; }
+.fg-line.w-crit > span { color: var(--crit-text); }
+.fg-line.fg-said { padding-bottom: 8px; }
+.reset-dialog .fp { margin-top: 2px; }
+.reset-dialog .fp dd { font-weight: 560; font-variation-settings: 'wght' 560; }
+@media (pointer: coarse) {
+  .ft .ft-act, .fg-line .btn.sm { height: 36px; }
+}
 @media (min-width: 760px) {
   .details-scrim { background: transparent; pointer-events: none; }
   .details { left: auto; top: 0; right: var(--rail-w, 0px); bottom: 0; max-height: none; width: min(clamp(420px, 34vw, 580px), calc(100% - var(--rail-w, 0px) - var(--safe-left, 0px))); border-radius: 0; border-left: 1px solid var(--rule); animation-name: dt-in; padding-top: var(--safe-top); }

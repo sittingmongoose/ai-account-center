@@ -22,6 +22,7 @@ mod media;
 mod owned;
 mod pins;
 mod question_index;
+mod resets;
 mod roster;
 mod scoreboard;
 mod session;

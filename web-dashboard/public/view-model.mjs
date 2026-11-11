@@ -5,7 +5,8 @@ import { HOST_IDS, HOST_LABELS } from './computers.mjs';
 // added or averaged across accounts or windows; at most two decimals; the product visibility rules of
 // visible-usage.mjs; Fable only for Claude Max plans, from the seven_day_fable window.
 import { visibleUsageWindows, isWeeklyScoped, scopedModelLabel, clearsText } from './visible-usage.mjs';
-import { claudeSignInFacts, claudeSignInLine, claudeSignInNote, needsFor } from './claude-signins.mjs';
+import { claudeSignInFacts, claudeSignInGroup, claudeSignInLine, claudeSignInNote, needsFor } from './claude-signins.mjs';
+import { isResetWindow, resetRowsOf, resetsMode } from './reset-rows.mjs';
 import { cursorPlanLabel, cursorPlanNote } from './cursor-data.mjs';
 import {
   antigravityView,
@@ -1428,6 +1429,49 @@ export function detailsViewModel(data, id, ctx = {}) {
     amounts: visibleAmounts(account).map((w) => amountView(account, w, now)),
     facts,
     sectionId: section?.id || '',
+    // The fact groups (caps head, one sentence, then a table or label/value pairs) the frame's Details draws.
+    resetsMode: resetsMode(account.provider),
+    resetRows: resetRowsOf(account, visibleAmounts(account)),
+    balances: visibleAmounts(account)
+      .filter((w) => !isResetWindow(account, w))
+      .map((w) => amountView(account, w, now)),
+    reading: readingGroup(account, profile, now),
+    signIns: account.provider === 'claude' ? claudeSignInGroup(data, account.email, now) : null,
+  };
+}
+
+/** One sentence per reading status, when the reading carries no message of its own. */
+const READING_WORDS = {
+  Live: 'Read from the provider at the last refresh.',
+  Cached: 'This is the last successful reading.',
+  'Sign-in needed': 'Sign in again so AAC can read this account.',
+  'Refresh failed': 'The last refresh failed.',
+  Unavailable: 'AAC has no reading for this account.',
+};
+
+/**
+ * The Details "Reading" fact group: when it was sampled in the head, the status as the answer, then Read from and
+ * Profile. Fetched shows only when it differs from Sampled, and the computer is part of Read from.
+ */
+export function readingGroup(account, profile = '', now = Date.now()) {
+  const status = statusWord(account);
+  const sampled = validDate(account?.sampledAt) ? Date.parse(account.sampledAt) : null;
+  const fetched = validDate(account?.fetchedAt) ? Date.parse(account.fetchedAt) : null;
+  const source = text(account?.source);
+  const host = hostLabel(account);
+  const rows = [
+    ...antigravityPlanFacts(account).map(({ label, value }) => ({ label, value, mono: false })),
+    { label: 'Read from', value: source ? `${source}, on ${host}` : `On ${host}`, mono: false },
+    ...(profile ? [{ label: 'Profile', value: profile, mono: true }] : []),
+    ...(fetched !== null && (sampled === null || Math.abs(fetched - sampled) > 90_000)
+      ? [{ label: 'Fetched', value: dateTime.format(new Date(fetched)), mono: false }]
+      : []),
+  ];
+  return {
+    head: sampled === null ? 'Never sampled' : `${dateTime.format(new Date(sampled))}, ${relative(sampled, now)}`,
+    lead: `${status}.`,
+    rest: text(account?.message) || READING_WORDS[status] || '',
+    rows,
   };
 }
 
