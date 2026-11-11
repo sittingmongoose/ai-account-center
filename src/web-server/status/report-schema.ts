@@ -1,3 +1,4 @@
+import { reportV2, type ReportV2 } from './report-v2';
 /**
  * Agent report documents (agent-reports v1): every rule the Status tab applies to a file it reads
  * from `<reports>/v1/writers/<writer>/` lives here, so a field added to the format is added in one
@@ -55,6 +56,9 @@ export interface BlockedOn {
   kind: string;
   what: string;
   since: string | null;
+  short?: string | null;
+  until?: string | null;
+  card?: string | null;
 }
 
 function blockedOn(value: unknown, field: string): BlockedOn | null {
@@ -64,10 +68,13 @@ function blockedOn(value: unknown, field: string): BlockedOn | null {
     kind: slug(item.kind, `${field}.kind`),
     what: text(item.what, `${field}.what`, 500),
     since: optIso(item.since, `${field}.since`),
+    short: optText(item.short, `${field}.short`, 80),
+    until: optIso(item.until, `${field}.until`),
+    card: optText(item.card, `${field}.card`, 200),
   };
 }
 
-export interface ThreadDoc extends DocHead {
+export interface ThreadDoc extends DocHead, ReportV2 {
   /**
    * Null for any state: a thread that ended its turn cannot heartbeat, whatever state it ended in
    * (blocked on the owner included). Such a thread is shown by age, never stale for lack of one.
@@ -113,6 +120,7 @@ function thread(doc: Record<string, unknown>, writer: string): ThreadDoc {
   }
   return {
     ...head(doc, THREAD_SCHEMA, writer),
+    ...reportV2(doc),
     ttlSeconds: ttl,
     agent: {
       name: optText(agent.name, 'agent.name', 64),
@@ -157,11 +165,12 @@ export interface TaskItem {
   reviews: Array<{ by: string; verdict: string; at: string | null }>;
   landed: { sha: string; at: string | null } | null;
   blockedOn: BlockedOn | null;
+  note?: string | null;
   why: string | null;
   updatedAt: string | null;
 }
 
-export interface TasksDoc extends DocHead {
+export interface TasksDoc extends DocHead, ReportV2 {
   project: string;
   projectLabel: string | null;
   stream: string;
@@ -199,6 +208,7 @@ function item(value: unknown, field: string): TaskItem {
     }),
     landed,
     blockedOn: blockedOn(row.blockedOn, `${field}.blockedOn`),
+    note: optText(row.note, `${field}.note`, 40),
     why: optText(row.why, `${field}.why`, 500),
     updatedAt: optIso(row.updatedAt, `${field}.updatedAt`),
   };
@@ -210,6 +220,7 @@ function tasks(doc: Record<string, unknown>, writer: string): TasksDoc {
   if (ids.size !== items.length) throw new Invalid('items repeat an id');
   return {
     ...head(doc, TASKS_SCHEMA, writer),
+    ...reportV2(doc),
     project: slug(doc.project, 'project'),
     projectLabel: optText(doc.projectLabel, 'projectLabel', 120),
     stream: slug(doc.stream, 'stream'),

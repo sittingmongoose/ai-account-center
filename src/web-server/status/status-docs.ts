@@ -1,3 +1,4 @@
+import { reportV2 } from './report-v2';
 /**
  * The `agent-reports/status@1` documents agents write at `writers/<writer>/status.json`: one
  * optional file per reporting thread, holding what `thread@1` and `tasks.json` lack for a
@@ -21,7 +22,7 @@ import {
   nodeReaderFs,
   type ReaderFs,
 } from './agent-reports-reader';
-import { isWriterName, jsonFromBytes } from './schema-helpers';
+import { Invalid, obj, isWriterName, jsonFromBytes } from './schema-helpers';
 import { STATUS_SIZE_CAP } from './status-size';
 
 /** The agent-reports reader's plain listing failure (the sibling of PERSISTENT_LISTING_ERROR). */
@@ -455,6 +456,14 @@ async function parseStatus(
 > {
   const checked = jsonFromBytes(bytes, STATUS_SIZE_CAP);
   if (!checked.ok) return { ok: false, reason: checked.reason };
+  try {
+    reportV2(obj(checked.value, 'document'));
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Invalid ? error.message : 'could not be validated',
+    };
+  }
   let raw: string;
   try {
     raw = await handle.call(

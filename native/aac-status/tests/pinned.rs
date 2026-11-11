@@ -1106,3 +1106,16 @@ fn one_unknown_task_state_only_marks_its_row() {
     assert!(update.unreadable_note.is_none());
     assert!(update.refusal.is_none());
 }
+
+#[test]
+fn v2_fields_reach_the_view_without_changing_existing_rendered_fields() {
+    let stages = json!([{ "label": "Build", "state": "done" }, { "label": "Land", "state": "next" }]);
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "title": "New title", "now": "New now", "next": "Land", "stages": stages }))]
+    }));
+    let update = serde_json::to_value(one_update(&built)).unwrap();
+    assert_eq!(update["reported"]["stages"], stages);
+    assert_eq!(update["reported"]["next"], "Land");
+    assert_eq!(update["title"], "Thread t1");
+}

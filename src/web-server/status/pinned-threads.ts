@@ -1,3 +1,4 @@
+import { reportV2 } from './report-v2';
 /**
  * The pinned-threads panel's collector: every machine's T3 pins (the VM's database read by
  * the aac-status native module, the Mac's, Windows' and Nas1's fetched with one short
@@ -216,6 +217,7 @@ export class PinnedThreadsCollector {
       pins: this.merged,
       machineProblems: this.problems,
       threads: reports.threads.map((row) => ({
+        ...reportV2(row.doc as unknown as Record<string, unknown>),
         writer: row.writer,
         writtenAt: row.doc.writtenAt,
         writtenAtMs: row.writtenAtMs,
@@ -238,6 +240,7 @@ export class PinnedThreadsCollector {
         problemSinceMs: row.problem?.since ?? null,
       })),
       tasks: reports.tasks.map((row) => ({
+        ...reportV2(row.doc as unknown as Record<string, unknown>),
         writer: row.writer,
         writtenAtMs: row.writtenAtMs,
         seq: row.doc.seq,
@@ -249,6 +252,7 @@ export class PinnedThreadsCollector {
         items: row.doc.items.map((item) => ({
           id: item.id,
           title: item.title,
+          note: item.note,
           state: item.state,
           reviews: item.reviews.map((review) => ({
             atMs: review.at ? Date.parse(review.at) : null,
@@ -268,6 +272,7 @@ export class PinnedThreadsCollector {
         askedAtMs: Date.parse(row.doc.askedAt),
       })),
       statuses: statuses.docs.map((row) => ({
+        ...reportV2(row.doc),
         writer: row.writer,
         writtenAt: row.doc.writtenAt,
         writtenAtMs: row.writtenAtMs,

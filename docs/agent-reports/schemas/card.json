@@ -1030,6 +1030,74 @@
         "type": "string"
       },
       "description": "Ids of related cards."
+    },
+    "media": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "image",
+              "video"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "poster": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 400
+          },
+          "caption": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 60
+          },
+          "label": {
+            "enum": [
+              "built",
+              "mockup",
+              null
+            ]
+          },
+          "seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "path"
+            ]
+          },
+          {
+            "required": [
+              "url"
+            ]
+          }
+        ]
+      }
     }
   },
   "required": [

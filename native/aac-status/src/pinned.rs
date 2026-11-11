@@ -126,6 +126,8 @@ pub struct MachineProblemIn {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadIn {
+    #[serde(flatten)]
+    pub additions: std::collections::BTreeMap<String, Json>,
     pub writer: String,
     pub written_at: String,
     pub written_at_ms: i64,
@@ -166,9 +168,11 @@ pub struct ThreadIn {
     pub problem_since_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockedIn {
+    #[serde(flatten)]
+    pub additions: std::collections::BTreeMap<String, Json>,
     pub kind: String,
     pub what: String,
     #[serde(default)]
@@ -191,6 +195,8 @@ pub struct ProgressIn {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TasksIn {
+    #[serde(flatten)]
+    pub additions: std::collections::BTreeMap<String, Json>,
     pub writer: String,
     pub written_at_ms: i64,
     pub seq: u64,
@@ -210,6 +216,8 @@ pub struct TasksIn {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemIn {
+    #[serde(default)]
+    pub note: Option<String>,
     pub id: String,
     pub title: String,
     pub state: String,
@@ -267,6 +275,8 @@ fn is_question_kind(kind: &str) -> bool {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusIn {
+    #[serde(flatten)]
+    pub additions: std::collections::BTreeMap<String, Json>,
     pub writer: String,
     pub written_at: String,
     pub written_at_ms: i64,
@@ -306,9 +316,11 @@ pub struct ItemLiteIn {
     pub title: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockerIn {
+    #[serde(flatten)]
+    pub additions: std::collections::BTreeMap<String, Json>,
     pub text: String,
     pub waiting_on: String,
 }
@@ -367,6 +379,8 @@ pub struct MachineProblemOut {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PinnedUpdate {
+    #[serde(rename = "reported", skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub additions: std::collections::BTreeMap<String, Json>,
     pub id: String,
     pub title: String,
     pub machine: String,
@@ -460,6 +474,10 @@ pub struct LoopingView {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ItemOut {
+    #[serde(rename = "blockedOn", skip_serializing_if = "Option::is_none")]
+    pub blocked_on: Option<Json>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     pub id: String,
     pub title: String,
 }
@@ -590,10 +608,23 @@ fn worst_loop(items: &[ItemIn], now_ms: i64) -> Option<ItemLoop> {
 }
 
 fn item_out(item: &ItemIn) -> ItemOut {
-    let known = ["todo", "working", "review", "fixing", "blocked", "ready", "landed", "done", "dropped"].contains(&item.state.as_str());
+    let known = [
+        "todo", "working", "review", "fixing", "blocked", "ready", "landed", "done", "dropped",
+    ]
+    .contains(&item.state.as_str());
     ItemOut {
+        note: item.note.clone(),
+        blocked_on: item
+            .blocked_on
+            .as_ref()
+            .filter(|b| b.additions.values().any(|v| !v.is_null()))
+            .and_then(|b| serde_json::to_value(b).ok()),
         id: item.id.clone(),
-        title: if known { item.title.clone() } else { format!("{} (state not recognised: {})", item.title, item.state) },
+        title: if known {
+            item.title.clone()
+        } else {
+            format!("{} (state not recognised: {})", item.title, item.state)
+        },
     }
 }
 
@@ -649,6 +680,8 @@ fn same_thread_id(reported: &str, pin: &str) -> bool {
 
 fn lite_out(item: &ItemLiteIn) -> ItemOut {
     ItemOut {
+        note: None,
+        blocked_on: None,
         id: item.id.clone(),
         title: item.title.clone(),
     }
@@ -665,7 +698,43 @@ fn compose_update(
     status: Option<&StatusIn>,
     standalone_refusal: Option<&StatusProblemIn>,
 ) -> PinnedUpdate {
+    let mut additions = std::collections::BTreeMap::new();
+    for source in [
+        tasks.map(|d| &d.additions),
+        thread.map(|d| &d.additions),
+        status.map(|d| &d.additions),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for key in [
+            "title",
+            "now",
+            "next",
+            "stages",
+            "deliverables",
+            "progress",
+            "readmeQuestions",
+        ] {
+            if let Some(value) = source.get(key) {
+                additions.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    if let Some(blocker) = thread
+        .and_then(|d| d.blocked_on.as_ref())
+        .filter(|b| !b.additions.is_empty())
+    {
+        additions.insert("blockedOn".into(), serde_json::to_value(blocker).unwrap_or(Json::Null));
+    }
+    if let Some(doc) = status.filter(|d| d.blockers.iter().any(|b| !b.additions.is_empty())) {
+        additions.insert(
+            "blockers".into(),
+            serde_json::to_value(&doc.blockers).unwrap_or(Json::Null),
+        );
+    }
     let mut update = PinnedUpdate {
+        additions,
         id: pin.id.clone(),
         title: pin.title.clone(),
         machine: pin.machine.clone(),

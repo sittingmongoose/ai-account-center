@@ -28,6 +28,8 @@ pub const STATUS_SIZE_CAP: usize = 64 * 1024;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusDoc {
+    #[serde(flatten)]
+    pub additions: std::collections::BTreeMap<String, Json>,
     pub writer: String,
     pub seq: u64,
     pub written_at: String,
@@ -53,6 +55,8 @@ pub struct StatusItem {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Blocker {
+    #[serde(flatten)]
+    pub additions: std::collections::BTreeMap<String, Json>,
     pub text: String,
     /// Who it waits on. Documented kinds: owner, agent, review, lock, resource, quota; any
     /// short slug is accepted and shown as written, as for `blockedOn.kind`.
@@ -102,6 +106,7 @@ fn items(value: Option<&Json>, field: &str) -> Valid<Vec<StatusItem>> {
 fn blocker(value: &Json, field: &str) -> Valid<Blocker> {
     let row = obj(Some(value), field)?;
     Ok(Blocker {
+        additions: additions(row, &["short", "since", "until", "card"]),
         text: text(row.get("text"), &format!("{field}.text"), 500)?,
         waiting_on: slug(row.get("waitingOn"), &format!("{field}.waitingOn"))?,
     })
@@ -143,6 +148,18 @@ pub fn parse_status_file(bytes: &[u8], writer: &str) -> Result<ParsedStatus, Str
         let doc = obj(Some(&raw), "document")?;
         let head = head(doc, STATUS_SCHEMA, writer)?;
         Ok(StatusDoc {
+            additions: additions(
+                doc,
+                &[
+                    "title",
+                    "now",
+                    "next",
+                    "stages",
+                    "deliverables",
+                    "progress",
+                    "readmeQuestions",
+                ],
+            ),
             writer: head.writer,
             seq: head.seq,
             written_at: head.written_at,
@@ -160,4 +177,10 @@ pub fn parse_status_file(bytes: &[u8], writer: &str) -> Result<ParsedStatus, Str
         doc,
         sha256: Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect(),
     })
+}
+
+fn additions(doc: &serde_json::Map<String, Json>, keys: &[&str]) -> std::collections::BTreeMap<String, Json> {
+    keys.iter()
+        .filter_map(|key| doc.get(*key).map(|value| (key.to_string(), value.clone())))
+        .collect()
 }

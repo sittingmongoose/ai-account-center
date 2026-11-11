@@ -1,3 +1,4 @@
+import { reportMedia } from './report-v2';
 /**
  * Decision cards (agent-reports/card@1): the one place a card file is validated and projected.
  * Fields beyond these are ignored; content blocks of an unknown type pass through as
@@ -74,6 +75,7 @@ export interface CardRecommendation {
 }
 
 export interface CardDoc extends DocHead {
+  media?: Record<string, unknown>[];
   id: string;
   /** A short id the owner can quote ("F-Q3"); the local id when the file names none. */
   label: string;
@@ -188,6 +190,7 @@ export function card(doc: Record<string, unknown>, writer: string, fileId: strin
   const local = fileId.slice(fileId.indexOf('--') + 2);
   return {
     ...base,
+    ...(doc.media === undefined ? {} : { media: reportMedia(doc.media) }),
     id: fileId,
     label: optText(doc.label, 'label', 32) ?? local,
     project: optSlug(doc.project, 'project'),
