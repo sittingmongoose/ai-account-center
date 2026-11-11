@@ -611,10 +611,7 @@ fn unknown_model_runs_count_every_runtime_and_effort() {
     let view = by_model(&parsed).unwrap();
     for panel in &view.views {
         let foot: Vec<&str> = panel.foot.iter().map(|run| run.text.as_str()).collect();
-        assert!(
-            foot.contains(&" example/example-1 (2 runs)."),
-            "foot was: {foot:?}"
-        );
+        assert!(foot.contains(&" example/example-1 (2 runs)."), "foot was: {foot:?}");
     }
 }
 

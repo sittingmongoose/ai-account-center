@@ -48,12 +48,15 @@ function reviewedCount(column: Pick<Column, 'reviews' | 'measures'>): number {
  * reviewed items — the same bar runs already follow. Five fix rounds on one item are one item,
  * not five. A Fine can stand on fewer; a benchmark column needs no review.
  */
-function belowReviewBar(column: Pick<Column, 'source' | 'reviews' | 'measures'>, minRuns: number): boolean {
+function belowReviewBar(
+  column: Pick<Column, 'source' | 'reviews' | 'measures'>,
+  minRuns: number
+): boolean {
   if (column.source !== 'observed') return false;
   // Cheating flags are per-run and do not depend on reviews: a cheating-floor Avoid stands
   // on any number of reviewed items, and its cell keeps the "cheated in … runs" wording.
-  const cheating = column.measures.cheating;
-  if (cheating?.value != null && cheating.value >= CHEATING_FLOOR) return false;
+  const cheatingValue = column.measures.cheating?.value;
+  if (typeof cheatingValue === 'number' && cheatingValue >= CHEATING_FLOOR) return false;
   return reviewedCount(column) < minRuns;
 }
 
@@ -194,7 +197,9 @@ export function judgeGroup(
     const peers = remaining.length;
     const pulled = remaining.filter((entry) => {
       const { verdict } = judge(entry, top, peers);
-      return (verdict === 'recommended' || verdict === 'avoid') && belowReviewBar(entry.column, minRuns);
+      return (
+        (verdict === 'recommended' || verdict === 'avoid') && belowReviewBar(entry.column, minRuns)
+      );
     });
     if (pulled.length === 0) break;
     for (const entry of pulled) {
