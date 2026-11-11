@@ -392,6 +392,30 @@ describe('status view', () => {
     expect(bare.headline.runs.map((run) => run.text).join('')).toContain('No questions for you');
   });
 
+  it('null ttl exempts only a thread waiting on the owner (F10)', async () => {
+    // The asker state reads the same staleness ("gone" when stale), where the thread
+    // rows themselves are quietly hidden after a day.
+    const askerOf = async (writer: string, thread: Record<string, unknown>, kind: string) => {
+      const root = dirs.make();
+      writeReport(root, writer, 'thread.json', threadDoc(writer, thread));
+      writeCard(
+        root,
+        cardDoc(writer, 'C1', kind === 'question' ? {} : { kind: kind as never, options: [], recommendation: null })
+      );
+      const view = buildStatusView(await inputs(root));
+      return view.cards.open[0]?.askerState;
+    };
+    // A crashed working thread with no heartbeat goes stale after the one-day default.
+    expect(await askerOf('vm.worker', { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) }, 'sample')).toBe('gone');
+    // Blocked and waiting states with no heartbeat do not.
+    expect(await askerOf('vm.blocked', { ttlSeconds: null, state: 'blocked', writtenAt: ago(2 * 86_400_000) }, 'sample')).toBe('blocked');
+    expect(await askerOf('vm.waiting', { ttlSeconds: null, state: 'waiting', writtenAt: ago(2 * 86_400_000) }, 'sample')).toBe('waiting');
+    // Waiting through an open question card does not.
+    expect(await askerOf('vm.asked', { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) }, 'question')).toBe('working');
+    // An objection card asks nothing of the owner: still stale.
+    expect(await askerOf('vm.object', { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) }, 'objection')).toBe('gone');
+  });
+
   it('keeps objection cards without a response open, and shows quiet threads by age', async () => {
     const root = dirs.make();
     writeCard(
