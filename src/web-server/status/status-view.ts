@@ -237,11 +237,14 @@ function seenAt(row: { writtenAtMs: number; firstSeenAt: number }): number {
 /** Only question, judgement and action cards count as "questions for you" (D10). */
 const QUESTION_KINDS: ReadonlySet<string> = new Set(['question', 'judgement', 'action']);
 
-/** Whether this thread's answer waits on the owner: a blocked/waiting state or an open question card (F10). */
+/**
+ * Whether this thread's answer waits on the owner, whatever the ttl (N4 — the same rule
+ * as the composer): a `blockedOn` naming the owner, or an open question, judgement or
+ * action card from the same writer.
+ */
 function waitsOnOwner(row: SeenReport<ThreadDoc>, inputs: StatusInputs): boolean {
   return (
-    row.doc.state === 'blocked' ||
-    row.doc.state === 'waiting' ||
+    row.doc.blockedOn?.kind === 'owner' ||
     inputs.reports.cards.some(
       (card) =>
         card.writer === row.writer && card.doc.state === 'open' && QUESTION_KINDS.has(card.doc.kind)
@@ -250,15 +253,20 @@ function waitsOnOwner(row: SeenReport<ThreadDoc>, inputs: StatusInputs): boolean
 }
 
 /**
- * Past its heartbeat, or unreadable. A null `ttlSeconds` exempts only a thread waiting
- * on the owner (blocked/waiting, or an open question card); any other state uses the
- * default TTL of one day, so a crashed `working` thread still goes stale (F10).
+ * Past its heartbeat, or unreadable. A thread waiting on the owner is never stale,
+ * whatever the ttl (N4). With a null `ttlSeconds` a blocked/waiting state is exempt
+ * too (F10); any other state uses the default TTL of one day, so a crashed `working`
+ * thread still goes stale.
  */
 function threadStale(row: SeenReport<ThreadDoc>, inputs: StatusInputs): boolean {
   if (row.problem !== null) return true;
+  if (waitsOnOwner(row, inputs)) return false;
   const age = inputs.now - seenAt(row);
   const ttl = row.doc.ttlSeconds;
-  if (ttl === null) return !waitsOnOwner(row, inputs) && age > NULL_TTL_DEFAULT_SECONDS * 1000;
+  if (ttl === null) {
+    const ended = row.doc.state === 'blocked' || row.doc.state === 'waiting';
+    return !ended && age > NULL_TTL_DEFAULT_SECONDS * 1000;
+  }
   return age > ttl * 1000;
 }
 

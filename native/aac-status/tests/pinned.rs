@@ -797,6 +797,28 @@ fn a_thread_waiting_on_a_question_card_is_never_stale() {
 }
 
 #[test]
+fn a_blocked_or_waiting_state_without_a_heartbeat_is_never_stale() {
+    // N4 (composer side): the documented null-ttl rule exempts blocked/waiting states.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "state": "waiting", "ttlSeconds": null,
+            "writtenAtMs": NOW - 3 * 24 * 60 * 60 * 1000
+        }))]
+    }));
+    assert_eq!(one_update(&built).report_state, "fresh");
+    // With a ttl set, the state alone does not exempt: the same report is stale.
+    let set = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "state": "waiting", "ttlSeconds": 1800,
+            "writtenAtMs": NOW - 3 * 24 * 60 * 60 * 1000
+        }))]
+    }));
+    assert_eq!(one_update(&set).report_state, "stale");
+}
+
+#[test]
 fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
     // B2: a thread that ended its turn to wait on the owner cannot heartbeat; the older its
     // last report, the more the update must keep saying it waits. Stale would hide exactly

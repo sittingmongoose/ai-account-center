@@ -822,6 +822,13 @@ fn compose_update(
                 .find(|card| card.writer == doc.writer && is_question_kind(&card.kind))
                 .map(|_| "owner")
         }),
+        // A blocked/waiting state with no heartbeat is exempt too (N4): the thread ended
+        // its turn waiting, whatever state it ended in. With a ttl set, the state alone
+        // does not exempt — the owner signals above must name it.
+        thread
+            .filter(|doc| doc.ttl_seconds.is_none())
+            .filter(|doc| matches!(doc.state.as_str(), "blocked" | "waiting"))
+            .map(|_| "owner"),
     ]
     .into_iter()
     .flatten()

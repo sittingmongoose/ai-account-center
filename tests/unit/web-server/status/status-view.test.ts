@@ -470,6 +470,52 @@ describe('status view', () => {
     ).toBe('gone');
   });
 
+  it('waiting on the owner is never stale, whatever the ttl (N4)', async () => {
+    const askerOf = async (writer: string, thread: Record<string, unknown>, kind: string) => {
+      const root = dirs.make();
+      writeReport(root, writer, 'thread.json', threadDoc(writer, thread));
+      writeCard(
+        root,
+        cardDoc(
+          writer,
+          'C1',
+          kind === 'question' ? {} : { kind: kind as never, options: [], recommendation: null }
+        )
+      );
+      const view = buildStatusView(await inputs(root));
+      return view.cards.open[0]?.askerState;
+    };
+    // The reviewer's case: waiting, ttl set, 3 h past it, one open question card.
+    expect(
+      await askerOf(
+        'vm.asked',
+        { ttlSeconds: 1800, state: 'waiting', writtenAt: ago(3 * 3600_000) },
+        'question'
+      )
+    ).toBe('waiting');
+    // A blockedOn naming the owner exempts whatever the ttl.
+    expect(
+      await askerOf(
+        'vm.blocked',
+        {
+          ttlSeconds: 1800,
+          state: 'blocked',
+          writtenAt: ago(3 * 3600_000),
+          blockedOn: { kind: 'owner', what: 'A decision', since: null },
+        },
+        'sample'
+      )
+    ).toBe('blocked');
+    // Without an owner signal the same report is stale.
+    expect(
+      await askerOf(
+        'vm.plain',
+        { ttlSeconds: 1800, state: 'working', writtenAt: ago(3 * 3600_000) },
+        'sample'
+      )
+    ).toBe('gone');
+  });
+
   it('keeps objection cards without a response open, and shows quiet threads by age', async () => {
     const root = dirs.make();
     writeCard(
