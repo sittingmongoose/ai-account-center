@@ -342,6 +342,14 @@ textarea.note::placeholder { color: var(--ink-4); }
 .rail a.on { background: var(--nav-active); color: var(--nav-active-fg); }
 .rail .rail-tools { margin-top: auto; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .rail .icon-btn { width: 44px; height: 44px; border-radius: 12px; }
+/* A short screen (an iPhone on its side, 402 pt) fits every tab and button without scrolling the rail. */
+@media (max-height: 430px) {
+  :root[data-chrome='rail'] .rail { gap: 2px; }
+  :root[data-chrome='rail'] .rail a { min-height: 40px; gap: 2px; }
+  :root[data-chrome='rail'] .rail a .ic { width: 18px; height: 18px; }
+  :root[data-chrome='rail'] .rail .rail-tools { gap: 4px; }
+  :root[data-chrome='rail'] .rail .icon-btn { width: 38px; height: 38px; }
+}
 
 /* ---------- Duo unfolded portrait: the band shows the page line and a summary (it takes no taps); the tabs sit under it ---------- */
 .band-head { background: var(--paper); border-bottom: 1px solid var(--rule); }

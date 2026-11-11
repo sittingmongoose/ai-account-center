@@ -70,3 +70,21 @@ test("the sign-in card clears the rail's strip, where the Duo's clock and signal
 	assert.match(css, /:root\[data-chrome='rail'\] \.signin-page \{[^}]*padding-right: calc\(var\(--rail-w, 0px\) \+ 16px\)/, 'strip on the right');
 	assert.match(css, /:root\[data-chrome='rail'\]\[data-rail-side='left'\] \.signin-page \{[^}]*padding-left: calc\(var\(--rail-w, 0px\) \+ 16px\)/, 'strip on the left');
 });
+
+test("on a short screen the rail's tabs and buttons fit without scrolling: an iPhone on its side, 402 pt (wave-2 device M3)", () => {
+	const block = css.match(/@media \(max-height: 430px\) \{([\s\S]*?)\n\}/);
+	assert.ok(block, 'a compact rail below 430 px of height');
+	const px = (re) => {
+		const m = block[1].match(re);
+		assert.ok(m, `compact rule ${re}`);
+		return Number(m[1]);
+	};
+	const gap = px(/:root\[data-chrome='rail'\] \.rail \{[^}]*gap: (\d+)px/);
+	const tab = px(/:root\[data-chrome='rail'\] \.rail a \{[^}]*min-height: (\d+)px/);
+	const toolGap = px(/:root\[data-chrome='rail'\] \.rail \.rail-tools \{[^}]*gap: (\d+)px/);
+	const tool = px(/:root\[data-chrome='rail'\] \.rail \.icon-btn \{[^}]*height: (\d+)px/);
+	// reserve 12, five tabs, the gap before the tools, three tools, the 21 pt home-indicator inset
+	const total = 12 + 5 * tab + 4 * gap + gap + 3 * tool + 2 * toolGap + 21;
+	assert.ok(total <= 402, `the compact rail is ${total} px tall`);
+	assert.ok(tab >= 36 && tool >= 36, 'targets stay at least 36 px');
+});
