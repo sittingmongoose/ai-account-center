@@ -1,0 +1,170 @@
+[
+  {
+    "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
+    "grants": [
+      {
+        "claimBlockedReason": null,
+        "claimable": true,
+        "expiresAtMs": null,
+        "grantKey": "5c7cbcec4b16f135c994440eabeb33c3f983302e2b8bf85fb8b15df0a3f04bbe",
+        "kind": "banked",
+        "label": "Banked reset",
+        "providerWords": null,
+        "refillsText": "Refills the eligible Codex usage windows.",
+        "resetsLeft": 1
+      }
+    ],
+    "history": [
+      {
+        "atMs": 1700000000000,
+        "details": {
+          "beforeCount": 1,
+          "callerHash": "557a21f3096f504048f58d09e3d167c09b46efc9fbf1627c05b8f13fb6791f24",
+          "callerKind": "session",
+          "grantHash": "e85ad1878e76f57cd4818e49a69fd875ccc9b76c9c07c52c79a6c26b94f973d7",
+          "identityHash": "fdcff2bc03c3908cb52c33d860ac4490693638a8acc382e6052ac7292b976d5e",
+          "kind": "banked",
+          "provider": "codex"
+        },
+        "event": "prepare",
+        "outcome": "prepared",
+        "targetHash": "ddf9ac0ca7d7bf919d8f99b31eb35ed866d1ac8db69c67506232dcb7bb7309e7"
+      },
+      {
+        "atMs": 1700000000000,
+        "details": {
+          "beforeCount": 1,
+          "beforeWindows": {
+            "primary": 100.0
+          },
+          "callerHash": "557a21f3096f504048f58d09e3d167c09b46efc9fbf1627c05b8f13fb6791f24",
+          "callerKind": "session",
+          "grantHash": "e85ad1878e76f57cd4818e49a69fd875ccc9b76c9c07c52c79a6c26b94f973d7",
+          "idempotencyHash": "ac7edb97166f7d682720aca18fea15cdd5d15242dad38297a48633a806236c4f",
+          "identityHash": "fdcff2bc03c3908cb52c33d860ac4490693638a8acc382e6052ac7292b976d5e",
+          "kind": "banked",
+          "provider": "codex"
+        },
+        "event": "attempt",
+        "outcome": "claimed-unconfirmed",
+        "targetHash": "ddf9ac0ca7d7bf919d8f99b31eb35ed866d1ac8db69c67506232dcb7bb7309e7"
+      }
+    ],
+    "observedAtMs": 1700000000000,
+    "pendingAttempt": "0000000000000000000000000000000000000000000000000000000000000003",
+    "sourceAgeMs": 0,
+    "status": "ok"
+  },
+  {
+    "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
+    "grants": [
+      {
+        "claimBlockedReason": null,
+        "claimable": true,
+        "expiresAtMs": null,
+        "grantKey": "97027211e2fd1ab23d6d8d8a77e34390d0aa13c3f39e49fdd4f3e168ffaa8910",
+        "kind": "banked",
+        "label": "Banked reset",
+        "providerWords": null,
+        "refillsText": "Refills the eligible Codex usage windows.",
+        "resetsLeft": 1
+      }
+    ],
+    "history": [
+      {
+        "atMs": 1700000000000,
+        "details": {
+          "beforeCount": 1,
+          "callerHash": "557a21f3096f504048f58d09e3d167c09b46efc9fbf1627c05b8f13fb6791f24",
+          "callerKind": "session",
+          "grantHash": "e85ad1878e76f57cd4818e49a69fd875ccc9b76c9c07c52c79a6c26b94f973d7",
+          "identityHash": "fdcff2bc03c3908cb52c33d860ac4490693638a8acc382e6052ac7292b976d5e",
+          "kind": "banked",
+          "provider": "codex"
+        },
+        "event": "prepare",
+        "outcome": "prepared",
+        "targetHash": "ddf9ac0ca7d7bf919d8f99b31eb35ed866d1ac8db69c67506232dcb7bb7309e7"
+      },
+      {
+        "atMs": 1700000000000,
+        "details": {
+          "beforeCount": 1,
+          "beforeWindows": {
+            "primary": 100.0
+          },
+          "callerHash": "557a21f3096f504048f58d09e3d167c09b46efc9fbf1627c05b8f13fb6791f24",
+          "callerKind": "session",
+          "grantHash": "e85ad1878e76f57cd4818e49a69fd875ccc9b76c9c07c52c79a6c26b94f973d7",
+          "idempotencyHash": "ac7edb97166f7d682720aca18fea15cdd5d15242dad38297a48633a806236c4f",
+          "identityHash": "fdcff2bc03c3908cb52c33d860ac4490693638a8acc382e6052ac7292b976d5e",
+          "kind": "banked",
+          "provider": "codex"
+        },
+        "event": "attempt",
+        "outcome": "claimed-unconfirmed",
+        "targetHash": "ddf9ac0ca7d7bf919d8f99b31eb35ed866d1ac8db69c67506232dcb7bb7309e7"
+      }
+    ],
+    "observedAtMs": 1700000000000,
+    "pendingAttempt": null,
+    "sourceAgeMs": 0,
+    "status": "ok"
+  },
+  {
+    "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
+    "grants": [
+      {
+        "claimBlockedReason": null,
+        "claimable": true,
+        "expiresAtMs": null,
+        "grantKey": "06a403afb6c26d3c5d39f684e968e9d243c74b83ab09eaace278d9b1dc950602",
+        "kind": "banked",
+        "label": "Banked reset",
+        "providerWords": null,
+        "refillsText": "Refills the eligible Codex usage windows.",
+        "resetsLeft": 1
+      }
+    ],
+    "history": [
+      {
+        "atMs": 1700000000000,
+        "details": {
+          "beforeCount": 1,
+          "callerHash": "557a21f3096f504048f58d09e3d167c09b46efc9fbf1627c05b8f13fb6791f24",
+          "callerKind": "session",
+          "grantHash": "e85ad1878e76f57cd4818e49a69fd875ccc9b76c9c07c52c79a6c26b94f973d7",
+          "identityHash": "fdcff2bc03c3908cb52c33d860ac4490693638a8acc382e6052ac7292b976d5e",
+          "kind": "banked",
+          "provider": "codex"
+        },
+        "event": "prepare",
+        "outcome": "prepared",
+        "targetHash": "ddf9ac0ca7d7bf919d8f99b31eb35ed866d1ac8db69c67506232dcb7bb7309e7"
+      },
+      {
+        "atMs": 1700000000000,
+        "details": {
+          "beforeCount": 1,
+          "beforeWindows": {
+            "primary": 100.0
+          },
+          "callerHash": "557a21f3096f504048f58d09e3d167c09b46efc9fbf1627c05b8f13fb6791f24",
+          "callerKind": "session",
+          "grantHash": "e85ad1878e76f57cd4818e49a69fd875ccc9b76c9c07c52c79a6c26b94f973d7",
+          "idempotencyHash": "ac7edb97166f7d682720aca18fea15cdd5d15242dad38297a48633a806236c4f",
+          "identityHash": "fdcff2bc03c3908cb52c33d860ac4490693638a8acc382e6052ac7292b976d5e",
+          "kind": "banked",
+          "provider": "codex"
+        },
+        "event": "attempt",
+        "outcome": "claimed-unconfirmed",
+        "targetHash": "ddf9ac0ca7d7bf919d8f99b31eb35ed866d1ac8db69c67506232dcb7bb7309e7"
+      }
+    ],
+    "observedAtMs": 1700000000000,
+    "pendingAttempt": "0000000000000000000000000000000000000000000000000000000000000003",
+    "sourceAgeMs": 0,
+    "status": "ok"
+  }
+]
