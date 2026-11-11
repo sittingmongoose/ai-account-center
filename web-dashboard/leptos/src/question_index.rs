@@ -87,7 +87,7 @@ pub fn QuestionIndex(
                     format!("{}–{} of {n}", page.get() * PAGE_SIZE + 1, ((page.get() + 1) * PAGE_SIZE).min(n))
                 }
             }}</span>
-            <button class="btn sm" disabled=move || (page.get() + 1) * PAGE_SIZE >= matches.with(|m| m.len())
+            <button class="btn sm" disabled=move || { (page.get() + 1) * PAGE_SIZE >= matches.with(|m| m.len()) }
                 on:click=move |_| page.update(|p| *p += 1)>"More"</button>
         </div>
         <ol class="q-index-items">
