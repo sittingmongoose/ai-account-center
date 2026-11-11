@@ -1520,7 +1520,7 @@ describe('native local analytics activity', () => {
     complete = true;
     now += 60000;
     const warm = await settled(service);
-    expect(warm.status).toBe('cached');
+    expect(warm.status).toBe('ok');
     expect(warm.sources?.find((s) => s.tool === 'codex' && s.host === 'ubuntu')).toMatchObject({
       state: 'ok',
       lastScanAt: new Date(now).toISOString(),
@@ -1883,7 +1883,9 @@ describe('native local analytics activity', () => {
     expect(refreshing.refreshing).toBe(true);
     expect(refreshing.totals?.inputTokens).toBe(20);
     const refreshed = await settled(service);
-    expect(refreshed.status).toBe('cached');
+    expect(refreshed.status).toBe('ok');
+    // Warm reads reuse the completed projection without changing its scan status.
+    expect(await service.get(QUERY, FROM, NOW)).toBe(refreshed);
     expect(refreshed.totals?.inputTokens).toBe(50);
     expect(refreshed.providers.map((row) => row.provider)).toEqual(['claude', 'codex']);
     expect(calls).toBe(4);
@@ -2340,7 +2342,7 @@ describe('native local analytics activity', () => {
       expect(instant.refreshing).toBe(true);
       expect(instant.totals?.inputTokens).toBe(10);
       const fresh = await settled(second);
-      expect(fresh.status).toBe('cached');
+      expect(fresh.status).toBe('ok');
       expect(fresh.refreshing).toBe(false);
       expect(fresh.totals?.inputTokens).toBe(20);
     } finally {

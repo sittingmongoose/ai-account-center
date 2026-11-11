@@ -234,7 +234,7 @@ describe('compiled Node usage workers', () => {
         providers: Array<{ provider: string; totals: Record<string, number> }>;
         totals: Record<string, number>;
       };
-      afterward: { totals: Record<string, number> };
+      afterward: { status: string; totals: Record<string, number> };
     };
     expect(result.before.totals.inputTokens).toBe(180);
     expect(result.cached.totals).toEqual(result.before.totals);
@@ -243,6 +243,8 @@ describe('compiled Node usage workers', () => {
     expect(result.refreshed.refreshing).toBe(true);
     expect(result.refreshed.totals).toEqual(result.before.totals);
     expect(result.settled.status).toBe('ok');
+    // A warm projection keeps the settled scan status as well as its totals.
+    expect(result.afterward.status).toBe('ok');
     expect(result.settled.providers.map((row) => [row.provider, row.totals.inputTokens])).toEqual(
       [
         ['claude', 150],
