@@ -32,9 +32,10 @@ const PREBUILT = path.join(
   nativeStatusModuleName()
 );
 const hasModule = fs.existsSync(PREBUILT);
-// On CI (or when required) a missing module fails instead of skipping, so a host without
-// a build cannot stay green by never running this (F12).
-const required = Boolean(process.env.CI || process.env.AAC_REQUIRE_NATIVE);
+// With AAC_REQUIRE_NATIVE a missing module fails instead of skipping, so a host without
+// a build cannot stay green by never running this (F12). CI is not required: the CI
+// job never builds the module, so forcing it there would go red on every push (N2).
+const required = Boolean(process.env.AAC_REQUIRE_NATIVE);
 const withModule = hasModule || required ? it : it.skip;
 
 const PIN_ID = 'pin-1';
