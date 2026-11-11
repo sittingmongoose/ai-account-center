@@ -355,7 +355,14 @@ export interface PinnedUpdateView {
   percentNote: string | null;
   now: string | null;
   blocked: { text: string; waitingOnYou: boolean };
-  looping: { answer: 'yes' | 'no' | 'cantTell'; text: string };
+  looping: {
+    answer: 'yes' | 'no' | 'cantTell';
+    text: string;
+    /** The looping item's id when the loop rule found one (the headline names it). */
+    task?: string | null;
+    /** The failing rounds behind a rule "yes"; 0 otherwise. */
+    rounds?: number;
+  };
   left: Array<{ id: string; title: string }>;
   done: Array<{ id: string; title: string }>;
   updated: { text: string; at: string; ageSeconds: number } | null;
@@ -424,6 +431,9 @@ export interface StatusView {
       blockedItems: number;
       workingThreads: number;
       staleSources: number;
+      /** The pinned panel's looping and waiting-on-you threads (D1), named in `runs`. */
+      loopingPinned: number;
+      waitingPinned: number;
     };
   };
   sources: Source[];

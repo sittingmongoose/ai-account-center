@@ -676,6 +676,17 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   const workingThreads = threads.filter((t) => t.state === 'working' && !t.stale).length;
   const staleSources = sources.filter((s) => s.state !== 'ok' && s.state !== 'unconfigured').length;
 
+  // The pinned panel's own worst thread, named (D1, PINNED-THREADS.md section 2): looping
+  // first, then waiting on Jared. Built from the composed panel, never from fixture text.
+  const pinnedView = inputs.pinned && !('unavailable' in inputs.pinned) ? inputs.pinned : null;
+  const loopingPins = pinnedView?.updates.filter((update) => update.looping.answer === 'yes') ?? [];
+  const waitingPins = pinnedView?.updates.filter((update) => update.blocked.waitingOnYou) ?? [];
+  const roundsOf = (update: (typeof loopingPins)[number]) => update.looping.rounds ?? 0;
+  const worstLoop = loopingPins.reduce<(typeof loopingPins)[number] | null>(
+    (worst, update) => (worst === null || roundsOf(update) > roundsOf(worst) ? update : worst),
+    null
+  );
+
   const runs: HeadlineRun[] = [];
   if (openCards > 0)
     runs.push(
@@ -683,6 +694,28 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
       { text: ' for you' }
     );
   else runs.push({ text: 'No questions for you' });
+  if (worstLoop) {
+    const task =
+      worstLoop.looping.task === undefined || worstLoop.looping.task === null
+        ? ''
+        : `, task ${worstLoop.looping.task}`;
+    runs.push(
+      { text: ' · ' },
+      {
+        text: `${plural(loopingPins.length, 'pinned thread')} ${loopingPins.length === 1 ? 'is' : 'are'} looping (${worstLoop.title}${task})`,
+        strong: true,
+        tone: 'warn',
+      }
+    );
+  }
+  if (waitingPins.length > 0)
+    runs.push(
+      { text: ' · ' },
+      {
+        text: `${plural(waitingPins.length, 'pinned thread')} wait${waitingPins.length === 1 ? 's' : ''} on you (${waitingPins[0].title})`,
+        tone: 'warn',
+      }
+    );
   if (done) runs.push({ text: ` · ${done.done} of ${done.of} items landed` });
   if (blockedItems > 0)
     runs.push({ text: ' · ' }, { text: `${blockedItems} blocked`, tone: 'warn' });
@@ -705,7 +738,13 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     machineRows.some((row) => row.warnings.length > 0 || row.state === 'unreachable') ||
     usage.warnings.some((w) => w.tone === 'bad') ||
     overLimit > 0;
-  const warn = openCards > 0 || blockedItems > 0 || staleSources > 0 || usage.warnings.length > 0;
+  const warn =
+    openCards > 0 ||
+    blockedItems > 0 ||
+    staleSources > 0 ||
+    usage.warnings.length > 0 ||
+    loopingPins.length > 0 ||
+    waitingPins.length > 0;
 
   return {
     version: STATUS_VIEW_VERSION,
@@ -714,7 +753,14 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     headline: {
       tone: bad ? 'bad' : warn ? 'warn' : 'good',
       runs,
-      counts: { openCards, blockedItems, workingThreads, staleSources },
+      counts: {
+        openCards,
+        blockedItems,
+        workingThreads,
+        staleSources,
+        loopingPinned: loopingPins.length,
+        waitingPinned: waitingPins.length,
+      },
     },
     sources,
     cards,

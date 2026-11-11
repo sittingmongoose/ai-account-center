@@ -425,6 +425,14 @@ pub struct LoopingView {
     /// yes | no | cantTell.
     pub answer: &'static str,
     pub text: String,
+    /// The looping item's id, when the loop rule found one: the Status headline names the pin
+    /// as "<title>, task <id>" (D1).
+    #[serde(default)]
+    pub task: Option<String>,
+    /// The failing rounds behind this "yes" from the loop rule, so the headline can pick the
+    /// worst looping pin; 0 when the rule did not say yes.
+    #[serde(default)]
+    pub rounds: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -643,6 +651,8 @@ fn compose_update(
         looping: LoopingView {
             answer: "cantTell",
             text: "Can't tell.".to_string(),
+            task: None,
+            rounds: 0,
         },
         left: Vec::new(),
         done: Vec::new(),
@@ -893,7 +903,12 @@ fn compose_update(
             text.push(' ');
             text.push_str(finding);
         }
-        update.looping = LoopingView { answer: "yes", text };
+        update.looping = LoopingView {
+            answer: "yes",
+            text,
+            task: Some(counts.id.clone()),
+            rounds: counts.rounds,
+        };
     } else if let Some(answer) = own {
         update.looping = match answer.state.as_str() {
             "yes" => LoopingView {
@@ -902,25 +917,35 @@ fn compose_update(
                     Some(text) => format!("Yes. {text}"),
                     None => "Yes.".to_string(),
                 },
+                task: None,
+                rounds: 0,
             },
             "no" => LoopingView {
                 answer: "no",
                 text: "No.".to_string(),
+                task: None,
+                rounds: 0,
             },
             _ => LoopingView {
                 answer: "cantTell",
                 text: "Can't tell.".to_string(),
+                task: None,
+                rounds: 0,
             },
         };
     } else if tasks.is_some() {
         update.looping = LoopingView {
             answer: "no",
             text: "No.".to_string(),
+            task: None,
+            rounds: 0,
         };
     } else {
         update.looping = LoopingView {
             answer: "cantTell",
             text: "Can't tell.".to_string(),
+            task: None,
+            rounds: 0,
         };
     }
 

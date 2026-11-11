@@ -293,6 +293,71 @@ describe('status view', () => {
     expect(view.headline.runs[0]).toEqual({ text: '3 questions', strong: true, tone: 'warn' });
   });
 
+
+  it('the headline names the worst pinned thread: looping first, then waiting on Jared (D1)', async () => {
+    // Built from the composed pinned panel, never from fixture text: whatever sentences the
+    // panel's updates carry, the headline names the thread and its looping task itself.
+    const pin = (over: Partial<{ looping: unknown; blocked: unknown; title: string }>) => ({
+      id: 't1',
+      title: over.title ?? 'Thread t1',
+      machine: 'vm',
+      who: null,
+      reportState: 'fresh',
+      percent: null,
+      percentNote: null,
+      now: null,
+      blocked: over.blocked ?? { text: 'None.', waitingOnYou: false },
+      looping: over.looping ?? { answer: 'cantTell', text: "Can't tell.", task: null, rounds: 0 },
+      left: [],
+      done: [],
+      updated: null,
+      reportNote: null,
+      staleNote: null,
+      unreadableNote: null,
+      summary: null,
+    });
+    const panel = {
+      asOfMs: NOW,
+      head: '3 pinned in T3 · 1 looping · 1 waiting on you',
+      counts: { pinned: 3, looping: 1, waitingOnYou: 1 },
+      machineProblems: [],
+      updates: [
+        pin({
+          title: 'Build PMConcept7',
+          looping: { answer: 'yes', text: 'Yes. F-07 has gone back for fixes 5 times without a passing review.', task: 'F-07', rounds: 5 },
+        }),
+        pin({ title: 'Redesign PM', blocked: { text: 'Waiting on you: pick the tray icon.', waitingOnYou: true } }),
+        pin({ title: 'Quiet thread' }),
+      ],
+    };
+    const view = buildStatusView(await inputs(dirs.make(), { pinned: panel }));
+    const line = view.headline.runs.map((run) => run.text).join('');
+    expect(line).toContain('No questions for you');
+    expect(line).toContain('1 pinned thread is looping (Build PMConcept7, task F-07)');
+    expect(line).toContain('1 pinned thread waits on you (Redesign PM)');
+    expect(view.headline.counts.loopingPinned).toBe(1);
+    expect(view.headline.counts.waitingPinned).toBe(1);
+    expect(view.headline.tone).toBe('warn');
+    // Two looping pins: the worst (most rounds) is the one named, the count says both.
+    const two = {
+      ...panel,
+      counts: { pinned: 3, looping: 2, waitingOnYou: 0 },
+      updates: [
+        pin({ title: 'Small loop', looping: { answer: 'yes', text: 'Yes.', task: 'B-1', rounds: 3 } }),
+        pin({ title: 'Big loop', looping: { answer: 'yes', text: 'Yes.', task: 'C-9', rounds: 6 } }),
+        pin({ title: 'Quiet thread' }),
+      ],
+    };
+    const next = buildStatusView(await inputs(dirs.make(), { pinned: two }));
+    const text = next.headline.runs.map((run) => run.text).join('');
+    expect(text).toContain('2 pinned threads are looping (Big loop, task C-9)');
+    expect(next.headline.counts.loopingPinned).toBe(2);
+    // An unavailable panel adds nothing: the headline never invents a pin.
+    const bare = buildStatusView(await inputs(dirs.make(), { pinned: { unavailable: 'the aac-status native module is disabled' } }));
+    expect(bare.headline.runs.map((run) => run.text).join('')).not.toContain('pinned thread');
+    expect(bare.headline.counts.loopingPinned).toBe(0);
+  });
+
   it('keeps objection cards without a response open, and shows quiet threads by age', async () => {
     const root = dirs.make();
     writeCard(
