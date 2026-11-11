@@ -586,12 +586,9 @@ fn a_demoted_row_with_reviews_names_how_many_in_the_cell() {
     // count), the items where they exist (2).
     assert_eq!(haiku_sub(&view.views[0]).unwrap(), vec!["5 runs, 0 reviewed, needs 5"]);
     assert_eq!(haiku_sub(&view.views[1]).unwrap(), vec!["5 runs, 2 reviewed, needs 5"]);
-    // The golden's own Haiku (no decided items either) reads the same.
+    // The golden's own Haiku (no review runs at all) reads none (L-new-4).
     let golden = by_model(&golden_view()).unwrap();
-    assert_eq!(
-        haiku_sub(&golden.views[0]).unwrap(),
-        vec!["5 runs, 0 reviewed, needs 5"]
-    );
+    assert_eq!(haiku_sub(&golden.views[0]).unwrap(), vec!["5 runs, none reviewed yet"]);
 }
 
 #[test]

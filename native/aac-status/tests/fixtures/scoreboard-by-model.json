@@ -865,7 +865,7 @@
               "verdict": "not-enough-data",
               "word": "Not enough data",
               "sub": [
-                "5 runs, 0 reviewed, needs 5"
+                "5 runs, none reviewed yet"
               ]
             },
             "plan": null,
@@ -1785,7 +1785,7 @@
               "verdict": "not-enough-data",
               "word": "Not enough data",
               "sub": [
-                "5 runs, 0 reviewed, needs 5"
+                "5 runs, none reviewed yet"
               ]
             },
             "plan": null,
