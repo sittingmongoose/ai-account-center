@@ -5,12 +5,24 @@ import * as path from 'path';
 import type { NativeStatusHandle } from '../../../src/status-native/native-loader';
 import type { PinnedThread } from '../../../src/status-native/pinned';
 import {
+  modelLabelFor,
   PinnedThreadsCollector,
   zoneOffsetMinutes,
   type PinsMachine,
 } from '../../../src/web-server/status/pinned-threads';
-import type { AgentReportsState } from '../../../src/web-server/status/agent-reports-reader';
+import {
+  AgentReportsReader,
+  type AgentReportsState,
+} from '../../../src/web-server/status/agent-reports-reader';
 import type { CommandRunner } from '../../../src/web-server/status/status-collectors';
+import {
+  cardDoc,
+  item,
+  tasksDoc,
+  threadDoc,
+  writeCard,
+  writeReport,
+} from '../web-server/status/status-test-helpers';
 
 /**
  * A fake native handle: the same method split as the module, with merge and compose echoing
@@ -265,16 +277,18 @@ describe('PinnedThreadsCollector', () => {
       await collector.collect();
       await collector.scanStatusDocs();
       await collector.compose(noReports, []);
-      let statuses = (composeInputs.at(-1) as Record<string, unknown>)
-        .statuses as Array<Record<string, unknown>>;
+      let statuses = (composeInputs.at(-1) as Record<string, unknown>).statuses as Array<
+        Record<string, unknown>
+      >;
       expect(statuses).toHaveLength(1);
       expect(statuses[0].problem).toBeNull();
 
       fs.chmodSync(path.join(dir, 'v1/writers'), 0o000);
       await collector.scanStatusDocs();
       await collector.compose(noReports, []);
-      statuses = (composeInputs.at(-1) as Record<string, unknown>)
-        .statuses as Array<Record<string, unknown>>;
+      statuses = (composeInputs.at(-1) as Record<string, unknown>).statuses as Array<
+        Record<string, unknown>
+      >;
       expect(statuses[0].problem).toContain('folder could not be listed');
       expect(typeof statuses[0].problemSinceMs).toBe('number');
     } finally {
@@ -295,6 +309,148 @@ describe('PinnedThreadsCollector', () => {
     expect(collector.view()).toEqual({ unavailable: 'the aac-status native module is disabled' });
   });
 
+  it('the composer input carries the catalog model label and the project label (D9)', async () => {
+    expect(modelLabelFor('claude-opus-5-5')).toBe('Opus 5.5');
+    expect(modelLabelFor('anthropic/claude-opus-5-5')).toBe('Opus 5.5');
+    expect(modelLabelFor('gpt-6.1-sol')).toBe('Sol 6.1');
+    expect(modelLabelFor('unknown-model-9')).toBeNull();
+    expect(modelLabelFor(null)).toBeNull();
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-pinned-who-'));
+    try {
+      writeReport(dir, 'vm.lead', 'thread.json', threadDoc('vm.lead'));
+      writeReport(
+        dir,
+        'vm.lead',
+        'tasks.json',
+        tasksDoc('vm.lead', [item('F-01', 'done')], {
+          project: 'puppet-master',
+          projectLabel: 'Puppet Master',
+          stream: 'F',
+          streamLabel: 'PM7 follow-ups',
+        })
+      );
+      const reader = new AgentReportsReader({
+        root: () => dir,
+        now: () => 1_794_116_000_000,
+      });
+      await reader.scan();
+      expect(reader.snapshot().problems).toEqual([]);
+      const { handle, composeInputs } = fakeHandle({
+        vm: () => ({ pinned: [pin('t1')] }),
+      });
+      const collector = new PinnedThreadsCollector({
+        handle,
+        run: neverRun,
+        readRemote: async () => '[]',
+        now: () => 1_794_116_000_000,
+        reportsRoot: () => dir,
+      });
+      await collector.collect();
+      await collector.compose(reader.snapshot(), []);
+      const input = composeInputs.at(-1) as Record<string, unknown>;
+      const threads = input.threads as Array<Record<string, unknown>>;
+      const tasks = input.tasks as Array<Record<string, unknown>>;
+      expect(threads).toHaveLength(1);
+      expect(threads[0].model).toBe('claude-opus-5-5');
+      expect(threads[0].modelLabel).toBe('Opus 5.5');
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].projectLabel).toBe('Puppet Master');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('open cards reach the composer with their kinds so only questions can wait (D10)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-pinned-kinds-'));
+    try {
+      writeCard(dir, cardDoc('vm.lead', 'Q1'));
+      writeCard(
+        dir,
+        cardDoc('vm.lead', 'O1', { kind: 'objection', options: [], recommendation: null })
+      );
+      writeCard(
+        dir,
+        cardDoc('vm.lead', 'S1', { kind: 'sample', options: [], recommendation: null })
+      );
+      const reader = new AgentReportsReader({
+        root: () => dir,
+        now: () => 1_794_116_000_000,
+      });
+      await reader.scan();
+      expect(reader.snapshot().problems).toEqual([]);
+      const { handle, composeInputs } = fakeHandle({
+        vm: () => ({ pinned: [pin('t1')] }),
+      });
+      const collector = new PinnedThreadsCollector({
+        handle,
+        run: neverRun,
+        readRemote: async () => '[]',
+        now: () => 1_794_116_000_000,
+        reportsRoot: () => dir,
+      });
+      await collector.collect();
+      await collector.compose(reader.snapshot(), []);
+      const input = composeInputs.at(-1) as Record<string, unknown>;
+      const cards = input.openCards as Array<Record<string, unknown>>;
+      expect(cards.map((card) => card.kind).sort()).toEqual(['objection', 'question', 'sample']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a hung check-file write never stalls the compose (F2)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-pinned-hung-'));
+    try {
+      writeReport(dir, 'vm.lead', 'thread.json', threadDoc('vm.lead'));
+      const reader = new AgentReportsReader({
+        root: () => dir,
+        now: () => 1_794_116_000_000,
+      });
+      await reader.scan();
+      expect(reader.snapshot().problems).toEqual([]);
+      let release: (() => void) | null = null;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const { ReadersCheckWriter } = await import('../../../src/web-server/status/readers-check');
+      const check = new ReadersCheckWriter({
+        root: () => dir,
+        now: () => 1_794_116_000_000,
+        files: {
+          stat: async () => ({ isDirectory: () => true }),
+          mkdir: async () => {},
+          writeFile: async () => {
+            await gate;
+          },
+          rename: async () => {},
+          rm: async () => {},
+        },
+      });
+      const { handle } = fakeHandle({ vm: () => ({ pinned: [pin('t1')] }) });
+      const collector = new PinnedThreadsCollector({
+        handle,
+        run: neverRun,
+        readRemote: async () => '[]',
+        now: () => 1_794_116_000_000,
+        reportsRoot: () => dir,
+        readersCheck: check,
+      });
+      await collector.collect();
+      const done = collector.compose(reader.snapshot(), []);
+      const winner = await Promise.race([
+        done.then(() => 'composed' as const),
+        new Promise<'timed out'>((resolve) =>
+          setTimeout(() => resolve('timed out'), 3000).unref?.()
+        ),
+      ]);
+      expect(winner).toBe('composed');
+      release?.();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('the dashboard zone becomes the offset the composer needs', () => {
     const november = Date.parse('2026-11-08T05:00:00Z');
     expect(zoneOffsetMinutes('UTC', november)).toBe(0);
@@ -309,10 +465,25 @@ describe('PinnedThreadsCollector', () => {
     const handle: NativeStatusHandle = {
       call: async (method, args) => {
         const parsed = JSON.parse(args) as Record<string, unknown>;
-        if (method === 'pins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }] });
+        if (method === 'pins')
+          return JSON.stringify({
+            pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }],
+          });
         if (method === 'parseRemotePins') return JSON.stringify({ ok: true, pinned: [] });
-        if (method === 'mergePins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a', machine: 'vm' }] });
-        if (method === 'parseStatus') throw new Error('must not reach native: TypeScript refuses first');
+        if (method === 'mergePins')
+          return JSON.stringify({
+            pinned: [
+              {
+                id: 'fixture-thread',
+                title: 'Fixture',
+                pinnedAt: 'a',
+                pinOrderKey: 'a',
+                machine: 'vm',
+              },
+            ],
+          });
+        if (method === 'parseStatus')
+          throw new Error('must not reach native: TypeScript refuses first');
         if (method === 'compose') {
           composeInputs.push(parsed);
           const statusProblems = (parsed.statusProblems ?? []) as Array<Record<string, unknown>>;
@@ -339,7 +510,11 @@ describe('PinnedThreadsCollector', () => {
               unreadableNote: hasRefusal ? 'Could not be read since 12:00 PM.' : null,
               summary: null,
               refusal: hasRefusal
-                ? { file: `writers/${String(status.writer)}/status.json`, reason: problem, sinceMs: status.problemSinceMs as number | null }
+                ? {
+                    file: `writers/${String(status.writer)}/status.json`,
+                    reason: problem,
+                    sinceMs: status.problemSinceMs as number | null,
+                  }
                 : null,
             };
           });
@@ -352,7 +527,40 @@ describe('PinnedThreadsCollector', () => {
             counts: { pinned: 1, looping: 0, waitingOnYou: 0 },
             machineProblems: [],
             statusProblems: allProblems,
-            updates: updates.length > 0 ? updates : (statusProblems.length > 0 ? [{ id: 'fixture-thread', title: 'Fixture', machine: 'vm', who: null, reportState: 'none', percent: null, percentNote: 'No task list.', now: null, blocked: { text: 'Not reported.', waitingOnYou: false }, looping: { answer: 'cantTell', text: "Can't tell." }, left: [], done: [], updated: null, reportNote: "This thread doesn't report its status yet.", staleNote: null, unreadableNote: null, summary: null, refusal: statusProblems.length > 0 ? { file: String(statusProblems[0].file), reason: String(statusProblems[0].reason), sinceMs: statusProblems[0].sinceMs as number | null } : null }] : []),
+            updates:
+              updates.length > 0
+                ? updates
+                : statusProblems.length > 0
+                  ? [
+                      {
+                        id: 'fixture-thread',
+                        title: 'Fixture',
+                        machine: 'vm',
+                        who: null,
+                        reportState: 'none',
+                        percent: null,
+                        percentNote: 'No task list.',
+                        now: null,
+                        blocked: { text: 'Not reported.', waitingOnYou: false },
+                        looping: { answer: 'cantTell', text: "Can't tell." },
+                        left: [],
+                        done: [],
+                        updated: null,
+                        reportNote: "This thread doesn't report its status yet.",
+                        staleNote: null,
+                        unreadableNote: null,
+                        summary: null,
+                        refusal:
+                          statusProblems.length > 0
+                            ? {
+                                file: String(statusProblems[0].file),
+                                reason: String(statusProblems[0].reason),
+                                sinceMs: statusProblems[0].sinceMs as number | null,
+                              }
+                            : null,
+                      },
+                    ]
+                  : [],
           });
         }
         throw new Error(`unexpected method ${method}`);
@@ -414,7 +622,9 @@ describe('PinnedThreadsCollector', () => {
       } else {
         // For the first refusal the top-level statusProblems already carries it; either is a
         // disclosure, a bare "none" with no file/reason is not.
-        const hasTopLevelReason = (String(viewProblems?.[0]?.reason).toLowerCase()).includes('bearer');
+        const hasTopLevelReason = String(viewProblems?.[0]?.reason)
+          .toLowerCase()
+          .includes('bearer');
         expect(hasTopLevelReason).toBe(true);
         expect(JSON.stringify(view)).not.toContain('Bearer\uFEFF');
       }
@@ -428,11 +638,27 @@ describe('PinnedThreadsCollector', () => {
     const handle: NativeStatusHandle = {
       call: async (method, args) => {
         const parsed = JSON.parse(args) as Record<string, unknown>;
-        if (method === 'pins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }] });
+        if (method === 'pins')
+          return JSON.stringify({
+            pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }],
+          });
         if (method === 'parseRemotePins') return JSON.stringify({ ok: true, pinned: [] });
-        if (method === 'mergePins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a', machine: 'vm' }] });
+        if (method === 'mergePins')
+          return JSON.stringify({
+            pinned: [
+              {
+                id: 'fixture-thread',
+                title: 'Fixture',
+                pinnedAt: 'a',
+                pinOrderKey: 'a',
+                machine: 'vm',
+              },
+            ],
+          });
         if (method === 'parseStatus') {
-          const doc = JSON.parse(Buffer.from(String(parsed.contentBase64), 'base64').toString('utf8')) as Record<string, unknown>;
+          const doc = JSON.parse(
+            Buffer.from(String(parsed.contentBase64), 'base64').toString('utf8')
+          ) as Record<string, unknown>;
           return JSON.stringify({ ok: true, doc, sha256: 'sha1' });
         }
         if (method === 'compose') {
@@ -447,23 +673,34 @@ describe('PinnedThreadsCollector', () => {
             counts: { pinned: 1, looping: 0, waitingOnYou: 0 },
             machineProblems: [],
             statusProblems: problems,
-            updates: [{
-              id: 'fixture-thread',
-              title: 'Fixture',
-              machine: 'vm',
-              who: null,
-              reportState: hasProblem ? 'unreadable' : 'fresh',
-              percent: null,
-              percentNote: 'No task list.',
-              now: 'Fixture clean',
-              blocked: { text: 'None.', waitingOnYou: false },
-              looping: { answer: 'cantTell', text: "Can't tell." },
-              left: [], done: [], updated: null,
-              reportNote: null, staleNote: null,
-              unreadableNote: hasProblem ? 'Could not be read since 12:00 PM.' : null,
-              summary: 'Fixture clean',
-              refusal: hasProblem ? { file: `writers/${String(s.writer)}/status.json`, reason: s.problem, sinceMs: s.problemSinceMs as number | null } : null,
-            }],
+            updates: [
+              {
+                id: 'fixture-thread',
+                title: 'Fixture',
+                machine: 'vm',
+                who: null,
+                reportState: hasProblem ? 'unreadable' : 'fresh',
+                percent: null,
+                percentNote: 'No task list.',
+                now: 'Fixture clean',
+                blocked: { text: 'None.', waitingOnYou: false },
+                looping: { answer: 'cantTell', text: "Can't tell." },
+                left: [],
+                done: [],
+                updated: null,
+                reportNote: null,
+                staleNote: null,
+                unreadableNote: hasProblem ? 'Could not be read since 12:00 PM.' : null,
+                summary: 'Fixture clean',
+                refusal: hasProblem
+                  ? {
+                      file: `writers/${String(s.writer)}/status.json`,
+                      reason: s.problem,
+                      sinceMs: s.problemSinceMs as number | null,
+                    }
+                  : null,
+              },
+            ],
           });
         }
         throw new Error(`unexpected method ${method}`);
@@ -480,7 +717,10 @@ describe('PinnedThreadsCollector', () => {
       t3Thread: 'fixture-thread',
       summary: 'Fixture clean',
     };
-    require('fs').writeFileSync(require('path').join(writerDir, 'status.json'), JSON.stringify(good));
+    require('fs').writeFileSync(
+      require('path').join(writerDir, 'status.json'),
+      JSON.stringify(good)
+    );
     try {
       const collector = new PinnedThreadsCollector({
         handle,

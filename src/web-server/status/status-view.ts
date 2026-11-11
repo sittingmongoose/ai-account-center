@@ -52,6 +52,7 @@ import {
   ageSeconds,
   clockText,
   iso,
+  NULL_TTL_DEFAULT_SECONDS,
   PM_MAIL_STALE_MS,
   plural,
   POLL_SECONDS,
@@ -233,13 +234,44 @@ function seenAt(row: { writtenAtMs: number; firstSeenAt: number }): number {
     : row.firstSeenAt;
 }
 
-/** Past its heartbeat, or unreadable. A quiet thread without a heartbeat (`ttlSeconds: null`) shows its age only. */
-function threadStale(row: SeenReport<ThreadDoc>, now: number): boolean {
-  const ttl = row.doc.ttlSeconds;
-  return row.problem !== null || (ttl !== null && now - seenAt(row) > ttl * 1000);
+/** Only question, judgement and action cards count as "questions for you" (D10). */
+const QUESTION_KINDS: ReadonlySet<string> = new Set(['question', 'judgement', 'action']);
+
+/**
+ * Whether this thread's answer waits on the owner, whatever the ttl (N4 — the same rule
+ * as the composer): a `blockedOn` naming the owner, or an open question, judgement or
+ * action card from the same writer.
+ */
+function waitsOnOwner(row: SeenReport<ThreadDoc>, inputs: StatusInputs): boolean {
+  return (
+    row.doc.blockedOn?.kind === 'owner' ||
+    inputs.reports.cards.some(
+      (card) =>
+        card.writer === row.writer && card.doc.state === 'open' && QUESTION_KINDS.has(card.doc.kind)
+    )
+  );
 }
 
-function reportThreadView(row: SeenReport<ThreadDoc>, now: number): ThreadView {
+/**
+ * Past its heartbeat, or unreadable. A thread waiting on the owner is never stale,
+ * whatever the ttl (N4). With a null `ttlSeconds` a blocked/waiting state is exempt
+ * too (F10); any other state uses the default TTL of one day, so a crashed `working`
+ * thread still goes stale.
+ */
+function threadStale(row: SeenReport<ThreadDoc>, inputs: StatusInputs): boolean {
+  if (row.problem !== null) return true;
+  if (waitsOnOwner(row, inputs)) return false;
+  const age = inputs.now - seenAt(row);
+  const ttl = row.doc.ttlSeconds;
+  if (ttl === null) {
+    const ended = row.doc.state === 'blocked' || row.doc.state === 'waiting';
+    return !ended && age > NULL_TTL_DEFAULT_SECONDS * 1000;
+  }
+  return age > ttl * 1000;
+}
+
+function reportThreadView(row: SeenReport<ThreadDoc>, inputs: StatusInputs): ThreadView {
+  const now = inputs.now;
   const at = seenAt(row);
   const ahead = Number.isFinite(row.writtenAtMs) ? (row.writtenAtMs - row.firstSeenAt) / 1000 : 0;
   return {
@@ -258,7 +290,7 @@ function reportThreadView(row: SeenReport<ThreadDoc>, now: number): ThreadView {
     source: 'report',
     lastSeen: iso(at),
     ageSeconds: ageSeconds(now, at),
-    stale: threadStale(row, now),
+    stale: threadStale(row, inputs),
     clockAheadSeconds: ahead > 120 ? Math.round(ahead) : null,
     problem: row.problem?.reason ?? null,
     registrySource: null,
@@ -281,7 +313,7 @@ function buildThreads(inputs: StatusInputs, registry: Source): ThreadView[] {
   const rows: ThreadView[] = [];
   const reporting = new Set<string>();
   for (const row of inputs.reports.threads) {
-    const view = reportThreadView(row, now);
+    const view = reportThreadView(row, inputs);
     reporting.add(view.name);
     reporting.add(row.writer.slice(row.writer.indexOf('.') + 1));
     if (now - seenAt(row) > QUIET_DAY_MS && row.doc.state !== 'blocked') continue;
@@ -338,7 +370,7 @@ function buildThreads(inputs: StatusInputs, registry: Source): ThreadView[] {
 function askerState(inputs: StatusInputs, writer: string): CardView['askerState'] {
   const thread = inputs.reports.threads.find((row) => row.writer === writer);
   if (!thread) return 'unknown';
-  return threadStale(thread, inputs.now) ? 'gone' : thread.doc.state;
+  return threadStale(thread, inputs) ? 'gone' : thread.doc.state;
 }
 
 /** The URL an option image is served from: the writer's folder and the path, each segment encoded. */
@@ -602,7 +634,7 @@ function buildProjects(inputs: StatusInputs): ProjectView[] {
       source: 'board-only',
       asOf: iso(at),
       ageSeconds: ageSeconds(inputs.now, at),
-      stale: threadStale(row, inputs.now),
+      stale: threadStale(row, inputs),
       problem: row.problem?.reason ?? null,
       counts: null,
       completion: null,
@@ -671,18 +703,61 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   const total = emptyCounts();
   for (const project of projects) addCounts(total, project.counts);
   const done = completion(total);
+  // Only question, judgement and action cards count as "questions for you" (D10):
+  // an objection waits for a look, never an answer; a sample wants no answer.
+  const questions = cards.open.filter((card) => QUESTION_KINDS.has(card.kind)).length;
+  const decisions = cards.open.filter((card) => card.kind === 'objection').length;
   const openCards = cards.open.length;
   const blockedItems = total.blocked;
   const workingThreads = threads.filter((t) => t.state === 'working' && !t.stale).length;
   const staleSources = sources.filter((s) => s.state !== 'ok' && s.state !== 'unconfigured').length;
 
+  // The pinned panel's own worst thread, named (D1, PINNED-THREADS.md section 2): looping
+  // first, then waiting on the owner. Built from the composed panel, never from fixture text.
+  const pinnedView = inputs.pinned && !('unavailable' in inputs.pinned) ? inputs.pinned : null;
+  const loopingPins = pinnedView?.updates.filter((update) => update.looping.answer === 'yes') ?? [];
+  const waitingPins = pinnedView?.updates.filter((update) => update.blocked?.waitingOnYou) ?? [];
+  const roundsOf = (update: (typeof loopingPins)[number]) => update.looping.rounds ?? 0;
+  const worstLoop = loopingPins.reduce<(typeof loopingPins)[number] | null>(
+    (worst, update) => (worst === null || roundsOf(update) > roundsOf(worst) ? update : worst),
+    null
+  );
+
   const runs: HeadlineRun[] = [];
-  if (openCards > 0)
+  if (questions > 0)
     runs.push(
-      { text: plural(openCards, 'question'), strong: true, tone: 'warn' },
+      { text: plural(questions, 'question'), strong: true, tone: 'warn' },
       { text: ' for you' }
     );
   else runs.push({ text: 'No questions for you' });
+  if (decisions > 0)
+    runs.push(
+      { text: ' · ' },
+      { text: plural(decisions, 'decision'), tone: 'warn' },
+      { text: ' to look at' }
+    );
+  if (worstLoop) {
+    const task =
+      worstLoop.looping.task === undefined || worstLoop.looping.task === null
+        ? ''
+        : `, task ${worstLoop.looping.task}`;
+    runs.push(
+      { text: ' · ' },
+      {
+        text: `${plural(loopingPins.length, 'pinned thread')} ${loopingPins.length === 1 ? 'is' : 'are'} looping (${worstLoop.title}${task})`,
+        strong: true,
+        tone: 'warn',
+      }
+    );
+  }
+  if (waitingPins.length > 0)
+    runs.push(
+      { text: ' · ' },
+      {
+        text: `${plural(waitingPins.length, 'pinned thread')} wait${waitingPins.length === 1 ? 's' : ''} on you (${waitingPins[0].title})`,
+        tone: 'warn',
+      }
+    );
   if (done) runs.push({ text: ` · ${done.done} of ${done.of} items landed` });
   if (blockedItems > 0)
     runs.push({ text: ' · ' }, { text: `${blockedItems} blocked`, tone: 'warn' });
@@ -705,7 +780,14 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     machineRows.some((row) => row.warnings.length > 0 || row.state === 'unreachable') ||
     usage.warnings.some((w) => w.tone === 'bad') ||
     overLimit > 0;
-  const warn = openCards > 0 || blockedItems > 0 || staleSources > 0 || usage.warnings.length > 0;
+  const warn =
+    questions > 0 ||
+    decisions > 0 ||
+    blockedItems > 0 ||
+    staleSources > 0 ||
+    usage.warnings.length > 0 ||
+    loopingPins.length > 0 ||
+    waitingPins.length > 0;
 
   return {
     version: STATUS_VIEW_VERSION,
@@ -714,7 +796,16 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     headline: {
       tone: bad ? 'bad' : warn ? 'warn' : 'good',
       runs,
-      counts: { openCards, blockedItems, workingThreads, staleSources },
+      counts: {
+        openCards,
+        questions,
+        decisions,
+        blockedItems,
+        workingThreads,
+        staleSources,
+        loopingPinned: loopingPins.length,
+        waitingPinned: waitingPins.length,
+      },
     },
     sources,
     cards,

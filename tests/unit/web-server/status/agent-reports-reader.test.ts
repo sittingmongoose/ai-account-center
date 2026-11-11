@@ -344,7 +344,7 @@ describe('agent reports reader', () => {
     expect(state.problems).toEqual([]);
   });
 
-  it('accepts T3 writers without a pm-mail name, and quiet threads without a heartbeat', async () => {
+  it('accepts T3 writers without a pm-mail name, and threads without a heartbeat', async () => {
     const root = dirs.make();
     writeReport(
       root,
@@ -352,26 +352,30 @@ describe('agent reports reader', () => {
       'thread.json',
       threadDoc('mac.t3-1a2b3c4d', { ttlSeconds: null, state: 'idle' })
     );
-    writeReport(
-      root,
-      'vm.busy',
-      'thread.json',
-      threadDoc('vm.busy', { ttlSeconds: null, state: 'working' })
-    );
+    // B2: a thread that ended its turn cannot heartbeat in any state, blocked included, so
+    // null is accepted everywhere and no writer is refused for it.
+    for (const [writer, state] of [
+      ['vm.busy', 'working'],
+      ['vm.stuck', 'blocked'],
+    ] as const) {
+      writeReport(root, writer, 'thread.json', threadDoc(writer, { ttlSeconds: null, state }));
+    }
     const r = reader(root);
     await r.scan();
-    expect(r.snapshot().threads.map((t) => t.writer)).toEqual(['mac.t3-1a2b3c4d']);
-    expect(r.snapshot().threads[0].doc.ttlSeconds).toBeNull();
-    expect(r.snapshot().problems.map((p) => p.reason)).toEqual([
-      'ttlSeconds is missing or not valid',
+    expect(r.snapshot().threads.map((t) => t.writer).sort()).toEqual([
+      'mac.t3-1a2b3c4d',
+      'vm.busy',
+      'vm.stuck',
     ]);
+    expect(r.snapshot().threads[0].doc.ttlSeconds).toBeNull();
+    expect(r.snapshot().problems).toEqual([]);
   });
 
   it('creates v1 and its folders under an existing root only', async () => {
     const root = dirs.make();
     const created = await ensureReportsLayout(root);
     expect(created.sort()).toEqual(
-      ['v1', 'v1/answers', 'v1/catalog', 'v1/keys', 'v1/schemas', 'v1/writers'].sort()
+      ['v1', 'v1/answers', 'v1/catalog', 'v1/keys', 'v1/readers', 'v1/schemas', 'v1/writers'].sort()
     );
     expect(fs.statSync(path.join(root, 'v1', 'writers')).mode & 0o777).toBe(0o777);
     expect(await ensureReportsLayout(root)).toEqual([]);

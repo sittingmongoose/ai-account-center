@@ -9,6 +9,8 @@ export const MEMORY_FLOOR_GB = 6;
 export const QUIET_DAY_MS = 86_400_000;
 /** A pm-mail-only thread counts as stale after this long without a pm-mail call. */
 export const PM_MAIL_STALE_MS = 30 * 60_000;
+/** The staleness limit a null `ttlSeconds` uses, except while waiting on the owner (F10): one day. */
+export const NULL_TTL_DEFAULT_SECONDS = 86_400;
 /** A stream board (tasks.json) not rewritten for this long shows as stale. */
 export const TASKS_STALE_MS = 86_400_000;
 

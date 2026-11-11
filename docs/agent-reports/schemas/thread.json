@@ -211,7 +211,7 @@
       ]
     },
     "ttlSeconds": {
-      "description": "Seconds after writtenAt before the thread shows as stale. May be null when state is waiting, idle, done or paused.",
+      "description": "Seconds after writtenAt before the thread shows as stale. May be null for any state: a thread that ended its turn cannot heartbeat, whatever state it ended in. A null ttl exempts only a thread waiting on the owner (blocked/waiting, or an open question, judgement or action card); any other state uses the default TTL of one day (86400 seconds).",
       "minimum": 0,
       "type": [
         "integer",

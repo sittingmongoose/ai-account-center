@@ -21,17 +21,22 @@ import {
   nodeReaderFs,
   type ReaderFs,
 } from './agent-reports-reader';
-import { jsonFromBytes } from './schema-helpers';
+import { isWriterName, jsonFromBytes } from './schema-helpers';
 import { STATUS_SIZE_CAP } from './status-size';
 
 /** The agent-reports reader's plain listing failure (the sibling of PERSISTENT_LISTING_ERROR). */
 const LISTING_ERROR = 'folder could not be listed';
+
+/** How the agent-reports reader words a writer folder that is not a writer id (F9). */
+const NOT_A_WRITER = 'folder name is not a writer name';
 
 /** One writer's status document: the last good copy, and its current problem if any. */
 export interface SeenStatus {
   writer: string;
   doc: Record<string, unknown>;
   sha256: string;
+  /** When AAC first saw this version (epoch ms), for the readers check file. */
+  firstSeenAt: number;
   /** The document's own `seq`, kept out of the record for ordering. */
   seq: number;
   /** When this version was written (`writtenAt` in the document), epoch ms. */
@@ -109,12 +114,13 @@ export class StatusDocsReader {
   private async runScan(): Promise<boolean> {
     const now = this.now();
     const handle = this.options.handle?.() ?? null;
-    let writers: string[];
+    let found: { writers: string[]; rejected: string[] };
     try {
-      writers = await this.listWriters();
+      found = await this.listWriters();
     } catch (error) {
       return this.rootListingFailed(error, handle, now);
     }
+    const { writers, rejected } = found;
     if (!handle) {
       // Without the native module there is nothing to validate against; this scan only
       // stamps its time.
@@ -124,6 +130,13 @@ export class StatusDocsReader {
     const limits = { ...STATUS_DOCS_LIMITS, ...this.options.limits };
     let changed = false;
     const failedListings = new Set<string>();
+    // A folder that is not a writer id is refused, never read (F9): its problem-only
+    // entry keeps the fixed wording, as the agent-reports reader does for its folders.
+    for (const name of rejected) {
+      const rel = `writers/${name}/status.json`;
+      if (this.recordProblem(rel, name, this.entries.get(rel) ?? null, NOT_A_WRITER, now))
+        changed = true;
+    }
     const scanned = await newestFolders(writers, limits.writers, (name) =>
       this.fs.stat(`${this.root}/v1/writers/${name}`)
     );
@@ -137,7 +150,7 @@ export class StatusDocsReader {
     // a missing status.json and ends the same way. A failed listing never reaches here, so
     // a failure stays distinct from a successful absence. Writers listed but past the scan's
     // own limit were not tried, not withdrawn; their entries are left to the bound below.
-    const listed = new Set(writers);
+    const listed = new Set([...writers, ...rejected]);
     for (const [rel, entry] of [...this.entries]) {
       if (listed.has(entry.writer)) continue;
       entry.missingSince ??= now;
@@ -246,6 +259,7 @@ export class StatusDocsReader {
           sha256: '',
           seq: 0,
           writtenAtMs: 0,
+          firstSeenAt: now,
           problem: { reason: folderRowProblem(reason), since },
           statKey: null,
           missingSince: null,
@@ -325,6 +339,7 @@ export class StatusDocsReader {
       sha256: parsed.sha256,
       seq: parsed.seq,
       writtenAtMs: parsed.writtenAtMs ?? now,
+      firstSeenAt: now,
       problem: null,
       statKey,
       missingSince: null,
@@ -362,6 +377,7 @@ export class StatusDocsReader {
         sha256: '',
         seq: 0,
         writtenAtMs: 0,
+        firstSeenAt: since,
         problem,
         statKey: null,
         missingSince: null,
@@ -371,12 +387,18 @@ export class StatusDocsReader {
   }
 
   /** Lists the writers root (every valid writer name); a listing failure is thrown to
-   * `runScan`, which owns its rule. */
-  private async listWriters(): Promise<string[]> {
+   * `runScan`, which owns its rule. A folder that is not a writer id (an uppercase name,
+   * a missing machine prefix, a `--`) is refused with the agent-reports wording (F9). */
+  private async listWriters(): Promise<{ writers: string[]; rejected: string[] }> {
     const names: fs.Dirent[] = await this.fs.readdir(`${this.root}/v1/writers`);
-    return names
-      .filter((entry) => entry.isDirectory() && /^[a-z0-9][a-z0-9.-]*$/i.test(entry.name))
-      .map((entry) => entry.name);
+    const writers: string[] = [];
+    const rejected: string[] = [];
+    for (const entry of names) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      if (isWriterName(entry.name)) writers.push(entry.name);
+      else rejected.push(entry.name);
+    }
+    return { writers, rejected };
   }
 
   snapshot(): StatusDocsState {
@@ -389,6 +411,7 @@ export class StatusDocsReader {
         sha256: entry.sha256,
         seq: entry.seq,
         writtenAtMs: entry.writtenAtMs,
+        firstSeenAt: entry.firstSeenAt,
         problem: entry.problem,
       }));
     const problems = entries

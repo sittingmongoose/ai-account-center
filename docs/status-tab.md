@@ -164,7 +164,10 @@ one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
   "headline": {
     "tone": "good" | "warn" | "bad",
     "runs": [ { "text": "3 questions", "strong": true, "tone": "warn" }, { "text": " for you · 41 of 88 items landed" } ],
-    "counts": { "openCards": 3, "blockedItems": 2, "workingThreads": 9, "staleSources": 1 }
+    // `openCards` counts every open card; `questions` only question, judgement and action
+    // cards ("questions for you"), `decisions` the objection cards ("decisions to look at").
+    // Sample cards are in `openCards` and in neither of the other two.
+    "counts": { "openCards": 3, "questions": 3, "decisions": 0, "blockedItems": 2, "workingThreads": 9, "staleSources": 1 }
   },
   "sources": [ Source ],
   "cards": { "source": "agent-reports", "open": [ Card ], "answered": [ AnsweredCard ], "batches": [ Batch ],
@@ -334,9 +337,12 @@ of the share are mapped); elsewhere `ageSeconds` is null.
 source: "report" | "pm-mail", lastSeen, ageSeconds, stale, clockAheadSeconds, problem, registrySource }`. Threads quiet for more than
 a day are left out unless they report `blocked`. `lastSeen` is the older of the writer's `writtenAt` and when AAC first
 saw that version, so a writer whose clock runs ahead cannot look fresh; `clockAheadSeconds` says by how much when over
-2 minutes. A report is `stale` after its `ttlSeconds` or while its file is unreadable. `ttlSeconds` may be null only
-when `state` is `waiting`, `idle`, `done` or `paused` (a thread that ended its turn cannot heartbeat): such a thread
-shows its age and is never stale for lack of a heartbeat (null with `working` or `blocked` makes the file unreadable). pm-mail rows (registry threads
+2 minutes. A report is `stale` after its `ttlSeconds` or while its file is unreadable. A report waiting on the owner
+(`blockedOn` naming the owner, or an open question, judgement or action card from the same writer; in the pinned
+composer also an owner blocker from its board or status document) is never marked stale, even with a ttl set.
+`ttlSeconds` may be null for any state (a thread that ended its turn cannot heartbeat, whatever state it ended in):
+with a null ttl a blocked or waiting state is exempt too; any other state uses the default TTL of one day
+(86400 seconds), so a crashed `working` thread still goes stale. pm-mail rows (registry threads
 with no report, seen in the last day) have `state: null`, `doing` = their about line, and are stale after 30 minutes.
 Their `registrySource` is the pm-mail registry's `SourceRef` (null on report rows): while the registry fails, its rows
 are the last good scan, shown as cached with the registry's problem. While only some registry files fail, each row
@@ -387,7 +393,8 @@ command over the dashboard's ssh aliases) plus the agent reports above and the `
 accepted — one secret filter, the TypeScript one. The TypeScript side passes the module's answer
 through. A machine that does not answer keeps its last good pins for one scan, then the panel names it in
 `machineProblems` while the other machines' pins still show. Every word is the module's; a missing piece is said in
-words ("No task list.", "Can't tell."), never invented.
+words or left null for the page to word ("No task lists yet." when there is no task list;
+"Can't tell." when nothing proves looping either way), never invented.
 ```jsonc
 { "asOfMs": 1762608600000, "head": "5 pinned in T3 · 1 looping · 2 waiting on you",
   "counts": { "pinned": 5, "looping": 1, "waitingOnYou": 2 },
@@ -396,12 +403,12 @@ words ("No task list.", "Can't tell."), never invented.
                  "who": "Puppet Master · pm7-build · Opus 5.5 xhigh" | null,
                  "reportState": "fresh" | "stale" | "unreadable" | "none",
                  "percent": { "text": "58%", "done": 14, "of": 24 } | { "text": "70%", "done": null, "of": null } | null,
-                 "percentNote": "About 70%, by its own estimate." | "Its task list says 14 of 24 (58%); the thread estimates 70%." | "No task list." | null,
+                 "percentNote": "About 70%, by its own estimate." | "Its task list says 14 of 24 (58%); the thread estimates 70%." | null,
                  "now": "Windows 10 sweep for stream F, batch 9." | null,
-                 "blocked": { "text": "Waiting on you: pick the reviewers for B09.", "waitingOnYou": true },
-                 "looping": { "answer": "yes" | "no" | "cantTell", "text": "Yes. F-07 has gone back for fixes 5 times without a passing review." },
-                 "left": [ { "id": "F-07", "title": "Tray icon sharp at 125% scale" } ],
-                 "done": [ { "id": "F-08", "title": "Sticker block landed" } ],
+                 "blocked": { "text": "Waiting on you: pick the reviewers for B09.", "waitingOnYou": true } | null,
+                 "looping": { "answer": "yes" | "no" | "cantTell", "text": "Yes. F-07 has gone back for fixes 5 times without a passing review.", "task": "F-07" | null, "rounds": 5 },
+                 "left": [ { "id": "F-07", "title": "Tray icon sharp at 125% scale" } ] | null,
+                 "done": [ { "id": "F-08", "title": "Sticker block landed" } ] | null,
                  "updated": { "text": "Updated 6 min ago", "at": "ISO", "ageSeconds": 360 } | null,
                  "reportNote": "This thread doesn't report its status yet." | null,
                  "staleNote": "No status update for 25 days. If it is finished, unpin it in T3." | null,

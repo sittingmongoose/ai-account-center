@@ -57,6 +57,7 @@ import {
   type UsageInput,
 } from './status-view';
 import { PinnedThreadsCollector, zoneOffsetMinutes } from './pinned-threads';
+import { ReadersCheckWriter } from './readers-check';
 import { buildSpend } from './status-view-quota';
 import { SPEND_BY_STREAM_UNAVAILABLE, composeSpendByStream } from './spend-by-stream';
 import type { SpendByStreamPanel } from './status-view-types';
@@ -167,6 +168,11 @@ export class StatusService {
         now: () => this.now(),
         timeZone: () => this.timeZone(),
         reportsRoot: () => this.reader.root,
+        // Same root as the readers, so the check file lands beside what it describes.
+        readersCheck: new ReadersCheckWriter({
+          root: () => this.reader.root,
+          now: () => this.now(),
+        }),
       });
     if (deps.spendNative !== undefined) {
       this.spendNative = deps.spendNative;

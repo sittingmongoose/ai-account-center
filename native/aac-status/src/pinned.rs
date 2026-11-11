@@ -12,8 +12,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-/// How far back the loop rule looks (PINNED-THREADS.md section 3: "in the last 24 hours").
-const LOOP_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+/// How far back the loop rule looks. Boards here review slower than once a day — the owner's own
+/// loops ran for days — so a 24-hour window read a four-day loop of daily fails as "not
+/// looping"; the window now spans several days (PINNED-THREADS.md section 3's "recent"
+/// reviews).
+const LOOP_WINDOW_MS: i64 = 4 * 24 * 60 * 60 * 1000;
 
 /// Past this age without a report a pinned thread says it stopped reporting, whatever its
 /// heartbeat said (section 1: "past its time-to-live, or a day").
@@ -27,7 +30,8 @@ const PASSING_VERDICTS: [&str; 8] = [
     "pass", "passed", "approve", "approved", "approval", "lgtm", "clean", "ship",
 ];
 
-/// A review verdict that failed, the spellings the boards and reviewers write.
+/// A review verdict that failed, the spellings the boards and reviewers write. Matched by
+/// prefix, like a pass: "FAIL, one Medium" is a fail, never an unclear verdict.
 const FAILING_VERDICTS: [&str; 6] = ["fail", "failed", "block", "blocked", "changes requested", "rejected"];
 
 /// How one review verdict reads for the loop rule (section 3): it passed, it failed, or it
@@ -45,16 +49,16 @@ fn classify_verdict(verdict: &str) -> Verdict {
     if text.starts_with("pass") || PASSING_VERDICTS.contains(&text.as_str()) {
         return Verdict::Pass;
     }
-    if FAILING_VERDICTS.contains(&text.as_str()) {
+    if FAILING_VERDICTS.iter().any(|word| text.starts_with(word)) {
         return Verdict::Fail;
     }
     Verdict::Unknown
 }
 
 /// The loop rule's counts (section 3): 3 or more failing reviews in a row, or 4 or more
-/// failing rounds since a passing one. A pass (or an unclear verdict, which never counts as
-/// a round) starts the count over, so the two measure the same stretch of a board whose
-/// reviews are written in order; both are checked anyway.
+/// failing rounds since a passing one. A pass starts the count over; an unclear verdict is
+/// skipped (never counted, never a reset), so the two measure the same stretch of a board
+/// whose reviews are written in order; both are checked anyway.
 const LOOP_ROW_MIN: usize = 3;
 const LOOP_ROUNDS_MIN: usize = 4;
 
@@ -134,6 +138,10 @@ pub struct ThreadIn {
     pub harness: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// The catalog label for the raw model id, as the TypeScript side resolved it
+    /// (D9); falls back to the raw id when the model is not in the catalog.
+    #[serde(default)]
+    pub model_label: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
     #[serde(default)]
@@ -165,6 +173,10 @@ pub struct BlockedIn {
     pub what: String,
     #[serde(default)]
     pub since: Option<String>,
+    /// The same moment as `since`, in epoch ms (the TypeScript side parses it once); used for
+    /// clock words, never recomputed here.
+    #[serde(default)]
+    pub since_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -184,6 +196,8 @@ pub struct TasksIn {
     pub seq: u64,
     pub project: String,
     pub stream: String,
+    #[serde(default)]
+    pub project_label: Option<String>,
     #[serde(default)]
     pub stream_label: Option<String>,
     /// The board file's current problem; the items above are its last good copy.
@@ -232,8 +246,22 @@ pub struct CardIn {
     pub id: String,
     pub seq: u64,
     pub title: String,
+    /// The card kind; a missing kind reads as `question` (D10), as the reader defaults it.
+    #[serde(default = "default_card_kind")]
+    pub kind: String,
     #[serde(default)]
     pub asked_at_ms: Option<i64>,
+}
+
+fn default_card_kind() -> String {
+    "question".to_string()
+}
+
+/// Whether a card kind counts as a question of the owner's (D10): only question,
+/// judgement and action cards do. An objection waits for a look, never an answer,
+/// and a sample wants no answer at all.
+fn is_question_kind(kind: &str) -> bool {
+    matches!(kind, "question" | "judgement" | "action")
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -356,14 +384,17 @@ pub struct PinnedUpdate {
     /// What it is doing now (`thread@1.doing`, else the status document's summary).
     #[serde(default)]
     pub now: Option<String>,
-    pub blocked: BlockedView,
+    /// Null when no task list and no report names a blocker (D8): the page says "No task lists
+    /// yet", never an invented "Nothing blocked".
+    #[serde(default)]
+    pub blocked: Option<BlockedView>,
     pub looping: LoopingView,
-    /// Not yet landed or done, blocked and looping ones first.
+    /// Not yet landed or done, blocked and looping ones first; null with no list to show.
     #[serde(default)]
-    pub left: Vec<ItemOut>,
-    /// Landed and done, newest first.
+    pub left: Option<Vec<ItemOut>>,
+    /// Landed and done, newest first; null with no list to show.
     #[serde(default)]
-    pub done: Vec<ItemOut>,
+    pub done: Option<Vec<ItemOut>>,
     /// "Updated 6 min ago" (clock time in `at` for hover and tap).
     #[serde(default)]
     pub updated: Option<UpdatedView>,
@@ -417,6 +448,14 @@ pub struct LoopingView {
     /// yes | no | cantTell.
     pub answer: &'static str,
     pub text: String,
+    /// The looping item's id, when the loop rule found one: the Status headline names the pin
+    /// as "<title>, task <id>" (D1).
+    #[serde(default)]
+    pub task: Option<String>,
+    /// The failing rounds behind this "yes" from the loop rule, so the headline can pick the
+    /// worst looping pin; 0 when the rule did not say yes.
+    #[serde(default)]
+    pub rounds: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -510,9 +549,16 @@ struct ItemLoop {
 
 /// The loop count for one item, over the reviews inside the loop window. A review the
 /// item's board did not date counts too — an undatable fix round must not hide a loop.
+/// An unclear verdict is skipped, not a reset: free wording a reviewer left between two
+/// fails ("cannot verify on the phone") must not turn a real loop back into "on track",
+/// and it never counts toward one either (section 3 prefers "unsure" to a guess).
+/// Reviews count by date, not list order (F11): a list written newest first must read
+/// the same as one written oldest first. Undated reviews keep their order at the end.
 fn item_loop(item: &ItemIn, now_ms: i64) -> ItemLoop {
+    let mut ordered: Vec<&ReviewIn> = item.reviews.iter().collect();
+    ordered.sort_by_key(|review| (review.at_ms.is_none(), review.at_ms));
     let mut rounds = 0;
-    for review in &item.reviews {
+    for review in ordered {
         let in_window = match review.at_ms {
             Some(at) => now_ms - at <= LOOP_WINDOW_MS,
             None => true,
@@ -523,9 +569,7 @@ fn item_loop(item: &ItemIn, now_ms: i64) -> ItemLoop {
         match classify_verdict(&review.verdict) {
             Verdict::Pass => rounds = 0,
             Verdict::Fail => rounds += 1,
-            // An unclear verdict is neither: it breaks the row of consecutive failures, and
-            // a loop is never guessed across it (section 3 prefers "unsure" to a guess).
-            Verdict::Unknown => rounds = 0,
+            Verdict::Unknown => {}
         }
     }
     ItemLoop {
@@ -552,6 +596,56 @@ fn item_out(item: &ItemIn) -> ItemOut {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The pin match (B8)
+
+/// One `%XX` escape, as percents appear in the ids T3 itself prints.
+fn hex_byte(first: u8, second: u8) -> Option<u8> {
+    let digit = |value: u8| match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    };
+    Some(digit(first)? << 4 | digit(second)?)
+}
+
+/// The id forms a report may carry for one T3 thread, normalised so they all compare equal:
+/// the plain id, the same id percent-encoded (T3's own run ids spell `mcp:launch:` as
+/// `mcp%3Alaunch%3A`), a `t3-thread://` link that ends in it, and the bare tail after the
+/// `mcp:launch:` prefix. Normalisation only — a title is never fuzzy-matched.
+fn normalised_thread_id(id: &str) -> String {
+    // Percent-decode first: the escapes hide the separators the later steps look for.
+    let bytes = id.trim().as_bytes();
+    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%'
+            && at + 2 < bytes.len()
+            && let Some(byte) = hex_byte(bytes[at + 1], bytes[at + 2])
+        {
+            decoded.push(byte);
+            at += 3;
+            continue;
+        }
+        decoded.push(bytes[at]);
+        at += 1;
+    }
+    let mut text = String::from_utf8_lossy(&decoded).to_lowercase();
+    // A link ends in the id; a bare id has no separator at all.
+    if let Some((_, tail)) = text.rsplit_once('/') {
+        text = tail.to_string();
+    }
+    text.strip_prefix("mcp:launch:").unwrap_or(&text).to_string()
+}
+
+/// Whether a report's `t3Thread` names this pin's thread (B8: normalised, never a title match).
+fn same_thread_id(reported: &str, pin: &str) -> bool {
+    let left = normalised_thread_id(reported);
+    let right = normalised_thread_id(pin);
+    !left.is_empty() && left == right
+}
+
 fn lite_out(item: &ItemLiteIn) -> ItemOut {
     ItemOut {
         id: item.id.clone(),
@@ -568,6 +662,7 @@ fn compose_update(
     thread: Option<&ThreadIn>,
     tasks: Option<&TasksIn>,
     status: Option<&StatusIn>,
+    standalone_refusal: Option<&StatusProblemIn>,
 ) -> PinnedUpdate {
     let mut update = PinnedUpdate {
         id: pin.id.clone(),
@@ -578,16 +673,15 @@ fn compose_update(
         percent: None,
         percent_note: None,
         now: None,
-        blocked: BlockedView {
-            text: "None.".to_string(),
-            waiting_on_you: false,
-        },
+        blocked: None,
         looping: LoopingView {
             answer: "cantTell",
             text: "Can't tell.".to_string(),
+            task: None,
+            rounds: 0,
         },
-        left: Vec::new(),
-        done: Vec::new(),
+        left: None,
+        done: None,
         updated: None,
         report_note: None,
         stale_note: None,
@@ -597,11 +691,26 @@ fn compose_update(
     };
 
     // ---- Who and Now --------------------------------------------------------------------
+    // The who line is the project label, the thread's name, and the catalog model label
+    // (D9): "Puppet Master · pm7-build · Opus 5.5 xhigh". The bare stream letter never
+    // shows; the board's stream label stands in only when the thread names nothing.
     if let Some(thread) = thread {
+        let labelled = |value: &Option<String>| value.clone().filter(|text| !text.is_empty());
+        let project_part = tasks
+            .and_then(|board| labelled(&board.project_label))
+            .or_else(|| labelled(&thread.project));
+        let name_part = labelled(&thread.name)
+            .or_else(|| labelled(&thread.harness))
+            .or_else(|| tasks.and_then(|board| labelled(&board.stream_label)));
+        let model_text = thread
+            .model_label
+            .clone()
+            .filter(|text| !text.is_empty())
+            .or_else(|| thread.model.clone());
         let parts = [
-            thread.name.clone().or_else(|| thread.harness.clone()),
-            thread.stream.clone(),
-            match (&thread.model, &thread.effort) {
+            project_part,
+            name_part,
+            match (&model_text, &thread.effort) {
                 (Some(model), Some(effort)) => Some(format!("{model} {effort}")),
                 (Some(model), None) => Some(model.clone()),
                 (None, Some(effort)) => Some(effort.clone()),
@@ -627,11 +736,6 @@ fn compose_update(
         // guessing, so the update says exactly that and stops.
         update.report_state = "none";
         update.report_note = Some("This thread doesn't report its status yet.".to_string());
-        update.percent_note = Some("No task list.".to_string());
-        update.blocked = BlockedView {
-            text: "Not reported.".to_string(),
-            waiting_on_you: false,
-        };
         return update;
     }
 
@@ -652,7 +756,8 @@ fn compose_update(
     }
 
     // The status@1 refusal behind this update, when the held copy carries one: the writer file
-    // and the fixed reason, so a refusal says why. Never the refused content.
+    // and the fixed reason, so a refusal says why. Never the refused content. A standalone
+    // refusal (no good copy) for this pin's writer attaches the same way (F13).
     if let Some(doc) = status.filter(|doc| doc.problem.is_some()) {
         let file = if doc.writer.is_empty() {
             "writers/<unknown>/status.json".to_string()
@@ -663,6 +768,12 @@ fn compose_update(
             file,
             reason: doc.problem.clone().unwrap_or_default(),
             since_ms: doc.problem_since_ms,
+        });
+    } else if let Some(problem) = standalone_refusal {
+        update.refusal = Some(RefusalView {
+            file: problem.file.clone(),
+            reason: problem.reason.clone(),
+            since_ms: Some(problem.since_ms),
         });
     }
     // Unreadable beats fresh and stale: the copy shown is the last good one, greyed.
@@ -681,6 +792,47 @@ fn compose_update(
         .and_then(|doc| doc.ttl_seconds)
         .map(|seconds| seconds * 1000)
         .unwrap_or(0);
+    // A thread whose last report says it waits on the owner is never stale: it ended its turn to
+    // wait for him, so the longer it waits the more the page must keep saying so (B2), whatever
+    // its heartbeat said. The `updated` line above still shows its true age.
+    let waiting_on_owner = [
+        thread
+            .and_then(|doc| doc.blocked_on.as_ref())
+            .map(|kind| kind.kind.as_str()),
+        tasks.and_then(|board| {
+            board
+                .items
+                .iter()
+                .filter(|item| !matches!(item.state.as_str(), "landed" | "done" | "dropped"))
+                .find(|item| item.blocked_on.as_ref().is_some_and(|kind| kind.kind == "owner"))
+                .map(|_| "owner")
+        }),
+        status.and_then(|doc| {
+            doc.blockers
+                .iter()
+                .find(|blocker| blocker.waiting_on == "owner")
+                .map(|_| "owner")
+        }),
+        // Waiting through an open question card is waiting too (F4): the thread asked
+        // and ended its turn, exactly as a blockedOn says so.
+        thread.and_then(|doc| {
+            input
+                .open_cards
+                .iter()
+                .find(|card| card.writer == doc.writer && is_question_kind(&card.kind))
+                .map(|_| "owner")
+        }),
+        // A blocked/waiting state with no heartbeat is exempt too (N4): the thread ended
+        // its turn waiting, whatever state it ended in. With a ttl set, the state alone
+        // does not exempt — the owner signals above must name it.
+        thread
+            .filter(|doc| doc.ttl_seconds.is_none())
+            .filter(|doc| matches!(doc.state.as_str(), "blocked" | "waiting"))
+            .map(|_| "owner"),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|kind| kind == "owner");
     if let Some(since) = unreadable_since {
         update.report_state = "unreadable";
         update.unreadable_note = Some(format!(
@@ -694,7 +846,7 @@ fn compose_update(
         // never invent a moment.
         update.report_state = "unreadable";
         update.unreadable_note = Some("Could not be read since the last scan.".to_string());
-    } else if age > DAY_MS || (ttl_ms > 0 && age > ttl_ms) {
+    } else if !waiting_on_owner && (age > DAY_MS || (ttl_ms > 0 && age > ttl_ms)) {
         update.report_state = "stale";
         update.stale_note = Some(format!(
             "No status update for {}. If it is finished, unpin it in T3.",
@@ -755,9 +907,9 @@ fn compose_update(
             });
             update.percent_note = Some(format!("About {estimate}%, by its own estimate."));
         }
-        (None, None) => {
-            update.percent_note = Some("No task list.".to_string());
-        }
+        // (None, None): no board and no estimate. Null, never an invented sentence — the page
+        // says "No task lists yet" (D8).
+        (None, None) => {}
     }
 
     // ---- Left and done -------------------------------------------------------------------
@@ -776,7 +928,7 @@ fn compose_update(
             let looping = loop_ids.contains(&item.id);
             !(blocked || looping)
         });
-        update.left = left.into_iter().map(item_out).collect();
+        update.left = Some(left.into_iter().map(item_out).collect());
         let mut done: Vec<&ItemIn> = board
             .items
             .iter()
@@ -791,10 +943,10 @@ fn compose_update(
                     .unwrap_or(0),
             )
         });
-        update.done = done.into_iter().map(item_out).collect();
+        update.done = Some(done.into_iter().map(item_out).collect());
     } else if let Some(doc) = status {
-        update.left = doc.left.iter().map(lite_out).collect();
-        update.done = doc.done.iter().map(lite_out).collect();
+        update.left = Some(doc.left.iter().map(lite_out).collect());
+        update.done = Some(doc.done.iter().map(lite_out).collect());
     }
 
     // ---- Looping (section 3) --------------------------------------------------------------
@@ -810,7 +962,12 @@ fn compose_update(
             text.push(' ');
             text.push_str(finding);
         }
-        update.looping = LoopingView { answer: "yes", text };
+        update.looping = LoopingView {
+            answer: "yes",
+            text,
+            task: Some(counts.id.clone()),
+            rounds: counts.rounds,
+        };
     } else if let Some(answer) = own {
         update.looping = match answer.state.as_str() {
             "yes" => LoopingView {
@@ -819,37 +976,81 @@ fn compose_update(
                     Some(text) => format!("Yes. {text}"),
                     None => "Yes.".to_string(),
                 },
+                task: None,
+                rounds: 0,
             },
             "no" => LoopingView {
                 answer: "no",
                 text: "No.".to_string(),
+                task: None,
+                rounds: 0,
             },
             _ => LoopingView {
                 answer: "cantTell",
                 text: "Can't tell.".to_string(),
+                task: None,
+                rounds: 0,
             },
         };
     } else if tasks.is_some() {
-        update.looping = LoopingView {
-            answer: "no",
-            text: "No.".to_string(),
+        // D8: a board with no review inside the loop window proves nothing about looping —
+        // "No." there was an invented all-clear. Only a review in the window, or the thread's
+        // own answer, may say no — and only a review that says pass or fail counts: a board
+        // whose only reviews are unclear ("cannot verify") says "Can't tell", not "No." (F7).
+        let reviewed_in_window = tasks.is_some_and(|board| {
+            board.items.iter().any(|item| {
+                item.reviews.iter().any(|review| {
+                    let in_window = match review.at_ms {
+                        Some(at) => input.now_ms - at <= LOOP_WINDOW_MS,
+                        None => true,
+                    };
+                    in_window && classify_verdict(&review.verdict) != Verdict::Unknown
+                })
+            })
+        });
+        update.looping = if reviewed_in_window {
+            LoopingView {
+                answer: "no",
+                text: "No.".to_string(),
+                task: None,
+                rounds: 0,
+            }
+        } else {
+            LoopingView {
+                answer: "cantTell",
+                text: "Can't tell.".to_string(),
+                task: None,
+                rounds: 0,
+            }
         };
     } else {
         update.looping = LoopingView {
             answer: "cantTell",
             text: "Can't tell.".to_string(),
+            task: None,
+            rounds: 0,
         };
     }
 
     // ---- Blocked / waiting on you ----------------------------------------------------------
     let mut waiting: Vec<String> = Vec::new();
     let mut blocked: Vec<String> = Vec::new();
+    // The earliest moment one of the waiting-on-you reports names, for "since <clock>".
+    let mut waiting_since: Option<i64> = None;
+    let mut note_waiting_since = |kind: &BlockedIn| {
+        if kind.kind == "owner"
+            && let Some(since) = kind.since_ms
+        {
+            waiting_since = Some(waiting_since.map_or(since, |held: i64| held.min(since)));
+        }
+    };
     // Blocked in so many words with no `blockedOn` to name: the state is known, the reason
     // is not, and neither may be dropped — the update says blocked and that the report does
     // not say on what, never "None.".
     let mut unexplained: Vec<String> = Vec::new();
     if let Some(kind) = thread.and_then(|doc| doc.blocked_on.as_ref()) {
         if kind.kind == "owner" {
+            note_waiting_since(kind);
             waiting.push(kind.what.clone());
         } else {
             blocked.push(format!("{} (waiting on {})", kind.what, kind.kind));
@@ -865,6 +1066,7 @@ fn compose_update(
             // An item that names a blocker is a blocked item, whatever its state column says.
             if let Some(kind) = &item.blocked_on {
                 if kind.kind == "owner" {
+                    note_waiting_since(kind);
                     waiting.push(kind.what.clone());
                 } else {
                     blocked.push(format!("{} (waiting on {})", kind.what, kind.kind));
@@ -884,10 +1086,12 @@ fn compose_update(
             }
         }
     }
-    // An open card this thread asked is a question of the owner's, whatever else it waits on.
+    // An open card this thread asked is a question of the owner's, whatever else it waits
+    // on — but only question, judgement and action cards count (D10): silence is fine on
+    // an objection, and a sample wants no answer.
     if let Some(thread) = thread {
         for card in &input.open_cards {
-            if card.writer == thread.writer {
+            if card.writer == thread.writer && is_question_kind(&card.kind) {
                 waiting.push(card.title.clone());
             }
         }
@@ -896,17 +1100,29 @@ fn compose_update(
     blocked.dedup();
     let mut parts: Vec<String> = Vec::new();
     if !waiting.is_empty() {
-        parts.push(format!("Waiting on you: {}.", waiting.join("; ")));
+        // "Waiting on you since 6:55 PM: pick the reviewers." — the since is the earliest moment
+        // a waiting report names; without one the sentence stays as it was.
+        let since = waiting_since
+            .map(|at| format!(" since {}", clock_text(at, input.utc_offset_minutes)))
+            .unwrap_or_default();
+        parts.push(format!("Waiting on you{since}: {}.", waiting.join("; ")));
     }
     if !blocked.is_empty() {
         parts.push(format!("Blocked: {}.", blocked.join("; ")));
     }
     parts.extend(unexplained);
     if !parts.is_empty() {
-        update.blocked = BlockedView {
+        update.blocked = Some(BlockedView {
             text: parts.join(" "),
             waiting_on_you: !waiting.is_empty(),
-        };
+        });
+    } else if tasks.is_some() {
+        // A board where nothing is blocked may say "None."; without one there is nothing to
+        // draw the sentence from, so it stays null (D8).
+        update.blocked = Some(BlockedView {
+            text: "None.".to_string(),
+            waiting_on_you: false,
+        });
     }
 
     update
@@ -917,17 +1133,21 @@ fn compose_update(
 pub fn compose(input: &ComposeInput) -> ComposeOutput {
     let mut updates = Vec::with_capacity(input.pins.len());
     for pin in &input.pins {
-        // The newest report of each kind that names this thread.
+        // The newest report of each kind that names this thread, by the normalised id forms
+        // a report carries (B8): a pinned thread whose report spells the id differently still
+        // gets its update instead of reading as "doesn't report".
         let thread = input
             .threads
             .iter()
-            .filter(|doc| doc.t3_thread.as_deref() == Some(pin.id.as_str()))
+            .filter(|doc| doc.t3_thread.as_deref().is_some_and(|id| same_thread_id(id, &pin.id)))
             .max_by_key(|doc| (doc.written_at_ms, doc.seq));
         let status = input
             .statuses
             .iter()
-            .filter(|doc| doc.t3_thread == pin.id)
+            .filter(|doc| same_thread_id(&doc.t3_thread, &pin.id))
             .max_by_key(|doc| (doc.written_at_ms, doc.seq));
+        // The board comes from the report's project and stream; a thread that reports only
+        // `status.json` names neither, so the same writer's `tasks.json` is its board (B8).
         let tasks = thread
             .and_then(|thread| thread.project.as_ref().zip(thread.stream.as_ref()))
             .and_then(|(project, stream)| {
@@ -936,11 +1156,33 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
                     .iter()
                     .filter(|board| &board.project == project && &board.stream == stream)
                     .max_by_key(|board| (board.written_at_ms, board.seq))
+            })
+            .or_else(|| {
+                let writer = thread
+                    .map(|thread| thread.writer.as_str())
+                    .or(status.map(|doc| doc.writer.as_str()));
+                writer.and_then(|writer| {
+                    input
+                        .tasks
+                        .iter()
+                        .filter(|board| board.writer == writer)
+                        .max_by_key(|board| (board.written_at_ms, board.seq))
+                })
             });
-        updates.push(compose_update(pin, input, thread, tasks, status));
+        // A standalone status refusal (no good copy) for this pin's writer attaches to
+        // the pin itself (F13), matched the way B8 matches: the report whose thread
+        // names this pin by the normalised id. The panel entry stays, too.
+        let standalone_refusal = thread.and_then(|doc| {
+            let want = format!("writers/{}/status.json", doc.writer);
+            input.status_problems.iter().find(|problem| problem.file == want)
+        });
+        updates.push(compose_update(pin, input, thread, tasks, status, standalone_refusal));
     }
     let looping = updates.iter().filter(|update| update.looping.answer == "yes").count();
-    let waiting = updates.iter().filter(|update| update.blocked.waiting_on_you).count();
+    let waiting = updates
+        .iter()
+        .filter(|update| update.blocked.as_ref().is_some_and(|blocked| blocked.waiting_on_you))
+        .count();
     let mut head = format!("{} pinned in T3", input.pins.len());
     if looping > 0 {
         head.push_str(&format!(" · {looping} looping"));

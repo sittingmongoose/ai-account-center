@@ -250,7 +250,9 @@ describe('status view', () => {
       ],
     });
     expect(view.cards.open.map((c) => c.id)).toEqual(['vm.lead--Q2', 'vm.lead--Q3', 'vm.lead--Q1']);
-    expect(view.cards.open[0].askerState).toBe('gone');
+    // The asker waits on the owner through its open question cards (N4): its stale
+    // heartbeat reads as its state, never as gone.
+    expect(view.cards.open[0].askerState).toBe('working');
     expect(view.cards.open[0].cardSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(view.cards.answered[0].card.id).toBe('vm.lead--Q4');
     expect(view.cards.answered[0].answer.delivery.state).toBe('rang');
@@ -291,6 +293,229 @@ describe('status view', () => {
     });
     expect(view.headline.tone).toBe('bad');
     expect(view.headline.runs[0]).toEqual({ text: '3 questions', strong: true, tone: 'warn' });
+  });
+
+  it('the headline names the worst pinned thread: looping first, then waiting on you (D1)', async () => {
+    // Built from the composed pinned panel, never from fixture text: whatever sentences the
+    // panel's updates carry, the headline names the thread and its looping task itself.
+    const pin = (over: Partial<{ looping: unknown; blocked: unknown; title: string }>) => ({
+      id: 't1',
+      title: over.title ?? 'Thread t1',
+      machine: 'vm',
+      who: null,
+      reportState: 'fresh',
+      percent: null,
+      percentNote: null,
+      now: null,
+      blocked: over.blocked ?? { text: 'None.', waitingOnYou: false },
+      looping: over.looping ?? { answer: 'cantTell', text: "Can't tell.", task: null, rounds: 0 },
+      left: [],
+      done: [],
+      updated: null,
+      reportNote: null,
+      staleNote: null,
+      unreadableNote: null,
+      summary: null,
+    });
+    const panel = {
+      asOfMs: NOW,
+      head: '3 pinned in T3 · 1 looping · 1 waiting on you',
+      counts: { pinned: 3, looping: 1, waitingOnYou: 1 },
+      machineProblems: [],
+      updates: [
+        pin({
+          title: 'Build PMConcept7',
+          looping: {
+            answer: 'yes',
+            text: 'Yes. F-07 has gone back for fixes 5 times without a passing review.',
+            task: 'F-07',
+            rounds: 5,
+          },
+        }),
+        pin({
+          title: 'Redesign PM',
+          blocked: { text: 'Waiting on you: pick the tray icon.', waitingOnYou: true },
+        }),
+        pin({ title: 'Quiet thread' }),
+      ],
+    };
+    const view = buildStatusView(await inputs(dirs.make(), { pinned: panel }));
+    const line = view.headline.runs.map((run) => run.text).join('');
+    expect(line).toContain('No questions for you');
+    expect(line).toContain('1 pinned thread is looping (Build PMConcept7, task F-07)');
+    expect(line).toContain('1 pinned thread waits on you (Redesign PM)');
+    expect(view.headline.counts.loopingPinned).toBe(1);
+    expect(view.headline.counts.waitingPinned).toBe(1);
+    expect(view.headline.tone).toBe('warn');
+    // Two looping pins: the worst (most rounds) is the one named, the count says both.
+    const two = {
+      ...panel,
+      counts: { pinned: 3, looping: 2, waitingOnYou: 0 },
+      updates: [
+        pin({
+          title: 'Small loop',
+          looping: { answer: 'yes', text: 'Yes.', task: 'B-1', rounds: 3 },
+        }),
+        pin({
+          title: 'Big loop',
+          looping: { answer: 'yes', text: 'Yes.', task: 'C-9', rounds: 6 },
+        }),
+        pin({ title: 'Quiet thread' }),
+      ],
+    };
+    const next = buildStatusView(await inputs(dirs.make(), { pinned: two }));
+    const text = next.headline.runs.map((run) => run.text).join('');
+    expect(text).toContain('2 pinned threads are looping (Big loop, task C-9)');
+    expect(next.headline.counts.loopingPinned).toBe(2);
+    // An unavailable panel adds nothing: the headline never invents a pin.
+    const bare = buildStatusView(
+      await inputs(dirs.make(), {
+        pinned: { unavailable: 'the aac-status native module is disabled' },
+      })
+    );
+    expect(bare.headline.runs.map((run) => run.text).join('')).not.toContain('pinned thread');
+    expect(bare.headline.counts.loopingPinned).toBe(0);
+  });
+
+  it('counts only question, judgement and action cards as questions for you (D10)', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    writeCard(root, cardDoc('vm.lead', 'J1', { kind: 'judgement', recommendation: null }));
+    writeCard(
+      root,
+      cardDoc('vm.lead', 'A1', { kind: 'action', options: [], recommendation: null })
+    );
+    writeCard(
+      root,
+      cardDoc('vm.lead', 'O1', { kind: 'objection', options: [], recommendation: null })
+    );
+    writeCard(
+      root,
+      cardDoc('vm.lead', 'S1', { kind: 'sample', options: [], recommendation: null })
+    );
+    const view = buildStatusView(await inputs(root));
+    expect(view.cards.open).toHaveLength(5);
+    // Sample and objection cards never count as questions; the objection is a decision
+    // to look at instead.
+    expect(view.headline.counts).toMatchObject({ openCards: 5, questions: 3, decisions: 1 });
+    const line = view.headline.runs.map((run) => run.text).join('');
+    expect(line).toContain('3 questions for you');
+    expect(line).toContain('1 decision to look at');
+    expect(line).not.toContain('5 questions');
+    expect(view.headline.tone).toBe('warn');
+    // A sample card alone says nothing at all.
+    const onlySample = dirs.make();
+    writeCard(
+      onlySample,
+      cardDoc('vm.lead', 'S1', { kind: 'sample', options: [], recommendation: null })
+    );
+    const bare = buildStatusView(await inputs(onlySample));
+    expect(bare.headline.counts).toMatchObject({ openCards: 1, questions: 0, decisions: 0 });
+    expect(bare.headline.runs.map((run) => run.text).join('')).toContain('No questions for you');
+  });
+
+  it('null ttl exempts only a thread waiting on the owner (F10)', async () => {
+    // The asker state reads the same staleness ("gone" when stale), where the thread
+    // rows themselves are quietly hidden after a day.
+    const askerOf = async (writer: string, thread: Record<string, unknown>, kind: string) => {
+      const root = dirs.make();
+      writeReport(root, writer, 'thread.json', threadDoc(writer, thread));
+      writeCard(
+        root,
+        cardDoc(
+          writer,
+          'C1',
+          kind === 'question' ? {} : { kind: kind as never, options: [], recommendation: null }
+        )
+      );
+      const view = buildStatusView(await inputs(root));
+      return view.cards.open[0]?.askerState;
+    };
+    // A crashed working thread with no heartbeat goes stale after the one-day default.
+    expect(
+      await askerOf(
+        'vm.worker',
+        { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) },
+        'sample'
+      )
+    ).toBe('gone');
+    // Blocked and waiting states with no heartbeat do not.
+    expect(
+      await askerOf(
+        'vm.blocked',
+        { ttlSeconds: null, state: 'blocked', writtenAt: ago(2 * 86_400_000) },
+        'sample'
+      )
+    ).toBe('blocked');
+    expect(
+      await askerOf(
+        'vm.waiting',
+        { ttlSeconds: null, state: 'waiting', writtenAt: ago(2 * 86_400_000) },
+        'sample'
+      )
+    ).toBe('waiting');
+    // Waiting through an open question card does not.
+    expect(
+      await askerOf(
+        'vm.asked',
+        { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) },
+        'question'
+      )
+    ).toBe('working');
+    // An objection card asks nothing of the owner: still stale.
+    expect(
+      await askerOf(
+        'vm.object',
+        { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) },
+        'objection'
+      )
+    ).toBe('gone');
+  });
+
+  it('waiting on the owner is never stale, whatever the ttl (N4)', async () => {
+    const askerOf = async (writer: string, thread: Record<string, unknown>, kind: string) => {
+      const root = dirs.make();
+      writeReport(root, writer, 'thread.json', threadDoc(writer, thread));
+      writeCard(
+        root,
+        cardDoc(
+          writer,
+          'C1',
+          kind === 'question' ? {} : { kind: kind as never, options: [], recommendation: null }
+        )
+      );
+      const view = buildStatusView(await inputs(root));
+      return view.cards.open[0]?.askerState;
+    };
+    // The reviewer's case: waiting, ttl set, 3 h past it, one open question card.
+    expect(
+      await askerOf(
+        'vm.asked',
+        { ttlSeconds: 1800, state: 'waiting', writtenAt: ago(3 * 3600_000) },
+        'question'
+      )
+    ).toBe('waiting');
+    // A blockedOn naming the owner exempts whatever the ttl.
+    expect(
+      await askerOf(
+        'vm.blocked',
+        {
+          ttlSeconds: 1800,
+          state: 'blocked',
+          writtenAt: ago(3 * 3600_000),
+          blockedOn: { kind: 'owner', what: 'A decision', since: null },
+        },
+        'sample'
+      )
+    ).toBe('blocked');
+    // Without an owner signal the same report is stale.
+    expect(
+      await askerOf(
+        'vm.plain',
+        { ttlSeconds: 1800, state: 'working', writtenAt: ago(3 * 3600_000) },
+        'sample'
+      )
+    ).toBe('gone');
   });
 
   it('keeps objection cards without a response open, and shows quiet threads by age', async () => {
