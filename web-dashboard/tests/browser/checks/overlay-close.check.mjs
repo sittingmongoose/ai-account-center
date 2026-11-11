@@ -187,6 +187,10 @@ export const tests = {
 				await t.page.click(btn);
 				await t.page.waitForSelector('.acct-menu', { timeout: 5000 });
 				await assertClose(t, `${p.name} account menu`, '.acct-menu .menu-item:last-of-type', '.acct-menu', p.safe, 'escape');
+				await t.page.click(btn);
+				await t.page.waitForSelector('.acct-menu', { timeout: 5000 });
+				await t.page.click('.menu-scrim');
+				await t.until(`${p.name} account menu: scrim tap closes`, () => !document.querySelector('.acct-menu'), null, { timeout: 5000 });
 			});
 		}
 	},
