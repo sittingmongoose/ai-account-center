@@ -1,7 +1,7 @@
 /** The Status tab view's types (docs/status-tab.md, GET /api/status v1) and the collected inputs. */
 import type { QuotaReportState } from './quota-report';
 import type { SpendView } from './status-view-quota';
-import type { SnapshotAccount } from '../agent-usage/agent-usage-snapshot';
+import type { SnapshotAccount } from '../agent-usage/agent-usage-markdown';
 import type { AgentReportsState } from './agent-reports-reader';
 import type { AnswerDelivery, AnswerHistoryEntry, SendRecord } from './answers';
 import type {

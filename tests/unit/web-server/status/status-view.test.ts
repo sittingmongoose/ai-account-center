@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
 import { AgentReportsReader } from '../../../../src/web-server/status/agent-reports-reader';
-import type { SnapshotAccount } from '../../../../src/web-server/agent-usage/agent-usage-snapshot';
+import type { SnapshotAccount } from '../../../../src/web-server/agent-usage/agent-usage-markdown';
 import type { MachineSample } from '../../../../src/web-server/status/status-collectors';
 import {
   buildStatusView,

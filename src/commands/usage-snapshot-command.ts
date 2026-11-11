@@ -20,10 +20,10 @@ import {
   isSnapshotLocationList,
   readSnapshotSettings,
   SNAPSHOT_JSON,
-  span,
   writeSnapshotSettings,
   type SnapshotLocation,
 } from '../web-server/agent-usage/agent-usage-snapshot';
+import { span } from '../web-server/agent-usage/agent-usage-markdown';
 
 export interface UsageSnapshotCommandIo {
   out: (text: string) => void;

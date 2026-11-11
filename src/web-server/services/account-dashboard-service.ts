@@ -35,6 +35,7 @@ import {
   getConfiguredAdditionalAccounts,
   type AdditionalAccountsSnapshot,
 } from './additional-account-service';
+import { usesAccountRegistry } from './account-registry-mode';
 import {
   readAccountVisibility,
   VisibilityMemory,
@@ -528,7 +529,7 @@ export class AccountDashboardService {
       : this.deps.getAdditionalAccounts || this.deps.getAdditionalSnapshot
         ? null
         : getConfiguredAdditionalAccounts({ excludeAntigravity });
-    return configured && configured.registry !== 'v1'
+    return configured && usesAccountRegistry(configured.registry)
       ? additionalAccounts(configured.accounts, configured.registry)
       : ADDITIONAL_PROVIDERS.map(([provider, label]) => additionalFallback(provider, label));
   }

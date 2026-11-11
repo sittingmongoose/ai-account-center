@@ -1,7 +1,7 @@
 import { execFile } from 'child_process';
 import * as path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
-import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-snapshot';
+import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-markdown';
 import {
   configuredUsageHosts,
   localUsagePython,

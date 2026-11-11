@@ -5,6 +5,7 @@ import {
   registryFromSourceManifest,
   type RegistryAccount,
 } from './account-registry-v2';
+import { classifyAccountRegistry, isUnreadableAccountRegistry } from './account-registry-mode';
 import { isPublicAccountId } from './account-visibility';
 import {
   ADDITIONAL_PROVIDERS,
@@ -95,9 +96,12 @@ export interface AdditionalEntries {
 
 /** The additional-provider accounts the collectors read now: registry v2, else the v1 sources. */
 export async function readAdditionalEntries(ccsDir: string): Promise<AdditionalEntries> {
-  const read = await readAccountRegistry(ccsDir).catch(() => ({ state: 'invalid' as const }));
-  if (read.state === 'invalid') throw new LifecycleHttpError(500, 'registry_unavailable');
-  if (read.state === 'ok') return { mode: 'v2', entries: read.registry.accounts };
+  const active = classifyAccountRegistry(
+    await readAccountRegistry(ccsDir).catch(() => ({ state: 'invalid' as const }))
+  );
+  if (isUnreadableAccountRegistry(active.mode))
+    throw new LifecycleHttpError(500, 'registry_unavailable');
+  if (active.mode === 'v2') return { mode: active.mode, entries: active.registry.accounts };
   const manifest = parseSourceManifest(await readSourceManifestFile(ccsDir).catch(() => null));
   if (!manifest.valid) throw new LifecycleHttpError(500, 'registry_unavailable');
   return {
