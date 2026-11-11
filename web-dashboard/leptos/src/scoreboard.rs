@@ -370,6 +370,8 @@ pub struct RunSummary {
     pub task: RunTask,
     pub label: Option<String>,
     pub model: Option<String>,
+    /// The harness the run used (claude-code, codex ...): the middle part of a row's key.
+    pub runtime: Option<String>,
     pub effort: Option<String>,
     #[serde(deserialize_with = "nullable")]
     pub outcome: String,
@@ -607,6 +609,20 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
     let sheet = RwSignal::new(None::<String>);
     let open_sheet = Callback::new(move |m: ModelRow| sheet.set(Some(m.key)));
     let close_sheet = Callback::new(move |_: ()| sheet.set(None));
+    let sheet_key = Memo::new(move |_| sheet.get());
+    let sheet_model = Memo::new(move |_| {
+        let key = sheet.get()?;
+        current.with(|v| {
+            v.as_ref()
+                .and_then(|v| v.models.iter().find(|m| m.key == key).cloned())
+        })
+    });
+    // the model left the view: the sheet closes (outside any render)
+    Effect::new(move |_| {
+        if sheet_key.with(|k| k.is_some()) && sheet_model.with(|m| m.is_none()) {
+            sheet.set(None);
+        }
+    });
     let selected = RwSignal::new(None::<String>);
     let on_row = Callback::new(move |key: String| selected.set(Some(key)));
     view! {
@@ -648,15 +664,8 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                         <SourcesList board=board open=sources_open/>
                     </div>
                 </Show>
-                {move || {
-                    let key = sheet.get()?;
-                    let model = current.with(|v| v.as_ref().and_then(|v| v.models.iter().find(|m| m.key == key).cloned()));
-                    if model.is_none() {
-                        // the model left the view: the sheet closes
-                        sheet.set(None);
-                    }
-                    model.map(|m| view! { <ModelSheet model=m on_close=close_sheet board=board/> })
-                }}
+                // mounted once per key: a refresh redraws its contents, not the sheet (drag and disclosure stay)
+                {move || sheet_key.get().map(|_| view! { <ModelSheet model=sheet_model on_close=close_sheet board=board/> })}
             </div>
         </PageShell>
     }
@@ -887,20 +896,32 @@ fn DetailGrid(report: Vec<JobReport>) -> impl IntoView {
 }
 
 /// The newest runs of one model and effort (the row's key is "model|runtime|effort"), with their evidence.
-fn runs_list(recent: &[RunSummary], key: &str) -> AnyView {
-    let mut parts = key.split('|');
-    let (model, effort) = (parts.next().unwrap_or(""), parts.nth(1).unwrap_or(""));
-    let runs = recent
+/// The runs of one row: the row's key is the server's `model|runtime|effort`, a missing part read as "" (as the
+/// server builds it), so a row with no effort never lists another effort's runs.
+fn runs_of(recent: &[RunSummary], key: &str) -> Vec<RunSummary> {
+    let mut parts = key.splitn(3, '|');
+    let (model, runtime, effort) = (
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or(""),
+    );
+    recent
         .iter()
         .filter(|r| {
-            r.model.as_deref() == Some(model)
-                && (effort.is_empty() || r.effort.as_deref() == Some(effort))
+            r.model.as_deref().unwrap_or("") == model
+                && r.runtime.as_deref().unwrap_or("") == runtime
+                && r.effort.as_deref().unwrap_or("") == effort
         })
         .take(20)
         .cloned()
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn runs_list(recent: &[RunSummary], key: &str) -> AnyView {
+    let runs = runs_of(recent, key);
     if runs.is_empty() {
-        return view! { <p class="sb-how q3">"No recent runs of this model and effort."</p> }
+        // recent is the newest runs of every model, not this row's history
+        return view! { <p class="sb-how q3">{format!("None of the {} newest runs is this model and effort.", recent.len())}</p> }
             .into_any();
     }
     view! {
@@ -915,10 +936,13 @@ fn runs_list(recent: &[RunSummary], key: &str) -> AnyView {
 }
 
 #[component]
-fn ModelSheet(model: ModelRow, on_close: Callback<()>, board: Board) -> impl IntoView {
+fn ModelSheet(
+    model: Memo<Option<ModelRow>>,
+    on_close: Callback<()>,
+    board: Board,
+) -> impl IntoView {
     let offset = RwSignal::new(0.0f64);
     let runs_open = RwSignal::new(false);
-    let key = model.key.clone();
     let recent = move || {
         board
             .view
@@ -930,14 +954,18 @@ fn ModelSheet(model: ModelRow, on_close: Callback<()>, board: Board) -> impl Int
             <div class="sheet" style=move || sheet_drag_style(offset.get())>
                 <SheetGrab offset=offset on_close=on_close/>
                 <button class="icon-btn bare sheet-close" aria-label="Close" on:click=move |_| on_close.run(())><Icon name="close"/></button>
-                <div class="sheet-title">
-                    <Mark name=model.mark.clone() size=24/>
-                    <div><div class="t">{format!("{} · {}", model.label, model.effort_text)}</div><div class="s">{model.sheet_head.clone()}</div></div>
-                </div>
-                <DetailGrid report=model.report/>
+                {move || model.get().map(|m| view! {
+                    <div class="sheet-title">
+                        <Mark name=m.mark.clone() size=24/>
+                        <div><div class="t">{format!("{} · {}", m.label, m.effort_text)}</div><div class="s">{m.sheet_head.clone()}</div></div>
+                    </div>
+                    <DetailGrid report=m.report/>
+                })}
                 // the desktop detail's runs, here too: the phone shows no detail plate
                 <div class="sb-sheet-runs"><Disclosure open=runs_open label="Latest runs of this model and effort".to_string()/></div>
-                <Show when=move || runs_open.get()>{let key = key.clone(); move || runs_list(&recent(), &key)}</Show>
+                <Show when=move || runs_open.get()>
+                    {move || model.with(|m| m.as_ref().map(|m| m.key.clone())).map(|key| runs_list(&recent(), &key))}
+                </Show>
             </div>
         </div>
     }
@@ -958,6 +986,56 @@ fn SourcesList(board: Board, open: RwSignal<bool>) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run(id: &str, model: &str, runtime: Option<&str>, effort: Option<&str>) -> RunSummary {
+        RunSummary {
+            id: id.into(),
+            model: Some(model.into()),
+            runtime: runtime.map(String::from),
+            effort: effort.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_rows_runs_match_model_runtime_and_effort_exactly() {
+        let recent = vec![
+            run(
+                "a",
+                "anthropic/claude-opus-5-5",
+                Some("claude-code"),
+                Some("xhigh"),
+            ),
+            run(
+                "b",
+                "anthropic/claude-opus-5-5",
+                Some("codex"),
+                Some("xhigh"),
+            ),
+            run(
+                "c",
+                "anthropic/claude-opus-5-5",
+                Some("claude-code"),
+                Some("high"),
+            ),
+            run("d", "anthropic/claude-opus-5-5", Some("claude-code"), None),
+        ];
+        let ids = |key: &str| {
+            runs_of(&recent, key)
+                .into_iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids("anthropic/claude-opus-5-5|claude-code|xhigh"),
+            vec!["a"]
+        );
+        // another runtime is another row
+        assert_eq!(ids("anthropic/claude-opus-5-5|codex|xhigh"), vec!["b"]);
+        // a row with no effort lists only the runs with none, never every effort
+        assert_eq!(ids("anthropic/claude-opus-5-5|claude-code|"), vec!["d"]);
+        assert!(ids("zai/glm-5.3|zcode|max").is_empty());
+    }
 
     #[test]
     fn the_example_view_reads() {

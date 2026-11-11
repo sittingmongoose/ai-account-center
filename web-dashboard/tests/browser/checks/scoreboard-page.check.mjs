@@ -103,4 +103,47 @@ export const tests = {
 		await t.page.click('.sheet-close');
 		await t.count('.sheet', 0);
 	},
+
+	// Review c4b4bc96 L1/L3/L5: the open sheet follows a refresh without being redrawn from scratch, its close button
+	// sits above the drag zone, and a drag of the grabber closes it (a short one springs back).
+	async 'scoreboard phone sheet follows a refresh and closes on a drag'(t) {
+		await t.newContext(PHONE);
+		await t.app.signIn();
+		let view = { ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') };
+		await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', (r) => r.fulfill({ json: view }));
+		await t.goto('/app/scoreboard', { settleMs: 300 });
+		await t.page.waitForSelector('.picks');
+		await t.page.click('.sbm >> nth=0');
+		await t.page.waitForSelector('.sheet .job');
+		await t.page.click('.sheet .sb-sheet-runs .disclosure');
+		await t.page.waitForSelector('.sheet ul.sb-how li, .sheet p.sb-how');
+		await t.page.locator('.sheet').evaluate((el) => { el.dataset.kitMark = 'kept'; });
+		const newer = structuredClone(view);
+		for (const v of newer.byModel.views) for (const m of v.models) if (m.key === view.byModel.views[0].models[0].key) m.sheetHead = 'Claude Code · 29 runs · 9 blind reviews';
+		view = newer;
+		await t.page.evaluate(() => window.dispatchEvent(new Event('online')));
+		await t.page.waitForFunction(() => /29 runs/.test(document.querySelector('.sheet .sheet-title')?.textContent || ''), null, { timeout: 10000 });
+		await t.equal('the sheet was not mounted again', await t.page.locator('.sheet').getAttribute('data-kit-mark'), 'kept');
+		await t.equal('its runs stay open', await t.page.locator('.sheet .sb-sheet-runs .disclosure').getAttribute('aria-expanded'), 'true');
+		const closeHit = await t.page.locator('.sheet-close').evaluate((b) => {
+			const r = b.getBoundingClientRect();
+			return b.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+		});
+		await t.check('the close button is above the drag zone', closeHit);
+		const grab = await t.page.locator('.sheet .grabber-zone').boundingBox();
+		const x = grab.x + grab.width / 2;
+		const y = grab.y + grab.height / 2;
+		const drag = async (dy) => {
+			await t.page.mouse.move(x, y);
+			await t.page.mouse.down();
+			for (let i = 1; i <= 10; i++) { await t.page.mouse.move(x, y + (dy * i) / 10); await t.page.waitForTimeout(30); }
+			await t.page.mouse.up();
+		};
+		await drag(16);
+		await t.page.waitForTimeout(300);
+		await t.count('.sheet', 1);
+		await t.equal('a short drag springs back', await t.page.locator('.sheet').evaluate((el) => el.style.transform), '');
+		await drag(160);
+		await t.count('.sheet', 0);
+	},
 };

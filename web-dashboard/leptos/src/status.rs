@@ -242,12 +242,7 @@ fn ProgressPanel() -> impl IntoView {
             .filter(|s| s.completion.is_none() && s.counts.is_none())
             .count();
         // With no task list anywhere there is nothing to call clear: say so rather than "Nothing blocked".
-        let any_list = list.iter().any(|p| p.counts.is_some())
-            || list
-                .iter()
-                .flat_map(|p| p.streams.iter())
-                .any(|s| s.completion.is_some() || s.counts.is_some());
-        if !any_list {
+        if !has_task_lists(&list) {
             return view! { <span>"No task lists yet."</span> }.into_any();
         }
         let mut parts: Vec<AnyView> = Vec::new();
@@ -280,8 +275,8 @@ fn ProgressPanel() -> impl IntoView {
                 <h2>"Progress"</h2>
                 <span class="plate-meta">{move || {
                     let (d, o, n) = totals();
-                    if o == 0 {
-                        // no task counted anywhere: never "0 of 0 tasks done in 0 projects"
+                    // the same test as the summary: never "0 of 0 tasks done in 0 projects"
+                    if !has_task_lists(&projects()) {
                         return view! { <span>"No task lists yet"</span> }.into_any();
                     }
                     view! { <b>{format!("{d} of {o}")}</b>{format!(" tasks done in {n} {}", if n == 1 { "project" } else { "projects" })}}.into_any()
@@ -301,6 +296,15 @@ fn ProgressPanel() -> impl IntoView {
             </div>
         </FoldedPlate>
     }
+}
+
+/// Whether any project or stream has a task list: the Progress head and its summary both ask this one question.
+fn has_task_lists(projects: &[Project]) -> bool {
+    projects.iter().any(|p| p.counts.is_some())
+        || projects
+            .iter()
+            .flat_map(|p| p.streams.iter())
+            .any(|s| s.completion.is_some() || s.counts.is_some())
 }
 
 #[component]
@@ -451,15 +455,18 @@ fn looping_fact(l: &PinnedLooping) -> AnyView {
 /// The one-line state of a pinned thread in its row ("Looping · waiting on you · 6 min ago").
 fn row_line(p: &PinnedUpdate) -> AnyView {
     let mut parts: Vec<AnyView> = Vec::new();
+    // A refused status.json comes with the cached last good copy (reportState "unreadable"): say why first.
+    if let Some(reason) = refusal_reason(p) {
+        let cached =
+            is_unreadable(p).then_some(view! { " · "<span class="q3">"cached copy"</span> });
+        return view! { <span data-tone="crit">"Status refused"</span>{format!(": {reason}")}{cached} }.into_any();
+    }
     if p.report_state == "stale" {
         return view! { <span class="q3">"Last update "{p.updated.as_ref().map(|u| u.text.clone()).unwrap_or_default().replace("Updated ", "")}</span> }.into_any();
     }
     if is_unreadable(p) {
         let note = unreadable_words(p);
         return view! { <span class="w-ink">{note}</span>" · "<span class="q3">"cached copy"</span> }.into_any();
-    }
-    if let Some(r) = p.refusal.as_ref() {
-        return view! { <span data-tone="crit">"Status refused"</span>{format!(": {}", r.reason.trim_end_matches('.'))} }.into_any();
     }
     if p.report_state == "none" {
         return view! { <span class="q3">"Not reporting yet"</span> }.into_any();
@@ -609,9 +616,7 @@ fn pin_body(
 /// A pinned thread with no current report: says so plainly, with what it last said. The server's note reads
 /// "No status update for 25 days. If it is finished, unpin it in T3.": the second sentence goes last.
 fn quiet_body(p: &PinnedUpdate) -> impl IntoView + use<> {
-    let refusal = p.refusal.clone().map(|r| {
-        view! { <p class="pin-cached"><span data-tone="crit">{format!("{} was refused:", r.file)}</span>{format!(" {}", r.reason)}</p> }
-    });
+    let refusal = refusal_notice(p);
     let note = p
         .stale_note
         .clone()
@@ -631,6 +636,16 @@ fn quiet_body(p: &PinnedUpdate) -> impl IntoView + use<> {
         </p>
         {rest.map(|r| view! { <p class="q3" style="font-size:12.5px">{r}</p> })}
     }
+}
+
+/// The desktop cards: reporting pins (fresh, or a cached last good copy, refused or not), at most six.
+fn card_pins(shown: &[PinnedUpdate]) -> Vec<PinnedUpdate> {
+    shown
+        .iter()
+        .filter(|u| !is_quiet(u))
+        .take(6)
+        .cloned()
+        .collect()
 }
 
 fn is_quiet(p: &PinnedUpdate) -> bool {
@@ -678,7 +693,7 @@ fn PinCard(update: PinnedUpdate) -> impl IntoView {
     let body = if quiet {
         quiet_body(&update).into_any()
     } else if cached {
-        view! { {cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 4, 2, false)}</div> }.into_any()
+        view! { {refusal_notice(&update)}{cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 4, 2, false)}</div> }.into_any()
     } else {
         pin_body(&update, 4, 2, false).into_any()
     };
@@ -728,7 +743,7 @@ fn PinSheet(update: Memo<Option<PinnedUpdate>>, on_close: Callback<()>) -> impl 
             let body = if quiet {
                 quiet_body(&update).into_any()
             } else if cached {
-                view! { {cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 500, 500, false)}</div> }.into_any()
+                view! { {refusal_notice(&update)}{cached_notice(&update)}<div class="pin-dim">{pin_body(&update, 500, 500, false)}</div> }.into_any()
             } else {
                 pin_body(&update, 500, 500, true).into_any()
             };
@@ -794,9 +809,9 @@ fn PinnedPanelView() -> impl IntoView {
                     let problems = p.machine_problems.clone();
                     let refused = refused_lines(&p);
                     // Pins that don't report at all share one closing line; the rest get rows, and on desktop the
-                    // reporting ones (fresh, or a cached last good copy) get cards, stale and refused ones rows.
+                    // reporting ones (fresh, or a cached last good copy, refused or not) get cards, stale ones rows.
                     let (silent, shown): (Vec<_>, Vec<_>) = p.updates.into_iter().partition(is_silent);
-                    let cards = shown.iter().filter(|u| !is_quiet(u) && u.refusal.is_none()).take(6).cloned().collect::<Vec<_>>();
+                    let cards = card_pins(&shown);
                     let card_ids = cards.iter().map(|u| u.id.clone()).collect::<Vec<_>>();
                     let rest = shown.iter().filter(|u| !card_ids.contains(&u.id)).cloned().collect::<Vec<_>>();
                     let names = silent.iter().map(|u| u.title.clone()).collect::<Vec<_>>();
@@ -825,6 +840,32 @@ fn PinnedPanelView() -> impl IntoView {
             {move || sheet_open.get().then(|| view! { <PinSheet update=sheet_update on_close=close_sheet/> })}
         </section>
     }
+}
+
+/// "<file> was refused:", or "A status file was refused:" when the server names no file.
+fn refused_head(file: &str) -> String {
+    if file.trim().is_empty() {
+        "A status file was refused:".to_string()
+    } else {
+        format!("{file} was refused:")
+    }
+}
+
+/// The reason a pin's own status.json was refused, without its closing stop (it goes inside a line).
+fn refusal_reason(p: &PinnedUpdate) -> Option<String> {
+    let r = p.refusal.as_ref()?;
+    let reason = r.reason.trim().trim_end_matches('.').to_string();
+    Some(if reason.is_empty() {
+        "no reason given".to_string()
+    } else {
+        reason
+    })
+}
+
+/// The refusal over a pin's card or sheet: what was refused and why, in the server's words.
+fn refusal_notice(p: &PinnedUpdate) -> Option<AnyView> {
+    let r = p.refusal.as_ref()?;
+    Some(view! { <p class="pin-cached"><span data-tone="crit">{refused_head(&r.file)}</span>{format!(" {}", r.reason)}</p> }.into_any())
 }
 
 /// A pin with no report at all (and no refused one): it has nothing to show beyond its name.
@@ -866,9 +907,9 @@ fn refused_lines(p: &PinnedPanel) -> impl IntoView + use<> {
         .collect();
     p.status_problems
         .iter()
-        .filter(|s| !s.file.is_empty() && !on_pins.contains(&s.file))
+        .filter(|s| s.file.is_empty() || !on_pins.contains(&s.file))
         .map(|s| {
-            view! { <p class="plate-note problem"><span data-tone="crit">{format!("{} was refused:", s.file)}</span>{format!(" {}", s.reason)}</p> }
+            view! { <p class="plate-note problem"><span data-tone="crit">{refused_head(&s.file)}</span>{format!(" {}", s.reason)}</p> }
         })
         .collect_view()
 }
@@ -1568,6 +1609,56 @@ mod tests {
         p.refusal = None;
         p.report_state = "fresh".into();
         assert!(!is_silent(&p));
+    }
+
+    #[test]
+    fn a_refused_pin_from_the_composer_is_a_card_that_says_why() {
+        // the composer sends a pin's refusal only with its cached last good copy (reportState "unreadable")
+        let json = r#"{"updates":[{"id":"t1","title":"One","reportState":"unreadable","unreadableNote":"Can't read the newest report.",
+            "refusal":{"file":"mac.flash/status.json","reason":"looping.state is missing or not valid.","sinceMs":1}},
+            {"id":"t2","title":"Two","reportState":"stale"},{"id":"t3","title":"Three","reportState":"none"}],
+            "statusProblems":[{"file":"mac.flash/status.json","reason":"looping.state is missing or not valid."},{"file":null,"reason":"seq went backwards"}]}"#;
+        let panel: PinnedPanel = serde_json::from_str(json).expect("panel reads");
+        let pin = &panel.updates[0];
+        assert!(!is_silent(pin) && !is_quiet(pin));
+        assert_eq!(
+            refusal_reason(pin).as_deref(),
+            Some("looping.state is missing or not valid")
+        );
+        let (_, shown): (Vec<_>, Vec<_>) = panel.updates.iter().cloned().partition(is_silent);
+        let cards = card_pins(&shown);
+        assert_eq!(
+            cards.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(),
+            ["t1"]
+        );
+        // a refusal with no file name still says what happened
+        assert_eq!(refused_head(""), "A status file was refused:");
+        assert_eq!(
+            refused_head("mac.flash/status.json"),
+            "mac.flash/status.json was refused:"
+        );
+    }
+
+    #[test]
+    fn the_progress_head_and_body_ask_the_same_task_list_question() {
+        let none = vec![Project {
+            id: "p".into(),
+            ..Default::default()
+        }];
+        assert!(!has_task_lists(&none));
+        let with_counts = vec![Project {
+            counts: Some(Default::default()),
+            ..Default::default()
+        }];
+        assert!(has_task_lists(&with_counts));
+        let with_stream = vec![Project {
+            streams: vec![crate::api::Stream {
+                counts: Some(Default::default()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        assert!(has_task_lists(&with_stream));
     }
 
     #[test]

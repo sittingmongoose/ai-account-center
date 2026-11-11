@@ -1949,7 +1949,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-vis
 .sheet-host .sheet-scrim { position: absolute; inset: 0; background: var(--sheet-scrim); border: 0; padding: 0; width: 100%; }
 .sheet-host .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--paper); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-pop);
   padding: 8px 16px calc(var(--safe-bottom) + 16px); max-height: calc(100dvh - var(--safe-top) - 12px); overflow: auto; }
-.sheet-close { position: absolute; right: 8px; top: 8px; }
+.sheet-close { position: absolute; right: 8px; top: 8px; z-index: 3; } /* above the sticky drag zone */
 .side-host { position: fixed; inset: 0; z-index: 40; }
 .side-host .sheet-scrim { position: absolute; inset: 0; background: var(--sheet-scrim); border: 0; padding: 0; width: 100%; }
 .side-panel { position: absolute; right: 0; top: 0; bottom: 0; width: min(560px, 100%); background: var(--paper); box-shadow: var(--shadow-pop); padding: 20px; overflow: auto; }

@@ -104,4 +104,17 @@ export const tests = {
 		await t.page.locator('.sheet-close').click();
 		await t.count('.sheet', 0);
 	},
+
+	// D12 / review c4b4bc96 L5: a downward drag of the grabber closes the pin sheet.
+	async 'status pin sheet closes on a drag of its grabber'(t) {
+		await openSheet(t, withPins(fixture('status-design-view.json').pinned));
+		const grab = await t.page.locator('.sheet .grabber-zone').boundingBox();
+		const x = grab.x + grab.width / 2;
+		const y = grab.y + grab.height / 2;
+		await t.page.mouse.move(x, y);
+		await t.page.mouse.down();
+		for (let i = 1; i <= 10; i++) { await t.page.mouse.move(x, y + 16 * i); await t.page.waitForTimeout(30); }
+		await t.page.mouse.up();
+		await t.count('.sheet', 0);
+	},
 };
