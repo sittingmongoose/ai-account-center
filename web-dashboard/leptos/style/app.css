@@ -1111,6 +1111,8 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
   .dt-body { padding: 14px 20px calc(var(--safe-bottom) + 20px); gap: 16px; }
 }
 :root[data-chrome='desk'] .details { top: 63px; }
+/* With the strip on the left the rail is on the left: the Details sheet and panel reach the right edge (review L1). */
+:root[data-chrome='rail'][data-rail-side='left'] .details { right: var(--safe-right, 0px); }
 /* A switch confirmation the dashboard draws shows the dashboard over the tab while it is open. */
 .slint-host.raised { position: fixed; inset: 0; z-index: 45; height: auto; }
 

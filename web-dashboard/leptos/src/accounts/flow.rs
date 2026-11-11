@@ -37,6 +37,16 @@ pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -
         k
     });
     let busy = page.busy;
+    // Enter in a field goes through the same check as the button: the flow's submit action enabled, and not busy
+    // unless that action is the one running (review L2).
+    let can_submit = move || {
+        flow.with_untracked(|f| {
+            f.actions
+                .iter()
+                .find(|a| a.act == "flow-submit")
+                .is_some_and(|a| a.enabled && (!busy.get_untracked() || a.busy))
+        })
+    };
     let prov = provider.clone();
     let submit = Callback::new(move |_: ()| {
         page.send(
@@ -104,7 +114,7 @@ pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -
                                 data-probe=move || format!("flow-input:{}", name.get_value())
                                 prop:value=move || input.get()
                                 on:input=move |e| input.set(event_target_value(&e))
-                                on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { e.prevent_default(); submit.run(()); }/>
+                                on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { e.prevent_default(); if can_submit() { submit.run(()); } }/>
                         </label>
                         <Show when=move || field_kind.with(|k| k.4)>
                             <label class="field label-field">
@@ -113,7 +123,7 @@ pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -
                                     disabled=move || busy.get()
                                     prop:value=move || label.get()
                                     on:input=move |e| label.set(event_target_value(&e))
-                                    on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { e.prevent_default(); submit.run(()); }/>
+                                    on:keydown=move |e: web_sys::KeyboardEvent| if e.key() == "Enter" { e.prevent_default(); if can_submit() { submit.run(()); } }/>
                             </label>
                         </Show>
                     </div>

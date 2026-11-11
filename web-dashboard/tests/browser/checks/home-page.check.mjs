@@ -253,9 +253,9 @@ export const tests = {
 			{ name: 'desktop 2560', width: 2560, height: 1300, table: ['claude', 'codex', 'antigravity'], side: true },
 			{ name: 'desktop 1440', width: 1440, height: 900, table: ['claude', 'codex', 'antigravity'], side: false },
 			{ name: 'desktop 1024', width: 1024, height: 800, table: ['antigravity'], side: true },
-			{ name: 'iphone', width: 402, height: 874, mobile: true, safe: '62,0,34,0', table: [], side: false },
+			{ name: 'iphone', width: 402, height: 812, mobile: true, safe: '0,0,34,0', table: [], side: false },
 			{ name: 'duo folded', width: 466, height: 678, mobile: true, safe: '0,84,34,0', table: [], side: false },
-			{ name: 'duo portrait', width: 669, height: 951, mobile: true, safe: '82,0,34,0', table: ['codex'], side: false },
+			{ name: 'duo open upright', width: 669, height: 869, mobile: true, safe: '0,0,34,0', table: ['codex'], side: false },
 			{ name: 'duo landscape', width: 951, height: 669, mobile: true, safe: '0,84,34,0', table: ['antigravity'], side: true },
 		];
 		for (const f of formats) {
