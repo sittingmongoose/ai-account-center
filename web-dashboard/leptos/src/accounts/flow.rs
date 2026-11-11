@@ -12,6 +12,12 @@ use super::model::{Action, Flow};
 use crate::ui::*;
 use leptos::prelude::*;
 
+/// Whether Enter may send the flow's submit: enabled, and not busy – neither the page nor the
+/// submit itself (review L2). The button keeps its own rule; Enter never re-sends a running submit.
+pub(crate) fn can_submit_action(enabled: bool, action_busy: bool, page_busy: bool) -> bool {
+    enabled && !action_busy && !page_busy
+}
+
 #[component]
 pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -> impl IntoView {
     let input = RwSignal::new(String::new());
@@ -37,14 +43,13 @@ pub fn FlowPanel(page: Page, provider: String, flow: Memo<super::model::Flow>) -
         k
     });
     let busy = page.busy;
-    // Enter in a field goes through the same check as the button: the flow's submit action enabled, and not busy
-    // unless that action is the one running (review L2).
+    // Enter in a field sends only when the submit is enabled and not busy (review L2).
     let can_submit = move || {
         flow.with_untracked(|f| {
             f.actions
                 .iter()
                 .find(|a| a.act == "flow-submit")
-                .is_some_and(|a| a.enabled && (!busy.get_untracked() || a.busy))
+                .is_some_and(|a| can_submit_action(a.enabled, a.busy, busy.get_untracked()))
         })
     };
     let prov = provider.clone();
@@ -301,4 +306,18 @@ fn copy_by_selection(text: &str) -> bool {
         .unwrap_or(false);
     area.remove();
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enter_sends_only_when_enabled_and_not_busy() {
+        assert!(can_submit_action(true, false, false));
+        // The submit itself running must not send again (review L2).
+        assert!(!can_submit_action(true, true, true));
+        assert!(!can_submit_action(true, false, true));
+        assert!(!can_submit_action(false, false, false));
+    }
 }
