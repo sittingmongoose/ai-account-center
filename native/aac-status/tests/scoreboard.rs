@@ -252,7 +252,7 @@ fn the_read_note_comes_from_the_runs_source_detail() {
             " One run file could not be read (a damaged write) and is left out."
         ]
     );
-    assert_eq!(view.band_summary, "8 models with runs · 92 runs read at 4:30 PM");
+    assert_eq!(view.band_summary, "7 models with runs · 92 runs read at 4:30 PM");
     assert_eq!(view.default_view, "pipeline");
     assert_eq!(view.read_link.label, "What was read");
     assert_eq!(view.read_link.anchor, "sources");
@@ -632,11 +632,19 @@ fn speed_note_bounds_never_print_zero_times() {
                 if !opus {
                     continue;
                 }
-                // Scout's ranged note: both bounds sub-centisecond.
+                // Scout's ranged note: both bounds sub-centisecond. The sheet now stands
+                // on the ranked benchmark column (the observed column is below the bar).
                 if use_id == "planning" && task_id == "scout" {
                     let speed = &mut row["observed"]["measures"]["speed"];
                     speed["low"] = json!(0.01);
                     speed["high"] = json!(0.04);
+                    for bench in row["benchmarks"].as_array_mut().unwrap() {
+                        let ranked = bench["ranked"].as_bool() == Some(true);
+                        if ranked {
+                            bench["measures"]["speed"]["low"] = json!(0.01);
+                            bench["measures"]["speed"]["high"] = json!(0.04);
+                        }
+                    }
                 }
                 // WorkNode build's per-task note: a sub-second fastest.
                 if use_id == "building" && task_id == "worknode-build" {
@@ -671,15 +679,35 @@ fn speed_note_bounds_never_print_zero_times() {
 #[test]
 fn a_count_of_one_reads_singular() {
     // L-new-2/L-new-5: "has 1 runs", "1 blind reviews" and "With 1 reviews" all read
-    // singular for one.
+    // singular for one. (The golden's one-review rate note and one-review head left
+    // the page with the mechanical column, so those halves are pinned on edits.)
     let view = by_model(&golden_view()).unwrap();
     let text = serde_json::to_string(&view).unwrap();
     assert!(text.contains("GLM 5.3 · max has 1 run"), "{text}");
     assert!(!text.contains("has 1 runs"), "{text}");
-    assert!(text.contains("1 blind review"), "{text}");
-    assert!(!text.contains("1 blind reviews"), "{text}");
-    assert!(text.contains("With 1 review the true rate"), "{text}");
-    assert!(!text.contains("With 1 reviews"), "{text}");
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    edit_objects(&mut doc, &mut |map| {
+        if map.get("model").and_then(|m| m.as_str()) == Some("anthropic/claude-haiku-5-5")
+            && let Some(observed) = map.get_mut("observed")
+            && let Some(reviews) = observed.get_mut("reviews")
+        {
+            *reviews = json!(1);
+        }
+        // One review behind GLM's rate note.
+        if map.get("model").and_then(|m| m.as_str()) == Some("zai/glm-5.3")
+            && let Some(observed) = map.get_mut("observed")
+            && let Some(quality) = observed.get_mut("measures").and_then(|m| m.get_mut("quality"))
+            && let Some(per) = quality.get_mut("per")
+        {
+            *per = json!(1);
+        }
+    });
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let edited = serde_json::to_string(&by_model(&parsed).unwrap()).unwrap();
+    assert!(edited.contains("1 blind review"), "{edited}");
+    assert!(!edited.contains("1 blind reviews"), "{edited}");
+    assert!(edited.contains("With 1 review the true rate"), "{edited}");
+    assert!(!edited.contains("With 1 reviews"), "{edited}");
 }
 
 #[test]

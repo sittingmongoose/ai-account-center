@@ -597,13 +597,13 @@
                 "observed": 5,
                 "benchmark": 5
               },
-              "basis": "observed",
-              "benchmark": null,
+              "basis": "benchmark",
+              "benchmark": "scout-sv3-t9",
               "ranked": true,
               "rank": 1,
-              "verdict": "fine",
-              "verdictLabel": "Fine",
-              "why": "The only ranked row here, so nothing to compare it with (n = 5).",
+              "verdict": "recommended",
+              "verdictLabel": "Recommended",
+              "why": "In the benchmark Scout test bed SV3/t9: Strongest on Facts kept, with no cheating flags (n = 5).",
               "observed": {
                 "source": "observed",
                 "benchmark": null,
@@ -611,12 +611,12 @@
                 "n": 5,
                 "imported": 0,
                 "reviews": 1,
-                "ranked": true,
-                "rank": 1,
-                "score": 0.979,
-                "verdict": "fine",
-                "verdictLabel": "Fine",
-                "why": "The only ranked row here, so nothing to compare it with (n = 5).",
+                "ranked": false,
+                "rank": null,
+                "score": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too few blind reviews yet (1 of 5 needed, n = 5)",
                 "preliminary": false,
                 "measures": {
                   "speed": {
@@ -3017,327 +3017,6 @@
               "benchmarks": []
             },
             {
-              "key": "openai/gpt-6.1-sol|codex|high",
-              "model": "openai/gpt-6.1-sol",
-              "label": "Sol 6.1",
-              "inCatalog": true,
-              "runtime": "codex",
-              "effort": "high",
-              "process": null,
-              "n": {
-                "observed": 7,
-                "benchmark": 0
-              },
-              "basis": "observed",
-              "benchmark": null,
-              "ranked": true,
-              "rank": 2,
-              "verdict": "fine",
-              "verdictLabel": "Fine",
-              "why": "Behind the top row, weakest on Speed (n = 7).",
-              "observed": {
-                "source": "observed",
-                "benchmark": null,
-                "benchmarkLabel": null,
-                "n": 7,
-                "imported": 0,
-                "reviews": 5,
-                "ranked": true,
-                "rank": 2,
-                "score": 0.836,
-                "verdict": "fine",
-                "verdictLabel": "Fine",
-                "why": "Behind the top row, weakest on Speed (n = 7).",
-                "preliminary": false,
-                "measures": {
-                  "speed": {
-                    "value": 935,
-                    "unit": "s/task",
-                    "n": 6,
-                    "low": 910,
-                    "high": 960,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "perTask": {
-                      "value": 935,
-                      "n": 6,
-                      "low": 910,
-                      "high": 960
-                    }
-                  },
-                  "quality": {
-                    "value": 0.75,
-                    "unit": "share",
-                    "n": 4,
-                    "low": 0.3562,
-                    "high": 0.9421,
-                    "interval": "wilson90",
-                    "of": 3,
-                    "per": 4,
-                    "preliminary": false,
-                    "disputed": 1,
-                    "cannotVerify": 1,
-                    "rounds": {
-                      "value": 1,
-                      "n": 3,
-                      "low": 1,
-                      "high": 1
-                    },
-                    "firstTry": 3,
-                    "overturns": [
-                      {
-                        "run": "vm.scoreboard-lead--WN-14",
-                        "review": "mac.scoreboard-reviews--R-WN-14",
-                        "by": "anthropic/claude-opus-5-5 xhigh",
-                        "disputed": false,
-                        "evidence": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
-                      },
-                      {
-                        "run": "vm.scoreboard-lead--WN-15",
-                        "review": "mac.scoreboard-reviews--R-WN-15",
-                        "by": "anthropic/claude-opus-5-5 xhigh",
-                        "disputed": true,
-                        "evidence": "/mnt/Cursor/share/example-project/reviews/R-WN-15.md"
-                      }
-                    ]
-                  },
-                  "thoroughness": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 6,
-                    "low": 1,
-                    "high": 1,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "files": {
-                      "value": 1,
-                      "n": 6,
-                      "low": 1,
-                      "high": 1
-                    },
-                    "records": {
-                      "value": 1,
-                      "n": 6,
-                      "low": 1,
-                      "high": 1
-                    }
-                  },
-                  "laziness": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 6,
-                    "low": 0,
-                    "high": 0.3108,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 6,
-                    "preliminary": false
-                  },
-                  "cheating": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 7,
-                    "low": 0,
-                    "high": 0.2788,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 7,
-                    "preliminary": false
-                  },
-                  "cost": {
-                    "value": null,
-                    "unit": "credits/task",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "quota": [],
-                    "usd": null,
-                    "estimate": {
-                      "label": "estimate",
-                      "credits": {
-                        "value": 9.6,
-                        "unit": "credits/task",
-                        "n": 6
-                      },
-                      "quota": [
-                        {
-                          "window": "5h",
-                          "value": 2.4,
-                          "unit": "%/task",
-                          "n": 6
-                        }
-                      ],
-                      "methods": [
-                        "token share at list price"
-                      ],
-                      "sources": [
-                        "quota-watch"
-                      ]
-                    }
-                  },
-                  "reliability": {
-                    "value": 0.8571,
-                    "unit": "share",
-                    "n": 7,
-                    "low": 0.5477,
-                    "high": 0.9675,
-                    "interval": "wilson90",
-                    "of": 6,
-                    "per": 7,
-                    "preliminary": false
-                  },
-                  "overclaim": {
-                    "value": 0.25,
-                    "unit": "share",
-                    "n": 4,
-                    "low": 0.05791,
-                    "high": 0.6438,
-                    "interval": "wilson90",
-                    "of": 1,
-                    "per": 4,
-                    "preliminary": false
-                  }
-                },
-                "flags": [],
-                "runs": [
-                  {
-                    "id": "vm.scoreboard-lead--WN-17",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-17",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-17"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "failed",
-                    "endedAt": "2026-11-05T00:30:00Z",
-                    "wallSeconds": 30,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "vm.scoreboard-lead--WN-16",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-16",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-16"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-04T10:30:00Z",
-                    "wallSeconds": 960,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "vm.scoreboard-lead--WN-15",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-15",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-15"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-04T09:30:00Z",
-                    "wallSeconds": 950,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "vm.scoreboard-lead--WN-14",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-14",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-14"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-04T08:30:00Z",
-                    "wallSeconds": 940,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "vm.scoreboard-lead--WN-13",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-13",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-13"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-04T07:30:00Z",
-                    "wallSeconds": 930,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  }
-                ]
-              },
-              "benchmarks": []
-            },
-            {
               "key": "zai/glm-5.3|zcode|max",
               "model": "zai/glm-5.3",
               "label": "GLM 5.3",
@@ -3352,7 +3031,7 @@
               "basis": "observed",
               "benchmark": null,
               "ranked": true,
-              "rank": 3,
+              "rank": 2,
               "verdict": "avoid",
               "verdictLabel": "Avoid for this",
               "why": "Flagged for cheating in 2 of 5 runs (n = 5).",
@@ -3364,7 +3043,7 @@
                 "imported": 0,
                 "reviews": 5,
                 "ranked": true,
-                "rank": 3,
+                "rank": 2,
                 "score": 0.569,
                 "verdict": "avoid",
                 "verdictLabel": "Avoid for this",
@@ -3674,6 +3353,377 @@
                     "imported": null,
                     "review": null,
                     "flags": 1,
+                    "evidence": []
+                  }
+                ]
+              },
+              "benchmarks": []
+            },
+            {
+              "key": "openai/gpt-6.1-sol|codex|high",
+              "model": "openai/gpt-6.1-sol",
+              "label": "Sol 6.1",
+              "inCatalog": true,
+              "runtime": "codex",
+              "effort": "high",
+              "process": null,
+              "n": {
+                "observed": 7,
+                "benchmark": 0
+              },
+              "basis": null,
+              "benchmark": null,
+              "ranked": false,
+              "rank": null,
+              "verdict": "not-enough-data",
+              "verdictLabel": "Not enough data yet",
+              "why": "too few blind reviews yet (4 of 5 needed, n = 7)",
+              "observed": {
+                "source": "observed",
+                "benchmark": null,
+                "benchmarkLabel": null,
+                "n": 7,
+                "imported": 0,
+                "reviews": 5,
+                "ranked": false,
+                "rank": null,
+                "score": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too few blind reviews yet (4 of 5 needed, n = 7)",
+                "preliminary": false,
+                "measures": {
+                  "speed": {
+                    "value": 935,
+                    "unit": "s/task",
+                    "n": 6,
+                    "low": 910,
+                    "high": 960,
+                    "interval": "range",
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "perTask": {
+                      "value": 935,
+                      "n": 6,
+                      "low": 910,
+                      "high": 960
+                    }
+                  },
+                  "quality": {
+                    "value": 0.75,
+                    "unit": "share",
+                    "n": 4,
+                    "low": 0.3562,
+                    "high": 0.9421,
+                    "interval": "wilson90",
+                    "of": 3,
+                    "per": 4,
+                    "preliminary": false,
+                    "disputed": 1,
+                    "cannotVerify": 1,
+                    "rounds": {
+                      "value": 1,
+                      "n": 3,
+                      "low": 1,
+                      "high": 1
+                    },
+                    "firstTry": 3,
+                    "overturns": [
+                      {
+                        "run": "vm.scoreboard-lead--WN-14",
+                        "review": "mac.scoreboard-reviews--R-WN-14",
+                        "by": "anthropic/claude-opus-5-5 xhigh",
+                        "disputed": false,
+                        "evidence": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
+                      },
+                      {
+                        "run": "vm.scoreboard-lead--WN-15",
+                        "review": "mac.scoreboard-reviews--R-WN-15",
+                        "by": "anthropic/claude-opus-5-5 xhigh",
+                        "disputed": true,
+                        "evidence": "/mnt/Cursor/share/example-project/reviews/R-WN-15.md"
+                      }
+                    ]
+                  },
+                  "thoroughness": {
+                    "value": 1,
+                    "unit": "share",
+                    "n": 6,
+                    "low": 1,
+                    "high": 1,
+                    "interval": "range",
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "files": {
+                      "value": 1,
+                      "n": 6,
+                      "low": 1,
+                      "high": 1
+                    },
+                    "records": {
+                      "value": 1,
+                      "n": 6,
+                      "low": 1,
+                      "high": 1
+                    }
+                  },
+                  "laziness": {
+                    "value": 0,
+                    "unit": "share",
+                    "n": 6,
+                    "low": 0,
+                    "high": 0.3108,
+                    "interval": "wilson90",
+                    "of": 0,
+                    "per": 6,
+                    "preliminary": false
+                  },
+                  "cheating": {
+                    "value": 0,
+                    "unit": "share",
+                    "n": 7,
+                    "low": 0,
+                    "high": 0.2788,
+                    "interval": "wilson90",
+                    "of": 0,
+                    "per": 7,
+                    "preliminary": false
+                  },
+                  "cost": {
+                    "value": null,
+                    "unit": "credits/task",
+                    "n": 0,
+                    "low": null,
+                    "high": null,
+                    "interval": null,
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "quota": [],
+                    "usd": null,
+                    "estimate": {
+                      "label": "estimate",
+                      "credits": {
+                        "value": 9.6,
+                        "unit": "credits/task",
+                        "n": 6
+                      },
+                      "quota": [
+                        {
+                          "window": "5h",
+                          "value": 2.4,
+                          "unit": "%/task",
+                          "n": 6
+                        }
+                      ],
+                      "methods": [
+                        "token share at list price"
+                      ],
+                      "sources": [
+                        "quota-watch"
+                      ]
+                    }
+                  },
+                  "reliability": {
+                    "value": 0.8571,
+                    "unit": "share",
+                    "n": 7,
+                    "low": 0.5477,
+                    "high": 0.9675,
+                    "interval": "wilson90",
+                    "of": 6,
+                    "per": 7,
+                    "preliminary": false
+                  },
+                  "overclaim": {
+                    "value": 0.25,
+                    "unit": "share",
+                    "n": 4,
+                    "low": 0.05791,
+                    "high": 0.6438,
+                    "interval": "wilson90",
+                    "of": 1,
+                    "per": 4,
+                    "preliminary": false
+                  }
+                },
+                "flags": [],
+                "runs": [
+                  {
+                    "id": "vm.scoreboard-lead--WN-17",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-17",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-17"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "failed",
+                    "endedAt": "2026-11-05T00:30:00Z",
+                    "wallSeconds": 30,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-16",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-16",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-16"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T10:30:00Z",
+                    "wallSeconds": 960,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-15",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-15",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-15"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T09:30:00Z",
+                    "wallSeconds": 950,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-14",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-14",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-14"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T08:30:00Z",
+                    "wallSeconds": 940,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-13",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-13",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-13"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T07:30:00Z",
+                    "wallSeconds": 930,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-12",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-12",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-12"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T06:30:00Z",
+                    "wallSeconds": 920,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-11",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-11",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-11"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T05:30:00Z",
+                    "wallSeconds": 910,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
                     "evidence": []
                   }
                 ]
@@ -5913,6 +5963,288 @@
           "byProcess": true,
           "rows": [
             {
+              "key": "openai/gpt-6.1-sol|codex|high|scout-pipeline|2.0",
+              "model": "openai/gpt-6.1-sol",
+              "label": "Sol 6.1",
+              "inCatalog": true,
+              "runtime": "codex",
+              "effort": "high",
+              "process": {
+                "id": "scout-pipeline",
+                "version": "2.0"
+              },
+              "n": {
+                "observed": 0,
+                "benchmark": 5
+              },
+              "basis": "benchmark",
+              "benchmark": "scout-sv3-t9",
+              "ranked": true,
+              "rank": 1,
+              "verdict": "recommended",
+              "verdictLabel": "Recommended",
+              "why": "In the benchmark Scout test bed SV3/t9: Strongest on Reliability, with no cheating flags (n = 5).",
+              "observed": null,
+              "benchmarks": [
+                {
+                  "source": "benchmark",
+                  "benchmark": "scout-sv3-t9",
+                  "benchmarkLabel": "Scout test bed SV3/t9",
+                  "n": 5,
+                  "imported": 0,
+                  "reviews": 0,
+                  "ranked": true,
+                  "rank": 1,
+                  "score": 1,
+                  "verdict": "recommended",
+                  "verdictLabel": "Recommended",
+                  "why": "Strongest on Reliability, with no cheating flags (n = 5).",
+                  "preliminary": false,
+                  "measures": {
+                    "speed": {
+                      "value": 4.748,
+                      "unit": "s/item",
+                      "n": 5,
+                      "low": 4.732,
+                      "high": 4.764,
+                      "interval": "range",
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "perTask": {
+                        "value": 603,
+                        "n": 5,
+                        "low": 601,
+                        "high": 605
+                      }
+                    },
+                    "quality": {
+                      "value": null,
+                      "unit": "share",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "disputed": 0,
+                      "cannotVerify": 0,
+                      "rounds": {
+                        "value": null,
+                        "n": 0,
+                        "low": null,
+                        "high": null
+                      },
+                      "firstTry": 0,
+                      "overturns": []
+                    },
+                    "facts-kept": {
+                      "value": 0.811,
+                      "unit": "share",
+                      "n": 5,
+                      "low": 0.7842,
+                      "high": 0.8352,
+                      "interval": "wilson90",
+                      "of": 515,
+                      "per": 635,
+                      "preliminary": false
+                    },
+                    "verdict-drift": {
+                      "value": 0.15,
+                      "unit": "share",
+                      "n": 5,
+                      "low": 0.1132,
+                      "high": 0.1962,
+                      "interval": "wilson90",
+                      "of": 30,
+                      "per": 200,
+                      "preliminary": false
+                    },
+                    "cheating": {
+                      "value": 0,
+                      "unit": "share",
+                      "n": 5,
+                      "low": 0,
+                      "high": 0.3511,
+                      "interval": "wilson90",
+                      "of": 0,
+                      "per": 5,
+                      "preliminary": false
+                    },
+                    "cost": {
+                      "value": null,
+                      "unit": "credits/item",
+                      "n": 0,
+                      "low": null,
+                      "high": null,
+                      "interval": null,
+                      "of": null,
+                      "per": null,
+                      "preliminary": false,
+                      "quota": [],
+                      "usd": null,
+                      "estimate": null
+                    },
+                    "reliability": {
+                      "value": 1,
+                      "unit": "share",
+                      "n": 5,
+                      "low": 0.6489,
+                      "high": 1,
+                      "interval": "wilson90",
+                      "of": 5,
+                      "per": 5,
+                      "preliminary": false
+                    }
+                  },
+                  "flags": [],
+                  "runs": [
+                    {
+                      "id": "windows.scoreboard-bench--bench-sol-v2-5",
+                      "writer": "windows.scoreboard-bench",
+                      "source": "benchmark",
+                      "benchmark": "scout-sv3-t9",
+                      "project": "example-project",
+                      "stream": "S",
+                      "task": {
+                        "id": "bench-sol-v2-5",
+                        "type": "scout",
+                        "title": "scout bench-sol-v2-5"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "high",
+                      "process": {
+                        "id": "scout-pipeline",
+                        "version": "2.0"
+                      },
+                      "outcome": "done",
+                      "endedAt": "2026-10-29T23:30:00Z",
+                      "wallSeconds": 605,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    },
+                    {
+                      "id": "windows.scoreboard-bench--bench-sol-v2-4",
+                      "writer": "windows.scoreboard-bench",
+                      "source": "benchmark",
+                      "benchmark": "scout-sv3-t9",
+                      "project": "example-project",
+                      "stream": "S",
+                      "task": {
+                        "id": "bench-sol-v2-4",
+                        "type": "scout",
+                        "title": "scout bench-sol-v2-4"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "high",
+                      "process": {
+                        "id": "scout-pipeline",
+                        "version": "2.0"
+                      },
+                      "outcome": "done",
+                      "endedAt": "2026-10-29T22:30:00Z",
+                      "wallSeconds": 604,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    },
+                    {
+                      "id": "windows.scoreboard-bench--bench-sol-v2-3",
+                      "writer": "windows.scoreboard-bench",
+                      "source": "benchmark",
+                      "benchmark": "scout-sv3-t9",
+                      "project": "example-project",
+                      "stream": "S",
+                      "task": {
+                        "id": "bench-sol-v2-3",
+                        "type": "scout",
+                        "title": "scout bench-sol-v2-3"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "high",
+                      "process": {
+                        "id": "scout-pipeline",
+                        "version": "2.0"
+                      },
+                      "outcome": "done",
+                      "endedAt": "2026-10-29T21:30:00Z",
+                      "wallSeconds": 603,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    },
+                    {
+                      "id": "windows.scoreboard-bench--bench-sol-v2-2",
+                      "writer": "windows.scoreboard-bench",
+                      "source": "benchmark",
+                      "benchmark": "scout-sv3-t9",
+                      "project": "example-project",
+                      "stream": "S",
+                      "task": {
+                        "id": "bench-sol-v2-2",
+                        "type": "scout",
+                        "title": "scout bench-sol-v2-2"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "high",
+                      "process": {
+                        "id": "scout-pipeline",
+                        "version": "2.0"
+                      },
+                      "outcome": "done",
+                      "endedAt": "2026-10-29T20:30:00Z",
+                      "wallSeconds": 602,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    },
+                    {
+                      "id": "windows.scoreboard-bench--bench-sol-v2-1",
+                      "writer": "windows.scoreboard-bench",
+                      "source": "benchmark",
+                      "benchmark": "scout-sv3-t9",
+                      "project": "example-project",
+                      "stream": "S",
+                      "task": {
+                        "id": "bench-sol-v2-1",
+                        "type": "scout",
+                        "title": "scout bench-sol-v2-1"
+                      },
+                      "model": "openai/gpt-6.1-sol",
+                      "label": "Sol 6.1",
+                      "runtime": "codex",
+                      "effort": "high",
+                      "process": {
+                        "id": "scout-pipeline",
+                        "version": "2.0"
+                      },
+                      "outcome": "done",
+                      "endedAt": "2026-10-29T19:30:00Z",
+                      "wallSeconds": 601,
+                      "imported": null,
+                      "review": null,
+                      "flags": 0,
+                      "evidence": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
               "key": "anthropic/claude-opus-5-5|claude-code|xhigh|scout-pipeline|2.0",
               "model": "anthropic/claude-opus-5-5",
               "label": "Opus 5.5",
@@ -5927,13 +6259,13 @@
                 "observed": 5,
                 "benchmark": 5
               },
-              "basis": "observed",
-              "benchmark": null,
+              "basis": "benchmark",
+              "benchmark": "scout-sv3-t9",
               "ranked": true,
-              "rank": 1,
-              "verdict": "fine",
-              "verdictLabel": "Fine",
-              "why": "The only ranked row here, so nothing to compare it with (n = 5).",
+              "rank": 2,
+              "verdict": "recommended",
+              "verdictLabel": "Recommended",
+              "why": "In the benchmark Scout test bed SV3/t9: Strongest on Reliability, with no cheating flags (n = 5).",
               "observed": {
                 "source": "observed",
                 "benchmark": null,
@@ -5941,12 +6273,12 @@
                 "n": 5,
                 "imported": 0,
                 "reviews": 1,
-                "ranked": true,
-                "rank": 1,
-                "score": 1,
-                "verdict": "fine",
-                "verdictLabel": "Fine",
-                "why": "The only ranked row here, so nothing to compare it with (n = 5).",
+                "ranked": false,
+                "rank": null,
+                "score": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too few blind reviews yet (1 of 5 needed, n = 5)",
                 "preliminary": false,
                 "measures": {
                   "speed": {
@@ -6440,288 +6772,6 @@
                       "outcome": "done",
                       "endedAt": "2026-10-29T09:30:00Z",
                       "wallSeconds": 619,
-                      "imported": null,
-                      "review": null,
-                      "flags": 0,
-                      "evidence": []
-                    }
-                  ]
-                }
-              ]
-            },
-            {
-              "key": "openai/gpt-6.1-sol|codex|high|scout-pipeline|2.0",
-              "model": "openai/gpt-6.1-sol",
-              "label": "Sol 6.1",
-              "inCatalog": true,
-              "runtime": "codex",
-              "effort": "high",
-              "process": {
-                "id": "scout-pipeline",
-                "version": "2.0"
-              },
-              "n": {
-                "observed": 0,
-                "benchmark": 5
-              },
-              "basis": "benchmark",
-              "benchmark": "scout-sv3-t9",
-              "ranked": true,
-              "rank": 1,
-              "verdict": "recommended",
-              "verdictLabel": "Recommended",
-              "why": "In the benchmark Scout test bed SV3/t9: Strongest on Reliability, with no cheating flags (n = 5).",
-              "observed": null,
-              "benchmarks": [
-                {
-                  "source": "benchmark",
-                  "benchmark": "scout-sv3-t9",
-                  "benchmarkLabel": "Scout test bed SV3/t9",
-                  "n": 5,
-                  "imported": 0,
-                  "reviews": 0,
-                  "ranked": true,
-                  "rank": 1,
-                  "score": 1,
-                  "verdict": "recommended",
-                  "verdictLabel": "Recommended",
-                  "why": "Strongest on Reliability, with no cheating flags (n = 5).",
-                  "preliminary": false,
-                  "measures": {
-                    "speed": {
-                      "value": 4.748,
-                      "unit": "s/item",
-                      "n": 5,
-                      "low": 4.732,
-                      "high": 4.764,
-                      "interval": "range",
-                      "of": null,
-                      "per": null,
-                      "preliminary": false,
-                      "perTask": {
-                        "value": 603,
-                        "n": 5,
-                        "low": 601,
-                        "high": 605
-                      }
-                    },
-                    "quality": {
-                      "value": null,
-                      "unit": "share",
-                      "n": 0,
-                      "low": null,
-                      "high": null,
-                      "interval": null,
-                      "of": null,
-                      "per": null,
-                      "preliminary": false,
-                      "disputed": 0,
-                      "cannotVerify": 0,
-                      "rounds": {
-                        "value": null,
-                        "n": 0,
-                        "low": null,
-                        "high": null
-                      },
-                      "firstTry": 0,
-                      "overturns": []
-                    },
-                    "facts-kept": {
-                      "value": 0.811,
-                      "unit": "share",
-                      "n": 5,
-                      "low": 0.7842,
-                      "high": 0.8352,
-                      "interval": "wilson90",
-                      "of": 515,
-                      "per": 635,
-                      "preliminary": false
-                    },
-                    "verdict-drift": {
-                      "value": 0.15,
-                      "unit": "share",
-                      "n": 5,
-                      "low": 0.1132,
-                      "high": 0.1962,
-                      "interval": "wilson90",
-                      "of": 30,
-                      "per": 200,
-                      "preliminary": false
-                    },
-                    "cheating": {
-                      "value": 0,
-                      "unit": "share",
-                      "n": 5,
-                      "low": 0,
-                      "high": 0.3511,
-                      "interval": "wilson90",
-                      "of": 0,
-                      "per": 5,
-                      "preliminary": false
-                    },
-                    "cost": {
-                      "value": null,
-                      "unit": "credits/item",
-                      "n": 0,
-                      "low": null,
-                      "high": null,
-                      "interval": null,
-                      "of": null,
-                      "per": null,
-                      "preliminary": false,
-                      "quota": [],
-                      "usd": null,
-                      "estimate": null
-                    },
-                    "reliability": {
-                      "value": 1,
-                      "unit": "share",
-                      "n": 5,
-                      "low": 0.6489,
-                      "high": 1,
-                      "interval": "wilson90",
-                      "of": 5,
-                      "per": 5,
-                      "preliminary": false
-                    }
-                  },
-                  "flags": [],
-                  "runs": [
-                    {
-                      "id": "windows.scoreboard-bench--bench-sol-v2-5",
-                      "writer": "windows.scoreboard-bench",
-                      "source": "benchmark",
-                      "benchmark": "scout-sv3-t9",
-                      "project": "example-project",
-                      "stream": "S",
-                      "task": {
-                        "id": "bench-sol-v2-5",
-                        "type": "scout",
-                        "title": "scout bench-sol-v2-5"
-                      },
-                      "model": "openai/gpt-6.1-sol",
-                      "label": "Sol 6.1",
-                      "runtime": "codex",
-                      "effort": "high",
-                      "process": {
-                        "id": "scout-pipeline",
-                        "version": "2.0"
-                      },
-                      "outcome": "done",
-                      "endedAt": "2026-10-29T23:30:00Z",
-                      "wallSeconds": 605,
-                      "imported": null,
-                      "review": null,
-                      "flags": 0,
-                      "evidence": []
-                    },
-                    {
-                      "id": "windows.scoreboard-bench--bench-sol-v2-4",
-                      "writer": "windows.scoreboard-bench",
-                      "source": "benchmark",
-                      "benchmark": "scout-sv3-t9",
-                      "project": "example-project",
-                      "stream": "S",
-                      "task": {
-                        "id": "bench-sol-v2-4",
-                        "type": "scout",
-                        "title": "scout bench-sol-v2-4"
-                      },
-                      "model": "openai/gpt-6.1-sol",
-                      "label": "Sol 6.1",
-                      "runtime": "codex",
-                      "effort": "high",
-                      "process": {
-                        "id": "scout-pipeline",
-                        "version": "2.0"
-                      },
-                      "outcome": "done",
-                      "endedAt": "2026-10-29T22:30:00Z",
-                      "wallSeconds": 604,
-                      "imported": null,
-                      "review": null,
-                      "flags": 0,
-                      "evidence": []
-                    },
-                    {
-                      "id": "windows.scoreboard-bench--bench-sol-v2-3",
-                      "writer": "windows.scoreboard-bench",
-                      "source": "benchmark",
-                      "benchmark": "scout-sv3-t9",
-                      "project": "example-project",
-                      "stream": "S",
-                      "task": {
-                        "id": "bench-sol-v2-3",
-                        "type": "scout",
-                        "title": "scout bench-sol-v2-3"
-                      },
-                      "model": "openai/gpt-6.1-sol",
-                      "label": "Sol 6.1",
-                      "runtime": "codex",
-                      "effort": "high",
-                      "process": {
-                        "id": "scout-pipeline",
-                        "version": "2.0"
-                      },
-                      "outcome": "done",
-                      "endedAt": "2026-10-29T21:30:00Z",
-                      "wallSeconds": 603,
-                      "imported": null,
-                      "review": null,
-                      "flags": 0,
-                      "evidence": []
-                    },
-                    {
-                      "id": "windows.scoreboard-bench--bench-sol-v2-2",
-                      "writer": "windows.scoreboard-bench",
-                      "source": "benchmark",
-                      "benchmark": "scout-sv3-t9",
-                      "project": "example-project",
-                      "stream": "S",
-                      "task": {
-                        "id": "bench-sol-v2-2",
-                        "type": "scout",
-                        "title": "scout bench-sol-v2-2"
-                      },
-                      "model": "openai/gpt-6.1-sol",
-                      "label": "Sol 6.1",
-                      "runtime": "codex",
-                      "effort": "high",
-                      "process": {
-                        "id": "scout-pipeline",
-                        "version": "2.0"
-                      },
-                      "outcome": "done",
-                      "endedAt": "2026-10-29T20:30:00Z",
-                      "wallSeconds": 602,
-                      "imported": null,
-                      "review": null,
-                      "flags": 0,
-                      "evidence": []
-                    },
-                    {
-                      "id": "windows.scoreboard-bench--bench-sol-v2-1",
-                      "writer": "windows.scoreboard-bench",
-                      "source": "benchmark",
-                      "benchmark": "scout-sv3-t9",
-                      "project": "example-project",
-                      "stream": "S",
-                      "task": {
-                        "id": "bench-sol-v2-1",
-                        "type": "scout",
-                        "title": "scout bench-sol-v2-1"
-                      },
-                      "model": "openai/gpt-6.1-sol",
-                      "label": "Sol 6.1",
-                      "runtime": "codex",
-                      "effort": "high",
-                      "process": {
-                        "id": "scout-pipeline",
-                        "version": "2.0"
-                      },
-                      "outcome": "done",
-                      "endedAt": "2026-10-29T19:30:00Z",
-                      "wallSeconds": 601,
                       "imported": null,
                       "review": null,
                       "flags": 0,
@@ -8323,327 +8373,6 @@
               "benchmarks": []
             },
             {
-              "key": "openai/gpt-6.1-sol|codex|high",
-              "model": "openai/gpt-6.1-sol",
-              "label": "Sol 6.1",
-              "inCatalog": true,
-              "runtime": "codex",
-              "effort": "high",
-              "process": null,
-              "n": {
-                "observed": 7,
-                "benchmark": 0
-              },
-              "basis": "observed",
-              "benchmark": null,
-              "ranked": true,
-              "rank": 2,
-              "verdict": "fine",
-              "verdictLabel": "Fine",
-              "why": "Behind the top row, weakest on Speed (n = 7).",
-              "observed": {
-                "source": "observed",
-                "benchmark": null,
-                "benchmarkLabel": null,
-                "n": 7,
-                "imported": 0,
-                "reviews": 5,
-                "ranked": true,
-                "rank": 2,
-                "score": 0.821,
-                "verdict": "fine",
-                "verdictLabel": "Fine",
-                "why": "Behind the top row, weakest on Speed (n = 7).",
-                "preliminary": false,
-                "measures": {
-                  "speed": {
-                    "value": 935,
-                    "unit": "s/task",
-                    "n": 6,
-                    "low": 910,
-                    "high": 960,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "perTask": {
-                      "value": 935,
-                      "n": 6,
-                      "low": 910,
-                      "high": 960
-                    }
-                  },
-                  "quality": {
-                    "value": 0.75,
-                    "unit": "share",
-                    "n": 4,
-                    "low": 0.3562,
-                    "high": 0.9421,
-                    "interval": "wilson90",
-                    "of": 3,
-                    "per": 4,
-                    "preliminary": false,
-                    "disputed": 1,
-                    "cannotVerify": 1,
-                    "rounds": {
-                      "value": 1,
-                      "n": 3,
-                      "low": 1,
-                      "high": 1
-                    },
-                    "firstTry": 3,
-                    "overturns": [
-                      {
-                        "run": "vm.scoreboard-lead--WN-14",
-                        "review": "mac.scoreboard-reviews--R-WN-14",
-                        "by": "anthropic/claude-opus-5-5 xhigh",
-                        "disputed": false,
-                        "evidence": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
-                      },
-                      {
-                        "run": "vm.scoreboard-lead--WN-15",
-                        "review": "mac.scoreboard-reviews--R-WN-15",
-                        "by": "anthropic/claude-opus-5-5 xhigh",
-                        "disputed": true,
-                        "evidence": "/mnt/Cursor/share/example-project/reviews/R-WN-15.md"
-                      }
-                    ]
-                  },
-                  "thoroughness": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 6,
-                    "low": 1,
-                    "high": 1,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "files": {
-                      "value": 1,
-                      "n": 6,
-                      "low": 1,
-                      "high": 1
-                    },
-                    "records": {
-                      "value": 1,
-                      "n": 6,
-                      "low": 1,
-                      "high": 1
-                    }
-                  },
-                  "laziness": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 6,
-                    "low": 0,
-                    "high": 0.3108,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 6,
-                    "preliminary": false
-                  },
-                  "cheating": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 7,
-                    "low": 0,
-                    "high": 0.2788,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 7,
-                    "preliminary": false
-                  },
-                  "cost": {
-                    "value": null,
-                    "unit": "credits/task",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "quota": [],
-                    "usd": null,
-                    "estimate": {
-                      "label": "estimate",
-                      "credits": {
-                        "value": 9.6,
-                        "unit": "credits/task",
-                        "n": 6
-                      },
-                      "quota": [
-                        {
-                          "window": "5h",
-                          "value": 2.4,
-                          "unit": "%/task",
-                          "n": 6
-                        }
-                      ],
-                      "methods": [
-                        "token share at list price"
-                      ],
-                      "sources": [
-                        "quota-watch"
-                      ]
-                    }
-                  },
-                  "reliability": {
-                    "value": 0.8571,
-                    "unit": "share",
-                    "n": 7,
-                    "low": 0.5477,
-                    "high": 0.9675,
-                    "interval": "wilson90",
-                    "of": 6,
-                    "per": 7,
-                    "preliminary": false
-                  },
-                  "overclaim": {
-                    "value": 0.25,
-                    "unit": "share",
-                    "n": 4,
-                    "low": 0.05791,
-                    "high": 0.6438,
-                    "interval": "wilson90",
-                    "of": 1,
-                    "per": 4,
-                    "preliminary": false
-                  }
-                },
-                "flags": [],
-                "runs": [
-                  {
-                    "id": "vm.scoreboard-lead--WN-17",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-17",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-17"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "failed",
-                    "endedAt": "2026-11-05T00:30:00Z",
-                    "wallSeconds": 30,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "vm.scoreboard-lead--WN-16",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-16",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-16"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-04T10:30:00Z",
-                    "wallSeconds": 960,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "vm.scoreboard-lead--WN-15",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-15",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-15"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-04T09:30:00Z",
-                    "wallSeconds": 950,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "vm.scoreboard-lead--WN-14",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-14",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-14"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-04T08:30:00Z",
-                    "wallSeconds": 940,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "vm.scoreboard-lead--WN-13",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "WN-13",
-                      "type": "worknode-build",
-                      "title": "worknode-build WN-13"
-                    },
-                    "model": "openai/gpt-6.1-sol",
-                    "label": "Sol 6.1",
-                    "runtime": "codex",
-                    "effort": "high",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-04T07:30:00Z",
-                    "wallSeconds": 930,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  }
-                ]
-              },
-              "benchmarks": []
-            },
-            {
               "key": "zai/glm-5.3|zcode|max",
               "model": "zai/glm-5.3",
               "label": "GLM 5.3",
@@ -8658,7 +8387,7 @@
               "basis": "observed",
               "benchmark": null,
               "ranked": true,
-              "rank": 3,
+              "rank": 2,
               "verdict": "avoid",
               "verdictLabel": "Avoid for this",
               "why": "Flagged for cheating in 2 of 5 runs (n = 5).",
@@ -8670,7 +8399,7 @@
                 "imported": 0,
                 "reviews": 5,
                 "ranked": true,
-                "rank": 3,
+                "rank": 2,
                 "score": 0.673,
                 "verdict": "avoid",
                 "verdictLabel": "Avoid for this",
@@ -8980,6 +8709,377 @@
                     "imported": null,
                     "review": null,
                     "flags": 1,
+                    "evidence": []
+                  }
+                ]
+              },
+              "benchmarks": []
+            },
+            {
+              "key": "openai/gpt-6.1-sol|codex|high",
+              "model": "openai/gpt-6.1-sol",
+              "label": "Sol 6.1",
+              "inCatalog": true,
+              "runtime": "codex",
+              "effort": "high",
+              "process": null,
+              "n": {
+                "observed": 7,
+                "benchmark": 0
+              },
+              "basis": null,
+              "benchmark": null,
+              "ranked": false,
+              "rank": null,
+              "verdict": "not-enough-data",
+              "verdictLabel": "Not enough data yet",
+              "why": "too few blind reviews yet (4 of 5 needed, n = 7)",
+              "observed": {
+                "source": "observed",
+                "benchmark": null,
+                "benchmarkLabel": null,
+                "n": 7,
+                "imported": 0,
+                "reviews": 5,
+                "ranked": false,
+                "rank": null,
+                "score": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too few blind reviews yet (4 of 5 needed, n = 7)",
+                "preliminary": false,
+                "measures": {
+                  "speed": {
+                    "value": 935,
+                    "unit": "s/task",
+                    "n": 6,
+                    "low": 910,
+                    "high": 960,
+                    "interval": "range",
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "perTask": {
+                      "value": 935,
+                      "n": 6,
+                      "low": 910,
+                      "high": 960
+                    }
+                  },
+                  "quality": {
+                    "value": 0.75,
+                    "unit": "share",
+                    "n": 4,
+                    "low": 0.3562,
+                    "high": 0.9421,
+                    "interval": "wilson90",
+                    "of": 3,
+                    "per": 4,
+                    "preliminary": false,
+                    "disputed": 1,
+                    "cannotVerify": 1,
+                    "rounds": {
+                      "value": 1,
+                      "n": 3,
+                      "low": 1,
+                      "high": 1
+                    },
+                    "firstTry": 3,
+                    "overturns": [
+                      {
+                        "run": "vm.scoreboard-lead--WN-14",
+                        "review": "mac.scoreboard-reviews--R-WN-14",
+                        "by": "anthropic/claude-opus-5-5 xhigh",
+                        "disputed": false,
+                        "evidence": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
+                      },
+                      {
+                        "run": "vm.scoreboard-lead--WN-15",
+                        "review": "mac.scoreboard-reviews--R-WN-15",
+                        "by": "anthropic/claude-opus-5-5 xhigh",
+                        "disputed": true,
+                        "evidence": "/mnt/Cursor/share/example-project/reviews/R-WN-15.md"
+                      }
+                    ]
+                  },
+                  "thoroughness": {
+                    "value": 1,
+                    "unit": "share",
+                    "n": 6,
+                    "low": 1,
+                    "high": 1,
+                    "interval": "range",
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "files": {
+                      "value": 1,
+                      "n": 6,
+                      "low": 1,
+                      "high": 1
+                    },
+                    "records": {
+                      "value": 1,
+                      "n": 6,
+                      "low": 1,
+                      "high": 1
+                    }
+                  },
+                  "laziness": {
+                    "value": 0,
+                    "unit": "share",
+                    "n": 6,
+                    "low": 0,
+                    "high": 0.3108,
+                    "interval": "wilson90",
+                    "of": 0,
+                    "per": 6,
+                    "preliminary": false
+                  },
+                  "cheating": {
+                    "value": 0,
+                    "unit": "share",
+                    "n": 7,
+                    "low": 0,
+                    "high": 0.2788,
+                    "interval": "wilson90",
+                    "of": 0,
+                    "per": 7,
+                    "preliminary": false
+                  },
+                  "cost": {
+                    "value": null,
+                    "unit": "credits/task",
+                    "n": 0,
+                    "low": null,
+                    "high": null,
+                    "interval": null,
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "quota": [],
+                    "usd": null,
+                    "estimate": {
+                      "label": "estimate",
+                      "credits": {
+                        "value": 9.6,
+                        "unit": "credits/task",
+                        "n": 6
+                      },
+                      "quota": [
+                        {
+                          "window": "5h",
+                          "value": 2.4,
+                          "unit": "%/task",
+                          "n": 6
+                        }
+                      ],
+                      "methods": [
+                        "token share at list price"
+                      ],
+                      "sources": [
+                        "quota-watch"
+                      ]
+                    }
+                  },
+                  "reliability": {
+                    "value": 0.8571,
+                    "unit": "share",
+                    "n": 7,
+                    "low": 0.5477,
+                    "high": 0.9675,
+                    "interval": "wilson90",
+                    "of": 6,
+                    "per": 7,
+                    "preliminary": false
+                  },
+                  "overclaim": {
+                    "value": 0.25,
+                    "unit": "share",
+                    "n": 4,
+                    "low": 0.05791,
+                    "high": 0.6438,
+                    "interval": "wilson90",
+                    "of": 1,
+                    "per": 4,
+                    "preliminary": false
+                  }
+                },
+                "flags": [],
+                "runs": [
+                  {
+                    "id": "vm.scoreboard-lead--WN-17",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-17",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-17"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "failed",
+                    "endedAt": "2026-11-05T00:30:00Z",
+                    "wallSeconds": 30,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-16",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-16",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-16"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T10:30:00Z",
+                    "wallSeconds": 960,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-15",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-15",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-15"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T09:30:00Z",
+                    "wallSeconds": 950,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-14",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-14",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-14"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T08:30:00Z",
+                    "wallSeconds": 940,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-13",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-13",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-13"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T07:30:00Z",
+                    "wallSeconds": 930,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-12",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-12",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-12"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T06:30:00Z",
+                    "wallSeconds": 920,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "vm.scoreboard-lead--WN-11",
+                    "writer": "vm.scoreboard-lead",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "WN-11",
+                      "type": "worknode-build",
+                      "title": "worknode-build WN-11"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-04T05:30:00Z",
+                    "wallSeconds": 910,
+                    "imported": null,
+                    "review": null,
+                    "flags": 0,
                     "evidence": []
                   }
                 ]
@@ -10995,13 +11095,13 @@
                 "observed": 5,
                 "benchmark": 0
               },
-              "basis": "observed",
+              "basis": null,
               "benchmark": null,
-              "ranked": true,
-              "rank": 1,
-              "verdict": "fine",
-              "verdictLabel": "Fine",
-              "why": "The only ranked row here, so nothing to compare it with (n = 5).",
+              "ranked": false,
+              "rank": null,
+              "verdict": "not-enough-data",
+              "verdictLabel": "Not enough data yet",
+              "why": "too few blind reviews yet (1 of 5 needed, n = 5)",
               "observed": {
                 "source": "observed",
                 "benchmark": null,
@@ -11009,12 +11109,12 @@
                 "n": 5,
                 "imported": 0,
                 "reviews": 1,
-                "ranked": true,
-                "rank": 1,
-                "score": 1,
-                "verdict": "fine",
-                "verdictLabel": "Fine",
-                "why": "The only ranked row here, so nothing to compare it with (n = 5).",
+                "ranked": false,
+                "rank": null,
+                "score": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too few blind reviews yet (1 of 5 needed, n = 5)",
                 "preliminary": false,
                 "measures": {
                   "speed": {

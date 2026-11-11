@@ -13,7 +13,7 @@
     "label": "What was read",
     "anchor": "sources"
   },
-  "bandSummary": "8 models with runs · 92 runs read at 4:30 PM",
+  "bandSummary": "7 models with runs · 92 runs read at 4:30 PM",
   "views": [
     {
       "id": "pipeline",
@@ -21,7 +21,7 @@
       "short": "Our pipeline",
       "meta": [
         {
-          "text": "8",
+          "text": "7",
           "strong": true
         },
         {
@@ -53,7 +53,7 @@
               "text": "7 real runs."
             },
             {
-              "text": " Sol 6.1 · high is next."
+              "text": " GLM 5.3 · max is next."
             }
           ]
         },
@@ -82,22 +82,22 @@
         {
           "job": "scout",
           "jobLabel": "Scout",
-          "model": null,
-          "noneLabel": "No pick yet",
+          "model": {
+            "label": "Opus 5.5",
+            "effort": "xhigh",
+            "mark": "claude"
+          },
+          "noneLabel": null,
           "why": [
             {
-              "text": "Only Opus 5.5 · xhigh has 5 real runs, so there is nothing to compare it with."
-            }
-          ]
-        },
-        {
-          "job": "mechanical",
-          "jobLabel": "Mechanical edits",
-          "model": null,
-          "noneLabel": "No pick yet",
-          "why": [
+              "text": "Benchmark only",
+              "strong": true
+            },
             {
-              "text": "Muse Spark 1.3 · max is the only model tried (5 runs, Fine)."
+              "text": ", 5 runs."
+            },
+            {
+              "text": " Sol 6.1 · high is next."
             }
           ]
         }
@@ -114,10 +114,6 @@
         {
           "id": "scout",
           "label": "Scout"
-        },
-        {
-          "id": "mechanical",
-          "label": "Mechanical edits"
         }
       ],
       "models": [
@@ -152,14 +148,13 @@
             },
             "plan": null,
             "scout": {
-              "verdict": "fine",
-              "word": "Fine",
+              "verdict": "recommended",
+              "word": "Recommended",
               "sub": [
-                "5 real runs",
-                "nothing to compare"
+                "benchmark",
+                "5 runs"
               ]
-            },
-            "mechanical": null
+            }
           },
           "report": [
             {
@@ -218,16 +213,6 @@
                   "text": "Others on this job: "
                 },
                 {
-                  "text": "Sol 6.1 · high",
-                  "strong": true
-                },
-                {
-                  "text": " Fine, passed 3 of 4 (75%), 16 min per task."
-                },
-                {
-                  "text": " "
-                },
-                {
                   "text": "GLM 5.3 · max",
                   "strong": true
                 },
@@ -247,37 +232,37 @@
             {
               "job": "scout",
               "label": "Scout",
-              "verdict": "fine",
-              "word": "Fine",
-              "basis": "5 real runs and 5 benchmark runs, Scout pipeline 2.0",
+              "verdict": "recommended",
+              "word": "Recommended",
+              "basis": "5 benchmark runs",
               "measures": [
                 {
                   "label": "Facts kept",
-                  "value": "93%",
-                  "sub": "real work",
-                  "note": "Over 5 runs; likely between 91% and 94%.",
+                  "value": "95%",
+                  "sub": "benchmark",
+                  "note": "Over 5 runs; likely between 94% and 96%.",
                   "range": {
-                    "low": 0.9105,
-                    "high": 0.9441,
-                    "value": 0.9291
+                    "low": 0.9369,
+                    "high": 0.9648,
+                    "value": 0.9528
                   }
                 },
                 {
                   "label": "Verdicts changed on a re-check",
-                  "value": "8%",
-                  "sub": "real work",
-                  "note": "Over 5 runs; likely between 5% and 11%.",
+                  "value": "5%",
+                  "sub": "benchmark",
+                  "note": "Over 5 runs; likely between 3% and 8%.",
                   "range": {
-                    "low": 0.04972,
-                    "high": 0.1116,
-                    "value": 0.075
+                    "low": 0.03012,
+                    "high": 0.08189,
+                    "value": 0.05
                   }
                 },
                 {
                   "label": "Time per item",
                   "value": "4.9 s",
                   "sub": "median",
-                  "note": "Range 4.8 to 4.9 s.",
+                  "note": "Range 4.9 to 4.9 s.",
                   "range": null
                 },
                 {
@@ -290,17 +275,14 @@
               ],
               "compare": [
                 {
-                  "text": "Why only Fine:",
+                  "text": "Others on this job: "
+                },
+                {
+                  "text": "Sol 6.1 · high",
                   "strong": true
                 },
                 {
-                  "text": " no other model has 5 real Scout runs, so there is nothing to compare."
-                },
-                {
-                  "text": " In the Scout benchmark it kept 95% of facts; Sol 6.1 · high kept 81%."
-                },
-                {
-                  "text": " The older pipeline 1.x has 3 benchmark runs, too few for a verdict."
+                  "text": " Fine."
                 }
               ]
             }
@@ -336,8 +318,7 @@
                 "6 runs"
               ]
             },
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": [
             {
@@ -410,11 +391,10 @@
           "sheetHead": "Codex · 29 runs · 6 blind reviews",
           "cells": {
             "worknode-build": {
-              "verdict": "fine",
-              "word": "Fine",
+              "verdict": "not-enough-data",
+              "word": "Not enough data",
               "sub": [
-                "7 runs",
-                "passed 3 of 4, 3 on the first try"
+                "7 runs, 4 reviewed, needs 5"
               ]
             },
             "plan": null,
@@ -425,92 +405,9 @@
                 "benchmark",
                 "5 runs"
               ]
-            },
-            "mechanical": null
+            }
           },
           "report": [
-            {
-              "job": "worknode-build",
-              "label": "WorkNode build",
-              "verdict": "fine",
-              "word": "Fine",
-              "basis": "7 real runs, 4 checked by a blind reviewer",
-              "measures": [
-                {
-                  "label": "Passed review",
-                  "value": "75%",
-                  "sub": "3 of 4, 3 on the first try",
-                  "note": "With 4 reviews the true rate is likely between 36% and 94%.",
-                  "range": {
-                    "low": 0.3562,
-                    "high": 0.9421,
-                    "value": 0.75
-                  }
-                },
-                {
-                  "label": "Said done, reviewer disagreed",
-                  "value": "25%",
-                  "sub": "1 of 4",
-                  "note": "Likely between 6% and 64%.",
-                  "range": {
-                    "low": 0.05791,
-                    "high": 0.6438,
-                    "value": 0.25
-                  }
-                },
-                {
-                  "label": "Time per task",
-                  "value": "16 min",
-                  "sub": "median",
-                  "note": "Fastest 15 min, slowest 16 min, over 6 runs.",
-                  "range": null
-                },
-                {
-                  "label": "Cost per task",
-                  "value": "≈ 9.6",
-                  "sub": "credits, estimated",
-                  "note": "From 6 runs; an estimate, not a measured cost.",
-                  "range": null
-                },
-                {
-                  "label": "Cheating flags",
-                  "value": "none",
-                  "sub": "in 7 runs",
-                  "note": "Read everything it was given in 6 of 7 runs.",
-                  "range": null
-                }
-              ],
-              "compare": [
-                {
-                  "text": "Others on this job: "
-                },
-                {
-                  "text": "Opus 5.5 · xhigh",
-                  "strong": true
-                },
-                {
-                  "text": " Recommended, passed 6 of 6 (100%), 23 min per task."
-                },
-                {
-                  "text": " "
-                },
-                {
-                  "text": "GLM 5.3 · max",
-                  "strong": true
-                },
-                {
-                  "text": " "
-                },
-                {
-                  "text": "Avoid",
-                  "strong": true,
-                  "tone": "crit"
-                },
-                {
-                  "text": ", cheated in 2 of 5 runs."
-                }
-              ]
-            },
             {
               "job": "scout",
               "label": "Scout",
@@ -564,7 +461,7 @@
                   "strong": true
                 },
                 {
-                  "text": " Fine."
+                  "text": " Recommended."
                 }
               ]
             }
@@ -599,8 +496,7 @@
               ]
             },
             "plan": null,
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": [
             {
@@ -664,95 +560,6 @@
                 },
                 {
                   "text": " Recommended, passed 6 of 6 (100%), 23 min per task."
-                },
-                {
-                  "text": " "
-                },
-                {
-                  "text": "Sol 6.1 · high",
-                  "strong": true
-                },
-                {
-                  "text": " Fine, passed 3 of 4 (75%), 16 min per task."
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "key": "muse/muse-spark-1.3-contributor|muse|max",
-          "model": "muse/muse-spark-1.3-contributor",
-          "label": "Muse Spark 1.3",
-          "effort": "max",
-          "effortText": "max",
-          "runtime": "Muse",
-          "mark": "muse",
-          "runs": 5,
-          "head": "Muse · ",
-          "headRuns": [
-            {
-              "text": "5",
-              "strong": true
-            },
-            {
-              "text": " runs: 5 real work, 0 benchmark · 1 blind review"
-            }
-          ],
-          "sheetHead": "Muse · 5 runs · 1 blind review",
-          "cells": {
-            "worknode-build": null,
-            "plan": null,
-            "scout": null,
-            "mechanical": {
-              "verdict": "fine",
-              "word": "Fine",
-              "sub": [
-                "5 runs",
-                "only model tried"
-              ]
-            }
-          },
-          "report": [
-            {
-              "job": "mechanical",
-              "label": "Mechanical edits",
-              "verdict": "fine",
-              "word": "Fine",
-              "basis": "5 real runs",
-              "measures": [
-                {
-                  "label": "Passed review",
-                  "value": "100%",
-                  "sub": "1 of 1, 1 on the first try",
-                  "note": "With 1 review the true rate is likely between 27% and 100%.",
-                  "range": {
-                    "low": 0.2699,
-                    "high": 1,
-                    "value": 1
-                  }
-                },
-                {
-                  "label": "Time per file",
-                  "value": "10 s",
-                  "sub": "median",
-                  "note": "Over 5 runs.",
-                  "range": null
-                },
-                {
-                  "label": "Cheating flags",
-                  "value": "none",
-                  "sub": "in 5 runs",
-                  "note": "Read everything it was given in 5 of 5 runs.",
-                  "range": null
-                }
-              ],
-              "compare": [
-                {
-                  "text": "Why only Fine:",
-                  "strong": true
-                },
-                {
-                  "text": " no other model has 5 real Mechanical edits runs, so there is nothing to compare."
                 }
               ]
             }
@@ -788,8 +595,7 @@
                 "5 runs"
               ]
             },
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": [
             {
@@ -869,8 +675,7 @@
               ]
             },
             "plan": null,
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": []
         },
@@ -903,8 +708,7 @@
               ]
             },
             "plan": null,
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": []
         }
@@ -915,7 +719,7 @@
           "strong": true
         },
         {
-          "text": " WorkNode creation, Build (Sonnet 5.5 has 2 runs), Fix round, Review (Sol 6.1 · high has 15 runs), Tests, Research report, Audit read (GLM 5.3 · max has 1 run), Docs. "
+          "text": " WorkNode creation, Build (Sonnet 5.5 has 2 runs), Fix round, Review (Sol 6.1 · high has 15 runs), Tests, Research report, Mechanical edits (Muse Spark 1.3 · max has 5 runs), Audit read (GLM 5.3 · max has 1 run), Docs. "
         },
         {
           "text": "In the catalog with no runs:",
@@ -939,7 +743,7 @@
       "short": "PM users",
       "meta": [
         {
-          "text": "8",
+          "text": "7",
           "strong": true
         },
         {
@@ -971,7 +775,7 @@
               "text": "7 real runs."
             },
             {
-              "text": " Sol 6.1 · high is next."
+              "text": " GLM 5.3 · max is next."
             }
           ]
         },
@@ -1013,17 +817,9 @@
             },
             {
               "text": ", 5 runs."
-            }
-          ]
-        },
-        {
-          "job": "mechanical",
-          "jobLabel": "Mechanical edits",
-          "model": null,
-          "noneLabel": "No pick yet",
-          "why": [
+            },
             {
-              "text": "Muse Spark 1.3 · max is the only model tried (5 runs, Fine)."
+              "text": " Opus 5.5 · xhigh is next."
             }
           ]
         }
@@ -1040,195 +836,9 @@
         {
           "id": "scout",
           "label": "Scout"
-        },
-        {
-          "id": "mechanical",
-          "label": "Mechanical edits"
         }
       ],
       "models": [
-        {
-          "key": "openai/gpt-6.1-sol|codex|high",
-          "model": "openai/gpt-6.1-sol",
-          "label": "Sol 6.1",
-          "effort": "high",
-          "effortText": "high",
-          "runtime": "Codex",
-          "mark": "codex",
-          "runs": 29,
-          "head": "Codex · ",
-          "headRuns": [
-            {
-              "text": "29",
-              "strong": true
-            },
-            {
-              "text": " runs: 24 real work, 5 benchmark · 6 blind reviews"
-            }
-          ],
-          "sheetHead": "Codex · 29 runs · 6 blind reviews",
-          "cells": {
-            "worknode-build": {
-              "verdict": "fine",
-              "word": "Fine",
-              "sub": [
-                "7 runs",
-                "passed 3 of 4, 3 on the first try"
-              ]
-            },
-            "plan": null,
-            "scout": {
-              "verdict": "recommended",
-              "word": "Recommended",
-              "sub": [
-                "benchmark",
-                "5 runs"
-              ]
-            },
-            "mechanical": null
-          },
-          "report": [
-            {
-              "job": "scout",
-              "label": "Scout",
-              "verdict": "recommended",
-              "word": "Recommended",
-              "basis": "5 benchmark runs",
-              "measures": [
-                {
-                  "label": "Facts kept",
-                  "value": "81%",
-                  "sub": "benchmark",
-                  "note": "Over 5 runs; likely between 78% and 84%.",
-                  "range": {
-                    "low": 0.7842,
-                    "high": 0.8352,
-                    "value": 0.811
-                  }
-                },
-                {
-                  "label": "Verdicts changed on a re-check",
-                  "value": "15%",
-                  "sub": "benchmark",
-                  "note": "Over 5 runs; likely between 11% and 20%.",
-                  "range": {
-                    "low": 0.1132,
-                    "high": 0.1962,
-                    "value": 0.15
-                  }
-                },
-                {
-                  "label": "Time per item",
-                  "value": "4.7 s",
-                  "sub": "median",
-                  "note": "Range 4.7 to 4.8 s.",
-                  "range": null
-                },
-                {
-                  "label": "Cheating flags",
-                  "value": "none",
-                  "sub": "in 5 runs",
-                  "note": "",
-                  "range": null
-                }
-              ],
-              "compare": [
-                {
-                  "text": "Others on this job: "
-                },
-                {
-                  "text": "Opus 5.5 · xhigh",
-                  "strong": true
-                },
-                {
-                  "text": " Fine."
-                }
-              ]
-            },
-            {
-              "job": "worknode-build",
-              "label": "WorkNode build",
-              "verdict": "fine",
-              "word": "Fine",
-              "basis": "7 real runs, 4 checked by a blind reviewer",
-              "measures": [
-                {
-                  "label": "Passed review",
-                  "value": "75%",
-                  "sub": "3 of 4, 3 on the first try",
-                  "note": "With 4 reviews the true rate is likely between 36% and 94%.",
-                  "range": {
-                    "low": 0.3562,
-                    "high": 0.9421,
-                    "value": 0.75
-                  }
-                },
-                {
-                  "label": "Said done, reviewer disagreed",
-                  "value": "25%",
-                  "sub": "1 of 4",
-                  "note": "Likely between 6% and 64%.",
-                  "range": {
-                    "low": 0.05791,
-                    "high": 0.6438,
-                    "value": 0.25
-                  }
-                },
-                {
-                  "label": "Time per task",
-                  "value": "16 min",
-                  "sub": "median",
-                  "note": "Fastest 15 min, slowest 16 min, over 6 runs.",
-                  "range": null
-                },
-                {
-                  "label": "Cost per task",
-                  "value": "≈ 9.6",
-                  "sub": "credits, estimated",
-                  "note": "From 6 runs; an estimate, not a measured cost.",
-                  "range": null
-                },
-                {
-                  "label": "Cheating flags",
-                  "value": "none",
-                  "sub": "in 7 runs",
-                  "note": "Read everything it was given in 6 of 7 runs.",
-                  "range": null
-                }
-              ],
-              "compare": [
-                {
-                  "text": "Others on this job: "
-                },
-                {
-                  "text": "Opus 5.5 · xhigh",
-                  "strong": true
-                },
-                {
-                  "text": " Recommended, passed 6 of 6 (100%), 23 min per task."
-                },
-                {
-                  "text": " "
-                },
-                {
-                  "text": "GLM 5.3 · max",
-                  "strong": true
-                },
-                {
-                  "text": " "
-                },
-                {
-                  "text": "Avoid",
-                  "strong": true,
-                  "tone": "crit"
-                },
-                {
-                  "text": ", cheated in 2 of 5 runs."
-                }
-              ]
-            }
-          ]
-        },
         {
           "key": "anthropic/claude-opus-5-5|claude-code|xhigh",
           "model": "anthropic/claude-opus-5-5",
@@ -1260,14 +870,13 @@
             },
             "plan": null,
             "scout": {
-              "verdict": "fine",
-              "word": "Fine",
+              "verdict": "recommended",
+              "word": "Recommended",
               "sub": [
-                "5 real runs",
-                "nothing to compare"
+                "benchmark",
+                "5 runs"
               ]
-            },
-            "mechanical": null
+            }
           },
           "report": [
             {
@@ -1326,16 +935,6 @@
                   "text": "Others on this job: "
                 },
                 {
-                  "text": "Sol 6.1 · high",
-                  "strong": true
-                },
-                {
-                  "text": " Fine, passed 3 of 4 (75%), 16 min per task."
-                },
-                {
-                  "text": " "
-                },
-                {
                   "text": "GLM 5.3 · max",
                   "strong": true
                 },
@@ -1355,37 +954,37 @@
             {
               "job": "scout",
               "label": "Scout",
-              "verdict": "fine",
-              "word": "Fine",
-              "basis": "5 real runs and 5 benchmark runs, Scout pipeline 2.0",
+              "verdict": "recommended",
+              "word": "Recommended",
+              "basis": "5 benchmark runs",
               "measures": [
                 {
                   "label": "Facts kept",
-                  "value": "93%",
-                  "sub": "real work",
-                  "note": "Over 5 runs; likely between 91% and 94%.",
+                  "value": "95%",
+                  "sub": "benchmark",
+                  "note": "Over 5 runs; likely between 94% and 96%.",
                   "range": {
-                    "low": 0.9105,
-                    "high": 0.9441,
-                    "value": 0.9291
+                    "low": 0.9369,
+                    "high": 0.9648,
+                    "value": 0.9528
                   }
                 },
                 {
                   "label": "Verdicts changed on a re-check",
-                  "value": "8%",
-                  "sub": "real work",
-                  "note": "Over 5 runs; likely between 5% and 11%.",
+                  "value": "5%",
+                  "sub": "benchmark",
+                  "note": "Over 5 runs; likely between 3% and 8%.",
                   "range": {
-                    "low": 0.04972,
-                    "high": 0.1116,
-                    "value": 0.075
+                    "low": 0.03012,
+                    "high": 0.08189,
+                    "value": 0.05
                   }
                 },
                 {
                   "label": "Time per item",
                   "value": "4.9 s",
                   "sub": "median",
-                  "note": "Range 4.8 to 4.9 s.",
+                  "note": "Range 4.9 to 4.9 s.",
                   "range": null
                 },
                 {
@@ -1398,17 +997,106 @@
               ],
               "compare": [
                 {
-                  "text": "Why only Fine:",
+                  "text": "Sol 6.1 · high",
                   "strong": true
                 },
                 {
-                  "text": " no other model has 5 real Scout runs, so there is nothing to compare."
+                  "text": " is also Recommended here, with 5 runs."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "key": "openai/gpt-6.1-sol|codex|high",
+          "model": "openai/gpt-6.1-sol",
+          "label": "Sol 6.1",
+          "effort": "high",
+          "effortText": "high",
+          "runtime": "Codex",
+          "mark": "codex",
+          "runs": 29,
+          "head": "Codex · ",
+          "headRuns": [
+            {
+              "text": "29",
+              "strong": true
+            },
+            {
+              "text": " runs: 24 real work, 5 benchmark · 6 blind reviews"
+            }
+          ],
+          "sheetHead": "Codex · 29 runs · 6 blind reviews",
+          "cells": {
+            "worknode-build": {
+              "verdict": "not-enough-data",
+              "word": "Not enough data",
+              "sub": [
+                "7 runs, 4 reviewed, needs 5"
+              ]
+            },
+            "plan": null,
+            "scout": {
+              "verdict": "recommended",
+              "word": "Recommended",
+              "sub": [
+                "benchmark",
+                "5 runs"
+              ]
+            }
+          },
+          "report": [
+            {
+              "job": "scout",
+              "label": "Scout",
+              "verdict": "recommended",
+              "word": "Recommended",
+              "basis": "5 benchmark runs",
+              "measures": [
+                {
+                  "label": "Facts kept",
+                  "value": "81%",
+                  "sub": "benchmark",
+                  "note": "Over 5 runs; likely between 78% and 84%.",
+                  "range": {
+                    "low": 0.7842,
+                    "high": 0.8352,
+                    "value": 0.811
+                  }
                 },
                 {
-                  "text": " In the Scout benchmark it kept 95% of facts; Sol 6.1 · high kept 81%."
+                  "label": "Verdicts changed on a re-check",
+                  "value": "15%",
+                  "sub": "benchmark",
+                  "note": "Over 5 runs; likely between 11% and 20%.",
+                  "range": {
+                    "low": 0.1132,
+                    "high": 0.1962,
+                    "value": 0.15
+                  }
                 },
                 {
-                  "text": " The older pipeline 1.x has 3 benchmark runs, too few for a verdict."
+                  "label": "Time per item",
+                  "value": "4.7 s",
+                  "sub": "median",
+                  "note": "Range 4.7 to 4.8 s.",
+                  "range": null
+                },
+                {
+                  "label": "Cheating flags",
+                  "value": "none",
+                  "sub": "in 5 runs",
+                  "note": "",
+                  "range": null
+                }
+              ],
+              "compare": [
+                {
+                  "text": "Opus 5.5 · xhigh",
+                  "strong": true
+                },
+                {
+                  "text": " is also Recommended here, with 5 runs."
                 }
               ]
             }
@@ -1444,8 +1132,7 @@
                 "6 runs"
               ]
             },
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": [
             {
@@ -1523,8 +1210,7 @@
                 "5 runs"
               ]
             },
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": [
             {
@@ -1601,8 +1287,7 @@
               ]
             },
             "plan": null,
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": [
             {
@@ -1666,95 +1351,6 @@
                 },
                 {
                   "text": " Recommended, passed 6 of 6 (100%), 23 min per task."
-                },
-                {
-                  "text": " "
-                },
-                {
-                  "text": "Sol 6.1 · high",
-                  "strong": true
-                },
-                {
-                  "text": " Fine, passed 3 of 4 (75%), 16 min per task."
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "key": "muse/muse-spark-1.3-contributor|muse|max",
-          "model": "muse/muse-spark-1.3-contributor",
-          "label": "Muse Spark 1.3",
-          "effort": "max",
-          "effortText": "max",
-          "runtime": "Muse",
-          "mark": "muse",
-          "runs": 5,
-          "head": "Muse · ",
-          "headRuns": [
-            {
-              "text": "5",
-              "strong": true
-            },
-            {
-              "text": " runs: 5 real work, 0 benchmark · 1 blind review"
-            }
-          ],
-          "sheetHead": "Muse · 5 runs · 1 blind review",
-          "cells": {
-            "worknode-build": null,
-            "plan": null,
-            "scout": null,
-            "mechanical": {
-              "verdict": "fine",
-              "word": "Fine",
-              "sub": [
-                "5 runs",
-                "only model tried"
-              ]
-            }
-          },
-          "report": [
-            {
-              "job": "mechanical",
-              "label": "Mechanical edits",
-              "verdict": "fine",
-              "word": "Fine",
-              "basis": "5 real runs",
-              "measures": [
-                {
-                  "label": "Passed review",
-                  "value": "100%",
-                  "sub": "1 of 1, 1 on the first try",
-                  "note": "With 1 review the true rate is likely between 27% and 100%.",
-                  "range": {
-                    "low": 0.2699,
-                    "high": 1,
-                    "value": 1
-                  }
-                },
-                {
-                  "label": "Time per file",
-                  "value": "10 s",
-                  "sub": "median",
-                  "note": "Over 5 runs.",
-                  "range": null
-                },
-                {
-                  "label": "Cheating flags",
-                  "value": "none",
-                  "sub": "in 5 runs",
-                  "note": "Read everything it was given in 5 of 5 runs.",
-                  "range": null
-                }
-              ],
-              "compare": [
-                {
-                  "text": "Why only Fine:",
-                  "strong": true
-                },
-                {
-                  "text": " no other model has 5 real Mechanical edits runs, so there is nothing to compare."
                 }
               ]
             }
@@ -1789,8 +1385,7 @@
               ]
             },
             "plan": null,
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": []
         },
@@ -1823,8 +1418,7 @@
               ]
             },
             "plan": null,
-            "scout": null,
-            "mechanical": null
+            "scout": null
           },
           "report": []
         }
@@ -1835,7 +1429,7 @@
           "strong": true
         },
         {
-          "text": " WorkNode creation, Build (Sonnet 5.5 has 2 runs), Fix round, Review (Sol 6.1 · high has 15 runs), Tests, Research report, Audit read (GLM 5.3 · max has 1 run), Docs. "
+          "text": " WorkNode creation, Build (Sonnet 5.5 has 2 runs), Fix round, Review (Sol 6.1 · high has 15 runs), Tests, Research report, Mechanical edits (Muse Spark 1.3 · max has 5 runs), Audit read (GLM 5.3 · max has 1 run), Docs. "
         },
         {
           "text": "In the catalog with no runs:",
