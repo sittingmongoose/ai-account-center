@@ -695,10 +695,10 @@
               "strong": true
             },
             {
-              "text": " runs: 5 real work, 0 benchmark · 1 blind reviews"
+              "text": " runs: 5 real work, 0 benchmark · 1 blind review"
             }
           ],
-          "sheetHead": "Muse · 5 runs · 1 blind reviews",
+          "sheetHead": "Muse · 5 runs · 1 blind review",
           "cells": {
             "worknode-build": null,
             "plan": null,
@@ -915,7 +915,7 @@
           "strong": true
         },
         {
-          "text": " WorkNode creation, Build (Sonnet 5.5 has 2 runs), Fix round, Review (Sol 6.1 · high has 15 runs), Tests, Research report, Audit read (GLM 5.3 · max has 1 runs), Docs. "
+          "text": " WorkNode creation, Build (Sonnet 5.5 has 2 runs), Fix round, Review (Sol 6.1 · high has 15 runs), Tests, Research report, Audit read (GLM 5.3 · max has 1 run), Docs. "
         },
         {
           "text": "In the catalog with no runs:",
@@ -1697,10 +1697,10 @@
               "strong": true
             },
             {
-              "text": " runs: 5 real work, 0 benchmark · 1 blind reviews"
+              "text": " runs: 5 real work, 0 benchmark · 1 blind review"
             }
           ],
-          "sheetHead": "Muse · 5 runs · 1 blind reviews",
+          "sheetHead": "Muse · 5 runs · 1 blind review",
           "cells": {
             "worknode-build": null,
             "plan": null,
@@ -1835,7 +1835,7 @@
           "strong": true
         },
         {
-          "text": " WorkNode creation, Build (Sonnet 5.5 has 2 runs), Fix round, Review (Sol 6.1 · high has 15 runs), Tests, Research report, Audit read (GLM 5.3 · max has 1 runs), Docs. "
+          "text": " WorkNode creation, Build (Sonnet 5.5 has 2 runs), Fix round, Review (Sol 6.1 · high has 15 runs), Tests, Research report, Audit read (GLM 5.3 · max has 1 run), Docs. "
         },
         {
           "text": "In the catalog with no runs:",

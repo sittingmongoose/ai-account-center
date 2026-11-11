@@ -1466,14 +1466,18 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                 head_runs: vec![
                     strong(runs.to_string()),
                     run(format!(
-                        " runs: {} real work, {} benchmark · {} blind reviews",
-                        model.real, model.bench, model.reviews
+                        " runs: {} real work, {} benchmark · {} blind {}",
+                        model.real,
+                        model.bench,
+                        model.reviews,
+                        if model.reviews == 1 { "review" } else { "reviews" }
                     )),
                 ],
                 sheet_head: format!(
-                    "{} · {runs} runs · {} blind reviews",
+                    "{} · {runs} runs · {} blind {}",
                     model.runtime.as_deref().map(runtime_word).unwrap_or(""),
-                    model.reviews
+                    model.reviews,
+                    if model.reviews == 1 { "review" } else { "reviews" }
                 ),
                 cells,
                 report,
@@ -1501,12 +1505,16 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                     .iter()
                     .find(|x| x.n.observed + x.n.benchmark > 0 && x.label != "example/example-1")
             }) {
-                Some(some) => format!(
-                    "{} ({} has {} runs)",
-                    t.label,
-                    name(&some.label, &some.effort),
-                    some.n.observed + some.n.benchmark
-                ),
+                Some(some) => {
+                    let n = some.n.observed + some.n.benchmark;
+                    format!(
+                        "{} ({} has {} {})",
+                        t.label,
+                        name(&some.label, &some.effort),
+                        n,
+                        if n == 1 { "run" } else { "runs" }
+                    )
+                }
                 None => t.label.clone(),
             }
         })
