@@ -49,7 +49,12 @@ function reviewedCount(column: Pick<Column, 'reviews' | 'measures'>): number {
  * not five. A Fine can stand on fewer; a benchmark column needs no review.
  */
 function belowReviewBar(column: Pick<Column, 'source' | 'reviews' | 'measures'>, minRuns: number): boolean {
-  return column.source === 'observed' && reviewedCount(column) < minRuns;
+  if (column.source !== 'observed') return false;
+  // Cheating flags are per-run and do not depend on reviews: a cheating-floor Avoid stands
+  // on any number of reviewed items, and its cell keeps the "cheated in … runs" wording.
+  const cheating = column.measures.cheating;
+  if (cheating?.value != null && cheating.value >= CHEATING_FLOOR) return false;
+  return reviewedCount(column) < minRuns;
 }
 
 interface Scored {

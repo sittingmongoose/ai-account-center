@@ -374,7 +374,7 @@ describe('verdict rules', () => {
       held.measures.quality = value(quality, 1);
       return held;
     };
-    const judged = judge([oneItem('a', 1, 0), oneItem('cheat', 1, 0.4)]);
+    const judged = judge([oneItem('a', 1, 0), oneItem('poor', 0.4, 0)]);
     expect(judged.map((c) => [c.ranked, c.verdict, c.why])).toEqual([
       [false, 'not-enough-data', 'too few blind reviews yet (n = 10)'],
       [false, 'not-enough-data', 'too few blind reviews yet (n = 10)'],
@@ -382,7 +382,7 @@ describe('verdict rules', () => {
     // minRuns reviewed items clear the bar: the same columns then get their scored verdicts.
     const cleared = judge([
       column('a', 1, 0, 10, { reviews: 5 }),
-      column('cheat', 1, 0.4, 10, { reviews: 5 }),
+      column('poor', 0.4, 0, 10, { reviews: 5 }),
     ]);
     expect(cleared.map((c) => [c.ranked, c.verdict])).toEqual([
       [true, 'recommended'],
@@ -420,6 +420,20 @@ describe('verdict rules', () => {
       why: 'too few blind reviews yet (n = 10)',
     });
     expect(judged[1]).toMatchObject({ ranked: true });
+  });
+
+  it('a cheating Avoid is exempt from the review bar', () => {
+    // Cheating flags are per-run and do not depend on reviews: one reviewed item is
+    // enough for a cheating-floor Avoid. A quality Avoid on one item is still held.
+    const cheat = column('cheat', 1, 0.4, 10, { reviews: 1 });
+    cheat.measures.quality = value(1, 1);
+    const peer = column('peer', 1, 0, 10, { reviews: 5 });
+    const judged = judge([cheat, peer]);
+    expect(judged[0]).toMatchObject({
+      ranked: true,
+      verdict: 'avoid',
+      why: 'Flagged for cheating in 4 of 10 runs (n = 10).',
+    });
   });
 
   it('a demoted row does not set the top score, the peers or the ranks', () => {
