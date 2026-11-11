@@ -122,7 +122,8 @@ async function openAccounts(t, safe) {
 async function accountButton(t) {
 	const chrome = await t.page.evaluate(() => document.documentElement.dataset.chrome);
 	if (chrome === 'rail') return '.rail button[aria-label="Account"]';
-	if (chrome === 'phone' || chrome === 'band') return '.topbar .icon-btn[aria-label="Account"]';
+	if (chrome === 'band') return '.band-tools .icon-btn[aria-label="Account"]';
+	if (chrome === 'phone') return '.topbar .icon-btn[aria-label="Account"]';
 	return '.chrome .select-btn[aria-label="Account"]';
 }
 
@@ -139,6 +140,8 @@ export const tests = {
 				if (!pin) return;
 				await t.page.click('.pin-row');
 				await t.page.waitForSelector('.sheet-host .sheet', { timeout: 5000 });
+				// The grab-bar half of the report: a tall sheet starts at least 28 px from the top (951x669).
+				await t.check(`${label}: sheet top clears 28`, await t.page.evaluate(() => document.querySelector('.sheet-host .sheet').getBoundingClientRect().y >= 28), 'top below 28');
 				await assertClose(t, label, '.sheet-host .sheet-close', '.sheet-host .sheet', p.safe);
 			});
 		}
@@ -165,6 +168,8 @@ export const tests = {
 				const label = `${p.name} popover`;
 				await t.page.click('.prov-btn');
 				await t.page.waitForSelector('.pop', { timeout: 5000 });
+				// Wait for the placement effect so the sheet/anchored read is settled.
+				await t.page.waitForTimeout(300);
 				// Sheet mode (no inline left): measure the panel itself; its background touches the
 				// bottom by design, so only top/left/right are checked (the grab position is the top).
 				const sheet = await t.page.evaluate(() => !(document.querySelector('.pop').getAttribute('style') || '').includes('left'));
