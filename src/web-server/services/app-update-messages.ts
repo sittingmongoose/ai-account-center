@@ -68,7 +68,7 @@ export const MESSAGES = {
   package_in_use:
     'Windows still reports the app package in use after the close; the update was attempted but did not install.',
   older_copy_first:
-    'Not current: the copy that runs first on this computer is older than the managed install.',
+    'Not current: an older copy is first on the system PATH (apps and scripts run it).',
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 
