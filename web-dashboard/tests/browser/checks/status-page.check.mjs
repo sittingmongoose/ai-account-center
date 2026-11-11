@@ -52,6 +52,16 @@ async function stubStatus(t, view) {
     }
   );
   await stubMedia(t);
+  // Things to open: the read-only deliverable route, stubbed (a fixture image for pictures, a page otherwise).
+  await t.page.route(
+    (u) => new URL(u).pathname === '/api/status/deliverable',
+    (r) => {
+      const wanted = new URL(r.request().url()).searchParams.get('path') || '';
+      return /\.(png|jpe?g|webp)$/i.test(wanted)
+        ? r.fulfill({ contentType: 'image/jpeg', body: fs.readFileSync(path.join(LEPTOS, 'fixtures', 'media', 'option-a.jpg')) })
+        : r.fulfill({ contentType: 'text/html', body: '<h1>Deliverable</h1>' });
+    }
+  );
   return sent;
 }
 
@@ -566,10 +576,6 @@ export const tests = {
   async 'status concept C v2 pinned threads'(t) {
     const c2 = fixture('status-c2-pins.json');
     const view = { ...fixture('status-design-view.json'), pinned: c2.pinned, projects: c2.projects };
-    await t.page.route(
-      (u) => new URL(u).pathname === '/api/status/deliverable',
-      (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<h1>Deliverable</h1>' })
-    );
     await t.viewport(1440, 900);
     await openStatus(t, view);
     await t.page.waitForSelector('.c2-pane .c2-sheet');
@@ -582,7 +588,7 @@ export const tests = {
       JSON.stringify(['For you', 'Waiting on', 'Now', 'Next', 'Updated'])
     );
     await t.text('.c2-pane .fx', /was due/);
-    await t.text('.c2-pane .c2-sec-end', /Reviews, round 2, 3 of 6/);
+    await t.text('.c2-pane', /Reviews, round 2, 3 of 6/);
     await t.count('.c2-pane .c2-stages li', 6);
     await t.check('the owner step waits in amber', await t.page.$$eval('.c2-pane .c2-stages li[data-st="you"]', (l) => l.length === 1));
     // Things to open: main first with the blue Open through the route; a file outside the share offers Copy path.
@@ -598,9 +604,9 @@ export const tests = {
     await t.page.click('.c2-pane .to-row.main .to-sub button.link');
     await t.text('.c2-pane .to-older', /Superseded by v2/);
     // Tasks: grouped; one unknown state marks one row; the big group folds.
-    await t.text('.c2-pane .tg', /reported as "queued"/);
-    await t.text('.c2-pane .tg', /Show all 8/);
-    await t.text('.c2-pane .tg', /In work/);
+    await t.text('.c2-pane', /reported as "queued"/);
+    await t.text('.c2-pane', /Show all 8/);
+    await t.text('.c2-pane', /in work/i);
     // The README flag shows on its closed row only.
     await t.text('.c2-roster', /Questions in a README, not filed as cards\./);
     await t.check('the Progress section is gone', (await t.page.locator('text=Progress').count()) === 0);

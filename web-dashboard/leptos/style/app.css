@@ -2537,7 +2537,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
    ========================================================================== */
 .sec-pinned.c2 .c2-body { border-top: 1px solid var(--rule-2); }
 .c2-group { display: flex; align-items: baseline; gap: 6px; padding: 14px 16px 6px; }
-.c2-group .n, .c2-sec-head .n, .tg .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.c2-group .n, .c2-sec-head .n, .c2-tg .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .c2-rows { list-style: none; margin: 0; padding: 0; }
 .c2-row { display: grid; gap: 3px; width: 100%; text-align: left; padding: 10px 16px 11px; background: none; border: 0; border-top: 1px solid var(--rule-2); font: inherit; color: inherit; cursor: pointer; }
 .c2-row:hover { background: var(--row-hover); }
@@ -2552,6 +2552,8 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .c2-row.quiet .c2-title { color: var(--ink-2); }
 .c2-prob { display: block; font-size: 12.5px; line-height: 1.4; }
 .c2-mini { display: inline-flex; gap: 3px; flex: none; }
+/* Stage segments carry .fill (the style rules allow state colours only on fills); they are not meter fills. */
+.c2-mini i.fill, .c2-track i.fill, .c2-stages .seg.fill { position: static; background-image: none; }
 .c2-mini i { display: block; width: 14px; height: 4px; border-radius: 2px; background: var(--track); }
 .c2-mini i.fill[data-st='done'], .c2-stages .seg.fill[data-st='done'] { background: var(--ink-3); }
 .c2-mini i.fill[data-st='now'], .c2-stages li[data-st='now'] .seg.fill { background: var(--accent); }
@@ -2588,7 +2590,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .c2-sec-end { margin-left: auto; font-size: 12.5px; color: var(--ink-3); text-align: right; }
 .c2-sec-end b { color: var(--ink); font-weight: 640; font-variation-settings: 'wght' 640; }
 .c2-none, .c2-sub { font-size: 12.5px; padding-top: 8px; }
-.c2-fold, .tg-fold { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 8px 0; font-size: 13.5px; border-top: 1px solid var(--rule-2); }
+.c2-fold, .c2-tg-fold { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 8px 0; font-size: 13.5px; border-top: 1px solid var(--rule-2); }
 .to-list { list-style: none; margin: 0; padding: 0; }
 .to-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--rule-2); }
 .to-row:first-child { border-top: 0; }
@@ -2622,12 +2624,12 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .c2-track i.fill[data-st='now'] { background: var(--accent); }
 .c2-track i.fill[data-st='you'] { background: var(--warn); }
 .c2-track i.fill[data-st='wait'] { background: var(--ink-4); }
-.tg h5 { margin: 12px 0 2px; display: flex; gap: 6px; align-items: baseline; }
-.tg-rows { list-style: none; margin: 0; padding: 0; }
-.tg-rows li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--rule-2); font-size: 13.5px; line-height: 1.4; }
-.tg-t { min-width: 0; }
-.tg-n { color: var(--ink-3); font-size: 12.5px; text-align: right; flex: none; max-width: 48%; }
-.tg-less { justify-content: end !important; }
+.c2-tg h5 { margin: 12px 0 2px; display: flex; gap: 6px; align-items: baseline; }
+.c2-tg-rows { list-style: none; margin: 0; padding: 0; }
+.c2-tg-rows li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--rule-2); font-size: 13.5px; line-height: 1.4; }
+.c2-tg-t { min-width: 0; }
+.c2-tg-n { color: var(--ink-3); font-size: 12.5px; text-align: right; flex: none; max-width: 48%; }
+.c2-tg-less { justify-content: end !important; }
 @container content (min-width: 900px) {
   .sec-pinned.c2 .c2-body { display: grid; grid-template-columns: minmax(300px, 440px) minmax(0, 1fr); }
   .sec-pinned.c2 .c2-body.solo { display: block; }

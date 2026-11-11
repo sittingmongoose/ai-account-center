@@ -213,10 +213,10 @@ export const tests = {
 				await t.check(`${label}: no sideways scroll`, s.scrollW <= s.w + 1, `${s.scrollW} > ${s.w}`);
 				// A pinned thread's sheet ends at the rail: never under the strip, its clock or the camera (review U1).
 				// The pin is required: without it the check fails, it does not pass silently (review L4).
-				const pin = await t.page.$('.pin-row');
+				const pin = await t.page.$('.c2-row');
 				await t.check(`${label}: a pinned thread to open`, !!pin);
 				if (pin) {
-					await t.page.click('.pin-row');
+					await t.page.click('.c2-row');
 					await t.page.waitForSelector('.sheet-host .sheet', { timeout: 5000 });
 					const sheet = await t.page.evaluate(() => {
 						const r = document.querySelector('.sheet-host .sheet').getBoundingClientRect();

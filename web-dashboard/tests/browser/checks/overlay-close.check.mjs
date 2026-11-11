@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { analyticsFixture } from '../device/analytics-fixture.mjs';
 import { fakeServer, serve } from '../accounts-fixture.mjs';
 
-const LEPTOS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../leptos');
+const LEPTOS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../leptos');
 const fixture = (name) => JSON.parse(fs.readFileSync(path.join(LEPTOS, 'fixtures', name), 'utf8'));
 const TYPES = { '.jpg': 'image/jpeg', '.png': 'image/png', '.mp4': 'video/mp4', '.webp': 'image/webp' };
 const DUO_SCREEN = { width: 466, height: 678 };
@@ -135,10 +135,10 @@ export const tests = {
 				await poseContext(t, p);
 				await openStatus(t, design, p.safe);
 				const label = `${p.name} pin sheet`;
-				const pin = await t.page.$('.pin-row');
+				const pin = await t.page.$('.c2-row');
 				await t.check(`${label}: a pinned thread to open`, !!pin);
 				if (!pin) return;
-				await t.page.click('.pin-row');
+				await t.page.click('.c2-row');
 				await t.page.waitForSelector('.sheet-host .sheet', { timeout: 5000 });
 				// The grab-bar half of the report: a tall sheet starts at least 28 px from the top (951x669).
 				await t.check(`${label}: sheet top clears 28`, await t.page.evaluate(() => document.querySelector('.sheet-host .sheet').getBoundingClientRect().y >= 28), 'top below 28');

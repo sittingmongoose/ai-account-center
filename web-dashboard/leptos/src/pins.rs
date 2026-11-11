@@ -664,26 +664,26 @@ fn TaskGroupView(g: TaskGroup) -> impl IntoView {
         g.label
     };
     view! {
-        <div class="tg">
+        <div class="c2-tg">
             <h5 class="cap" data-tone=g.warn.then_some("warn")>{label}" "<span class="n">{n.to_string()}</span></h5>
             {move || if folds && !open.get() {
                 view! {
-                    <p class="tg-fold"><span>{plural_tasks(n)}</span>
+                    <p class="c2-tg-fold"><span>{plural_tasks(n)}</span>
                         <button class="link" on:click=move |_| open.set(true)>{format!("Show all {n}")}</button></p>
                 }.into_any()
             } else {
                 view! {
-                    <ul class="tg-rows">
+                    <ul class="c2-tg-rows">
                         {rows.iter().map(|r| view! {
-                            <li><span class="tg-t">{r.title.clone()}</span>
+                            <li><span class="c2-tg-t">{r.title.clone()}</span>
                                 {match (&r.odd_state, &r.note) {
-                                    (Some(s), _) => view! { <span class="tg-n" data-tone="warn">{format!("reported as \"{s}\"")}</span> }.into_any(),
-                                    (None, Some(n)) => view! { <span class="tg-n">{n.clone()}</span> }.into_any(),
-                                    _ => view! { <span class="tg-n"></span> }.into_any(),
+                                    (Some(s), _) => view! { <span class="c2-tg-n" data-tone="warn">{format!("reported as \"{s}\"")}</span> }.into_any(),
+                                    (None, Some(n)) => view! { <span class="c2-tg-n">{n.clone()}</span> }.into_any(),
+                                    _ => view! { <span class="c2-tg-n"></span> }.into_any(),
                                 }}
                             </li>
                         }).collect_view()}
-                        {(folds).then(|| view! { <li class="tg-less"><button class="link" on:click=move |_| open.set(false)>"Fewer"</button></li> })}
+                        {(folds).then(|| view! { <li class="c2-tg-less"><button class="link" on:click=move |_| open.set(false)>"Fewer"</button></li> })}
                     </ul>
                 }.into_any()
             }}
