@@ -381,14 +381,22 @@ fn a_passing_or_unclear_verdict_never_counts_as_a_failing_round() {
         );
     }
     // A verdict that says neither (the reviewer's own words) is unclear: it never counts
-    // toward a loop, and it breaks the row of consecutive failures.
+    // toward a loop, and since B3 it no longer resets the count either - free wording
+    // between two fails must not hide the loop those fails make.
     let unclear = board(json!([
         { "atMs": NOW - 3_600_000, "verdict": "fail" },
         { "atMs": NOW - 1_800_000, "verdict": "fail" },
         { "atMs": NOW - 1_200_000, "verdict": "inconclusive: rerun the probes" },
         { "atMs": NOW - 600_000, "verdict": "fail" }
     ]));
-    assert_eq!(one_update(&unclear).looping.answer, "no");
+    assert_eq!(one_update(&unclear).looping.answer, "yes");
+    // Alone it is still never a loop: unclear rounds never count.
+    let only_unclear = board(json!([
+        { "atMs": NOW - 1_800_000, "verdict": "fail" },
+        { "atMs": NOW - 1_200_000, "verdict": "inconclusive: rerun the probes" },
+        { "atMs": NOW - 600_000, "verdict": "inconclusive: rerun the probes" }
+    ]));
+    assert_eq!(one_update(&only_unclear).looping.answer, "no");
 
     // The documented failure spellings still fail, case and trim included.
     for verdict in ["FAIL", " Failed ", "BLOCK", "blocked", "CHANGES REQUESTED", "rejected"] {
@@ -406,7 +414,9 @@ fn a_passing_or_unclear_verdict_never_counts_as_a_failing_round() {
 }
 
 #[test]
-fn reviews_outside_the_last_day_do_not_loop_and_undated_ones_do() {
+fn reviews_outside_the_loop_window_do_not_loop_and_undated_ones_do() {
+    // The window spans four days (B3): a daily-fail loop is still a loop, and only reviews
+    // older than that stop counting.
     let outside = input(json!({
         "pins": [pin("t1", json!("a"))],
         "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
@@ -415,9 +425,9 @@ fn reviews_outside_the_last_day_do_not_loop_and_undated_ones_do() {
             "project": "pm7", "stream": "f",
             "items": [ { "id": "F-07", "title": "Tray icon", "state": "fixing",
                 "reviews": [
-                    { "atMs": NOW - 3 * 24 * 60 * 60 * 1000, "verdict": "fail" },
-                    { "atMs": NOW - 2 * 24 * 60 * 60 * 1000, "verdict": "fail" },
-                    { "atMs": NOW - 24 * 60 * 60 * 1000 - 1, "verdict": "fail" }
+                    { "atMs": NOW - 6 * 24 * 60 * 60 * 1000, "verdict": "fail" },
+                    { "atMs": NOW - 5 * 24 * 60 * 60 * 1000, "verdict": "fail" },
+                    { "atMs": NOW - 4 * 24 * 60 * 60 * 1000 - 1, "verdict": "fail" }
                 ] } ]
         })]
     }));
@@ -631,4 +641,79 @@ fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
     let update = one_update(&lapsed);
     assert_eq!(update.report_state, "fresh");
     assert_eq!(update.blocked.text, "Waiting on you: Pick the reviewers.");
+}
+
+#[test]
+fn the_loop_rule_matches_fail_wording_by_prefix() {
+    // B3: reviewers here word a failing round "FAIL, one Medium"; the rule must read it as a
+    // fail the way it already reads "PASS WITH NOTES" as a pass.
+    let day = 24 * 60 * 60 * 1000i64;
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
+            "project": "pm7", "stream": "f",
+            "items": [
+                { "id": "S-01", "title": "Sweep", "state": "fixing", "reviews": [
+                    { "atMs": NOW - 9 * 3_600_000, "verdict": "FAIL, one Medium" },
+                    { "atMs": NOW - 6 * 3_600_000, "verdict": "FAIL, one Medium" },
+                    { "atMs": NOW - 3 * 3_600_000, "verdict": "FAIL, one Medium" }
+                ] },
+                { "id": "S-02", "title": "Daily", "state": "fixing", "reviews": [
+                    { "atMs": NOW - 4 * day + 3_600_000, "verdict": "fail" },
+                    { "atMs": NOW - 3 * day + 3_600_000, "verdict": "fail" },
+                    { "atMs": NOW - 2 * day + 3_600_000, "verdict": "fail" },
+                    { "atMs": NOW - 1 * day + 3_600_000, "verdict": "fail" }
+                ] },
+                { "id": "S-03", "title": "Unclear", "state": "fixing", "reviews": [
+                    { "atMs": NOW - 9 * 3_600_000, "verdict": "fail" },
+                    { "atMs": NOW - 6 * 3_600_000, "verdict": "cannot verify on the phone" },
+                    { "atMs": NOW - 3 * 3_600_000, "verdict": "fail" },
+                    { "atMs": NOW - 2 * 3_600_000, "verdict": "fail" }
+                ] },
+                { "id": "S-04", "title": "Never a loop", "state": "fixing", "reviews": [
+                    { "atMs": NOW - 9 * 3_600_000, "verdict": "cannot verify on the phone" },
+                    { "atMs": NOW - 6 * 3_600_000, "verdict": "cannot verify on the phone" },
+                    { "atMs": NOW - 3 * 3_600_000, "verdict": "cannot verify on the phone" },
+                    { "atMs": NOW - 2 * 3_600_000, "verdict": "cannot verify on the phone" }
+                ] }
+            ]
+        })]
+    }));
+    let view = compose(&built);
+    let update = &view.updates[0];
+    // Before the rule read these boards, every one of S-01..S-03 said "No." (an unknown
+    // verdict reset the count; a day-old fail fell out of the window). Now the worst item
+    // of the board loops and is named; S-04's unclear verdicts never loop on their own.
+    assert_eq!(update.looping.answer, "yes");
+    assert!(
+        update
+            .looping
+            .text
+            .starts_with("Yes. S-02 has gone back for fixes 4 times")
+            || update
+                .looping
+                .text
+                .starts_with("Yes. S-03 has gone back for fixes 4 times"),
+        "the worst loop must say four rounds: {}",
+        update.looping.text
+    );
+    assert_eq!(view.counts.looping, 1);
+    // A board whose only reviews are unclear stays "No.", not a loop: unknown never counts.
+    let unclear = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
+            "project": "pm7", "stream": "f",
+            "items": [ { "id": "S-04", "title": "Never a loop", "state": "fixing", "reviews": [
+                { "atMs": NOW - 9 * 3_600_000, "verdict": "cannot verify on the phone" },
+                { "atMs": NOW - 6 * 3_600_000, "verdict": "cannot verify on the phone" },
+                { "atMs": NOW - 3 * 3_600_000, "verdict": "cannot verify on the phone" }
+            ] } ]
+        })]
+    }));
+    let update = one_update(&unclear);
+    assert_eq!(update.looping.answer, "no");
 }

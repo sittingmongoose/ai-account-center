@@ -12,8 +12,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-/// How far back the loop rule looks (PINNED-THREADS.md section 3: "in the last 24 hours").
-const LOOP_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+/// How far back the loop rule looks. Boards here review slower than once a day — Jared's own
+/// loops ran for days — so a 24-hour window read a four-day loop of daily fails as "not
+/// looping"; the window now spans several days (PINNED-THREADS.md section 3's "recent"
+/// reviews).
+const LOOP_WINDOW_MS: i64 = 4 * 24 * 60 * 60 * 1000;
 
 /// Past this age without a report a pinned thread says it stopped reporting, whatever its
 /// heartbeat said (section 1: "past its time-to-live, or a day").
@@ -27,7 +30,8 @@ const PASSING_VERDICTS: [&str; 8] = [
     "pass", "passed", "approve", "approved", "approval", "lgtm", "clean", "ship",
 ];
 
-/// A review verdict that failed, the spellings the boards and reviewers write.
+/// A review verdict that failed, the spellings the boards and reviewers write. Matched by
+/// prefix, like a pass: "FAIL, one Medium" is a fail, never an unclear verdict.
 const FAILING_VERDICTS: [&str; 6] = ["fail", "failed", "block", "blocked", "changes requested", "rejected"];
 
 /// How one review verdict reads for the loop rule (section 3): it passed, it failed, or it
@@ -45,16 +49,16 @@ fn classify_verdict(verdict: &str) -> Verdict {
     if text.starts_with("pass") || PASSING_VERDICTS.contains(&text.as_str()) {
         return Verdict::Pass;
     }
-    if FAILING_VERDICTS.contains(&text.as_str()) {
+    if FAILING_VERDICTS.iter().any(|word| text.starts_with(word)) {
         return Verdict::Fail;
     }
     Verdict::Unknown
 }
 
 /// The loop rule's counts (section 3): 3 or more failing reviews in a row, or 4 or more
-/// failing rounds since a passing one. A pass (or an unclear verdict, which never counts as
-/// a round) starts the count over, so the two measure the same stretch of a board whose
-/// reviews are written in order; both are checked anyway.
+/// failing rounds since a passing one. A pass starts the count over; an unclear verdict is
+/// skipped (never counted, never a reset), so the two measure the same stretch of a board
+/// whose reviews are written in order; both are checked anyway.
 const LOOP_ROW_MIN: usize = 3;
 const LOOP_ROUNDS_MIN: usize = 4;
 
@@ -514,6 +518,9 @@ struct ItemLoop {
 
 /// The loop count for one item, over the reviews inside the loop window. A review the
 /// item's board did not date counts too — an undatable fix round must not hide a loop.
+/// An unclear verdict is skipped, not a reset: free wording a reviewer left between two
+/// fails ("cannot verify on the phone") must not turn a real loop back into "on track",
+/// and it never counts toward one either (section 3 prefers "unsure" to a guess).
 fn item_loop(item: &ItemIn, now_ms: i64) -> ItemLoop {
     let mut rounds = 0;
     for review in &item.reviews {
@@ -527,9 +534,7 @@ fn item_loop(item: &ItemIn, now_ms: i64) -> ItemLoop {
         match classify_verdict(&review.verdict) {
             Verdict::Pass => rounds = 0,
             Verdict::Fail => rounds += 1,
-            // An unclear verdict is neither: it breaks the row of consecutive failures, and
-            // a loop is never guessed across it (section 3 prefers "unsure" to a guess).
-            Verdict::Unknown => rounds = 0,
+            Verdict::Unknown => {}
         }
     }
     ItemLoop {
