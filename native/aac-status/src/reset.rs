@@ -64,14 +64,13 @@ impl Snapshot {
             if g.left > 1000 || g.kind.len() > 64 || g.clears.len() > 16 || g.clears.iter().any(|s| s.len() > 64) {
                 return Err("shape");
             }
-            if let Some(id) = &g.id {
-                if id.is_empty()
+            if let Some(id) = &g.id
+                && (id.is_empty()
                     || id.len() > 256
                     || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                    || !ids.insert(id)
-                {
-                    return Err("shape");
-                }
+                    || !ids.insert(id))
+            {
+                return Err("shape");
             }
         }
         Ok(())
@@ -151,10 +150,10 @@ pub struct Store {
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
-        if let Ok(meta) = std::fs::symlink_metadata(path) {
-            if meta.file_type().is_symlink() || !meta.is_file() {
-                return Err("unsafe-storage");
-            }
+        if let Ok(meta) = std::fs::symlink_metadata(path)
+            && (meta.file_type().is_symlink() || !meta.is_file())
+        {
+            return Err("unsafe-storage");
         }
         #[cfg(unix)]
         {
@@ -414,6 +413,7 @@ impl Store {
     }
     /// Atomically consumes confirmation and durably reserves the account BEFORE any I/O.
     /// A crashed/ambiguous attempt stays pending forever until a read proves its result.
+    #[expect(clippy::too_many_arguments, reason = "Preserve the existing explicit claim boundary")]
     pub fn begin(
         &mut self,
         account: &str,
@@ -632,23 +632,45 @@ impl Store {
         self.finish(&owner, attempt, Outcome::Ambiguous, Some(after), now, None)
     }
     pub fn history(&self, account: &str) -> Result<Value> {
-        let canonical = self.account_canonical(account)?;
-        let mut hashes = vec![hash(account)];
-        let mut accounts = sql(self.db.prepare(
-            "SELECT account FROM aliases WHERE lock_key=? UNION SELECT account FROM attempts WHERE lock_key=?",
-        ))?;
-        let routes = sql(accounts.query_map(params![canonical, canonical], |r| r.get::<_, String>(0)))?;
-        for route in routes {
-            hashes.push(hash(&sql(route)?));
+        let Some(canonical) = self.account_canonical(account)? else {
+            return Ok(json!([]));
+        };
+        // Route names can be reused for another login. Audit ownership comes from the
+        // immutable target snapshot (prepare/attempt) or reserved attempt (verification).
+        let mut targets = std::collections::HashSet::new();
+        let mut stmt = sql(self.db.prepare("SELECT key,snapshot FROM targets"))?;
+        let rows = sql(stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))))?;
+        for row in rows {
+            let (key, snapshot) = sql(row)?;
+            let snapshot: Snapshot = serde_json::from_str(&snapshot).map_err(|_| "shape")?;
+            if Self::canonical(&snapshot)? == canonical {
+                targets.insert(hash(&key));
+            }
+        }
+        let mut attempts = std::collections::HashSet::new();
+        let mut stmt = sql(self.db.prepare("SELECT key,target FROM attempts WHERE lock_key=?"))?;
+        let rows = sql(stmt.query_map([canonical], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))))?;
+        for row in rows {
+            let (key, target) = sql(row)?;
+            attempts.insert(hash(&key));
+            targets.insert(hash(&target));
         }
         let mut stmt = sql(self
             .db
-            .prepare("SELECT account_hash,at_ms,event,target_hash,outcome,details FROM history ORDER BY seq"))?;
-        let rows=sql(stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,json!({"atMs":r.get::<_,i64>(1)?,"event":r.get::<_,String>(2)?,"targetHash":r.get::<_,String>(3)?,"outcome":r.get::<_,String>(4)?,"details":serde_json::from_str::<Value>(&r.get::<_,String>(5)?).unwrap_or(Value::Null)})))))?;
+            .prepare("SELECT at_ms,event,target_hash,outcome,details FROM history ORDER BY seq"))?;
+        let rows = sql(stmt.query_map([], |r| {
+            Ok(json!({"atMs":r.get::<_,i64>(0)?,"event":r.get::<_,String>(1)?,"targetHash":r.get::<_,String>(2)?,"outcome":r.get::<_,String>(3)?,"details":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))
+        }))?;
         let mut events = vec![];
         for row in rows {
-            let (account_hash, event) = sql(row)?;
-            if hashes.contains(&account_hash) {
+            let event = sql(row)?;
+            let key = event["targetHash"].as_str().unwrap_or("");
+            let owned = match event["event"].as_str() {
+                Some("prepare" | "attempt") => targets.contains(key),
+                Some("verification") => attempts.contains(key),
+                _ => false,
+            };
+            if owned {
                 events.push(event);
             }
         }

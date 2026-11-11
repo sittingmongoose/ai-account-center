@@ -257,10 +257,10 @@ pub fn dispatch(args: &str) -> Result<Value> {
     if a.expected_account.is_empty() {
         return Err("identity-unconfirmed");
     }
-    if let Some(w) = &a.write {
-        if w["identity"]["account"] != a.expected_account {
-            return Err("identity-changed");
-        }
+    if let Some(w) = &a.write
+        && w["identity"]["account"] != a.expected_account
+    {
+        return Err("identity-changed");
     }
     let result = codex(&a.home, &a.profile, &a.host, a.write.as_ref())?;
     if a.write.is_none() && result["identity"]["account"] != a.expected_account {
