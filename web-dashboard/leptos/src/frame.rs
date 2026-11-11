@@ -664,8 +664,8 @@ fn watch_build(ctx: FrameCtx) {
         // holds its HTML in the cache, so check it now and warm the served runtime too.
         let check = check.clone();
         let start = Closure::once_into_js(move || check(false));
-        let _ =
-            window().set_timeout_with_callback_and_timeout_and_arguments_0(start.unchecked_ref(), 4000);
+        let _ = window()
+            .set_timeout_with_callback_and_timeout_and_arguments_0(start.unchecked_ref(), 4000);
     }
 }
 

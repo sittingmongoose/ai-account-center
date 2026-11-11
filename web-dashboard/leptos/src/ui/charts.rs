@@ -395,6 +395,52 @@ fn sideways(from: (f64, f64), to: (f64, f64)) -> bool {
 
 // ---------------------------------------------------------------- tips
 
+/// The horizontal content bounds for an anchored panel: the window minus the rail (review J1).
+/// `rail_w` is the strip width on the rail's side; off the rail the window bounds hold.
+pub(crate) fn content_bounds(vw: f64, chrome: &str, side: &str, rail_w: f64) -> (f64, f64) {
+    let (mut lo, mut hi) = (8.0, vw - 8.0);
+    if chrome == "rail" {
+        if side == "left" {
+            lo = rail_w;
+        } else {
+            hi = vw - rail_w;
+        }
+    }
+    // A window narrower than the rail still yields a span inside the window.
+    if hi <= lo {
+        return (8.0, (vw - 8.0).max(8.0));
+    }
+    (lo, hi)
+}
+
+/// The left edge for an anchored panel of width `w`, kept between the content bounds.
+pub(crate) fn pop_left(anchor_left: f64, anchor_right: f64, w: f64, lo: f64, hi: f64) -> f64 {
+    (anchor_right - w)
+        .max(lo)
+        .min(anchor_left.max(lo))
+        .min(hi - w)
+}
+
+/// Reads the content bounds from the page's chrome (`data-chrome`, `data-rail-side`, `--rail-w`).
+fn page_bounds(vw: f64) -> (f64, f64) {
+    let root = document().document_element();
+    let chrome = root
+        .as_ref()
+        .and_then(|r| r.get_attribute("data-chrome"))
+        .unwrap_or_default();
+    let side = root
+        .as_ref()
+        .and_then(|r| r.get_attribute("data-rail-side"))
+        .unwrap_or_default();
+    let rail_w = root
+        .as_ref()
+        .and_then(|r| window().get_computed_style(r).ok().flatten())
+        .and_then(|st| st.get_property_value("--rail-w").ok())
+        .map(|v| v.trim_end_matches("px").parse::<f64>().unwrap_or(0.0))
+        .unwrap_or(0.0);
+    content_bounds(vw, &chrome, &side, rail_w)
+}
+
 /// The hover tip: one floating card for every element with `data-tip` inside `children`. A mouse shows it on hover;
 /// a touch shows it on a tap that does nothing else (a plain value), until the next tap.
 #[component]
@@ -418,7 +464,8 @@ pub fn TipLayer(children: Children) -> impl IntoView {
             .and_then(|v| v.as_f64())
             .unwrap_or(1024.0);
         let below = rect.top() < 120.0;
-        let x = (rect.left() + rect.width() / 2.0).clamp(12.0, vw - 12.0);
+        let (lo, hi) = page_bounds(vw);
+        let x = (rect.left() + rect.width() / 2.0).clamp(lo + 4.0, (hi - 4.0).max(lo + 4.0));
         let y = if below {
             rect.bottom() + 8.0
         } else {
@@ -523,11 +570,9 @@ pub fn Popover(
         if rect.bottom() < 0.0 || rect.top() > vh {
             return false;
         }
-        let w = width.min(vw - 16.0);
-        let left = (rect.right() - w)
-            .max(8.0)
-            .min(rect.left().max(8.0))
-            .min(vw - w - 8.0);
+        let (lo, hi) = page_bounds(vw);
+        let w = width.min((hi - lo).max(0.0));
+        let left = pop_left(rect.left(), rect.right(), w, lo, hi);
         let top = rect.bottom() + 8.0;
         let at = if top + 240.0 <= vh || rect.top() < vh / 2.0 {
             format!(
@@ -656,6 +701,19 @@ mod tests {
             assert!(v >= last && v <= 1.0);
             last = v;
         }
+    }
+
+    #[test]
+    fn the_popover_stays_beside_the_rail() {
+        // strip on the right (951x669): the popover ends at the rail (867), never 943
+        let (lo, hi) = content_bounds(951.0, "rail", "right", 84.0);
+        assert_eq!(pop_left(800.0, 867.0, 340.0, lo, hi), 527.0);
+        // strip on the left (678x466): the popover starts at the rail (84), never 8
+        let (lo, hi) = content_bounds(678.0, "rail", "left", 84.0);
+        assert_eq!(pop_left(100.0, 150.0, 340.0, lo, hi), 84.0);
+        // no rail (phone 402): the window bounds, as before
+        let (lo, hi) = content_bounds(402.0, "phone", "", 0.0);
+        assert_eq!((lo, hi), (8.0, 394.0));
     }
 
     #[test]

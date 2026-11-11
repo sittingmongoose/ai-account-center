@@ -220,9 +220,7 @@ pub fn keep_chrome_while_typing(
     last_side: Option<&'static str>,
     side: &'static str,
 ) -> bool {
-    typing
-        && last_width.is_some_and(|w| (w - width).abs() < 1.0)
-        && last_side == Some(side)
+    typing && last_width.is_some_and(|w| (w - width).abs() < 1.0) && last_side == Some(side)
 }
 
 /// Whether a reload would steal the screen (review L5): a field has focus, the dashboard iframe
@@ -265,7 +263,11 @@ pub fn typing() -> bool {
         .ok()
         .flatten()
         .is_some();
-    let dialog_open = document().query_selector(".adialog").ok().flatten().is_some();
+    let dialog_open = document()
+        .query_selector(".adialog")
+        .ok()
+        .flatten()
+        .is_some();
     busy_for_reload(field_typing, iframe_focused, dashboard_raised, dialog_open)
 }
 
@@ -435,7 +437,8 @@ pub fn start(embed: bool) {
                 0,
             );
         });
-        let _ = document().add_event_listener_with_callback("focusout", on_blur.as_ref().unchecked_ref());
+        let _ = document()
+            .add_event_listener_with_callback("focusout", on_blur.as_ref().unchecked_ref());
         on_blur.forget();
     }
     on_change.forget();
@@ -525,13 +528,37 @@ mod tests {
     #[test]
     fn typing_keeps_the_chrome_until_the_width_changes() {
         // the keyboard shortens open upright from 669x869: same width, so the bars stay
-        assert!(keep_chrome_while_typing(true, Some(669.0), 669.0, Some("right"), "right"));
+        assert!(keep_chrome_while_typing(
+            true,
+            Some(669.0),
+            669.0,
+            Some("right"),
+            "right"
+        ));
         // turned while typing: a new width chooses again
-        assert!(!keep_chrome_while_typing(true, Some(669.0), 951.0, Some("right"), "right"));
+        assert!(!keep_chrome_while_typing(
+            true,
+            Some(669.0),
+            951.0,
+            Some("right"),
+            "right"
+        ));
         // turned 180 the same width (the folded Duo 678): the strip moves side, so choose again (review L1)
-        assert!(!keep_chrome_while_typing(true, Some(678.0), 678.0, Some("right"), "left"));
+        assert!(!keep_chrome_while_typing(
+            true,
+            Some(678.0),
+            678.0,
+            Some("right"),
+            "left"
+        ));
         // not typing, or nothing chosen yet: choose as usual
-        assert!(!keep_chrome_while_typing(false, Some(669.0), 669.0, Some("right"), "right"));
+        assert!(!keep_chrome_while_typing(
+            false,
+            Some(669.0),
+            669.0,
+            Some("right"),
+            "right"
+        ));
         assert!(!keep_chrome_while_typing(true, None, 669.0, None, "right"));
     }
 
@@ -582,9 +609,21 @@ mod tests {
     #[test]
     fn an_iframe_or_open_confirmation_keeps_the_screen() {
         assert!(!busy_for_reload(false, false, false, false));
-        assert!(busy_for_reload(true, false, false, false), "a field has focus");
-        assert!(busy_for_reload(false, true, false, false), "the dashboard iframe has focus (review L5)");
-        assert!(busy_for_reload(false, false, true, false), "a raised dashboard confirmation");
-        assert!(busy_for_reload(false, false, false, true), "the frame's switch dialog is open");
+        assert!(
+            busy_for_reload(true, false, false, false),
+            "a field has focus"
+        );
+        assert!(
+            busy_for_reload(false, true, false, false),
+            "the dashboard iframe has focus (review L5)"
+        );
+        assert!(
+            busy_for_reload(false, false, true, false),
+            "a raised dashboard confirmation"
+        );
+        assert!(
+            busy_for_reload(false, false, false, true),
+            "the frame's switch dialog is open"
+        );
     }
 }

@@ -1933,6 +1933,18 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-vis
 :root[data-chrome='rail'][data-rail-side='left'] .sheet-host .sheet { right: 0; left: var(--rail-w); }
 :root[data-chrome='rail'] .side-host .side-panel { right: var(--rail-w); width: min(560px, calc(100% - var(--rail-w))); }
 :root[data-chrome='rail'][data-rail-side='left'] .side-host .side-panel { right: 0; }
+/* The popover sheet (charts.rs Popover on phones) ends at the rail like the other sheets. Anchored popovers are
+   clamped by the script to the content bounds (content_bounds). */
+:root[data-chrome='rail'] .pop:not([style*='left']) { right: var(--rail-w); }
+:root[data-chrome='rail'][data-rail-side='left'] .pop:not([style*='left']) { left: var(--rail-w); right: 0; }
+/* The viewer and the switch approval keep clear of the rail even when iOS reports no strip inset. */
+:root[data-chrome='rail'] .viewer { padding-right: max(var(--safe-right), var(--rail-w)); }
+:root[data-chrome='rail'][data-rail-side='left'] .viewer { padding-left: max(var(--safe-left), var(--rail-w)); padding-right: var(--safe-right); }
+:root[data-chrome='rail'] .ascrim { padding-right: calc(16px + max(var(--safe-right), var(--rail-w))); }
+:root[data-chrome='rail'][data-rail-side='left'] .ascrim { padding-left: calc(16px + max(var(--safe-left), var(--rail-w))); padding-right: calc(16px + var(--safe-right)); }
+/* The help popover and the tip stay inside the content beside the rail. */
+:root[data-chrome='rail'] .hpop { right: 0; }
+:root[data-chrome='rail'] .tip-card { max-width: min(340px, calc(100vw - var(--rail-w) - 24px)); }
 
 /* ---------- Spend and Scoreboard interactivity ---------- */
 .seg-row { display: flex; }
