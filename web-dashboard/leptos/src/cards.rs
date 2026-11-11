@@ -674,9 +674,9 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
         facts.push(("Related", related.join(", ")));
     }
     let note_hint = match c.kind.as_str() {
-        "objection" => "Say why you object, or leave a note. It goes to the agent word for word.",
-        "action" => "Note for the agent (optional). It goes word for word.",
-        _ => "Add a note (optional). It goes to the agent word for word.",
+        "objection" => "Say why you object, or write a response. It goes to the agent word for word.",
+        "action" => "Write a response, or add a note to Done. It goes to the agent word for word.",
+        _ => "Write a response, or add a note to your choice. It goes to the agent word for word.",
     };
 
     view! {
@@ -817,9 +817,9 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                 })}
                 <Show when=move || standing() == Standing::Changed>
                     <p class="q-problem">{move || match drafts.with(|d| drafts::stale_parts(d, &card.get_value())) {
-                        (true, true) => "This question changed after you answered. Nothing is sent until you tap an option again and edit your note.",
+                        (true, true) => "This question changed after you answered. Nothing is sent until you tap an option again and edit your words.",
                         (true, false) => "This question changed after you chose. Nothing is sent until you tap an option again.",
-                        _ => "This question changed after you wrote your note. Nothing is sent until you edit the note.",
+                        _ => "This question changed after you wrote your response. Nothing is sent until you edit it.",
                     }}</p>
                 </Show>
                 {(!c.notes.is_empty() || !c.replies.is_empty()).then(|| view! {
@@ -853,7 +853,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                         }
                     })}
                     <label class="q-note-label">
-                        <span class="sr">"Note to the agent"</span>
+                        <span class="sr">"Your response, or a note to your choice"</span>
                         <textarea
                             class="note"
                             rows="2"
@@ -967,7 +967,11 @@ fn Review(
                             Standing::Empty if c.kind == "objection" => ("No objection · nothing is sent".to_string(), ""),
                             Standing::Empty if c.kind == "action" => ("Not done yet · stays open".to_string(), ""),
                             Standing::Empty => ("Not answered · stays open for later".to_string(), ""),
-                            Standing::Ready if draft.choice.is_empty() => ("Note only · the question stays open".to_string(), ""),
+                            // Words without a choice are the owner's response: they close the card, sent word for word.
+                            Standing::Ready if draft.choice.is_empty() => (
+                                if c.kind == "action" { "Written response · closes this task" } else { "Written response · closes this question" }.to_string(),
+                                "good",
+                            ),
                             Standing::Ready if c.kind == "action" => ("Done".to_string(), "good"),
                             Standing::Ready if c.kind == "objection" => ("You object".to_string(), "warn"),
                             Standing::Ready => {
@@ -1015,13 +1019,14 @@ fn Review(
             })}
             <p class="review-fine">
                 {move || {
-                    // Answers and "done" close their cards; notes, objections and samples stay open.
+                    // Answers, "done" and written responses close their cards; objections and samples stay open.
                     let closing = open.with(|cards| drafts.with(|d| {
-                        drafts::entries(d, cards).iter().filter(|e| e.kind == "answer" || e.kind == "done").count()
+                        drafts::entries(d, cards).iter().filter(|e| drafts::closes(&e.kind)).count()
                     }));
                     let left = open.with(|o| o.len()).saturating_sub(closing);
                     let stays = match left { 0 => String::new(), 1 => "1 question stays open for later. ".into(), n => format!("{n} questions stay open for later. ") };
-                    format!("{stays}Tap a row to change it. When you send, AAC records your exact choices, your notes word for word and the time, signs them, and tells each agent that asked.")
+                    let closes = match closing { 0 => String::new(), 1 => "Sending closes 1 question. ".into(), n => format!("Sending closes {n} questions. ") };
+                    format!("{closes}{stays}Tap a row to change it. When you send, AAC records your exact choices, your written responses word for word and the time, signs them, and tells each agent that asked. A draft is kept until AAC confirms it is recorded.")
                 }}
             </p>
         </div>

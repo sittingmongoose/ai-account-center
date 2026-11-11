@@ -125,6 +125,12 @@ pub fn entry_kind(card: &Card, draft: &Draft) -> &'static str {
     }
 }
 
+/// Whether an entry of this kind closes its card once recorded: an answer, "done", and words sent without a choice
+/// (the wire kind stays "note"; the owner's written response is the answer). An objection leaves the card open.
+pub fn closes(kind: &str) -> bool {
+    matches!(kind, "answer" | "done" | "note")
+}
+
 /// Tap an option: one choice unless the card takes several; tapping the chosen one clears it.
 pub fn toggle(drafts: &mut Drafts, card: &Card, key: &str) {
     let d = draft_for(drafts, card);
@@ -813,5 +819,15 @@ mod tests {
         toggle(&mut d, &cards[0], "A");
         prune(&mut d, &cards);
         assert_eq!(d.keys().collect::<Vec<_>>(), vec!["a"]);
+    }
+
+    #[test]
+    fn a_written_response_closes_its_card_and_keeps_the_note_kind() {
+        let card = Card { id: "c".into(), ..Default::default() };
+        let draft = Draft { note: "Use the other approach instead".into(), ..Default::default() };
+        // no option is invented: the wire kind is "note" with no choice
+        assert_eq!(entry_kind(&card, &draft), "note");
+        assert!(closes("note") && closes("answer") && closes("done"));
+        assert!(!closes("object"));
     }
 }
