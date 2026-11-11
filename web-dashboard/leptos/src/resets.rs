@@ -1233,6 +1233,7 @@ impl ResetCtx {
         }
     }
 
+    #[cfg(test)]
     fn say(&self, said: Said) {
         self.say_for(&self.account.get_untracked(), said);
     }
