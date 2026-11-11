@@ -57,7 +57,7 @@ export default (ctx) => {
 		async teardown(_, s) { if (s && s.home && !ctx.args.keep) fs.rmSync(s.home, { recursive: true, force: true }); },
 		viewport: { width: 1920, height: 1080 },
 		// Signed out on an empty CCS_HOME, the update status call answers 401 by design
-		consoleErrors: { fail: true, allow: [/status of 401 .*\/api\/app-updates\/status/] },
+		consoleErrors: { fail: true, allow: [/status of 401 .*\/api\/app-updates\/status/, /status of 409 .*\/activate\b/] }, // 409: a Codex switch asks for its approval first (overlay-close drives it)
 		// A video with preload="metadata" stops its own request once it has the metadata (net::ERR_ABORTED).
 		failedRequests: { fail: false, allow: [/\/api\/status\/files\/.*\.(mp4|webm)\b/] },
 		// The canvas's controls, for t.audit, t.clickControl and t.scrollToControl (browser-check 2.0): the interactive probes on

@@ -33,6 +33,13 @@ async function poseContext(t, p) {
  * `skipBottom` for bottom sheets (` .pop` in sheet mode): the panel background touches the bottom
  * by design, so only top/left/right are checked (the grabber position is the panel top). */
 async function assertClose(t, label, closeSel, goneSel, safe, closeClick = 'click', opts = {}) {
+	// Measure the overlay at rest: Details slides in from 28 px to the right (dt-in), and a rect read mid-slide put
+	// its X 16 px into the rail on the Mac's GPU Chrome. Finite animations only (a spinner never finishes), 2 s at most.
+	await t.page.evaluate(async (sel) => {
+		const el = document.querySelector(sel);
+		const running = (el?.getAnimations?.({ subtree: true }) ?? []).filter((a) => a.effect?.getTiming?.().iterations !== Infinity);
+		await Promise.race([Promise.all(running.map((a) => a.finished.catch(() => null))), new Promise((r) => setTimeout(r, 2000))]);
+	}, goneSel);
 	const s = await t.page.evaluate((sel) => {
 		const b = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, r: r.right, b: r.bottom }; };
 		const el = document.querySelector(sel);
@@ -153,6 +160,12 @@ export const tests = {
 				await poseContext(t, p);
 				await openBoard(t, p.safe);
 				const label = `${p.name} model sheet`;
+				// From 760 px of content the board is a matrix whose rows select in place: no sheet to close there.
+				const rows = await t.page.$$eval('.sbm', (l) => l.filter((e) => e.getClientRects().length > 0).length);
+				if (rows === 0) {
+					await t.check(`${label}: the matrix shows instead, with no model sheet by design`, await t.page.$$eval('.sb-matrix', (l) => l.some((e) => e.getClientRects().length > 0)));
+					return;
+				}
 				await t.page.click('.sbm >> nth=0');
 				await t.page.waitForSelector('.sheet-host .sheet', { timeout: 5000 });
 				await assertClose(t, label, '.sheet-host .sheet-close', '.sheet-host .sheet', p.safe);
