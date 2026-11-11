@@ -261,6 +261,7 @@ export class PinnedThreadsCollector {
         id: row.doc.id,
         seq: row.doc.seq,
         title: row.doc.title,
+        kind: row.doc.kind,
         askedAtMs: Date.parse(row.doc.askedAt),
       })),
       statuses: statuses.docs.map((row) => ({

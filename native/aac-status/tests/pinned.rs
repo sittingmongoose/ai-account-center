@@ -184,6 +184,45 @@ fn waiting_on_you_comes_from_every_source_that_names_it() {
 }
 
 #[test]
+fn only_question_judgement_and_action_cards_make_a_pin_wait_on_you() {
+    // D10: an objection ("shipping tonight unless you object") and a sample card must
+    // not read as "Waiting on you"; a judgement card and a kindless card must.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1" }))],
+        "openCards": [
+            json!({ "writer": "vm.pm7-build", "id": "obj", "seq": 1,
+                    "title": "Shipping tonight unless you object.", "kind": "objection" }),
+            json!({ "writer": "vm.pm7-build", "id": "sam", "seq": 1,
+                    "title": "A format sample.", "kind": "sample" }),
+            json!({ "writer": "vm.pm7-build", "id": "jud", "seq": 1,
+                    "title": "Measure the tray at 125%?", "kind": "judgement" }),
+            json!({ "writer": "vm.pm7-build", "id": "que", "seq": 1,
+                    "title": "Which tray icon?" }),
+        ]
+    }));
+    let update = one_update(&built);
+    let blocked = update.blocked.as_ref().unwrap();
+    assert!(blocked.waiting_on_you);
+    assert_eq!(
+        blocked.text,
+        "Waiting on you: Measure the tray at 125%?; Which tray icon?."
+    );
+    // Objection and sample cards alone leave the pin without a wait.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1" }))],
+        "openCards": [
+            json!({ "writer": "vm.pm7-build", "id": "obj", "seq": 1,
+                    "title": "Shipping tonight unless you object.", "kind": "objection" }),
+            json!({ "writer": "vm.pm7-build", "id": "sam", "seq": 1,
+                    "title": "A format sample.", "kind": "sample" }),
+        ]
+    }));
+    assert_eq!(one_update(&built).blocked, None);
+}
+
+#[test]
 fn a_blocked_state_without_a_reason_stays_blocked() {
     // `thread@1.state = "blocked"` (or a `tasks@1` item) with no `blockedOn`: the state is
     // known, the reason is not, and the update must say both — never "None." (Sol M1).

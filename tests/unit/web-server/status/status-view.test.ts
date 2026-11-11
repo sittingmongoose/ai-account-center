@@ -358,6 +358,40 @@ describe('status view', () => {
     expect(bare.headline.counts.loopingPinned).toBe(0);
   });
 
+  it('counts only question, judgement and action cards as questions for you (D10)', async () => {
+    const root = dirs.make();
+    writeCard(root, cardDoc('vm.lead', 'Q1'));
+    writeCard(root, cardDoc('vm.lead', 'J1', { kind: 'judgement', recommendation: null }));
+    writeCard(root, cardDoc('vm.lead', 'A1', { kind: 'action', options: [], recommendation: null }));
+    writeCard(
+      root,
+      cardDoc('vm.lead', 'O1', { kind: 'objection', options: [], recommendation: null })
+    );
+    writeCard(
+      root,
+      cardDoc('vm.lead', 'S1', { kind: 'sample', options: [], recommendation: null })
+    );
+    const view = buildStatusView(await inputs(root));
+    expect(view.cards.open).toHaveLength(5);
+    // Sample and objection cards never count as questions; the objection is a decision
+    // to look at instead.
+    expect(view.headline.counts).toMatchObject({ openCards: 5, questions: 3, decisions: 1 });
+    const line = view.headline.runs.map((run) => run.text).join('');
+    expect(line).toContain('3 questions for you');
+    expect(line).toContain('1 decision to look at');
+    expect(line).not.toContain('5 questions');
+    expect(view.headline.tone).toBe('warn');
+    // A sample card alone says nothing at all.
+    const onlySample = dirs.make();
+    writeCard(
+      onlySample,
+      cardDoc('vm.lead', 'S1', { kind: 'sample', options: [], recommendation: null })
+    );
+    const bare = buildStatusView(await inputs(onlySample));
+    expect(bare.headline.counts).toMatchObject({ openCards: 1, questions: 0, decisions: 0 });
+    expect(bare.headline.runs.map((run) => run.text).join('')).toContain('No questions for you');
+  });
+
   it('keeps objection cards without a response open, and shows quiet threads by age', async () => {
     const root = dirs.make();
     writeCard(

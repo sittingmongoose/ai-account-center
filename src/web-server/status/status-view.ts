@@ -671,6 +671,11 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   const total = emptyCounts();
   for (const project of projects) addCounts(total, project.counts);
   const done = completion(total);
+  // Only question, judgement and action cards count as "questions for you" (D10):
+  // an objection waits for a look, never an answer; a sample wants no answer.
+  const QUESTION_KINDS: ReadonlySet<string> = new Set(['question', 'judgement', 'action']);
+  const questions = cards.open.filter((card) => QUESTION_KINDS.has(card.kind)).length;
+  const decisions = cards.open.filter((card) => card.kind === 'objection').length;
   const openCards = cards.open.length;
   const blockedItems = total.blocked;
   const workingThreads = threads.filter((t) => t.state === 'working' && !t.stale).length;
@@ -688,12 +693,18 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   );
 
   const runs: HeadlineRun[] = [];
-  if (openCards > 0)
+  if (questions > 0)
     runs.push(
-      { text: plural(openCards, 'question'), strong: true, tone: 'warn' },
+      { text: plural(questions, 'question'), strong: true, tone: 'warn' },
       { text: ' for you' }
     );
   else runs.push({ text: 'No questions for you' });
+  if (decisions > 0)
+    runs.push(
+      { text: ' · ' },
+      { text: plural(decisions, 'decision'), tone: 'warn' },
+      { text: ' to look at' }
+    );
   if (worstLoop) {
     const task =
       worstLoop.looping.task === undefined || worstLoop.looping.task === null
@@ -739,7 +750,8 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     usage.warnings.some((w) => w.tone === 'bad') ||
     overLimit > 0;
   const warn =
-    openCards > 0 ||
+    questions > 0 ||
+    decisions > 0 ||
     blockedItems > 0 ||
     staleSources > 0 ||
     usage.warnings.length > 0 ||
@@ -755,6 +767,8 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
       runs,
       counts: {
         openCards,
+        questions,
+        decisions,
         blockedItems,
         workingThreads,
         staleSources,

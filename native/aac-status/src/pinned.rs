@@ -246,8 +246,22 @@ pub struct CardIn {
     pub id: String,
     pub seq: u64,
     pub title: String,
+    /// The card kind; a missing kind reads as `question` (D10), as the reader defaults it.
+    #[serde(default = "default_card_kind")]
+    pub kind: String,
     #[serde(default)]
     pub asked_at_ms: Option<i64>,
+}
+
+fn default_card_kind() -> String {
+    "question".to_string()
+}
+
+/// Whether a card kind counts as a question of the owner's (D10): only question,
+/// judgement and action cards do. An objection waits for a look, never an answer,
+/// and a sample wants no answer at all.
+fn is_question_kind(kind: &str) -> bool {
+    matches!(kind, "question" | "judgement" | "action")
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1038,10 +1052,12 @@ fn compose_update(
             }
         }
     }
-    // An open card this thread asked is a question of the owner's, whatever else it waits on.
+    // An open card this thread asked is a question of the owner's, whatever else it waits
+    // on — but only question, judgement and action cards count (D10): silence is fine on
+    // an objection, and a sample wants no answer.
     if let Some(thread) = thread {
         for card in &input.open_cards {
-            if card.writer == thread.writer {
+            if card.writer == thread.writer && is_question_kind(&card.kind) {
                 waiting.push(card.title.clone());
             }
         }

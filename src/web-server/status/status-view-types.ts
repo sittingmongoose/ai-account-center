@@ -429,7 +429,12 @@ export interface StatusView {
     tone: Tone;
     runs: HeadlineRun[];
     counts: {
+      /** All open cards, every kind (stable meaning: sample cards included). */
       openCards: number;
+      /** Open question, judgement and action cards: the "questions for you" (D10). */
+      questions: number;
+      /** Open objection cards: "decisions to look at", never "questions for you" (D10). */
+      decisions: number;
       blockedItems: number;
       workingThreads: number;
       staleSources: number;

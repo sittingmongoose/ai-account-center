@@ -16,9 +16,11 @@ import {
 } from '../../../src/web-server/status/agent-reports-reader';
 import type { CommandRunner } from '../../../src/web-server/status/status-collectors';
 import {
+  cardDoc,
   item,
   tasksDoc,
   threadDoc,
+  writeCard,
   writeReport,
 } from '../web-server/status/status-test-helpers';
 
@@ -352,6 +354,44 @@ describe('PinnedThreadsCollector', () => {
       expect(threads[0].modelLabel).toBe('Opus 5.5');
       expect(tasks).toHaveLength(1);
       expect(tasks[0].projectLabel).toBe('Puppet Master');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('open cards reach the composer with their kinds so only questions can wait (D10)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-pinned-kinds-'));
+    try {
+      writeCard(dir, cardDoc('vm.lead', 'Q1'));
+      writeCard(
+        dir,
+        cardDoc('vm.lead', 'O1', { kind: 'objection', options: [], recommendation: null })
+      );
+      writeCard(
+        dir,
+        cardDoc('vm.lead', 'S1', { kind: 'sample', options: [], recommendation: null })
+      );
+      const reader = new AgentReportsReader({
+        root: () => dir,
+        now: () => 1_794_116_000_000,
+      });
+      await reader.scan();
+      expect(reader.snapshot().problems).toEqual([]);
+      const { handle, composeInputs } = fakeHandle({
+        vm: () => ({ pinned: [pin('t1')] }),
+      });
+      const collector = new PinnedThreadsCollector({
+        handle,
+        run: neverRun,
+        readRemote: async () => '[]',
+        now: () => 1_794_116_000_000,
+        reportsRoot: () => dir,
+      });
+      await collector.collect();
+      await collector.compose(reader.snapshot(), []);
+      const input = composeInputs.at(-1) as Record<string, unknown>;
+      const cards = input.openCards as Array<Record<string, unknown>>;
+      expect(cards.map((card) => card.kind).sort()).toEqual(['objection', 'question', 'sample']);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

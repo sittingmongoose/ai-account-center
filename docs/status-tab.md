@@ -164,7 +164,10 @@ one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
   "headline": {
     "tone": "good" | "warn" | "bad",
     "runs": [ { "text": "3 questions", "strong": true, "tone": "warn" }, { "text": " for you · 41 of 88 items landed" } ],
-    "counts": { "openCards": 3, "blockedItems": 2, "workingThreads": 9, "staleSources": 1 }
+    // `openCards` counts every open card; `questions` only question, judgement and action
+    // cards ("questions for you"), `decisions` the objection cards ("decisions to look at").
+    // Sample cards are in `openCards` and in neither of the other two.
+    "counts": { "openCards": 3, "questions": 3, "decisions": 0, "blockedItems": 2, "workingThreads": 9, "staleSources": 1 }
   },
   "sources": [ Source ],
   "cards": { "source": "agent-reports", "open": [ Card ], "answered": [ AnsweredCard ], "batches": [ Batch ],
