@@ -291,8 +291,6 @@ export class ReadersCheckWriter {
 
 /** The default check folder: the same reports root the readers read. */
 export function defaultReadersCheckRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = env.AAC_READERS_CHECK_DIR?.trim();
-  if (configured) return path.resolve(configured);
   const reports = env.AAC_AGENT_REPORTS_DIR?.trim();
   return reports ? path.resolve(reports) : '/mnt/Cursor/agent-reports';
 }

@@ -8,7 +8,7 @@ import {
   AgentReportsReader,
   type AgentReportsState,
 } from '../../../../src/web-server/status/agent-reports-reader';
-import { matchPin, normaliseThreadId, ReadersCheckWriter } from '../../../../src/web-server/status/readers-check';
+import { defaultReadersCheckRoot, matchPin, normaliseThreadId, ReadersCheckWriter } from '../../../../src/web-server/status/readers-check';
 import { StatusDocsReader } from '../../../../src/web-server/status/status-docs';
 import { cardDoc, tasksDoc, threadDoc, item } from './status-test-helpers';
 
@@ -221,6 +221,18 @@ describe('the readers check file', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('the default check root follows the reports root, never a check dir override (F8)', () => {
+    expect(defaultReadersCheckRoot({ AAC_READERS_CHECK_DIR: '/somewhere/else' } as NodeJS.ProcessEnv)).toBe(
+      '/mnt/Cursor/agent-reports'
+    );
+    expect(
+      defaultReadersCheckRoot({
+        AAC_READERS_CHECK_DIR: '/somewhere/else',
+        AAC_AGENT_REPORTS_DIR: '/reports/here',
+      } as NodeJS.ProcessEnv)
+    ).toBe('/reports/here');
   });
 
   it('normalises the id forms the composer tolerates, and matches no pin by title', () => {
