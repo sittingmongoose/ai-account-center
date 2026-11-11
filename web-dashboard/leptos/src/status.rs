@@ -402,6 +402,11 @@ fn lead_word(text: &str, word: &str, tone: &'static str) -> AnyView {
 }
 
 fn blocked_fact(b: &PinnedBlocked) -> AnyView {
+    // An empty text is the composer's "unknown" (no blocker to say): it draws nothing,
+    // never an empty warn chip and never an invented "None.".
+    if b.text.is_empty() {
+        return view! {}.into_any();
+    }
     match b.text.split_once(':') {
         Some((head, rest)) => {
             let tone = "warn";
@@ -439,7 +444,9 @@ fn row_line(p: &PinnedUpdate) -> AnyView {
         return view! { <span class="q3">"Doesn't report its status yet"</span> }.into_any();
     }
     let looping = p.looping.answer == "yes";
-    let waiting = !(p.blocked.text == "None." || p.blocked.text == "None");
+    // An empty blocked text is "unknown", not a wait: no warn chip for it.
+    let waiting = !p.blocked.text.is_empty()
+        && !(p.blocked.text == "None." || p.blocked.text == "None");
     if looping {
         // The server says that a task is looping, not which: a blocked task can sit ahead of it in `left`.
         parts.push(view! { <span data-tone="crit">"Looping"</span> }.into_any());

@@ -95,7 +95,11 @@ pub struct PinnedUpdate {
     pub percent: Option<PinnedPercent>,
     pub percent_note: Option<String>,
     pub now: Option<String>,
+    /// Null when the composer has no blocker to say ("unknown"); reads as empty, drawn as missing.
+    #[serde(deserialize_with = "nullable")]
     pub blocked: PinnedBlocked,
+    /// Never null from the composer; nullable so the page still parses if a server ever sends it.
+    #[serde(deserialize_with = "nullable")]
     pub looping: PinnedLooping,
     #[serde(deserialize_with = "nullable")]
     pub left: Vec<PinnedItem>,
@@ -1853,6 +1857,51 @@ mod tests {
                 .flat_map(|p| &p.streams)
                 .all(|s| s.rows.iter().all(|r| !r.value_text.is_empty()))
         );
+    }
+
+    /// The composer's pinned updates now carry nulls (D8): a pin with nothing blocked reads
+    /// "blocked": null and a report-less thread reads left/done as null. The page must parse
+    /// them, with the nulls read as unknown (empty), never as a failed view.
+    #[test]
+    fn the_pinned_updates_read_with_nulls() {
+        let panel: PinnedPanel = serde_json::from_str(
+            r#"{
+                "asOfMs": 1762608600000,
+                "head": "2 pinned in T3 · 1 waiting on you",
+                "counts": {"pinned": 2, "looping": 0, "waitingOnYou": 1},
+                "machineProblems": [],
+                "updates": [
+                    {
+                        "id": "t1", "title": "Silent thread", "machine": "vm",
+                        "who": null, "reportState": "none", "percent": null, "percentNote": null,
+                        "now": null, "blocked": null,
+                        "looping": {"answer": "cantTell", "text": "Can't tell.", "task": null, "rounds": 0},
+                        "left": null, "done": null, "updated": null,
+                        "reportNote": "This thread doesn't report its status yet.",
+                        "staleNote": null, "unreadableNote": null, "summary": null, "refusal": null
+                    },
+                    {
+                        "id": "t2", "title": "Waiting thread", "machine": "vm",
+                        "who": "Puppet Master · pm7-build · Opus 5.5 xhigh",
+                        "reportState": "fresh", "percent": null, "percentNote": null,
+                        "now": "Sweeping.", "blocked": {"text": "Waiting on you: pick the reviewers.", "waitingOnYou": true},
+                        "looping": {"answer": "no", "text": "No.", "task": null, "rounds": 0},
+                        "left": null, "done": null, "updated": null,
+                        "reportNote": null, "staleNote": null, "unreadableNote": null, "summary": null
+                    }
+                ]
+            }"#,
+        )
+        .expect("the composer's nulls must parse");
+        assert_eq!(panel.updates.len(), 2);
+        let silent = &panel.updates[0];
+        assert!(silent.blocked.text.is_empty(), "null blocked reads as unknown");
+        assert!(!silent.blocked.waiting_on_you);
+        assert!(silent.left.is_empty() && silent.done.is_empty());
+        assert!(silent.who.is_none() && silent.percent_note.is_none());
+        let waiting = &panel.updates[1];
+        assert!(waiting.blocked.waiting_on_you);
+        assert!(waiting.blocked.text.starts_with("Waiting on you"));
     }
 
     #[test]
