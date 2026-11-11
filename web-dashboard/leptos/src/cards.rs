@@ -1087,6 +1087,26 @@ fn Sent(summary: SentSummary, back: impl Fn() + Copy + Send + Sync + 'static) ->
     }
 }
 
+/// One closed card's unsent row: the exact stored words. The copy is byte-for-byte recovery of the held text, so
+/// only the emptiness checks trim; the note keeps its surrounding spaces and line breaks as written.
+fn unsent_row(
+    id: &str,
+    draft: &drafts::Draft,
+    answered: &[AnsweredCard],
+) -> (String, String, Vec<String>, String) {
+    let title = answered
+        .iter()
+        .find(|a| &a.card.id == id)
+        .map(|a| a.card.title.clone())
+        .unwrap_or_else(|| id.rsplit("--").next().unwrap_or(id).to_string());
+    (
+        id.to_string(),
+        title,
+        draft.choice.clone(),
+        draft.note.clone(),
+    )
+}
+
 /// Words or a choice this device holds for a question that has closed, which no record holds (another tab or device
 /// closed it first, or an older response did while newer words were written). They were not sent, and a closed
 /// question takes no answer, so the owner can copy them or discard them; nothing drops them silently.
@@ -1110,19 +1130,7 @@ fn UnsentClosed(open: Memo<Vec<Card>>, drafts: RwSignal<Drafts>) -> impl IntoVie
             drafts.with(|d| {
                 drafts::unsent_closed(d, cards)
                     .into_iter()
-                    .map(|(id, draft)| {
-                        let title = answered
-                            .iter()
-                            .find(|a| &a.card.id == id)
-                            .map(|a| a.card.title.clone())
-                            .unwrap_or_else(|| id.rsplit("--").next().unwrap_or(id).to_string());
-                        (
-                            id.clone(),
-                            title,
-                            draft.choice.clone(),
-                            draft.note.trim().to_string(),
-                        )
-                    })
+                    .map(|(id, draft)| unsent_row(id, draft, &answered))
                     .collect::<Vec<_>>()
             })
         })
@@ -1144,9 +1152,9 @@ fn UnsentClosed(open: Memo<Vec<Card>>, drafts: RwSignal<Drafts>) -> impl IntoVie
                             <li>
                                 <div><b>{title}</b></div>
                                 {(!choice.is_empty()).then(|| view! { <div>{format!("Chosen, not sent: {}", choice.join(", "))}</div> })}
-                                {(!note.is_empty()).then(|| view! { <blockquote>{note.clone()}</blockquote> })}
+                                {(!note.trim().is_empty()).then(|| view! { <blockquote>{note.clone()}</blockquote> })}
                                 <div class="q-unsent-actions">
-                                    {(!words.is_empty()).then(|| view! {
+                                    {(!words.trim().is_empty()).then(|| view! {
                                         <button class="btn sm" on:click=move |_| copy_words(words.clone(), copied)>
                                             {move || match copied.get() { Some(true) => "Copied", Some(false) => "Copy failed: select the words", None => "Copy words" }}
                                         </button>
@@ -1224,4 +1232,43 @@ fn DeliveryWarnings(delivery: Delivery) -> impl IntoView {
         .into_iter()
         .map(|w| view! { <div data-tone="warn">{w}</div> })
         .collect_view()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_closed_row_copies_the_exact_stored_words() {
+        let draft = drafts::Draft {
+            note: "  first line\nsecond line\n  ".to_string(),
+            choice: vec!["a".into()],
+            ..Default::default()
+        };
+        let (id, title, choice, note) = unsent_row("thread--q1", &draft, &[]);
+        assert_eq!((id.as_str(), title.as_str()), ("thread--q1", "q1"));
+        assert_eq!(choice, vec!["a".to_string()]);
+        // the words keep their leading and trailing spaces and line breaks, as written: the copy is byte-for-byte
+        // recovery of the held text, not the trimmed projection
+        assert_eq!(note, "  first line\nsecond line\n  ");
+        // only the emptiness checks trim: whitespace-only words still hide the quote and the copy button
+        let blank = drafts::Draft {
+            note: " \n ".to_string(),
+            ..Default::default()
+        };
+        let (_, _, _, note) = unsent_row("q", &blank, &[]);
+        assert!(note.trim().is_empty());
+        assert!(!note.is_empty());
+        // a closed card with recorded history keeps its own title
+        let answered = [AnsweredCard {
+            card: Card {
+                id: "thread--q1".into(),
+                title: "The question".into(),
+                ..Default::default()
+            },
+            answer: crate::api::Answer::default(),
+        }];
+        let (_, title, _, _) = unsent_row("thread--q1", &draft, &answered);
+        assert_eq!(title, "The question");
+    }
 }
