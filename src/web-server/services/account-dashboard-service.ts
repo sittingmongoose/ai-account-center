@@ -710,8 +710,10 @@ export class AccountDashboardService {
         current.pending = null;
       });
     }
-    const usedCache = !collect || state.pending === null;
-    if (collect && state.pending) await state.pending;
+    const waitForCollection = collect && (refresh || !Number.isFinite(state.fetchedAt));
+    const usedCache = !waitForCollection || state.pending === null;
+    if (waitForCollection && state.pending) await state.pending;
+    else if (state.pending) void state.pending.catch(() => {});
     // Account switches invalidate the native summary by live auth file signature.
     // Refresh this inexpensive identity even when quota samples are still cached.
     const registeredAntigravity = (

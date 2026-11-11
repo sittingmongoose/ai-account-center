@@ -1545,3 +1545,29 @@ describe('Codex saved-login renewal in the dashboard', () => {
     });
   });
 });
+
+ it('stale-serves expired rows during collection but explicit refresh waits for it', async () => {
+    let now = 100_000;
+    let hold = false;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const service = new AccountDashboardService(deps({
+      now: () => now,
+      getCodexRows: async (names) => {
+        if (hold) await gate;
+        return names.map((name) => row(name));
+      },
+    }));
+    await service.get('mac');
+    now += 60_001;
+    hold = true;
+    const stale = await service.get('mac');
+    expect(stale.accounts.find((account) => account.provider === 'codex')?.status).toBe('cached');
+    let finished = false;
+    const refresh = service.get('mac', true).then(() => { finished = true; });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(finished).toBe(false);
+    release();
+    await refresh;
+    expect(finished).toBe(true);
+  });
