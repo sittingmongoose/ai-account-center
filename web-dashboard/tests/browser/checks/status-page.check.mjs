@@ -234,8 +234,9 @@ export const tests = {
 		await openStatus(t, view, '?safe=0,62,21,62');
 		await t.page.waitForSelector(CARD);
 		await t.equal('an iPhone on its side', await t.page.evaluate(() => document.documentElement.dataset.chrome), 'rail');
-		// The inset is padding on main.content itself, so its own edge sits at 0; the first child is what moves.
-		await t.check('the page pads by the 62 px left inset', await t.page.evaluate(() => Math.round(document.querySelector('.content > *').getBoundingClientRect().left) >= 62));
+		// The inset is padding on main.content itself, so its own edge sits at 0; the shown tab's route is what moves (the
+		// frame keeps every tab's route, the hidden ones first when Home is native).
+		await t.check('the page pads by the 62 px left inset', await t.page.evaluate(() => Math.round(document.querySelector('.content > .route:not([hidden])').getBoundingClientRect().left) >= 62));
 	},
 
 	// In the shell's iframe the page draws no chrome and keeps no room for one.

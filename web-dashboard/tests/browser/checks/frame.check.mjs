@@ -193,9 +193,8 @@ export const tests = {
 					await t.check(`${label}: no tab is covered`, s.covered.length === 0, s.covered.join(', '));
 					await t.check(`${label}: no sideways scroll`, s.scrollW <= s.w + 1, `${s.scrollW} > ${s.w}`);
 					if (page === 'analytics') {
-						const c = s.content, i = s.iframe;
-						await t.check(`${label}: the dashboard fills the content area`, !!i && Math.abs(i.x - (c.x + c.padL)) < 1 && Math.abs(i.w - (c.w - c.padL)) < 1 && Math.abs(i.y - (c.y + c.padT)) < 1 && Math.abs(i.b - (Math.min(c.b, s.h) - c.pad)) < 1.5,
-							i ? `iframe ${Math.round(i.x)},${Math.round(i.y)} ${Math.round(i.w)}x${Math.round(i.h)}; content ${Math.round(c.x)},${Math.round(c.y)} ${Math.round(c.w)}x${Math.round(c.h)}, ${c.pad} px kept for the home indicator` : 'no iframe shown');
+						// every tab is drawn here: the dashboard only feeds Analytics, hidden
+						await t.check(`${label}: Analytics is drawn here, the dashboard stays hidden`, !s.iframe, s.iframe ? 'the dashboard iframe is on screen' : '');
 					}
 					if (f.chrome === 'rail') {
 						const strip = s.w - s.sr;
