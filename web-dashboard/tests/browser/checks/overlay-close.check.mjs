@@ -189,14 +189,23 @@ export const tests = {
 				await assertClose(t, `${p.name} details`, '[data-probe="details-close"]', '.details', p.safe);
 				await t.page.click('.acc-item[data-row="codex:two"] [data-probe="activate:codex:two"]');
 				await t.until('the approval shows', () => !!document.querySelector('.adialog'), null, { timeout: 15000 });
-				await assertClose(t, `${p.name} approval`, '.adialog .a-btns .btn:last-of-type', '.adialog', p.safe);
+				// Measure the last (rightmost) button, but close with Escape (the approval's cancel): in this fixture
+				// "Yes" gets a fresh 409 confirmation and the bridge shows the dialog again (pkg F recheck #2 R1).
+				await assertClose(t, `${p.name} approval`, '.adialog .a-btns .btn:last-of-type', '.adialog', p.safe, 'escape');
 				const btn = await accountButton(t);
 				await t.page.click(btn);
 				await t.page.waitForSelector('.acct-menu', { timeout: 5000 });
 				await assertClose(t, `${p.name} account menu`, '.acct-menu .menu-item:last-of-type', '.acct-menu', p.safe, 'escape');
 				await t.page.click(btn);
 				await t.page.waitForSelector('.acct-menu', { timeout: 5000 });
-				await t.page.click('.menu-scrim');
+				// Tap the scrim where the menu is not: its centre can sit under the menu in the turned Duo poses (R2).
+				const spot = await t.page.evaluate(() => {
+					const scrim = document.querySelector('.menu-scrim');
+					const pts = [[8, 8], [innerWidth - 8, 8], [8, innerHeight - 8], [innerWidth - 8, innerHeight - 8]];
+					return pts.find(([x, y]) => document.elementFromPoint(x, y) === scrim) || null;
+				});
+				await t.check(`${p.name} account menu: some scrim corner is free of the menu`, !!spot);
+				if (spot) await t.page.mouse.click(spot[0], spot[1]);
 				await t.until(`${p.name} account menu: scrim tap closes`, () => !document.querySelector('.acct-menu'), null, { timeout: 5000 });
 			});
 		}
