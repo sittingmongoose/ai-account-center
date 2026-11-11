@@ -218,6 +218,9 @@ function networkFirst(event, request, timeoutMs) {
     .then(
       function (response) {
         if (response.status >= 500 && response.status <= 599) {
+          // A no-store check (the frame's build check) never reads the cache: a proxy 5xx
+          // must not read as the server's newer build.
+          if (request.cache === 'no-store') return response;
           return cachedShell(request).then(function (cached) {
             return cached || response;
           });
@@ -225,6 +228,7 @@ function networkFirst(event, request, timeoutMs) {
         return response;
       },
       function () {
+        if (request.cache === 'no-store') throw new Error('The network could not answer.');
         return caches.match(request).then(function (cached) {
           if (cached) return cached;
           if (request.mode === 'navigate') {

@@ -546,6 +546,23 @@ pub fn build_id(html_or_href: &str) -> Option<String> {
     .then(|| id.to_string())
 }
 
+/// The runtime files a served build needs to start: the worker caches them cache-first, so fetching them warms the
+/// cache beside the page the check just stored (review M1: a cached page without its runtime shows "This page could
+/// not start").
+pub(crate) fn runtime_paths(served: &str) -> [String; 2] {
+    [
+        format!("/pkg/{served}/aac_web.js"),
+        format!("/pkg/{served}/aac_web_bg.wasm"),
+    ]
+}
+
+/// Fetches a served build's runtime so the worker stores it behind the cached page.
+fn warm_runtime(served: &str) {
+    for path in runtime_paths(served) {
+        let _ = window().fetch_with_str(&path);
+    }
+}
+
 /// An installed app that iOS resumes keeps the build it started with, for days. So whenever the app comes back on
 /// screen, and every 10 minutes while it is open, the frame asks the server for its page (no cache) and compares the
 /// build. Coming back on screen with nothing being typed, it reloads at once; otherwise it offers "New version ·
@@ -596,6 +613,9 @@ fn watch_build(ctx: FrameCtx) {
                     if resumed && !crate::ui::device::typing() {
                         let _ = window().location().reload();
                     } else {
+                        // Store the runtime behind the page the worker just stored, so an
+                        // offline start finds it too (review M1).
+                        warm_runtime(&served);
                         let _ = ctx.new_build.try_set(true);
                     }
                 }
@@ -614,9 +634,10 @@ fn watch_build(ctx: FrameCtx) {
             .add_event_listener_with_callback("visibilitychange", on_show.as_ref().unchecked_ref());
         on_show.forget();
     }
+    let poll_check = check.clone();
     let poll = Closure::<dyn Fn()>::new(move || {
         if document().visibility_state() == web_sys::VisibilityState::Visible {
-            check(false);
+            poll_check(false);
         }
     });
     let _ = window().set_interval_with_callback_and_timeout_and_arguments_0(
@@ -624,6 +645,14 @@ fn watch_build(ctx: FrameCtx) {
         600_000,
     );
     poll.forget();
+    {
+        // Once shortly after start (review M1): a slow start served from the old build still
+        // holds its HTML in the cache, so check it now and warm the served runtime too.
+        let check = check.clone();
+        let start = Closure::once_into_js(move || check(false));
+        let _ =
+            window().set_timeout_with_callback_and_timeout_and_arguments_0(start.unchecked_ref(), 4000);
+    }
 }
 
 #[component]
@@ -837,6 +866,17 @@ mod tests {
             refresh: Callback::new(|_| {}),
             lead: None,
         }
+    }
+
+    #[test]
+    fn warming_a_new_build_caches_its_runtime() {
+        assert_eq!(
+            runtime_paths("deadbeefcafe"),
+            [
+                "/pkg/deadbeefcafe/aac_web.js".to_string(),
+                "/pkg/deadbeefcafe/aac_web_bg.wasm".to_string()
+            ]
+        );
     }
 
     #[test]
