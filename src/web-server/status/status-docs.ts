@@ -134,9 +134,7 @@ export class StatusDocsReader {
     // entry keeps the fixed wording, as the agent-reports reader does for its folders.
     for (const name of rejected) {
       const rel = `writers/${name}/status.json`;
-      if (
-        this.recordProblem(rel, name, this.entries.get(rel) ?? null, NOT_A_WRITER, now)
-      )
+      if (this.recordProblem(rel, name, this.entries.get(rel) ?? null, NOT_A_WRITER, now))
         changed = true;
     }
     const scanned = await newestFolders(writers, limits.writers, (name) =>

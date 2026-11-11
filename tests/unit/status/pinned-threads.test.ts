@@ -277,16 +277,18 @@ describe('PinnedThreadsCollector', () => {
       await collector.collect();
       await collector.scanStatusDocs();
       await collector.compose(noReports, []);
-      let statuses = (composeInputs.at(-1) as Record<string, unknown>)
-        .statuses as Array<Record<string, unknown>>;
+      let statuses = (composeInputs.at(-1) as Record<string, unknown>).statuses as Array<
+        Record<string, unknown>
+      >;
       expect(statuses).toHaveLength(1);
       expect(statuses[0].problem).toBeNull();
 
       fs.chmodSync(path.join(dir, 'v1/writers'), 0o000);
       await collector.scanStatusDocs();
       await collector.compose(noReports, []);
-      statuses = (composeInputs.at(-1) as Record<string, unknown>)
-        .statuses as Array<Record<string, unknown>>;
+      statuses = (composeInputs.at(-1) as Record<string, unknown>).statuses as Array<
+        Record<string, unknown>
+      >;
       expect(statuses[0].problem).toContain('folder could not be listed');
       expect(typeof statuses[0].problemSinceMs).toBe('number');
     } finally {
@@ -411,9 +413,7 @@ describe('PinnedThreadsCollector', () => {
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const { ReadersCheckWriter } = await import(
-        '../../../src/web-server/status/readers-check'
-      );
+      const { ReadersCheckWriter } = await import('../../../src/web-server/status/readers-check');
       const check = new ReadersCheckWriter({
         root: () => dir,
         now: () => 1_794_116_000_000,
@@ -440,7 +440,9 @@ describe('PinnedThreadsCollector', () => {
       const done = collector.compose(reader.snapshot(), []);
       const winner = await Promise.race([
         done.then(() => 'composed' as const),
-        new Promise<'timed out'>((resolve) => setTimeout(() => resolve('timed out'), 3000).unref?.()),
+        new Promise<'timed out'>((resolve) =>
+          setTimeout(() => resolve('timed out'), 3000).unref?.()
+        ),
       ]);
       expect(winner).toBe('composed');
       release?.();
@@ -463,10 +465,25 @@ describe('PinnedThreadsCollector', () => {
     const handle: NativeStatusHandle = {
       call: async (method, args) => {
         const parsed = JSON.parse(args) as Record<string, unknown>;
-        if (method === 'pins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }] });
+        if (method === 'pins')
+          return JSON.stringify({
+            pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }],
+          });
         if (method === 'parseRemotePins') return JSON.stringify({ ok: true, pinned: [] });
-        if (method === 'mergePins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a', machine: 'vm' }] });
-        if (method === 'parseStatus') throw new Error('must not reach native: TypeScript refuses first');
+        if (method === 'mergePins')
+          return JSON.stringify({
+            pinned: [
+              {
+                id: 'fixture-thread',
+                title: 'Fixture',
+                pinnedAt: 'a',
+                pinOrderKey: 'a',
+                machine: 'vm',
+              },
+            ],
+          });
+        if (method === 'parseStatus')
+          throw new Error('must not reach native: TypeScript refuses first');
         if (method === 'compose') {
           composeInputs.push(parsed);
           const statusProblems = (parsed.statusProblems ?? []) as Array<Record<string, unknown>>;
@@ -493,7 +510,11 @@ describe('PinnedThreadsCollector', () => {
               unreadableNote: hasRefusal ? 'Could not be read since 12:00 PM.' : null,
               summary: null,
               refusal: hasRefusal
-                ? { file: `writers/${String(status.writer)}/status.json`, reason: problem, sinceMs: status.problemSinceMs as number | null }
+                ? {
+                    file: `writers/${String(status.writer)}/status.json`,
+                    reason: problem,
+                    sinceMs: status.problemSinceMs as number | null,
+                  }
                 : null,
             };
           });
@@ -506,7 +527,40 @@ describe('PinnedThreadsCollector', () => {
             counts: { pinned: 1, looping: 0, waitingOnYou: 0 },
             machineProblems: [],
             statusProblems: allProblems,
-            updates: updates.length > 0 ? updates : (statusProblems.length > 0 ? [{ id: 'fixture-thread', title: 'Fixture', machine: 'vm', who: null, reportState: 'none', percent: null, percentNote: 'No task list.', now: null, blocked: { text: 'Not reported.', waitingOnYou: false }, looping: { answer: 'cantTell', text: "Can't tell." }, left: [], done: [], updated: null, reportNote: "This thread doesn't report its status yet.", staleNote: null, unreadableNote: null, summary: null, refusal: statusProblems.length > 0 ? { file: String(statusProblems[0].file), reason: String(statusProblems[0].reason), sinceMs: statusProblems[0].sinceMs as number | null } : null }] : []),
+            updates:
+              updates.length > 0
+                ? updates
+                : statusProblems.length > 0
+                  ? [
+                      {
+                        id: 'fixture-thread',
+                        title: 'Fixture',
+                        machine: 'vm',
+                        who: null,
+                        reportState: 'none',
+                        percent: null,
+                        percentNote: 'No task list.',
+                        now: null,
+                        blocked: { text: 'Not reported.', waitingOnYou: false },
+                        looping: { answer: 'cantTell', text: "Can't tell." },
+                        left: [],
+                        done: [],
+                        updated: null,
+                        reportNote: "This thread doesn't report its status yet.",
+                        staleNote: null,
+                        unreadableNote: null,
+                        summary: null,
+                        refusal:
+                          statusProblems.length > 0
+                            ? {
+                                file: String(statusProblems[0].file),
+                                reason: String(statusProblems[0].reason),
+                                sinceMs: statusProblems[0].sinceMs as number | null,
+                              }
+                            : null,
+                      },
+                    ]
+                  : [],
           });
         }
         throw new Error(`unexpected method ${method}`);
@@ -568,7 +622,9 @@ describe('PinnedThreadsCollector', () => {
       } else {
         // For the first refusal the top-level statusProblems already carries it; either is a
         // disclosure, a bare "none" with no file/reason is not.
-        const hasTopLevelReason = (String(viewProblems?.[0]?.reason).toLowerCase()).includes('bearer');
+        const hasTopLevelReason = String(viewProblems?.[0]?.reason)
+          .toLowerCase()
+          .includes('bearer');
         expect(hasTopLevelReason).toBe(true);
         expect(JSON.stringify(view)).not.toContain('Bearer\uFEFF');
       }
@@ -582,11 +638,27 @@ describe('PinnedThreadsCollector', () => {
     const handle: NativeStatusHandle = {
       call: async (method, args) => {
         const parsed = JSON.parse(args) as Record<string, unknown>;
-        if (method === 'pins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }] });
+        if (method === 'pins')
+          return JSON.stringify({
+            pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a' }],
+          });
         if (method === 'parseRemotePins') return JSON.stringify({ ok: true, pinned: [] });
-        if (method === 'mergePins') return JSON.stringify({ pinned: [{ id: 'fixture-thread', title: 'Fixture', pinnedAt: 'a', pinOrderKey: 'a', machine: 'vm' }] });
+        if (method === 'mergePins')
+          return JSON.stringify({
+            pinned: [
+              {
+                id: 'fixture-thread',
+                title: 'Fixture',
+                pinnedAt: 'a',
+                pinOrderKey: 'a',
+                machine: 'vm',
+              },
+            ],
+          });
         if (method === 'parseStatus') {
-          const doc = JSON.parse(Buffer.from(String(parsed.contentBase64), 'base64').toString('utf8')) as Record<string, unknown>;
+          const doc = JSON.parse(
+            Buffer.from(String(parsed.contentBase64), 'base64').toString('utf8')
+          ) as Record<string, unknown>;
           return JSON.stringify({ ok: true, doc, sha256: 'sha1' });
         }
         if (method === 'compose') {
@@ -601,23 +673,34 @@ describe('PinnedThreadsCollector', () => {
             counts: { pinned: 1, looping: 0, waitingOnYou: 0 },
             machineProblems: [],
             statusProblems: problems,
-            updates: [{
-              id: 'fixture-thread',
-              title: 'Fixture',
-              machine: 'vm',
-              who: null,
-              reportState: hasProblem ? 'unreadable' : 'fresh',
-              percent: null,
-              percentNote: 'No task list.',
-              now: 'Fixture clean',
-              blocked: { text: 'None.', waitingOnYou: false },
-              looping: { answer: 'cantTell', text: "Can't tell." },
-              left: [], done: [], updated: null,
-              reportNote: null, staleNote: null,
-              unreadableNote: hasProblem ? 'Could not be read since 12:00 PM.' : null,
-              summary: 'Fixture clean',
-              refusal: hasProblem ? { file: `writers/${String(s.writer)}/status.json`, reason: s.problem, sinceMs: s.problemSinceMs as number | null } : null,
-            }],
+            updates: [
+              {
+                id: 'fixture-thread',
+                title: 'Fixture',
+                machine: 'vm',
+                who: null,
+                reportState: hasProblem ? 'unreadable' : 'fresh',
+                percent: null,
+                percentNote: 'No task list.',
+                now: 'Fixture clean',
+                blocked: { text: 'None.', waitingOnYou: false },
+                looping: { answer: 'cantTell', text: "Can't tell." },
+                left: [],
+                done: [],
+                updated: null,
+                reportNote: null,
+                staleNote: null,
+                unreadableNote: hasProblem ? 'Could not be read since 12:00 PM.' : null,
+                summary: 'Fixture clean',
+                refusal: hasProblem
+                  ? {
+                      file: `writers/${String(s.writer)}/status.json`,
+                      reason: s.problem,
+                      sinceMs: s.problemSinceMs as number | null,
+                    }
+                  : null,
+              },
+            ],
           });
         }
         throw new Error(`unexpected method ${method}`);
@@ -634,7 +717,10 @@ describe('PinnedThreadsCollector', () => {
       t3Thread: 'fixture-thread',
       summary: 'Fixture clean',
     };
-    require('fs').writeFileSync(require('path').join(writerDir, 'status.json'), JSON.stringify(good));
+    require('fs').writeFileSync(
+      require('path').join(writerDir, 'status.json'),
+      JSON.stringify(good)
+    );
     try {
       const collector = new PinnedThreadsCollector({
         handle,

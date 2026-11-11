@@ -7,7 +7,16 @@ import { nativeStatusModuleName } from '../../../../src/status-native/native-loa
 import { AgentReportsReader } from '../../../../src/web-server/status/agent-reports-reader';
 import { PinnedThreadsCollector } from '../../../../src/web-server/status/pinned-threads';
 import { buildStatusView } from '../../../../src/web-server/status/status-view';
-import { ago, cardDoc, item, NOW, tasksDoc, threadDoc, writeCard, writeReport } from './status-test-helpers';
+import {
+  ago,
+  cardDoc,
+  item,
+  NOW,
+  tasksDoc,
+  threadDoc,
+  writeCard,
+  writeReport,
+} from './status-test-helpers';
 
 /**
  * The end-to-end fixture (D14): real-shaped report files and a fixture T3 pin database,

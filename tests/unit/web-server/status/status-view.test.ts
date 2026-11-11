@@ -293,7 +293,6 @@ describe('status view', () => {
     expect(view.headline.runs[0]).toEqual({ text: '3 questions', strong: true, tone: 'warn' });
   });
 
-
   it('the headline names the worst pinned thread: looping first, then waiting on you (D1)', async () => {
     // Built from the composed pinned panel, never from fixture text: whatever sentences the
     // panel's updates carry, the headline names the thread and its looping task itself.
@@ -324,9 +323,17 @@ describe('status view', () => {
       updates: [
         pin({
           title: 'Build PMConcept7',
-          looping: { answer: 'yes', text: 'Yes. F-07 has gone back for fixes 5 times without a passing review.', task: 'F-07', rounds: 5 },
+          looping: {
+            answer: 'yes',
+            text: 'Yes. F-07 has gone back for fixes 5 times without a passing review.',
+            task: 'F-07',
+            rounds: 5,
+          },
         }),
-        pin({ title: 'Redesign PM', blocked: { text: 'Waiting on you: pick the tray icon.', waitingOnYou: true } }),
+        pin({
+          title: 'Redesign PM',
+          blocked: { text: 'Waiting on you: pick the tray icon.', waitingOnYou: true },
+        }),
         pin({ title: 'Quiet thread' }),
       ],
     };
@@ -343,8 +350,14 @@ describe('status view', () => {
       ...panel,
       counts: { pinned: 3, looping: 2, waitingOnYou: 0 },
       updates: [
-        pin({ title: 'Small loop', looping: { answer: 'yes', text: 'Yes.', task: 'B-1', rounds: 3 } }),
-        pin({ title: 'Big loop', looping: { answer: 'yes', text: 'Yes.', task: 'C-9', rounds: 6 } }),
+        pin({
+          title: 'Small loop',
+          looping: { answer: 'yes', text: 'Yes.', task: 'B-1', rounds: 3 },
+        }),
+        pin({
+          title: 'Big loop',
+          looping: { answer: 'yes', text: 'Yes.', task: 'C-9', rounds: 6 },
+        }),
         pin({ title: 'Quiet thread' }),
       ],
     };
@@ -353,7 +366,11 @@ describe('status view', () => {
     expect(text).toContain('2 pinned threads are looping (Big loop, task C-9)');
     expect(next.headline.counts.loopingPinned).toBe(2);
     // An unavailable panel adds nothing: the headline never invents a pin.
-    const bare = buildStatusView(await inputs(dirs.make(), { pinned: { unavailable: 'the aac-status native module is disabled' } }));
+    const bare = buildStatusView(
+      await inputs(dirs.make(), {
+        pinned: { unavailable: 'the aac-status native module is disabled' },
+      })
+    );
     expect(bare.headline.runs.map((run) => run.text).join('')).not.toContain('pinned thread');
     expect(bare.headline.counts.loopingPinned).toBe(0);
   });
@@ -362,7 +379,10 @@ describe('status view', () => {
     const root = dirs.make();
     writeCard(root, cardDoc('vm.lead', 'Q1'));
     writeCard(root, cardDoc('vm.lead', 'J1', { kind: 'judgement', recommendation: null }));
-    writeCard(root, cardDoc('vm.lead', 'A1', { kind: 'action', options: [], recommendation: null }));
+    writeCard(
+      root,
+      cardDoc('vm.lead', 'A1', { kind: 'action', options: [], recommendation: null })
+    );
     writeCard(
       root,
       cardDoc('vm.lead', 'O1', { kind: 'objection', options: [], recommendation: null })
@@ -400,20 +420,54 @@ describe('status view', () => {
       writeReport(root, writer, 'thread.json', threadDoc(writer, thread));
       writeCard(
         root,
-        cardDoc(writer, 'C1', kind === 'question' ? {} : { kind: kind as never, options: [], recommendation: null })
+        cardDoc(
+          writer,
+          'C1',
+          kind === 'question' ? {} : { kind: kind as never, options: [], recommendation: null }
+        )
       );
       const view = buildStatusView(await inputs(root));
       return view.cards.open[0]?.askerState;
     };
     // A crashed working thread with no heartbeat goes stale after the one-day default.
-    expect(await askerOf('vm.worker', { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) }, 'sample')).toBe('gone');
+    expect(
+      await askerOf(
+        'vm.worker',
+        { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) },
+        'sample'
+      )
+    ).toBe('gone');
     // Blocked and waiting states with no heartbeat do not.
-    expect(await askerOf('vm.blocked', { ttlSeconds: null, state: 'blocked', writtenAt: ago(2 * 86_400_000) }, 'sample')).toBe('blocked');
-    expect(await askerOf('vm.waiting', { ttlSeconds: null, state: 'waiting', writtenAt: ago(2 * 86_400_000) }, 'sample')).toBe('waiting');
+    expect(
+      await askerOf(
+        'vm.blocked',
+        { ttlSeconds: null, state: 'blocked', writtenAt: ago(2 * 86_400_000) },
+        'sample'
+      )
+    ).toBe('blocked');
+    expect(
+      await askerOf(
+        'vm.waiting',
+        { ttlSeconds: null, state: 'waiting', writtenAt: ago(2 * 86_400_000) },
+        'sample'
+      )
+    ).toBe('waiting');
     // Waiting through an open question card does not.
-    expect(await askerOf('vm.asked', { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) }, 'question')).toBe('working');
+    expect(
+      await askerOf(
+        'vm.asked',
+        { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) },
+        'question'
+      )
+    ).toBe('working');
     // An objection card asks nothing of the owner: still stale.
-    expect(await askerOf('vm.object', { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) }, 'objection')).toBe('gone');
+    expect(
+      await askerOf(
+        'vm.object',
+        { ttlSeconds: null, state: 'working', writtenAt: ago(2 * 86_400_000) },
+        'objection'
+      )
+    ).toBe('gone');
   });
 
   it('keeps objection cards without a response open, and shows quiet threads by age', async () => {

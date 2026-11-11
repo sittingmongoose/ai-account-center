@@ -8,7 +8,12 @@ import {
   AgentReportsReader,
   type AgentReportsState,
 } from '../../../../src/web-server/status/agent-reports-reader';
-import { defaultReadersCheckRoot, matchPin, normaliseThreadId, ReadersCheckWriter } from '../../../../src/web-server/status/readers-check';
+import {
+  defaultReadersCheckRoot,
+  matchPin,
+  normaliseThreadId,
+  ReadersCheckWriter,
+} from '../../../../src/web-server/status/readers-check';
 import { StatusDocsReader } from '../../../../src/web-server/status/status-docs';
 import { cardDoc, tasksDoc, threadDoc, item } from './status-test-helpers';
 
@@ -55,24 +60,33 @@ describe('the readers check file', () => {
         path.join(root, 'v1/writers/vm.lead/thread.json'),
         JSON.stringify({
           ...threadDoc('vm.lead', { seq: 12 }),
-          agent: { name: 'lead', harness: null, model: 'claude-opus-5-5', effort: 'high', account: null, machine: 'vm', t3Thread: encoded, parent: null },
+          agent: {
+            name: 'lead',
+            harness: null,
+            model: 'claude-opus-5-5',
+            effort: 'high',
+            account: null,
+            machine: 'vm',
+            t3Thread: encoded,
+            parent: null,
+          },
         })
       );
-      writeReport(root, 'vm.lead', 'tasks.json', tasksDoc('vm.lead', [item('F-01', 'done'), item('F-02', 'todo')]));
-      writeReport(root, 'vm.lead', 'cards/vm.lead--q1.json', cardDoc('vm.lead', 'q1'));
       writeReport(
         root,
         'vm.lead',
-        'status.json',
-        {
-          schema: 'agent-reports/status@1',
-          writer: 'vm.lead',
-          seq: 18,
-          writtenAt: '2026-11-10T08:00:00Z',
-          t3Thread: plain,
-          summary: 'Landing F-02.',
-        }
+        'tasks.json',
+        tasksDoc('vm.lead', [item('F-01', 'done'), item('F-02', 'todo')])
       );
+      writeReport(root, 'vm.lead', 'cards/vm.lead--q1.json', cardDoc('vm.lead', 'q1'));
+      writeReport(root, 'vm.lead', 'status.json', {
+        schema: 'agent-reports/status@1',
+        writer: 'vm.lead',
+        seq: 18,
+        writtenAt: '2026-11-10T08:00:00Z',
+        t3Thread: plain,
+        summary: 'Landing F-02.',
+      });
       // A writer whose status.json is refused outright: a secret, in the reader's fixed words.
       writeReport(root, 'vm.probe', 'status.json', {
         schema: 'agent-reports/status@1',
@@ -85,7 +99,11 @@ describe('the readers check file', () => {
 
       const reports = new AgentReportsReader({ root: () => root, now: () => NOW });
       await reports.scan();
-      const docs = new StatusDocsReader({ root: () => root, now: () => NOW, handle: () => fakeHandle });
+      const docs = new StatusDocsReader({
+        root: () => root,
+        now: () => NOW,
+        handle: () => fakeHandle,
+      });
       await docs.scan();
       const check = new ReadersCheckWriter({ root: () => root, now: () => NOW });
       check.recordStatusScan(reports.snapshot(), docs.snapshot(), pins);
@@ -167,7 +185,9 @@ describe('the readers check file', () => {
         pin: null,
       });
       // The reason is the reader's own fixed sentence, word for word.
-      expect(probe.files[0].reason).toBe('status.json refused: it contains what looks like a bearer token');
+      expect(probe.files[0].reason).toBe(
+        'status.json refused: it contains what looks like a bearer token'
+      );
       expect(JSON.stringify(probe)).not.toContain('Bearer');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -183,7 +203,16 @@ describe('the readers check file', () => {
         path.join(root, 'v1/writers/vm.lead/thread.json'),
         JSON.stringify({
           ...threadDoc('vm.lead', { seq: 12 }),
-          agent: { name: 'lead', harness: null, model: 'claude-opus-5-5', effort: 'high', account: null, machine: 'vm', t3Thread: plain, parent: null },
+          agent: {
+            name: 'lead',
+            harness: null,
+            model: 'claude-opus-5-5',
+            effort: 'high',
+            account: null,
+            machine: 'vm',
+            t3Thread: plain,
+            parent: null,
+          },
         })
       );
       const reports = new AgentReportsReader({ root: () => root, now: () => NOW });
@@ -201,7 +230,9 @@ describe('the readers check file', () => {
       expect(state.threads).toHaveLength(1);
       expect(state.threads[0].doc.seq).toBe(12);
       expect(state.threads[0].problem?.reason).toBe('state is missing or not valid');
-      expect(state.problems.some((problem) => problem.file === 'writers/vm.lead/thread.json')).toBe(true);
+      expect(state.problems.some((problem) => problem.file === 'writers/vm.lead/thread.json')).toBe(
+        true
+      );
       const check = new ReadersCheckWriter({ root: () => root, now: () => NOW });
       check.recordStatusScan(state, { state: 'ok', scannedAt: NOW, docs: [], problems: [] }, pins);
       await check.flush();
@@ -234,12 +265,20 @@ describe('the readers check file', () => {
         t3Thread: 'mcp:launch:other',
         summary: 'Landing F-02.',
       });
-      const docs = new StatusDocsReader({ root: () => root, now: () => NOW, handle: () => fakeHandle });
+      const docs = new StatusDocsReader({
+        root: () => root,
+        now: () => NOW,
+        handle: () => fakeHandle,
+      });
       await docs.scan();
       const state = docs.snapshot();
       expect(state.docs).toEqual([]);
       expect(state.problems).toEqual([
-        { file: 'writers/VM.Lead/status.json', reason: 'folder name is not a writer name', since: NOW },
+        {
+          file: 'writers/VM.Lead/status.json',
+          reason: 'folder name is not a writer name',
+          since: NOW,
+        },
       ]);
       // No check file is ever written for the refused writer (no VM.Lead.json clash).
       fs.mkdirSync(path.join(root, 'v1/readers'), { recursive: true });
@@ -269,9 +308,9 @@ describe('the readers check file', () => {
   });
 
   it('the default check root follows the reports root, never a check dir override (F8)', () => {
-    expect(defaultReadersCheckRoot({ AAC_READERS_CHECK_DIR: '/somewhere/else' } as NodeJS.ProcessEnv)).toBe(
-      '/mnt/Cursor/agent-reports'
-    );
+    expect(
+      defaultReadersCheckRoot({ AAC_READERS_CHECK_DIR: '/somewhere/else' } as NodeJS.ProcessEnv)
+    ).toBe('/mnt/Cursor/agent-reports');
     expect(
       defaultReadersCheckRoot({
         AAC_READERS_CHECK_DIR: '/somewhere/else',
@@ -285,7 +324,9 @@ describe('the readers check file', () => {
     const plain = `mcp:launch:${hex}`;
     expect(normaliseThreadId(plain)).toBe(hex);
     expect(normaliseThreadId(plain.replace(/:/g, '%3A'))).toBe(hex);
-    expect(normaliseThreadId(`t3-thread://v2/ef60010f-0371-4770-ad52-d8378888411b/${plain}`)).toBe(hex);
+    expect(normaliseThreadId(`t3-thread://v2/ef60010f-0371-4770-ad52-d8378888411b/${plain}`)).toBe(
+      hex
+    );
     expect(normaliseThreadId(` ${hex.toUpperCase()} `)).toBe(hex);
     expect(matchPin(plain.replace(/:/g, '%3A'), pins)?.title).toBe(pins[0].title);
     // Another id, and a title that happens to match the pin's title: no match either way.
@@ -311,7 +352,11 @@ describe('the readers check file', () => {
       // Two instances over one root (the Status scan and the Scoreboard's runs scan).
       const statusSide = new ReadersCheckWriter({ root: () => root, now: () => NOW });
       const runsSide = new ReadersCheckWriter({ root: () => root, now: () => NOW });
-      statusSide.recordStatusScan(state, { state: 'ok', scannedAt: NOW, docs: [], problems: [] }, []);
+      statusSide.recordStatusScan(
+        state,
+        { state: 'ok', scannedAt: NOW, docs: [], problems: [] },
+        []
+      );
       runsSide.recordRuns({
         state: 'ok',
         scannedAt: NOW,
@@ -325,7 +370,11 @@ describe('the readers check file', () => {
           },
         ],
         problems: [
-          { file: 'writers/vm.probe/runs/2026-11-10/run-9.json', reason: 'not valid JSON', since: NOW },
+          {
+            file: 'writers/vm.probe/runs/2026-11-10/run-9.json',
+            reason: 'not valid JSON',
+            since: NOW,
+          },
         ],
       });
       await statusSide.flush();
@@ -375,7 +424,15 @@ describe('the readers check file', () => {
         complete: true,
         threads: [],
         tasks: [],
-        cards: [{ writer: 'vm.lead', doc: cardDoc('vm.lead', 'q1'), sha256: 'ab'.repeat(32), firstSeenAt: NOW, problem: null } as never],
+        cards: [
+          {
+            writer: 'vm.lead',
+            doc: cardDoc('vm.lead', 'q1'),
+            sha256: 'ab'.repeat(32),
+            firstSeenAt: NOW,
+            problem: null,
+          } as never,
+        ],
         problems: [],
         boards: new Map(),
       },
@@ -472,8 +529,20 @@ describe('the readers check file', () => {
           threads: [],
           tasks: [],
           cards: [
-            { writer: 'vm.a', doc: cardDoc('vm.a', 'q1'), sha256: 'ab'.repeat(32), firstSeenAt: NOW, problem: null } as never,
-            { writer: 'vm.b', doc: cardDoc('vm.b', 'q2'), sha256: 'cd'.repeat(32), firstSeenAt: NOW, problem: null } as never,
+            {
+              writer: 'vm.a',
+              doc: cardDoc('vm.a', 'q1'),
+              sha256: 'ab'.repeat(32),
+              firstSeenAt: NOW,
+              problem: null,
+            } as never,
+            {
+              writer: 'vm.b',
+              doc: cardDoc('vm.b', 'q2'),
+              sha256: 'cd'.repeat(32),
+              firstSeenAt: NOW,
+              problem: null,
+            } as never,
           ],
           problems: [],
           boards: new Map(),
