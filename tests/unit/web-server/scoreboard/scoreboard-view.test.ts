@@ -71,7 +71,7 @@ describe('the fixture view', () => {
     expect(catalog.state).toBe('ok');
     // audit-read is in the catalog now (building and PM-user views), so nothing is left unscored by task type.
     expect(catalog.detail).not.toContain('audit-read');
-    expect(catalog.detail).toContain('example/example-1 (1 run)');
+    expect(catalog.detail).toContain('example-1 (1 run)');
   });
 
   it('keeps observed and benchmark data in separate columns', async () => {
@@ -214,8 +214,8 @@ describe('the fixture view', () => {
     const sonnet = build.find((r) => r.model.includes('sonnet'));
     expect(sonnet?.observed?.imported).toBe(2);
     expect(sonnet?.observed?.runs[0].imported?.from).toContain('closure-reaudit');
-    const unlisted = build.find((r) => r.model === 'example/example-1');
-    expect(unlisted).toMatchObject({ label: 'example/example-1', inCatalog: false });
+    const unlisted = build.find((r) => r.model === 'example-1');
+    expect(unlisted).toMatchObject({ label: 'example-1', inCatalog: false });
   });
 
   it('lists the latest runs, newest first, in plain terms', async () => {

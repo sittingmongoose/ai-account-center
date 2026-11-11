@@ -231,3 +231,16 @@ fn seq_must_be_a_safe_integer_so_ordering_never_rounds() {
         assert_eq!(refused(&doc), "seq is missing or not valid");
     }
 }
+
+#[test]
+fn optional_v2_fields_and_blocker_details_survive() {
+    let mut raw = valid();
+    raw["title"] = json!("Build");
+    raw["stages"] = json!([{ "label": "Build", "state": "done" }, { "label": "Land", "state": "next" }]);
+    raw["blockers"][0]["short"] = json!("Pick reviewers");
+    raw["blockers"][0]["until"] = json!("2026-11-12T16:00:00Z");
+    let doc = serde_json::to_value(parse(&raw).unwrap().doc).unwrap();
+    assert_eq!(doc["stages"], raw["stages"]);
+    assert_eq!(doc["title"], raw["title"]);
+    assert_eq!(doc["blockers"], raw["blockers"]);
+}

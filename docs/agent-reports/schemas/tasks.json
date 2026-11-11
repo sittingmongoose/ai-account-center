@@ -1,1 +1,533 @@
-{"$defs": {"blockedOn": {"additionalProperties": false, "description": "What the item waits on.", "properties": {"kind": {"description": "What kind of thing blocks the item.", "enum": ["agent", "lock", "owner", "quota", "resource", "review"], "type": "string"}, "since": {"$ref": "#/$defs/timestamp", "description": "When the block started."}, "what": {"description": "What is waited on.", "type": "string"}}, "required": ["kind", "since", "what"], "type": ["object", "null"]}, "timestamp": {"description": "ISO 8601 UTC, e.g. 2026-11-06T16:00:00Z.", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$", "type": "string"}}, "$id": "agent-reports/tasks@1", "$schema": "https://json-schema.org/draft/2020-12/schema", "additionalProperties": false, "description": "A stream lead's board: the stream's items and their states. Size cap: 512 KB (see spec).", "properties": {"board": {"description": "Path of the stream's human-readable board, if any.", "type": "string"}, "goal": {"description": "What the stream is working toward.", "type": "string"}, "items": {"description": "Board items.", "items": {"additionalProperties": false, "properties": {"blockedOn": {"$ref": "#/$defs/blockedOn", "description": "What the item waits on, or null."}, "branch": {"description": "Working branch, if any.", "type": "string"}, "head": {"description": "Working head SHA, if any.", "type": "string"}, "id": {"description": "Item id, e.g. FO-40.", "type": "string"}, "landed": {"additionalProperties": false, "description": "Landing record, when the item landed.", "properties": {"at": {"$ref": "#/$defs/timestamp", "description": "When the item landed."}, "sha": {"description": "SHA the item landed as.", "type": "string"}}, "required": ["at", "sha"], "type": "object"}, "owner": {"description": "Agent that owns the item, if any.", "type": "string"}, "reviews": {"description": "Reviews recorded against the item.", "items": {"additionalProperties": false, "properties": {"at": {"$ref": "#/$defs/timestamp", "description": "When the review finished."}, "by": {"description": "Reviewer, e.g. gpt-6.1-sol/max.", "type": "string"}, "verdict": {"description": "Review verdict; the spec shows pass.", "type": "string"}}, "required": ["at", "by", "verdict"], "type": "object"}, "type": "array"}, "state": {"description": "Item state.", "enum": ["blocked", "done", "dropped", "fixing", "landed", "ready", "review", "todo", "working"], "type": "string"}, "title": {"description": "Item title.", "type": "string"}, "updatedAt": {"$ref": "#/$defs/timestamp", "description": "When the item was last updated."}, "why": {"description": "Why the item was dropped, or extra state detail.", "type": "string"}}, "required": ["id", "state", "title"], "type": "object"}, "type": "array"}, "owner": {"description": "Stream lead that owns the board.", "type": "string"}, "project": {"description": "Project id, e.g. puppet-master.", "type": "string"}, "projectLabel": {"description": "Human-readable project name.", "type": "string"}, "schema": {"const": "agent-reports/tasks@1", "description": "Schema id of this document."}, "seq": {"description": "Increases on every write by this writer.", "minimum": 0, "type": "integer"}, "stream": {"description": "Stream id within the project, e.g. F.", "type": "string"}, "streamLabel": {"description": "Human-readable stream name.", "type": "string"}, "writer": {"description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-fo-lead.", "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$", "type": "string"}, "writtenAt": {"$ref": "#/$defs/timestamp", "description": "When this version was written."}}, "required": ["items", "project", "schema", "seq", "stream", "writer", "writtenAt"], "type": "object"}
+{
+  "$defs": {
+    "blockedOn": {
+      "additionalProperties": false,
+      "description": "What the item waits on.",
+      "properties": {
+        "kind": {
+          "description": "What kind of thing blocks the item.",
+          "enum": [
+            "agent",
+            "lock",
+            "owner",
+            "quota",
+            "resource",
+            "review"
+          ],
+          "type": "string"
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "what": {
+          "description": "What is waited on.",
+          "type": "string"
+        },
+        "short": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 80
+        },
+        "until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "card": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "since",
+        "what"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "timestamp": {
+      "description": "ISO 8601 UTC, e.g. 2026-11-06T16:00:00Z.",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+      "type": "string"
+    }
+  },
+  "$id": "agent-reports/tasks@1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A stream lead's board: the stream's items and their states. Size cap: 512 KB (see spec).",
+  "properties": {
+    "board": {
+      "description": "Path of the stream's human-readable board, if any.",
+      "type": "string"
+    },
+    "goal": {
+      "description": "What the stream is working toward.",
+      "type": "string"
+    },
+    "items": {
+      "description": "Board items.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "blockedOn": {
+            "$ref": "#/$defs/blockedOn",
+            "description": "What the item waits on, or null."
+          },
+          "branch": {
+            "description": "Working branch, if any.",
+            "type": "string"
+          },
+          "head": {
+            "description": "Working head SHA, if any.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Item id, e.g. FO-40.",
+            "type": "string"
+          },
+          "landed": {
+            "additionalProperties": false,
+            "description": "Landing record, when the item landed.",
+            "properties": {
+              "at": {
+                "$ref": "#/$defs/timestamp",
+                "description": "When the item landed."
+              },
+              "sha": {
+                "description": "SHA the item landed as.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "at",
+              "sha"
+            ],
+            "type": "object"
+          },
+          "owner": {
+            "description": "Agent that owns the item, if any.",
+            "type": "string"
+          },
+          "reviews": {
+            "description": "Reviews recorded against the item.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "at": {
+                  "$ref": "#/$defs/timestamp",
+                  "description": "When the review finished."
+                },
+                "by": {
+                  "description": "Reviewer, e.g. gpt-6.1-sol/max.",
+                  "type": "string"
+                },
+                "verdict": {
+                  "description": "Review verdict; the spec shows pass.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "at",
+                "by",
+                "verdict"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "state": {
+            "description": "Reported state; unknown values mark only this item.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "title": {
+            "description": "Item title.",
+            "type": "string"
+          },
+          "updatedAt": {
+            "$ref": "#/$defs/timestamp",
+            "description": "When the item was last updated."
+          },
+          "why": {
+            "description": "Why the item was dropped, or extra state detail.",
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "title"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "owner": {
+      "description": "Stream lead that owns the board.",
+      "type": "string"
+    },
+    "project": {
+      "description": "Project id, e.g. puppet-master.",
+      "type": "string"
+    },
+    "projectLabel": {
+      "description": "Human-readable project name.",
+      "type": "string"
+    },
+    "schema": {
+      "const": "agent-reports/tasks@1",
+      "description": "Schema id of this document."
+    },
+    "seq": {
+      "description": "Increases on every write by this writer.",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "stream": {
+      "description": "Stream id within the project, e.g. F.",
+      "type": "string"
+    },
+    "streamLabel": {
+      "description": "Human-readable stream name.",
+      "type": "string"
+    },
+    "writer": {
+      "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-fo-lead.",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "type": "string"
+    },
+    "writtenAt": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When this version was written."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60
+    },
+    "now": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 140
+    },
+    "next": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
+          },
+          "state": {
+            "enum": [
+              "done",
+              "now",
+              "waiting",
+              "next",
+              "skipped"
+            ]
+          },
+          "by": {
+            "enum": [
+              "thread",
+              "owner",
+              "reviewer",
+              "other"
+            ]
+          },
+          "waitingOn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "round": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 99
+          },
+          "of": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 99
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "label",
+          "state"
+        ]
+      }
+    },
+    "deliverables": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 48
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "kind": {
+            "enum": [
+              "concept",
+              "report",
+              "document",
+              "build",
+              "decisions",
+              "video",
+              "screenshots",
+              "other"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "main": {
+            "type": "boolean"
+          },
+          "media": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "image",
+                    "video"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "url": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "poster": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 400
+                },
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 60
+                },
+                "label": {
+                  "enum": [
+                    "built",
+                    "mockup",
+                    null
+                  ]
+                },
+                "seconds": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "path"
+                  ]
+                },
+                {
+                  "required": [
+                    "url"
+                  ]
+                }
+              ]
+            }
+          },
+          "versions": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "object"
+            }
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "for": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "want": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unlocks": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supersedes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "readyAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "builtAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "version",
+          "updatedAt"
+        ]
+      }
+    },
+    "readmeQuestions": {
+      "type": "boolean"
+    },
+    "progress": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "done",
+        "total"
+      ]
+    }
+  },
+  "required": [
+    "items",
+    "project",
+    "schema",
+    "seq",
+    "stream",
+    "writer",
+    "writtenAt"
+  ],
+  "type": "object"
+}

@@ -17,12 +17,33 @@
           "type": "string"
         },
         "since": {
-          "$ref": "#/$defs/timestamp",
-          "description": "When the block started."
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "what": {
           "description": "What is waited on.",
           "type": "string"
+        },
+        "short": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 80
+        },
+        "until": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "card": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -226,6 +247,279 @@
     "writtenAt": {
       "$ref": "#/$defs/timestamp",
       "description": "When this version was written."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60
+    },
+    "now": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 140
+    },
+    "next": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 7,
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
+          },
+          "state": {
+            "enum": [
+              "done",
+              "now",
+              "waiting",
+              "next",
+              "skipped"
+            ]
+          },
+          "by": {
+            "enum": [
+              "thread",
+              "owner",
+              "reviewer",
+              "other"
+            ]
+          },
+          "waitingOn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "round": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 99
+          },
+          "of": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 99
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "label",
+          "state"
+        ]
+      }
+    },
+    "deliverables": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 48
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "kind": {
+            "enum": [
+              "concept",
+              "report",
+              "document",
+              "build",
+              "decisions",
+              "video",
+              "screenshots",
+              "other"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "main": {
+            "type": "boolean"
+          },
+          "media": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "image",
+                    "video"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "url": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 400
+                },
+                "poster": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 400
+                },
+                "caption": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 60
+                },
+                "label": {
+                  "enum": [
+                    "built",
+                    "mockup",
+                    null
+                  ]
+                },
+                "seconds": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "anyOf": [
+                {
+                  "required": [
+                    "path"
+                  ]
+                },
+                {
+                  "required": [
+                    "url"
+                  ]
+                }
+              ]
+            }
+          },
+          "versions": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "object"
+            }
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "for": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "want": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unlocks": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "supersedes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "readyAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "builtAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "version",
+          "updatedAt"
+        ]
+      }
+    },
+    "readmeQuestions": {
+      "type": "boolean"
     }
   },
   "required": [

@@ -574,7 +574,8 @@ function tasksStream(inputs: StatusInputs, row: SeenReport<TasksDoc>): StreamVie
   const counts = emptyCounts();
   for (const item of doc.items) {
     counts.total += 1;
-    counts[item.state] += 1;
+    if (ITEM_STATES.includes(item.state as (typeof ITEM_STATES)[number]))
+      counts[item.state as (typeof ITEM_STATES)[number]] += 1;
   }
   const at = seenAt(row);
   return {

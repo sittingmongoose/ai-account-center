@@ -342,6 +342,8 @@ export interface PinnedView {
 }
 
 export interface PinnedUpdateView {
+  /** Optional v2 report data; the current page does not draw it yet. */
+  reported?: Record<string, unknown>;
   id: string;
   title: string;
   /** The machine whose T3 holds the pin: vm, mac, windows or nas1. */

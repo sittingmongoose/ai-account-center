@@ -50,17 +50,6 @@
       "notes": ""
     },
     {
-      "model": "anthropic/claude-fable-5-2",
-      "label": "Fable 5.2",
-      "family": "Claude",
-      "runtimes": [
-        "claude-code"
-      ],
-      "efforts": [],
-      "prices": null,
-      "notes": ""
-    },
-    {
       "model": "openai/gpt-6.1-sol",
       "label": "Sol 6.1",
       "family": "GPT-6",
@@ -138,12 +127,76 @@
     },
     {
       "model": "muse/muse-wonder-full-1.0",
+      "label": "Muse Wonder Full 1.0",
+      "family": "Muse",
+      "runtimes": [
+        "muse"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "anthropic/claude-fable-5-2",
+      "label": "Fable 5.2",
+      "family": "Claude",
+      "runtimes": [
+        "claude-code"
+      ],
+      "efforts": [
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "muse/muse-wonder-1.0",
       "label": "Muse Wonder 1.0",
       "family": "Muse",
       "runtimes": [
         "muse"
       ],
       "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "muse/muse-ember-1.0",
+      "label": "Muse Ember 1.0",
+      "family": "Muse",
+      "runtimes": [
+        "muse"
+      ],
+      "efforts": [
+        "max"
+      ],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "xai/grok-4.7",
+      "label": "Grok 4.7",
+      "family": "Grok",
+      "runtimes": [
+        "cursor",
+        "grok"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "google/gemini-4-argon",
+      "label": "Gemini 4 Argon",
+      "family": "Gemini",
+      "runtimes": [
+        "antigravity"
+      ],
+      "efforts": [
+        "high"
+      ],
       "prices": null,
       "notes": ""
     }

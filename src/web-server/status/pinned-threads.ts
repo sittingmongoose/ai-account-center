@@ -1,3 +1,4 @@
+import { reportV2 } from './report-v2';
 /**
  * The pinned-threads panel's collector: every machine's T3 pins (the VM's database read by
  * the aac-status native module, the Mac's, Windows' and Nas1's fetched with one short
@@ -202,17 +203,21 @@ export class PinnedThreadsCollector {
     answers: readonly AnswerHistoryEntry[],
     docs?: StatusDocsState
   ): Promise<void> {
+    const statuses = docs ?? this.docs.snapshot();
+    // Check receipts describe reader acceptance even when pins or native composition are unavailable.
+    this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
+    this.deps.readersCheck?.flushSoon();
     if (!this.handle) return;
     // Before the first collect there are no pins to compose over; the reports scan that runs
     // first must not publish an empty panel.
     if (!this.collected) return;
-    const statuses = docs ?? this.docs.snapshot();
     const input = {
       nowMs: this.now(),
       utcOffsetMinutes: zoneOffsetMinutes(this.deps.timeZone?.() ?? 'UTC', this.now()),
       pins: this.merged,
       machineProblems: this.problems,
       threads: reports.threads.map((row) => ({
+        ...reportV2(row.doc as unknown as Record<string, unknown>),
         writer: row.writer,
         writtenAt: row.doc.writtenAt,
         writtenAtMs: row.writtenAtMs,
@@ -235,6 +240,7 @@ export class PinnedThreadsCollector {
         problemSinceMs: row.problem?.since ?? null,
       })),
       tasks: reports.tasks.map((row) => ({
+        ...reportV2(row.doc as unknown as Record<string, unknown>),
         writer: row.writer,
         writtenAtMs: row.writtenAtMs,
         seq: row.doc.seq,
@@ -246,6 +252,7 @@ export class PinnedThreadsCollector {
         items: row.doc.items.map((item) => ({
           id: item.id,
           title: item.title,
+          note: item.note,
           state: item.state,
           reviews: item.reviews.map((review) => ({
             atMs: review.at ? Date.parse(review.at) : null,
@@ -265,6 +272,7 @@ export class PinnedThreadsCollector {
         askedAtMs: Date.parse(row.doc.askedAt),
       })),
       statuses: statuses.docs.map((row) => ({
+        ...reportV2(row.doc),
         writer: row.writer,
         writtenAt: row.doc.writtenAt,
         writtenAtMs: row.writtenAtMs,
@@ -288,11 +296,6 @@ export class PinnedThreadsCollector {
     const composed = await composePinned(input, { handle: this.handle });
     if ('view' in composed) this.composed = composed.view as unknown as PinnedView;
     // A refused compose keeps the last good view; its own asOfMs shows its age.
-    // The check file says what the dashboard did with every write this scan read: the same
-    // rows the pinned updates were composed from, plus the pin each report is shown under.
-    this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
-    // Fire and forget (F2): a hung share must never stall the collect; the next scan retries.
-    this.deps.readersCheck?.flushSoon();
   }
 
   /** The merged pins of the last collect, for the pin match the check file reports. */
