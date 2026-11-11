@@ -21,6 +21,9 @@ async function openSheet(t, first) {
 	await t.app.signIn();
 	let current = first;
 	await t.page.route((u) => new URL(u).pathname === '/api/status', (r) => r.fulfill({ json: current }));
+	// Things to open in the C2 fixture: the read-only route, stubbed (never the share).
+	await t.page.context().route((u) => new URL(u).pathname === '/api/status/deliverable', (r) =>
+		r.fulfill({ contentType: 'image/jpeg', body: fs.readFileSync(path.join(LEPTOS, 'fixtures', 'media', 'option-a.jpg')) }));
 	await t.goto('/app/status', { settleMs: 300 });
 	await t.page.locator(ROW).first().click();
 	await t.page.waitForSelector(SHEET);

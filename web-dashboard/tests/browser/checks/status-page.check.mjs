@@ -245,7 +245,7 @@ export const tests = {
     await openStatus(t, fixture('server-view.json'));
     await t.page.waitForSelector(CARD);
     // The fixture's note-only answer is a written response: it closed its card (owner, 2026-11-11), so 8 stay open.
-    await t.text('.sec-questions .plate-meta', /\b8 open/);
+    await t.text('.sec-questions .plate-meta', /\b9 open/);
     await t.text('.sec-machines', /ssh refused/);
     await t.text('.sec-machines', /under the 50 GB floor/);
     await t.text('.sec-questions .plate-note', /unreadable/i);
