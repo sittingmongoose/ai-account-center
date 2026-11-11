@@ -16,6 +16,7 @@ import * as path from 'path';
 import type { AgentReportsState } from './agent-reports-reader';
 import type { MergedPin } from '../../status-native/pinned';
 import type { RunsState } from '../scoreboard/runs-reader';
+import { isWriterName } from './schema-helpers';
 import type { StatusDocsState } from './status-docs';
 
 export const READERS_CHECK_SCHEMA = 'agent-reports/reader@1';
@@ -115,6 +116,9 @@ export class ReadersCheckWriter {
   /** Replaces the status-side rows (thread.json, tasks.json, status.json, cards) from one scan. */
   recordStatusScan(reports: AgentReportsState, statuses: StatusDocsState, pins: MergedPin[]): void {
     const put = (writer: string, row: ReaderFileRow) => {
+      // A folder that is not a writer id never gets a check file: a name like VM.Lead
+      // would write VM.Lead.json beside vm.lead.json on case-insensitive shares (F9).
+      if (!isWriterName(writer)) return;
       const mine = this.rows().get(writer) ?? new Map<string, ReaderFileRow>();
       mine.set(row.file, row);
       this.rows().set(writer, mine);
@@ -184,6 +188,8 @@ export class ReadersCheckWriter {
   /** Replaces the runs rows from one Scoreboard runs scan. */
   recordRuns(runs: RunsState): void {
     const put = (writer: string, row: ReaderFileRow) => {
+      // As in recordStatusScan: an invalid writer id never becomes a check file (F9).
+      if (!isWriterName(writer)) return;
       const mine = this.rows().get(writer) ?? new Map<string, ReaderFileRow>();
       mine.set(row.file, row);
       this.rows().set(writer, mine);

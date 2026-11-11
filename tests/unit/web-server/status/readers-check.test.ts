@@ -223,6 +223,51 @@ describe('the readers check file', () => {
     }
   });
 
+  it('an uppercase writer folder is refused with the fixed wording and never reads (F9)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-case-'));
+    try {
+      writeReport(root, 'VM.Lead', 'status.json', {
+        schema: 'agent-reports/status@1',
+        writer: 'VM.Lead',
+        seq: 3,
+        writtenAt: '2026-11-10T08:30:00Z',
+        t3Thread: 'mcp:launch:other',
+        summary: 'Landing F-02.',
+      });
+      const docs = new StatusDocsReader({ root: () => root, now: () => NOW, handle: () => fakeHandle });
+      await docs.scan();
+      const state = docs.snapshot();
+      expect(state.docs).toEqual([]);
+      expect(state.problems).toEqual([
+        { file: 'writers/VM.Lead/status.json', reason: 'folder name is not a writer name', since: NOW },
+      ]);
+      // No check file is ever written for the refused writer (no VM.Lead.json clash).
+      fs.mkdirSync(path.join(root, 'v1/readers'), { recursive: true });
+      const check = new ReadersCheckWriter({ root: () => root, now: () => NOW });
+      check.recordStatusScan(
+        {
+          root,
+          state: 'ok',
+          scannedAt: NOW,
+          complete: true,
+          threads: [],
+          tasks: [],
+          cards: [],
+          problems: [],
+          boards: new Map(),
+        },
+        state,
+        []
+      );
+      expect(check.rowsFor('VM.Lead')).toEqual([]);
+      await check.flush();
+      const aac = path.join(root, 'v1/readers/aac');
+      expect(fs.existsSync(aac) && fs.readdirSync(aac)).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('the default check root follows the reports root, never a check dir override (F8)', () => {
     expect(defaultReadersCheckRoot({ AAC_READERS_CHECK_DIR: '/somewhere/else' } as NodeJS.ProcessEnv)).toBe(
       '/mnt/Cursor/agent-reports'
