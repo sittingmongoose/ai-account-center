@@ -801,6 +801,15 @@ fn compose_update(
                 .find(|blocker| blocker.waiting_on == "owner")
                 .map(|_| "owner")
         }),
+        // Waiting through an open question card is waiting too (F4): the thread asked
+        // and ended its turn, exactly as a blockedOn says so.
+        thread.and_then(|doc| {
+            input
+                .open_cards
+                .iter()
+                .find(|card| card.writer == doc.writer && is_question_kind(&card.kind))
+                .map(|_| "owner")
+        }),
     ]
     .into_iter()
     .flatten()

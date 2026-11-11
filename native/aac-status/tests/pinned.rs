@@ -712,6 +712,41 @@ fn a_task_board_that_cannot_be_read_says_so_beside_its_counts() {
 }
 
 #[test]
+fn a_thread_waiting_on_a_question_card_is_never_stale() {
+    // F4: waiting through an open question card is waiting on the owner. A waiting
+    // report three hours past its ttl must not read as stale while its card is open.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "state": "waiting", "ttlSeconds": 1800,
+            "writtenAtMs": NOW - 3 * 60 * 60 * 1000
+        }))],
+        "openCards": [json!({
+            "writer": "vm.pm7-build", "id": "card-1", "seq": 3,
+            "title": "Which tray icon?", "kind": "question"
+        })]
+    }));
+    let update = one_update(&built);
+    assert_eq!(update.report_state, "fresh");
+    let blocked = update.blocked.as_ref().unwrap();
+    assert!(blocked.waiting_on_you);
+    assert_eq!(blocked.text, "Waiting on you: Which tray icon?.");
+    // An objection card asks nothing of the owner: the same report is stale.
+    let objected = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "state": "waiting", "ttlSeconds": 1800,
+            "writtenAtMs": NOW - 3 * 60 * 60 * 1000
+        }))],
+        "openCards": [json!({
+            "writer": "vm.pm7-build", "id": "card-1", "seq": 3,
+            "title": "Shipping tonight unless you object.", "kind": "objection"
+        })]
+    }));
+    assert_eq!(one_update(&objected).report_state, "stale");
+}
+
+#[test]
 fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
     // B2: a thread that ended its turn to wait on the owner cannot heartbeat; the older its
     // last report, the more the update must keep saying it waits. Stale would hide exactly
