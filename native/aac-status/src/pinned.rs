@@ -561,6 +561,55 @@ fn item_out(item: &ItemIn) -> ItemOut {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The pin match (B8)
+
+/// One `%XX` escape, as percents appear in the ids T3 itself prints.
+fn hex_byte(first: u8, second: u8) -> Option<u8> {
+    let digit = |value: u8| match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    };
+    Some(digit(first)? << 4 | digit(second)?)
+}
+
+/// The id forms a report may carry for one T3 thread, normalised so they all compare equal:
+/// the plain id, the same id percent-encoded (T3's own run ids spell `mcp:launch:` as
+/// `mcp%3Alaunch%3A`), a `t3-thread://` link that ends in it, and the bare tail after the
+/// `mcp:launch:` prefix. Normalisation only — a title is never fuzzy-matched.
+fn normalised_thread_id(id: &str) -> String {
+    // Percent-decode first: the escapes hide the separators the later steps look for.
+    let bytes = id.trim().as_bytes();
+    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' && at + 2 < bytes.len() {
+            if let Some(byte) = hex_byte(bytes[at + 1], bytes[at + 2]) {
+                decoded.push(byte);
+                at += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[at]);
+        at += 1;
+    }
+    let mut text = String::from_utf8_lossy(&decoded).to_lowercase();
+    // A link ends in the id; a bare id has no separator at all.
+    if let Some((_, tail)) = text.rsplit_once('/') {
+        text = tail.to_string();
+    }
+    text.strip_prefix("mcp:launch:").unwrap_or(&text).to_string()
+}
+
+/// Whether a report's `t3Thread` names this pin's thread (B8: normalised, never a title match).
+fn same_thread_id(reported: &str, pin: &str) -> bool {
+    let left = normalised_thread_id(reported);
+    let right = normalised_thread_id(pin);
+    !left.is_empty() && left == right
+}
+
 fn lite_out(item: &ItemLiteIn) -> ItemOut {
     ItemOut {
         id: item.id.clone(),
@@ -966,17 +1015,21 @@ fn compose_update(
 pub fn compose(input: &ComposeInput) -> ComposeOutput {
     let mut updates = Vec::with_capacity(input.pins.len());
     for pin in &input.pins {
-        // The newest report of each kind that names this thread.
+        // The newest report of each kind that names this thread, by the normalised id forms
+        // a report carries (B8): a pinned thread whose report spells the id differently still
+        // gets its update instead of reading as "doesn't report".
         let thread = input
             .threads
             .iter()
-            .filter(|doc| doc.t3_thread.as_deref() == Some(pin.id.as_str()))
+            .filter(|doc| doc.t3_thread.as_deref().is_some_and(|id| same_thread_id(id, &pin.id)))
             .max_by_key(|doc| (doc.written_at_ms, doc.seq));
         let status = input
             .statuses
             .iter()
-            .filter(|doc| doc.t3_thread == pin.id)
+            .filter(|doc| same_thread_id(&doc.t3_thread, &pin.id))
             .max_by_key(|doc| (doc.written_at_ms, doc.seq));
+        // The board comes from the report's project and stream; a thread that reports only
+        // `status.json` names neither, so the same writer's `tasks.json` is its board (B8).
         let tasks = thread
             .and_then(|thread| thread.project.as_ref().zip(thread.stream.as_ref()))
             .and_then(|(project, stream)| {
@@ -985,6 +1038,18 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
                     .iter()
                     .filter(|board| &board.project == project && &board.stream == stream)
                     .max_by_key(|board| (board.written_at_ms, board.seq))
+            })
+            .or_else(|| {
+                let writer = thread
+                    .map(|thread| thread.writer.as_str())
+                    .or(status.map(|doc| doc.writer.as_str()));
+                writer.and_then(|writer| {
+                    input
+                        .tasks
+                        .iter()
+                        .filter(|board| board.writer == writer)
+                        .max_by_key(|board| (board.written_at_ms, board.seq))
+                })
             });
         updates.push(compose_update(pin, input, thread, tasks, status));
     }

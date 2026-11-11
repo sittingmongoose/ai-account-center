@@ -512,9 +512,9 @@ fn the_head_counts_looping_and_waiting_pins() {
     let built = input(json!({
         "pins": [pin("t1", json!("a")), pin("t2", json!("b"))],
         "threads": [
-            thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f",
+            thread(json!({ "writer": "vm.pm7-design", "t3Thread": "t1", "project": "pm7", "stream": "f",
                 "blockedOn": { "kind": "owner", "what": "Pick reviewers", "since": null } })),
-            thread(json!({ "t3Thread": "t2", "project": "pm7", "stream": "g" }))
+            thread(json!({ "writer": "vm.pm7-build", "t3Thread": "t2", "project": "pm7", "stream": "g" }))
         ],
         "tasks": [
             json!({
@@ -716,4 +716,80 @@ fn the_loop_rule_matches_fail_wording_by_prefix() {
     }));
     let update = one_update(&unclear);
     assert_eq!(update.looping.answer, "no");
+}
+
+#[test]
+fn a_pinned_thread_with_only_status_json_still_gets_its_board() {
+    // B8: a board used to be found only through thread@1's project and stream, so a thread
+    // that reports only status.json never got one. The same writer's tasks.json is its board.
+    let built = input(json!({
+        "pins": [pin("mcp:launch:ba7eba5e", json!("a"))],
+        "statuses": [json!({
+            "writer": "vm.flash", "writtenAt": "2026-11-08T05:00:00Z",
+            "writtenAtMs": NOW - 600_000, "seq": 3, "t3Thread": "mcp:launch:ba7eba5e",
+            "summary": "Sweeping", "percent": 40,
+            "left": [ { "id": "R-02", "title": "Second pass" } ],
+            "done": [ { "id": "R-01", "title": "First pass" } ]
+        })],
+        "tasks": [json!({
+            "writer": "vm.flash", "writtenAtMs": NOW - 300_000, "seq": 7,
+            "project": "flash", "stream": "research",
+            "items": [
+                { "id": "R-01", "title": "First pass", "state": "done" },
+                { "id": "R-02", "title": "Second pass", "state": "working" },
+                { "id": "R-03", "title": "Write-up", "state": "todo" }
+            ]
+        })]
+    }));
+    let update = one_update(&built);
+    assert_eq!(update.report_state, "fresh");
+    // The board's own counts, not the status estimate and not "No task list.".
+    assert_eq!(update.percent.as_ref().unwrap().text, "33%");
+    assert_eq!(update.percent.as_ref().unwrap().done, Some(1));
+    assert_eq!(update.percent.as_ref().unwrap().of, Some(3));
+}
+
+#[test]
+fn the_pin_match_tolerates_the_id_forms_reports_carry() {
+    // B8: the match was an exact string compare, so a report that spelled the id the way
+    // T3's own links and run ids spell it read as "doesn't report its status yet".
+    let hex = "320669b2e6cf23a317d2030821cc8a74289073eab144883a2c9b47acdade3c44";
+    let plain = format!("mcp:launch:{hex}");
+    // Percent-encoded, as run ids spell it: the thread.json matches.
+    let encoded = input(json!({
+        "pins": [pin(&plain, json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": format!("mcp%3Alaunch%3A{hex}"), "doing": "Encoded id."
+        }))]
+    }));
+    let update = one_update(&encoded);
+    assert_eq!(update.report_state, "fresh");
+    assert_eq!(update.now.as_deref(), Some("Encoded id."));
+    // A t3-thread:// link, as the thread panels spell it: the status document matches.
+    let linked = input(json!({
+        "pins": [pin(&plain, json!("a"))],
+        "statuses": [json!({
+            "writer": "vm.lead", "writtenAt": "2026-11-08T05:00:00Z",
+            "writtenAtMs": NOW - 600_000, "seq": 2,
+            "t3Thread": format!("t3-thread://v2/ef60010f-0371-4770-ad52-d8378888411b/{plain}"),
+            "summary": "Linked id."
+        })]
+    }));
+    assert_eq!(one_update(&linked).summary.as_deref(), Some("Linked id."));
+    // The bare tail, and case, still match; another thread's id never does.
+    let bare = input(json!({
+        "pins": [pin(&plain, json!("a"))],
+        "threads": [thread(json!({ "t3Thread": hex.to_uppercase(), "doing": "Bare id." }))]
+    }));
+    assert_eq!(one_update(&bare).now.as_deref(), Some("Bare id."));
+    let other = input(json!({
+        "pins": [pin(&plain, json!("a"))],
+        "threads": [thread(json!({ "t3Thread": format!("mcp:launch:{hex}dead"), "doing": "Other." }))]
+    }));
+    let update = one_update(&other);
+    assert_eq!(update.report_state, "none");
+    assert_eq!(
+        update.report_note.as_deref(),
+        Some("This thread doesn't report its status yet.")
+    );
 }
