@@ -7,12 +7,14 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-const script = html.match(/<script>(var FRAME_DEFAULT='(?:classic|new)';try\{if\(\(localStorage[\s\S]*?)<\/script>/)?.[1];
+const script = html.match(/<script>(var FRAME_DEFAULT='(?:classic|new)';try\{if\(self===top&&\(localStorage[\s\S]*?)<\/script>/)?.[1];
 
-function run(source, { stored = null, path = '/', search = '' } = {}) {
+function run(source, { stored = null, path = '/', search = '', framed = false } = {}) {
   let to = null;
   const location = { pathname: path, search, replace: (url) => { to = url; } };
-  vm.runInNewContext(source, { localStorage: { getItem: (k) => (k === 'aac-frame' ? stored : null) }, location, URLSearchParams });
+  const self = {};
+  const top = framed ? {} : self;
+  vm.runInNewContext(source, { localStorage: { getItem: (k) => (k === 'aac-frame' ? stored : null) }, location, URLSearchParams, self, top });
   return to;
 }
 
@@ -32,6 +34,8 @@ test('a fresh install opens the frame; a device that chose classic stays; ?class
   assert.equal(run(script, { search: '?content=1' }), null);
   assert.equal(run(script, { search: '?e2e' }), null);
   assert.equal(run(script, { search: '?e2e&view=accounts' }), null);
+  // inside a frame (a misrouted Status or Scoreboard iframe of the classic shell) it stays, so the page can refuse
+  assert.equal(run(script, { framed: true }), null);
 });
 
 test('with the constant set back to classic only a device that chose the frame goes to it (the way back)', () => {
