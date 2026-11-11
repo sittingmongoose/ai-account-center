@@ -761,6 +761,39 @@ describe('stray copies beside a managed Codex or Claude install', () => {
     expect(messageFor('current', 'codex-cli')).toBe(MESSAGES.current);
   });
 
+  it('keeps an older-copy-first row as action_required, never as current words', () => {
+    const value = normalizeAppUpdateRow(
+      row({
+        status: 'action_required',
+        messageCode: 'older_copy_first',
+        updateAttempted: true,
+        strays: [copy('0.145.0')],
+      }),
+      'codex-cli',
+      'mac'
+    );
+    expect(value.status).toBe('action_required');
+    expect(value.message).toBe(MESSAGES.older_copy_first + sentence('0.145.0'));
+    // The code belongs only to a stray app with that status; anything else is helper_invalid.
+    const wrongStatus = normalizeAppUpdateRow(
+      row({ messageCode: 'older_copy_first', strays: [copy('0.145.0')] }),
+      'codex-cli',
+      'mac'
+    );
+    expect(wrongStatus.status).toBe('failed');
+    const wrongApp = normalizeAppUpdateRow(
+      row({
+        appId: 'omp',
+        status: 'action_required',
+        messageCode: 'older_copy_first',
+        strays: [copy('0.145.0')],
+      }),
+      'omp',
+      'mac'
+    );
+    expect(wrongApp.status).toBe('failed');
+  });
+
   it('restores a saved Codex row with its strays and the same words from disk', () => {
     const root = directory();
     const saved = normalizeAppUpdateRow(row({ strays: [copy('0.145.0')] }), 'codex-cli', 'mac');
