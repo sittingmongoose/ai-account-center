@@ -39,3 +39,12 @@ test('the top strip sticks to the top of the scrolling sheet and is opaque', () 
 	assert.ok(grab, '.grabber-zone has a rule');
 	assert.doesNotMatch(grab, /position:\s*sticky/, 'only the strip sticks, so the button and grabber move together');
 });
+
+// iOS sends no click for a tap on a plain area (wave-2 device M1): Details closed only by its X there.
+test('Details closes on iOS by a tap outside and by its grabber', () => {
+	const src = fs.readFileSync(path.join(leptos, 'src/details.rs'), 'utf8').split('#[cfg(test)]')[0];
+	assert.match(src, /<button type="button" class="details-scrim"/, 'the phone scrim is a button, so iOS sends its click');
+	assert.match(src, /"pointerup",\s*\n?\s*[a-z_]+\.as_ref\(\)/, 'a pointerup closes it where no click follows (the side panel lets taps through)');
+	assert.match(src, /<SheetGrab\b/, 'the grabber drags the sheet down like the other sheets');
+	assert.doesNotMatch(src, /class="sheet-grab"/, 'no decorative grabber left');
+});

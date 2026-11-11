@@ -1071,13 +1071,14 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 }
 
 /* ---------- Details: a side panel from 760 px, a bottom sheet below ---------- */
-.details-scrim { position: fixed; inset: 0; z-index: 34; background: var(--sheet-scrim); }
+.details-scrim { position: fixed; inset: 0; z-index: 34; background: var(--sheet-scrim); border: 0; padding: 0; margin: 0; border-radius: 0; cursor: default; }
 .details { position: fixed; z-index: 35; background: var(--paper); box-shadow: var(--shadow-pop); display: flex; flex-direction: column; overflow: hidden;
   left: var(--safe-left, 0px); right: var(--rail-w, 0px); bottom: 0; max-height: calc(100dvh - var(--safe-top) - 24px); border-radius: var(--r-sheet) var(--r-sheet) 0 0; animation: dt-up var(--t-med) var(--ease-out); }
 @keyframes dt-up { from { transform: translateY(24px); opacity: 0; } }
 @keyframes dt-in { from { transform: translateX(28px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .details { animation: none; } }
-.sheet-grab { display: block; width: 36px; height: 5px; border-radius: 2.5px; background: var(--grabber); margin: 7px auto 0; flex: none; }
+.dt-grab { flex: none; }
+.dt-grab .grabber-zone { padding: 7px 0 4px; }
 .dt-head { display: flex; gap: 10px; align-items: center; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--rule-2); flex: none; }
 .dt-titles { flex: 1 1 auto; min-width: 0; }
 .dt-title { font-size: 16px; font-weight: 640; font-variation-settings: 'wght' 640; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1107,7 +1108,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
   .details-scrim { background: transparent; pointer-events: none; }
   .details { left: auto; top: 0; right: var(--rail-w, 0px); bottom: 0; max-height: none; width: min(clamp(420px, 34vw, 580px), calc(100% - var(--rail-w, 0px) - var(--safe-left, 0px))); border-radius: 0; border-left: 1px solid var(--rule); animation-name: dt-in; padding-top: var(--safe-top); }
   :root[data-chrome='rail'][data-rail-side='left'] .details { width: min(clamp(420px, 34vw, 580px), calc(100% - var(--safe-right, 0px) - var(--safe-left, 0px))); }
-  .sheet-grab { display: none; }
+  .dt-grab { display: none; }
   .dt-head { padding: 16px 12px 12px 20px; }
   .dt-title { font-size: 18px; }
   .dt-body { padding: 14px 20px calc(var(--safe-bottom) + 20px); gap: 16px; }

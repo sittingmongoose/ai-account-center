@@ -10,6 +10,7 @@ use crate::Page;
 use crate::api::Run;
 use crate::dash::nullable;
 use crate::frame::FrameCtx;
+use crate::status::{SheetGrab, sheet_drag_style};
 use crate::ui::*;
 use leptos::prelude::*;
 use serde::Deserialize;
@@ -244,8 +245,15 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
     });
     // A press outside the panel closes it once the click is handled, unless that click asked for another account
     // (a row: the panel swaps) or a switch confirmation waits. Captured first, so a button that stops its click
-    // closes it too, as the Slint canvas did.
-    let pressed: StoredValue<Option<u64>> = StoredValue::new(None);
+    // closes it too, as the Slint canvas did. iOS sends no click for a tap on a plain area (the page under the side
+    // panel, which lets taps through), so a press that ends without its click closes it a moment after the lift.
+    let pressed: StoredValue<Option<(u64, u64)>> = StoredValue::new(None);
+    let presses = StoredValue::new(0u64);
+    let finish = move |before: u64| {
+        if asks() == before && dash.activation.try_with_untracked(|a| a.is_empty()) == Some(true) {
+            close();
+        }
+    };
     let down =
         wasm_bindgen::closure::Closure::<dyn Fn(web_sys::Event)>::new(move |e: web_sys::Event| {
             let Some(is_open) = open.try_get_untracked() else {
@@ -255,23 +263,35 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                 .activation
                 .try_with_untracked(|a| a.is_empty())
                 .unwrap_or(false);
-            let _ = pressed.try_set_value((is_open && calm && !inside(e.target())).then(asks));
+            let n = presses.try_get_value().unwrap_or(0) + 1;
+            let _ = presses.try_set_value(n);
+            let _ = pressed
+                .try_set_value((is_open && calm && !inside(e.target())).then(|| (n, asks())));
         });
     let up =
         wasm_bindgen::closure::Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
-            let Some(Some(before)) = pressed.try_get_value() else {
+            let Some(Some((_, before))) = pressed.try_get_value() else {
                 return;
             };
             let _ = pressed.try_set_value(None);
+            let later = wasm_bindgen::closure::Closure::once_into_js(move || finish(before));
+            let _ = window()
+                .set_timeout_with_callback_and_timeout_and_arguments_0(later.unchecked_ref(), 0);
+        });
+    let lifted =
+        wasm_bindgen::closure::Closure::<dyn Fn(web_sys::Event)>::new(move |_: web_sys::Event| {
+            let Some(Some(press)) = pressed.try_get_value() else {
+                return;
+            };
+            // the click, when one comes, takes the press first; a tap that becomes a scroll is cancelled, not lifted
             let later = wasm_bindgen::closure::Closure::once_into_js(move || {
-                if asks() == before
-                    && dash.activation.try_with_untracked(|a| a.is_empty()) == Some(true)
-                {
-                    close();
+                if pressed.try_get_value() == Some(Some(press)) {
+                    let _ = pressed.try_set_value(None);
+                    finish(press.1);
                 }
             });
             let _ = window()
-                .set_timeout_with_callback_and_timeout_and_arguments_0(later.unchecked_ref(), 0);
+                .set_timeout_with_callback_and_timeout_and_arguments_0(later.unchecked_ref(), 450);
         });
     // Window listeners for the frame's life: after a sign-out their signals are gone and they do nothing.
     let _ = window().add_event_listener_with_callback_and_bool(
@@ -284,14 +304,28 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
         up.as_ref().unchecked_ref(),
         true,
     );
+    let _ = window().add_event_listener_with_callback_and_bool(
+        "pointerup",
+        lifted.as_ref().unchecked_ref(),
+        true,
+    );
     down.forget();
     up.forget();
+    lifted.forget();
     on_cleanup(move || keys.remove());
     let busy = dash.busy;
+    // The phone sheet's grabber drags it down to close it, as the Status and Scoreboard sheets do.
+    let drag = RwSignal::new(0.0);
+    let grab_close = Callback::new(move |_| {
+        close();
+        drag.set(0.0);
+    });
     view! {
         <Show when=move || open.get()>
-            <div class="details-scrim" aria-hidden="true"></div>
+            // A button, so iOS sends the tap's click; the window's listeners above close the panel.
+            <button type="button" class="details-scrim" tabindex="-1" aria-label="Close"></button>
             <aside class="details" role="dialog" aria-modal="false" data-probe="details"
+                style=move || sheet_drag_style(drag.get())
                 aria-label=move || data.with(|d| d.as_ref().map(|d| d.title.clone()).unwrap_or_default())>
                 {move || data.get().map(|d| {
                     let d2 = d.clone();
@@ -308,7 +342,7 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                     let n_meters = d.meters.len();
                     let n_amounts = d.amounts.len();
                     view! {
-                        <span class="sheet-grab" aria-hidden="true"></span>
+                        <div class="dt-grab"><SheetGrab offset=drag on_close=grab_close/></div>
                         <header class="dt-head">
                             <ProviderMark provider=d.provider.clone() size=30/>
                             <div class="dt-titles">
