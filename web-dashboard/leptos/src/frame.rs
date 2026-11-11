@@ -40,6 +40,8 @@ pub struct FrameCtx {
     infos: RwSignal<Vec<(Page, u64, ChromeInfo)>>,
     next_info: RwSignal<u64>,
     pub menu_open: RwSignal<bool>,
+    /// The server has a newer build than the one running (`watch_build`): the frame offers "New version · Reload".
+    pub new_build: RwSignal<bool>,
     pub toasts: RwSignal<Vec<Toast>>,
     pub username: RwSignal<String>,
     next_toast: RwSignal<u64>,
@@ -116,6 +118,7 @@ impl FrameCtx {
             infos: RwSignal::new(Vec::new()),
             next_info: RwSignal::new(0),
             menu_open: RwSignal::new(false),
+            new_build: RwSignal::new(false),
             toasts: RwSignal::new(Vec::new()),
             username: RwSignal::new(String::new()),
             next_toast: RwSignal::new(0),
@@ -530,6 +533,99 @@ fn warm_offline_copies() {
         window().set_timeout_with_callback_and_timeout_and_arguments_0(warm.unchecked_ref(), 4000);
 }
 
+/// The build a page is: the id in its runtime's address (`/pkg/<id>/aac_web.js`, index.html's {{PKG}}).
+pub fn build_id(html_or_href: &str) -> Option<String> {
+    let at = html_or_href.find("/pkg/")? + 5;
+    let rest = &html_or_href[at..];
+    let end = rest.find('/')?;
+    let id = &rest[..end];
+    (!id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+    .then(|| id.to_string())
+}
+
+/// An installed app that iOS resumes keeps the build it started with, for days. So whenever the app comes back on
+/// screen, and every 10 minutes while it is open, the frame asks the server for its page (no cache) and compares the
+/// build. Coming back on screen with nothing being typed, it reloads at once; otherwise it offers "New version ·
+/// Reload", so a note being written is never lost.
+fn watch_build(ctx: FrameCtx) {
+    let running = document()
+        .query_selector("link[rel=\"modulepreload\"]")
+        .ok()
+        .flatten()
+        .and_then(|l| l.get_attribute("href"))
+        .and_then(|href| build_id(&href));
+    let Some(running) = running else { return };
+    let check = std::rc::Rc::new(move |resumed: bool| {
+        if !window().navigator().on_line() {
+            return;
+        }
+        let running = running.clone();
+        leptos::task::spawn_local(async move {
+            let init = web_sys::RequestInit::new();
+            init.set_cache(web_sys::RequestCache::NoStore);
+            init.set_credentials(web_sys::RequestCredentials::SameOrigin);
+            let path = window()
+                .location()
+                .pathname()
+                .unwrap_or_else(|_| "/app/home".into());
+            let Ok(response) = wasm_bindgen_futures::JsFuture::from(
+                window().fetch_with_str_and_init(&path, &init),
+            )
+            .await
+            .and_then(|r| r.dyn_into::<web_sys::Response>()) else {
+                return;
+            };
+            if !response.ok() {
+                return;
+            }
+            let Some(text) = response
+                .text()
+                .ok()
+                .map(wasm_bindgen_futures::JsFuture::from)
+            else {
+                return;
+            };
+            let Some(html) = text.await.ok().and_then(|t| t.as_string()) else {
+                return;
+            };
+            match build_id(&html) {
+                Some(served) if served != running => {
+                    if resumed && !crate::ui::device::typing() {
+                        let _ = window().location().reload();
+                    } else {
+                        let _ = ctx.new_build.try_set(true);
+                    }
+                }
+                _ => {}
+            }
+        });
+    });
+    {
+        let check = check.clone();
+        let on_show = Closure::<dyn Fn()>::new(move || {
+            if document().visibility_state() == web_sys::VisibilityState::Visible {
+                check(true);
+            }
+        });
+        let _ = document()
+            .add_event_listener_with_callback("visibilitychange", on_show.as_ref().unchecked_ref());
+        on_show.forget();
+    }
+    let poll = Closure::<dyn Fn()>::new(move || {
+        if document().visibility_state() == web_sys::VisibilityState::Visible {
+            check(false);
+        }
+    });
+    let _ = window().set_interval_with_callback_and_timeout_and_arguments_0(
+        poll.as_ref().unchecked_ref(),
+        600_000,
+    );
+    poll.forget();
+}
+
 #[component]
 pub fn Frame(initial: Page) -> impl IntoView {
     let _ = js_sys::Reflect::set(&window(), &"__aacFrame".into(), &true.into());
@@ -572,6 +668,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
     listen_to_dashboard(ctx, chrome);
     follow_history(ctx);
     warm_offline_copies();
+    watch_build(ctx);
     let close_menu = window_event_listener(leptos::ev::click, move |_| ctx.menu_open.set(false));
     on_cleanup(move || close_menu.remove());
     let signed_in = Memo::new(move |_| view_signal.with(|v: &SessionView| v.signed_in));
@@ -594,6 +691,13 @@ pub fn Frame(initial: Page) -> impl IntoView {
             <ActivationDialog/>
         </Show>
         <Toasts ctx=ctx/>
+        <Show when=move || ctx.new_build.get()>
+            <div class="new-build" role="status">
+                <span>"New version"</span>
+                <button class="btn primary sm" on:click=move |_| { let _ = window().location().reload(); }>"Reload"</button>
+                <button class="icon-btn bare" aria-label="Later" on:click=move |_| ctx.new_build.set(false)><Icon name="close"/></button>
+            </div>
+        </Show>
     }
 }
 
@@ -733,6 +837,19 @@ mod tests {
             refresh: Callback::new(|_| {}),
             lead: None,
         }
+    }
+
+    #[test]
+    fn the_build_is_read_from_the_runtime_address() {
+        assert_eq!(
+            build_id("/pkg/5b71f6820ff9/aac_web.js").as_deref(),
+            Some("5b71f6820ff9")
+        );
+        let page = r#"<link rel="modulepreload" href="/pkg/c965f1a909c2/aac_web.js" />"#;
+        assert_eq!(build_id(page).as_deref(), Some("c965f1a909c2"));
+        assert_eq!(build_id("/app/home"), None);
+        assert_eq!(build_id("/pkg//aac_web.js"), None);
+        assert_eq!(build_id("/pkg/a\"b/x"), None);
     }
 
     #[test]

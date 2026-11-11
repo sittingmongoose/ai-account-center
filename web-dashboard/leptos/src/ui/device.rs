@@ -217,7 +217,7 @@ pub fn keep_chrome_while_typing(typing: bool, last_width: Option<f64>, width: f6
 }
 
 /// A text field or editable element has the focus (the keyboard is, or is about to be, up).
-fn typing() -> bool {
+pub fn typing() -> bool {
     document()
         .active_element()
         .map(|el| {
