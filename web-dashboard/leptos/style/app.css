@@ -1297,7 +1297,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
    Shell: the page's own chrome is drawn only when it is opened standalone (html[data-chrome]); inside the Slint
    shell's iframe data-chrome is "none" and the content takes the iframe's whole box.
    ========================================================================== */
-html { background: var(--bg-band); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html { background: var(--bg-band); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overscroll-behavior-y: none; }
 body { min-height: 100dvh; }
 .shell { min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); background: var(--bg-band); }
 .content { overflow-x: hidden; min-width: 0; }
@@ -1925,6 +1925,12 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-vis
 .side-host { position: fixed; inset: 0; z-index: 40; }
 .side-host .sheet-scrim { position: absolute; inset: 0; background: var(--sheet-scrim); border: 0; padding: 0; width: 100%; }
 .side-panel { position: absolute; right: 0; top: 0; bottom: 0; width: min(560px, 100%); background: var(--paper); box-shadow: var(--shadow-pop); padding: 20px; overflow: auto; }
+/* Beside the rail a sheet or side panel ends at the rail, never under the status strip, its clock or the camera island,
+   and a tall sheet starts low enough to clear the screen's top corner. */
+:root[data-chrome='rail'] .sheet-host .sheet { right: var(--rail-w); max-height: calc(100dvh - max(var(--safe-top), 28px) - 12px); }
+:root[data-chrome='rail'][data-rail-side='left'] .sheet-host .sheet { right: 0; left: var(--rail-w); }
+:root[data-chrome='rail'] .side-host .side-panel { right: var(--rail-w); width: min(560px, calc(100% - var(--rail-w))); }
+:root[data-chrome='rail'][data-rail-side='left'] .side-host .side-panel { right: 0; }
 
 /* ---------- Spend and Scoreboard interactivity ---------- */
 .seg-row { display: flex; }

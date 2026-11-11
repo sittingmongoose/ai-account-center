@@ -209,6 +209,34 @@ pub fn rail_width(insets: Insets) -> f64 {
     strip(insets).max(84.0)
 }
 
+/// While a text field has focus the on-screen keyboard shortens the window (open upright 669x869 can become 669x560),
+/// which would read as "not upright" and swap the bars for the rail in the middle of a note. So while typing, a change
+/// that keeps the window's width keeps the chrome; a rotation (a new width) still chooses again.
+pub fn keep_chrome_while_typing(typing: bool, last_width: Option<f64>, width: f64) -> bool {
+    typing && last_width.is_some_and(|w| (w - width).abs() < 1.0)
+}
+
+/// A text field or editable element has the focus (the keyboard is, or is about to be, up).
+fn typing() -> bool {
+    document()
+        .active_element()
+        .map(|el| {
+            let tag = el.tag_name().to_ascii_lowercase();
+            let editable = js_sys::Reflect::get(&el, &"isContentEditable".into())
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            editable
+                || tag == "textarea"
+                || (tag == "input"
+                    && !matches!(
+                        el.get_attribute("type").unwrap_or_default().as_str(),
+                        "checkbox" | "radio" | "button" | "submit" | "range"
+                    ))
+        })
+        .unwrap_or(false)
+}
+
 fn parse_override(search: &str) -> Option<Insets> {
     let safe = web_sys::UrlSearchParams::new_with_str(search)
         .ok()?
@@ -273,6 +301,9 @@ pub fn start(embed: bool) {
             )
         })
         .unwrap_or(false);
+    // The width and chrome last chosen, so typing can keep them (keep_chrome_while_typing).
+    let last: std::rc::Rc<std::cell::Cell<Option<(f64, &'static str)>>> =
+        std::rc::Rc::new(std::cell::Cell::new(None));
     let apply = move || {
         let insets = forced
             .or_else(|| probe.as_ref().filter(|_| !embed).map(measure))
@@ -282,7 +313,12 @@ pub fn start(embed: bool) {
         };
         let width = size(window().inner_width(), 1440.0);
         let height = size(window().inner_height(), 900.0);
+        let previous = last.get();
+        if keep_chrome_while_typing(typing(), previous.map(|(w, _)| w), width) {
+            return;
+        }
         let chrome = chrome_for(embed, duo, width, height, insets);
+        last.set(Some((width, chrome)));
         let _ = root.set_attribute("data-chrome", chrome);
         // The rail sits in the strip, on whichever side iOS puts it (app.css mirrors the rail's layout for the left).
         if chrome == "rail" {
@@ -433,6 +469,17 @@ mod tests {
             chrome_for(false, false, 867.0, 600.0, Insets::default()),
             "desk"
         );
+    }
+
+    #[test]
+    fn typing_keeps_the_chrome_until_the_width_changes() {
+        // the keyboard shortens open upright from 669x869: same width, so the bars stay
+        assert!(keep_chrome_while_typing(true, Some(669.0), 669.0));
+        // turned while typing: a new width chooses again
+        assert!(!keep_chrome_while_typing(true, Some(669.0), 951.0));
+        // not typing, or nothing chosen yet: choose as usual
+        assert!(!keep_chrome_while_typing(false, Some(669.0), 669.0));
+        assert!(!keep_chrome_while_typing(true, None, 669.0));
     }
 
     #[test]
