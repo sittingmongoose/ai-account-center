@@ -26,7 +26,11 @@ The current router also requires sign-in for localhost (no anonymous claims).
 
 For the Details UI the inventory also carries `providerWords` (an unmapped kind's own words, sanitised to at most
 48 printable characters; absent for every mapped kind) and `pendingAttempt` (the account's unresolved attempt key,
-or null, so any signed-in session can Check again after a reload). A confirmed claim or check answers `windows`:
+or null, so any signed-in session can Check again after a reload). Inventory also returns an opaque
+`canonicalAccountKey`: saved profile aliases for the same provider account and organization share
+pending discovery, history and the UI's spend lock. Check again still requires evidence matching
+the attempt's original profile, host and source binding to confirm settlement; another alias's
+evidence leaves it unconfirmed. A confirmed claim or check answers `windows`:
 each refilled window's id and used percent from the verification read (empty unless confirmed). A refused prepare
 or claim answers 409 `{code, action, reason, sent}`: `reason` is one of a fixed allowlist of native codes (never an
 identity) or null, and `sent` says whether the provider write was reached, in which case the UI blocks another

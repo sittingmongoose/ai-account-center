@@ -237,8 +237,16 @@ test('a refusal passes on only an allowlisted native code, and says whether the 
       body: JSON.stringify({ grantKey, confirmationToken: 'c'.repeat(64) }),
     });
   for (const [reject, reason, sent] of [
-    [{ op: 'begin', message: 'confirmation-invalid: Reset operation refused.' }, 'confirmation-invalid', false],
-    [{ op: 'claimGate', message: 'check-again-required: Reset operation refused.' }, 'check-again-required', false],
+    [
+      { op: 'begin', message: 'confirmation-invalid: Reset operation refused.' },
+      'confirmation-invalid',
+      false,
+    ],
+    [
+      { op: 'claimGate', message: 'check-again-required: Reset operation refused.' },
+      'check-again-required',
+      false,
+    ],
     [{ op: 'begin', message: 'private-account-name: leaked words' }, null, false],
     [{ op: 'finish', message: 'storage-unavailable: Reset operation refused.' }, null, true],
   ] as const) {
@@ -250,4 +258,20 @@ test('a refusal passes on only an allowlisted native code, and says whether the 
     expect(JSON.stringify(body)).not.toContain('private');
   }
   expect(sends).toBe(1);
+});
+
+test('alias recovery is read after inventory establishes canonical identity', async () => {
+  const source: ResetSource = {
+    async read() {
+      return {};
+    },
+    async send() {
+      throw new Error('must not send');
+    },
+  };
+  const { url, calls } = await serve('session', source, false, undefined, 'e'.repeat(64));
+  const res = await fetch(`${url}/accounts/alias/reset-claims`);
+  expect(res.status).toBe(200);
+  expect((await res.json()).pendingAttempt).toBe('e'.repeat(64));
+  expect(calls.slice(-3)).toEqual(['inventory', 'history', 'pending']);
 });

@@ -34,6 +34,7 @@ pub struct Inventory {
     #[serde(deserialize_with = "nullable")]
     pub history: Vec<HistoryEvent>,
     pub pending_attempt: Option<String>,
+    pub canonical_account_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -953,6 +954,7 @@ pub struct ResetCtx {
     cache: StoredValue<Vec<(String, f64, Inventory)>>,
     /// Every account's lock, kept while Details shows another account or is closed.
     locks: StoredValue<Vec<(String, Unresolved)>>,
+    aliases: StoredValue<Vec<(String, String)>>,
 }
 
 const REUSE_MS: f64 = 60_000.0;
@@ -969,6 +971,7 @@ impl ResetCtx {
             checking: RwSignal::new(false),
             cache: StoredValue::new(vec![]),
             locks: StoredValue::new(vec![]),
+            aliases: StoredValue::new(vec![]),
         }
     }
 
@@ -1006,9 +1009,38 @@ impl ResetCtx {
         }
     }
 
+    fn lock_key(&self, account: &str) -> String {
+        self.aliases
+            .with_value(|a| {
+                a.iter()
+                    .find(|(route, _)| route == account)
+                    .map(|(_, key)| key.clone())
+            })
+            .unwrap_or_else(|| account.to_string())
+    }
+    fn bind_alias(&self, account: &str, canonical: &str) {
+        let previous = self.lock_of(account);
+        self.aliases.update_value(|a| {
+            a.retain(|(route, _)| route != account);
+            a.push((account.into(), canonical.into()));
+        });
+        // Preserve an unanswered send's latch when its canonical identity is first learned.
+        if previous.blocks() {
+            self.update_lock(account, |u| {
+                if !u.blocks() {
+                    *u = previous;
+                }
+            });
+        }
+    }
     fn lock_of(&self, account: &str) -> Unresolved {
+        let account = self.lock_key(account);
         self.locks
-            .try_with_value(|l| l.iter().find(|(a, _)| a == account).map(|(_, u)| u.clone()))
+            .try_with_value(|l| {
+                l.iter()
+                    .find(|(a, _)| a == &account)
+                    .map(|(_, u)| u.clone())
+            })
             .flatten()
             .unwrap_or_default()
     }
@@ -1016,20 +1048,28 @@ impl ResetCtx {
     /// Changes one account's lock, shown or not (an answer may arrive after Details moved on).
     fn update_lock<R>(&self, account: &str, f: impl FnOnce(&mut Unresolved) -> R) -> R {
         let mut lock = self.lock_of(account);
+        let key = self.lock_key(account);
         let out = f(&mut lock);
         let _ = self.locks.try_update_value(|l| {
-            l.retain(|(a, _)| a != account);
+            l.retain(|(a, _)| a != &key);
             if lock != Unresolved::default() {
-                l.push((account.to_string(), lock.clone()));
+                l.push((key.clone(), lock.clone()));
             }
         });
-        if self.account.try_get_untracked().as_deref() == Some(account) {
+        if self
+            .account
+            .try_get_untracked()
+            .is_some_and(|shown| self.lock_key(&shown) == key)
+        {
             let _ = self.unresolved.try_set(lock);
         }
         out
     }
 
     fn take(&self, account: &str, inv: Inventory, started_ms: f64) {
+        if let Some(key) = &inv.canonical_account_key {
+            self.bind_alias(account, key);
+        }
         let cleared =
             self.update_lock(account, |u| u.read(inv.pending_attempt.clone(), started_ms));
         if cleared
@@ -1060,6 +1100,9 @@ impl ResetCtx {
         spawn_local(async move {
             let got = load(&account).await;
             if let Answer::Ok(inv) = &got {
+                if let Some(key) = &inv.canonical_account_key {
+                    me.bind_alias(&account, key);
+                }
                 // the lock learns from every read, even one for an account no longer shown
                 let _ = me.cache.try_update_value(|c| {
                     c.retain(|(a, _, _)| *a != account);
@@ -2120,6 +2163,41 @@ mod tests {
                 grant_key: "g".into()
             }
         ));
+    }
+
+    #[test]
+    fn canonical_aliases_share_the_spend_lock_and_pending_recovery() {
+        Owner::new().with(|| {
+            let rc = ResetCtx::new();
+            let canonical = |pending: serde_json::Value| {
+                inv(&serde_json::json!({
+                    "status":"ok", "canonicalAccountKey":"canonical", "pendingAttempt":pending
+                })
+                .to_string())
+            };
+            rc.show("a", "codex", false);
+            rc.take("a", canonical(serde_json::Value::Null), 1.0);
+            rc.show("b", "codex", false);
+            rc.take("b", canonical(serde_json::Value::Null), 2.0);
+            rc.update_lock("a", |u| {
+                u.apply(Lock::Latch {
+                    key: Some("attempt".into()),
+                    proof_after_ms: 10.0,
+                })
+            });
+            assert!(rc.unresolved.get_untracked().blocks());
+            assert!(!use_enabled(
+                true,
+                &rc.unresolved.get_untracked(),
+                &Dialog::Closed
+            ));
+            rc.take("b", canonical(serde_json::json!("attempt")), 11.0);
+            assert!(rc.lock_of("a").blocks());
+            rc.show("a", "codex", false);
+            assert!(rc.unresolved.get_untracked().blocks());
+            rc.take("a", canonical(serde_json::Value::Null), 12.0);
+            assert!(!rc.lock_of("b").blocks());
+        });
     }
 
     #[test]

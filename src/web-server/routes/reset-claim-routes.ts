@@ -157,7 +157,14 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         });
         return;
       }
-      res.json({ ...(await call('inventory', account, { snapshot })), history, pendingAttempt });
+      const inventory = await call('inventory', account, { snapshot });
+      // Inventory establishes the current profile's canonical identity before recovery reads.
+      res.json({
+        ...inventory,
+        history: await call('history', account),
+        pendingAttempt: ((await call('pending', account)) as { attemptKey: string | null })
+          .attemptKey,
+      });
     } catch {
       res.status(503).json({ status: 'unavailable', code: 'reset-inventory-unavailable' });
     }

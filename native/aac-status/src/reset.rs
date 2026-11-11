@@ -176,6 +176,7 @@ impl Store {
         }
         sql(db.busy_timeout(std::time::Duration::from_secs(5)))?;
         sql(db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
+            CREATE TABLE IF NOT EXISTS aliases(account TEXT PRIMARY KEY, lock_key TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS targets(key TEXT PRIMARY KEY, account TEXT NOT NULL, snapshot TEXT NOT NULL, grant_json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS confirmations(token TEXT PRIMARY KEY, caller TEXT NOT NULL, account TEXT NOT NULL, target TEXT NOT NULL, fingerprint TEXT NOT NULL, expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS attempts(key TEXT PRIMARY KEY, account TEXT NOT NULL, target TEXT NOT NULL, before_json TEXT NOT NULL, grant_json TEXT NOT NULL, outcome TEXT NOT NULL, pending INTEGER NOT NULL, created INTEGER NOT NULL, lock_key TEXT NOT NULL, provider_success INTEGER NOT NULL DEFAULT 0);
@@ -210,6 +211,10 @@ impl Store {
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        sql(tx.execute(
+            "INSERT INTO aliases VALUES(?,?) ON CONFLICT(account) DO UPDATE SET lock_key=excluded.lock_key",
+            params![account, Self::canonical(s)?],
+        ))?;
         // Keep old targets so an open confirmation cannot silently select another grant.
         let mut rows = vec![];
         for (i, g) in s.grants.iter().enumerate() {
@@ -222,8 +227,47 @@ impl Store {
         }
         sql(tx.commit())?;
         Ok(
-            json!({"status":if s.identity.provider=="qwen"{"unsupported"}else{"ok"},"observedAtMs":s.observed_at_ms,"sourceAgeMs":now-s.observed_at_ms,"grants":rows}),
+            json!({"status":if s.identity.provider=="qwen"{"unsupported"}else{"ok"},"observedAtMs":s.observed_at_ms,"sourceAgeMs":now-s.observed_at_ms,"canonicalAccountKey":Self::canonical(s)?,"grants":rows}),
         )
+    }
+    fn canonical(s: &Snapshot) -> Result<String> {
+        Ok(hash(&encode(&(
+            &s.identity.provider,
+            &s.identity.account,
+            &s.identity.organization,
+        ))?))
+    }
+    fn account_canonical(&self, account: &str) -> Result<Option<String>> {
+        let key: Option<String> = sql(self
+            .db
+            .query_row("SELECT lock_key FROM aliases WHERE account=?", [account], |r| r.get(0))
+            .optional())?;
+        if key.is_some() {
+            return Ok(key);
+        }
+        // Pre-alias-schema attempts and inventory targets remain discoverable after upgrade.
+        let snapshot: Option<String> = sql(self
+            .db
+            .query_row(
+                "SELECT before_json FROM attempts WHERE account=? ORDER BY created DESC LIMIT 1",
+                [account],
+                |r| r.get(0),
+            )
+            .optional())?;
+        let snapshot = match snapshot {
+            Some(s) => Some(s),
+            None => sql(self
+                .db
+                .query_row(
+                    "SELECT snapshot FROM targets WHERE account=? ORDER BY rowid DESC LIMIT 1",
+                    [account],
+                    |r| r.get(0),
+                )
+                .optional())?,
+        };
+        snapshot
+            .map(|s| Self::canonical(&serde_json::from_str(&s).map_err(|_| "shape")?))
+            .transpose()
     }
     fn target(&self, account: &str, key: &str) -> Result<(Snapshot, Grant)> {
         let (s, g): (String, String) = sql(self.db.query_row(
@@ -569,8 +613,8 @@ impl Store {
         let key: Option<String> = sql(self
             .db
             .query_row(
-                "SELECT key FROM attempts WHERE account=? AND pending=1 ORDER BY created DESC LIMIT 1",
-                [account],
+                "SELECT key FROM attempts WHERE (lock_key=? OR (account=? AND ? IS NULL)) AND pending=1 ORDER BY created DESC LIMIT 1",
+                params![self.account_canonical(account)?,account,self.account_canonical(account)?],
                 |r| r.get(0),
             )
             .optional())?;
@@ -578,17 +622,37 @@ impl Store {
     }
     /// Read-only at the provider: this method has no Write return path.
     pub fn check(&mut self, account: &str, attempt: &str, after: &Snapshot, now: i64) -> Result<Value> {
-        self.finish(account, attempt, Outcome::Ambiguous, Some(after), now, None)
+        let canonical = self.account_canonical(account)?;
+        let owner: String = sql(self.db.query_row(
+            "SELECT account FROM attempts WHERE key=? AND (lock_key=? OR (account=? AND ? IS NULL))",
+            params![attempt, canonical, account, canonical],
+            |r| r.get(0),
+        ))?;
+        // verify() still compares the full original identity and source binding.
+        self.finish(&owner, attempt, Outcome::Ambiguous, Some(after), now, None)
     }
     pub fn history(&self, account: &str) -> Result<Value> {
+        let canonical = self.account_canonical(account)?;
+        let mut hashes = vec![hash(account)];
+        let mut accounts = sql(self.db.prepare(
+            "SELECT account FROM aliases WHERE lock_key=? UNION SELECT account FROM attempts WHERE lock_key=?",
+        ))?;
+        let routes = sql(accounts.query_map(params![canonical, canonical], |r| r.get::<_, String>(0)))?;
+        for route in routes {
+            hashes.push(hash(&sql(route)?));
+        }
         let mut stmt = sql(self
             .db
-            .prepare("SELECT at_ms,event,target_hash,outcome,details FROM history WHERE account_hash=? ORDER BY seq"))?;
-        let rows=sql(stmt.query_map([hash(account)],|r|Ok(json!({"atMs":r.get::<_,i64>(0)?,"event":r.get::<_,String>(1)?,"targetHash":r.get::<_,String>(2)?,"outcome":r.get::<_,String>(3)?,"details":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))))?;
-        Ok(Value::Array(
-            rows.collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|_| "storage-unavailable")?,
-        ))
+            .prepare("SELECT account_hash,at_ms,event,target_hash,outcome,details FROM history ORDER BY seq"))?;
+        let rows=sql(stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,json!({"atMs":r.get::<_,i64>(1)?,"event":r.get::<_,String>(2)?,"targetHash":r.get::<_,String>(3)?,"outcome":r.get::<_,String>(4)?,"details":serde_json::from_str::<Value>(&r.get::<_,String>(5)?).unwrap_or(Value::Null)})))))?;
+        let mut events = vec![];
+        for row in rows {
+            let (account_hash, event) = sql(row)?;
+            if hashes.contains(&account_hash) {
+                events.push(event);
+            }
+        }
+        Ok(Value::Array(events))
     }
 }
 #[derive(Clone, Copy)]
