@@ -3,12 +3,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { STATIC_RATES, ALIASES, FALLBACK_RATES, modelRates, reconcile } from '../public/model-rates.mjs';
 
-// The mirror must equal src/web-server/model-pricing.ts (read only): the page splits each model's logged cost by
-// these rates, so a drifted rate would draw a wrong split.
+// The mirror must equal the server's pricing (read only): the page splits each model's logged cost by these rates, so a
+// drifted rate would draw a wrong split. The table and aliases live in model-pricing-data.ts; the unknown-model
+// fallback stays in model-pricing.ts.
 const source = fs.readFileSync(new URL('../../src/web-server/model-pricing.ts', import.meta.url), 'utf8');
+const data = fs.readFileSync(new URL('../../src/web-server/model-pricing-data.ts', import.meta.url), 'utf8');
 
 test('the static rate table mirrors PRICING_REGISTRY entry for entry', () => {
-  const registry = source.slice(source.indexOf('const PRICING_REGISTRY'), source.indexOf('const MODEL_PRICING_ALIASES'));
+  const start = data.indexOf('const PRICING_REGISTRY');
+  const end = data.indexOf('const MODEL_PRICING_ALIASES');
+  assert.ok(start >= 0 && end > start, 'model-pricing-data.ts holds PRICING_REGISTRY before MODEL_PRICING_ALIASES');
+  const registry = data.slice(start, end);
   // keys may be quoted or bare (Prettier unquotes single words like stealth and o1)
   const entries = [...registry.matchAll(/^ {2}(?:'([^']+)'|([A-Za-z_$][\w$]*)): \{\s*inputPerMillion: ([\d.]+),\s*outputPerMillion: ([\d.]+),\s*cacheCreationPerMillion: ([\d.]+),\s*cacheReadPerMillion: ([\d.]+),/gm)]
     .map(m => [m[1] ?? m[2], [Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6])]]);
@@ -18,7 +23,9 @@ test('the static rate table mirrors PRICING_REGISTRY entry for entry', () => {
 });
 
 test('aliases and the unknown-model fallback mirror model-pricing.ts', () => {
-  const block = source.slice(source.indexOf('const MODEL_PRICING_ALIASES'), source.indexOf('// Default pricing for unknown models'));
+  const aliasStart = data.indexOf('const MODEL_PRICING_ALIASES');
+  assert.ok(aliasStart >= 0, 'model-pricing-data.ts holds MODEL_PRICING_ALIASES');
+  const block = data.slice(aliasStart, data.indexOf('\n};\n', aliasStart) + 3);
   assert.deepEqual(Object.fromEntries([...block.matchAll(/(?:'([^']+)'|([A-Za-z_$][\w$]*)): '([^']+)'/g)].map(m => [m[1] ?? m[2], m[3]])), ALIASES);
   const unknown = /UNKNOWN_MODEL_PRICING: ModelPricing = \{\s*inputPerMillion: ([\d.]+),\s*outputPerMillion: ([\d.]+),\s*cacheCreationPerMillion: ([\d.]+),\s*cacheReadPerMillion: ([\d.]+),/.exec(source);
   assert.deepEqual(unknown.slice(1).map(Number), FALLBACK_RATES);
