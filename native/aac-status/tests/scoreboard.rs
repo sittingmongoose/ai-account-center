@@ -591,6 +591,34 @@ fn a_demoted_row_with_reviews_names_how_many_in_the_cell() {
 }
 
 #[test]
+fn unknown_model_runs_count_every_runtime_and_effort() {
+    // L1: one unknown model run at two efforts in one task type is two rows. The foot
+    // counts both; the old key (model without its effort) skipped the second.
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    for use_in in doc["uses"].as_array_mut().unwrap() {
+        for task in use_in["taskTypes"].as_array_mut().unwrap() {
+            if task["id"] != "build" {
+                continue;
+            }
+            let rows = task["rows"].as_array_mut().unwrap();
+            let at = rows.iter().position(|row| row["model"] == "example/example-1").unwrap();
+            let mut clone = rows[at].clone();
+            clone["effort"] = json!("max");
+            rows.push(clone);
+        }
+    }
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let view = by_model(&parsed).unwrap();
+    for panel in &view.views {
+        let foot: Vec<&str> = panel.foot.iter().map(|run| run.text.as_str()).collect();
+        assert!(
+            foot.iter().any(|text| *text == " example/example-1 (2 runs)."),
+            "foot was: {foot:?}"
+        );
+    }
+}
+
+#[test]
 fn unknown_speed_and_cost_are_not_called_the_same() {
     // The review fixture builder's review runs, with wallSeconds and cost set to null.
     // Both models stay Recommended. Unknown speed and unknown cost are not a tie. R1.

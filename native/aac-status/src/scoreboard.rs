@@ -1518,11 +1518,12 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                 if catalog_models.contains(row.model.as_str()) {
                     continue;
                 }
-                // Runs count once per task type and process: the uses repeat the same rows.
+                // Runs count once per task type, model row and process: the uses repeat the
+                // same rows, but one model run at two runtimes or efforts is two rows (L1).
                 let dedupe = format!(
                     "{}|{}|{}|{}",
                     task.id,
-                    row.model,
+                    row_key(row),
                     row.process.as_ref().map(|p| p.id.as_str()).unwrap_or(""),
                     row.process.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("")
                 );
