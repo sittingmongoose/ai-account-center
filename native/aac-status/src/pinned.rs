@@ -138,6 +138,10 @@ pub struct ThreadIn {
     pub harness: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// The catalog label for the raw model id, as the TypeScript side resolved it
+    /// (D9); falls back to the raw id when the model is not in the catalog.
+    #[serde(default)]
+    pub model_label: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
     #[serde(default)]
@@ -192,6 +196,8 @@ pub struct TasksIn {
     pub seq: u64,
     pub project: String,
     pub stream: String,
+    #[serde(default)]
+    pub project_label: Option<String>,
     #[serde(default)]
     pub stream_label: Option<String>,
     /// The board file's current problem; the items above are its last good copy.
@@ -665,11 +671,26 @@ fn compose_update(
     };
 
     // ---- Who and Now --------------------------------------------------------------------
+    // The who line is the project label, the thread's name, and the catalog model label
+    // (D9): "Puppet Master · pm7-build · Opus 5.5 xhigh". The bare stream letter never
+    // shows; the board's stream label stands in only when the thread names nothing.
     if let Some(thread) = thread {
+        let labelled = |value: &Option<String>| value.clone().filter(|text| !text.is_empty());
+        let project_part = tasks
+            .and_then(|board| labelled(&board.project_label))
+            .or_else(|| labelled(&thread.project));
+        let name_part = labelled(&thread.name)
+            .or_else(|| labelled(&thread.harness))
+            .or_else(|| tasks.and_then(|board| labelled(&board.stream_label)));
+        let model_text = thread
+            .model_label
+            .clone()
+            .filter(|text| !text.is_empty())
+            .or_else(|| thread.model.clone());
         let parts = [
-            thread.name.clone().or_else(|| thread.harness.clone()),
-            thread.stream.clone(),
-            match (&thread.model, &thread.effort) {
+            project_part,
+            name_part,
+            match (&model_text, &thread.effort) {
                 (Some(model), Some(effort)) => Some(format!("{model} {effort}")),
                 (Some(model), None) => Some(model.clone()),
                 (None, Some(effort)) => Some(effort.clone()),

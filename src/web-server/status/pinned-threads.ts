@@ -26,6 +26,9 @@ import type { PinnedPanel, PinnedView } from './status-view-types';
 import { readRemotePins, runCommand, type CommandRunner } from './status-collectors';
 import type { ReadersCheckWriter } from './readers-check';
 import { StatusDocsReader, type StatusDocsState } from './status-docs';
+import { packagedCatalogDir } from '../scoreboard/catalog';
+import fs from 'fs';
+import path from 'path';
 
 export type PinsMachine = 'vm' | 'mac' | 'windows' | 'nas1';
 
@@ -218,6 +221,7 @@ export class PinnedThreadsCollector {
         name: row.doc.agent.name,
         harness: row.doc.agent.harness,
         model: row.doc.agent.model,
+        modelLabel: modelLabelFor(row.doc.agent.model),
         effort: row.doc.agent.effort,
         account: row.doc.agent.account,
         project: row.doc.project,
@@ -235,6 +239,7 @@ export class PinnedThreadsCollector {
         writtenAtMs: row.writtenAtMs,
         seq: row.doc.seq,
         project: row.doc.project,
+        projectLabel: row.doc.projectLabel,
         stream: row.doc.stream,
         streamLabel: row.doc.streamLabel,
         problem: row.problem?.reason ?? null,
@@ -296,6 +301,46 @@ export class PinnedThreadsCollector {
   pins(): MergedPin[] {
     return this.merged;
   }
+}
+
+/** The catalog's models, read once from the packaged seed (the file the Scoreboard seeds from). */
+let packagedModels: Array<{ model: string; label: string }> | null = null;
+
+function packagedModelRows(): Array<{ model: string; label: string }> {
+  if (packagedModels === null) {
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(path.join(packagedCatalogDir(), 'models.json'), 'utf8')
+      ) as { models?: unknown };
+      packagedModels = Array.isArray(raw.models)
+        ? raw.models.flatMap((row) => {
+            const entry = row as { model?: unknown; label?: unknown };
+            return typeof entry.model === 'string' && typeof entry.label === 'string'
+              ? [{ model: entry.model, label: entry.label }]
+              : [];
+          })
+        : [];
+    } catch {
+      packagedModels = [];
+    }
+  }
+  return packagedModels;
+}
+
+/**
+ * The who line's catalog model label for a thread's raw model id (D9): an exact catalog
+ * model (`anthropic/claude-opus-5-5`) or the reporter's short form (`claude-opus-5-5`) both
+ * find their label. A model the catalog does not know labels as null, so the raw id shows
+ * as written; no label is ever invented.
+ */
+export function modelLabelFor(model: string | null): string | null {
+  if (!model) return null;
+  const rows = packagedModelRows();
+  const exact = rows.find((row) => row.model === model);
+  if (exact) return exact.label;
+  const short = model.slice(model.lastIndexOf('/') + 1);
+  const byShort = rows.find((row) => row.model.slice(row.model.lastIndexOf('/') + 1) === short);
+  return byShort?.label ?? null;
 }
 
 /** `blockedOn` with its `since` parsed once, for the composer's "waiting since" clock words. */

@@ -5,12 +5,22 @@ import * as path from 'path';
 import type { NativeStatusHandle } from '../../../src/status-native/native-loader';
 import type { PinnedThread } from '../../../src/status-native/pinned';
 import {
+  modelLabelFor,
   PinnedThreadsCollector,
   zoneOffsetMinutes,
   type PinsMachine,
 } from '../../../src/web-server/status/pinned-threads';
-import type { AgentReportsState } from '../../../src/web-server/status/agent-reports-reader';
+import {
+  AgentReportsReader,
+  type AgentReportsState,
+} from '../../../src/web-server/status/agent-reports-reader';
 import type { CommandRunner } from '../../../src/web-server/status/status-collectors';
+import {
+  item,
+  tasksDoc,
+  threadDoc,
+  writeReport,
+} from '../web-server/status/status-test-helpers';
 
 /**
  * A fake native handle: the same method split as the module, with merge and compose echoing
@@ -293,6 +303,58 @@ describe('PinnedThreadsCollector', () => {
     await collector.collect(); // no throw
     await collector.compose(noReports, []);
     expect(collector.view()).toEqual({ unavailable: 'the aac-status native module is disabled' });
+  });
+
+  it('the composer input carries the catalog model label and the project label (D9)', async () => {
+    expect(modelLabelFor('claude-opus-5-5')).toBe('Opus 5.5');
+    expect(modelLabelFor('anthropic/claude-opus-5-5')).toBe('Opus 5.5');
+    expect(modelLabelFor('gpt-6.1-sol')).toBe('Sol 6.1');
+    expect(modelLabelFor('unknown-model-9')).toBeNull();
+    expect(modelLabelFor(null)).toBeNull();
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-pinned-who-'));
+    try {
+      writeReport(dir, 'vm.lead', 'thread.json', threadDoc('vm.lead'));
+      writeReport(
+        dir,
+        'vm.lead',
+        'tasks.json',
+        tasksDoc('vm.lead', [item('F-01', 'done')], {
+          project: 'puppet-master',
+          projectLabel: 'Puppet Master',
+          stream: 'F',
+          streamLabel: 'PM7 follow-ups',
+        })
+      );
+      const reader = new AgentReportsReader({
+        root: () => dir,
+        now: () => 1_794_116_000_000,
+      });
+      await reader.scan();
+      expect(reader.snapshot().problems).toEqual([]);
+      const { handle, composeInputs } = fakeHandle({
+        vm: () => ({ pinned: [pin('t1')] }),
+      });
+      const collector = new PinnedThreadsCollector({
+        handle,
+        run: neverRun,
+        readRemote: async () => '[]',
+        now: () => 1_794_116_000_000,
+        reportsRoot: () => dir,
+      });
+      await collector.collect();
+      await collector.compose(reader.snapshot(), []);
+      const input = composeInputs.at(-1) as Record<string, unknown>;
+      const threads = input.threads as Array<Record<string, unknown>>;
+      const tasks = input.tasks as Array<Record<string, unknown>>;
+      expect(threads).toHaveLength(1);
+      expect(threads[0].model).toBe('claude-opus-5-5');
+      expect(threads[0].modelLabel).toBe('Opus 5.5');
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].projectLabel).toBe('Puppet Master');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('the dashboard zone becomes the offset the composer needs', () => {

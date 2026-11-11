@@ -47,13 +47,15 @@ fn the_full_update_from_a_reporting_thread() {
     let built = input(json!({
         "pins": [pin("t1", json!("a"))],
         "threads": [thread(json!({
-            "t3Thread": "t1", "name": "Puppet Master", "harness": "claude",
-            "model": "Opus 5.5", "effort": "xhigh", "project": "pm7", "stream": "pm7-build",
+            "t3Thread": "t1", "name": "pm7-build", "harness": "claude",
+            "model": "claude-opus-5-5", "modelLabel": "Opus 5.5", "effort": "xhigh",
+            "project": "puppet-master", "stream": "F",
             "doing": "Windows 10 sweep for stream F, batch 9."
         }))],
         "tasks": [json!({
             "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
-            "project": "pm7", "stream": "pm7-build",
+            "project": "puppet-master", "projectLabel": "Puppet Master",
+            "stream": "F", "streamLabel": "PM7 follow-ups",
             "items": [
                 { "id": "F-07", "title": "Tray icon sharp at 125% scale", "state": "fixing",
                   "updatedAtMs": null,
@@ -107,6 +109,41 @@ fn the_full_update_from_a_reporting_thread() {
     assert_eq!(update.updated.as_ref().unwrap().text, "Updated 3 min ago");
     assert_eq!(view.counts.looping, 1);
     assert_eq!(view.counts.waiting_on_you, 0);
+}
+
+#[test]
+fn the_who_line_labels_the_project_and_the_model_or_says_what_it_knows() {
+    // No board and a model the catalog does not know: the project id and the raw model
+    // id show as written, never invented labels — and the bare stream letter stays out.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "name": "some-thread",
+            "model": "some/unknown-1", "effort": "high",
+            "project": "some-project", "stream": "X"
+        }))]
+    }));
+    assert_eq!(
+        one_update(&built).who.as_deref(),
+        Some("some-project · some-thread · some/unknown-1 high")
+    );
+    // No name at all: the board's stream label stands in for the middle part.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "t3Thread": "t1", "project": "puppet-master", "stream": "F"
+        }))],
+        "tasks": [json!({
+            "writer": "vm.other", "writtenAtMs": NOW - 100_000, "seq": 1,
+            "project": "puppet-master", "projectLabel": "Puppet Master",
+            "stream": "F", "streamLabel": "PM7 follow-ups",
+            "items": []
+        })]
+    }));
+    assert_eq!(
+        one_update(&built).who.as_deref(),
+        Some("Puppet Master · PM7 follow-ups")
+    );
 }
 
 #[test]
