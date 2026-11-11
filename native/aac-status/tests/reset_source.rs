@@ -28,7 +28,9 @@ for line in sys.stdin:
  if method=='initialize': result={}
  elif method=='account/read': result={'account':{'type':'chatgpt','email':'synthetic-principal'}}
  elif method=='account/rateLimits/read':
-  result={'accountId':'synthetic-account','rateLimits':{'primary':{'usedPercent':100}},'rateLimitResetCredits':{'availableCount':2,'credits':[{'id':'individual_a','resetType':'codexRateLimits','status':'available'},{'id':'individual_b','resetType':'codexRateLimits','status':'available'}]}}
+  who=os.path.join(os.environ['CODEX_HOME'],'usage-account.json')
+  usage_account=json.load(open(who)) if os.path.exists(who) else {'accountId':'synthetic-account'}
+  result={**usage_account,'rateLimits':{'primary':{'usedPercent':100}},'rateLimitResetCredits':{'availableCount':2,'credits':[{'id':'individual_a','resetType':'codexRateLimits','status':'available'},{'id':'individual_b','resetType':'codexRateLimits','status':'available'}]}}
  elif method=='account/rateLimitResetCredit/consume':
   with open(os.path.join(os.environ['CODEX_HOME'],'sent.json'),'w') as f: json.dump(r['params'],f)
   result={'outcome':'reset'}
@@ -73,4 +75,32 @@ for line in sys.stdin:
     let sent: serde_json::Value = serde_json::from_slice(&std::fs::read(home.join("sent.json")).unwrap()).unwrap();
     assert_eq!(sent["creditId"], "individual_b");
     assert_eq!(sent["idempotencyKey"], "a".repeat(64));
+
+    // The usage read must name the saved account. A different or missing accountId refuses the read and the claim
+    // before any consume request, even though the saved login and account/read still agree.
+    std::fs::remove_file(home.join("sent.json")).unwrap();
+    for usage_account in [
+        json!({"accountId":"other-account"}),
+        json!({}),
+        json!({"accountId":null}),
+    ] {
+        std::fs::write(home.join("usage-account.json"), usage_account.to_string()).unwrap();
+        let read = aac_status::reset_source::codex_with_binary(
+            home.to_str().unwrap(),
+            "exact-profile",
+            "fixture-host",
+            None,
+            &binary,
+        );
+        assert_eq!(read.unwrap_err(), "identity-unconfirmed", "usage {usage_account}");
+        let claim = aac_status::reset_source::codex_with_binary(
+            home.to_str().unwrap(),
+            "exact-profile",
+            "fixture-host",
+            Some(&write),
+            &binary,
+        );
+        assert_eq!(claim.unwrap_err(), "identity-unconfirmed", "usage {usage_account}");
+        assert!(!home.join("sent.json").exists(), "no consume for usage {usage_account}");
+    }
 }
