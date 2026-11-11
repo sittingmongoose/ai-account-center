@@ -1,5 +1,5 @@
 // A phone sheet's close button stays reachable while the sheet scrolls: it shares the grabber's
-// sticky strip instead of being positioned inside the scrolling sheet (pkg P recheck N2; Jared,
+// sticky strip instead of being positioned inside the scrolling sheet (pkg P recheck N2; the owner,
 // 2026-11-11: a Status sheet could not be closed on the Duo).
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
