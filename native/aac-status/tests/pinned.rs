@@ -844,6 +844,23 @@ fn the_loop_rule_matches_fail_wording_by_prefix() {
         update.looping.text
     );
     assert_eq!(view.counts.looping, 1);
+    // The prefix fail alone, on its own board: this fails without the prefix fix (F5).
+    let prefix_only = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
+            "project": "pm7", "stream": "f",
+            "items": [ { "id": "S-01", "title": "Sweep", "state": "fixing", "reviews": [
+                { "atMs": NOW - 9 * 3_600_000, "verdict": "FAIL, one Medium" },
+                { "atMs": NOW - 6 * 3_600_000, "verdict": "FAIL, one Medium" },
+                { "atMs": NOW - 3 * 3_600_000, "verdict": "FAIL, one Medium" }
+            ] } ]
+        })]
+    }));
+    let prefix_update = one_update(&prefix_only);
+    assert_eq!(prefix_update.looping.answer, "yes");
+    assert_eq!(prefix_update.looping.task.as_deref(), Some("S-01"));
     // A board whose only reviews are unclear stays "No.", not a loop: unknown never counts.
     let unclear = input(json!({
         "pins": [pin("t1", json!("a"))],
