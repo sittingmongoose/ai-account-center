@@ -1,3 +1,4 @@
+import { sendRevalidatedView } from './revalidated-view';
 import type { NextFunction, Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
 import { hasOnlyKeys, sendError } from './account-route-guards';
@@ -140,7 +141,7 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       sendError(res, 400, 'unexpected_query', 'This request does not take a query string.');
       return;
     }
-    res.json(service().view());
+    sendRevalidatedView(res, service().view());
   });
 
   router.get('/answers', (req, res) => {

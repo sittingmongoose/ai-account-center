@@ -1,3 +1,4 @@
+import { sendRevalidatedView } from './revalidated-view';
 import type { Router } from 'express';
 import { createApiRouter } from './api-router';
 import { sendError } from './account-route-guards';
@@ -20,7 +21,7 @@ export function createScoreboardRouter(
       return;
     }
     try {
-      res.json(await service().view());
+      sendRevalidatedView(res, await service().view());
     } catch {
       sendError(res, 500, 'scoreboard_failed', 'The scoreboard could not be built.');
     }

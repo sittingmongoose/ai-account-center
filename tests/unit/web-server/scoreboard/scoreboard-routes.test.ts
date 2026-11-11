@@ -65,7 +65,12 @@ describe('scoreboard route', () => {
     expect((await device.json()).code).toBe('device_scope');
     const ok = await fetch(url, { headers: session });
     expect(ok.status).toBe(200);
-    expect(ok.headers.get('cache-control')).toBe('no-store');
+    expect(ok.headers.get('cache-control')).toBe('private, no-cache');
+    const etag = ok.headers.get('etag');
+    expect(etag).toBeTruthy();
+    const unchanged = await fetch(url, { headers: { ...session, 'If-None-Match': etag! } });
+    expect(unchanged.status).toBe(304);
+    expect(await unchanged.text()).toBe('');
     const view = await ok.json();
     expect(view.version).toBe(1);
     expect(view.refresh).toEqual({ pollSeconds: 60 });

@@ -153,11 +153,10 @@ compare it with (n = 96)."; " Preliminary." is added when a weighted value is pr
 
 ## GET /api/scoreboard (view v1)
 Same rules as `/api/status`: a browser session (`authKind(req) === 'session'`; no session `401 auth_required`, a device
-token `403 device_scope`), `Cache-Control: no-store`, no query (`400 unexpected_query`), errors `{ error, code }` with
+token `403 device_scope`), `Cache-Control: private, no-cache` with an ETag (304 for unchanged data), no query (`400 unexpected_query`), errors `{ error, code }` with
 fixed sentences (`500 scoreboard_failed`).
 
-**Refresh.** A read older than 10 s rescans the share (stat first, read only changed files) and waits at most 8 s; a hung
-share answers with the last good data and its Source turns stale after 180 s. Nothing runs while nobody reads. The page
+**Refresh.** A read older than 60 s starts a background rescan (16 parallel file visits, stat first, read only changed files). It immediately returns the previous view marked cached, with its age and refreshing flag; its Sources are marked stale while rescanning. A cold read waits at most 8 s. Nothing runs while nobody reads. The page
 re-reads every `refresh.pollSeconds` while visible. There is no `/ws` hint: scans happen only on reads, so there is
 nothing to push between them.
 

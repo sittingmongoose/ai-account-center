@@ -108,7 +108,7 @@ describe('status routes', () => {
       try {
         const res = await fetch(`${base}/api/status`, { headers: session });
         expect(res.status).toBe(200);
-        expect(res.headers.get('cache-control')).toBe('no-store');
+        expect(res.headers.get('cache-control')).toBe('private, no-cache');
         const view = await res.json();
         expect(view.cards.answerHistoryProblem).toBe("The answer history can't be read right now.");
         expect(view.cards.answered).toBeNull();
@@ -330,7 +330,9 @@ describe('status routes', () => {
     expect((await device.json()).code).toBe('device_scope');
     const ok = await fetch(`${base}/api/status`, { headers: session });
     expect(ok.status).toBe(200);
-    expect(ok.headers.get('cache-control')).toBe('no-store');
+    expect(ok.headers.get('cache-control')).toBe('private, no-cache');
+    const etag = ok.headers.get('etag');
+    expect(etag).toBeTruthy();
     const view = await ok.json();
     expect(view.version).toBe(1);
     expect(view.sources.map((s: { id: string }) => s.id)).toEqual([
