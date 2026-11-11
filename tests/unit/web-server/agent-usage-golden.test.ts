@@ -9,7 +9,7 @@ import { describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
 import { buildSnapshotFiles } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
-import { renderSnapshotMarkdown } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
+import { renderSnapshotMarkdown } from '../../../src/web-server/agent-usage/agent-usage-markdown';
 import {
   GOLDEN_SIGN_IN_NOW,
   goldenEvent,

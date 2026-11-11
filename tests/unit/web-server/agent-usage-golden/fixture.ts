@@ -17,7 +17,7 @@ import type {
 import type {
   SnapshotSignInProfile,
   SnapshotSignInRenewal,
-} from '../../../../src/web-server/agent-usage/agent-usage-snapshot';
+} from '../../../../src/web-server/agent-usage/agent-usage-markdown';
 
 export const GOLDEN_NOW = Date.parse('2026-10-15T12:00:00.000Z');
 export const GOLDEN_SIGN_IN_NOW = Date.parse('2026-10-15T12:00:05.000Z');

@@ -24,7 +24,6 @@ import {
   createSnapshotPublisher,
   downgradeCrossedSignInRows,
   readSnapshotSettings,
-  renderSnapshotMarkdown,
   SNAPSHOT_HISTORY,
   SNAPSHOT_JSON,
   SNAPSHOT_LOCATIONS,
@@ -32,6 +31,7 @@ import {
   snapshotSettingsPath,
   writeSnapshotSettings,
 } from '../../../src/web-server/agent-usage/agent-usage-snapshot';
+import { renderSnapshotMarkdown } from '../../../src/web-server/agent-usage/agent-usage-markdown';
 import { handleUsageSnapshotCommand } from '../../../src/commands/usage-snapshot-command';
 import { writePrivateJsonFile } from '../../../src/web-server/services/private-json-store';
 import {
