@@ -616,12 +616,13 @@ fn normalised_thread_id(id: &str) -> String {
     let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut at = 0;
     while at < bytes.len() {
-        if bytes[at] == b'%' && at + 2 < bytes.len() {
-            if let Some(byte) = hex_byte(bytes[at + 1], bytes[at + 2]) {
-                decoded.push(byte);
-                at += 3;
-                continue;
-            }
+        if bytes[at] == b'%'
+            && at + 2 < bytes.len()
+            && let Some(byte) = hex_byte(bytes[at + 1], bytes[at + 2])
+        {
+            decoded.push(byte);
+            at += 3;
+            continue;
         }
         decoded.push(bytes[at]);
         at += 1;
@@ -1005,9 +1006,10 @@ fn compose_update(
     // The earliest moment one of the waiting-on-you reports names, for "since <clock>".
     let mut waiting_since: Option<i64> = None;
     let mut note_waiting_since = |kind: &BlockedIn| {
-        if kind.kind == "owner" && kind.since_ms.is_some() {
-            waiting_since =
-                Some(waiting_since.map_or(kind.since_ms.unwrap(), |held: i64| held.min(kind.since_ms.unwrap())));
+        if kind.kind == "owner"
+            && let Some(since) = kind.since_ms
+        {
+            waiting_since = Some(waiting_since.map_or(since, |held: i64| held.min(since)));
         }
     };
     // Blocked in so many words with no `blockedOn` to name: the state is known, the reason

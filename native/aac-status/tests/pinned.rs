@@ -729,7 +729,7 @@ fn a_thread_waiting_on_the_owner_is_never_stale_and_names_the_moment() {
     }));
     let update = one_update(&built);
     assert_eq!(update.report_state, "fresh");
-    assert_eq!(update.blocked.as_ref().unwrap().waiting_on_you, true);
+    assert!(update.blocked.as_ref().unwrap().waiting_on_you);
     // NOW - 90 min reads 11:03 PM in the dashboard's zone (offset -300).
     assert_eq!(
         update.blocked.as_ref().unwrap().text,
@@ -773,7 +773,7 @@ fn the_loop_rule_matches_fail_wording_by_prefix() {
                     { "atMs": NOW - 4 * day + 3_600_000, "verdict": "fail" },
                     { "atMs": NOW - 3 * day + 3_600_000, "verdict": "fail" },
                     { "atMs": NOW - 2 * day + 3_600_000, "verdict": "fail" },
-                    { "atMs": NOW - 1 * day + 3_600_000, "verdict": "fail" }
+                    { "atMs": NOW - day + 3_600_000, "verdict": "fail" }
                 ] },
                 { "id": "S-03", "title": "Unclear", "state": "fixing", "reviews": [
                     { "atMs": NOW - 9 * 3_600_000, "verdict": "fail" },
