@@ -623,8 +623,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 45,
-      "totalSourceFiles": 505,
-      "coverageRatio": 0.0891,
+      "totalSourceFiles": 509,
+      "coverageRatio": 0.0884,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -652,7 +652,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 225,
+          "count": 229,
           "withLogger": 28
         },
         {
@@ -779,12 +779,12 @@
           "loc": 3724
         },
         {
-          "file": "src/web-server/status/answers.ts",
-          "loc": 1737
+          "file": "src/web-server/services/account-analytics-activity.ts",
+          "loc": 1808
         },
         {
-          "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1734
+          "file": "src/web-server/status/answers.ts",
+          "loc": 1743
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -811,16 +811,16 @@
           "loc": 990
         },
         {
+          "file": "src/web-server/services/analytics-remote-sources.ts",
+          "loc": 957
+        },
+        {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 938
+          "loc": 940
         },
         {
           "file": "src/web-server/agent-usage/agent-usage-snapshot.ts",
           "loc": 924
-        },
-        {
-          "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 918
         },
         {
           "file": "src/cliproxy/model-catalog.ts",
@@ -831,8 +831,8 @@
           "loc": 871
         },
         {
-          "file": "src/web-server/usage/native-quota-collector.ts",
-          "loc": 848
+          "file": "src/web-server/status/status-view.ts",
+          "loc": 849
         }
       ]
     }

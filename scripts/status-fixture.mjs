@@ -10,7 +10,7 @@
  * already answered), stream boards under boards/, and a pm-mail registry copy under
  * pm-mail-registry/ (2 threads that do not report yet).
  *
- * The 2 answers and 1 note (a note alone on an open card) live in the server's private store, so
+ * The 2 answers and 1 note (a note alone, which closes its card as a written response) live in the server's private store, so
  * they need the server's ccs folder:
  * `--ccs-dir <dir>` (else CCS_DIR, else CCS_HOME/.ccs). The script writes
  * <dir>/status/answer-key.pem (created when absent), appends the records to
@@ -952,7 +952,7 @@ export function writeStatusFixture(
         ago: 20 * HOUR,
       },
       { id: answeredIds[0], choice: ['A'], note: '', via: 'recommended', ago: 3 * HOUR },
-      // A note alone: the card stays open and shows it.
+      // A note alone is a written response: it closes the card (owner rule, 2026-11-11).
       {
         id: 'vm.aac-status-lead--Q2',
         choice: [],

@@ -159,7 +159,7 @@ export const tests = {
       await t.text(`${CARD} .q-title`, /Inbox question 72/);
     }
   },
-  // Jared, 2026-11-11: "The cards arent labeled so idk which are the ones you are referring to." Every open card
+  // The owner, 2026-11-11: "The cards arent labeled so idk which are the ones you are referring to." Every open card
   // shows its label where he looks, the index groups by batch, and a missing label is never made up.
   async 'status every open card shows its label'(t) {
     // Videos left out: on the Mac's Chrome a card video's request is not caught by the page route (TOOL-ISSUES 39).
