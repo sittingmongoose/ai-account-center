@@ -50,6 +50,8 @@ export interface AnalyticsRemoteSourceState {
 }
 
 export interface AnalyticsRemoteSourceDeps {
+  /** An explicit refresh requests a new observation even inside the ordinary scan TTL. */
+  force?: boolean;
   hosts?: () => Promise<AnalyticsRemoteAliases>;
   runHelper?: (
     sshHost: string,
@@ -626,6 +628,7 @@ export async function loadAnalyticsRemoteSources(
           const read = cached.kinds?.[kind];
           const age = now() - Date.parse(read?.lastScanAt ?? '');
           return (
+            !deps.force &&
             read &&
             ['ok', 'no_usage', 'not_installed'].includes(read.state) &&
             age >= 0 &&

@@ -265,6 +265,7 @@ export interface AccountAnalyticsActivityDeps {
   remote?: (
     minDateMs: number,
     opts?: {
+      force?: boolean;
       onHostScan?: (host: AnalyticsRemoteHost, phase: 'start' | 'done') => void;
     }
   ) => Promise<RemoteAnswer>;
@@ -751,9 +752,12 @@ export class AccountAnalyticsActivityService {
     state.remotePending = [];
     const loadRemote =
       this.deps.remote ??
-      ((ms: number, opts?: { onHostScan?: typeof onHostScan }) =>
+      ((ms: number, opts?: { onHostScan?: typeof onHostScan; force?: boolean }) =>
         loadAnalyticsRemoteSources(ms, opts ?? {}));
-    const remotePromise = loadRemote(cutoff, { onHostScan }).catch(() => null);
+    const remotePromise = loadRemote(cutoff, {
+      onHostScan,
+      force: state.manualRefreshPending,
+    }).catch(() => null);
     let settledRemote: RemoteAnswer | null = null;
     void remotePromise.then((answer) => {
       settledRemote = answer;
