@@ -251,6 +251,7 @@ describe('the readers check file', () => {
       release = resolve;
     });
     const files = {
+      stat: async () => ({ isDirectory: () => true }),
       mkdir: async () => {},
       writeFile: async () => {
         writes += 1;
@@ -278,16 +279,63 @@ describe('the readers check file', () => {
     const first = check.flushSoon();
     expect(first).toBeUndefined();
     // Let the background flush reach the hung write.
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
     expect(writes).toBe(1);
     // A second flush while one is in flight starts nothing new.
     check.flushSoon();
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
     expect(writes).toBe(1);
     expect(release).not.toBeNull();
     release?.();
+  });
+
+  it('a missing root is never created by a flush (F3)', async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-noroot-'));
+    const missing = path.join(parent, 'does-not-exist');
+    try {
+      expect(fs.existsSync(missing)).toBe(false);
+      let mkdirCalls = 0;
+      const check = new ReadersCheckWriter({ root: () => missing, now: () => NOW });
+      check.recordStatusScan(
+        {
+          root: missing,
+          state: 'ok',
+          scannedAt: NOW,
+          complete: true,
+          threads: [],
+          tasks: [],
+          cards: [],
+          problems: [],
+          boards: new Map(),
+        },
+        { state: 'ok', scannedAt: NOW, docs: [], problems: [] },
+        []
+      );
+      await check.flush();
+      expect(fs.existsSync(missing)).toBe(false);
+      // And with an injected share: no mkdir at all when the root is absent.
+      const silent = new ReadersCheckWriter({
+        root: () => missing,
+        now: () => NOW,
+        files: {
+          stat: async () => {
+            const error = new Error('gone') as NodeJS.ErrnoException;
+            error.code = 'ENOENT';
+            throw error;
+          },
+          mkdir: async () => {
+            mkdirCalls += 1;
+          },
+          writeFile: async () => {},
+          rename: async () => {},
+          rm: async () => {},
+        },
+      });
+      await silent.flush();
+      expect(mkdirCalls).toBe(0);
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   it('a failed write is logged once and never thrown', async () => {
@@ -299,6 +347,7 @@ describe('the readers check file', () => {
     try {
       let writes = 0;
       const files = {
+        stat: async () => ({ isDirectory: () => true }),
         mkdir: async () => {},
         writeFile: async () => {
           writes += 1;

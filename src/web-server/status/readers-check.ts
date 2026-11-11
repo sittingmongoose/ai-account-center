@@ -39,6 +39,7 @@ export interface ReaderFileRow {
 
 /** The share writes one flush performs, so tests can hang or fail them (F2). */
 export interface CheckFiles {
+  stat(file: string): Promise<{ isDirectory(): boolean }>;
   mkdir(dir: string, options?: { recursive?: boolean }): Promise<void>;
   writeFile(file: string, body: string, options?: { mode?: number }): Promise<void>;
   rename(from: string, to: string): Promise<void>;
@@ -46,6 +47,10 @@ export interface CheckFiles {
 }
 
 const nodeCheckFiles: CheckFiles = {
+  stat: async (file) => {
+    const result = await fs.promises.stat(file);
+    return { isDirectory: () => result.isDirectory() };
+  },
   mkdir: async (dir, options) => {
     await fs.promises.mkdir(dir, options);
   },
@@ -212,10 +217,24 @@ export class ReadersCheckWriter {
     const dir = path.join(this.root(), 'v1', 'readers', 'aac');
     const writtenAt = new Date(this.now()).toISOString();
     const target = this.files();
+    // The reports root is never created (F3): an unmounted share must not grow a
+    // local folder, as ensureReportsLayout guards. Under an existing root, only
+    // AAC's own folders below it are created, one level at a time.
     try {
-      await target.mkdir(dir, { recursive: true });
+      if (!(await target.stat(this.root())).isDirectory()) return;
     } catch {
-      return; // The share is not there for us: skip, the next scan tries again.
+      return;
+    }
+    for (const folder of [
+      path.join(this.root(), 'v1'),
+      path.join(this.root(), 'v1', 'readers'),
+      dir,
+    ]) {
+      try {
+        await target.mkdir(folder);
+      } catch {
+        /* Already there (or not creatable): leave it; the writes below fail the same way. */
+      }
     }
     let logged = false;
     for (const [writer, files] of this.rows()) {

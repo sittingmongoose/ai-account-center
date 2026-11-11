@@ -418,6 +418,7 @@ describe('PinnedThreadsCollector', () => {
         root: () => dir,
         now: () => 1_794_116_000_000,
         files: {
+          stat: async () => ({ isDirectory: () => true }),
           mkdir: async () => {},
           writeFile: async () => {
             await gate;
