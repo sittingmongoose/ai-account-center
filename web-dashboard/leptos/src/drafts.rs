@@ -254,7 +254,11 @@ pub fn proven_recorded(id: &str, d: &Draft, answered: &[AnsweredCard]) -> bool {
             return false;
         }
         let kind = entry_kind(&a.card, d);
-        let mut sent = if kind == "answer" { d.choice.clone() } else { Vec::new() };
+        let mut sent = if kind == "answer" {
+            d.choice.clone()
+        } else {
+            Vec::new()
+        };
         let mut held = a.answer.choice.clone().unwrap_or_default();
         sent.sort();
         held.sort();
@@ -917,8 +921,14 @@ mod tests {
 
     #[test]
     fn a_written_response_closes_its_card_and_keeps_the_note_kind() {
-        let card = Card { id: "c".into(), ..Default::default() };
-        let draft = Draft { note: "Use the other approach instead".into(), ..Default::default() };
+        let card = Card {
+            id: "c".into(),
+            ..Default::default()
+        };
+        let draft = Draft {
+            note: "Use the other approach instead".into(),
+            ..Default::default()
+        };
         // no option is invented: the wire kind is "note" with no choice
         assert_eq!(entry_kind(&card, &draft), "note");
         assert!(closes("note") && closes("answer") && closes("done"));

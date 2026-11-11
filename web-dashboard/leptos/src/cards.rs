@@ -197,9 +197,11 @@ pub fn CardsPanel() -> impl IntoView {
             .with_untracked(|v| v.as_ref().is_some_and(|v| v.cards.proves_closed()));
         if complete {
             // Only empty drafts, and words the answered history holds, go: unsent words of a closed card stay below.
-            let answered = live
-                .view
-                .with_untracked(|v| v.as_ref().map(|v| v.cards.answered.clone()).unwrap_or_default());
+            let answered = live.view.with_untracked(|v| {
+                v.as_ref()
+                    .map(|v| v.cards.answered.clone())
+                    .unwrap_or_default()
+            });
             drafts.update(|d| drafts::prune(d, &cards, &answered));
         }
     });
@@ -679,7 +681,9 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
         facts.push(("Related", related.join(", ")));
     }
     let note_hint = match c.kind.as_str() {
-        "objection" => "Say why you object, or write a response. It goes to the agent word for word.",
+        "objection" => {
+            "Say why you object, or write a response. It goes to the agent word for word."
+        }
         "action" => "Write a response, or add a note to Done. It goes to the agent word for word.",
         _ => "Write a response, or add a note to your choice. It goes to the agent word for word.",
     };
@@ -1071,10 +1075,17 @@ fn UnsentClosed(open: Memo<Vec<Card>>, drafts: RwSignal<Drafts>) -> impl IntoVie
     let live = expect_context::<Live>();
     let rows = Memo::new(move |_| {
         // Only a complete card list proves a card closed; a short one says nothing here.
-        if !live.view.with(|v| v.as_ref().is_some_and(|v| v.cards.proves_closed())) {
+        if !live
+            .view
+            .with(|v| v.as_ref().is_some_and(|v| v.cards.proves_closed()))
+        {
             return Vec::new();
         }
-        let answered = live.view.with(|v| v.as_ref().map(|v| v.cards.answered.clone()).unwrap_or_default());
+        let answered = live.view.with(|v| {
+            v.as_ref()
+                .map(|v| v.cards.answered.clone())
+                .unwrap_or_default()
+        });
         open.with(|cards| {
             drafts.with(|d| {
                 drafts::unsent_closed(d, cards)
@@ -1085,7 +1096,12 @@ fn UnsentClosed(open: Memo<Vec<Card>>, drafts: RwSignal<Drafts>) -> impl IntoVie
                             .find(|a| &a.card.id == id)
                             .map(|a| a.card.title.clone())
                             .unwrap_or_else(|| id.rsplit("--").next().unwrap_or(id).to_string());
-                        (id.clone(), title, draft.choice.clone(), draft.note.trim().to_string())
+                        (
+                            id.clone(),
+                            title,
+                            draft.choice.clone(),
+                            draft.note.trim().to_string(),
+                        )
                     })
                     .collect::<Vec<_>>()
             })
@@ -1129,7 +1145,8 @@ fn UnsentClosed(open: Memo<Vec<Card>>, drafts: RwSignal<Drafts>) -> impl IntoVie
 fn copy_words(text: String, done: RwSignal<Option<bool>>) {
     use wasm_bindgen::JsCast;
     let navigator = window().navigator();
-    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into()).unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
+    let clipboard = js_sys::Reflect::get(&navigator, &"clipboard".into())
+        .unwrap_or(wasm_bindgen::JsValue::UNDEFINED);
     let promise = js_sys::Reflect::get(&clipboard, &"writeText".into())
         .ok()
         .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
