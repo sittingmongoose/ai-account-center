@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1408,
-    "filesAffected": 142,
-    "hotpathOccurrences": 749,
-    "hotpathFilesAffected": 83,
+    "totalOccurrences": 1409,
+    "filesAffected": 143,
+    "hotpathOccurrences": 750,
+    "hotpathFilesAffected": 84,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -623,8 +623,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 45,
-      "totalSourceFiles": 504,
-      "coverageRatio": 0.0893,
+      "totalSourceFiles": 505,
+      "coverageRatio": 0.0891,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -652,7 +652,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 224,
+          "count": 225,
           "withLogger": 28
         },
         {
@@ -703,10 +703,10 @@
       ]
     },
     "hotpathConsoleErrors": {
-      "totalOccurrences": 277,
+      "totalOccurrences": 279,
       "exemptOccurrences": 207,
-      "hotpathOccurrences": 70,
-      "filesAffected": 17,
+      "hotpathOccurrences": 72,
+      "filesAffected": 18,
       "topFiles": [
         {
           "file": "src/errors/error-handler.ts",
@@ -761,11 +761,11 @@
           "count": 2
         },
         {
-          "file": "src/config/loader/normalizers.ts",
-          "count": 1
+          "file": "src/web-server/status/readers-check.ts",
+          "count": 2
         },
         {
-          "file": "src/errors/cleanup-registry.ts",
+          "file": "src/config/loader/normalizers.ts",
           "count": 1
         }
       ]
