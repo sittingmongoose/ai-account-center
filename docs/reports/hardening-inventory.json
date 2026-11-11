@@ -780,7 +780,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1808
+          "loc": 1807
         },
         {
           "file": "src/web-server/status/answers.ts",

@@ -87,7 +87,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | File | LOC |
 |---|---:|
 | `src/web-server/usage/account-activity-collector.ts` | 3724 |
-| `src/web-server/services/account-analytics-activity.ts` | 1808 |
+| `src/web-server/services/account-analytics-activity.ts` | 1807 |
 | `src/web-server/status/answers.ts` | 1743 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1340 |
 | `src/web-server/model-pricing.ts` | 1322 |
