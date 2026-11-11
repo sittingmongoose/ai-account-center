@@ -662,6 +662,7 @@ fn compose_update(
     thread: Option<&ThreadIn>,
     tasks: Option<&TasksIn>,
     status: Option<&StatusIn>,
+    standalone_refusal: Option<&StatusProblemIn>,
 ) -> PinnedUpdate {
     let mut update = PinnedUpdate {
         id: pin.id.clone(),
@@ -755,7 +756,8 @@ fn compose_update(
     }
 
     // The status@1 refusal behind this update, when the held copy carries one: the writer file
-    // and the fixed reason, so a refusal says why. Never the refused content.
+    // and the fixed reason, so a refusal says why. Never the refused content. A standalone
+    // refusal (no good copy) for this pin's writer attaches the same way (F13).
     if let Some(doc) = status.filter(|doc| doc.problem.is_some()) {
         let file = if doc.writer.is_empty() {
             "writers/<unknown>/status.json".to_string()
@@ -766,6 +768,12 @@ fn compose_update(
             file,
             reason: doc.problem.clone().unwrap_or_default(),
             since_ms: doc.problem_since_ms,
+        });
+    } else if let Some(problem) = standalone_refusal {
+        update.refusal = Some(RefusalView {
+            file: problem.file.clone(),
+            reason: problem.reason.clone(),
+            since_ms: Some(problem.since_ms),
         });
     }
     // Unreadable beats fresh and stale: the copy shown is the last good one, greyed.
@@ -1154,7 +1162,14 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
                         .max_by_key(|board| (board.written_at_ms, board.seq))
                 })
             });
-        updates.push(compose_update(pin, input, thread, tasks, status));
+        // A standalone status refusal (no good copy) for this pin's writer attaches to
+        // the pin itself (F13), matched the way B8 matches: the report whose thread
+        // names this pin by the normalised id. The panel entry stays, too.
+        let standalone_refusal = thread.and_then(|doc| {
+            let want = format!("writers/{}/status.json", doc.writer);
+            input.status_problems.iter().find(|problem| problem.file == want)
+        });
+        updates.push(compose_update(pin, input, thread, tasks, status, standalone_refusal));
     }
     let looping = updates.iter().filter(|update| update.looping.answer == "yes").count();
     let waiting = updates

@@ -147,6 +147,33 @@ fn the_who_line_labels_the_project_and_the_model_or_says_what_it_knows() {
 }
 
 #[test]
+fn a_standalone_status_refusal_attaches_to_its_pin() {
+    // F13: a pinned writer whose status.json was refused with no good copy carries the
+    // refusal on its own pin, not only at panel level. The thread report matches the
+    // pin by the normalised id (B8); the refusal matches the thread's writer.
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "mcp:launch:t1", "doing": "Sweeping." }))],
+        "statusProblems": [json!({
+            "file": "writers/vm.pm7-build/status.json",
+            "reason": "status.json looping.state is missing or not valid",
+            "sinceMs": NOW - 600_000
+        })]
+    }));
+    let view = compose(&built);
+    let update = &view.updates[0];
+    // The thread reports, so the pin is not "not reporting yet".
+    assert_eq!(update.report_state, "fresh");
+    let refusal = update.refusal.as_ref().expect("refusal on the pin");
+    assert_eq!(refusal.file, "writers/vm.pm7-build/status.json");
+    assert_eq!(refusal.reason, "status.json looping.state is missing or not valid");
+    assert_eq!(refusal.since_ms, Some(NOW - 600_000));
+    // The panel entry stays, too.
+    assert_eq!(view.status_problems.len(), 1);
+    assert_eq!(view.status_problems[0].file, "writers/vm.pm7-build/status.json");
+}
+
+#[test]
 fn waiting_on_you_comes_from_every_source_that_names_it() {
     let built = input(json!({
         "pins": [pin("t1", json!("a"))],
