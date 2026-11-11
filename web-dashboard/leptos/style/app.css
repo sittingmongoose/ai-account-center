@@ -1317,6 +1317,20 @@ body { min-height: 100dvh; }
 :root[data-chrome='rail'] .content { padding-left: var(--safe-left); padding-top: var(--safe-top); }
 @media (min-width: 760px) { :root[data-chrome='rail'] .content { padding-left: max(16px, var(--safe-left)); padding-top: max(10px, var(--safe-top)); } }
 :root[data-chrome='rail'] .rail { display: flex; position: sticky; top: 0; height: 100dvh; align-self: start; overflow-y: auto; }
+/* The strip on the left (the folded Duo turned the other way): the rail sits in it, the page to its right with no left
+   gutter (the rail covers the strip), and the screen's right edge gets the side padding instead. */
+:root[data-chrome='rail'][data-rail-side='left'] .shell { grid-template-columns: var(--rail-w, var(--safe-left)) minmax(0, 1fr); }
+:root[data-chrome='rail'][data-rail-side='left'] .rail { grid-column: 1; grid-row: 1; border-left: 0; border-right: 1px solid var(--rule); }
+:root[data-chrome='rail'][data-rail-side='left'] .content { grid-column: 2; grid-row: 1; padding-left: 0; padding-right: var(--safe-right); }
+@media (min-width: 760px) { :root[data-chrome='rail'][data-rail-side='left'] .content { padding-right: max(16px, var(--safe-right)); } }
+/* The folded Duo's screen corners are round (about 55 pt). Beside the rail the page's first line starts 16 pt from the
+   screen's edge and 38 pt down (8 + 28 here, plus the page's own 8 and 10), the least that keeps a line of text 12 pt
+   clear of the corner (folded upright the corner is top left; with the strip on the left, top right). Wider screens
+   already keep 16 at the side. */
+@media (max-width: 759.98px) {
+  :root[data-chrome='rail'] .content { padding-top: max(28px, var(--safe-top)); padding-left: max(8px, var(--safe-left)); }
+  :root[data-chrome='rail'][data-rail-side='left'] .content { padding-left: 0; padding-right: max(8px, var(--safe-right)); }
+}
 :root[data-chrome='rail'] .content, :root[data-chrome='band'] .content { padding-bottom: var(--safe-bottom); }
 :root[data-chrome='band'] .band-head { display: block; position: sticky; top: 0; z-index: 5; }
 :root[data-chrome='none'] .shell { grid-template-rows: minmax(0, 1fr); background: transparent; }
@@ -2015,7 +2029,8 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 
 .toasts { position: fixed; z-index: 60; top: 72px; right: calc(16px + var(--safe-right)); width: min(380px, calc(100vw - 32px)); display: grid; gap: 8px; pointer-events: none; }
 :root[data-chrome='phone'] .toasts, :root[data-chrome='band'] .toasts { top: calc(var(--safe-top) + 56px); left: calc(12px + var(--safe-left)); right: calc(12px + var(--safe-right)); width: auto; }
-:root[data-chrome='rail'] .toasts { top: 12px; right: calc(var(--rail-w, var(--safe-right)) + 12px); }
+:root[data-chrome='rail'] .toasts { top: 12px; right: calc(var(--rail-w, var(--safe-right)) + 12px); width: min(380px, calc(100vw - var(--rail-w, 84px) - 24px)); }
+:root[data-chrome='rail'][data-rail-side='left'] .toasts { right: calc(12px + var(--safe-right)); }
 .toast { pointer-events: auto; display: flex; gap: 10px; align-items: flex-start; padding: 10px 8px 10px 14px; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); font-size: 13px; }
 .toast-text { flex: 1 1 0; min-width: 0; display: grid; gap: 2px; }
 .toast-text span { color: var(--ink-2); }
@@ -2026,6 +2041,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 :root[data-chrome='phone'] .acct-menu { top: calc(var(--safe-top) + 52px); right: calc(12px + var(--safe-right)); }
 :root[data-chrome='band'] .acct-menu { top: calc(var(--safe-top) + 50px); right: 10px; }
 :root[data-chrome='rail'] .acct-menu { top: auto; bottom: calc(var(--safe-bottom) + 12px); right: calc(var(--rail-w, var(--safe-right)) + 8px); }
+:root[data-chrome='rail'][data-rail-side='left'] .acct-menu { right: auto; left: calc(var(--rail-w, var(--safe-left)) + 8px); }
 .menu-head { padding: 8px 10px; color: var(--ink-3); font-size: 12.5px; border-bottom: 1px solid var(--rule-2); margin-bottom: 2px; }
 .menu-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; }
 .menu-row .seg button { display: inline-flex; align-items: center; gap: 4px; padding: 0 9px; }
