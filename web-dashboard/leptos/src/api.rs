@@ -56,8 +56,21 @@ pub struct PinnedPanel {
     pub counts: PinnedCounts,
     #[serde(deserialize_with = "nullable")]
     pub machine_problems: Vec<PinnedMachineProblem>,
+    /// The status@1 files the server refused and holds no good copy of: the writer file and the fixed reason.
+    #[serde(deserialize_with = "nullable")]
+    pub status_problems: Vec<StatusProblem>,
     #[serde(deserialize_with = "nullable")]
     pub updates: Vec<PinnedUpdate>,
+}
+
+/// A refused status@1 file (`writers/<writer>/status.json`) and why, in the server's fixed words.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StatusProblem {
+    #[serde(deserialize_with = "nullable")]
+    pub file: String,
+    #[serde(deserialize_with = "nullable")]
+    pub reason: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
@@ -95,7 +108,10 @@ pub struct PinnedUpdate {
     pub percent: Option<PinnedPercent>,
     pub percent_note: Option<String>,
     pub now: Option<String>,
+    /// Null (no report to say it) reads as empty: the page then says it can't tell, never "None".
+    #[serde(deserialize_with = "nullable")]
     pub blocked: PinnedBlocked,
+    #[serde(deserialize_with = "nullable")]
     pub looping: PinnedLooping,
     #[serde(deserialize_with = "nullable")]
     pub left: Vec<PinnedItem>,
@@ -106,6 +122,8 @@ pub struct PinnedUpdate {
     pub stale_note: Option<String>,
     pub unreadable_note: Option<String>,
     pub summary: Option<String>,
+    /// The refused status@1 file behind this pin, when its writer's last file was refused.
+    pub refusal: Option<StatusProblem>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]

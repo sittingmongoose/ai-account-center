@@ -499,6 +499,10 @@ fn Deck(
         </div>
         {move || source_note(source.get(), "No reading from the agent reports yet.")}
         {move || history_problem.get().map(|m| view! { <p class="plate-note problem" role="status">{m}</p> })}
+        // below desktop the head's tools are hidden: the recommendations button sits in the body
+        <Show when=can_use_rec>
+            <div class="q-userec not-d"><button class="btn sm" on:click=use_rec>"Use my recommendations"</button></div>
+        </Show>
         <Show when=move || !verdicts.with(|v| v.is_empty())>
             <div class="q-seg">
                 <Segmented

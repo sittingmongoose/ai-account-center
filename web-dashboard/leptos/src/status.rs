@@ -241,6 +241,15 @@ fn ProgressPanel() -> impl IntoView {
             .flat_map(|p| p.streams.iter())
             .filter(|s| s.completion.is_none() && s.counts.is_none())
             .count();
+        // With no task list anywhere there is nothing to call clear: say so rather than "Nothing blocked".
+        let any_list = list.iter().any(|p| p.counts.is_some())
+            || list
+                .iter()
+                .flat_map(|p| p.streams.iter())
+                .any(|s| s.completion.is_some() || s.counts.is_some());
+        if !any_list {
+            return view! { <span>"No task lists yet."</span> }.into_any();
+        }
         let mut parts: Vec<AnyView> = Vec::new();
         if blocked > 0 {
             parts.push(
@@ -263,12 +272,20 @@ fn ProgressPanel() -> impl IntoView {
             .enumerate()
             .map(|(i, part)| view! { {(i > 0).then_some(" · ")}{part} })
             .collect_view()
+            .into_any()
     };
     view! {
         <FoldedPlate class="sec-progress">
             <FoldHead>
                 <h2>"Progress"</h2>
-                <span class="plate-meta">{move || { let (d, o, n) = totals(); view! { <b>{format!("{d} of {o}")}</b>{format!(" tasks done in {n} {}", if n == 1 { "project" } else { "projects" })}} }}</span>
+                <span class="plate-meta">{move || {
+                    let (d, o, n) = totals();
+                    if o == 0 {
+                        // no task counted anywhere: never "0 of 0 tasks done in 0 projects"
+                        return view! { <span>"No task lists yet"</span> }.into_any();
+                    }
+                    view! { <b>{format!("{d} of {o}")}</b>{format!(" tasks done in {n} {}", if n == 1 { "project" } else { "projects" })}}.into_any()
+                }}</span>
                 <Chev/>
                 <p class="sec-sum not-wide">{summary}</p>
             </FoldHead>
@@ -402,6 +419,9 @@ fn lead_word(text: &str, word: &str, tone: &'static str) -> AnyView {
 }
 
 fn blocked_fact(b: &PinnedBlocked) -> AnyView {
+    if b.text.trim().is_empty() {
+        return view! { <span class="q3">"Can't tell."</span> }.into_any();
+    }
     match b.text.split_once(':') {
         Some((head, rest)) => {
             let tone = "warn";
@@ -418,6 +438,9 @@ fn blocked_fact(b: &PinnedBlocked) -> AnyView {
 }
 
 fn looping_fact(l: &PinnedLooping) -> AnyView {
+    if l.text.trim().is_empty() {
+        return view! { <span class="q3">"Can't tell."</span> }.into_any();
+    }
     match l.answer.as_str() {
         "yes" => lead_word(&l.text, "Yes.", "crit"),
         "cantTell" => view! { <span class="q3">{l.text.clone()}</span> }.into_any(),
@@ -435,11 +458,16 @@ fn row_line(p: &PinnedUpdate) -> AnyView {
         let note = unreadable_words(p);
         return view! { <span class="w-ink">{note}</span>" · "<span class="q3">"cached copy"</span> }.into_any();
     }
+    if let Some(r) = p.refusal.as_ref() {
+        return view! { <span data-tone="crit">"Status refused"</span>{format!(": {}", r.reason.trim_end_matches('.'))} }.into_any();
+    }
     if p.report_state == "none" {
-        return view! { <span class="q3">"Doesn't report its status yet"</span> }.into_any();
+        return view! { <span class="q3">"Not reporting yet"</span> }.into_any();
     }
     let looping = p.looping.answer == "yes";
-    let waiting = !(p.blocked.text == "None." || p.blocked.text == "None");
+    // an empty blocked fact (no report says it) is unknown: neither waiting nor on track
+    let blocked_known = !p.blocked.text.trim().is_empty();
+    let waiting = blocked_known && !(p.blocked.text == "None." || p.blocked.text == "None");
     if looping {
         // The server says that a task is looping, not which: a blocked task can sit ahead of it in `left`.
         parts.push(view! { <span data-tone="crit">"Looping"</span> }.into_any());
@@ -468,10 +496,20 @@ fn row_line(p: &PinnedUpdate) -> AnyView {
         parts.push(view! { <span data-tone="warn">{words}</span> }.into_any());
     }
     if !looping {
-        if !waiting {
+        let looping_known = p.looping.answer == "no" && !p.looping.text.trim().is_empty();
+        if !waiting && blocked_known && looping_known {
             parts.push(view! { <span>"On track"</span> }.into_any());
         }
-        parts.push(view! { <span>{if p.looping.answer == "cantTell" { "can't tell if it's looping" } else { "not looping" }}</span> }.into_any());
+        parts.push(view! { <span>{if looping_known { "not looping" } else { "can't tell if it's looping" }}</span> }.into_any());
+    }
+    // no percent: the slot stays empty and the line says why (never "no update" beside a fresh report)
+    if p.percent.is_none() {
+        let note = p
+            .percent_note
+            .clone()
+            .map(|n| lowercase_first(n.trim_end_matches('.')))
+            .unwrap_or_else(|| "no task list".to_string());
+        parts.push(view! { <span class="q3">{note}</span> }.into_any());
     }
     if let Some(u) = p.updated.as_ref() {
         parts.push(view! { <span>{u.text.replace("Updated ", "")}</span> }.into_any());
@@ -558,16 +596,22 @@ fn pin_body(
             <dt>"Looping"</dt><dd>{looping}</dd>
             {updated.map(|u| view! { <dt>"Updated"</dt><dd>{u}</dd> })}
         </dl>
-        <div class="tasks">
-            <div class="left"><h4 class="cap">{format!("Left · {}", left.len())}</h4>{item_list(&left, left_limit)}</div>
-            <div class="done"><h4 class="cap">{format!("Done · {}", done.len())}</h4>{item_list(&done, done_limit)}</div>
-        </div>
+        // a list with nothing in it isn't drawn (no bare "Left · 0")
+        {(!left.is_empty() || !done.is_empty()).then(|| view! {
+            <div class="tasks">
+                {(!left.is_empty()).then(|| view! { <div class="left"><h4 class="cap">{format!("Left · {}", left.len())}</h4>{item_list(&left, left_limit)}</div> })}
+                {(!done.is_empty()).then(|| view! { <div class="done"><h4 class="cap">{format!("Done · {}", done.len())}</h4>{item_list(&done, done_limit)}</div> })}
+            </div>
+        })}
     }
 }
 
 /// A pinned thread with no current report: says so plainly, with what it last said. The server's note reads
 /// "No status update for 25 days. If it is finished, unpin it in T3.": the second sentence goes last.
 fn quiet_body(p: &PinnedUpdate) -> impl IntoView + use<> {
+    let refusal = p.refusal.clone().map(|r| {
+        view! { <p class="pin-cached"><span data-tone="crit">{format!("{} was refused:", r.file)}</span>{format!(" {}", r.reason)}</p> }
+    });
     let note = p
         .stale_note
         .clone()
@@ -580,6 +624,7 @@ fn quiet_body(p: &PinnedUpdate) -> impl IntoView + use<> {
     };
     let summary = p.summary.clone();
     view! {
+        {refusal}
         <p class="q2" style="font-size:13px;line-height:1.5">
             <span class="w-ink">{first}</span>
             {summary.map(|s| format!(" The last one said: {s}"))}
@@ -662,7 +707,7 @@ fn PinRow(update: PinnedUpdate, on_open: Callback<String>) -> impl IntoView {
             <span class="pr-name" class:q2=quiet>{update.title.clone()}</span>
             {match pct_text {
                 Some(t) => view! { <span class="pr-pct">{t}<small>"%"</small></span> }.into_any(),
-                None => view! { <span class="pr-pct q3" style="font-size:13px">"no update"</span> }.into_any(),
+                None => view! { <span class="pr-pct"></span> }.into_any(),
             }}
             {bar.map(|v| view! { <Track pct=v kind="acc" thin=true/> })}
             <p class="pr-line" class:q3=quiet>{line}</p>
@@ -674,6 +719,7 @@ fn PinRow(update: PinnedUpdate, on_open: Callback<String>) -> impl IntoView {
 /// sheet itself stays, and with it where it was scrolled.
 #[component]
 fn PinSheet(update: Memo<Option<PinnedUpdate>>, on_close: Callback<()>) -> impl IntoView {
+    let offset = RwSignal::new(0.0f64);
     let contents = move || {
         update.get().map(|update| {
             let quiet = is_quiet(&update);
@@ -695,8 +741,8 @@ fn PinSheet(update: Memo<Option<PinnedUpdate>>, on_close: Callback<()>) -> impl 
     view! {
         <div class="sheet-host" role="dialog" aria-modal="true">
             <button class="sheet-scrim" aria-label="Close" on:click=move |_| on_close.run(())></button>
-            <div class="sheet">
-                <div class="grabber"></div>
+            <div class="sheet" style=move || sheet_drag_style(offset.get())>
+                <SheetGrab offset=offset on_close=on_close/>
                 <button class="icon-btn bare sheet-close" aria-label="Close" on:click=move |_| on_close.run(())><Icon name="close"/></button>
                 <article class="pin">{contents}</article>
             </div>
@@ -745,20 +791,32 @@ fn PinnedPanelView() -> impl IntoView {
                     <p class="empty">"No threads are pinned in T3."</p>
                 }.into_any(),
                 Some(p) => {
-                    let cards = p.updates.iter().take(6).cloned().collect::<Vec<_>>();
-                    let rest = p.updates.iter().skip(6).cloned().collect::<Vec<_>>();
                     let problems = p.machine_problems.clone();
+                    let refused = refused_lines(&p);
+                    // Pins that don't report at all share one closing line; the rest get rows, and on desktop the
+                    // reporting ones (fresh, or a cached last good copy) get cards, stale and refused ones rows.
+                    let (silent, shown): (Vec<_>, Vec<_>) = p.updates.into_iter().partition(is_silent);
+                    let cards = shown.iter().filter(|u| !is_quiet(u) && u.refusal.is_none()).take(6).cloned().collect::<Vec<_>>();
+                    let card_ids = cards.iter().map(|u| u.id.clone()).collect::<Vec<_>>();
+                    let rest = shown.iter().filter(|u| !card_ids.contains(&u.id)).cloned().collect::<Vec<_>>();
+                    let names = silent.iter().map(|u| u.title.clone()).collect::<Vec<_>>();
+                    let none_report = shown.is_empty();
                     view! {
                         {problems.into_iter().map(|m| view! { <p class="plate-note problem">{m.text}</p> }).collect_view()}
+                        {refused}
                         <div class="pin-list">
-                            {p.updates.into_iter().map(|u| view! { <PinRow update=u on_open=open_sheet/> }).collect_view()}
+                            {shown.into_iter().map(|u| view! { <PinRow update=u on_open=open_sheet/> }).collect_view()}
+                            {silent_line(&names, none_report)}
                         </div>
-                        <div class="pin-grid">
-                            {cards.into_iter().map(|u| view! { <PinCard update=u/> }).collect_view()}
-                        </div>
-                        {(!rest.is_empty()).then(|| view! {
-                            <div class="only-d">
-                                <div class="pin-more">{rest.into_iter().map(|u| view! { <PinRow update=u on_open=open_sheet/> }).collect_view()}</div>
+                        {(!cards.is_empty()).then(|| view! {
+                            <div class="pin-grid">
+                                {cards.into_iter().map(|u| view! { <PinCard update=u/> }).collect_view()}
+                            </div>
+                        })}
+                        {(!rest.is_empty() || !names.is_empty()).then(|| view! {
+                            <div class="only-d pin-rest" class:first=card_ids.is_empty()>
+                                {(!rest.is_empty()).then(|| view! { <div class="pin-more">{rest.into_iter().map(|u| view! { <PinRow update=u on_open=open_sheet/> }).collect_view()}</div> })}
+                                {silent_line(&names, none_report)}
                             </div>
                         })}
                     }.into_any()
@@ -766,6 +824,100 @@ fn PinnedPanelView() -> impl IntoView {
             }}
             {move || sheet_open.get().then(|| view! { <PinSheet update=sheet_update on_close=close_sheet/> })}
         </section>
+    }
+}
+
+/// A pin with no report at all (and no refused one): it has nothing to show beyond its name.
+fn is_silent(p: &PinnedUpdate) -> bool {
+    p.report_state == "none" && p.refusal.is_none()
+}
+
+/// The silent pins in one line: "None reports yet: A, B and C." with how a thread starts, or, when some report,
+/// "Not reporting yet: A and B."
+fn silent_line(names: &[String], none_report: bool) -> Option<AnyView> {
+    if names.is_empty() {
+        return None;
+    }
+    let list = match names {
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        [] => String::new(),
+    };
+    Some(if none_report {
+        view! {
+            <p class="pin-silent">
+                <b>"None reports yet: "</b><span>{format!("{list}.")}</span>
+                <span class="q3">" A thread shows here once it reports its status with agent-report update."</span>
+            </p>
+        }
+        .into_any()
+    } else {
+        view! { <p class="pin-silent"><span class="q2">"Not reporting yet: "</span><span>{format!("{list}.")}</span></p> }.into_any()
+    })
+}
+
+/// The refused status@1 files the server holds no good copy of, under the head. A pin whose own row says it was
+/// refused isn't repeated here.
+fn refused_lines(p: &PinnedPanel) -> impl IntoView + use<> {
+    let on_pins: Vec<String> = p
+        .updates
+        .iter()
+        .filter_map(|u| u.refusal.as_ref().map(|r| r.file.clone()))
+        .collect();
+    p.status_problems
+        .iter()
+        .filter(|s| !s.file.is_empty() && !on_pins.contains(&s.file))
+        .map(|s| {
+            view! { <p class="plate-note problem"><span data-tone="crit">{format!("{} was refused:", s.file)}</span>{format!(" {}", s.reason)}</p> }
+        })
+        .collect_view()
+}
+
+/// The sheet's grabber: drag the sheet down to close it (past 80 px, or a quick flick down); otherwise it springs back.
+#[component]
+pub(crate) fn SheetGrab(offset: RwSignal<f64>, on_close: Callback<()>) -> impl IntoView {
+    let start = StoredValue::new(None::<(f64, f64)>);
+    let down = move |e: web_sys::PointerEvent| {
+        if let Some(el) = e
+            .current_target()
+            .and_then(|t| wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(t).ok())
+        {
+            let _ = el.set_pointer_capture(e.pointer_id());
+        }
+        start.set_value(Some((e.client_y() as f64, js_sys::Date::now())));
+    };
+    let moved = move |e: web_sys::PointerEvent| {
+        if let Some((y0, _)) = start.get_value() {
+            offset.set((e.client_y() as f64 - y0).max(0.0));
+        }
+    };
+    let up = move |e: web_sys::PointerEvent| {
+        let Some((y0, t0)) = start.get_value() else {
+            return;
+        };
+        start.set_value(None);
+        let dy = e.client_y() as f64 - y0;
+        let speed = dy / (js_sys::Date::now() - t0).max(1.0);
+        if dy > 80.0 || (dy > 24.0 && speed > 0.6) {
+            on_close.run(());
+        } else {
+            offset.set(0.0);
+        }
+    };
+    view! {
+        <div class="grabber-zone" aria-hidden="true" on:pointerdown=down on:pointermove=moved on:pointerup=up
+            on:pointercancel=move |_| { start.set_value(None); offset.set(0.0); }>
+            <div class="grabber"></div>
+        </div>
+    }
+}
+
+/// The sheet follows a drag on its grabber without easing; at rest it has no transform.
+pub(crate) fn sheet_drag_style(offset: f64) -> String {
+    if offset > 0.0 {
+        format!("transform:translateY({offset:.0}px);transition:none")
+    } else {
+        String::new()
     }
 }
 
@@ -1179,9 +1331,16 @@ fn spend_block(row: &SpendRowView, columns: &[SpendColumn]) -> impl IntoView + u
         let cell = row.cells.get(i)?.clone()?;
         let col = columns.get(i)?.clone();
         let share = cell.share;
+        // two limits of one account can share a short name (the weekly and the Fable weekly): then the long one
+        let shared = columns.iter().filter(|c| c.short == col.short).count() > 1;
+        let key = if shared {
+            format!("{} · {}", col.label, col.account_label)
+        } else {
+            col.short.clone()
+        };
         Some(view! {
             <div class="sbar">
-                <span class="k">{col.short.clone()}</span>
+                <span class="k">{whole_words(&key)}</span>
                 {match share {
                     Some(s) => view! { <Track pct=(s * 100.0).min(100.0) kind=fill_of(&col.hue) thin=true/> }.into_any(),
                     None => view! { <TrackNa thin=true/> }.into_any(),
@@ -1201,6 +1360,24 @@ fn spend_block(row: &SpendRowView, columns: &[SpendColumn]) -> impl IntoView + u
             {credits}
         </div>
     }
+}
+
+/// The limit columns only bucket rows ("Not tied to a stream") fill, when there are stream rows at all.
+fn folded_columns(rows: &[SpendRowView], count: usize) -> Vec<usize> {
+    let streams = rows.iter().filter(|r| !r.bucket).collect::<Vec<_>>();
+    if streams.is_empty() {
+        return Vec::new();
+    }
+    (0..count)
+        .filter(|&i| {
+            streams
+                .iter()
+                .all(|r| r.cells.get(i).is_none_or(|c| c.is_none()))
+                && rows
+                    .iter()
+                    .any(|r| r.bucket && r.cells.get(i).is_some_and(|c| c.is_some()))
+        })
+        .collect()
 }
 
 #[component]
@@ -1251,7 +1428,7 @@ fn SpendPanel() -> impl IntoView {
                 <h2>"Spend by stream"</h2>
                 <span class="plate-meta">"Estimates from quota-watch"</span>
                 <div class="plate-tools only-wide" on:click=|e| e.stop_propagation()>
-                    {move || (!opts.get().is_empty()).then(|| view! { <Segmented options=opts.get() selected=current_id on_select=on_select label="Period"/> })}
+                    {move || (opts.get().len() > 1).then(|| view! { <Segmented options=opts.get() selected=current_id on_select=on_select label="Period"/> })}
                 </div>
                 <Chev/>
                 <p class="sec-sum not-wide">{move || match current.get() {
@@ -1266,16 +1443,31 @@ fn SpendPanel() -> impl IntoView {
                 (Some(_), None) => view! { <p class="plate-note">"Spend by stream is unavailable."</p> }.into_any(),
                 (Some(d), Some(p)) => {
                     let columns = p.columns.clone();
-                    let head = columns.iter().map(|c| view! { <th><span class="cap">{whole_words(&c.label)}</span><span class="acct">{c.account_label.clone()}</span></th> }).collect_view();
+                    // Limits only the untied row used fold into that row, so the table keeps to the plate.
+                    let folded = folded_columns(&p.rows, columns.len());
+                    let kept = (0..columns.len()).filter(|i| !folded.contains(i)).collect::<Vec<_>>();
+                    let head = kept.iter().map(|&i| { let c = &columns[i]; view! { <th><span class="cap">{whole_words(&c.label)}</span><span class="acct">{c.account_label.clone()}</span></th> } }).collect_view();
                     let credits_col = p.credits.clone();
+                    let span = kept.len() + usize::from(p.credits.is_some());
                     let body = p.rows.iter().map(|r| {
                         let hues: Vec<String> = columns.iter().map(|c| c.hue.clone()).collect();
+                        let also = folded.iter().filter_map(|&i| {
+                            let cell = r.cells.get(i)?.as_ref()?;
+                            let c = &columns[i];
+                            Some(format!("{} · {} {}", c.label, c.account_label, cell.text))
+                        }).collect::<Vec<_>>();
                         view! {
                             <tr class:bucket=r.bucket>
                                 <td class="sname">{r.stream.clone()}<small>{r.label.clone()}</small></td>
-                                {r.cells.iter().enumerate().map(|(i, c)| spend_cell(c, hues.get(i).map(String::as_str).unwrap_or(""))).collect_view()}
+                                {kept.iter().map(|&i| spend_cell(r.cells.get(i).unwrap_or(&None), hues.get(i).map(String::as_str).unwrap_or(""))).collect_view()}
                                 {p.credits.is_some().then(|| credits_cell(&r.credits))}
                             </tr>
+                            {(!also.is_empty()).then(|| view! {
+                                <tr class="fold" class:bucket=r.bucket><td></td><td colspan=span.to_string()>
+                                    <span class="q3">"Also: "</span>
+                                    {also.iter().enumerate().map(|(n, a)| view! { {(n > 0).then_some(" · ")}<span class="nw">{a.clone()}</span> }).collect_view()}
+                                </td></tr>
+                            })}
                         }
                     }).collect_view();
                     let top = p.rows.iter().filter(|r| !r.bucket).take(4).cloned().collect::<Vec<_>>();
@@ -1284,6 +1476,10 @@ fn SpendPanel() -> impl IntoView {
                     let cols2 = columns.clone();
                     let cols3 = columns.clone();
                     view! {
+                        // below 760 px the period switch sits in the body (the head's tools are hidden there)
+                        {(opts.get_untracked().len() > 1).then(|| view! {
+                            <div class="spend-period not-wide rows"><Segmented options=opts.get_untracked() selected=current_id on_select=on_select label="Period"/></div>
+                        })}
                         <p class="spend-lead rows">{runs_view(p.lead.clone())}</p>
                         <div class="spend-table rows">
                             <table>
@@ -1308,5 +1504,67 @@ fn SpendPanel() -> impl IntoView {
                 }
             }}
         </FoldedPlate>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(stream: &str, bucket: bool, cells: &[bool]) -> SpendRowView {
+        SpendRowView {
+            stream: stream.into(),
+            bucket,
+            cells: cells
+                .iter()
+                .map(|&has| has.then(SpendCell::default))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn limits_only_the_untied_row_used_fold_into_it() {
+        let rows = vec![
+            row("E", false, &[false, true, false]),
+            row("F", false, &[false, true, true]),
+            row("Not tied to a stream", true, &[true, true, false]),
+        ];
+        assert_eq!(folded_columns(&rows, 3), vec![0]);
+        // no stream rows: nothing folds (the table is the untied row alone)
+        assert!(folded_columns(&rows[2..], 3).is_empty());
+    }
+
+    #[test]
+    fn a_silent_pin_is_one_with_no_report_and_no_refusal() {
+        let mut p = PinnedUpdate {
+            report_state: "none".into(),
+            ..Default::default()
+        };
+        assert!(is_silent(&p));
+        p.refusal = Some(StatusProblem {
+            file: "mac.flash/status.json".into(),
+            reason: "looping.state is missing or not valid".into(),
+        });
+        assert!(!is_silent(&p));
+        p.refusal = None;
+        p.report_state = "fresh".into();
+        assert!(!is_silent(&p));
+    }
+
+    #[test]
+    fn null_facts_and_refusals_read_without_failing_the_panel() {
+        let json = r#"{"head":"2 pinned in T3","counts":{"pinned":2},"statusProblems":[{"file":"a/status.json","reason":"seq went backwards","sinceMs":1}],
+            "updates":[{"id":"t1","title":"One","reportState":"none","blocked":null,"looping":null,"refusal":{"file":"b/status.json","reason":"x","sinceMs":null}},
+                       {"id":"t2","title":"Two","reportState":"fresh","blocked":{"text":"","waitingOnYou":false},"looping":{"answer":"cantTell","text":""}}]}"#;
+        let panel: PinnedPanel = serde_json::from_str(json).expect("panel reads");
+        assert_eq!(panel.status_problems.len(), 1);
+        assert_eq!(
+            panel.updates[0].refusal.as_ref().map(|r| r.file.as_str()),
+            Some("b/status.json")
+        );
+        assert!(
+            panel.updates[0].blocked.text.is_empty() && panel.updates[1].looping.text.is_empty()
+        );
     }
 }

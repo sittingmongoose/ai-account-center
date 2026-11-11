@@ -620,7 +620,7 @@ textarea.note::placeholder { color: var(--ink-4); }
 .spend-table tr:last-child td { border-bottom: 0; }
 .spend-table .sname { font-weight: 600; font-variation-settings: 'wght' 600; white-space: nowrap; }
 .spend-table .sname small { display: block; font-weight: 400; font-variation-settings: 'wght' 400; color: var(--ink-3); font-size: 12px; }
-.cellbar { display: grid; grid-template-columns: 1fr 44px; gap: 8px; align-items: center; min-width: 120px; }
+.cellbar { display: grid; grid-template-columns: 1fr 40px; gap: 6px; align-items: center; min-width: 86px; }
 .cellbar .v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-variation-settings: 'wght' 600; }
 .cellbar .v.small { font-weight: 450; font-variation-settings: 'wght' 450; color: var(--ink-3); }
 .cellnone { color: var(--ink-4); }
@@ -638,7 +638,8 @@ textarea.note::placeholder { color: var(--ink-4); }
 .sblock-head .nm { font-weight: 620; font-variation-settings: 'wght' 620; }
 .sblock-head .big { margin-left: auto; font-size: 12.5px; color: var(--ink-3); }
 .sbar { display: grid; grid-template-columns: 112px 1fr 40px; gap: 10px; align-items: center; font-size: 13px; }
-.sbar .k { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a limit's name wraps between whole words rather than losing its window to an ellipsis */
+.sbar .k { color: var(--ink-2); min-width: 0; line-height: 1.25; }
 .sbar .v { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-variation-settings: 'wght' 600; }
 .spend-key { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 16px 0; font-size: 12px; color: var(--ink-3); }
 @container content (min-width: 1280px) { .spend-key { padding: 10px 20px 0; } }
@@ -1908,6 +1909,30 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-vis
 .pin-row { cursor: pointer; background: none; border-left: 0; border-right: 0; border-top: 0; font: inherit; color: inherit; text-align: left; width: 100%; }
 .pin-row:hover { background: var(--row-hover); }
 .pin-more { padding: 10px 20px; border-top: 1px solid var(--rule-2); }
+/* Pins that don't report: one closing line with their names (and, when none reports, how a thread starts). */
+.pin-silent { padding: 11px 16px 12px; border-top: 1px solid var(--rule-2); font-size: var(--fs-small); color: var(--ink); line-height: 1.45; }
+.pin-silent b { font-weight: 600; font-variation-settings: 'wght' 600; }
+.pin-list .pin-silent:first-child, .pin-rest.first .pin-silent:first-child { border-top: 0; }
+@container content (min-width: 1280px) { .pin-silent { padding: 12px 20px 14px; } }
+.pin-rest .pin-more + .pin-silent { border-top: 1px solid var(--rule-2); }
+.pin-row .pr-pct:empty { min-width: 0; }
+/* The sheet's grabber takes a downward drag (the sheet follows it and closes past 80 px). */
+.grabber-zone { touch-action: none; cursor: grab; padding: 12px 0 8px; margin: -12px -16px 4px; }
+.grabber-zone .grabber { margin: 0 auto; }
+/* Controls the head hides below a width sit in the body there. */
+.spend-period { padding: 0 16px 10px; }
+.q-userec { padding: 0 16px 10px; }
+.sb-how-toggle { padding: 0 16px 8px; }
+.sb-sheet-runs { margin-top: 14px; }
+.sheet .sb-how { padding-left: 18px; }
+@container content (max-width: 1279.98px) { .spend-period, .q-userec, .sb-how-toggle { padding-left: 12px; padding-right: 12px; } }
+/* The table's limits only the untied row used, folded into that row. */
+.spend-table tr.fold td { padding-top: 0; font-size: var(--fs-small); color: var(--ink-2); border-top: 0; }
+/* Opened on a phone, the head's summary would repeat the lead right under it. */
+.sec-spend.collapsed-open .sec-sum { display: none; }
+/* Line breaks (Jared's rule): titles balance their lines, body text never leaves a word alone. */
+:is(.status-grid, .sb-stack, .sheet-host, .page-head:not(.ax-top)) :is(h2, h3, .pin-name, .pr-name, .pick-model, .sheet-title .t) { text-wrap: balance; }
+:is(.status-grid, .sb-stack, .sheet-host, .page-head:not(.ax-top)) :is(p, li, dd, .pr-line, .sec-sum, .plate-meta, .headline) { text-wrap: pretty; }
 .stream { width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .stream:disabled { cursor: default; }
 .stream-items { padding: 2px 0 8px; font-size: var(--fs-small); }

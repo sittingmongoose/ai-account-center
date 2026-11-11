@@ -6,6 +6,7 @@
 
 use crate::api::{FetchError, Link, Refresh, Run, nullable, send};
 use crate::fmt;
+use crate::status::{SheetGrab, sheet_drag_style};
 use crate::ui::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -598,8 +599,9 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         Some(view! { <p class="banner" role="status">{error.sentence()}{old}</p> })
     };
     let sources_open = RwSignal::new(false);
-    let sheet = RwSignal::new(None::<ModelRow>);
-    let open_sheet = Callback::new(move |m: ModelRow| sheet.set(Some(m)));
+    // The sheet holds the model's key; what it shows comes from the current view, so it follows a refresh.
+    let sheet = RwSignal::new(None::<String>);
+    let open_sheet = Callback::new(move |m: ModelRow| sheet.set(Some(m.key)));
     let close_sheet = Callback::new(move |_: ()| sheet.set(None));
     let selected = RwSignal::new(None::<String>);
     let on_row = Callback::new(move |key: String| selected.set(Some(key)));
@@ -642,7 +644,15 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                         <SourcesList board=board open=sources_open/>
                     </div>
                 </Show>
-                {move || sheet.get().map(|m| view! { <ModelSheet model=m on_close=close_sheet/> })}
+                {move || {
+                    let key = sheet.get()?;
+                    let model = current.with(|v| v.as_ref().and_then(|v| v.models.iter().find(|m| m.key == key).cloned()));
+                    if model.is_none() {
+                        // the model left the view: the sheet closes
+                        sheet.set(None);
+                    }
+                    model.map(|m| view! { <ModelSheet model=m on_close=close_sheet board=board/> })
+                }}
             </div>
         </PageShell>
     }
@@ -774,6 +784,7 @@ fn ModelsSections(
                 <span class="plate-meta">{runs_view(meta)}</span>
                 <div class="plate-tools only-d"><Disclosure open=how_open label="How verdicts work".to_string()/></div>
             </div>
+            <div class="sb-how-toggle not-d"><Disclosure open=how_open label="How verdicts work".to_string()/></div>
             <Show when=move || how_open.get()>
                 <ul class="sb-how">
                     {move || measures().into_iter().map(|m| {
@@ -835,16 +846,10 @@ fn ModelsSections(
                     <Mark name=m.mark.clone() size=22/>
                     <h2>{format!("{} · {}", m.label, m.effort_text)}</h2>
                     <span class="plate-meta">{m.head.clone()}{runs_view(m.head_runs.clone())}</span>
-                    <div class="plate-tools"><button class="link" style="font-size:12.5px" on:click=move |_| runs_open.update(|o| *o = !*o)>"Latest runs and evidence"</button></div>
+                    <div class="plate-tools"><button class="link" style="font-size:12.5px" on:click=move |_| runs_open.update(|o| *o = !*o)>"Latest runs of this model and effort"</button></div>
                 </div>
                 <Show when=move || runs_open.get()>
-                    <ul class="sb-how">
-                        {move || recent().into_iter().take(20).map(|r| {
-                            let who = [r.label.clone().or(r.model.clone()), r.effort.clone()].into_iter().flatten().collect::<Vec<_>>().join(" ");
-                            let meta = [Some(if r.source == "benchmark" { "benchmark".to_string() } else { "real work".to_string() }), Some(fmt::clock(&r.ended_at)).filter(|s| !s.is_empty()), Some(r.outcome.clone()).filter(|s| !s.is_empty())].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-                            view! { <li><b>{who}</b>{format!(" · {} · {meta}", r.task.title)}{r.evidence.first().map(|e| view! { <code class="sb-ev">{e.path.clone()}</code> })}</li> }
-                        }).collect_view()}
-                    </ul>
+                    {let key = m.key.clone(); move || runs_list(&recent(), &key)}
                 </Show>
                 <DetailGrid report=m.report.clone()/>
             })}
@@ -877,19 +882,58 @@ fn DetailGrid(report: Vec<JobReport>) -> impl IntoView {
     }
 }
 
+/// The newest runs of one model and effort (the row's key is "model|runtime|effort"), with their evidence.
+fn runs_list(recent: &[RunSummary], key: &str) -> AnyView {
+    let mut parts = key.split('|');
+    let (model, effort) = (parts.next().unwrap_or(""), parts.nth(1).unwrap_or(""));
+    let runs = recent
+        .iter()
+        .filter(|r| {
+            r.model.as_deref() == Some(model)
+                && (effort.is_empty() || r.effort.as_deref() == Some(effort))
+        })
+        .take(20)
+        .cloned()
+        .collect::<Vec<_>>();
+    if runs.is_empty() {
+        return view! { <p class="sb-how q3">"No recent runs of this model and effort."</p> }
+            .into_any();
+    }
+    view! {
+        <ul class="sb-how">
+            {runs.into_iter().map(|r| {
+                let meta = [Some(if r.source == "benchmark" { "benchmark".to_string() } else { "real work".to_string() }), Some(fmt::clock(&r.ended_at)).filter(|s| !s.is_empty()), Some(r.outcome.clone()).filter(|s| !s.is_empty())].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                view! { <li><b>{r.task.title.clone()}</b>{format!(" · {meta}")}{r.evidence.first().map(|e| view! { <code class="sb-ev">{e.path.clone()}</code> })}</li> }
+            }).collect_view()}
+        </ul>
+    }
+    .into_any()
+}
+
 #[component]
-fn ModelSheet(model: ModelRow, on_close: Callback<()>) -> impl IntoView {
+fn ModelSheet(model: ModelRow, on_close: Callback<()>, board: Board) -> impl IntoView {
+    let offset = RwSignal::new(0.0f64);
+    let runs_open = RwSignal::new(false);
+    let key = model.key.clone();
+    let recent = move || {
+        board
+            .view
+            .with(|v| v.as_ref().map(|v| v.recent.clone()).unwrap_or_default())
+    };
     view! {
         <div class="sheet-host" role="dialog" aria-modal="true">
             <button class="sheet-scrim" aria-label="Close" on:click=move |_| on_close.run(())></button>
-            <div class="sheet">
-                <div class="grabber"></div>
+            <div class="sheet" style=move || sheet_drag_style(offset.get())>
+                <SheetGrab offset=offset on_close=on_close/>
                 <button class="icon-btn bare sheet-close" aria-label="Close" on:click=move |_| on_close.run(())><Icon name="close"/></button>
                 <div class="sheet-title">
                     <Mark name=model.mark.clone() size=24/>
                     <div><div class="t">{format!("{} · {}", model.label, model.effort_text)}</div><div class="s">{model.sheet_head.clone()}</div></div>
                 </div>
                 <DetailGrid report=model.report/>
+                // the desktop detail's runs, here too: the phone shows no detail plate
+                <div class="sb-sheet-runs"><Disclosure open=runs_open label="Latest runs of this model and effort".to_string()/></div>
+                <Show when=move || runs_open.get()>{let key = key.clone(); move || runs_list(&recent(), &key)}</Show>
             </div>
         </div>
     }
