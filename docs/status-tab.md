@@ -639,6 +639,9 @@ all the answer is `500 answers_failed`: some entries may have been recorded.
 
 ## Web UI move
 
+Share deliverables can be opened through the session-only [deliverable route](share-deliverables.md).
+That guide defines the relative URL contract, sandbox, allowed roots, limits and supported hosts.
+
 The owner approved moving the web UI from Slint to Leptos on 2026-11-06 (Leptos 0.9.0-rc1, client-side rendered, served by
 this TypeScript server). The Status and Scoreboard pages are the first Leptos pages, shown inside the Slint shell by an
 iframe until the shell itself moves. The JavaScript view-model layer (`web-dashboard/public/*.mjs`) stays.

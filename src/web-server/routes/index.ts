@@ -36,6 +36,7 @@ import barRoutes from './bar-routes';
 import { storeRoutes, usageRoutes } from './store-routes';
 import scoreboardRoutes from './scoreboard-routes';
 import statusRoutes from './status-routes';
+import { createShareRouter } from './share-route';
 
 // Create the main API router (case-sensitive; handler errors stay in the request)
 export const apiRoutes = createApiRouter();
@@ -109,6 +110,7 @@ apiRoutes.use('/bar', barRoutes);
 apiRoutes.use('/store', storeRoutes);
 apiRoutes.use('/usage', usageRoutes);
 apiRoutes.use('/status', statusRoutes);
+apiRoutes.use('/status/deliverable', createShareRouter());
 apiRoutes.use('/scoreboard', scoreboardRoutes);
 
 // Public process liveness compatibility; no configuration details or repair actions.
