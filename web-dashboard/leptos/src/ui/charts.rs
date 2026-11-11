@@ -421,6 +421,17 @@ pub(crate) fn pop_left(anchor_left: f64, anchor_right: f64, w: f64, lo: f64, hi:
         .min(hi - w)
 }
 
+/// The hover tip's centre x with its whole card (width `w`) between the content bounds: clamping the centre alone
+/// would let half a wide tip draw under the rail at the content edge (review N5). A card wider than the content
+/// centres itself in the content.
+pub(crate) fn tip_centre(centre: f64, w: f64, lo: f64, hi: f64) -> f64 {
+    const PAD: f64 = 4.0;
+    if hi - lo <= w + 2.0 * PAD {
+        return (lo + hi) / 2.0;
+    }
+    centre.clamp(lo + PAD + w / 2.0, hi - PAD - w / 2.0)
+}
+
 /// The anchored panel's max heights (below, above), each cleared of the bottom inset (review N3).
 pub(crate) fn pop_max_heights(vh: f64, top: f64, anchor_top: f64, safe_bottom: f64) -> (f64, f64) {
     (
@@ -465,6 +476,9 @@ fn page_bounds(vw: f64) -> (f64, f64) {
 pub fn TipLayer(children: Children) -> impl IntoView {
     let text = RwSignal::new(String::new());
     let pos = RwSignal::new((0.0f64, 0.0f64, false));
+    // Where the tipped element asks for the card (its centre x), before the card's own width is applied.
+    let at = RwSignal::new((0.0f64, 0.0f64, false));
+    let card = NodeRef::<leptos::html::Div>::new();
     let find = |target: Option<web_sys::EventTarget>| -> Option<(String, web_sys::DomRect, bool)> {
         let el = target?.dyn_into::<web_sys::Element>().ok()?;
         let tipped = el.closest("[data-tip]").ok().flatten()?;
@@ -476,22 +490,31 @@ pub fn TipLayer(children: Children) -> impl IntoView {
         Some((tip, tipped.get_bounding_client_rect(), acts))
     };
     let place = move |tip: String, rect: web_sys::DomRect| {
-        let vw = window()
-            .inner_width()
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1024.0);
         let below = rect.top() < 120.0;
-        let (lo, hi) = page_bounds(vw);
-        let x = (rect.left() + rect.width() / 2.0).clamp(lo + 4.0, (hi - 4.0).max(lo + 4.0));
         let y = if below {
             rect.bottom() + 8.0
         } else {
             rect.top() - 8.0
         };
+        at.set((rect.left() + rect.width() / 2.0, y, below));
         text.set(tip);
-        pos.set((x, y, below));
     };
+    // The card is placed once it has rendered its words: its measured width keeps the whole box between the content
+    // bounds, so a wide tip at the content edge never draws under the rail.
+    Effect::new(move |_| {
+        let (centre_x, y, below) = at.get();
+        if text.with(|t| t.is_empty()) {
+            return;
+        }
+        let vw = window()
+            .inner_width()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1024.0);
+        let (lo, hi) = page_bounds(vw);
+        let w = card.get().map(|c| c.offset_width() as f64).unwrap_or(0.0);
+        pos.set((tip_centre(centre_x, w, lo, hi), y, below));
+    });
     let over = move |e: web_sys::PointerEvent| {
         if e.pointer_type() != "mouse" {
             return;
@@ -516,7 +539,7 @@ pub fn TipLayer(children: Children) -> impl IntoView {
         <div class="tip-scope" on:pointerover=over on:pointerup=up on:pointerleave=move |_| text.set(String::new())>
             {children()}
             <div class="tip-card" class:below=move || pos.get().2 hidden=move || text.with(|t| t.is_empty())
-                style=move || { let (x, y, _) = pos.get(); format!("left:{x:.0}px;top:{y:.0}px") }>{move || text.get()}</div>
+                node_ref=card style=move || { let (x, y, _) = pos.get(); format!("left:{x:.0}px;top:{y:.0}px") }>{move || text.get()}</div>
         </div>
     }
 }
@@ -729,6 +752,29 @@ mod tests {
         // no rail (phone 402): the window bounds, as before
         let (lo, hi) = content_bounds(402.0, "phone", "", 0.0);
         assert_eq!((lo, hi), (8.0, 394.0));
+    }
+
+    #[test]
+    fn a_wide_tip_at_the_content_edge_keeps_its_whole_box_inside() {
+        // strip on the right (951x669): the content ends at the rail (867)
+        let (lo, hi) = content_bounds(951.0, "rail", "right", 84.0);
+        // a narrow tip at the far edge: its centre clamps as before
+        assert_eq!(tip_centre(900.0, 120.0, lo, hi), 803.0);
+        // a wide tip (300) whose centre fits the centre-only clamp (up to 863) would run its box past 867 and under
+        // the rail: the whole box is clamped, ending at 863
+        assert_eq!(tip_centre(717.0, 300.0, lo, hi), 713.0);
+        assert_eq!(tip_centre(900.0, 300.0, lo, hi), 713.0);
+        // at the left edge the box starts at 12, not at -33
+        assert_eq!(tip_centre(20.0, 300.0, lo, hi), 162.0);
+        // a tip in the middle of the content does not move
+        assert_eq!(tip_centre(437.0, 300.0, lo, hi), 437.0);
+        // a card wider than the content centres itself in the content
+        assert_eq!(tip_centre(200.0, 900.0, lo, hi), 437.5);
+        // a not-yet-measured card (w 0) keeps the old centre clamp
+        assert_eq!(tip_centre(900.0, 0.0, lo, hi), 863.0);
+        // no rail (phone 402): the same box clamp holds at the window edge
+        let (lo, hi) = content_bounds(402.0, "phone", "", 0.0);
+        assert_eq!(tip_centre(100.0, 340.0, lo, hi), 182.0);
     }
 
     #[test]

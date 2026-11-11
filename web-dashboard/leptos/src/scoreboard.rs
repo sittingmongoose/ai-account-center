@@ -524,11 +524,9 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
             let t = ticks.get_untracked() + 15;
             if t >= every {
                 ticks.set(0);
-                // a refusal the server explains (sign-in turned off) doesn't change by asking again
-                let refused = board
-                    .error
-                    .with_untracked(|e| matches!(e, Some(FetchError::Refused(_))));
-                if crate::page_on_screen(crate::Page::Scoreboard) && !refused {
+                if crate::page_on_screen(crate::Page::Scoreboard)
+                    && !crate::live::refused(&board.error)
+                {
                     board.reload();
                 }
             } else {
@@ -537,10 +535,12 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         },
         Duration::from_secs(15),
     );
-    // Shown again by the shell, or back online: read at once (until the page is unmounted, owned.rs).
+    // Shown again by the shell, or back online: read at once (a refusal the server explains still doesn't), until
+    // the page is unmounted (owned.rs).
     for event in [crate::SHOWN_EVENT, "online"] {
         crate::owned::listen(&window(), event, move || {
-            if crate::page_on_screen(crate::Page::Scoreboard) {
+            if crate::page_on_screen(crate::Page::Scoreboard) && !crate::live::refused(&board.error)
+            {
                 board.reload();
             }
         });

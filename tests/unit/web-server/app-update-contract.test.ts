@@ -648,6 +648,13 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
 describe('stray copies beside a managed Codex or Claude install', () => {
   const sentence = (version: string, place = '/usr/local/bin', label = 'Codex CLI') =>
     ` An older ${label} copy (${version}) in ${place} comes first on some PATHs; remove it so it never runs instead.`;
+  it('says an older copy is first on the system PATH, not on this computer', () => {
+    // A login terminal can put the managed copy first (~/.zprofile); system-PATH apps and scripts still run the
+    // stray, so the lead sentence claims only the PATH (recheck F1).
+    expect(MESSAGES.older_copy_first).toBe(
+      'Not current: an older copy is first on the system PATH (apps and scripts run it).'
+    );
+  });
   const row = (overrides: Record<string, unknown> = {}) => ({
     appId: 'codex-cli',
     status: 'current',

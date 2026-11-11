@@ -68,6 +68,13 @@ fn visible() -> bool {
     crate::page_on_screen(crate::Page::Status)
 }
 
+/// A refusal the server explains (sign-in turned off) doesn't change by asking again, so every automatic re-read
+/// stays quiet on it: the poll, and the event-driven reads (visibility, shown-again, online, socket hint). A manual
+/// refresh skips this check; it is how the page recovers once sign-in is turned on, without a reload.
+pub fn refused(error: &RwSignal<Option<FetchError>>) -> bool {
+    error.with_untracked(|e| matches!(e, Some(FetchError::Refused(_))))
+}
+
 pub fn start() -> Live {
     let live = Live {
         view: RwSignal::new(None),
@@ -98,11 +105,7 @@ pub fn start() -> Live {
             let ticks = polled.get() + 5;
             if ticks >= every {
                 polled.set(0);
-                // a refusal the server explains (sign-in turned off) doesn't change by asking again
-                let refused = live
-                    .error
-                    .with_untracked(|e| matches!(e, Some(crate::api::FetchError::Refused(_))));
-                if visible() && !refused {
+                if visible() && !refused(&live.error) {
                     live.reload();
                 }
             } else {
@@ -112,9 +115,10 @@ pub fn start() -> Live {
         Duration::from_secs(5),
     );
 
-    // Coming back to the page reads at once. These, and the hint socket, stop with the page (owned.rs).
+    // Coming back to the page reads at once (a refusal the server explains still doesn't). These, and the hint
+    // socket, stop with the page (owned.rs).
     owned::listen(&document(), "visibilitychange", move || {
-        if visible() {
+        if visible() && !refused(&live.error) {
             live.reload();
         }
     });
@@ -122,7 +126,7 @@ pub fn start() -> Live {
     // Shown again by the shell, or back online: read at once.
     for event in [crate::SHOWN_EVENT, "online"] {
         owned::listen(&window(), event, move || {
-            if visible() {
+            if visible() && !refused(&live.error) {
                 live.reload();
             }
         });
@@ -162,7 +166,7 @@ fn connect_hints(live: Live, slot: Rc<RefCell<Option<web_sys::WebSocket>>>, dela
                 return;
             };
             // a hidden page ignores hints (its reads would keep the server's collectors busy); returning to it reads
-            if text.contains("\"status-changed\"") && visible() {
+            if text.contains("\"status-changed\"") && visible() && !refused(&live.error) {
                 live.reload();
             }
         });
@@ -170,7 +174,7 @@ fn connect_hints(live: Live, slot: Rc<RefCell<Option<web_sys::WebSocket>>>, dela
     on_message.forget();
 
     let on_open = Closure::<dyn Fn()>::new(move || {
-        if visible() {
+        if visible() && !refused(&live.error) {
             live.reload();
         }
     });
@@ -189,4 +193,31 @@ fn connect_hints(live: Live, slot: Rc<RefCell<Option<web_sys::WebSocket>>>, dela
     socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
     on_close.forget();
     *slot.borrow_mut() = Some(socket);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_rereads_stay_quiet_only_while_the_server_refuses() {
+        let owner = Owner::new();
+        owner.set();
+        let error = RwSignal::new(None::<FetchError>);
+        // healthy: visibility, shown-again, online and socket hints all read
+        assert!(!refused(&error));
+        // any other failure still reads (the next read may succeed)
+        error.set(Some(FetchError::Offline));
+        assert!(!refused(&error));
+        error.set(Some(FetchError::Server(403)));
+        assert!(!refused(&error));
+        // a refusal the server explains: the events read nothing; a manual refresh asks anyway
+        error.set(Some(FetchError::Refused(
+            "These tabs need dashboard sign-in turned on.".into(),
+        )));
+        assert!(refused(&error));
+        // a later good read clears it, and the events read again
+        error.set(None);
+        assert!(!refused(&error));
+    }
 }
