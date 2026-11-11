@@ -250,7 +250,9 @@ describe('status view', () => {
       ],
     });
     expect(view.cards.open.map((c) => c.id)).toEqual(['vm.lead--Q2', 'vm.lead--Q3', 'vm.lead--Q1']);
-    expect(view.cards.open[0].askerState).toBe('gone');
+    // The asker waits on the owner through its open question cards (N4): its stale
+    // heartbeat reads as its state, never as gone.
+    expect(view.cards.open[0].askerState).toBe('working');
     expect(view.cards.open[0].cardSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(view.cards.answered[0].card.id).toBe('vm.lead--Q4');
     expect(view.cards.answered[0].answer.delivery.state).toBe('rang');
