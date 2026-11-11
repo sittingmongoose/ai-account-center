@@ -481,6 +481,22 @@ describe('verdict rules', () => {
     expect(judged[2]).toMatchObject({ ranked: true });
   });
 
+  it("pulling one demoted row never changes another row's verdict", () => {
+    // One fast one-item row (demoted), a two-item row whose Avoid comes only from the
+    // fast one's speed best, and a well-reviewed row. The pull of the fast one alone
+    // must leave the other two exactly as they judge without it.
+    const thin = column('thin', 1, 0, 1, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const sonnet = column('sonnet', 0.5, 1 / 7, 1000, { reviews: 5 });
+    sonnet.measures.quality = value(0.5, 2);
+    sonnet.measures.cheating = value(1 / 7, 7);
+    const opus = column('opus', 1, 0, 1000, { reviews: 5 });
+    const judged = judge([thin, sonnet, opus]);
+    expect(judged[0]).toMatchObject({ ranked: false, verdict: 'not-enough-data' });
+    expect(judged[1]).toMatchObject({ ranked: true, verdict: 'fine' });
+    expect(judged[2]).toMatchObject({ ranked: true, verdict: 'recommended' });
+  });
+
   it('a weak survivor of a pull is the only ranked row, not behind the demoted top', () => {
     const thin = column('thin', 1, 0, 10, { reviews: 5 });
     thin.measures.quality = value(1, 1);

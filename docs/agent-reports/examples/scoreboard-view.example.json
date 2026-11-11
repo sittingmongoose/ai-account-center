@@ -4650,6 +4650,320 @@
           "byProcess": false,
           "rows": [
             {
+              "key": "anthropic/claude-opus-5-5|claude-code|xhigh",
+              "model": "anthropic/claude-opus-5-5",
+              "label": "Opus 5.5",
+              "inCatalog": true,
+              "runtime": "claude-code",
+              "effort": "xhigh",
+              "process": null,
+              "n": {
+                "observed": 8,
+                "benchmark": 0
+              },
+              "basis": "observed",
+              "benchmark": null,
+              "ranked": true,
+              "rank": 1,
+              "verdict": "fine",
+              "verdictLabel": "Fine",
+              "why": "The only ranked row here, so nothing to compare it with (n = 8).",
+              "observed": {
+                "source": "observed",
+                "benchmark": null,
+                "benchmarkLabel": null,
+                "n": 8,
+                "imported": 0,
+                "reviews": 1,
+                "ranked": true,
+                "rank": 1,
+                "score": 1,
+                "verdict": "fine",
+                "verdictLabel": "Fine",
+                "why": "The only ranked row here, so nothing to compare it with (n = 8).",
+                "preliminary": false,
+                "measures": {
+                  "speed": {
+                    "value": 7.5,
+                    "unit": "s/record",
+                    "n": 8,
+                    "low": 7.5,
+                    "high": 7.5,
+                    "interval": "range",
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "perTask": {
+                      "value": 300,
+                      "n": 8,
+                      "low": 300,
+                      "high": 300
+                    }
+                  },
+                  "quality": {
+                    "value": 1,
+                    "unit": "share",
+                    "n": 1,
+                    "low": 0.2699,
+                    "high": 1,
+                    "interval": "wilson90",
+                    "of": 1,
+                    "per": 1,
+                    "preliminary": false,
+                    "disputed": 0,
+                    "cannotVerify": 0,
+                    "rounds": {
+                      "value": 1,
+                      "n": 1,
+                      "low": 1,
+                      "high": 1
+                    },
+                    "firstTry": 1,
+                    "overturns": []
+                  },
+                  "thoroughness": {
+                    "value": 1,
+                    "unit": "share",
+                    "n": 8,
+                    "low": 1,
+                    "high": 1,
+                    "interval": "range",
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "files": {
+                      "value": 1,
+                      "n": 8,
+                      "low": 1,
+                      "high": 1
+                    },
+                    "records": {
+                      "value": 1,
+                      "n": 8,
+                      "low": 1,
+                      "high": 1
+                    }
+                  },
+                  "laziness": {
+                    "value": 0,
+                    "unit": "share",
+                    "n": 8,
+                    "low": 0,
+                    "high": 0.2527,
+                    "interval": "wilson90",
+                    "of": 0,
+                    "per": 8,
+                    "preliminary": false
+                  },
+                  "cheating": {
+                    "value": 0,
+                    "unit": "share",
+                    "n": 8,
+                    "low": 0,
+                    "high": 0.2527,
+                    "interval": "wilson90",
+                    "of": 0,
+                    "per": 8,
+                    "preliminary": false
+                  },
+                  "cost": {
+                    "value": 0.05,
+                    "unit": "credits/record",
+                    "n": 8,
+                    "low": null,
+                    "high": null,
+                    "interval": null,
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "quota": [],
+                    "usd": null,
+                    "estimate": null
+                  },
+                  "reliability": {
+                    "value": 1,
+                    "unit": "share",
+                    "n": 8,
+                    "low": 0.7473,
+                    "high": 1,
+                    "interval": "wilson90",
+                    "of": 8,
+                    "per": 8,
+                    "preliminary": false
+                  }
+                },
+                "flags": [],
+                "runs": [
+                  {
+                    "id": "mac.scoreboard-reviews--R-nobody",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-nobody",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--no-such-run"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-06T09:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--no-such-run",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-of-R-WN-1",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-of-R-WN-1",
+                      "type": "review",
+                      "title": "Blind review of mac.scoreboard-reviews--R-WN-1"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-06T09:00:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "mac.scoreboard-reviews--R-WN-1",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "anthropic/claude-opus-5-5 xhigh"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-16",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-16",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-16"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T06:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-16",
+                      "verdict": "cannot-verify",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-15",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-15",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-15"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T05:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-15",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": true,
+                      "by": "anthropic/claude-opus-5-5 xhigh"
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-15.md"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-14",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-14",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-14"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T04:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-14",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": false,
+                      "by": "anthropic/claude-opus-5-5 xhigh"
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "benchmarks": []
+            },
+            {
               "key": "openai/gpt-6.1-sol|codex|high",
               "model": "openai/gpt-6.1-sol",
               "label": "Sol 6.1",
@@ -5280,413 +5594,6 @@
                       "overturned": false,
                       "disputed": false,
                       "by": "openai/gpt-6.1-sol high"
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  }
-                ]
-              },
-              "benchmarks": []
-            },
-            {
-              "key": "anthropic/claude-opus-5-5|claude-code|xhigh",
-              "model": "anthropic/claude-opus-5-5",
-              "label": "Opus 5.5",
-              "inCatalog": true,
-              "runtime": "claude-code",
-              "effort": "xhigh",
-              "process": null,
-              "n": {
-                "observed": 8,
-                "benchmark": 0
-              },
-              "basis": null,
-              "benchmark": null,
-              "ranked": false,
-              "rank": null,
-              "verdict": "not-enough-data",
-              "verdictLabel": "Not enough data yet",
-              "why": "too few blind reviews yet (1 of 5 needed, n = 8)",
-              "observed": {
-                "source": "observed",
-                "benchmark": null,
-                "benchmarkLabel": null,
-                "n": 8,
-                "imported": 0,
-                "reviews": 1,
-                "ranked": false,
-                "rank": null,
-                "score": null,
-                "verdict": "not-enough-data",
-                "verdictLabel": "Not enough data yet",
-                "why": "too few blind reviews yet (1 of 5 needed, n = 8)",
-                "preliminary": false,
-                "measures": {
-                  "speed": {
-                    "value": 7.5,
-                    "unit": "s/record",
-                    "n": 8,
-                    "low": 7.5,
-                    "high": 7.5,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "perTask": {
-                      "value": 300,
-                      "n": 8,
-                      "low": 300,
-                      "high": 300
-                    }
-                  },
-                  "quality": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 1,
-                    "low": 0.2699,
-                    "high": 1,
-                    "interval": "wilson90",
-                    "of": 1,
-                    "per": 1,
-                    "preliminary": false,
-                    "disputed": 0,
-                    "cannotVerify": 0,
-                    "rounds": {
-                      "value": 1,
-                      "n": 1,
-                      "low": 1,
-                      "high": 1
-                    },
-                    "firstTry": 1,
-                    "overturns": []
-                  },
-                  "thoroughness": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 8,
-                    "low": 1,
-                    "high": 1,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "files": {
-                      "value": 1,
-                      "n": 8,
-                      "low": 1,
-                      "high": 1
-                    },
-                    "records": {
-                      "value": 1,
-                      "n": 8,
-                      "low": 1,
-                      "high": 1
-                    }
-                  },
-                  "laziness": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 8,
-                    "low": 0,
-                    "high": 0.2527,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 8,
-                    "preliminary": false
-                  },
-                  "cheating": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 8,
-                    "low": 0,
-                    "high": 0.2527,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 8,
-                    "preliminary": false
-                  },
-                  "cost": {
-                    "value": 0.05,
-                    "unit": "credits/record",
-                    "n": 8,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "quota": [],
-                    "usd": null,
-                    "estimate": null
-                  },
-                  "reliability": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 8,
-                    "low": 0.7473,
-                    "high": 1,
-                    "interval": "wilson90",
-                    "of": 8,
-                    "per": 8,
-                    "preliminary": false
-                  }
-                },
-                "flags": [],
-                "runs": [
-                  {
-                    "id": "mac.scoreboard-reviews--R-nobody",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-nobody",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--no-such-run"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-06T09:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--no-such-run",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-of-R-WN-1",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-of-R-WN-1",
-                      "type": "review",
-                      "title": "Blind review of mac.scoreboard-reviews--R-WN-1"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-06T09:00:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "mac.scoreboard-reviews--R-WN-1",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": "anthropic/claude-opus-5-5 xhigh"
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-16",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-16",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-16"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T06:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-16",
-                      "verdict": "cannot-verify",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-15",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-15",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-15"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T05:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-15",
-                      "verdict": "fail",
-                      "overturned": true,
-                      "disputed": true,
-                      "by": "anthropic/claude-opus-5-5 xhigh"
-                    },
-                    "flags": 0,
-                    "evidence": [
-                      {
-                        "label": "Review notes",
-                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-15.md"
-                      }
-                    ]
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-14",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-14",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-14"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T04:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-14",
-                      "verdict": "fail",
-                      "overturned": true,
-                      "disputed": false,
-                      "by": "anthropic/claude-opus-5-5 xhigh"
-                    },
-                    "flags": 0,
-                    "evidence": [
-                      {
-                        "label": "Review notes",
-                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
-                      }
-                    ]
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-13",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-13",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-13"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T03:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-13",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-12",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-12",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-12"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T02:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-12",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-11",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-11",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-11"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T01:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-11",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
                     },
                     "flags": 0,
                     "evidence": []
@@ -9920,6 +9827,320 @@
           "byProcess": false,
           "rows": [
             {
+              "key": "anthropic/claude-opus-5-5|claude-code|xhigh",
+              "model": "anthropic/claude-opus-5-5",
+              "label": "Opus 5.5",
+              "inCatalog": true,
+              "runtime": "claude-code",
+              "effort": "xhigh",
+              "process": null,
+              "n": {
+                "observed": 8,
+                "benchmark": 0
+              },
+              "basis": "observed",
+              "benchmark": null,
+              "ranked": true,
+              "rank": 1,
+              "verdict": "fine",
+              "verdictLabel": "Fine",
+              "why": "The only ranked row here, so nothing to compare it with (n = 8).",
+              "observed": {
+                "source": "observed",
+                "benchmark": null,
+                "benchmarkLabel": null,
+                "n": 8,
+                "imported": 0,
+                "reviews": 1,
+                "ranked": true,
+                "rank": 1,
+                "score": 1,
+                "verdict": "fine",
+                "verdictLabel": "Fine",
+                "why": "The only ranked row here, so nothing to compare it with (n = 8).",
+                "preliminary": false,
+                "measures": {
+                  "speed": {
+                    "value": 7.5,
+                    "unit": "s/record",
+                    "n": 8,
+                    "low": 7.5,
+                    "high": 7.5,
+                    "interval": "range",
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "perTask": {
+                      "value": 300,
+                      "n": 8,
+                      "low": 300,
+                      "high": 300
+                    }
+                  },
+                  "quality": {
+                    "value": 1,
+                    "unit": "share",
+                    "n": 1,
+                    "low": 0.2699,
+                    "high": 1,
+                    "interval": "wilson90",
+                    "of": 1,
+                    "per": 1,
+                    "preliminary": false,
+                    "disputed": 0,
+                    "cannotVerify": 0,
+                    "rounds": {
+                      "value": 1,
+                      "n": 1,
+                      "low": 1,
+                      "high": 1
+                    },
+                    "firstTry": 1,
+                    "overturns": []
+                  },
+                  "thoroughness": {
+                    "value": 1,
+                    "unit": "share",
+                    "n": 8,
+                    "low": 1,
+                    "high": 1,
+                    "interval": "range",
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "files": {
+                      "value": 1,
+                      "n": 8,
+                      "low": 1,
+                      "high": 1
+                    },
+                    "records": {
+                      "value": 1,
+                      "n": 8,
+                      "low": 1,
+                      "high": 1
+                    }
+                  },
+                  "laziness": {
+                    "value": 0,
+                    "unit": "share",
+                    "n": 8,
+                    "low": 0,
+                    "high": 0.2527,
+                    "interval": "wilson90",
+                    "of": 0,
+                    "per": 8,
+                    "preliminary": false
+                  },
+                  "cheating": {
+                    "value": 0,
+                    "unit": "share",
+                    "n": 8,
+                    "low": 0,
+                    "high": 0.2527,
+                    "interval": "wilson90",
+                    "of": 0,
+                    "per": 8,
+                    "preliminary": false
+                  },
+                  "cost": {
+                    "value": 0.05,
+                    "unit": "credits/record",
+                    "n": 8,
+                    "low": null,
+                    "high": null,
+                    "interval": null,
+                    "of": null,
+                    "per": null,
+                    "preliminary": false,
+                    "quota": [],
+                    "usd": null,
+                    "estimate": null
+                  },
+                  "reliability": {
+                    "value": 1,
+                    "unit": "share",
+                    "n": 8,
+                    "low": 0.7473,
+                    "high": 1,
+                    "interval": "wilson90",
+                    "of": 8,
+                    "per": 8,
+                    "preliminary": false
+                  }
+                },
+                "flags": [],
+                "runs": [
+                  {
+                    "id": "mac.scoreboard-reviews--R-nobody",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-nobody",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--no-such-run"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-06T09:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--no-such-run",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-of-R-WN-1",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-of-R-WN-1",
+                      "type": "review",
+                      "title": "Blind review of mac.scoreboard-reviews--R-WN-1"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-06T09:00:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "mac.scoreboard-reviews--R-WN-1",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "anthropic/claude-opus-5-5 xhigh"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-16",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-16",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-16"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T06:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-16",
+                      "verdict": "cannot-verify",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-15",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-15",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-15"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T05:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-15",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": true,
+                      "by": "anthropic/claude-opus-5-5 xhigh"
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-15.md"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-14",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-14",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-14"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T04:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-14",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": false,
+                      "by": "anthropic/claude-opus-5-5 xhigh"
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "benchmarks": []
+            },
+            {
               "key": "openai/gpt-6.1-sol|codex|high",
               "model": "openai/gpt-6.1-sol",
               "label": "Sol 6.1",
@@ -10550,413 +10771,6 @@
                       "overturned": false,
                       "disputed": false,
                       "by": "openai/gpt-6.1-sol high"
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  }
-                ]
-              },
-              "benchmarks": []
-            },
-            {
-              "key": "anthropic/claude-opus-5-5|claude-code|xhigh",
-              "model": "anthropic/claude-opus-5-5",
-              "label": "Opus 5.5",
-              "inCatalog": true,
-              "runtime": "claude-code",
-              "effort": "xhigh",
-              "process": null,
-              "n": {
-                "observed": 8,
-                "benchmark": 0
-              },
-              "basis": null,
-              "benchmark": null,
-              "ranked": false,
-              "rank": null,
-              "verdict": "not-enough-data",
-              "verdictLabel": "Not enough data yet",
-              "why": "too few blind reviews yet (1 of 5 needed, n = 8)",
-              "observed": {
-                "source": "observed",
-                "benchmark": null,
-                "benchmarkLabel": null,
-                "n": 8,
-                "imported": 0,
-                "reviews": 1,
-                "ranked": false,
-                "rank": null,
-                "score": null,
-                "verdict": "not-enough-data",
-                "verdictLabel": "Not enough data yet",
-                "why": "too few blind reviews yet (1 of 5 needed, n = 8)",
-                "preliminary": false,
-                "measures": {
-                  "speed": {
-                    "value": 7.5,
-                    "unit": "s/record",
-                    "n": 8,
-                    "low": 7.5,
-                    "high": 7.5,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "perTask": {
-                      "value": 300,
-                      "n": 8,
-                      "low": 300,
-                      "high": 300
-                    }
-                  },
-                  "quality": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 1,
-                    "low": 0.2699,
-                    "high": 1,
-                    "interval": "wilson90",
-                    "of": 1,
-                    "per": 1,
-                    "preliminary": false,
-                    "disputed": 0,
-                    "cannotVerify": 0,
-                    "rounds": {
-                      "value": 1,
-                      "n": 1,
-                      "low": 1,
-                      "high": 1
-                    },
-                    "firstTry": 1,
-                    "overturns": []
-                  },
-                  "thoroughness": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 8,
-                    "low": 1,
-                    "high": 1,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "files": {
-                      "value": 1,
-                      "n": 8,
-                      "low": 1,
-                      "high": 1
-                    },
-                    "records": {
-                      "value": 1,
-                      "n": 8,
-                      "low": 1,
-                      "high": 1
-                    }
-                  },
-                  "laziness": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 8,
-                    "low": 0,
-                    "high": 0.2527,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 8,
-                    "preliminary": false
-                  },
-                  "cheating": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 8,
-                    "low": 0,
-                    "high": 0.2527,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 8,
-                    "preliminary": false
-                  },
-                  "cost": {
-                    "value": 0.05,
-                    "unit": "credits/record",
-                    "n": 8,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "quota": [],
-                    "usd": null,
-                    "estimate": null
-                  },
-                  "reliability": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 8,
-                    "low": 0.7473,
-                    "high": 1,
-                    "interval": "wilson90",
-                    "of": 8,
-                    "per": 8,
-                    "preliminary": false
-                  }
-                },
-                "flags": [],
-                "runs": [
-                  {
-                    "id": "mac.scoreboard-reviews--R-nobody",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-nobody",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--no-such-run"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-06T09:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--no-such-run",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-of-R-WN-1",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-of-R-WN-1",
-                      "type": "review",
-                      "title": "Blind review of mac.scoreboard-reviews--R-WN-1"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-06T09:00:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "mac.scoreboard-reviews--R-WN-1",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": "anthropic/claude-opus-5-5 xhigh"
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-16",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-16",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-16"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T06:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-16",
-                      "verdict": "cannot-verify",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-15",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-15",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-15"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T05:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-15",
-                      "verdict": "fail",
-                      "overturned": true,
-                      "disputed": true,
-                      "by": "anthropic/claude-opus-5-5 xhigh"
-                    },
-                    "flags": 0,
-                    "evidence": [
-                      {
-                        "label": "Review notes",
-                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-15.md"
-                      }
-                    ]
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-14",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-14",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-14"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T04:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-14",
-                      "verdict": "fail",
-                      "overturned": true,
-                      "disputed": false,
-                      "by": "anthropic/claude-opus-5-5 xhigh"
-                    },
-                    "flags": 0,
-                    "evidence": [
-                      {
-                        "label": "Review notes",
-                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
-                      }
-                    ]
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-13",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-13",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-13"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T03:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-13",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-12",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-12",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-12"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T02:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-12",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
-                    },
-                    "flags": 0,
-                    "evidence": []
-                  },
-                  {
-                    "id": "mac.scoreboard-reviews--R-WN-11",
-                    "writer": "mac.scoreboard-reviews",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "R-WN-11",
-                      "type": "review",
-                      "title": "Blind review of vm.scoreboard-lead--WN-11"
-                    },
-                    "model": "anthropic/claude-opus-5-5",
-                    "label": "Opus 5.5",
-                    "runtime": "claude-code",
-                    "effort": "xhigh",
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-05T01:30:00Z",
-                    "wallSeconds": 300,
-                    "imported": null,
-                    "review": {
-                      "of": "vm.scoreboard-lead--WN-11",
-                      "verdict": "pass",
-                      "overturned": false,
-                      "disputed": false,
-                      "by": null
                     },
                     "flags": 0,
                     "evidence": []

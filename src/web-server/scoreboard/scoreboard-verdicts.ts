@@ -195,31 +195,30 @@ export function judgeGroup(
   };
   // Settle the review bar before the comparison: a row the bar demotes must not set
   // the top score, the peer count, the ranks, or the best values the speed and cost
-  // marks are measured against. Pull every demoted row out and re-score the rest
-  // against each other, until a pass pulls nothing (each pass pulls at least one).
+  // marks are measured against. Each pass pulls the single top-scored demoted row
+  // (in sort order) and re-scores the rest against each other, so a pulled row
+  // never changes another row's verdict.
   const judged = new Map<Column, Column>();
   let remaining = scoreSet(eligible);
   while (remaining.length > 0) {
     const top = remaining[0].score;
     const peers = remaining.length;
-    const pulled = remaining.filter((entry) => {
+    const pulled = remaining.find((entry) => {
       const { verdict } = judge(entry, top, peers);
       return (
         (verdict === 'recommended' || verdict === 'avoid') && belowReviewBar(entry.column, minRuns)
       );
     });
-    if (pulled.length === 0) break;
-    for (const entry of pulled) {
-      judged.set(
-        entry.column,
-        unranked(
-          entry.column,
-          `too few blind reviews yet (${reviewedCount(entry.column)} of ${minRuns} needed, n = ${entry.column.n})`
-        )
-      );
-    }
+    if (!pulled) break;
+    judged.set(
+      pulled.column,
+      unranked(
+        pulled.column,
+        `too few blind reviews yet (${reviewedCount(pulled.column)} of ${minRuns} needed, n = ${pulled.column.n})`
+      )
+    );
     remaining = scoreSet(
-      remaining.filter((entry) => !pulled.includes(entry)).map((entry) => entry.column)
+      remaining.filter((entry) => entry !== pulled).map((entry) => entry.column)
     );
   }
   const top = remaining[0]?.score ?? 0;
