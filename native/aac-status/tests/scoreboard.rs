@@ -102,17 +102,16 @@ fn a_run_naming_a_model_the_catalog_does_not_list_is_flagged_in_the_foot() {
     }
     let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
     edit_objects(&mut doc, &mut |map| {
-        if let Some(models) = map.get_mut("models").map(|value| value.as_array_mut().unwrap()) {
-            if let Some(sonnet) = models
+        if let Some(models) = map.get_mut("models").map(|value| value.as_array_mut().unwrap())
+            && let Some(sonnet) = models
                 .iter()
                 .find(|model| model.get("model").and_then(|m| m.as_str()) == Some("anthropic/claude-sonnet-5-5"))
                 .cloned()
-            {
-                let mut known = sonnet;
-                known["model"] = json!("example/example-1");
-                known["label"] = json!("Example One");
-                models.push(known);
-            }
+        {
+            let mut known = sonnet;
+            known["model"] = json!("example/example-1");
+            known["label"] = json!("Example One");
+            models.push(known);
         }
     });
     let parsed: ViewIn = serde_json::from_value(doc).unwrap();
