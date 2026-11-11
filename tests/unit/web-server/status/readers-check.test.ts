@@ -463,9 +463,7 @@ describe('the readers check file', () => {
         threads: [],
         tasks: [],
         cards: [],
-        problems: [
-          { file: 'writers/vm.lead/thread.json', reason, since: NOW },
-        ],
+        problems: [{ file: 'writers/vm.lead/thread.json', reason, since: NOW }],
         boards: new Map(),
       });
       check.recordStatusScan(
