@@ -275,23 +275,24 @@ export class ReadersCheckWriter {
     }
   }
 
-  /** The one flush in flight, if any; skipped while one runs so scans never pile up behind it. */
-  private flushing: Promise<void> | null = null;
-
   /**
    * Starts one flush and returns at once (F2): a hung share must never stall a scan or a
-   * build. A flush already in flight is not queued behind; it is skipped. A failed write is
-   * logged once per flush, never thrown.
+   * build. A flush already in flight for this root is not queued behind; it is skipped.
+   * A failed write is logged once per flush, never thrown.
    */
   flushSoon(): void {
-    if (this.flushing) return;
-    this.flushing = this.flush()
-      .catch((error: unknown) => {
-        console.error('readers check flush failed:', error);
-      })
-      .finally(() => {
-        this.flushing = null;
-      });
+    const root = this.root();
+    if (flushingByRoot.has(root)) return;
+    flushingByRoot.set(
+      root,
+      this.flush()
+        .catch((error: unknown) => {
+          console.error('readers check flush failed:', error);
+        })
+        .finally(() => {
+          flushingByRoot.delete(root);
+        })
+    );
   }
 }
 
@@ -345,3 +346,10 @@ export function matchPin(
 
 /** Every root's rows, so both scans merge wherever they read the same share. */
 const storesByRoot = new Map<string, Map<string, Map<string, ReaderFileRow>>>();
+
+/**
+ * The one flush in flight per root, shared by every writer over that root (N1): the
+ * Status scan and the Scoreboard's scans read the same share, so a hung share parks at
+ * most one flush per root, never one per rebuild.
+ */
+const flushingByRoot = new Map<string, Promise<void>>();

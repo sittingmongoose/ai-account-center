@@ -452,6 +452,71 @@ describe('the readers check file', () => {
     release?.();
   });
 
+  it('one hung flush per root is shared by every writer over it (N1)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-shared-'));
+    try {
+      let writes = 0;
+      let release: ((v: unknown) => void) | null = null;
+      const gate = new Promise<unknown>((resolve) => {
+        release = resolve;
+      });
+      const files = {
+        stat: async () => ({ isDirectory: () => true }),
+        mkdir: async () => {},
+        writeFile: async () => {
+          writes += 1;
+          await gate;
+        },
+        rename: async () => {},
+        rm: async () => {},
+      };
+      const state = {
+        root,
+        state: 'ok' as const,
+        scannedAt: NOW,
+        complete: true,
+        threads: [],
+        tasks: [],
+        cards: [
+          {
+            writer: 'vm.lead',
+            doc: cardDoc('vm.lead', 'q1'),
+            sha256: 'ab'.repeat(32),
+            firstSeenAt: NOW,
+            problem: null,
+          } as never,
+        ],
+        problems: [],
+        boards: new Map(),
+      };
+      const statuses = { state: 'ok' as const, scannedAt: NOW, docs: [], problems: [] };
+      // Two writer instances over the same root (Status + Scoreboard).
+      const a = new ReadersCheckWriter({ root: () => root, now: () => NOW, files });
+      const b = new ReadersCheckWriter({ root: () => root, now: () => NOW, files });
+      a.recordStatusScan(state, statuses, []);
+      b.recordStatusScan(state, statuses, []);
+      a.flushSoon();
+      b.flushSoon();
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      expect(writes).toBe(1);
+      release?.(null);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      // A different root flushes on its own.
+      const other = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-other-'));
+      try {
+        const c = new ReadersCheckWriter({ root: () => other, now: () => NOW, files });
+        c.recordStatusScan({ ...state, root: other }, statuses, []);
+        c.flushSoon();
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        expect(writes).toBe(2);
+      } finally {
+        fs.rmSync(other, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('a missing root is never created by a flush (F3)', async () => {
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-noroot-'));
     const missing = path.join(parent, 'does-not-exist');
