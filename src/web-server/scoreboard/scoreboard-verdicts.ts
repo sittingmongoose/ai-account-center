@@ -200,7 +200,10 @@ export function judgeGroup(
     for (const entry of pulled) {
       judged.set(
         entry.column,
-        unranked(entry.column, `too few blind reviews yet (n = ${entry.column.n})`)
+        unranked(
+          entry.column,
+          `too few blind reviews yet (${reviewedCount(entry.column)} of ${minRuns} needed, n = ${entry.column.n})`
+        )
       );
     }
     remaining = remaining.filter((entry) => !pulled.includes(entry));

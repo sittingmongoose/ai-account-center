@@ -376,8 +376,8 @@ describe('verdict rules', () => {
     };
     const judged = judge([oneItem('a', 1, 0), oneItem('poor', 0.4, 0)]);
     expect(judged.map((c) => [c.ranked, c.verdict, c.why])).toEqual([
-      [false, 'not-enough-data', 'too few blind reviews yet (n = 10)'],
-      [false, 'not-enough-data', 'too few blind reviews yet (n = 10)'],
+      [false, 'not-enough-data', 'too few blind reviews yet (1 of 5 needed, n = 10)'],
+      [false, 'not-enough-data', 'too few blind reviews yet (1 of 5 needed, n = 10)'],
     ]);
     // minRuns reviewed items clear the bar: the same columns then get their scored verdicts.
     const cleared = judge([
@@ -403,7 +403,7 @@ describe('verdict rules', () => {
     expect(judged[0]).toMatchObject({
       ranked: false,
       verdict: 'not-enough-data',
-      why: 'too few blind reviews yet (n = 10)',
+      why: 'too few blind reviews yet (1 of 5 needed, n = 10)',
     });
     expect(judged[1]).toMatchObject({ ranked: true });
   });
@@ -417,7 +417,7 @@ describe('verdict rules', () => {
     expect(judged[0]).toMatchObject({
       ranked: false,
       verdict: 'not-enough-data',
-      why: 'too few blind reviews yet (n = 10)',
+      why: 'too few blind reviews yet (1 of 5 needed, n = 10)',
     });
     expect(judged[1]).toMatchObject({ ranked: true });
   });

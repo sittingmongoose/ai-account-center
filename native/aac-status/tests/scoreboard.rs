@@ -543,6 +543,54 @@ fn the_pick_uses_the_same_process_as_the_cell_and_the_sheet() {
 }
 
 #[test]
+fn a_demoted_row_with_reviews_names_how_many_in_the_cell() {
+    // M3: a demoted row whose reviews were read says how many, in the bar's own count —
+    // the reviewed items when a quality pass rate exists, else the review runs. "None
+    // reviewed yet" stays only for none at all.
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    for use_in in doc["uses"].as_array_mut().unwrap() {
+        let use_id = use_in["id"].as_str().unwrap_or("").to_string();
+        for task in use_in["taskTypes"].as_array_mut().unwrap() {
+            if task["id"] != "worknode-build" {
+                continue;
+            }
+            for row in task["rows"].as_array_mut().unwrap() {
+                let haiku = row["model"].as_str() == Some("anthropic/claude-haiku-5-5");
+                // The pipeline view's Haiku: 3 review runs read, no decided items (null per).
+                if haiku && use_id == "building" {
+                    row["observed"]["reviews"] = json!(3);
+                }
+                // The pm-users view's Haiku: 3 review runs over 2 decided items.
+                if haiku && use_id == "pm-users" {
+                    row["observed"]["reviews"] = json!(3);
+                    row["observed"]["measures"]["quality"] = json!({
+                        "value": 1, "n": 5, "low": 0.5, "high": 1, "of": 2, "per": 2
+                    });
+                }
+            }
+        }
+    }
+    let view = by_model(&serde_json::from_value(doc).unwrap()).unwrap();
+    let haiku_sub = |panel: &aac_status::scoreboard::ViewOut| {
+        panel
+            .models
+            .iter()
+            .find(|m| m.key == "anthropic/claude-haiku-5-5|claude-code|")
+            .unwrap()
+            .cells
+            .get("worknode-build")
+            .and_then(|cell| cell.as_ref())
+            .map(|cell| cell.sub.clone())
+    };
+    // The bar's count: review runs where no decided items (3), items where they exist (2).
+    assert_eq!(haiku_sub(&view.views[0]).unwrap(), vec!["5 runs, 3 reviewed, needs 5"]);
+    assert_eq!(haiku_sub(&view.views[1]).unwrap(), vec!["5 runs, 2 reviewed, needs 5"]);
+    // None at all still reads none (the golden's own Haiku before the edit).
+    let golden = by_model(&golden_view()).unwrap();
+    assert_eq!(haiku_sub(&golden.views[0]).unwrap(), vec!["5 runs, none reviewed yet"]);
+}
+
+#[test]
 fn unknown_speed_and_cost_are_not_called_the_same() {
     // The review fixture builder's review runs, with wallSeconds and cost set to null.
     // Both models stay Recommended. Unknown speed and unknown cost are not a tie. R1.

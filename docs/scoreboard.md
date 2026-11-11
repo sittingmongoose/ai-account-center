@@ -110,9 +110,12 @@ such outcome with its count.
 - A column is **ranked** in a task type only with at least `minRuns` runs there (catalog setting, default 5). An observed
   column also needs at least one decisive blind review. Below that its `why` is "too little data (n = 2)" or "no blind
   review yet (n = 7)", with its runs, unranked. A benchmark column needs no review.
-- One review alone is never enough for **Recommended** or **Avoid**: an observed column needs `minRuns` decisive blind
-  reviews for either (a 1-of-1 quality share reads 100%). Below that the row is unranked, `why` "too few blind reviews
-  yet (n = 11)". A Fine may stand on fewer reviews.
+- One reviewed item alone is never enough for **Recommended** or **Avoid**: an observed column needs `minRuns`
+  reviewed items for either (fix rounds on one item count once; a 1-of-1 quality share reads 100%). A task type
+  with no quality pass rate keeps the decisive review-run count. Cheating flags do not depend on reviews, so a
+  cheating-floor **Avoid** stands on any number. Below the bar the row is unranked, `why` "too few blind reviews
+  yet (1 of 5 needed, n = 11)", and demoted rows do not set the top score, peer count or ranks of the rows that
+  stay. A Fine may stand on fewer.
 - Observed and benchmark data are separate columns; they are never averaged together. Benchmark columns are ranked only
   against other columns of the same benchmark.
 - Models are compared only within a task type: harder work goes to stronger models, so a pooled pass rate flatters the

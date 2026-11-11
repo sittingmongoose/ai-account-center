@@ -583,10 +583,18 @@ fn cell(row: &RowIn, ranked1: bool, tried: usize, min_runs: MinRuns) -> Result<C
                 sub: vec![format!("needs {min_runs}")],
             });
         }
+        // A demoted row whose reviews were read names how many, in the bar's own count
+        // (reviewed items where a quality pass rate exists, else review runs); "none
+        // reviewed yet" only when there were none (2026-11-11, M3).
+        let reviewed = c.measures.get("quality").and_then(|q| q.per).unwrap_or(c.reviews);
         return Ok(CellOut {
             verdict: "not-enough-data".to_string(),
             word,
-            sub: vec![format!("{n} runs, none reviewed yet")],
+            sub: vec![if reviewed > 0 {
+                format!("{n} runs, {reviewed} reviewed, needs {min_runs}")
+            } else {
+                format!("{n} runs, none reviewed yet")
+            }],
         });
     }
     if row.basis.as_deref() == Some("benchmark") {
