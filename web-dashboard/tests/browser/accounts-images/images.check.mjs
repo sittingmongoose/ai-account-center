@@ -5,24 +5,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fakeServer, serve, updateJob } from '../accounts-fixture.mjs';
 
+const DUO_SCREEN = { width: 466, height: 678 };
 const FORMATS = [
 	{ name: 'desktop-1024', width: 1024, height: 768, safe: '0,0,0,0', mobile: false, slint: true },
 	{ name: 'desktop-1440', width: 1440, height: 900, safe: '0,0,0,0', mobile: false, slint: true },
 	{ name: 'desktop-2560', width: 2560, height: 1440, safe: '0,0,0,0', mobile: false, slint: true },
 	{ name: 'iphone', width: 402, height: 812, safe: '0,0,34,0', mobile: true },
-	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true },
-	{ name: 'duo-folded-rotated', width: 678, height: 466, safe: '0,84,21,0', mobile: true },
-	{ name: 'duo-open-upright', width: 669, height: 869, safe: '0,0,34,0', mobile: true },
-	{ name: 'duo-folded-turned-strip-right', width: 678, height: 466, safe: '0,84,34,0', mobile: true },
-	{ name: 'duo-folded-turned-strip-left', width: 678, height: 466, safe: '0,0,34,84', mobile: true },
-	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
+	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true, duo: true },
+	{ name: 'duo-open-upright', width: 669, height: 869, safe: '0,0,34,0', mobile: true, duo: true },
+	{ name: 'duo-folded-turned-strip-right', width: 678, height: 466, safe: '0,84,34,0', mobile: true, duo: true },
+	{ name: 'duo-folded-turned-strip-left', width: 678, height: 466, safe: '0,0,34,84', mobile: true, duo: true },
+	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true, duo: true },
 ];
 const UNPIN = `html { scrollbar-width: none; }
 .rail, .tabbar, .topbar, .chrome, .band-head { position: static !important; }
 .rail { height: auto !important; align-self: stretch !important; }`;
 
 async function shoot(t, f, theme, { slint }) {
-	await t.newContext({ viewport: { width: f.width, height: slint ? 3400 : f.height }, isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
+	await t.newContext({ viewport: { width: f.width, height: slint ? 3400 : f.height }, ...(f.duo ? { screen: DUO_SCREEN } : {}), isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
 	await t.page.addInitScript((mode) => { try { localStorage.setItem('aac-theme', mode); } catch {} }, theme);
 	await t.app.signIn();
 	const server = fakeServer({ rich: true, update: updateJob() });

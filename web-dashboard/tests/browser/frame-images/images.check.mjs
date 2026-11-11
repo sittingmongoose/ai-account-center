@@ -20,14 +20,15 @@ async function stubPages(t) {
 	await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', (r) => r.fulfill({ json: board }));
 }
 
+const DUO_SCREEN = { width: 466, height: 678 };
 const FORMATS = [
 	{ name: 'desktop', width: 1440, height: 900, safe: '0,0,0,0', mobile: false },
 	{ name: 'iphone', width: 402, height: 812, safe: '0,0,34,0', mobile: true },
-	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true },
-	{ name: 'duo-open-upright', width: 669, height: 869, safe: '0,0,34,0', mobile: true },
-	{ name: 'duo-folded-turned-strip-right', width: 678, height: 466, safe: '0,84,34,0', mobile: true },
-	{ name: 'duo-folded-turned-strip-left', width: 678, height: 466, safe: '0,0,34,84', mobile: true },
-	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
+	{ name: 'duo-folded', width: 466, height: 678, safe: '0,84,34,0', mobile: true, duo: true },
+	{ name: 'duo-open-upright', width: 669, height: 869, safe: '0,0,34,0', mobile: true, duo: true },
+	{ name: 'duo-folded-turned-strip-right', width: 678, height: 466, safe: '0,84,34,0', mobile: true, duo: true },
+	{ name: 'duo-folded-turned-strip-left', width: 678, height: 466, safe: '0,0,34,84', mobile: true, duo: true },
+	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true, duo: true },
 ];
 const TABS = ['status', 'scoreboard', 'home', 'analytics', 'accounts'];
 const SLINT = new Set();
@@ -61,7 +62,7 @@ export const tests = Object.fromEntries(
 			['light', 'dark'].map((theme) => [
 				`${tab} ${f.name} ${theme}`,
 				async (t) => {
-					await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
+					await t.newContext({ viewport: { width: f.width, height: f.height }, ...(f.duo ? { screen: DUO_SCREEN } : {}), isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
 					await t.page.addInitScript((mode) => { try { localStorage.setItem('aac-theme', mode); } catch {} }, theme);
 					await t.app.signIn();
 					await t.app.stub('/api/accounts/dashboard', ACCOUNTS);
