@@ -223,6 +223,18 @@ pub fn keep_chrome_while_typing(
     typing && last_width.is_some_and(|w| (w - width).abs() < 1.0) && last_side == Some(side)
 }
 
+/// Whether a change of the window is only a pinch-zoom, which keeps the chrome. Only a page zoomed in counts: while it
+/// settles a fold iOS reports a scale below 1 (0.71 from open landscape to folded), which is no zoom. And a fold or a
+/// rotation always moves the layout width or the insets, so either change chooses the chrome again even when zoomed.
+pub fn zoom_only(
+    scale: f64,
+    last: Option<(f64, Insets)>,
+    layout_width: f64,
+    insets: Insets,
+) -> bool {
+    scale > 1.01 && last.is_some_and(|(w, i)| (w - layout_width).abs() < 1.0 && i == insets)
+}
+
 /// Whether a reload would steal the screen (review L5): a field has focus, the dashboard iframe
 /// has focus, its raised confirmation shows, or the frame's own switch dialog is open.
 pub(crate) fn busy_for_reload(
@@ -338,66 +350,83 @@ pub fn start(embed: bool) {
     // The width, chrome and rail side last chosen, so typing can keep them (keep_chrome_while_typing).
     let last: std::rc::Rc<std::cell::Cell<Option<(f64, &'static str, &'static str)>>> =
         std::rc::Rc::new(std::cell::Cell::new(None));
-    let apply = move || {
-        let insets = forced
+    // The layout width and insets the chrome was last chosen for, so a pinch-zoom can be told from a fold (zoom_only).
+    let seen: std::rc::Rc<std::cell::Cell<Option<(f64, Insets)>>> =
+        std::rc::Rc::new(std::cell::Cell::new(None));
+    let read_insets = move || {
+        forced
             .or_else(|| probe.as_ref().filter(|_| !embed).map(measure))
-            .unwrap_or_default();
-        let size = |v: Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>, or: f64| {
-            v.ok().and_then(|v| v.as_f64()).unwrap_or(or)
-        };
-        let width = size(window().inner_width(), 1440.0);
-        let height = size(window().inner_height(), 900.0);
-        let previous = last.get();
-        let side = rail_side(insets);
-        if keep_chrome_while_typing(
-            typing(),
-            previous.map(|(w, _, _)| w),
-            width,
-            previous.map(|(_, _, s)| s),
-            side,
-        ) {
-            return;
-        }
-        let chrome = chrome_for(embed, duo, width, height, insets);
-        last.set(Some((width, chrome, side)));
-        let _ = root.set_attribute("data-chrome", chrome);
-        // The rail sits in the strip, on whichever side iOS puts it (app.css mirrors the rail's layout for the left).
-        if chrome == "rail" {
-            let _ = root.set_attribute("data-rail-side", side);
-        } else {
-            let _ = root.remove_attribute("data-rail-side");
-        }
-        let style = root.style();
-        // Inside the iframe nothing is reserved: the shell's own chrome already sits outside the content.
-        let px = |n: f64| format!("{n}px");
-        let _ = style.set_property("--safe-top", &px(insets.top));
-        let _ = style.set_property("--safe-right", &px(insets.right));
-        let _ = style.set_property("--safe-bottom", &px(insets.bottom));
-        let _ = style.set_property("--safe-left", &px(insets.left));
-        // The tall reserve clears the Duo's clock and signal ring; any other device's rail starts near the top.
-        let reserve = if chrome == "rail" {
-            if duo {
-                rail_reserve(width, height, insets)
-            } else {
-                12.0
+            .unwrap_or_default()
+    };
+    let layout_width = || {
+        document()
+            .document_element()
+            .map(|e| e.client_width() as f64)
+            .unwrap_or(0.0)
+    };
+    let apply = {
+        let read_insets = read_insets.clone();
+        let seen = seen.clone();
+        move || {
+            let insets = read_insets();
+            let size = |v: Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>, or: f64| {
+                v.ok().and_then(|v| v.as_f64()).unwrap_or(or)
+            };
+            let width = size(window().inner_width(), 1440.0);
+            let height = size(window().inner_height(), 900.0);
+            let previous = last.get();
+            let side = rail_side(insets);
+            if keep_chrome_while_typing(
+                typing(),
+                previous.map(|(w, _, _)| w),
+                width,
+                previous.map(|(_, _, s)| s),
+                side,
+            ) {
+                return;
             }
-        } else {
-            0.0
-        };
-        let _ = style.set_property("--rail-reserve", &px(reserve));
-        remember(insets, chrome, duo, reserve, width, height);
-        let _ = style.set_property(
-            "--rail-w",
-            &px(if chrome == "rail" {
-                rail_width(insets)
+            let chrome = chrome_for(embed, duo, width, height, insets);
+            last.set(Some((width, chrome, side)));
+            seen.set(Some((layout_width(), insets)));
+            let _ = root.set_attribute("data-chrome", chrome);
+            // The rail sits in the strip, on whichever side iOS puts it (app.css mirrors the rail's layout for the left).
+            if chrome == "rail" {
+                let _ = root.set_attribute("data-rail-side", side);
+            } else {
+                let _ = root.remove_attribute("data-rail-side");
+            }
+            let style = root.style();
+            // Inside the iframe nothing is reserved: the shell's own chrome already sits outside the content.
+            let px = |n: f64| format!("{n}px");
+            let _ = style.set_property("--safe-top", &px(insets.top));
+            let _ = style.set_property("--safe-right", &px(insets.right));
+            let _ = style.set_property("--safe-bottom", &px(insets.bottom));
+            let _ = style.set_property("--safe-left", &px(insets.left));
+            // The tall reserve clears the Duo's clock and signal ring; any other device's rail starts near the top.
+            let reserve = if chrome == "rail" {
+                if duo {
+                    rail_reserve(width, height, insets)
+                } else {
+                    12.0
+                }
             } else {
                 0.0
-            }),
-        );
-        let _ = style.set_property(
-            "--band-reserve",
-            &px(if chrome == "band" { 112.0 } else { 0.0 }),
-        );
+            };
+            let _ = style.set_property("--rail-reserve", &px(reserve));
+            remember(insets, chrome, duo, reserve, width, height);
+            let _ = style.set_property(
+                "--rail-w",
+                &px(if chrome == "rail" {
+                    rail_width(insets)
+                } else {
+                    0.0
+                }),
+            );
+            let _ = style.set_property(
+                "--band-reserve",
+                &px(if chrome == "band" { 112.0 } else { 0.0 }),
+            );
+        }
     };
     apply();
     // iOS reports a fold's or a rotation's new insets after the resize, so the chrome is worked out again on every
@@ -405,12 +434,9 @@ pub fn start(embed: bool) {
     let settle = Closure::<dyn Fn()>::new(apply.clone());
     let blur_apply = Closure::<dyn Fn()>::new(apply.clone());
     let on_change = Closure::<dyn Fn()>::new(move || {
-        // A pinch-zoom resizes the visual viewport too: the chrome is chosen at the page's own scale only.
-        let zoomed = window()
-            .visual_viewport()
-            .map(|v| (v.scale() - 1.0).abs() > 0.01)
-            .unwrap_or(false);
-        if zoomed {
+        // A pinch-zoom resizes the visual viewport too: it keeps the chrome, a fold or a rotation does not.
+        let scale = window().visual_viewport().map(|v| v.scale()).unwrap_or(1.0);
+        if zoom_only(scale, seen.get(), layout_width(), read_insets()) {
             return;
         }
         apply();
@@ -455,6 +481,30 @@ mod tests {
             bottom,
             left,
         }
+    }
+
+    #[test]
+    fn a_fold_is_never_taken_for_a_pinch_zoom() {
+        let open = insets(0.0, 84.0, 34.0, 0.0);
+        let folded = insets(0.0, 84.0, 34.0, 0.0);
+        // Open landscape to folded on its side: iOS reports scale 0.71 while the width drops from 951 to 678.
+        assert!(!zoom_only(0.71, Some((951.0, open)), 678.0, folded));
+        // A scale below 1 is never a zoom, even when nothing else has moved yet.
+        assert!(!zoom_only(0.71, Some((678.0, folded)), 678.0, folded));
+        assert!(!zoom_only(1.0, Some((402.0, open)), 402.0, open));
+    }
+
+    #[test]
+    fn a_pinch_zoom_keeps_the_chrome_until_the_width_or_insets_move() {
+        let phone = insets(62.0, 0.0, 34.0, 0.0);
+        let side = insets(0.0, 62.0, 21.0, 62.0);
+        assert!(zoom_only(2.0, Some((402.0, phone)), 402.0, phone));
+        // Zoomed in and then rotated: the layout width and the insets move, so the chrome is chosen again.
+        assert!(!zoom_only(2.0, Some((402.0, phone)), 874.0, side));
+        assert!(!zoom_only(2.0, Some((402.0, phone)), 402.0, side));
+        assert!(!zoom_only(2.0, Some((402.0, phone)), 874.0, phone));
+        // Nothing chosen yet: choose.
+        assert!(!zoom_only(2.0, None, 402.0, phone));
     }
 
     #[test]
