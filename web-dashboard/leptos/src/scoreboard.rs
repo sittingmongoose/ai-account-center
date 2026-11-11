@@ -1055,17 +1055,22 @@ mod tests {
         let by: ByModel = serde_json::from_str(text).expect("by-model parses");
         assert_eq!(by.default_view.as_deref(), Some("pipeline"));
         let pipeline = &by.views[0];
-        assert_eq!(pipeline.picks.len(), 5);
+        // Package M's regenerated example: rows below the review bar are never ranked, so the
+        // pipeline keeps three jobs, and a pass rate names its first-try count (B6).
+        assert_eq!(pipeline.picks.len(), 3);
         let opus = &pipeline.models[0];
         assert_eq!(opus.label, "Opus 5.5");
         assert_eq!(opus.effort_text, "xhigh");
-        assert!(opus.cells.contains_key("mechanical"));
-        assert_eq!(opus.cells["mechanical"], None);
+        assert!(opus.cells.contains_key("plan"));
+        assert_eq!(opus.cells["plan"], None);
         let cell = opus.cells["worknode-build"].clone().unwrap();
         assert_eq!(cell.word, "Recommended");
         assert_eq!(
             cell.sub,
-            vec!["7 runs".to_string(), "passed review 6 of 6".to_string()]
+            vec![
+                "7 runs".to_string(),
+                "passed review 6 of 6, 5 on the first try".to_string()
+            ]
         );
     }
 

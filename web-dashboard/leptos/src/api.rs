@@ -1935,7 +1935,10 @@ mod tests {
         .expect("the composer's nulls must parse");
         assert_eq!(panel.updates.len(), 2);
         let silent = &panel.updates[0];
-        assert!(silent.blocked.text.is_empty(), "null blocked reads as unknown");
+        assert!(
+            silent.blocked.text.is_empty(),
+            "null blocked reads as unknown"
+        );
         assert!(!silent.blocked.waiting_on_you);
         assert!(silent.left.is_empty() && silent.done.is_empty());
         assert!(silent.who.is_none() && silent.percent_note.is_none());
