@@ -595,7 +595,7 @@ function renderAnalytics(mode = 'static') {
   const busyNow = act?.status === 'loading' || act?.refreshing === true;
   const converging = Array.isArray(act?.sources) && act.sources.some(r => r?.state === 'scanning');
   if (currentPage === 'analytics' && (busyNow || converging))
-    analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(false, 'morph', { silent: true }); }, busyNow ? 10000 : 15000);
+    analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(false, 'morph', { silent: true }); }, act?.totals ? 60000 : busyNow ? 10000 : 15000);
   shownSize = size;
   if (!morph || native) { shownGeo = next; return; }
   const t0 = performance.now();

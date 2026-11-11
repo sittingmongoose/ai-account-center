@@ -17,7 +17,7 @@ import {
 import {
   analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
-  loadAnalyticsRemoteSources,
+  loadAnalyticsRemoteSources as readRemoteSources,
 } from '../../../src/web-server/services/analytics-remote-sources';
 import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
 import {
@@ -31,6 +31,15 @@ import {
 import { withLfLineEndings } from '../../../src/utils/packaged-source';
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 import { localClaudeLogNames } from '../../../src/web-server/services/analytics-claude-log-names';
+
+
+// Scan-behaviour fixtures advance beyond the authoritative cache between reads.
+let fixtureClock = Date.now();
+function loadAnalyticsRemoteSources(...args: Parameters<typeof readRemoteSources>) {
+  fixtureClock += 360_000;
+  const [minimum, options = {}] = args;
+  return readRemoteSources(minimum, { now: () => fixtureClock, ...options });
+}
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 let cache: string;
@@ -384,7 +393,7 @@ describe('analytics remote sources', () => {
       cacheDir: cache,
       hosts: async () => ({ mac: 'fixture', windows: 'fixture', nas1: 'fixture' }),
       claudeLogNames: () => ({ originals: new Set<string>(), complete: true }),
-      now: () => started + pass * 60_000,
+      now: () => started + pass * 360_000,
       runHelper: async () => {
         const old = pass > 0 && pass < 4;
         const owner = pass === 0 ? FILE_1 : other;
@@ -443,7 +452,7 @@ describe('analytics remote sources', () => {
         const cell = answer.states.find((state) => state.host === host && state.tool === 'claude');
         expect(cell).toMatchObject({
           state: old ? 'cached' : 'ok',
-          lastScanAt: new Date(started + (old ? 0 : pass) * 60_000).toISOString(),
+          lastScanAt: new Date(started + (old ? 0 : pass) * 360_000).toISOString(),
           rowCount: 2,
           detail: old
             ? 'the computer answered with an older reader; showing previously read usage'
@@ -453,7 +462,7 @@ describe('analytics remote sources', () => {
         for (const tool of tools) {
           expect(saved.rows.find((row: { k: string }) => row.k === tool).i).toBe(100 + pass);
           expect(saved.kinds[tool].lastScanAt).toBe(
-            new Date(started + pass * 60_000).toISOString()
+            new Date(started + pass * 360_000).toISOString()
           );
         }
       }
@@ -707,7 +716,7 @@ describe('analytics remote sources', () => {
     const deps = {
       cacheDir: cache,
       hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null }),
-      now: () => started + pass * 60_000,
+      now: () => started + pass * 360_000,
       runHelper: async () =>
         parseAnalyticsRemoteResponse(
           JSON.stringify(
@@ -1646,13 +1655,35 @@ describe('analytics remote scans per kind', () => {
       })
     );
 
+  it('retains authoritative kinds for five minutes and scans only an expired kind', async () => {
+    const now = Date.now();
+    const calls: Array<{ host: string; kinds: string[] }> = [];
+    const options = { hosts, cacheDir: cache, now: () => now,
+      runHelper: async (_alias: string, host: AnalyticsRemoteHost, request: { kinds: string[] }) => {
+        calls.push({ host, kinds: request.kinds });
+        return answer(request.kinds);
+      } };
+    await readRemoteSources(MIN_DATE, options);
+    calls.length = 0;
+    const warm = await readRemoteSources(MIN_DATE, options);
+    expect(calls).toHaveLength(0);
+    expect(warm.results.filter((result) => result.tool === 'omp')).toHaveLength(3);
+    expect(warm.states.find((source) => source.host === 'mac' && source.tool === 'omp')?.state).toBe('cached');
+    const file = path.join(cache, 'analytics-remote-v1', 'mac.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    saved.kinds.omp.lastScanAt = new Date(now - 300_000).toISOString();
+    fs.writeFileSync(file, JSON.stringify(saved));
+    await readRemoteSources(MIN_DATE, options);
+    expect(calls).toEqual([{ host: 'mac', kinds: ['omp'] }]);
+  });
+
   it('scans a cold host with one call per kind, all at once, so a slow kind holds up none', async () => {
     const calls: Array<{ host: string; kinds: string[]; prints: string[] }> = [];
     let releaseClaude: () => void = () => {};
     const slowClaude = new Promise<void>((resolve) => {
       releaseClaude = resolve;
     });
-    const loading = loadAnalyticsRemoteSources(MIN_DATE, {
+    const loading = readRemoteSources(MIN_DATE, {
       hosts,
       cacheDir: cache,
       runHelper: async (_alias, platform, request) => {
@@ -1678,9 +1709,13 @@ describe('analytics remote scans per kind', () => {
     const { results, states } = await loading;
     expect(results.filter((entry) => entry.tool === 'omp')).toHaveLength(3);
     expect(states.filter((entry) => entry.state === 'ok')).toHaveLength(3);
-    // A settled host's next scan is one call for every kind.
+    // A recent settled answer causes no helper calls.
     calls.length = 0;
-    await loadAnalyticsRemoteSources(MIN_DATE, {
+    await readRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper: async () => { throw new Error('recent cache must skip helper'); } });
+    // After five minutes, the next scan is one call for every kind.
+    const later = Date.now() + 300_001;
+    await readRemoteSources(MIN_DATE, {
+      now: () => later,
       hosts,
       cacheDir: cache,
       runHelper: async (_alias, platform, request) => {

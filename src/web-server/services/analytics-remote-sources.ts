@@ -617,9 +617,40 @@ export async function loadAnalyticsRemoteSources(
   for (const host of REMOTE_ANALYTICS_HOSTS) {
     jobs.push(
       (async (): Promise<void> => {
-        const kinds = REMOTE_TARGETS[host];
+        const allKinds = REMOTE_TARGETS[host];
         const file = cacheFile(cacheDir, host);
         const cached = loadCache(file);
+        // A successful disk answer remains authoritative across process restarts.
+        // Each kind has its own last scan; one recent kind cannot hide an old one.
+        const recentKinds = allKinds.filter((kind) => {
+          const read = cached.kinds?.[kind];
+          const age = now() - Date.parse(read?.lastScanAt ?? '');
+          return (
+            read &&
+            ['ok', 'no_usage', 'not_installed'].includes(read.state) &&
+            age >= 0 &&
+            age < 5 * 60_000
+          );
+        });
+        const kinds = allKinds.filter((kind) => !recentKinds.includes(kind));
+        results.push(
+          ...cachedHostSources(host, cached, minDateMs, 'cached remote scan').results.filter(
+            (source) => recentKinds.includes(source.tool)
+          )
+        );
+        states.push(
+          ...cachedHostSources(host, cached, minDateMs, 'cached remote scan').states.filter(
+            (source) => recentKinds.includes(source.tool)
+          )
+        );
+        if (kinds.length === 0) {
+          parts.set(host, {
+            ...cached,
+            rows: cached.rows.filter((row) => inWindow(row, minDateMs)),
+            srows: cached.srows.filter((row) => sessionInWindow(row, minDateMs)),
+          });
+          return;
+        }
         const alias = hosts[host];
         if (!alias) {
           for (const tool of kinds)
@@ -660,8 +691,8 @@ export async function loadAnalyticsRemoteSources(
             minDateMs,
             failure.damaged ? HELPER_DAMAGED : 'remote scan failed'
           );
-          results.push(...part.results);
-          states.push(...part.states);
+          results.push(...part.results.filter((source) => !recentKinds.includes(source.tool)));
+          states.push(...part.states.filter((source) => !recentKinds.includes(source.tool)));
           return;
         }
         const { response, cutKinds, failedKinds, olderClaude } = scan;
@@ -700,7 +731,8 @@ export async function loadAnalyticsRemoteSources(
         for (const row of [...response.rows, ...(response.srows ?? [])])
           if (!discarded(row.k)) replaced.get(row.k)?.add(row.f);
         const kept = cached.rows.filter((row) => {
-          if (!kinds.includes(row.k) || !inWindow(row, minDateMs)) return false;
+          if (!inWindow(row, minDateMs)) return false;
+          if (!kinds.includes(row.k)) return true;
           if (replaced.get(row.k)?.has(row.f)) return false;
           const print = freshPrints[row.k]?.[row.f];
           if (print === undefined) return keepsUnvisited(row.k);
@@ -713,7 +745,8 @@ export async function loadAnalyticsRemoteSources(
         // Session aggregates merge under the same file fingerprints as the
         // hourly rows: a re-read file replaces both, an unvisited one keeps both.
         const keptSessions = cached.srows.filter((row) => {
-          if (!kinds.includes(row.k) || !sessionInWindow(row, minDateMs)) return false;
+          if (!sessionInWindow(row, minDateMs)) return false;
+          if (!kinds.includes(row.k)) return true;
           if (replaced.get(row.k)?.has(row.f)) return false;
           const print = freshPrints[row.k]?.[row.f];
           if (print === undefined) return keepsUnvisited(row.k);
@@ -746,7 +779,10 @@ export async function loadAnalyticsRemoteSources(
           ...freshPrints,
         };
         for (const [kind, entries] of Object.entries(cached.fingerprints)) {
-          if (!kinds.includes(kind as AnalyticsRemoteKind)) continue;
+          if (!kinds.includes(kind as AnalyticsRemoteKind)) {
+            prints[kind] = entries;
+            continue;
+          }
           if (!keepsUnvisited(kind as AnalyticsRemoteKind)) continue;
           // Keep group metadata for unreadable members even after their rows
           // were replaced, so renamed aliases still join on the next scan.
