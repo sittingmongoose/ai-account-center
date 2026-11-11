@@ -590,9 +590,10 @@ fn worst_loop(items: &[ItemIn], now_ms: i64) -> Option<ItemLoop> {
 }
 
 fn item_out(item: &ItemIn) -> ItemOut {
+    let known = ["todo", "working", "review", "fixing", "blocked", "ready", "landed", "done", "dropped"].contains(&item.state.as_str());
     ItemOut {
         id: item.id.clone(),
-        title: item.title.clone(),
+        title: if known { item.title.clone() } else { format!("{} (state not recognised: {})", item.title, item.state) },
     }
 }
 

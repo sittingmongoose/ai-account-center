@@ -1091,3 +1091,18 @@ fn a_thread_with_no_task_list_sends_nulls_not_invented_all_clears() {
     );
     assert!(update.blocked.as_ref().unwrap().waiting_on_you);
 }
+
+#[test]
+fn one_unknown_task_state_only_marks_its_row() {
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "project", "stream": "work" }))],
+        "tasks": [{ "writer": "vm.pm7-build", "writtenAtMs": NOW, "seq": 1, "project": "project", "stream": "work",
+            "items": [{ "id": "good", "title": "Good", "state": "done" }, { "id": "bad", "title": "Bad", "state": "queued" }] }]
+    }));
+    let update = one_update(&built);
+    assert_eq!(update.done.unwrap().len(), 1);
+    assert_eq!(update.left.unwrap()[0].title, "Bad (state not recognised: queued)");
+    assert!(update.unreadable_note.is_none());
+    assert!(update.refusal.is_none());
+}

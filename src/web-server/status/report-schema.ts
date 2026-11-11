@@ -150,7 +150,7 @@ export type ItemState = (typeof ITEM_STATES)[number];
 export interface TaskItem {
   id: string;
   title: string;
-  state: ItemState;
+  state: string;
   owner: string | null;
   branch: string | null;
   head: string | null;
@@ -185,7 +185,7 @@ function item(value: unknown, field: string): TaskItem {
   return {
     id: text(row.id, `${field}.id`, 64),
     title: text(row.title, `${field}.title`, 300),
-    state: oneOf(row.state, `${field}.state`, ITEM_STATES),
+    state: text(row.state, `${field}.state`, 64),
     owner: optText(row.owner, `${field}.owner`, 64),
     branch: optText(row.branch, `${field}.branch`, 200),
     head: optText(row.head, `${field}.head`, 64),
