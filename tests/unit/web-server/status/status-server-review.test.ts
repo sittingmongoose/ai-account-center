@@ -459,7 +459,8 @@ describe('an older answer cannot replace a newer one', () => {
     fs.writeFileSync(path.join(root, 'v1', 'answers'), 'blocker');
     const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
     await answers.submitSet([entry(CARD, sha, { choice: [], note: 'first' })], 'Mac');
-    await answers.submitSet([entry(CARD, sha)], 'Mac');
+    const newer = writeCard(root, cardDoc('vm.lead', 'Q1', { seq: 2 }));
+    await answers.submitSet([entry(CARD, newer, { cardSeq: 2 })], 'Mac');
     fs.rmSync(path.join(root, 'v1', 'answers'));
     await answers.retryPending();
     expect(answers.list().map((e) => e.share.state)).toEqual(['done', 'done']);
@@ -1043,7 +1044,7 @@ describe('the client send id', () => {
   it('forgets after a day and past 200 ids, and never remembers a send that recorded nothing', async () => {
     const root = dirs.make();
     fs.mkdirSync(path.join(root, 'v1'), { recursive: true });
-    const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+    const sha = writeCard(root, cardDoc('vm.lead', 'Q1', { kind: 'objection' }));
     const reader = new AgentReportsReader({ root: () => root, now: () => NOW });
     let now = NOW;
     const answers = new StatusAnswers({
@@ -1053,7 +1054,7 @@ describe('the client send id', () => {
       doorbell: async () => ({ ok: true, detail: 'Rang.' }),
       now: () => now,
     });
-    const note = (text: string) => [entry(CARD, sha, { choice: [], note: text })];
+    const note = (text: string) => [entry(CARD, sha, { choice: [], kind: 'object', note: text })];
     const refusedOnly = await answers.submitSet([{ nonsense: true }], 'Mac', ID);
     expect(refusedOnly[0].outcome).toBe('refused');
     expect((await answers.submitSet(note('real'), 'Mac', ID))[0].outcome).toBe('recorded');
@@ -1755,14 +1756,14 @@ process.exit(0);
 
     it('the same id with different entries is a new send', async () => {
       const { root, answers } = setup();
-      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1', { kind: 'objection' }));
       const first = await answers.submitSet(
-        [entry(CARD, sha, { choice: [], note: 'one' })],
+        [entry(CARD, sha, { choice: [], kind: 'object', note: 'one' })],
         'Mac',
         ID
       );
       const second = await answers.submitSet(
-        [entry(CARD, sha, { choice: [], note: 'two' })],
+        [entry(CARD, sha, { choice: [], kind: 'object', note: 'two' })],
         'Mac',
         ID
       );
@@ -1772,13 +1773,17 @@ process.exit(0);
 
     it('binding survives a restart, and key order does not matter', async () => {
       const { root, answers, make } = setup();
-      const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
-      const { via, ...rest } = entry(CARD, sha, { choice: [], note: 'one' });
+      const sha = writeCard(root, cardDoc('vm.lead', 'Q1', { kind: 'objection' }));
+      const { via, ...rest } = entry(CARD, sha, { choice: [], kind: 'object', note: 'one' });
       await answers.submitSet([{ ...rest, via }], 'Mac', ID);
       const again = make();
       await again.submitSet([{ via, ...rest }], 'Mac', ID);
       expect(again.list()).toHaveLength(1);
-      await again.submitSet([entry(CARD, sha, { choice: [], note: 'two' })], 'Mac', ID);
+      await again.submitSet(
+        [entry(CARD, sha, { choice: [], kind: 'object', note: 'two' })],
+        'Mac',
+        ID
+      );
       expect(again.list()).toHaveLength(2);
     });
   });
@@ -1861,14 +1866,15 @@ process.exit(0);
       expect(answers.list()).toHaveLength(2);
     });
 
-    it('two fresh drafts with the same words and different ids are both recorded', async () => {
+    it('a second fresh draft cannot answer a card closed by a written response', async () => {
       const { root, answers } = setup();
       const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
       const draft = (entryId: string) => [entry(CARD, sha, { choice: [], note: 'same', entryId })];
       const sameSend = 'z'.repeat(32);
       await answers.submitSet(draft('1'.repeat(32)), 'Mac', sameSend);
-      await answers.submitSet(draft('2'.repeat(32)), 'Mac', sameSend);
-      expect(answers.list()).toHaveLength(2);
+      const second = await answers.submitSet(draft('2'.repeat(32)), 'Mac', sameSend);
+      expect(second[0].outcome).toBe('card_changed');
+      expect(answers.list()).toHaveLength(1);
     });
 
     it('an entry that was refused is not remembered: its retry can be recorded', async () => {
@@ -3175,11 +3181,8 @@ describe('round four', () => {
       expect(again.list()[0].share.state).toBe('skipped');
     });
 
-    it('a signed answer copied from another card, or a signed note, blocks nothing', async () => {
-      for (const held of [
-        { ...unsigned(50, 'c'.repeat(64)), cardId: 'vm.lead--Q9' },
-        { ...unsigned(50, 'c'.repeat(64)), kind: 'note' as const, choice: [], note: 'words' },
-      ]) {
+    it('a signed answer copied from another card blocks nothing', async () => {
+      for (const held of [{ ...unsigned(50, 'c'.repeat(64)), cardId: 'vm.lead--Q9' }]) {
         const { root, store, answers, rings } = await behind();
         fs.writeFileSync(
           answerFile(root),
@@ -3912,10 +3915,12 @@ describe('real-process journal and publication fences', () => {
         await b.next('retried');
         assert.equal(answerRecords(root).length, 1);
         assert.equal(ringCount(root), 1);
-        // A different request under that key is still a new send.
+        // A different card under that key is still a new send.
+        const next = cardDoc('vm.first', 'Q2');
+        const nextHash = writeCard(path.join(root, 'reports'), next);
         b.send({
           cmd: 'submit',
-          entries: [{ ...plain, note: 'Another note.' }],
+          entries: [{ ...plain, cardId: next.id, cardSha256: nextHash, note: 'Another response.' }],
           clientSendId: 'send-line-retry-1234',
         });
         assert.equal((await b.next('submitted')).result[0].outcome, 'recorded');

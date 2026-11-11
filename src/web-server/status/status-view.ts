@@ -471,7 +471,7 @@ function cardsComplete(inputs: StatusInputs): boolean {
 
 function buildCards(inputs: StatusInputs): StatusView['cards'] {
   const summaries = summarySteps(inputs.sends ?? []);
-  // Answers and dones close a card version; notes and objections stay on the open card.
+  // Choices, written responses and completed actions close a card version; objections remain open.
   const answers = inputs.answers.filter((e) => CLOSING_KINDS.has(e.answer.kind));
   const answered = new Set(
     answers.map((e) => `${e.answer.cardId}\n${e.answer.cardSeq}\n${e.answer.cardSha256}`)
@@ -533,7 +533,7 @@ function buildCards(inputs: StatusInputs): StatusView['cards'] {
       : history.map((entry) => ({
           card: cardView(inputs, entry.card, entry.answer.cardSha256, null),
           answer: {
-            kind: entry.answer.kind as 'answer' | 'done',
+            kind: entry.answer.kind as 'answer' | 'note' | 'done',
             choice: entry.answer.choice,
             note: entry.answer.note,
             via: entry.answer.via,

@@ -114,8 +114,8 @@ export function validChoice(card: CardDoc, choice: string[]): boolean {
 
 export type AnswerKind = UnsignedAnswer['kind'];
 const ANSWER_KINDS: readonly AnswerKind[] = ['answer', 'note', 'object', 'done'];
-/** Record kinds that close the card version they answer; a note or an objection leaves it open. */
-export const CLOSING_KINDS: ReadonlySet<AnswerKind> = new Set(['answer', 'done']);
+/** Written responses close the question just as a selected option does. Objections remain open. */
+export const CLOSING_KINDS: ReadonlySet<AnswerKind> = new Set(['answer', 'note', 'done']);
 
 export interface AnswerEntry {
   cardId: string;
@@ -196,7 +196,7 @@ export function entryKind(
 
 /**
  * Where a record's signed copy goes: an answer or a done replaces `<card>.json`; a note or an
- * objection leaves the card open and may come again, so each gets its own file.
+ * objection has its own immutable file. Written responses retain their historical note filenames.
  */
 export function shareFileName(answer: SignedAnswer, recordId: string): string {
   const hex = recordId.replace(/-/g, '').slice(0, 12);

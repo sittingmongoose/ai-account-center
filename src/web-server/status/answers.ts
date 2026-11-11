@@ -124,7 +124,10 @@ function draftHash(entry: AnswerEntry, note: string): string {
     note,
     via: entry.via,
     kind: entry.kind ?? null,
-    ...(CLOSING_KINDS.has(kind) ? { cardSeq: entry.cardSeq, cardSha256: entry.cardSha256 } : {}),
+    // Keep hashes of persisted note drafts compatible across this behavior change.
+    ...(kind === 'answer' || kind === 'done'
+      ? { cardSeq: entry.cardSeq, cardSha256: entry.cardSha256 }
+      : {}),
   });
 }
 
@@ -859,7 +862,7 @@ export class StatusAnswers {
     return [...this.sends.values()];
   }
 
-  /** Whether this exact card version already has an answer or a done (notes and objections leave it open). */
+  /** Whether this exact card version has a choice, written response or completed action. */
   isAnswered(cardId: string, seq: number, sha256: string): boolean {
     return this.list().some(
       (entry) =>
@@ -1183,6 +1186,9 @@ export class StatusAnswers {
    * writing this record now would put the older answer back over the newer one.
    */
   private superseded(entry: AnswerHistoryEntry): boolean {
+    // Written responses have immutable share filenames: always deliver the owner's words,
+    // even when a later version has already been answered.
+    if (entry.answer.kind === 'note') return false;
     if (!CLOSING_KINDS.has(entry.answer.kind)) return false;
     const all = this.list();
     // By id: a non-owner's refreshed history holds fresh objects, while a delivery may hold the earlier one.
@@ -1214,7 +1220,7 @@ export class StatusAnswers {
     }
     const held = verifySignedAnswer(bytes, this.answerKey().publicKeyPem);
     // Only this server's own closing answer to this same card blocks: a signed file copied from another card (the
-    // share's answers folder is writable by every writer) or a note is no newer answer to this one.
+    // share's answers folder is writable by every writer) or an objection is no newer answer to this one.
     if (
       held.ok &&
       held.answer.cardId === entry.answer.cardId &&

@@ -59,7 +59,7 @@ export interface SentRecord {
 
 const KIND_WORDS: Record<SignedAnswer['kind'], string> = {
   answer: 'answer',
-  note: 'note (the card stays open; reply on the card or withdraw it)',
+  note: 'written response (closes this card; the owner may be asking a question or proposing another solution)',
   object: 'objection (the card stays open; reply on the card or withdraw it)',
   done: 'done',
 };

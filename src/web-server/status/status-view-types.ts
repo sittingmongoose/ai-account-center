@@ -258,7 +258,7 @@ export interface AnsweredCardView {
   card: CardView;
   answer: {
     /** answer (a choice) or done (an action card); notes and objections stay on the open card. */
-    kind: 'answer' | 'done';
+    kind: 'answer' | 'note' | 'done';
     choice: string[];
     note: string;
     via: 'deck' | 'recommended';

@@ -261,29 +261,20 @@ describe('status view', () => {
         },
       ],
     });
-    expect(view.cards.open.map((c) => c.id)).toEqual(['vm.lead--Q2', 'vm.lead--Q3', 'vm.lead--Q1']);
+    expect(view.cards.open.map((c) => c.id)).toEqual(['vm.lead--Q2', 'vm.lead--Q3']);
     // The asker waits on the owner through its open question cards (N4): its stale
     // heartbeat reads as its state, never as gone.
     expect(view.cards.open[0].askerState).toBe('working');
     expect(view.cards.open[0].cardSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(view.cards.answered[0].card.id).toBe('vm.lead--Q4');
     expect(view.cards.answered[0].answer.delivery.state).toBe('rang');
-    expect(view.cards.batches).toEqual([
-      { id: 'b1', label: 'b1', cardIds: ['vm.lead--Q2', 'vm.lead--Q1'] },
-    ]);
-    expect(view.cards.answered).toHaveLength(1);
+    expect(view.cards.batches).toEqual([{ id: 'b1', label: 'b1', cardIds: ['vm.lead--Q2'] }]);
+    expect(view.cards.answered).toHaveLength(2);
     expect(view.cards.answered[0].answer.kind).toBe('answer');
-    const open1 = view.cards.open.find((c) => c.id === 'vm.lead--Q1');
-    expect(open1?.notes).toEqual([
-      {
-        kind: 'note',
-        note: 'A third way?',
-        at: ago(2000),
-        delivery: expect.objectContaining({ state: 'rang' }),
-      },
-    ]);
-    expect(open1?.label).toBe('S-Q1');
-    expect(open1?.options[0].media).toEqual([
+    const written = view.cards.answered.find((c) => c.card.id === 'vm.lead--Q1');
+    expect(written?.answer).toMatchObject({ kind: 'note', note: 'A third way?', choice: [] });
+    expect(written?.card.label).toBe('S-Q1');
+    expect(written?.card.options[0].media).toEqual([
       {
         kind: 'video',
         path: 'images/a-b.mp4',
@@ -294,7 +285,7 @@ describe('status view', () => {
         posterUrl: '/api/status/files/vm.lead/images/a-b.png',
       },
     ]);
-    expect(open1?.options[1]).toEqual({
+    expect(written?.card.options[1]).toEqual({
       key: 'B',
       label: 'Second',
       gets: null,
@@ -304,7 +295,7 @@ describe('status view', () => {
       stance: null,
     });
     expect(view.headline.tone).toBe('bad');
-    expect(view.headline.runs[0]).toEqual({ text: '3 questions', strong: true, tone: 'warn' });
+    expect(view.headline.runs[0]).toEqual({ text: '2 questions', strong: true, tone: 'warn' });
   });
 
   it('the headline names the worst pinned thread: looping first, then waiting on you (D1)', async () => {

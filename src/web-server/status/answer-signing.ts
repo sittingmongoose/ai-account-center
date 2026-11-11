@@ -30,7 +30,7 @@ export interface UnsignedAnswer {
   cardSeq: number;
   cardSha256: string;
   /**
-   * answer: a choice (question card); note: a note alone, the card stays open; object: the owner
+   * answer: a choice (question card); note: a written response, closing this card; object: the owner
    * objects to an objection card, in their own words; done: an action card is done.
    */
   kind: 'answer' | 'note' | 'object' | 'done';

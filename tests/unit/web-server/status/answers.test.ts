@@ -237,39 +237,32 @@ describe('answers', () => {
     expect(results[11].cardId).toBeNull();
   });
 
-  it('records a note alone as a note: signed and rung, but the card stays open', async () => {
+  it('records a written response without an option, closes the card and delivers the exact words', async () => {
     const { root, answers, rings } = setup();
     const sha = writeCard(root, cardDoc('vm.lead', 'Q1'));
-    const results = await answers.submitSet(
-      [
-        entry('vm.lead--Q1', sha, { choice: [], note: 'What about a third way?' }),
-        entry('vm.lead--Q1', sha, { choice: [], note: 'And a second note.' }),
-      ],
+    const words = 'The user chooses the reset they want specifically.';
+    const result = await answers.submitSet(
+      [entry('vm.lead--Q1', sha, { choice: [], note: words })],
       'iPhone'
     );
-    expect(results.map((r) => r.outcome)).toEqual(['recorded', 'recorded']);
-    expect(answers.isAnswered('vm.lead--Q1', 1, sha)).toBe(false);
-    const notes = answers.history();
-    expect(notes.map((n) => n.answer.kind)).toEqual(['note', 'note']);
-    const files = fs
-      .readdirSync(path.join(root, 'v1', 'answers'))
-      .filter((f) => f !== 'batches')
-      .sort();
-    expect(files).toHaveLength(2);
-    expect(files.every((f) => /^vm\.lead--Q1\.note-[0-9a-f]{12}\.json$/.test(f))).toBe(true);
-    const pub = fs.readFileSync(path.join(root, 'v1', 'keys', 'aac-answers.pub'), 'utf8');
-    for (const file of files)
-      expect(
-        verifySignedAnswer(fs.readFileSync(path.join(root, 'v1', 'answers', file)), pub).ok
-      ).toBe(true);
-    await settle();
-    // One send, one asker: one ring naming both notes.
-    expect(rings.map((r) => r.subject)).toEqual(['2 answers from the owner']);
-    expect(rings[0].body.match(/Card vm\.lead--Q1 /g)).toHaveLength(2);
-    // The card can still be answered.
-    const answered = await answers.submitSet([entry('vm.lead--Q1', sha)], 'iPhone');
-    expect(answered[0].outcome).toBe('recorded');
+    expect(result[0].outcome).toBe('recorded');
     expect(answers.isAnswered('vm.lead--Q1', 1, sha)).toBe(true);
+    expect(answers.history()[0].answer).toMatchObject({ kind: 'note', choice: [], note: words });
+    const files = fs.readdirSync(path.join(root, 'v1', 'answers')).filter((f) => f !== 'batches');
+    expect(files).toHaveLength(1);
+    const pub = fs.readFileSync(path.join(root, 'v1', 'keys', 'aac-answers.pub'), 'utf8');
+    const signed = verifySignedAnswer(
+      fs.readFileSync(path.join(root, 'v1', 'answers', files[0])),
+      pub
+    );
+    expect(signed.ok).toBe(true);
+    if (signed.ok) expect(signed.answer.note).toBe(words);
+    await settle();
+    expect(rings[0].body).toContain(words);
+    expect(rings[0].body).toContain('written response');
+    const duplicate = await answers.submitSet([entry('vm.lead--Q1', sha)], 'iPhone');
+    expect(duplicate[0].outcome).toBe('card_changed');
+    expect(answers.history()).toHaveLength(1);
   });
 
   it("takes objections with the owner's words and done on action cards, and checks kind against the card", async () => {
