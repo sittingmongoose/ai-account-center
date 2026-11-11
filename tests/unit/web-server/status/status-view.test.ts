@@ -294,7 +294,7 @@ describe('status view', () => {
   });
 
 
-  it('the headline names the worst pinned thread: looping first, then waiting on Jared (D1)', async () => {
+  it('the headline names the worst pinned thread: looping first, then waiting on you (D1)', async () => {
     // Built from the composed pinned panel, never from fixture text: whatever sentences the
     // panel's updates carry, the headline names the thread and its looping task itself.
     const pin = (over: Partial<{ looping: unknown; blocked: unknown; title: string }>) => ({

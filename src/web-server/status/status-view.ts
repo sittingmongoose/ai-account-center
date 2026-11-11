@@ -682,7 +682,7 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   const staleSources = sources.filter((s) => s.state !== 'ok' && s.state !== 'unconfigured').length;
 
   // The pinned panel's own worst thread, named (D1, PINNED-THREADS.md section 2): looping
-  // first, then waiting on Jared. Built from the composed panel, never from fixture text.
+  // first, then waiting on the owner. Built from the composed panel, never from fixture text.
   const pinnedView = inputs.pinned && !('unavailable' in inputs.pinned) ? inputs.pinned : null;
   const loopingPins = pinnedView?.updates.filter((update) => update.looping.answer === 'yes') ?? [];
   const waitingPins = pinnedView?.updates.filter((update) => update.blocked?.waitingOnYou) ?? [];

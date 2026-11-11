@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-/// How far back the loop rule looks. Boards here review slower than once a day — Jared's own
+/// How far back the loop rule looks. Boards here review slower than once a day — the owner's own
 /// loops ran for days — so a 24-hour window read a four-day loop of daily fails as "not
 /// looping"; the window now spans several days (PINNED-THREADS.md section 3's "recent"
 /// reviews).
