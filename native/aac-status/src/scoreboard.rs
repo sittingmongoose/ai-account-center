@@ -1478,6 +1478,39 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
         .filter(|m| !tested.contains(m.model.as_str()))
         .map(|m| m.label.clone())
         .collect();
+    // A run naming a model the catalog does not list is flagged in the foot, with its runs
+    // counted once per task type and process, the way a model row's own runs are (B11).
+    let catalog_models: HashSet<&str> = view.catalog.models.iter().map(|m| m.model.as_str()).collect();
+    let mut unknown: BTreeMap<String, (String, i64)> = BTreeMap::new();
+    let mut seen_dedupe: HashSet<String> = HashSet::new();
+    for use_in in &view.uses {
+        for task in &use_in.task_types {
+            for row in &task.rows {
+                if catalog_models.contains(row.model.as_str()) {
+                    continue;
+                }
+                // Runs count once per task type and process: the uses repeat the same rows.
+                let dedupe = format!(
+                    "{}|{}|{}|{}",
+                    task.id,
+                    row.model,
+                    row.process.as_ref().map(|p| p.id.as_str()).unwrap_or(""),
+                    row.process.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("")
+                );
+                if !seen_dedupe.insert(dedupe) {
+                    continue;
+                }
+                let entry = unknown
+                    .entry(row.model.clone())
+                    .or_insert_with(|| (row.label.clone(), 0));
+                entry.1 += row.n.observed + row.n.benchmark;
+            }
+        }
+    }
+    let unknown_models: Vec<String> = unknown
+        .into_values()
+        .map(|(label, runs)| format!("{label} ({runs} {})", if runs == 1 { "run" } else { "runs" }))
+        .collect();
 
     Ok(ViewOut {
         id: id.to_string(),
@@ -1498,12 +1531,23 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
             })
             .collect(),
         models: out_models,
-        foot: vec![
-            strong("No verdicts yet:"),
-            run(format!(" {}. ", no_verdict.join(", "))),
-            strong("In the catalog with no runs:"),
-            run(format!(" {}.", no_runs.join(", "))),
-        ],
+        foot: [
+            vec![
+                strong("No verdicts yet:"),
+                run(format!(" {}. ", no_verdict.join(", "))),
+                strong("In the catalog with no runs:"),
+                run(format!(" {}.", no_runs.join(", "))),
+            ],
+            if unknown_models.is_empty() {
+                Vec::new()
+            } else {
+                vec![
+                    strong("Models in runs but not in the catalog:"),
+                    run(format!(" {}.", unknown_models.join(", "))),
+                ]
+            },
+        ]
+        .concat(),
     })
 }
 

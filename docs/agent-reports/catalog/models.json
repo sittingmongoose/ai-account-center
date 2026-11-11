@@ -50,6 +50,17 @@
       "notes": ""
     },
     {
+      "model": "anthropic/claude-fable-5-2",
+      "label": "Fable 5.2",
+      "family": "Claude",
+      "runtimes": [
+        "claude-code"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
       "model": "openai/gpt-6.1-sol",
       "label": "Sol 6.1",
       "family": "GPT-6",

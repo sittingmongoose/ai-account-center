@@ -1069,6 +1069,13 @@
         },
         {
           "text": " Fable 5.1, Astra, Luna, Terra 6.1, Muse Wonder 1.0."
+        },
+        {
+          "text": "Models in runs but not in the catalog:",
+          "strong": true
+        },
+        {
+          "text": " example/example-1 (1 run)."
         }
       ]
     },
@@ -2128,6 +2135,13 @@
         },
         {
           "text": " Fable 5.1, Astra, Luna, Terra 6.1, Muse Wonder 1.0."
+        },
+        {
+          "text": "Models in runs but not in the catalog:",
+          "strong": true
+        },
+        {
+          "text": " example/example-1 (1 run)."
         }
       ]
     }

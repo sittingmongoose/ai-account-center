@@ -76,6 +76,17 @@
         "notes": null
       },
       {
+        "model": "anthropic/claude-fable-5-2",
+        "label": "Fable 5.2",
+        "family": "Claude",
+        "runtimes": [
+          "claude-code"
+        ],
+        "efforts": [],
+        "prices": null,
+        "notes": null
+      },
+      {
         "model": "openai/gpt-6.1-sol",
         "label": "Sol 6.1",
         "family": "GPT-6",
@@ -643,6 +654,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "facts-kept": {
@@ -899,6 +911,7 @@
                         "low": null,
                         "high": null
                       },
+                      "firstTry": 0,
                       "overturns": []
                     },
                     "facts-kept": {
@@ -1180,6 +1193,7 @@
                         "low": null,
                         "high": null
                       },
+                      "firstTry": 0,
                       "overturns": []
                     },
                     "facts-kept": {
@@ -1461,6 +1475,7 @@
                         "low": null,
                         "high": null
                       },
+                      "firstTry": 0,
                       "overturns": []
                     },
                     "facts-kept": {
@@ -1681,6 +1696,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "facts-kept": {
@@ -2765,6 +2781,7 @@
                       "low": 1,
                       "high": 2
                     },
+                    "firstTry": 5,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-6-a",
@@ -3068,6 +3085,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 3,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-14",
@@ -3388,6 +3406,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-21",
@@ -3730,6 +3749,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -4014,6 +4034,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -4242,6 +4263,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -4457,6 +4479,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -4695,6 +4718,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -5333,6 +5357,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -5757,6 +5782,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -5958,6 +5984,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "facts-kept": {
@@ -6214,6 +6241,7 @@
                         "low": null,
                         "high": null
                       },
+                      "firstTry": 0,
                       "overturns": []
                     },
                     "facts-kept": {
@@ -6495,6 +6523,7 @@
                         "low": null,
                         "high": null
                       },
+                      "firstTry": 0,
                       "overturns": []
                     },
                     "facts-kept": {
@@ -6776,6 +6805,7 @@
                         "low": null,
                         "high": null
                       },
+                      "firstTry": 0,
                       "overturns": []
                     },
                     "facts-kept": {
@@ -6996,6 +7026,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "facts-kept": {
@@ -8056,6 +8087,7 @@
                       "low": 1,
                       "high": 2
                     },
+                    "firstTry": 5,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-6-a",
@@ -8359,6 +8391,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 3,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-14",
@@ -8679,6 +8712,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": [
                       {
                         "run": "vm.scoreboard-lead--WN-21",
@@ -9021,6 +9055,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -9305,6 +9340,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -9533,6 +9569,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -9748,6 +9785,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -9950,6 +9988,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -10588,6 +10627,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -11012,6 +11052,7 @@
                       "low": 1,
                       "high": 1
                     },
+                    "firstTry": 1,
                     "overturns": []
                   },
                   "thoroughness": {
@@ -11310,6 +11351,7 @@
                       "low": null,
                       "high": null
                     },
+                    "firstTry": 0,
                     "overturns": []
                   },
                   "thoroughness": {

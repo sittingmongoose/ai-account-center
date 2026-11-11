@@ -88,6 +88,42 @@ fn the_golden_pair_through_the_dispatch_too() {
 }
 
 #[test]
+fn a_run_naming_a_model_the_catalog_does_not_list_is_flagged_in_the_foot() {
+    // The golden's example/example-1 row: named in the foot with its runs. A catalog that knows
+    // every model in the runs flags nothing (B11).
+    let view = by_model(&golden_view()).unwrap();
+    for panel in &view.views {
+        let words: Vec<&str> = panel.foot.iter().map(|run| run.text.as_str()).collect();
+        let at = words
+            .iter()
+            .position(|text| *text == "Models in runs but not in the catalog:")
+            .unwrap_or_else(|| panic!("the unknown model was not flagged: {words:?}"));
+        assert_eq!(words[at + 1], " example/example-1 (1 run).");
+    }
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    edit_objects(&mut doc, &mut |map| {
+        if let Some(models) = map.get_mut("models").map(|value| value.as_array_mut().unwrap()) {
+            if let Some(sonnet) = models
+                .iter()
+                .find(|model| model.get("model").and_then(|m| m.as_str()) == Some("anthropic/claude-sonnet-5-5"))
+                .cloned()
+            {
+                let mut known = sonnet;
+                known["model"] = json!("example/example-1");
+                known["label"] = json!("Example One");
+                models.push(known);
+            }
+        }
+    });
+    let parsed: ViewIn = serde_json::from_value(doc).unwrap();
+    let text = serde_json::to_string(&by_model(&parsed).unwrap()).unwrap();
+    assert!(
+        !text.contains("Models in runs but not in the catalog"),
+        "a known model was flagged: {text}"
+    );
+}
+
+#[test]
 fn a_model_with_no_effort_reads_effort_unknown_and_names_without_the_dot() {
     let view = by_model(&golden_view()).unwrap();
     let haiku = view.views[0]
