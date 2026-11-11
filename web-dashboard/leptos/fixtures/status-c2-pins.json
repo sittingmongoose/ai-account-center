@@ -1,0 +1,454 @@
+{
+ "_source": "Synthetic C2 pins for the browser kit: made-up threads in the shapes of report-v2.ts and native/aac-status composer output.",
+ "pinned": {
+  "asOfMs": 1794416000000,
+  "head": "6 pinned in T3",
+  "counts": {
+   "pinned": 6,
+   "looping": 1,
+   "waitingOnYou": 1
+  },
+  "machineProblems": [],
+  "updates": [
+   {
+    "id": "c2-old",
+    "title": "Build PMConcept7 and Background Activity",
+    "machine": "vm",
+    "who": "Example project \u00b7 c2-old \u00b7 Opus 5.5 xhigh",
+    "reportState": "fresh",
+    "percent": {
+     "text": "70%",
+     "done": null,
+     "of": null
+    },
+    "percentNote": null,
+    "now": "Landing 1 is on main; land-2 is next.",
+    "blocked": {
+     "text": "None.",
+     "waitingOnYou": false
+    },
+    "looping": {
+     "answer": "no",
+     "text": "No."
+    },
+    "left": [],
+    "done": [],
+    "updated": {
+     "ageSeconds": 120,
+     "at": "2026-11-11T15:29:00Z",
+     "text": "Updated 2 min ago"
+    },
+    "reportNote": null,
+    "staleNote": null,
+    "unreadableNote": null,
+    "summary": null
+   },
+   {
+    "id": "c2-quiet",
+    "title": "Old exploration",
+    "machine": "vm",
+    "who": "Example project \u00b7 c2-quiet \u00b7 Opus 5.5 xhigh",
+    "reportState": "stale",
+    "percent": null,
+    "percentNote": null,
+    "now": "Working through the list.",
+    "blocked": {
+     "text": "None.",
+     "waitingOnYou": false
+    },
+    "looping": {
+     "answer": "no",
+     "text": "No."
+    },
+    "left": [],
+    "done": [],
+    "updated": {
+     "ageSeconds": 2160000,
+     "at": "2026-10-17T10:00:00Z",
+     "text": "Updated 25 days ago"
+    },
+    "reportNote": null,
+    "staleNote": "No status update for 25 days. If it is finished, unpin it in T3.",
+    "unreadableNote": null,
+    "summary": null
+   },
+   {
+    "id": "c2-loop",
+    "title": "Tray icon fixes",
+    "machine": "vm",
+    "who": "Example project \u00b7 c2-loop \u00b7 Opus 5.5 xhigh",
+    "reportState": "fresh",
+    "percent": null,
+    "percentNote": null,
+    "now": "Working through the list.",
+    "blocked": {
+     "text": "Blocked on F-00; the report does not say on what.",
+     "waitingOnYou": false
+    },
+    "looping": {
+     "answer": "yes",
+     "text": "Yes. F-07 has gone back for fixes 3 times without a passing review."
+    },
+    "left": [
+     {
+      "id": "F-00",
+      "title": "Pick icon"
+     },
+     {
+      "id": "F-07",
+      "title": "Tray icon sharp at 125% scale"
+     }
+    ],
+    "done": [],
+    "updated": {
+     "ageSeconds": 120,
+     "at": "2026-11-11T15:29:00Z",
+     "text": "Updated 2 min ago"
+    },
+    "reportNote": null,
+    "staleNote": null,
+    "unreadableNote": null,
+    "summary": null
+   },
+   {
+    "id": "c2-readme",
+    "title": "App and Onboarding Performance",
+    "machine": "vm",
+    "who": "Example project \u00b7 c2-readme \u00b7 Opus 5.5 xhigh",
+    "reportState": "fresh",
+    "percent": null,
+    "percentNote": null,
+    "now": "Working through the list.",
+    "blocked": {
+     "text": "Waiting on you: five decisions in the performance report.",
+     "waitingOnYou": true
+    },
+    "looping": {
+     "answer": "no",
+     "text": "No."
+    },
+    "left": [],
+    "done": [],
+    "updated": {
+     "ageSeconds": 120,
+     "at": "2026-11-11T15:29:00Z",
+     "text": "Updated 2 min ago"
+    },
+    "reportNote": null,
+    "staleNote": null,
+    "unreadableNote": null,
+    "summary": null,
+    "reported": {
+     "readmeQuestions": true,
+     "next": "The next lanes on Codex",
+     "stages": [
+      {
+       "label": "Measure",
+       "state": "done"
+      },
+      {
+       "label": "Fixes",
+       "state": "done"
+      },
+      {
+       "label": "Checks",
+       "state": "now"
+      },
+      {
+       "label": "Your 5 decisions",
+       "state": "waiting",
+       "by": "owner"
+      },
+      {
+       "label": "Land",
+       "state": "next"
+      }
+     ]
+    }
+   },
+   {
+    "id": "c2-ready",
+    "title": "Redesign Settings Managers for Beginners",
+    "machine": "vm",
+    "who": "Example project \u00b7 c2-ready \u00b7 Opus 5.5 xhigh",
+    "reportState": "fresh",
+    "percent": null,
+    "percentNote": null,
+    "now": "Working through the list.",
+    "blocked": {
+     "text": "None.",
+     "waitingOnYou": false
+    },
+    "looping": {
+     "answer": "no",
+     "text": "No."
+    },
+    "left": [
+     {
+      "id": "SWEEP",
+      "title": "Sweep for buttons that are real and dead",
+      "note": "running since 9:19 AM"
+     },
+     {
+      "id": "R2B",
+      "title": "Review round 2, second reviewer (state not recognised: queued)"
+     },
+     {
+      "id": "PART-1",
+      "title": "Concept part 1"
+     },
+     {
+      "id": "PART-2",
+      "title": "Concept part 2"
+     },
+     {
+      "id": "PART-3",
+      "title": "Concept part 3"
+     },
+     {
+      "id": "PART-4",
+      "title": "Concept part 4"
+     },
+     {
+      "id": "PART-5",
+      "title": "Concept part 5"
+     },
+     {
+      "id": "PART-6",
+      "title": "Concept part 6"
+     },
+     {
+      "id": "PART-7",
+      "title": "Concept part 7"
+     },
+     {
+      "id": "PART-8",
+      "title": "Concept part 8"
+     }
+    ],
+    "done": [
+     {
+      "id": "STUDY",
+      "title": "Study the current Settings"
+     }
+    ],
+    "updated": {
+     "ageSeconds": 120,
+     "at": "2026-11-11T15:29:00Z",
+     "text": "Updated 2 min ago"
+    },
+    "reportNote": null,
+    "staleNote": null,
+    "unreadableNote": null,
+    "summary": null,
+    "reported": {
+     "now": "Dead-button sweep running. The second round-2 review starts after it.",
+     "next": "Review round 2, second reviewer",
+     "stages": [
+      {
+       "label": "Study",
+       "state": "done"
+      },
+      {
+       "label": "Build",
+       "state": "done"
+      },
+      {
+       "label": "Reviews",
+       "state": "now",
+       "by": "reviewer",
+       "round": 2
+      },
+      {
+       "label": "Your look",
+       "state": "waiting",
+       "by": "owner"
+      },
+      {
+       "label": "Max reviews",
+       "state": "next",
+       "by": "reviewer"
+      },
+      {
+       "label": "Land",
+       "state": "next"
+      }
+     ],
+     "blockers": [
+      {
+       "text": "VM memory under 10 GB, for a 14-test run",
+       "waitingOn": "resource",
+       "since": "2026-11-11T14:08:00Z",
+       "until": "2026-11-11T12:30:00Z"
+      }
+     ],
+     "deliverables": [
+      {
+       "id": "preview",
+       "name": "Settings managers, the one-file preview",
+       "kind": "concept",
+       "state": "ready",
+       "for": "owner",
+       "want": "review",
+       "main": true,
+       "version": "v2",
+       "updatedAt": "2026-11-11T15:31:00Z",
+       "supersedes": "v1",
+       "path": "/mnt/Cursor/share/kit-example/round2/concept-c2.html",
+       "note": "v2 follows the dead-button sweep.",
+       "unlocks": "Your OK starts the max reviews, then landing.",
+       "media": [
+        {
+         "kind": "image",
+         "path": "/mnt/Cursor/share/kit-example/round2/desktop.png",
+         "caption": "Desktop, 1760",
+         "label": "mockup"
+        },
+        {
+         "kind": "image",
+         "path": "/home/me/private.png",
+         "caption": "Private"
+        }
+       ],
+       "versions": [
+        {
+         "version": "v1",
+         "updatedAt": "2026-11-11T14:44:00Z",
+         "path": "/mnt/Cursor/share/kit-example/round2/concept-c.html"
+        }
+       ]
+      },
+      {
+       "id": "readme",
+       "name": "README: what to do with it",
+       "kind": "document",
+       "state": "ready",
+       "for": "owner",
+       "version": "v1",
+       "updatedAt": "2026-11-11T05:36:00Z",
+       "path": "/mnt/Cursor/share/kit-example/round2/README.md"
+      },
+      {
+       "id": "lead-state",
+       "name": "Lead state",
+       "kind": "other",
+       "version": "v1",
+       "updatedAt": "2026-11-11T05:36:00Z",
+       "path": "/home/me/lead-state.md"
+      }
+     ]
+    }
+   },
+   {
+    "id": "c2-silent",
+    "title": "Exact Agent Tooling Assessment",
+    "machine": "vm",
+    "reportState": "none",
+    "reportNote": "This thread doesn't report its status yet.",
+    "looping": {
+     "answer": "cantTell",
+     "text": "Can't tell."
+    },
+    "blocked": null,
+    "left": null,
+    "done": null
+   }
+  ]
+ },
+ "projects": [
+  {
+   "id": "example",
+   "label": "Example project",
+   "counts": null,
+   "streams": [
+    {
+     "id": "S",
+     "label": "Settings",
+     "owner": "",
+     "goal": "",
+     "board": null,
+     "source": "tasks",
+     "asOf": "2026-11-11T15:21:00Z",
+     "stale": false,
+     "counts": null,
+     "completion": null,
+     "items": [
+      {
+       "id": "SWEEP",
+       "title": "Sweep for buttons that are real and dead",
+       "state": "working",
+       "reviews": []
+      },
+      {
+       "id": "R2B",
+       "title": "Review round 2, second reviewer",
+       "state": "queued",
+       "reviews": []
+      },
+      {
+       "id": "STUDY",
+       "title": "Study the current Settings",
+       "state": "done",
+       "reviews": []
+      },
+      {
+       "id": "GONE",
+       "title": "Dropped idea",
+       "state": "dropped",
+       "reviews": []
+      },
+      {
+       "id": "PART-1",
+       "title": "Concept part 1",
+       "state": "review",
+       "reviews": []
+      },
+      {
+       "id": "PART-2",
+       "title": "Concept part 2",
+       "state": "review",
+       "reviews": []
+      },
+      {
+       "id": "PART-3",
+       "title": "Concept part 3",
+       "state": "review",
+       "reviews": []
+      },
+      {
+       "id": "PART-4",
+       "title": "Concept part 4",
+       "state": "review",
+       "reviews": []
+      },
+      {
+       "id": "PART-5",
+       "title": "Concept part 5",
+       "state": "review",
+       "reviews": []
+      },
+      {
+       "id": "PART-6",
+       "title": "Concept part 6",
+       "state": "review",
+       "reviews": []
+      },
+      {
+       "id": "PART-7",
+       "title": "Concept part 7",
+       "state": "review",
+       "reviews": []
+      },
+      {
+       "id": "PART-8",
+       "title": "Concept part 8",
+       "state": "review",
+       "reviews": []
+      }
+     ],
+     "problem": null
+    }
+   ]
+  }
+ ]
+}

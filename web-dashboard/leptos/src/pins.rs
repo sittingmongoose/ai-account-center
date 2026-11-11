@@ -64,7 +64,14 @@ impl Pin {
                 .unreadable_note
                 .clone()
                 .unwrap_or_else(|| "Could not be read.".into());
-            out.push((note.clone(), format!("{note} Showing its cached copy.")));
+            let full = format!("{note} Showing its cached copy.");
+            out.push((full.clone(), full));
+        }
+        if self.u.looping.answer == "yes" {
+            let text = self.u.looping.text.trim();
+            let text = text.strip_prefix("Yes.").unwrap_or(text).trim();
+            let full = if text.is_empty() { "Looping.".to_string() } else { format!("Looping: {text}") };
+            out.push((cut(&full, 72), full));
         }
         if self.r.readme_questions && self.cards.is_empty() {
             out.push((

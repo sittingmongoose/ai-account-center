@@ -100,7 +100,6 @@ async function openStatus(t, view, query = '') {
 
 const SECTIONS = [
   '.sec-questions',
-  '.sec-progress',
   '.sec-pinned',
   '.sec-machines',
   '.sec-phones',
@@ -515,52 +514,35 @@ export const tests = {
 
     await t.viewport(1440, 900);
     await openStatus(t, withPins(cases.unreadableWithTasks));
-    await t.page.waitForSelector('.pin-grid .pin');
-    await t.text('.pin-grid .pin', NOTE);
-    await t.text('.pin-grid .pin', /cached/i);
+    await t.page.waitForSelector('.c2-pane .c2-sheet');
+    await t.text('.c2-pane .c2-sheet', NOTE);
+    await t.text('.c2-pane .c2-sheet', /cached/i);
+    await t.check('pane: the cached copy is dimmed', (await opacity('.c2-pane .c2-cols')) < 0.6);
     await t.check(
-      'card: the cached figures are dimmed',
-      (await opacity('.pin-grid .pin-pct .big')) < 0.6
-    );
-    await t.check(
-      'card: no line says it was just updated',
-      !/Updated 1 min ago/.test(await t.page.locator('.pin-grid .pin').textContent())
+      'pane: the problem shows once, in the sheet, not also on the open row',
+      await t.page.evaluate(() => getComputedStyle(document.querySelector('.c2-row.sel .c2-prob') ?? document.body).display === 'none' || !document.querySelector('.c2-row.sel .c2-prob'))
     );
 
     await t.newContext(PHONE);
     await openStatus(t, withPins(cases.unreadableWithTasks));
-    await t.page.waitForSelector('.pin-list .pin-row');
-    await t.text('.pin-list .pin-row', NOTE);
-    await t.text('.pin-list .pin-row', /cached/i);
-    await t.check(
-      'row: the cached percent is dimmed',
-      (await opacity('.pin-list .pin-row .pr-pct')) < 0.6
-    );
-    await t.check(
-      'row: no cached state reads as current',
-      !/Looping|Updated|min ago/.test(
-        await t.page.locator('.pin-list .pin-row .pr-line').textContent()
-      )
-    );
-    await t.page.locator('.pin-list .pin-row').click();
-    await t.page.waitForSelector('.sheet .pin');
-    await t.text('.sheet .pin', NOTE);
-    await t.text('.sheet .pin', /cached/i);
-    await t.check(
-      'sheet: the cached figures are dimmed',
-      (await opacity('.sheet .pin-pct .big')) < 0.6
-    );
+    await t.page.waitForSelector('.c2-row');
+    await t.text('.c2-row', NOTE);
+    await t.text('.c2-row', /cached/i);
+    await t.page.locator('.c2-row').first().click();
+    await t.page.waitForSelector('.c2-sheet-host .c2-sheet');
+    await t.text('.c2-sheet-host .c2-sheet', NOTE);
+    await t.text('.c2-sheet-host .c2-sheet', /cached/i);
+    await t.check('sheet: the cached copy is dimmed', (await opacity('.c2-sheet-host .c2-cols')) < 0.6);
 
     // The composer's own test case, which has no task list behind it.
     await t.newContext(PHONE);
     await openStatus(t, withPins(cases.unreadable));
-    await t.page.waitForSelector('.pin-list .pin-row');
-    await t.text('.pin-list .pin-row', NOTE);
-    await t.text('.pin-list .pin-row', /cached/i);
-    await t.page.locator('.pin-list .pin-row').click();
-    await t.page.waitForSelector('.sheet .pin');
-    await t.text('.sheet .pin', NOTE);
-    await t.text('.sheet .pin', /cached/i);
+    await t.page.waitForSelector('.c2-row');
+    await t.text('.c2-row', NOTE);
+    await t.page.locator('.c2-row').first().click();
+    await t.page.waitForSelector('.c2-sheet-host .c2-sheet');
+    await t.text('.c2-sheet-host .c2-sheet', NOTE);
+    await t.text('.c2-sheet-host .c2-sheet', /cached/i);
   },
 
   // Fix round 1, R3: the server doesn't say which task is looping, and a blocked task can sit ahead of it.
@@ -571,13 +553,89 @@ export const tests = {
       ...fixture('status-design-view.json'),
       pinned: cases.loopingBehindBlocked,
     });
-    await t.page.waitForSelector('.pin-list .pin-row');
-    const line = await t.page.locator('.pin-list .pin-row .pr-line').textContent();
+    await t.page.waitForSelector('.c2-row');
+    const line = await t.page.locator('.c2-row .c2-prob').first().textContent();
     await t.check('row: says Looping', /^Looping\b/.test(line), line);
     await t.check('row: names no task as the looping one', !/Looping on/.test(line), line);
-    await t.page.locator('.pin-list .pin-row').click();
-    await t.page.waitForSelector('.sheet .pin');
-    await t.text('.sheet .pin', /F-07 has gone back for fixes 3 times/);
+    await t.page.locator('.c2-row').first().click();
+    await t.page.waitForSelector('.c2-sheet-host .c2-sheet');
+    await t.text('.c2-sheet-host .c2-sheet', /F-07 has gone back for fixes 3 times/);
+  },
+
+  // Concept C v2 (owner S1): the roster, the five fixed facts, stages, things to open, grouped tasks, one problem line.
+  async 'status concept C v2 pinned threads'(t) {
+    const c2 = fixture('status-c2-pins.json');
+    const view = { ...fixture('status-design-view.json'), pinned: c2.pinned, projects: c2.projects };
+    await t.page.route(
+      (u) => new URL(u).pathname === '/api/status/deliverable',
+      (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<h1>Deliverable</h1>' })
+    );
+    await t.viewport(1440, 900);
+    await openStatus(t, view);
+    await t.page.waitForSelector('.c2-pane .c2-sheet');
+    await t.count('.sec-progress', 0);
+    await t.check('Needs you is the first group', /^Needs you/.test(await t.page.locator('.c2-group').first().textContent()));
+    await t.text('.c2-row.sel .c2-l2', /^Ready for you 2 things to open/);
+    await t.text('.c2-pane .c2-state', /^Ready for you/);
+    await t.check('five fixed facts, in order', async () =>
+      JSON.stringify(await t.page.$$eval('.c2-pane .fx dt', (d) => d.map((x) => x.textContent))) ===
+      JSON.stringify(['For you', 'Waiting on', 'Now', 'Next', 'Updated'])
+    );
+    await t.text('.c2-pane .fx', /was due/);
+    await t.text('.c2-pane .c2-sec-end', /Reviews, round 2, 3 of 6/);
+    await t.count('.c2-pane .c2-stages li', 6);
+    await t.check('the owner step waits in amber', await t.page.$$eval('.c2-pane .c2-stages li[data-st="you"]', (l) => l.length === 1));
+    // Things to open: main first with the blue Open through the route; a file outside the share offers Copy path.
+    const open = t.page.locator('.c2-pane .to-row.main a.btn.primary');
+    await t.check('main opens through the deliverable route', /^\/api\/status\/deliverable\?path=share%2F/.test(await open.getAttribute('href')));
+    await t.text('.c2-pane .to-list', /Kept outside the share, so it cannot be opened here/);
+    await t.text('.c2-pane .to-list', /Copy path/);
+    await t.text('.c2-pane .to-row.main .to-mark', /^New$/);
+    await t.text('.c2-pane .to-row.main', /1 more is kept outside the share/);
+    const [popup] = await Promise.all([t.page.waitForEvent('popup'), open.click()]);
+    await popup.close();
+    await t.text('.c2-pane .to-row.main .to-mark', /^Opened /);
+    await t.page.click('.c2-pane .to-row.main .to-sub button.link');
+    await t.text('.c2-pane .to-older', /Superseded by v2/);
+    // Tasks: grouped; one unknown state marks one row; the big group folds.
+    await t.text('.c2-pane .tg', /reported as "queued"/);
+    await t.text('.c2-pane .tg', /Show all 8/);
+    await t.text('.c2-pane .tg', /In work/);
+    // The README flag shows on its closed row only.
+    await t.text('.c2-roster', /Questions in a README, not filed as cards\./);
+    await t.check('the Progress section is gone', (await t.page.locator('text=Progress').count()) === 0);
+    // A report written before the new fields: nothing invented.
+    await t.page.locator('.c2-row', { hasText: 'Build PMConcept7' }).click();
+    await t.text('.c2-pane .c2-state', /^Reporting/);
+    await t.text('.c2-pane .fx', /Not reported/);
+    await t.text('.c2-pane', /Own estimate 70%/);
+    await t.text('.c2-silent', /Exact Agent Tooling Assessment/);
+
+    for (const [w, h] of [[390, 844], [402, 874], [466, 900], [669, 900], [951, 900], [1760, 1000]]) {
+      await t.viewport(w, h);
+      await openStatus(t, view);
+      await t.page.waitForSelector('.c2-row');
+      await t.check(`${w}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      const plates = await t.page.evaluate(() => {
+        const rows = [...document.querySelectorAll('.c2-row')].slice(0, 2).map((r) => r.getBoundingClientRect());
+        return { radius: parseFloat(getComputedStyle(document.querySelector('.c2-row')).borderTopLeftRadius), gap: rows[1].top - rows[0].bottom };
+      });
+      if (w < 900) {
+        await t.check(`${w}: each pin is its own plate`, plates.radius > 0 && plates.gap >= 8, JSON.stringify(plates));
+        if (w === 390) await t.shot('c2-roster-390', '390 px: pinned threads as separate plates (C2 phone)');
+        await t.page.locator('.c2-row').first().click();
+        await t.page.waitForSelector('.c2-sheet-host .c2-sheet');
+        await t.check(`${w}: the sheet opens with the five facts`, (await t.page.locator('.c2-sheet-host .fx dt').count()) === 5);
+        await t.check(`${w}: the sheet fits the width`, await t.page.evaluate(() => document.querySelector('.c2-sheet-host .sheet').getBoundingClientRect().right <= innerWidth + 1));
+        await t.crop(`c2-sheet-${w}`, '.c2-sheet-host .sheet', `${w} px: a pinned thread opened as a sheet (C2 phone)`);
+      } else {
+        await t.check(`${w}: the pane sits beside the roster`, await t.page.evaluate(() => {
+          const r = document.querySelector('.c2-roster').getBoundingClientRect(), p = document.querySelector('.c2-pane').getBoundingClientRect();
+          return p.left >= r.right - 1 && p.width > 300;
+        }));
+        await t.crop(`c2-desktop-${w}`, '.sec-pinned', `${w} px: roster beside the thread pane (C2 wide)`);
+      }
+    }
   },
 
   // Data the server doesn't send yet is said so, never guessed.
