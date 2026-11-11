@@ -65,7 +65,8 @@ export const tests = {
 		await t.text(SHEET, /The last summary\./);
 		await t.count('.sheet .pin-pct', 0);
 		await t.check('stale: the old looping sentence is gone', !/F-07 has gone back/.test(await t.page.locator(SHEET).textContent()));
-		await sheet.change(withPins(c.none), rowSays, [ROW, "Doesn't report"]);
+		// a pin with no report has no row of its own: it is named in the closing line (D4), and its open sheet says why
+		await sheet.change(withPins(c.none), rowSays, ['.pin-list', 'reports yet|Not reporting yet']);
 		await t.text(SHEET, /This thread doesn't report its status yet\./);
 		await t.check('none: the last summary is gone', !/The last summary/.test(await t.page.locator(SHEET).textContent()));
 	},

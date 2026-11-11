@@ -1930,6 +1930,9 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-vis
 .spend-table tr.fold td { padding-top: 0; font-size: var(--fs-small); color: var(--ink-2); border-top: 0; }
 /* Opened on a phone, the head's summary would repeat the lead right under it. */
 .sec-spend.collapsed-open .sec-sum { display: none; }
+/* a link's words stay together ("What was read") */
+.sb-read .link { white-space: nowrap; }
+@container content (max-width: 1279.98px) { .pin-silent { padding: 9px 12px 10px; } }
 /* Line breaks (Jared's rule): titles balance their lines, body text never leaves a word alone. */
 :is(.status-grid, .sb-stack, .sheet-host, .page-head:not(.ax-top)) :is(h2, h3, .pin-name, .pr-name, .pick-model, .sheet-title .t) { text-wrap: balance; }
 :is(.status-grid, .sb-stack, .sheet-host, .page-head:not(.ax-top)) :is(p, li, dd, .pr-line, .sec-sum, .plate-meta, .headline) { text-wrap: pretty; }
