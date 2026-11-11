@@ -212,7 +212,10 @@ export const tests = {
 					near.map((r) => `"${r.text}" at ${Math.round(r.dx)},${Math.round(r.dy)}`).join('; ') || 'no text near the corner');
 				await t.check(`${label}: no sideways scroll`, s.scrollW <= s.w + 1, `${s.scrollW} > ${s.w}`);
 				// A pinned thread's sheet ends at the rail: never under the strip, its clock or the camera (review U1).
-				if (await t.page.$('.pin-row')) {
+				// The pin is required: without it the check fails, it does not pass silently (review L4).
+				const pin = await t.page.$('.pin-row');
+				await t.check(`${label}: a pinned thread to open`, !!pin);
+				if (pin) {
 					await t.page.click('.pin-row');
 					await t.page.waitForSelector('.sheet-host .sheet', { timeout: 5000 });
 					const sheet = await t.page.evaluate(() => {
