@@ -727,10 +727,10 @@ fn compose_update(
     }
     // Thread progress is a typed field, so serde does not include it in additions.
     // Preserve the same tasks < thread < status precedence as the additive fields.
-    if !status.is_some_and(|d| d.additions.contains_key("progress")) {
-        if let Some(progress) = thread.and_then(|d| d.progress.as_ref()) {
-            additions.insert("progress".into(), serde_json::to_value(progress).unwrap_or(Json::Null));
-        }
+    if !status.is_some_and(|d| d.additions.contains_key("progress"))
+        && let Some(progress) = thread.and_then(|d| d.progress.as_ref())
+    {
+        additions.insert("progress".into(), serde_json::to_value(progress).unwrap_or(Json::Null));
     }
     if let Some(blocker) = thread
         .and_then(|d| d.blocked_on.as_ref())
