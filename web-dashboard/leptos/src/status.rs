@@ -1524,6 +1524,24 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_the_server_explains_is_shown_in_its_words() {
+        let e = crate::api::answer_error(
+            403,
+            r#"{"error":"signin_required","message":"These tabs need dashboard sign-in turned on."}"#,
+        );
+        assert_eq!(e.sentence(), "These tabs need dashboard sign-in turned on.");
+        // any other 403, or an answer that isn't the refusal's shape, keeps the code
+        assert_eq!(
+            crate::api::answer_error(403, r#"{"error":"forbidden"}"#),
+            FetchError::Server(403)
+        );
+        assert_eq!(
+            crate::api::answer_error(500, "oops"),
+            FetchError::Server(500)
+        );
+    }
+
+    #[test]
     fn limits_only_the_untied_row_used_fold_into_it() {
         let rows = vec![
             row("E", false, &[false, true, false]),

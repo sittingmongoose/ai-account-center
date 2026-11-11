@@ -1219,6 +1219,9 @@ pub enum FetchError {
     SignedOut,
     Offline,
     Server(u16),
+    /// A refusal the server explains in its own words (403 `signin_required`: "These tabs need dashboard sign-in
+    /// turned on."). Reading again changes nothing until the setting does, so the readers stop polling on it.
+    Refused(String),
     Version(u32),
     Malformed,
 }
@@ -1231,6 +1234,7 @@ impl FetchError {
             }
             FetchError::Offline => "No connection to AI Account Center.".into(),
             FetchError::Server(code) => format!("The server answered {code}."),
+            FetchError::Refused(message) => message.clone(),
             FetchError::Version(v) => format!(
                 "This page reads status view {STATUS_VIEW_VERSION}; the server sent {v}. Reload the page."
             ),
@@ -1332,13 +1336,34 @@ pub(crate) async fn send(
     result
 }
 
+/// A non-200 answer: the server's own sentence for a refusal it explains (403 `signin_required`), else its code.
+pub fn answer_error(status: u16, text: &str) -> FetchError {
+    #[derive(Deserialize)]
+    struct Refusal {
+        error: Option<String>,
+        message: Option<String>,
+    }
+    if status == 403 {
+        if let Ok(Refusal {
+            error: Some(code),
+            message: Some(message),
+        }) = serde_json::from_str::<Refusal>(text)
+        {
+            if code == "signin_required" && !message.trim().is_empty() {
+                return FetchError::Refused(message);
+            }
+        }
+    }
+    FetchError::Server(status)
+}
+
 pub async fn fetch_status() -> Result<StatusView, FetchError> {
     let (status, text) = send("GET", "/api/status", None).await?;
     if status == 401 {
         return Err(FetchError::SignedOut);
     }
     if status != 200 {
-        return Err(FetchError::Server(status));
+        return Err(answer_error(status, &text));
     }
     let view: StatusView = serde_json::from_str(&text).map_err(|_| FetchError::Malformed)?;
     if view.version != STATUS_VIEW_VERSION {

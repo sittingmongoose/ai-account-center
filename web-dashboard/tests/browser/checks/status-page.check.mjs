@@ -532,4 +532,25 @@ export const tests = {
 		// the 500 this test answered on purpose is the only console error allowed
 		await t.noConsoleErrors('console (only the stubbed 500 on /api/status/answers)', { allow: [/status of 500 .*\/api\/status\/answers/] });
 	},
+
+	// With dashboard sign-in off the server refuses both tabs in its own words (403 signin_required): the page says that
+	// sentence, not "The server answered 403.", and stops asking until the setting changes.
+	async 'status and scoreboard say why the server refuses them'(t) {
+		await t.viewport(1440, 900);
+		await t.app.signIn();
+		const refusal = { error: 'signin_required', message: 'These tabs need dashboard sign-in turned on.' };
+		let reads = 0;
+		for (const api of ['/api/status', '/api/scoreboard']) {
+			await t.page.route((u) => new URL(u).pathname === api, (r) => { reads++; return r.fulfill({ status: 403, json: refusal }); });
+		}
+		await t.goto('/app/status', { settleMs: 300 });
+		await t.until('Status says the server\'s sentence', () => /These tabs need dashboard sign-in turned on\./.test(document.querySelector('.route:not([hidden]) .banner')?.textContent || ''), null, { timeout: 15000 });
+		await t.check('no bare status code', !/answered 403/.test(await t.page.locator('.route:not([hidden])').textContent()));
+		await t.goto('/app/scoreboard', { settleMs: 300 });
+		await t.until('Scoreboard says the server\'s sentence', () => /These tabs need dashboard sign-in turned on\./.test(document.querySelector('.route:not([hidden]) .banner')?.textContent || ''), null, { timeout: 15000 });
+		const settled = reads;
+		await t.page.waitForTimeout(35000);
+		await t.check(`no re-read while refused (${reads - settled} more)`, reads - settled <= 1);
+		await t.noConsoleErrors('console (only the refused reads)', { allow: [/status of 403/] });
+	},
 };

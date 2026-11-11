@@ -98,7 +98,11 @@ pub fn start() -> Live {
             let ticks = polled.get() + 5;
             if ticks >= every {
                 polled.set(0);
-                if visible() {
+                // a refusal the server explains (sign-in turned off) doesn't change by asking again
+                let refused = live
+                    .error
+                    .with_untracked(|e| matches!(e, Some(crate::api::FetchError::Refused(_))));
+                if visible() && !refused {
                     live.reload();
                 }
             } else {

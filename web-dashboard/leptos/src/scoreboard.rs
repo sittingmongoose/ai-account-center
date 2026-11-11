@@ -409,7 +409,7 @@ pub async fn fetch_scoreboard() -> Result<ScoreboardView, FetchError> {
         return Err(FetchError::SignedOut);
     }
     if status != 200 {
-        return Err(FetchError::Server(status));
+        return Err(crate::api::answer_error(status, &text));
     }
     let view: ScoreboardView = serde_json::from_str(&text).map_err(|_| FetchError::Malformed)?;
     if view.version != SCOREBOARD_VIEW_VERSION {
@@ -522,7 +522,11 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
             let t = ticks.get_untracked() + 15;
             if t >= every {
                 ticks.set(0);
-                if crate::page_on_screen(crate::Page::Scoreboard) {
+                // a refusal the server explains (sign-in turned off) doesn't change by asking again
+                let refused = board
+                    .error
+                    .with_untracked(|e| matches!(e, Some(FetchError::Refused(_))));
+                if crate::page_on_screen(crate::Page::Scoreboard) && !refused {
                     board.reload();
                 }
             } else {
