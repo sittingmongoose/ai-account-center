@@ -24,7 +24,10 @@ export function createResetSourceAdapter(): ResetSource {
       const summary = await getCodexAuthProfilesSummary();
       const profile = summary.profiles.find((p) => p.name === name && p.authValid);
       if (!profile || !profile.accountId)
-        throw new ProviderError('Exact saved profile unavailable.', 'codex');
+        throw new ProviderError(
+          'credential-host-unavailable: Exact saved profile unavailable.',
+          'codex'
+        );
       return native('resetCodexSource', {
         home: profile.codexHome,
         expectedAccount: profile.accountId,
@@ -34,12 +37,15 @@ export function createResetSourceAdapter(): ResetSource {
       });
     }
     if (!account.startsWith('claude:'))
-      throw new ProviderError('Provider read only.', 'reset-claims');
+      throw new ProviderError('provider-read-only: Provider read only.', 'reset-claims');
     const profiles = await listClaudeDesktopProfiles();
     const profile = profiles.find((p) => `claude:${p.id ?? p.email}` === account);
     const win = profile?.windows;
     if (!profile || !win || (!win.sshHost && process.platform !== 'win32')) {
-      throw new ProviderError('Credential host unavailable.', 'claude');
+      throw new ProviderError(
+        'credential-host-unavailable: Credential host unavailable.',
+        'claude'
+      );
     }
     const host: UsageHost = { host: 'windows', platform: 'windows', sshHost: win.sshHost ?? null };
     const input = {

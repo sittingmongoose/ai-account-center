@@ -37,6 +37,31 @@ export interface ResetRouteDeps {
   ccsDir?: string;
   now?: () => number;
 }
+/** Fixed native refusal codes the browser may word for the owner. They name no account, grant or host. */
+const SAFE_REASONS = new Set([
+  'check-again-required',
+  'confirmation-invalid',
+  'cooldown',
+  'grant-changed',
+  'identity-changed',
+  'identity-unconfirmed',
+  'rate-limited',
+  'stale-inventory',
+  'provider-read-only',
+  'unknown-grant-kind',
+  'exact-grant-unavailable',
+  'unsupported-grant-id',
+  'credential-host-unavailable',
+  'grant-unavailable',
+  'refill-windows-unconfirmed',
+  'signed-out',
+]);
+/** A native rejection reads `<code>: <message>`; only an allowlisted code is passed on. */
+function safeReason(error: unknown): string | null {
+  const code = error instanceof Error ? error.message.split(':', 1)[0].trim() : '';
+  return SAFE_REASONS.has(code) ? code : null;
+}
+
 export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
   const router = createApiRouter();
   let handle = deps.native;
@@ -105,17 +130,34 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
     try {
       const account = String(req.params.accountId);
       const history = await call('history', account);
+      // An unresolved attempt blocks every other spend; its key lets any signed-in session check it again.
+      const pendingAttempt = ((await call('pending', account)) as { attemptKey: string | null })
+        .attemptKey;
       if (!deps.source) {
         res.json({
           status: 'unavailable',
           reason: 'credential-host-unavailable',
           grants: [],
           history,
+          pendingAttempt,
         });
         return;
       }
-      const snapshot = await deps.source.read(account);
-      res.json({ ...(await call('inventory', account, { snapshot })), history });
+      let snapshot: unknown;
+      try {
+        snapshot = await deps.source.read(account);
+      } catch (error) {
+        // History and the pending attempt stay visible when the fresh read fails; nothing is invented.
+        res.json({
+          status: 'unavailable',
+          reason: safeReason(error) ?? 'reset-inventory-unavailable',
+          grants: [],
+          history,
+          pendingAttempt,
+        });
+        return;
+      }
+      res.json({ ...(await call('inventory', account, { snapshot })), history, pendingAttempt });
     } catch {
       res.status(503).json({ status: 'unavailable', code: 'reset-inventory-unavailable' });
     }
@@ -127,6 +169,8 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         return;
       }
       const account = String(req.params.accountId);
+      // Set just before the one provider write: a failure after it may have spent the chosen grant.
+      let sent = false;
       try {
         if (op !== 'check') {
           await call(op === 'prepare' ? 'prepareGate' : 'claimGate', account, {
@@ -155,6 +199,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
           snapshot,
         })) as ResetWrite;
         let result: { outcome: string; retryAfterMs?: number } = { outcome: 'ambiguous' };
+        sent = true;
         try {
           result = await deps.source.send(write);
         } catch {
@@ -174,9 +219,15 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
             snapshot: after,
           })
         );
-      } catch {
-        // Fixed response: neither native errors nor upstream responses may echo identities.
-        res.status(409).json({ code: 'reset-state-unavailable', action: 'check-again' });
+      } catch (error) {
+        // Fixed response: neither native errors nor upstream responses may echo identities. Only an allowlisted
+        // native code, and whether the provider write was reached, are passed on.
+        res.status(409).json({
+          code: 'reset-state-unavailable',
+          action: 'check-again',
+          reason: safeReason(error),
+          sent,
+        });
       }
     });
   }

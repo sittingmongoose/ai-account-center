@@ -24,6 +24,14 @@ The current router also requires sign-in for localhost (no anonymous claims).
 | POST root | `{grantKey,confirmationToken}` | attempt key, outcome, verification, providerSuccess |
 | POST `/check` | `{attemptKey}` | read-only verification; never sends a provider claim |
 
+For the Details UI the inventory also carries `providerWords` (an unmapped kind's own words, sanitised to at most
+48 printable characters; absent for every mapped kind) and `pendingAttempt` (the account's unresolved attempt key,
+or null, so any signed-in session can Check again after a reload). A confirmed claim or check answers `windows`:
+each refilled window's id and used percent from the verification read (empty unless confirmed). A refused prepare
+or claim answers 409 `{code, action, reason, sent}`: `reason` is one of a fixed allowlist of native codes (never an
+identity) or null, and `sent` says whether the provider write was reached, in which case the UI blocks another
+spend until Check again settles it.
+
 Tokens and target keys are 64 hex characters. Request objects have exact fields;
 raw provider grant IDs, host paths, organization IDs and executable names cannot
 be provided by the browser. Responses and errors never echo private input.
@@ -85,3 +93,14 @@ Use a native artifact built in an isolated target directory. It exercises only
 `resetClaims` with generated nonces and synthetic snapshots, never source or
 provider methods. It verifies exact selection, one-shot confirmation, durable
 provider-success state, read-only verification and audit privacy.
+
+## Details UI
+
+`web-dashboard/leptos/src/resets.rs` draws the "Resets and balances" fact group: one table row per grant (State /
+Refills / Expires) with Use reset only on rows the server marks claimable, used grants grey at the bottom, unknown
+kinds in the provider's words with "AAC doesn't know what this refills yet; it can't be used from here". Opening
+the dialog calls only `prepare`; it shows prepare's `account.label`, the grant, what it refills, its expiry and
+"You have N; this spends one and can't be undone", and counts down the confirmation (ending 10 s early so the
+server's fresh read fits inside its 120 s). Only "Use this reset" calls the claim route. The result line comes from
+the claim answer, then the group reads the inventory again; nothing is shown as used until a read says so. Z.ai
+cards are listed with "Use in Z.ai"; Qwen says its plan has none. Paired native bars never call these routes.

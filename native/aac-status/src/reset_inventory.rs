@@ -19,6 +19,22 @@ pub struct Grant {
     pub left: u32,
     pub expires_at_ms: Option<i64>,
     pub usable: bool,
+    /// The provider's own words for a kind AAC has not mapped (bounded and sanitised), so an unknown grant can be
+    /// shown as the provider names it. Absent for every mapped kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<String>,
+}
+
+/// Upstream kind words as display text: printable ASCII letters, digits and a few separators, at most 48 characters.
+/// Anything else is dropped, never echoed; empty input stays absent.
+pub fn provider_words(raw: &str) -> Option<String> {
+    let kept: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.' | ':' | '/' | ','))
+        .take(48)
+        .collect();
+    let kept = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!kept.is_empty()).then_some(kept)
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -129,6 +145,14 @@ pub fn claude(cedar: &Value, expiries: &[Option<i64>]) -> Result<Vec<Grant>> {
                 "full" if !session || !weekly => "unknown",
                 other => other,
             };
+            let words = if kind == "unknown" {
+                explicit
+                    .filter(|t| !t.trim().is_empty())
+                    .and_then(provider_words)
+                    .or_else(|| provider_words(&clears.join(", ")))
+            } else {
+                None
+            };
             Ok(Grant {
                 id: id(&g["id"])?,
                 kind: kind.to_owned(),
@@ -136,6 +160,7 @@ pub fn claude(cedar: &Value, expiries: &[Option<i64>]) -> Result<Vec<Grant>> {
                 left,
                 expires_at_ms: expiries[i],
                 usable: usable && !paused,
+                words,
             })
         })
         .collect()
@@ -152,14 +177,11 @@ pub fn codex(details: &Value, expiries: &[Option<i64>], known_type: &str, clears
         .map(|(i, g)| {
             let status = g["status"].as_str().ok_or("shape")?;
             let ty = g["reset_type"].as_str().ok_or("shape")?;
+            let known = !known_type.is_empty() && ty == known_type;
             Ok(Grant {
                 id: id(&g["id"])?,
-                kind: if !known_type.is_empty() && ty == known_type {
-                    "banked"
-                } else {
-                    "unknown"
-                }
-                .to_owned(),
+                kind: if known { "banked" } else { "unknown" }.to_owned(),
+                words: if known { None } else { provider_words(ty) },
                 clears: clears.to_vec(),
                 left: if status == "available" { 1 } else { 0 },
                 expires_at_ms: expiries[i],

@@ -18,7 +18,9 @@ afterEach(async () => {
 async function serve(
   auth: 'session' | 'device' | 'none',
   source?: ResetSource,
-  rejectGate = false
+  rejectGate = false,
+  reject?: { op: string; message: string },
+  pendingAttempt: string | null = null
 ) {
   const app = express();
   app.use(express.json());
@@ -43,7 +45,9 @@ async function serve(
           const a = JSON.parse(raw);
           calls.push(a.op);
           if (rejectGate && a.op.endsWith('Gate')) throw new Error('synthetic cooldown');
+          if (reject && a.op === reject.op) throw new Error(reject.message);
           if (a.op === 'history') return '[]';
+          if (a.op === 'pending') return JSON.stringify({ attemptKey: pendingAttempt });
           if (a.op === 'begin')
             return JSON.stringify({
               attemptKey: 'a'.repeat(64),
@@ -189,4 +193,61 @@ test('a persisted native hold refuses the request before any provider read', asy
   expect(reads).toBe(0);
   expect(sends).toBe(0);
   expect(calls).toEqual(['prepareGate']);
+});
+
+test('the inventory read names an unresolved attempt so any signed-in session can check it again', async () => {
+  const source: ResetSource = {
+    async read() {
+      throw new Error('synthetic source failure with private words');
+    },
+    async send() {
+      throw new Error('must not send');
+    },
+  };
+  const { url, calls } = await serve('session', source, false, undefined, 'd'.repeat(64));
+  const res = await fetch(`${url}/accounts/synthetic/reset-claims`);
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body).toEqual({
+    status: 'unavailable',
+    reason: 'reset-inventory-unavailable',
+    grants: [],
+    history: [],
+    pendingAttempt: 'd'.repeat(64),
+  });
+  expect(JSON.stringify(body)).not.toContain('private');
+  expect(calls).toEqual(['history', 'pending']);
+});
+
+test('a refusal passes on only an allowlisted native code, and says whether the write was reached', async () => {
+  let sends = 0;
+  const source: ResetSource = {
+    async read() {
+      return {};
+    },
+    async send() {
+      sends++;
+      return { outcome: 'reset' };
+    },
+  };
+  const post = (url: string) =>
+    fetch(`${url}/accounts/synthetic/reset-claims`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: url },
+      body: JSON.stringify({ grantKey, confirmationToken: 'c'.repeat(64) }),
+    });
+  for (const [reject, reason, sent] of [
+    [{ op: 'begin', message: 'confirmation-invalid: Reset operation refused.' }, 'confirmation-invalid', false],
+    [{ op: 'claimGate', message: 'check-again-required: Reset operation refused.' }, 'check-again-required', false],
+    [{ op: 'begin', message: 'private-account-name: leaked words' }, null, false],
+    [{ op: 'finish', message: 'storage-unavailable: Reset operation refused.' }, null, true],
+  ] as const) {
+    const { url } = await serve('session', source, false, reject);
+    const res = await post(url);
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body).toEqual({ code: 'reset-state-unavailable', action: 'check-again', reason, sent });
+    expect(JSON.stringify(body)).not.toContain('private');
+  }
+  expect(sends).toBe(1);
 });

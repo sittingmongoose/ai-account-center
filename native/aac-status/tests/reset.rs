@@ -25,6 +25,7 @@ fn snapshot(provider: &str) -> Snapshot {
                 left: 2,
                 expires_at_ms: None,
                 usable: true,
+                words: None,
             },
             Grant {
                 id: Some("grant_b".into()),
@@ -33,6 +34,7 @@ fn snapshot(provider: &str) -> Snapshot {
                 left: 1,
                 expires_at_ms: None,
                 usable: true,
+                words: None,
             },
         ],
         windows: std::collections::BTreeMap::from([("seven_day".into(), 100.0)]),
@@ -321,6 +323,83 @@ fn normalizers_preserve_ids_and_unknowns() {
     let details = json!({"credits":[{"id":"exact_b","status":"available","reset_type":"future"}]});
     let g = aac_status::reset_inventory::codex(&details, &[None], "", &[]).unwrap();
     assert_eq!(g[0].kind, "unknown");
+    assert_eq!(g[0].words.as_deref(), Some("future"));
+}
+
+#[test]
+fn unknown_kinds_keep_bounded_provider_words_and_known_kinds_have_none() {
+    use aac_status::reset_inventory::{claude, provider_words};
+    let cedar = json!({"eligible":true,"grants":[
+        {"id":"g_typed","resets_left":1,"paused":false,"usable_now":true,"type":"opus\u{0} <b>boost</b>","clears":["seven_day"]},
+        {"id":"g_window","resets_left":1,"paused":false,"usable_now":true,"clears":["seven_day_opus"]},
+        {"id":"g_weekly","resets_left":1,"paused":false,"usable_now":true,"type":"weekly","clears":["seven_day"]}]});
+    let g = claude(&cedar, &[None, None, None]).unwrap();
+    assert_eq!(g[0].kind, "unknown");
+    assert_eq!(g[0].words.as_deref(), Some("opus bboost/b"));
+    assert_eq!(g[1].words.as_deref(), Some("seven_day_opus"));
+    assert_eq!(g[2].kind, "weekly");
+    assert_eq!(g[2].words, None);
+    assert_eq!(provider_words(&"x".repeat(80)).unwrap().len(), 48);
+    assert_eq!(provider_words("  \u{7}  "), None);
+    // the public row carries the words for the unknown grant only, and never makes it claimable
+    let (_d, mut s) = open();
+    let mut snap = snapshot("claude");
+    snap.grants[0].kind = "unknown".into();
+    snap.grants[0].words = Some("seven_day_opus".into());
+    snap.grants[1].words = Some("must-not-show".into());
+    let out = s.inventory("route-account", &snap, NOW, &entropy(30)).unwrap();
+    assert_eq!(out["grants"][0]["providerWords"], "seven_day_opus");
+    assert_eq!(out["grants"][0]["claimable"], false);
+    assert_eq!(out["grants"][0]["claimBlockedReason"], "unknown-grant-kind");
+    assert!(out["grants"][1]["providerWords"].is_null());
+    assert_eq!(out["grants"][1]["claimable"], true);
+}
+
+#[test]
+fn a_confirmed_claim_reports_the_refilled_windows_from_the_verification_read() {
+    let (_d, mut s) = open();
+    let snap = snapshot("claude");
+    let (_, a) = begin(&mut s, &snap);
+    let mut after = snap.clone();
+    after.observed_at_ms += 1;
+    after.grants[1].left = 0;
+    after.windows.insert("seven_day".into(), 12.5);
+    let r = s
+        .finish("route-account", &a, Outcome::Reset, Some(&after), NOW + 1, None)
+        .unwrap();
+    assert_eq!(r["outcome"], "claimed");
+    assert_eq!(r["windows"], json!([{"id":"seven_day","usedPercent":12.5}]));
+    // an unconfirmed result never reports windows
+    let (_d, mut s) = open();
+    let (_, a) = begin(&mut s, &snap);
+    let r = s
+        .finish("route-account", &a, Outcome::Reset, Some(&snap), NOW, None)
+        .unwrap();
+    assert_eq!(r["outcome"], "claimed-unconfirmed");
+    assert_eq!(r["windows"], json!([]));
+}
+
+#[test]
+fn the_pending_attempt_is_readable_for_check_again_and_clears_once_settled() {
+    let (d, mut s) = open();
+    let snap = snapshot("codex");
+    assert!(s.pending("route-account").unwrap()["attemptKey"].is_null());
+    let (_, a) = begin(&mut s, &snap);
+    s.finish("route-account", &a, Outcome::Ambiguous, None, NOW, None)
+        .unwrap();
+    drop(s);
+    let mut s = Store::open(&d.path().join("reset.sqlite")).unwrap();
+    assert_eq!(s.pending("route-account").unwrap()["attemptKey"], a);
+    assert!(s.pending("other-account").unwrap()["attemptKey"].is_null());
+    let mut after = snap.clone();
+    after.observed_at_ms += 1;
+    after.grants[1].left = 0;
+    after.windows.insert("seven_day".into(), 0.0);
+    assert_eq!(
+        s.check("route-account", &a, &after, NOW + 1).unwrap()["outcome"],
+        "claimed"
+    );
+    assert!(s.pending("route-account").unwrap()["attemptKey"].is_null());
 }
 
 #[test]

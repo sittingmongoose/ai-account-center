@@ -127,7 +127,10 @@ fn blocked(s: &Snapshot, g: &Grant, now: i64) -> Option<&'static str> {
 fn public(s: &Snapshot, g: &Grant, key: &str, now: i64) -> Value {
     let (label, text) =
         kind(&s.identity.provider, g).unwrap_or(("Other reset", "AAC does not know what this refills yet."));
-    json!({"grantKey":key,"kind":if kind(&s.identity.provider,g).is_some(){g.kind.as_str()}else{"unknown"},"label":label,"refillsText":text,"resetsLeft":g.left,"expiresAtMs":g.expires_at_ms,"claimable":blocked(s,g,now).is_none(),"claimBlockedReason":blocked(s,g,now)})
+    let known = kind(&s.identity.provider, g).is_some();
+    // An unmapped kind keeps the provider's own (sanitised) words so it can be shown as the provider names it.
+    let words = if known { None } else { g.words.as_deref() };
+    json!({"grantKey":key,"kind":if known{g.kind.as_str()}else{"unknown"},"label":label,"refillsText":text,"providerWords":words,"resetsLeft":g.left,"expiresAtMs":g.expires_at_ms,"claimable":blocked(s,g,now).is_none(),"claimBlockedReason":blocked(s,g,now)})
 }
 fn fingerprint(s: &Snapshot, g: &Grant) -> Result<String> {
     // Sample timestamp deliberately excluded: a fresh read of unchanged state must match.
@@ -508,9 +511,35 @@ impl Store {
             json!({"provider":before.identity.provider,"kind":g.kind,"grantHash":hash(g.id.as_deref().unwrap_or("")),"idempotencyHash":hash(attempt),"providerSuccess":provider_success,"providerOutcome":outcome.word(),"verified":verified,"beforeCount":g.left,"afterCount":after.and_then(|a|a.grants.iter().find(|n|n.id==g.id).map(|n|n.left)),"beforeWindows":before.windows,"afterWindows":after.map(|a|&a.windows)}),
         )?;
         sql(tx.commit())?;
+        // The refilled windows as the verification read saw them; only a confirmed claim reports them.
+        let windows: Vec<Value> = if verified {
+            after
+                .map(|a| {
+                    g.clears
+                        .iter()
+                        .filter_map(|k| a.windows.get(k).map(|v| json!({"id":k,"usedPercent":v})))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
         Ok(
-            json!({"attemptKey":attempt,"outcome":result,"verification":if verified{"confirmed"}else{"unconfirmed"},"providerSuccess":provider_success}),
+            json!({"attemptKey":attempt,"outcome":result,"verification":if verified{"confirmed"}else{"unconfirmed"},"providerSuccess":provider_success,"windows":windows}),
         )
+    }
+    /// The route account's unresolved attempt, if any: the browser needs its key to check it again after a reload or
+    /// from another signed-in session. Reading it sends nothing and consumes nothing.
+    pub fn pending(&self, account: &str) -> Result<Value> {
+        let key: Option<String> = sql(self
+            .db
+            .query_row(
+                "SELECT key FROM attempts WHERE account=? AND pending=1 ORDER BY created DESC LIMIT 1",
+                [account],
+                |r| r.get(0),
+            )
+            .optional())?;
+        Ok(json!({ "attemptKey": key }))
     }
     /// Read-only at the provider: this method has no Write return path.
     pub fn check(&mut self, account: &str, attempt: &str, after: &Snapshot, now: i64) -> Result<Value> {
@@ -685,6 +714,7 @@ pub fn dispatch(args: &str) -> Result<Value> {
         }
         "check" => s.check(&a.account, &a.key, snapshot()?, now_ms),
         "history" => s.history(&a.account),
+        "pending" => s.pending(&a.account),
         _ => Err("unknown-method"),
     }
 }

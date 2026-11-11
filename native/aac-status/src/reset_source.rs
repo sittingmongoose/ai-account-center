@@ -176,14 +176,15 @@ pub fn codex_with_binary(home: &str, profile: &str, host: &str, write: Option<&V
             .filter(|(_, v)| **v >= 100.0)
             .map(|(k, _)| k.clone())
             .collect::<Vec<_>>();
+        let known = g["resetType"] == "codexRateLimits";
         grants.push(Grant {
             id: Some(id.to_owned()),
-            kind: if g["resetType"] == "codexRateLimits" {
-                "banked"
+            kind: if known { "banked" } else { "unknown" }.into(),
+            words: if known {
+                None
             } else {
-                "unknown"
-            }
-            .into(),
+                g["resetType"].as_str().and_then(crate::reset_inventory::provider_words)
+            },
             clears,
             left: if g["status"] == "available" { 1 } else { 0 },
             expires_at_ms: g["expiresAt"].as_i64().and_then(|n| n.checked_mul(1000)),
