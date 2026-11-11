@@ -178,20 +178,31 @@ export function judgeGroup(
       b.column.n - a.column.n ||
       JSON.stringify(a.column.runs[0]?.id).localeCompare(JSON.stringify(b.column.runs[0]?.id))
   );
-  const top = scored[0]?.score ?? 0;
+  // Settle the review bar before the comparison: a row the bar demotes must not set
+  // the top score, the peer count or the ranks of the rows that stay. Pull every
+  // demoted row out and judge the rest again, until a pass pulls nothing (each pass
+  // pulls at least one, so at most scored.length passes).
   const judged = new Map<Column, Column>();
-  scored.forEach((entry, position) => {
-    const { verdict, why } = judge(entry, top, scored.length);
-    if (
-      (verdict === 'recommended' || verdict === 'avoid') &&
-      belowReviewBar(entry.column, minRuns)
-    ) {
+  let remaining = scored;
+  while (remaining.length > 0) {
+    const top = remaining[0].score;
+    const peers = remaining.length;
+    const pulled = remaining.filter((entry) => {
+      const { verdict } = judge(entry, top, peers);
+      return (verdict === 'recommended' || verdict === 'avoid') && belowReviewBar(entry.column, minRuns);
+    });
+    if (pulled.length === 0) break;
+    for (const entry of pulled) {
       judged.set(
         entry.column,
         unranked(entry.column, `too few blind reviews yet (n = ${entry.column.n})`)
       );
-      return;
     }
+    remaining = remaining.filter((entry) => !pulled.includes(entry));
+  }
+  const top = remaining[0]?.score ?? 0;
+  remaining.forEach((entry, position) => {
+    const { verdict, why } = judge(entry, top, remaining.length);
     const preliminary = entry.marks.some((mark) => mark.value.preliminary);
     judged.set(entry.column, {
       ...entry.column,

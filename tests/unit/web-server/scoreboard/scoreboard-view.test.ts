@@ -422,6 +422,37 @@ describe('verdict rules', () => {
     expect(judged[1]).toMatchObject({ ranked: true });
   });
 
+  it('a demoted row does not set the top score, the peers or the ranks', () => {
+    // The one-item column (quality 1 of 1) tops the group and is pulled by the bar. The
+    // survivor is then the only ranked row: rank 1, fine — never Recommended at rank 2
+    // with no rank 1, and never "Behind the top row" behind a demoted row.
+    const thin = column('thin', 1, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const deep = column('deep', 0.97, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({ ranked: false, verdict: 'not-enough-data' });
+    expect(judged[1]).toMatchObject({
+      ranked: true,
+      rank: 1,
+      verdict: 'fine',
+      why: 'The only ranked row here, so nothing to compare it with (n = 10).',
+    });
+  });
+
+  it('a weak survivor of a pull is the only ranked row, not behind the demoted top', () => {
+    const thin = column('thin', 1, 0, 10, { reviews: 5 });
+    thin.measures.quality = value(1, 1);
+    const deep = column('deep', 0.5, 0, 10, { reviews: 5 });
+    const judged = judge([thin, deep]);
+    expect(judged[0]).toMatchObject({ ranked: false, verdict: 'not-enough-data' });
+    expect(judged[1]).toMatchObject({
+      ranked: true,
+      rank: 1,
+      verdict: 'fine',
+      why: 'The only ranked row here, so nothing to compare it with (n = 10).',
+    });
+  });
+
   it('says preliminary when a weighted value is', () => {
     const preliminary = column('a', 1, 0, 10);
     preliminary.measures.quality = value(1, 10, { preliminary: true });
