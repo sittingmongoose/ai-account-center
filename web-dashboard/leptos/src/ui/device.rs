@@ -225,9 +225,22 @@ pub fn keep_chrome_while_typing(
         && last_side == Some(side)
 }
 
-/// A text field or editable element has the focus (the keyboard is, or is about to be, up).
+/// Whether a reload would steal the screen (review L5): a field has focus, the dashboard iframe
+/// has focus, its raised confirmation shows, or the frame's own switch dialog is open.
+pub(crate) fn busy_for_reload(
+    field_typing: bool,
+    iframe_focused: bool,
+    dashboard_raised: bool,
+    dialog_open: bool,
+) -> bool {
+    field_typing || iframe_focused || dashboard_raised || dialog_open
+}
+
+/// A text field or editable element has the focus (the keyboard is, or is about to be, up), the dashboard iframe
+/// has the focus, or a switch confirmation (the dashboard's raised one, or the frame's own dialog) is open: a
+/// resume reload offers instead of reloading over any of them (review L5).
 pub fn typing() -> bool {
-    document()
+    let (field_typing, iframe_focused) = document()
         .active_element()
         .map(|el| {
             let tag = el.tag_name().to_ascii_lowercase();
@@ -235,15 +248,25 @@ pub fn typing() -> bool {
                 .ok()
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            editable
-                || tag == "textarea"
-                || (tag == "input"
-                    && !matches!(
-                        el.get_attribute("type").unwrap_or_default().as_str(),
-                        "checkbox" | "radio" | "button" | "submit" | "range"
-                    ))
+            (
+                editable
+                    || tag == "textarea"
+                    || (tag == "input"
+                        && !matches!(
+                            el.get_attribute("type").unwrap_or_default().as_str(),
+                            "checkbox" | "radio" | "button" | "submit" | "range"
+                        )),
+                tag == "iframe",
+            )
         })
-        .unwrap_or(false)
+        .unwrap_or((false, false));
+    let dashboard_raised = document()
+        .query_selector(".slint-host.raised")
+        .ok()
+        .flatten()
+        .is_some();
+    let dialog_open = document().query_selector(".adialog").ok().flatten().is_some();
+    busy_for_reload(field_typing, iframe_focused, dashboard_raised, dialog_open)
 }
 
 fn parse_override(search: &str) -> Option<Insets> {
@@ -554,5 +577,14 @@ mod tests {
         assert_eq!(rail_width(insets(0.0, 62.0, 21.0, 62.0)), 84.0);
         // a left inset too small to be a strip does not move the rail
         assert_eq!(rail_side(insets(0.0, 0.0, 34.0, 30.0)), "right");
+    }
+
+    #[test]
+    fn an_iframe_or_open_confirmation_keeps_the_screen() {
+        assert!(!busy_for_reload(false, false, false, false));
+        assert!(busy_for_reload(true, false, false, false), "a field has focus");
+        assert!(busy_for_reload(false, true, false, false), "the dashboard iframe has focus (review L5)");
+        assert!(busy_for_reload(false, false, true, false), "a raised dashboard confirmation");
+        assert!(busy_for_reload(false, false, false, true), "the frame's switch dialog is open");
     }
 }
