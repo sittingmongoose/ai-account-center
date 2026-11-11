@@ -446,6 +446,29 @@ fn the_loop_rule_fires_at_three_failing_reviews_in_a_row_and_names_the_item() {
 }
 
 #[test]
+fn reviews_count_by_date_not_list_order() {
+    // F11: four fails and then a pass, written newest first: by list order the pass
+    // resets and the fails loop; by date the fails build and the pass clears it.
+    let newest_first = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "pm7", "stream": "f" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 40,
+            "project": "pm7", "stream": "f",
+            "items": [ { "id": "F-07", "title": "Tray icon", "state": "review",
+                "reviews": [
+                    { "atMs": NOW - 600_000, "verdict": "pass" },
+                    { "atMs": NOW - 1_800_000, "verdict": "fail" },
+                    { "atMs": NOW - 2_400_000, "verdict": "fail" },
+                    { "atMs": NOW - 3_000_000, "verdict": "fail" },
+                    { "atMs": NOW - 3_600_000, "verdict": "fail" }
+                ] } ]
+        })]
+    }));
+    assert_eq!(one_update(&newest_first).looping.answer, "no");
+}
+
+#[test]
 fn a_passing_or_unclear_verdict_never_counts_as_a_failing_round() {
     let board = |reviews: Value| {
         input(json!({

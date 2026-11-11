@@ -552,9 +552,13 @@ struct ItemLoop {
 /// An unclear verdict is skipped, not a reset: free wording a reviewer left between two
 /// fails ("cannot verify on the phone") must not turn a real loop back into "on track",
 /// and it never counts toward one either (section 3 prefers "unsure" to a guess).
+/// Reviews count by date, not list order (F11): a list written newest first must read
+/// the same as one written oldest first. Undated reviews keep their order at the end.
 fn item_loop(item: &ItemIn, now_ms: i64) -> ItemLoop {
+    let mut ordered: Vec<&ReviewIn> = item.reviews.iter().collect();
+    ordered.sort_by_key(|review| (review.at_ms.is_none(), review.at_ms));
     let mut rounds = 0;
-    for review in &item.reviews {
+    for review in ordered {
         let in_window = match review.at_ms {
             Some(at) => now_ms - at <= LOOP_WINDOW_MS,
             None => true,
