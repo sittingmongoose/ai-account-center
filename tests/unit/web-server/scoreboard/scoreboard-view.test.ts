@@ -283,7 +283,8 @@ describe('verdict rules', () => {
       benchmarkLabel: null,
       n: 10,
       imported: 0,
-      reviews: 3,
+      // Above minRuns (5), so the Recommended/Avoid tests exercise scoring, not the review bar.
+      reviews: 6,
       ranked: false,
       rank: null,
       score: null,
@@ -364,6 +365,31 @@ describe('verdict rules', () => {
       [false, 'no blind review yet (n = 10)'],
       [true, 'The only ranked row here, so nothing to compare it with (n = 10).'],
     ]);
+  });
+
+  it('one review alone is never enough for Recommended or Avoid', () => {
+    const judged = judge([
+      column('a', 1, 0, 10, { reviews: 1 }),
+      column('cheat', 1, 0.4, 10, { reviews: 1 }),
+    ]);
+    expect(judged.map((c) => [c.ranked, c.verdict, c.why])).toEqual([
+      [false, 'not-enough-data', 'too few blind reviews yet (n = 10)'],
+      [false, 'not-enough-data', 'too few blind reviews yet (n = 10)'],
+    ]);
+    // minRuns reviews clear the bar: the same columns then get their scored verdicts.
+    const cleared = judge([
+      column('a', 1, 0, 10, { reviews: 5 }),
+      column('cheat', 1, 0.4, 10, { reviews: 5 }),
+    ]);
+    expect(cleared.map((c) => [c.ranked, c.verdict])).toEqual([
+      [true, 'recommended'],
+      [true, 'avoid'],
+    ]);
+    // A Fine may stand on fewer reviews, and a benchmark column needs none.
+    expect(judge([column('fine', 1, 0, 10, { reviews: 1 })])[0]).toMatchObject({
+      ranked: true,
+      verdict: 'fine',
+    });
   });
 
   it('says preliminary when a weighted value is', () => {

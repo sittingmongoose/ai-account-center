@@ -4638,13 +4638,13 @@
                 "observed": 15,
                 "benchmark": 0
               },
-              "basis": "observed",
+              "basis": null,
               "benchmark": null,
-              "ranked": true,
-              "rank": 1,
-              "verdict": "recommended",
-              "verdictLabel": "Recommended",
-              "why": "Strongest on Quality, with no cheating flags (n = 15).",
+              "ranked": false,
+              "rank": null,
+              "verdict": "not-enough-data",
+              "verdictLabel": "Not enough data yet",
+              "why": "too few blind reviews yet (n = 15)",
               "observed": {
                 "source": "observed",
                 "benchmark": null,
@@ -4652,12 +4652,12 @@
                 "n": 15,
                 "imported": 0,
                 "reviews": 1,
-                "ranked": true,
-                "rank": 1,
-                "score": 1,
-                "verdict": "recommended",
-                "verdictLabel": "Recommended",
-                "why": "Strongest on Quality, with no cheating flags (n = 15).",
+                "ranked": false,
+                "rank": null,
+                "score": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too few blind reviews yet (n = 15)",
                 "preliminary": false,
                 "measures": {
                   "speed": {
@@ -4934,6 +4934,331 @@
                         "path": "/mnt/Cursor/share/example-project/reviews/R-WN-23.md"
                       }
                     ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-22",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-22",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-22"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T12:42:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-22",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-22.md"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-21",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-21",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-21"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T12:36:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-21",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-21.md"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-6-b",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-6-b",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-6-b"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T14:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-6-b",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-6-a",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-6-a",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-6-a"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T10:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-6-a",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-6-a.md"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-5",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-5",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-5"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T03:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-5",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-4",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-4",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-4"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T02:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-4",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-3",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-3",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-3"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T01:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-3",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-2",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-2",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-2"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T00:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-2",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-1",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-1",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-1"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-02T23:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-1",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-scout-1",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-scout-1",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--scout-opus-v2-1"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-10-31T00:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--scout-opus-v2-1",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
                   }
                 ]
               },
@@ -4951,13 +5276,13 @@
                 "observed": 8,
                 "benchmark": 0
               },
-              "basis": "observed",
+              "basis": null,
               "benchmark": null,
-              "ranked": true,
-              "rank": 2,
-              "verdict": "recommended",
-              "verdictLabel": "Recommended",
-              "why": "Strongest on Quality, with no cheating flags (n = 8).",
+              "ranked": false,
+              "rank": null,
+              "verdict": "not-enough-data",
+              "verdictLabel": "Not enough data yet",
+              "why": "too few blind reviews yet (n = 8)",
               "observed": {
                 "source": "observed",
                 "benchmark": null,
@@ -4965,12 +5290,12 @@
                 "n": 8,
                 "imported": 0,
                 "reviews": 1,
-                "ranked": true,
-                "rank": 2,
-                "score": 1,
-                "verdict": "recommended",
-                "verdictLabel": "Recommended",
-                "why": "Strongest on Quality, with no cheating flags (n = 8).",
+                "ranked": false,
+                "rank": null,
+                "score": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too few blind reviews yet (n = 8)",
                 "preliminary": false,
                 "measures": {
                   "speed": {
@@ -5247,6 +5572,99 @@
                         "path": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
                       }
                     ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-13",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-13",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-13"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T03:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-13",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-12",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-12",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-12"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T02:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-12",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-11",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-11",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-11"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T01:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-11",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
                   }
                 ]
               },
@@ -9475,13 +9893,13 @@
                 "observed": 15,
                 "benchmark": 0
               },
-              "basis": "observed",
+              "basis": null,
               "benchmark": null,
-              "ranked": true,
-              "rank": 1,
-              "verdict": "recommended",
-              "verdictLabel": "Recommended",
-              "why": "Strongest on Quality, with no cheating flags (n = 15).",
+              "ranked": false,
+              "rank": null,
+              "verdict": "not-enough-data",
+              "verdictLabel": "Not enough data yet",
+              "why": "too few blind reviews yet (n = 15)",
               "observed": {
                 "source": "observed",
                 "benchmark": null,
@@ -9489,12 +9907,12 @@
                 "n": 15,
                 "imported": 0,
                 "reviews": 1,
-                "ranked": true,
-                "rank": 1,
-                "score": 1,
-                "verdict": "recommended",
-                "verdictLabel": "Recommended",
-                "why": "Strongest on Quality, with no cheating flags (n = 15).",
+                "ranked": false,
+                "rank": null,
+                "score": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too few blind reviews yet (n = 15)",
                 "preliminary": false,
                 "measures": {
                   "speed": {
@@ -9771,6 +10189,331 @@
                         "path": "/mnt/Cursor/share/example-project/reviews/R-WN-23.md"
                       }
                     ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-22",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-22",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-22"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T12:42:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-22",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-22.md"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-21",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-21",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-21"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T12:36:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-21",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-21.md"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-6-b",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-6-b",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-6-b"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T14:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-6-b",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-6-a",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-6-a",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-6-a"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T10:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-6-a",
+                      "verdict": "fail",
+                      "overturned": true,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": [
+                      {
+                        "label": "Review notes",
+                        "path": "/mnt/Cursor/share/example-project/reviews/R-WN-6-a.md"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-5",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-5",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-5"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T03:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-5",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-4",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-4",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-4"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T02:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-4",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-3",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-3",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-3"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T01:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-3",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-2",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-2",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-2"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-03T00:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-2",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-1",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-1",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-1"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-02T23:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-1",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-scout-1",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-scout-1",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--scout-opus-v2-1"
+                    },
+                    "model": "openai/gpt-6.1-sol",
+                    "label": "Sol 6.1",
+                    "runtime": "codex",
+                    "effort": "high",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-10-31T00:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--scout-opus-v2-1",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": "openai/gpt-6.1-sol high"
+                    },
+                    "flags": 0,
+                    "evidence": []
                   }
                 ]
               },
@@ -9788,13 +10531,13 @@
                 "observed": 8,
                 "benchmark": 0
               },
-              "basis": "observed",
+              "basis": null,
               "benchmark": null,
-              "ranked": true,
-              "rank": 2,
-              "verdict": "recommended",
-              "verdictLabel": "Recommended",
-              "why": "Strongest on Quality, with no cheating flags (n = 8).",
+              "ranked": false,
+              "rank": null,
+              "verdict": "not-enough-data",
+              "verdictLabel": "Not enough data yet",
+              "why": "too few blind reviews yet (n = 8)",
               "observed": {
                 "source": "observed",
                 "benchmark": null,
@@ -9802,12 +10545,12 @@
                 "n": 8,
                 "imported": 0,
                 "reviews": 1,
-                "ranked": true,
-                "rank": 2,
-                "score": 1,
-                "verdict": "recommended",
-                "verdictLabel": "Recommended",
-                "why": "Strongest on Quality, with no cheating flags (n = 8).",
+                "ranked": false,
+                "rank": null,
+                "score": null,
+                "verdict": "not-enough-data",
+                "verdictLabel": "Not enough data yet",
+                "why": "too few blind reviews yet (n = 8)",
                 "preliminary": false,
                 "measures": {
                   "speed": {
@@ -10084,6 +10827,99 @@
                         "path": "/mnt/Cursor/share/example-project/reviews/R-WN-14.md"
                       }
                     ]
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-13",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-13",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-13"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T03:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-13",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-12",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-12",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-12"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T02:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-12",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
+                  },
+                  {
+                    "id": "mac.scoreboard-reviews--R-WN-11",
+                    "writer": "mac.scoreboard-reviews",
+                    "source": "observed",
+                    "benchmark": null,
+                    "project": "example-project",
+                    "stream": "S",
+                    "task": {
+                      "id": "R-WN-11",
+                      "type": "review",
+                      "title": "Blind review of vm.scoreboard-lead--WN-11"
+                    },
+                    "model": "anthropic/claude-opus-5-5",
+                    "label": "Opus 5.5",
+                    "runtime": "claude-code",
+                    "effort": "xhigh",
+                    "process": null,
+                    "outcome": "done",
+                    "endedAt": "2026-11-05T01:30:00Z",
+                    "wallSeconds": 300,
+                    "imported": null,
+                    "review": {
+                      "of": "vm.scoreboard-lead--WN-11",
+                      "verdict": "pass",
+                      "overturned": false,
+                      "disputed": false,
+                      "by": null
+                    },
+                    "flags": 0,
+                    "evidence": []
                   }
                 ]
               },

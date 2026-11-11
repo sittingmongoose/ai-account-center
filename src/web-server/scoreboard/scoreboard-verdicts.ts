@@ -32,6 +32,16 @@ export function belowBar(column: Pick<Column, 'n' | 'source' | 'reviews'>, minRu
   return null;
 }
 
+/**
+ * The review bar a Recommended or Avoid verdict must clear: one review alone never lifts a row to
+ * either (a 1-of-1 quality share reads 100%), so an observed column needs `minRuns` decisive blind
+ * reviews — the same bar runs already follow. A Fine can stand on fewer; a benchmark column needs
+ * no review.
+ */
+function belowReviewBar(column: Pick<Column, 'source' | 'reviews'>, minRuns: number): boolean {
+  return column.source === 'observed' && column.reviews < minRuns;
+}
+
 interface Scored {
   column: Column;
   score: number;
@@ -162,6 +172,16 @@ export function judgeGroup(
   const judged = new Map<Column, Column>();
   scored.forEach((entry, position) => {
     const { verdict, why } = judge(entry, top, scored.length);
+    if (
+      (verdict === 'recommended' || verdict === 'avoid') &&
+      belowReviewBar(entry.column, minRuns)
+    ) {
+      judged.set(
+        entry.column,
+        unranked(entry.column, `too few blind reviews yet (n = ${entry.column.n})`)
+      );
+      return;
+    }
     const preliminary = entry.marks.some((mark) => mark.value.preliminary);
     judged.set(entry.column, {
       ...entry.column,

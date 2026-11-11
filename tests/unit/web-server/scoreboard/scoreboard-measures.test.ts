@@ -191,6 +191,15 @@ describe('measures', () => {
     expect(value.overturns).toHaveLength(1);
   });
 
+  it('quality: a fail verdict is not passed, whatever overturned says', () => {
+    const value = measure('quality', [doc('A'), doc('B')], [
+      reviewOf('R1', 'A', { verdict: 'fail', overturned: false }),
+      reviewOf('R2', 'B', { verdict: 'fail', overturned: true }),
+    ]);
+    expect(value).toMatchObject({ value: 0, n: 2, of: 0, per: 2, disputed: 0 });
+    expect(value.rounds).toEqual({ value: null, n: 0, low: null, high: null });
+  });
+
   it('quality: a disputed overturn shows as disputed and leaves the share; cannot-verify decides nothing', () => {
     const value = measure(
       'quality',
@@ -438,7 +447,7 @@ describe('a review without overturned', () => {
     ).toThrow('review.overturned');
   });
 
-  it('keeps the documented scoring: fail with overturned false is not an overturn', () => {
+  it('keeps the documented scoring: fail with overturned false is a fail, not an overturn', () => {
     const runs = [doc('a'), reviewOf('r', 'a', { verdict: 'fail', overturned: false })];
     const defs = new Map<string, CatalogMeasure>([
       [
@@ -461,7 +470,8 @@ describe('a review without overturned', () => {
       defs,
       buildReviewIndex(runs)
     );
-    expect(quality.quality.value).toBe(1);
+    expect(quality.quality.value).toBe(0);
+    expect(quality.quality.overturns).toEqual([]);
   });
 });
 
