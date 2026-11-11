@@ -163,9 +163,12 @@ export class ReadersCheckWriter {
       });
     }
     // Files the readers refused with no good copy to keep: the row is the refusal itself.
+    // A file that still has its good copy already has a row above (with its seq, sha and
+    // pin): the problem must not overwrite it (F6).
     for (const problem of [...reports.problems, ...statuses.problems]) {
       const [writer, rest] = writerAndFile(problem.file);
       if (!writer || !rest) continue;
+      if (this.rows().get(writer)?.has(rest)) continue;
       put(writer, {
         file: rest,
         seq: null,
@@ -201,6 +204,7 @@ export class ReadersCheckWriter {
     for (const problem of runs.problems) {
       const [writer, rest] = writerAndFile(problem.file);
       if (!writer || !rest || !rest.startsWith('runs/')) continue;
+      if (this.rows().get(writer)?.has(rest)) continue;
       put(writer, {
         file: rest,
         seq: null,

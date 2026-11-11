@@ -174,6 +174,55 @@ describe('the readers check file', () => {
     }
   });
 
+  it('a refused newer file keeps its good copy seq, sha and pin in the row (F6)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-fallback-'));
+    try {
+      const plain = pins[0].id;
+      fs.mkdirSync(path.join(root, 'v1/writers/vm.lead'), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, 'v1/writers/vm.lead/thread.json'),
+        JSON.stringify({
+          ...threadDoc('vm.lead', { seq: 12 }),
+          agent: { name: 'lead', harness: null, model: 'claude-opus-5-5', effort: 'high', account: null, machine: 'vm', t3Thread: plain, parent: null },
+        })
+      );
+      const reports = new AgentReportsReader({ root: () => root, now: () => NOW });
+      await reports.scan();
+      expect(reports.snapshot().threads).toHaveLength(1);
+      expect(reports.snapshot().threads[0].doc.seq).toBe(12);
+      expect(reports.snapshot().threads[0].problem).toBeNull();
+      // A newer refused version (missing state) over the good copy.
+      fs.writeFileSync(
+        path.join(root, 'v1/writers/vm.lead/thread.json'),
+        JSON.stringify({ ...threadDoc('vm.lead', { seq: 13 }), state: undefined })
+      );
+      await reports.scan();
+      const state = reports.snapshot();
+      expect(state.threads).toHaveLength(1);
+      expect(state.threads[0].doc.seq).toBe(12);
+      expect(state.threads[0].problem?.reason).toBe('state is missing or not valid');
+      expect(state.problems.some((problem) => problem.file === 'writers/vm.lead/thread.json')).toBe(true);
+      const check = new ReadersCheckWriter({ root: () => root, now: () => NOW });
+      check.recordStatusScan(state, { state: 'ok', scannedAt: NOW, docs: [], problems: [] }, pins);
+      await check.flush();
+      const lead = JSON.parse(
+        fs.readFileSync(path.join(root, 'v1/readers/aac/vm.lead.json'), 'utf8')
+      );
+      expect(lead.files).toHaveLength(1);
+      // The good copy's seq, sha and pin survive; only the outcome is refused.
+      expect(lead.files[0]).toMatchObject({
+        file: 'thread.json',
+        seq: 12,
+        result: 'refused',
+        reason: 'state is missing or not valid',
+        pin: { t3Thread: plain, title: 'Build PMConcept7 and Background Activity' },
+      });
+      expect(lead.files[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('normalises the id forms the composer tolerates, and matches no pin by title', () => {
     const hex = '320669b2e6cf23a317d2030821cc8a74289073eab144883a2c9b47acdade3c44';
     const plain = `mcp:launch:${hex}`;
