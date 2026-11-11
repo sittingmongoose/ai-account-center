@@ -3,7 +3,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { runWithScopedConfigDir } from '../../../utils/config-manager';
-import { __testExports, fetchCliproxyStats, fetchCliproxyUsageRaw } from '../stats-fetcher';
+import {
+  __testExports,
+  buildAuthIndexToAccountMap,
+  fetchCliproxyStats,
+  fetchCliproxyUsageRaw,
+  type CliproxyManagementAuthFile,
+} from '../stats-fetcher';
 import { mergeUsageResponseWithMissingDetails } from '../usage-compatibility-transformer';
 
 const originalFetch = globalThis.fetch;
@@ -1471,5 +1477,63 @@ describe('fetchCliproxyStats', () => {
       failureCount: 0,
       totalTokens: 23,
     });
+  });
+});
+
+describe('buildAuthIndexToAccountMap', () => {
+  it('builds map from auth files with auth_index and email', () => {
+    const authFiles: CliproxyManagementAuthFile[] = [
+      { auth_index: 0, provider: 'anthropic', email: 'alice@example.com' },
+      { auth_index: 1, provider: 'anthropic', email: 'bob@example.com' },
+      { auth_index: 2, provider: 'gemini', email: 'carol@example.com' },
+    ];
+
+    const map = buildAuthIndexToAccountMap(authFiles);
+
+    expect(map.get('0')).toBe('alice@example.com');
+    expect(map.get('1')).toBe('bob@example.com');
+    expect(map.get('2')).toBe('carol@example.com');
+  });
+
+  it('skips entries missing auth_index', () => {
+    const authFiles: CliproxyManagementAuthFile[] = [
+      { provider: 'anthropic', email: 'nobody@example.com' }, // no auth_index
+      { auth_index: 3, provider: 'anthropic', email: 'alice@example.com' },
+    ];
+
+    const map = buildAuthIndexToAccountMap(authFiles);
+
+    expect(map.size).toBe(1);
+    expect(map.get('3')).toBe('alice@example.com');
+  });
+
+  it('skips entries missing email', () => {
+    const authFiles: CliproxyManagementAuthFile[] = [
+      { auth_index: 4, provider: 'anthropic' }, // no email
+      { auth_index: 5, provider: 'anthropic', email: 'dave@example.com' },
+    ];
+
+    const map = buildAuthIndexToAccountMap(authFiles);
+
+    expect(map.size).toBe(1);
+    expect(map.get('5')).toBe('dave@example.com');
+  });
+
+  it('returns empty map for empty auth files array', () => {
+    const map = buildAuthIndexToAccountMap([]);
+
+    expect(map.size).toBe(0);
+  });
+
+  it('handles numeric and string auth_index keys consistently', () => {
+    const authFiles: CliproxyManagementAuthFile[] = [
+      { auth_index: 7, provider: 'anthropic', email: 'alice@example.com' },
+      { auth_index: '8', provider: 'anthropic', email: 'bob@example.com' },
+    ];
+
+    const map = buildAuthIndexToAccountMap(authFiles);
+
+    expect(map.get('7')).toBe('alice@example.com');
+    expect(map.get('8')).toBe('bob@example.com');
   });
 });

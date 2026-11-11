@@ -1,24 +1,10 @@
 /**
- * JSONL Parser for Claude Code Usage Analytics
+ * JSONL line parser for Claude Code Usage Analytics
  *
- * High-performance streaming parser for ~/.claude/projects/ JSONL files.
- * Replaces better-ccusage dependency with optimized custom implementation.
- *
- * Key features:
- * - Streaming line-by-line parsing (memory efficient)
+ * Parses `~/.claude/projects/` JSONL lines into raw usage entries.
  * - Only parses "assistant" entries with usage data
- * - Parallel file processing with configurable concurrency
- * - Graceful error handling for malformed entries
+ * - Graceful error handling for malformed entries (they count as no usage, never as an error)
  */
-
-import * as fs from 'fs';
-import * as path from 'path';
-import * as readline from 'readline';
-import { getClaudeConfigDir } from '../utils/claude-config-path';
-
-// ============================================================================
-// TYPE DEFINITIONS
-// ============================================================================
 
 /** Raw usage data from JSONL entry */
 export interface RawUsageEntry {
@@ -73,23 +59,6 @@ interface JsonlAssistantEntry {
     };
   };
 }
-
-/** Parser options */
-export interface ParserOptions {
-  /** Max files to parse concurrently (default: 10) */
-  concurrency?: number;
-  /** Skip files older than this date */
-  minDate?: Date;
-  /** Custom projects directory (default: ~/.claude/projects) */
-  projectsDir?: string;
-}
-
-const DEFAULT_SCAN_CONCURRENCY = 10;
-const MAX_SCAN_CONCURRENCY = 64;
-
-// ============================================================================
-// CORE PARSING FUNCTIONS
-// ============================================================================
 
 /**
  * Parse a single JSONL line into RawUsageEntry if valid
@@ -172,166 +141,4 @@ export function parseUsageEntry(line: string, projectPath: string): RawUsageEntr
     // Malformed JSON - skip silently
     return null;
   }
-}
-
-/**
- * Stream-parse a single JSONL file
- * Yields RawUsageEntry for each valid assistant entry
- */
-export async function parseJsonlFile(
-  filePath: string,
-  projectPath: string
-): Promise<RawUsageEntry[]> {
-  const entries: RawUsageEntry[] = [];
-
-  let fileStream: fs.ReadStream | null = null;
-  let rl: readline.Interface | null = null;
-  try {
-    fileStream = fs.createReadStream(filePath, { encoding: 'utf8' });
-    rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity,
-    });
-
-    for await (const line of rl) {
-      const entry = parseUsageEntry(line, projectPath);
-      if (entry) {
-        entries.push(entry);
-      }
-    }
-  } catch {
-    // File read/stream error - return whatever was parsed so far
-  } finally {
-    rl?.close();
-    fileStream?.destroy();
-  }
-
-  return entries;
-}
-
-function decodeProjectPath(projectDir: string): string {
-  const raw = path.basename(projectDir).replace(/-/g, '/');
-  const safeSegments = raw
-    .split('/')
-    .filter((segment) => segment && segment !== '.' && segment !== '..');
-
-  return `/${safeSegments.join('/')}`;
-}
-
-/**
- * Parse all JSONL files in a single project directory
- */
-export async function parseProjectDirectory(projectDir: string): Promise<RawUsageEntry[]> {
-  const entries: RawUsageEntry[] = [];
-
-  // Get project path from directory name (e.g., "-home-kai-project" -> "/home/kai/project")
-  const projectPath = decodeProjectPath(projectDir);
-
-  try {
-    const files = await fs.promises.readdir(projectDir);
-    const jsonlFiles = files.filter((f) => f.endsWith('.jsonl'));
-
-    // Parse files sequentially within a project to avoid too many open handles
-    for (const file of jsonlFiles) {
-      const filePath = path.join(projectDir, file);
-      const fileEntries = await parseJsonlFile(filePath, projectPath);
-      entries.push(...fileEntries);
-    }
-  } catch {
-    // Directory access error - skip silently
-  }
-
-  return entries;
-}
-
-// ============================================================================
-// DIRECTORY SCANNING
-// ============================================================================
-
-/**
- * Get default Claude projects directory
- */
-export function getDefaultProjectsDir(): string {
-  return path.join(getClaudeConfigDir(), 'projects');
-}
-
-/**
- * Find all project directories under ~/.claude/projects/
- */
-export function findProjectDirectories(projectsDir?: string): string[] {
-  const dir = projectsDir || getDefaultProjectsDir();
-
-  try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(dir, entry.name));
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Scan all projects and parse all JSONL files
- * Main entry point for usage data extraction
- *
- * @param options - Parser configuration
- * @returns All parsed usage entries from all projects
- */
-export async function scanProjectsDirectory(options: ParserOptions = {}): Promise<RawUsageEntry[]> {
-  const requestedConcurrency = options.concurrency;
-  const concurrency =
-    typeof requestedConcurrency === 'number' &&
-    Number.isInteger(requestedConcurrency) &&
-    requestedConcurrency > 0
-      ? Math.min(requestedConcurrency, MAX_SCAN_CONCURRENCY)
-      : DEFAULT_SCAN_CONCURRENCY;
-  const { projectsDir } = options;
-  const allEntries: RawUsageEntry[] = [];
-
-  const projectDirs = findProjectDirectories(projectsDir);
-
-  if (projectDirs.length === 0) {
-    return allEntries;
-  }
-
-  // Process projects in batches for controlled concurrency
-  for (let i = 0; i < projectDirs.length; i += concurrency) {
-    const batch = projectDirs.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map((dir) => parseProjectDirectory(dir)));
-
-    for (const entries of batchResults) {
-      allEntries.push(...entries);
-    }
-  }
-
-  // Filter by date if specified
-  if (options.minDate) {
-    const minTime = options.minDate.getTime();
-    return allEntries.filter((entry) => {
-      const entryTime = Date.parse(entry.timestamp);
-      return Number.isFinite(entryTime) && entryTime >= minTime;
-    });
-  }
-
-  return allEntries;
-}
-
-/**
- * Get count of JSONL files across all projects (for progress reporting)
- */
-export function countJsonlFiles(projectsDir?: string): number {
-  const projectDirs = findProjectDirectories(projectsDir);
-  let count = 0;
-
-  for (const dir of projectDirs) {
-    try {
-      const files = fs.readdirSync(dir);
-      count += files.filter((f) => f.endsWith('.jsonl')).length;
-    } catch {
-      // Skip inaccessible directories
-    }
-  }
-
-  return count;
 }

@@ -81,20 +81,10 @@ afterEach(() => {
 });
 
 describe('compiled Node usage workers', () => {
-  it('rejects a huge obsolete raw cache before allocation, and bounds resumable Analytics scans under a 256MB heap', async () => {
+  it('bounds resumable Analytics scans under a 256MB heap', async () => {
     const codexHome = writeCodexFixture();
-    const cacheDir = path.join(tempRoot, 'large-legacy-cache');
+    const cacheDir = path.join(tempRoot, 'bounded-cache');
     fs.mkdirSync(cacheDir, { recursive: true });
-    const oldCache = path.join(cacheDir, 'codex-native-usage-v1.json');
-    const fd = fs.openSync(oldCache, 'w');
-    fs.writeSync(
-      fd,
-      '{"version":1,"includeCliproxySessions":false,"generatedAt":0,"files":{},"padding":"'
-    );
-    const padding = Buffer.alloc(1024 * 1024, 32);
-    for (let index = 0; index < 160; index++) fs.writeSync(fd, padding);
-    fs.writeSync(fd, '"}');
-    fs.closeSync(fd);
     const rollout = path.join(codexHome, 'sessions', 'rollout-worker.jsonl');
     const transcript =
       JSON.stringify({
@@ -109,12 +99,11 @@ describe('compiled Node usage workers', () => {
       const assert=require('node:assert/strict');
       const {loadAccountAnalyticsWorker}=require('./dist/web-server/services/account-analytics-activity');
       (async()=>{
-        const legacy=await loadAccountAnalyticsWorker(${JSON.stringify(request)});
-        assert.equal(legacy.eventCount,1); assert.equal(legacy.hourly[0].inputTokens,80);
         const request={...${JSON.stringify(request)},activity:{minDate:Date.parse('2026-03-01T00:00:00Z'),
           cacheDir:${JSON.stringify(cacheDir)},maxBytesPerFile:16*1024*1024}};
         const start=Date.now();let result=await loadAccountAnalyticsWorker(request);
-        assert.equal(result.scan.complete,false); assert.equal(result.eventCount,1);
+        // The usage event lives before the huge records, so even a partial first pass has it.
+        assert.equal(result.eventCount,1); assert.equal(result.hourly[0].inputTokens,80);
         let bytes=result.scan.readBytes,passes=1;
         while(!result.scan.complete&&passes<10){result=await loadAccountAnalyticsWorker(request);bytes+=result.scan.readBytes;passes++;}
         assert.equal(result.scan.complete,true); assert.equal(result.scan.skippedLines,0);
@@ -124,20 +113,18 @@ describe('compiled Node usage workers', () => {
         const warm=await loadAccountAnalyticsWorker(request);assert.equal(warm.scan.readBytes,0);
         assert.deepEqual(warm.hourly,result.hourly);
         console.log('RESULT '+JSON.stringify({passes,bytes,elapsedMs:Date.now()-start,
-          warmEvents:warm.eventCount,heapLimitMb:256,complete:result.scan.complete}));
+          warmEvents:warm.eventCount,complete:result.scan.complete}));
       })().catch(error=>{console.error(error);process.exitCode=1});
     `)) as {
       passes: number;
       bytes: number;
       elapsedMs: number;
       warmEvents: number;
-      heapLimitMb: number;
       complete: boolean;
     };
     expect(result.complete).toBe(true);
     expect(result.bytes).toBe(fs.statSync(rollout).size);
     expect(result.passes).toBeGreaterThan(1);
-    expect(result.heapLimitMb).toBe(256);
     expect(result.warmEvents).toBe(1);
     expect(result.elapsedMs).toBeLessThan(15000);
   }, 20000);
@@ -166,10 +153,28 @@ describe('compiled Node usage workers', () => {
       }) + '\n'
     );
     const requests = [
-      { provider: 'claude', request: { kind: 'claude', projectsDir } },
+      {
+        provider: 'claude',
+        request: {
+          kind: 'claude',
+          projectsDir,
+          activity: {
+            minDate: Date.parse('2026-09-30T00:00:00Z'),
+            cacheDir: path.join(tempRoot, 'cache'),
+          },
+        },
+      },
       {
         provider: 'codex',
-        request: { kind: 'codex', codexHome, cacheDir: path.join(tempRoot, 'cache') },
+        request: {
+          kind: 'codex',
+          codexHome,
+          cacheDir: path.join(tempRoot, 'cache'),
+          activity: {
+            minDate: Date.parse('2026-09-30T00:00:00Z'),
+            cacheDir: path.join(tempRoot, 'cache'),
+          },
+        },
       },
     ];
     const appendedClaude = {
@@ -259,33 +264,24 @@ describe('compiled Node usage workers', () => {
     expect(result.afterward.totals).toEqual(result.settled.totals);
   });
 
-  it('returns identical native Codex summaries without transferring raw events', async () => {
+  it('returns native Codex summaries without transferring raw events', async () => {
     const codexHome = writeCodexFixture([codexFixtureLines()[2], '{malformed']);
-    const request = { kind: 'codex', codexHome, cacheDir: path.join(tempRoot, 'native-cache') };
+    const cacheDir = path.join(tempRoot, 'native-cache');
     const result = (await runNode(`
       const assert = require('node:assert/strict');
-      const { loadUsageInWorker } = require(${JSON.stringify(clientPath)});
       const { loadAccountAnalyticsWorker } = require('./dist/web-server/services/account-analytics-activity');
-      const { scanCodexNativeUsageEntries } = require('./dist/web-server/usage/codex-native-usage-collector');
-      const aggregators = require('./dist/web-server/usage/data-aggregator');
       (async () => {
-        const result = await loadUsageInWorker(${JSON.stringify(request)});
-        const bounded = await loadAccountAnalyticsWorker(${JSON.stringify(request)});
-        assert.deepEqual(bounded, result);
-        const entries = await scanCodexNativeUsageEntries({
-          env: { CODEX_HOME: ${JSON.stringify(codexHome)} }, disableCache: true,
+        const result = await loadAccountAnalyticsWorker({
+          ...${JSON.stringify({ kind: 'codex', codexHome, cacheDir })},
+          activity: { minDate: Date.parse('2026-03-01T00:00:00Z'), cacheDir: ${JSON.stringify(cacheDir)} },
         });
-        for (const key of ['daily', 'hourly', 'monthly', 'session']) {
-          const name = 'aggregate' + key[0].toUpperCase() + key.slice(1) + 'Usage';
-          assert.deepEqual(result[key], aggregators[name](entries, 'codex-native'));
-        }
         assert.equal('entries' in result, false);
         console.log('RESULT ' + JSON.stringify(result));
       })().catch(error => { console.error(error); process.exitCode = 1; });
-    `)) as { eventCount: number; daily: Array<Record<string, unknown>> };
+    `)) as { eventCount: number; hourly: Array<Record<string, unknown>> };
 
     expect(result.eventCount).toBe(1);
-    expect(result.daily[0]).toMatchObject({
+    expect(result.hourly[0]).toMatchObject({
       inputTokens: 80,
       outputTokens: 5,
       cacheReadTokens: 20,
@@ -293,7 +289,7 @@ describe('compiled Node usage workers', () => {
     });
   });
 
-  it('keeps Claude totals and all four source labels unchanged', async () => {
+  it('keeps Claude totals and the custom-parser source label unchanged', async () => {
     const projectsDir = path.join(tempRoot, 'claude-projects');
     fs.mkdirSync(path.join(projectsDir, 'fixture'), { recursive: true });
     fs.writeFileSync(
@@ -310,23 +306,21 @@ describe('compiled Node usage workers', () => {
       }) + '\n'
     );
     const result = (await runNode(`
-      const assert = require('node:assert/strict');
-      const { loadUsageInWorker } = require(${JSON.stringify(clientPath)});
-      const { loadAllUsageData } = require('./dist/web-server/usage/data-aggregator');
+      const { loadAccountAnalyticsWorker } = require('./dist/web-server/services/account-analytics-activity');
       (async () => {
-        const result = await loadUsageInWorker({ kind: 'claude', projectsDir: ${JSON.stringify(projectsDir)} });
-        const expected = await loadAllUsageData({ projectsDir: ${JSON.stringify(projectsDir)} });
-        for (const key of ['daily', 'hourly', 'monthly', 'session']) assert.deepEqual(result[key], expected[key]);
-        const droid = await loadUsageInWorker({ kind: 'droid', homeDir: ${JSON.stringify(tempRoot)} });
-        assert.equal(droid.eventCount, 0);
+        const result = await loadAccountAnalyticsWorker({
+          kind: 'claude', projectsDir: ${JSON.stringify(projectsDir)},
+          activity: { minDate: Date.parse('2026-03-01T00:00:00Z'), cacheDir: ${JSON.stringify(path.join(tempRoot, 'cache'))} },
+        });
         console.log('RESULT ' + JSON.stringify(result));
       })().catch(error => { console.error(error); process.exitCode = 1; });
-    `)) as { eventCount: number; daily: Array<Record<string, unknown>> };
+    `)) as { eventCount: number; hourly: Array<Record<string, unknown>> };
     expect(result.eventCount).toBe(1);
-    expect(result.daily[0]).toMatchObject({
+    expect(result.hourly[0]).toMatchObject({
       inputTokens: 100,
       outputTokens: 40,
       cacheReadTokens: 9,
+      source: 'custom-parser',
     });
   });
 
@@ -334,15 +328,18 @@ describe('compiled Node usage workers', () => {
     // The collector stops reading at 12 s and needs time to return its checkpoints, so a tiny
     // budget is raised to the 15 s floor instead of killing the worker mid-write.
     const codexHome = writeCodexFixture();
-    const request = { kind: 'codex', codexHome, cacheDir: path.join(tempRoot, 'native-cache') };
+    const cacheDir = path.join(tempRoot, 'native-cache');
     const result = (await runNode(`
       const { loadAccountAnalyticsWorker } = require('./dist/web-server/services/account-analytics-activity');
       (async () => {
-        const data = await loadAccountAnalyticsWorker(${JSON.stringify(request)}, 1);
+        const data = await loadAccountAnalyticsWorker({
+          ...${JSON.stringify({ kind: 'codex', codexHome, cacheDir })},
+          activity: { minDate: Date.parse('2026-03-01T00:00:00Z'), cacheDir: ${JSON.stringify(cacheDir)} },
+        }, 1);
         console.log('RESULT ' + JSON.stringify({ keys: Object.keys(data).sort(), text: JSON.stringify(data) }));
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `)) as { keys: string[]; text: string };
-    expect(result.keys).toEqual(['daily', 'eventCount', 'hourly', 'monthly', 'session']);
+    expect(result.keys).toEqual(['daily', 'eventCount', 'hourly', 'monthly', 'scan', 'session']);
     expect(JSON.parse(result.text).eventCount).toBe(1);
     expect(result.text).not.toContain(tempRoot);
     expect(result.text).not.toContain('token_count');
@@ -375,7 +372,7 @@ describe('compiled Node usage workers', () => {
     const codexHome = writeCodexFixture();
     const scopedDir = path.join(tempRoot, 'scoped-ccs');
     const result = (await runNode(`
-      const { loadUsageInWorker } = require(${JSON.stringify(clientPath)});
+      const { loadAccountAnalyticsWorker } = require('./dist/web-server/services/account-analytics-activity');
       const { runWithScopedConfigDir } = require('./dist/utils/config-manager');
       const { setCachedModelsDevRegistry } = require('./dist/web-server/models-dev/registry-cache');
       (async () => {
@@ -383,11 +380,13 @@ describe('compiled Node usage workers', () => {
           setCachedModelsDevRegistry({ openai: { id: 'openai', models: {
             'gpt-5': { id: 'gpt-5', cost: { input: 10, output: 20, cache_read: 5, cache_write: 0 } },
           } } });
-          return loadUsageInWorker({
-            kind: 'codex', codexHome: ${JSON.stringify(codexHome)}, cacheDir: ${JSON.stringify(path.join(tempRoot, 'native-cache'))},
+          return loadAccountAnalyticsWorker({
+            kind: 'codex', codexHome: ${JSON.stringify(codexHome)},
+            cacheDir: ${JSON.stringify(path.join(tempRoot, 'native-cache'))},
+            activity: { minDate: Date.parse('2026-03-01T00:00:00Z'), cacheDir: ${JSON.stringify(path.join(tempRoot, 'native-cache'))} },
           });
         });
-        console.log('RESULT ' + JSON.stringify(result.daily[0].totalCost));
+        console.log('RESULT ' + JSON.stringify(result.hourly[0].totalCost));
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `)) as number;
     // Cached input and reasoning output are subsets, rather than extra tokens.
@@ -403,10 +402,10 @@ describe('compiled Node usage workers', () => {
       payload: { text: 'x'.repeat(4 * 1024 * 1024) },
     });
     const codexHome = writeCodexFixture(Array.from({ length: 24 }, () => transcript));
-    const request = { kind: 'codex', codexHome, cacheDir: path.join(tempRoot, 'native-cache') };
+    const cacheDir = path.join(tempRoot, 'native-cache');
     const result = (await runNode(`
       const http = require('node:http');
-      const { loadUsageInWorker } = require(${JSON.stringify(clientPath)});
+      const { loadAccountAnalyticsWorker } = require('./dist/web-server/services/account-analytics-activity');
       (async () => {
         const server = http.createServer((_request, response) => response.end('accounts ready'));
         await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -414,7 +413,10 @@ describe('compiled Node usage workers', () => {
         let ticks = 0, maxGap = 0, lastTick = Date.now(), finished = false;
         const timer = setInterval(() => { const now = Date.now(); maxGap = Math.max(maxGap, now - lastTick); lastTick = now; ticks++; }, 10);
         const start = Date.now();
-        const scan = loadUsageInWorker(${JSON.stringify(request)}).then(result => { finished = true; return result; });
+        const scan = loadAccountAnalyticsWorker({
+          ...${JSON.stringify({ kind: 'codex', codexHome, cacheDir })},
+          activity: { minDate: Date.parse('2026-03-01T00:00:00Z'), cacheDir: ${JSON.stringify(cacheDir)} },
+        }).then(result => { finished = true; return result; });
         await new Promise(resolve => setTimeout(resolve, 50));
         const responseStart = Date.now();
         const body = await new Promise((resolve, reject) => {

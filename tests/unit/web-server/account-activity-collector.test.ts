@@ -17,8 +17,6 @@ import {
 } from '../../../src/web-server/usage/worker-client';
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 import { setCachedModelsDevRegistry } from '../../../src/web-server/models-dev/registry-cache';
-import { scanCodexNativeUsageEntries } from '../../../src/web-server/usage/codex-native-usage-collector';
-import { aggregateHourlyUsage } from '../../../src/web-server/usage/data-aggregator';
 
 const NOW = Date.parse('2026-10-01T16:30:00Z');
 let root: string;
@@ -501,7 +499,7 @@ describe('bounded native account activity checkpoints', () => {
     expect(sum(data, 'outputTokens')).toBe(5);
   });
 
-  it('matches existing native pricing and model semantics while resolving scoped rates once per model', async () => {
+  it('resolves scoped model rates once per model for native pricing', async () => {
     write([
       meta(),
       model(),
@@ -526,18 +524,40 @@ describe('bounded native account activity checkpoints', () => {
           },
         },
       });
-      const entries = await scanCodexNativeUsageEntries({
-        env: { CODEX_HOME: path.join(root, 'codex') },
-        disableCache: true,
-      });
-      return { bounded: await collect(), legacy: aggregateHourlyUsage(entries, 'codex-native') };
+      return collect();
     });
-    expect(result.bounded.hourly).toEqual(result.legacy);
-    expect(result.bounded.hourly[0].totalCost).toBeCloseTo(
+    expect(result.hourly[0].totalCost).toBeCloseTo(
       (120 * 10 + 20 * 20 + 30 * 5 + 20 * 15 + 5 * 25 + 10 * 3) / 1e6,
       12
     );
-    expect(result.bounded.hourly[0].requestCount).toBe(3);
+    expect(result.hourly[0].requestCount).toBe(3);
+  });
+
+  it('preserves cache-only model activity in hourly model breakdowns', async () => {
+    write([
+      meta(),
+      model(),
+      tokens(100, 20, 10),
+      model('gpt-5.3-codex'),
+      // The cumulative total grows only in cached reads: a cache-only delta.
+      tokens(120, 40, 15),
+    ]);
+    const data = await collect();
+    expect(data.hourly).toHaveLength(1);
+    expect(data.hourly[0].inputTokens).toBe(80);
+    expect(data.hourly[0].cacheReadTokens).toBe(40);
+    expect(data.hourly[0].modelsUsed).toContain('gpt-5.3-codex');
+    expect(data.hourly[0].modelBreakdowns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ modelName: 'gpt-5.4', inputTokens: 80, cacheReadTokens: 20 }),
+        expect.objectContaining({
+          modelName: 'gpt-5.3-codex',
+          inputTokens: 0,
+          cacheReadTokens: 20,
+          outputTokens: 5,
+        }),
+      ])
+    );
   });
 
   it('bounds oversized lines, resumes discarding, and keeps subsequent actual usage with an explicit partial result', async () => {

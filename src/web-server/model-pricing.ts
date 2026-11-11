@@ -1204,9 +1204,9 @@ function hasProviderContext(model: string, options: PricingLookupOptions): boole
  * to the base rates so existing callers stay unaffected.
  *
  * TODO(opus-fast-mode): No production caller currently passes `serviceTier`.
- * Anthropic's `service_tier` is not yet captured on CliproxyRequestDetail, so
- * usage transformers (cliproxy-usage-transformer.ts, data-aggregator.ts) bill
- * fast-mode requests at the standard rate — i.e. fast Opus is under-reported by
+ * Anthropic's `service_tier` is not yet captured on the usage pipeline's
+ * request details, so the account activity collector bills fast-mode requests
+ * at the standard rate — i.e. fast Opus is under-reported by
  * the tier premium ($10/$50 vs $5/$25). Wire `serviceTier` through once the
  * usage pipeline records it. The schema below is ready for that integration.
  */

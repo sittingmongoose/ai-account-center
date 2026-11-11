@@ -1,15 +1,6 @@
 /** Parse history and aggregate it away from the dashboard's HTTP event loop. */
 import { parentPort, workerData } from 'worker_threads';
 import { ValidationError } from '../../errors/error-types';
-import { scanProjectsDirectory } from '../jsonl-parser';
-import {
-  aggregateDailyUsage,
-  aggregateHourlyUsage,
-  aggregateMonthlyUsage,
-  aggregateSessionUsage,
-} from './data-aggregator';
-import { scanCodexNativeUsageEntries } from './codex-native-usage-collector';
-import { scanDroidNativeUsageEntries } from './droid-native-usage-collector';
 import {
   collectAccountActivity,
   collectCodexPartition,
@@ -69,42 +60,7 @@ async function collectUsage(request: UsageWorkerRequest): Promise<UsageWorkerRes
       data: { daily: [], hourly: [], monthly: [], session: [], eventCount: 0 },
     };
   }
-  let entries;
-  let source;
-  switch (request.kind) {
-    case 'claude':
-      entries = await scanProjectsDirectory({ projectsDir: request.projectsDir });
-      source = 'custom-parser';
-      break;
-    case 'codex':
-      entries = await scanCodexNativeUsageEntries({
-        env: { ...process.env, CODEX_HOME: request.codexHome },
-        cacheDir: request.cacheDir,
-      });
-      source = 'codex-native';
-      break;
-    case 'droid':
-      entries = await scanDroidNativeUsageEntries({
-        env: { ...process.env, CCS_HOME: request.homeDir },
-      });
-      source = 'droid-native';
-      break;
-    default:
-      throw new ValidationError('Unknown usage worker source');
-  }
-
-  // Raw events (including the large native cache) stay in this thread. Only
-  // compact summaries cross the boundary, preserving existing source labels.
-  return {
-    ok: true,
-    data: {
-      eventCount: entries.length,
-      daily: aggregateDailyUsage(entries, source),
-      hourly: aggregateHourlyUsage(entries, source),
-      monthly: aggregateMonthlyUsage(entries, source),
-      session: aggregateSessionUsage(entries, source),
-    },
-  };
+  throw new ValidationError('Unknown usage worker source');
 }
 
 if (parentPort) {
