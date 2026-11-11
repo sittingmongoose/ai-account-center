@@ -23,7 +23,10 @@ const PREBUILT = path.join(
   nativeStatusModuleName()
 );
 const hasModule = fs.existsSync(PREBUILT);
-const withModule = hasModule ? it : it.skip;
+// On CI (or when required) a missing module fails instead of skipping, so a host without
+// a build cannot stay green by never running this (F12).
+const required = Boolean(process.env.CI || process.env.AAC_REQUIRE_NATIVE);
+const withModule = hasModule || required ? it : it.skip;
 
 const PIN_ID = 'pin-1';
 const PIN_TITLE = 'Build PMConcept7';
