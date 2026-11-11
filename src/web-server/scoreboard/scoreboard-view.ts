@@ -4,6 +4,7 @@
  * when the task type says so, within one task type; observed and benchmark runs stay in separate
  * columns and are only ever compared with their own kind (and their own benchmark).
  */
+import { normalizeModel } from './model-identity';
 import type { RunDoc } from '../status/report-schema';
 import type { CatalogMeasure, CatalogTaskType, CatalogUse } from './catalog';
 import {
@@ -261,7 +262,14 @@ function bump(map: Map<string, number>, key: string): void {
 
 export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
   const { catalog, runs, now } = inputs;
-  const docs = runs.runs.map((run) => run.doc);
+  const docs = runs.runs.map(({ doc }) => {
+    if (!doc.model.id) return doc;
+    const identity = normalizeModel(doc.model.id, doc.model.effort, catalog.models);
+    return {
+      ...doc,
+      model: { ...doc.model, id: identity.id, effort: identity.effort, provider: null },
+    };
+  });
   const index = buildReviewIndex(docs);
   const labels = new Map(catalog.models.map((model) => [model.model, model.label]));
   const shared: Shared = {

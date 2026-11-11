@@ -21,7 +21,7 @@
       "ageSeconds": 0,
       "staleAfterSeconds": 180,
       "state": "ok",
-      "detail": "Catalog read 4:30 PM. Models in runs but not in the catalog: example/example-1 (1 run)."
+      "detail": "Catalog read 4:30 PM. Models in runs but not in the catalog: example-1 (1 run)."
     }
   ],
   "catalog": {
@@ -67,17 +67,6 @@
       {
         "model": "anthropic/claude-fable-5-1",
         "label": "Fable 5.1",
-        "family": "Claude",
-        "runtimes": [
-          "claude-code"
-        ],
-        "efforts": [],
-        "prices": null,
-        "notes": null
-      },
-      {
-        "model": "anthropic/claude-fable-5-2",
-        "label": "Fable 5.2",
         "family": "Claude",
         "runtimes": [
           "claude-code"
@@ -164,12 +153,76 @@
       },
       {
         "model": "muse/muse-wonder-full-1.0",
+        "label": "Muse Wonder Full 1.0",
+        "family": "Muse",
+        "runtimes": [
+          "muse"
+        ],
+        "efforts": [],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "anthropic/claude-fable-5-2",
+        "label": "Fable 5.2",
+        "family": "Claude",
+        "runtimes": [
+          "claude-code"
+        ],
+        "efforts": [
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "muse/muse-wonder-1.0",
         "label": "Muse Wonder 1.0",
         "family": "Muse",
         "runtimes": [
           "muse"
         ],
         "efforts": [],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "muse/muse-ember-1.0",
+        "label": "Muse Ember 1.0",
+        "family": "Muse",
+        "runtimes": [
+          "muse"
+        ],
+        "efforts": [
+          "max"
+        ],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "xai/grok-4.7",
+        "label": "Grok 4.7",
+        "family": "Grok",
+        "runtimes": [
+          "cursor",
+          "grok"
+        ],
+        "efforts": [],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "google/gemini-4-argon",
+        "label": "Gemini 4 Argon",
+        "family": "Gemini",
+        "runtimes": [
+          "antigravity"
+        ],
+        "efforts": [
+          "high"
+        ],
         "prices": null,
         "notes": null
       }
@@ -4461,9 +4514,9 @@
               "benchmarks": []
             },
             {
-              "key": "example/example-1|omp|",
-              "model": "example/example-1",
-              "label": "example/example-1",
+              "key": "example-1|omp|",
+              "model": "example-1",
+              "label": "example-1",
               "inCatalog": false,
               "runtime": "omp",
               "effort": null,
@@ -4628,8 +4681,8 @@
                       "type": "build",
                       "title": "build unlisted"
                     },
-                    "model": "example/example-1",
-                    "label": "example/example-1",
+                    "model": "example-1",
+                    "label": "example-1",
                     "runtime": "omp",
                     "effort": null,
                     "process": null,
@@ -9817,9 +9870,9 @@
               "benchmarks": []
             },
             {
-              "key": "example/example-1|omp|",
-              "model": "example/example-1",
-              "label": "example/example-1",
+              "key": "example-1|omp|",
+              "model": "example-1",
+              "label": "example-1",
               "inCatalog": false,
               "runtime": "omp",
               "effort": null,
@@ -9984,8 +10037,8 @@
                       "type": "build",
                       "title": "build unlisted"
                     },
-                    "model": "example/example-1",
-                    "label": "example/example-1",
+                    "model": "example-1",
+                    "label": "example-1",
                     "runtime": "omp",
                     "effort": null,
                     "process": null,
@@ -11624,8 +11677,8 @@
         "type": "build",
         "title": "build unlisted"
       },
-      "model": "example/example-1",
-      "label": "example/example-1",
+      "model": "example-1",
+      "label": "example-1",
       "runtime": "omp",
       "effort": null,
       "process": null,

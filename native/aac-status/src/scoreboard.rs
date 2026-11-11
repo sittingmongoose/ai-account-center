@@ -56,6 +56,8 @@ pub struct CatalogIn {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CatalogModelIn {
+    #[serde(default)]
+    pub efforts: Vec<String>,
     pub model: String,
     pub label: String,
 }
@@ -1693,6 +1695,17 @@ fn read_note(sources: &[SourceIn]) -> (Vec<Run>, Option<String>) {
 /// The composed `byModel` field: both views, the picks and the read note. Pure: the same
 /// view gives the same words.
 pub fn by_model(view: &ViewIn) -> Result<ByModel> {
+    let mut normalized = view.clone();
+    for usage in &mut normalized.uses {
+        for task in &mut usage.task_types {
+            for row in &mut task.rows {
+                let (id, effort) = normalize_model(&row.model, row.effort.clone(), &view.catalog.models);
+                row.model = id;
+                row.effort = effort;
+            }
+        }
+    }
+    let view = &normalized;
     let min_runs = view.catalog.min_runs;
     let (note, summary) = read_note(&view.sources);
     let pipeline = build_view(
@@ -1731,4 +1744,49 @@ pub fn by_model(view: &ViewIn) -> Result<ByModel> {
             build_view(view, "pm-users", "Puppet Master users", "PM users", &["pm-users"])?,
         ],
     })
+}
+
+/// Catalog-only identity resolution, including catalog-declared effort suffixes.
+fn normalize_model(id: &str, effort: Option<String>, models: &[CatalogModelIn]) -> (String, Option<String>) {
+    let matches = |candidate: &str, model: &str| {
+        candidate == model
+            || (!candidate.contains('/') && model.split_once('/').is_some_and(|(_, bare)| candidate == bare))
+    };
+    let exact: Vec<_> = models.iter().filter(|m| matches(id, &m.model)).collect();
+    if exact.len() == 1 {
+        return (exact[0].model.clone(), effort);
+    }
+    let mut found = Vec::new();
+    for model in models {
+        for suffix in &model.efforts {
+            if let Some(base) = id.strip_suffix(&format!("-{suffix}"))
+                && matches(base, &model.model)
+            {
+                found.push((model.model.clone(), effort.clone().or(Some(suffix.clone()))));
+            }
+        }
+    }
+    if found.len() == 1 {
+        found.remove(0)
+    } else {
+        (id.to_string(), effort)
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    #[test]
+    fn catalog_identities_and_effort_suffixes() {
+        let models = vec![CatalogModelIn {
+            model: "google/gemini-4-argon".into(),
+            label: "Argon".into(),
+            efforts: vec!["high".into()],
+        }];
+        assert_eq!(
+            normalize_model("gemini-4-argon-high", None, &models),
+            ("google/gemini-4-argon".into(), Some("high".into()))
+        );
+        assert_eq!(normalize_model("unknown", None, &models), ("unknown".into(), None));
+    }
 }
