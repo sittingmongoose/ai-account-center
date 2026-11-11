@@ -2519,3 +2519,16 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 :root[data-chrome='phone'] .new-build { bottom: calc(max(var(--safe-bottom), 8px) + 58px); }
 :root[data-chrome='rail'] .new-build { left: calc(50% - var(--rail-w) / 2); }
 :root[data-chrome='rail'][data-rail-side='left'] .new-build { left: calc(50% + var(--rail-w) / 2); }
+
+/* Keep large question decks bounded on desktop, phones and short foldable screens. */
+.q-index-tools { display: grid; gap: 8px; padding: 10px; }
+.q-index-tools input, .q-index-tools select { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--rule-2); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; }
+.q-index-pages { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 10px 10px; font-size: var(--fs-small); }
+.q-index-items { max-height: min(480px, 45dvh); overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable; }
+.q-index-items .q-t { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.q-index-items .q-m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-height: 759.98px) {
+  @container content (min-width: 760px) and (max-width: 1279.98px) {
+    .q-wrap > .q-list { display: block; }
+  }
+}

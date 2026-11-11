@@ -20,6 +20,7 @@ mod home;
 mod live;
 mod media;
 mod owned;
+mod question_index;
 mod scoreboard;
 mod session;
 mod status;

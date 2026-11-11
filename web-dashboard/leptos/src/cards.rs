@@ -439,29 +439,13 @@ fn Deck(
         };
         view! { {first}" · "{second} }.into_any()
     };
-    let list_items =
-        move || {
-            shown.get().into_iter().enumerate().map(|(i, card)| {
-            let ready = drafts.with(|d| drafts::standing(d, &card) == Standing::Ready);
-            let meta = item_meta(&card);
-            view! {
-                <li>
-                    <button
-                        class="q-item"
-                        class:sel=move || deck_view.get() == DeckView::Cards && at.get() == i
-                        class:done=ready
-                        data-label=card.short()
-                        data-state=ready.then_some("ready")
-                        on:click=move |_| { list_open.set(false); go_card(i) }
-                    >
-                        <span class="q-n">{(i + 1).to_string()}</span>
-                        <span class="q-t">{card.title.clone()}</span>
-                        <span class="q-m">{meta}</span>
-                    </button>
-                </li>
-            }
-        }).collect_view()
-        };
+    let list_items = move || {
+        view! {
+            <crate::question_index::QuestionIndex cards=shown selected=at meta=item_meta
+                ready=move |card| drafts.with(|d| drafts::standing(d, card) == Standing::Ready)
+                on_select=Callback::new(move |i| { list_open.set(false); go_card(i); })/>
+        }
+    };
     let review_label = move || format!("Review and send ({})", ready());
     let at_end = move || at.get() + 1 >= shown.with(|o| o.len());
     let next_label = move || if at_end() { "Review" } else { "Next" };
@@ -522,12 +506,12 @@ fn Deck(
                 <Disclosure open=list_open label="All questions".to_string()/>
             </div>
             <Show when=move || list_open.get()>
-                <ol class="q-list-phone">{list_items}</ol>
+                <div class="q-list-phone">{list_items}</div>
             </Show>
         </Show>
         <div class="q-wrap">
             <Show when=move || !matches!(deck_view.get(), DeckView::Sent(_))>
-                <ol class="q-list">{list_items}</ol>
+                <div class="q-list">{list_items}</div>
             </Show>
             {move || match deck_view.get() {
                 DeckView::Cards => view! {
