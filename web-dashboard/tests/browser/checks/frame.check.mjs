@@ -48,6 +48,33 @@ async function openFrame(t, page, safe = '') {
 
 const where = (t) => t.page.evaluate(() => ({ path: location.pathname, current: [...document.querySelectorAll('a[aria-current="page"]')].map((a) => a.getAttribute('href')) }));
 
+/** Whether a point (dx, dy from a screen corner) clears that rounded corner (radius r, about 55 pt on the Duo) by `margin`. */
+const cornerClear = (dx, dy, r = 55, margin = 12) => dx >= r || dy >= r || Math.hypot(r - dx, r - dy) <= r - margin;
+
+/** The rail pose's geometry: the rail and its controls, the content, the first plate, toasts, and where the page's
+ * first lines of text start. */
+const railPose = () => {
+	const box = (el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, r: r.right, b: r.bottom }; };
+	const rail = document.querySelector('.rail');
+	const content = document.querySelector('main.content');
+	const plate = document.querySelector('.route:not([hidden]) .plate');
+	const texts = [];
+	const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+	while (texts.length < 60 && walker.nextNode()) {
+		const n = walker.currentNode;
+		if (!n.textContent.trim() || !n.parentElement?.checkVisibility?.()) continue;
+		const range = document.createRange();
+		range.selectNodeContents(n);
+		for (const r of range.getClientRects()) if (r.width > 0 && r.height > 0) texts.push({ x: r.x, y: r.y, r: r.right, text: n.textContent.trim().slice(0, 24) });
+	}
+	return {
+		chrome: document.documentElement.dataset.chrome, side: document.documentElement.dataset.railSide || '', w: innerWidth, h: innerHeight,
+		reserve: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--rail-reserve')) || 0,
+		rail: box(rail), controls: [...rail.querySelectorAll('a, button')].map(box), content: box(content), plate: plate ? box(plate) : null,
+		toasts: box(document.querySelector('.toasts')), texts, scrollW: document.documentElement.scrollWidth,
+	};
+};
+
 export const tests = {
 	async 'frame: the tabs, the address and Back move together'(t) {
 		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
@@ -121,6 +148,48 @@ export const tests = {
 			const s = await where(t);
 			await t.check('/app/accounts opens Accounts & Settings', s.path === '/app/accounts' && s.current.includes('/app/accounts'), JSON.stringify(s));
 		});
+	},
+
+	async 'frame: the rail follows the strip to either side, and the page clears the rounded corners'(t) {
+		// The real Duo (REAL-DEVICE-INFO.md): its screen reports 466x678 in every pose, so it is known as the Duo; folded and
+		// turned one way iOS puts the strip on the right, turned the other way on the LEFT (safe 0/0/34/84).
+		const poses = [
+			{ name: 'folded on its side, strip on the left', width: 678, height: 466, safe: '0,0,34,84', side: 'left', reserve: 12 },
+			{ name: 'folded on its side, strip on the right', width: 678, height: 466, safe: '0,84,34,0', side: 'right', reserve: 12 },
+			{ name: 'folded upright', width: 466, height: 678, safe: '0,84,34,0', side: 'right', reserve: 184 },
+		];
+		for (const p of poses) {
+			await t.step(p.name, async () => {
+				await t.newContext({ viewport: { width: p.width, height: p.height }, screen: { width: 466, height: 678 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1, serviceWorkers: 'block' });
+				await t.app.signIn();
+				await openFrame(t, 'status', p.safe);
+				const s = await t.page.evaluate(railPose);
+				const label = p.name;
+				await t.check(`${label}: the rail, on the ${p.side}`, s.chrome === 'rail' && s.side === p.side, `${s.chrome} ${s.side}`);
+				await t.equal(`${label}: the rail starts ${p.reserve} px down (no status cluster in a sideways strip)`, s.reserve, p.reserve);
+				const strip = p.side === 'left' ? [0, 84] : [s.w - 84, s.w];
+				await t.check(`${label}: the rail and every control in it sit in the strip`, s.rail.x >= strip[0] - 0.5 && s.rail.r <= strip[1] + 0.5 && s.controls.length >= 8 && s.controls.every((c) => c.x >= strip[0] - 0.5 && c.r <= strip[1] + 0.5),
+					`rail ${Math.round(s.rail.x)}-${Math.round(s.rail.r)}; controls ${s.controls.map((c) => `${Math.round(c.x)}-${Math.round(c.r)}`).join(' ')}`);
+				if (p.side === 'left') {
+					await t.check(`${label}: the page starts at the rail, with no left gutter`, s.content.x >= s.rail.r - 0.5 && !!s.plate && s.plate.x - s.rail.r <= 16 && Math.abs(s.content.r - s.w) < 1,
+						`rail ends ${Math.round(s.rail.r)}, content ${Math.round(s.content.x)}-${Math.round(s.content.r)}, first plate at ${s.plate && Math.round(s.plate.x)}`);
+					await t.check(`${label}: toasts keep clear of the rail`, s.toasts.x >= s.rail.r - 0.5 && s.toasts.r <= s.w + 0.5, `toasts ${Math.round(s.toasts.x)}-${Math.round(s.toasts.r)}`);
+					await t.page.click('.rail button[aria-label="Account"]');
+					const menu = await t.page.evaluate(() => { const r = document.querySelector('.acct-menu').getBoundingClientRect(); return { x: r.x, r: r.right }; });
+					await t.check(`${label}: the account menu opens beside the rail, not under it`, menu.x >= s.rail.r - 0.5 && menu.r <= s.w + 0.5, `menu ${Math.round(menu.x)}-${Math.round(menu.r)}`);
+					await t.page.keyboard.press('Escape');
+				} else {
+					await t.check(`${label}: the page stops at the rail`, s.content.r <= s.rail.x + 0.5, `content ends ${Math.round(s.content.r)}, rail starts ${Math.round(s.rail.x)}`);
+				}
+				// The screen corner beside the page: top left with the strip on the right, top right with it on the left.
+				const near = p.side === 'left'
+					? s.texts.filter((r) => r.r > s.w - 60 && r.y < 60).map((r) => ({ ...r, dx: s.w - r.r, dy: r.y }))
+					: s.texts.filter((r) => r.x < 60 && r.y < 60).map((r) => ({ ...r, dx: r.x, dy: r.y }));
+				await t.check(`${label}: the page's first lines clear the 55 pt rounded corner by 12 pt`, near.every((r) => cornerClear(r.dx, r.dy)),
+					near.map((r) => `"${r.text}" at ${Math.round(r.dx)},${Math.round(r.dy)}`).join('; ') || 'no text near the corner');
+				await t.check(`${label}: no sideways scroll`, s.scrollW <= s.w + 1, `${s.scrollW} > ${s.w}`);
+			});
+		}
 	},
 
 	async 'frame: each format draws its own chrome, and the Duo keeps its strip and band rules'(t) {

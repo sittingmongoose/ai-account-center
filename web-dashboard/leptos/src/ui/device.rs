@@ -68,8 +68,16 @@ pub fn device_report() -> String {
     LAST.with(|l| {
         let (i, chrome, duo, reserve) = *l.borrow();
         out += &format!(
-            "safe t{} r{} b{} l{}\nchrome {chrome}  duo {duo}  reserve {reserve}\n",
-            i.top, i.right, i.bottom, i.left
+            "safe t{} r{} b{} l{}\nchrome {chrome}{}  duo {duo}  reserve {reserve}\n",
+            i.top,
+            i.right,
+            i.bottom,
+            i.left,
+            if chrome == "rail" {
+                format!(" ({})", rail_side(i))
+            } else {
+                String::new()
+            }
         );
     });
     let ua = nav.user_agent().unwrap_or_default();
@@ -161,22 +169,44 @@ pub fn chrome_for(embed: bool, duo: bool, width: f64, height: f64, insets: Inset
     if content < 760.0 { "phone" } else { "desk" }
 }
 
+/// Which side the rail goes on: the left when iOS reports the status strip there and not on the right (the folded Duo
+/// turned the other way, safe 0/0/34/84 on the device), else the right, also while a fold's insets have not arrived.
+pub fn rail_side(insets: Insets) -> &'static str {
+    if insets.left >= 44.0 && insets.right < 44.0 {
+        "left"
+    } else {
+        "right"
+    }
+}
+
+/// The status strip on the rail's side, or 0 when iOS reports none.
+fn strip(insets: Insets) -> f64 {
+    if rail_side(insets) == "left" {
+        insets.left
+    } else {
+        insets.right
+    }
+}
+
 /// How far below the top of the strip the app's tabs may start: past the iOS clock and the signal and battery ring
-/// (measured on the device, 2026-11-10: the cluster ends near 168 pt folded and 116 pt open). With no strip on the
-/// right (iOS kept its status bar on top) the rail starts near the top.
-pub fn rail_reserve(width: f64, insets: Insets) -> f64 {
-    if insets.right < 44.0 {
+/// (measured on the device, 2026-11-10: the cluster ends near 168 pt folded and 116 pt open). On its side the folded
+/// Duo shows no status cluster in its strip, on either side, and with no strip at all (iOS kept its status bar on top)
+/// the rail starts near the top too.
+pub fn rail_reserve(width: f64, height: f64, insets: Insets) -> f64 {
+    if strip(insets) < 44.0 {
         12.0
     } else if width >= 760.0 {
         136.0
+    } else if width > height {
+        12.0
     } else {
         184.0
     }
 }
 
-/// The rail's width: the status strip when iOS reports one, else the strip's usual 84 px.
+/// The rail's width: the status strip on its side when iOS reports one, else the strip's usual 84 px.
 pub fn rail_width(insets: Insets) -> f64 {
-    insets.right.max(84.0)
+    strip(insets).max(84.0)
 }
 
 fn parse_override(search: &str) -> Option<Insets> {
@@ -254,6 +284,12 @@ pub fn start(embed: bool) {
         let height = size(window().inner_height(), 900.0);
         let chrome = chrome_for(embed, duo, width, height, insets);
         let _ = root.set_attribute("data-chrome", chrome);
+        // The rail sits in the strip, on whichever side iOS puts it (app.css mirrors the rail's layout for the left).
+        if chrome == "rail" {
+            let _ = root.set_attribute("data-rail-side", rail_side(insets));
+        } else {
+            let _ = root.remove_attribute("data-rail-side");
+        }
         let style = root.style();
         // Inside the iframe nothing is reserved: the shell's own chrome already sits outside the content.
         let px = |n: f64| format!("{n}px");
@@ -264,7 +300,7 @@ pub fn start(embed: bool) {
         // The tall reserve clears the Duo's clock and signal ring; any other device's rail starts near the top.
         let reserve = if chrome == "rail" {
             if duo {
-                rail_reserve(width, insets)
+                rail_reserve(width, height, insets)
             } else {
                 12.0
             }
@@ -413,9 +449,33 @@ mod tests {
 
     #[test]
     fn reserve_keeps_the_clock_and_signal_clear() {
-        let strip = insets(0.0, 84.0, 34.0, 0.0);
-        assert_eq!(rail_reserve(466.0, strip), 184.0);
-        assert_eq!(rail_reserve(951.0, strip), 136.0);
-        assert_eq!(rail_reserve(951.0, Insets::default()), 12.0);
+        let right = insets(0.0, 84.0, 34.0, 0.0);
+        let left = insets(0.0, 0.0, 34.0, 84.0);
+        assert_eq!(rail_reserve(466.0, 678.0, right), 184.0, "folded upright");
+        assert_eq!(rail_reserve(951.0, 669.0, right), 136.0, "open on its side");
+        assert_eq!(
+            rail_reserve(951.0, 669.0, Insets::default()),
+            12.0,
+            "no strip reported"
+        );
+        // folded on its side: no status cluster in the strip, whichever side it is on
+        assert_eq!(rail_reserve(678.0, 466.0, right), 12.0);
+        assert_eq!(rail_reserve(678.0, 466.0, left), 12.0);
+    }
+
+    #[test]
+    fn the_rail_goes_on_the_side_of_the_strip() {
+        // the real Duo folded and turned the other way (2026-11-10, log 18:56:23)
+        assert_eq!(rail_side(insets(0.0, 0.0, 34.0, 84.0)), "left");
+        assert_eq!(rail_width(insets(0.0, 0.0, 34.0, 84.0)), 84.0);
+        assert_eq!(rail_width(insets(0.0, 0.0, 34.0, 96.0)), 96.0);
+        // folded upright, open on its side, folded turned the usual way
+        assert_eq!(rail_side(insets(0.0, 84.0, 34.0, 0.0)), "right");
+        // no strip yet, or one on each side (an iPhone on its side): the right, as before
+        assert_eq!(rail_side(Insets::default()), "right");
+        assert_eq!(rail_side(insets(0.0, 62.0, 21.0, 62.0)), "right");
+        assert_eq!(rail_width(insets(0.0, 62.0, 21.0, 62.0)), 84.0);
+        // a left inset too small to be a strip does not move the rail
+        assert_eq!(rail_side(insets(0.0, 0.0, 34.0, 30.0)), "right");
     }
 }
