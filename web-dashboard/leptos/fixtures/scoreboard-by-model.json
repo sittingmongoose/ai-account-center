@@ -683,7 +683,7 @@
                 },
                 {
                   "label": "Time per word",
-                  "value": "0.0 s",
+                  "value": "–",
                   "sub": "median",
                   "note": "Over 6 runs.",
                   "range": null
@@ -956,7 +956,7 @@
                 },
                 {
                   "label": "Time per word",
-                  "value": "0.0 s",
+                  "value": "–",
                   "sub": "median",
                   "note": "Over 5 runs.",
                   "range": null
@@ -1755,7 +1755,7 @@
                 },
                 {
                   "label": "Time per word",
-                  "value": "0.0 s",
+                  "value": "–",
                   "sub": "median",
                   "note": "Over 6 runs.",
                   "range": null
@@ -1835,7 +1835,7 @@
                 },
                 {
                   "label": "Time per word",
-                  "value": "0.0 s",
+                  "value": "–",
                   "sub": "median",
                   "note": "Over 5 runs.",
                   "range": null

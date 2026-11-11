@@ -459,6 +459,91 @@ fn a_per_task_speed_with_no_value_is_still_refused() {
 }
 
 #[test]
+fn the_pick_uses_the_same_process_as_the_cell_and_the_sheet() {
+    // D3 on real data's shape: one model, two processes. The older process (rank 1,
+    // recommended) and the newer one (rank 2, fine) must not both surface: the pick, the
+    // cell and the sheet all draw on the chosen process, so the pick says the only model
+    // tried and never compares the model with itself. A speed that formats to zero time
+    // reads "–", and one model reads "1 model", never "1 models".
+    let misses = |value: f64| json!({ "value": value, "n": 12, "low": 0.01, "high": 0.03, "of": 19, "per": 1075 });
+    let bench = |version: &str| {
+        json!({
+            "model": "x/one", "label": "One", "runtime": "rt", "effort": "e",
+            "process": { "id": "p", "version": version },
+            "n": { "observed": 0, "benchmark": 12 },
+            "basis": "benchmark", "ranked": true,
+            "why": "",
+            "observed": { "n": 0, "reviews": 0, "ranked": false, "why": "" },
+            "benchmarks": [{
+                "n": 12, "ranked": true, "why": "",
+                "measures": {
+                    "silent-misses": misses(0.02),
+                    "speed": { "value": 0.02, "n": 12, "low": 0.01, "high": 0.04 }
+                }
+            }]
+        })
+    };
+    let mut older = bench("1");
+    older["verdict"] = json!("recommended");
+    older["rank"] = json!(1);
+    let mut newer = bench("2");
+    newer["verdict"] = json!("fine");
+    newer["rank"] = json!(2);
+    let small: Value = json!({
+        "catalog": {
+            "minRuns": 5,
+            "models": [{ "model": "x/one", "label": "One" }],
+            "taskTypes": [{ "id": "plan", "label": "Planning wizard" }]
+        },
+        "uses": [
+            {
+                "id": "planning",
+                "label": "Planning",
+                "taskTypes": [{
+                    "id": "plan", "label": "Planning wizard", "unit": "word",
+                    "rows": [older, newer]
+                }]
+            },
+            { "id": "building", "label": "Building", "taskTypes": [] },
+            { "id": "pm-users", "label": "PM users", "taskTypes": [] }
+        ],
+        "sources": []
+    });
+    let parsed: ViewIn = serde_json::from_value(small).unwrap();
+    let view = by_model(&parsed).unwrap();
+    assert_eq!(view.band_summary, "1 model with runs");
+    let pipeline = &view.views[0];
+    let meta: Vec<&str> = pipeline.meta.iter().map(|run| run.text.as_str()).collect();
+    assert_eq!(meta, vec!["1", " model with runs · a verdict needs 5 runs of that job"]);
+
+    // The pick names the only model tried, with the chosen process's verdict — never
+    // the older process's "Benchmark only" comparison of the model with itself.
+    let why = pipeline.picks[0]
+        .why
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    assert_eq!(why, "One · e is the only model tried (12 runs, Fine).");
+
+    // The cell and the sheet agree with the pick (the same process, verdict fine), and
+    // the speed reads unknown, never "0.0 s".
+    let model = &pipeline.models[0];
+    let cell = model.cells.get("plan").unwrap().as_ref().unwrap();
+    assert_eq!(cell.verdict, "fine");
+    let times: Vec<&str> = model.report[0]
+        .measures
+        .iter()
+        .filter(|m| m.label == "Time per word")
+        .map(|m| m.value.as_str())
+        .collect();
+    assert_eq!(times, vec!["–"]);
+    let text = serde_json::to_string(&view).unwrap();
+    assert!(!text.contains("0.0 s"), "a zero time was printed: {text}");
+    assert!(!text.contains("1 models"), "the model count was not singular: {text}");
+}
+
+#[test]
 fn unknown_speed_and_cost_are_not_called_the_same() {
     // The review fixture builder's review runs, with wallSeconds and cost set to null.
     // Both models stay Recommended. Unknown speed and unknown cost are not a tie. R1.

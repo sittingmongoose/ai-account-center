@@ -22,6 +22,11 @@
 //!
 //! Fix round 2: "at the same speed and cost" is said only when both models' speed and
 //! cost are known finite numbers and each pair matches. Two unknown values are not a tie.
+//!
+//! Amendments of 2026-11-11 (pkg M, D3): the pick draws on the same row as the cell and
+//! the sheet (one row per model per job), so it never compares a model with itself or
+//! another process of the same model; a speed that formats to a zero time reads "–"
+//! (unknown), never a measured zero; "1 models" reads "1 model".
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -768,9 +773,16 @@ fn measures(job: &TaskIn, row: &RowIn, min_runs: MinRuns) -> Result<Vec<MeasureO
     let speed = m.get("speed");
     if let Some(sp) = speed.filter(|sp| sp.has_value()) {
         let per_task = sp.per_task.as_ref().filter(|_| job.unit == "task");
-        let value = match per_task {
+        let formatted = match per_task {
             Some(stat) => minutes(stat.value.ok_or_else(|| shape("a per-task speed with no value"))?)?,
             None => seconds(sp.value.as_f64().ok_or_else(|| shape("a speed with no usable value"))?)?,
+        };
+        // A speed that formats to a zero time ("0.0 s", "0 s") holds no usable figure: it
+        // reads "–" (unknown), never a measured zero (2026-11-11, D3).
+        let value = if matches!(formatted.as_str(), "0.0 s" | "0 s" | "0 min") {
+            "–".to_string()
+        } else {
+            formatted
         };
         let note = if let Some(stat) = per_task {
             // A missing bound is not zero: the reference's number check refuses it.
@@ -1054,13 +1066,23 @@ fn report_basis(row: &RowIn) -> Result<String> {
 
 /// The pick for one job: the top recommended row, or why there is none.
 fn pick_for(job: &TaskIn, min_runs: MinRuns) -> Result<PickOut> {
-    let mut ranked: Vec<usize> = job
-        .rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.ranked)
-        .map(|(i, _)| i)
-        .collect();
+    // One row per model for this job — the same row the model's cell and sheet draw on
+    // (ranked first, then the newest process, then the most runs). The pick therefore
+    // never compares a model with itself or with another process of the same model
+    // (2026-11-11, D3).
+    let mut chosen: Vec<usize> = Vec::new();
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    for (i, row) in job.rows.iter().enumerate() {
+        match groups.iter_mut().find(|(k, _)| *k == row_key(row)) {
+            Some((_, indexes)) => indexes.push(i),
+            None => groups.push((row_key(row), vec![i])),
+        }
+    }
+    for (_, mut indexes) in groups {
+        sort_best(&job.rows, &mut indexes);
+        chosen.push(indexes[0]);
+    }
+    let mut ranked: Vec<usize> = chosen.iter().copied().filter(|i| job.rows[*i].ranked).collect();
     sort_by_rank(&job.rows, &mut ranked);
     let recommended: Vec<usize> = ranked
         .iter()
@@ -1068,16 +1090,15 @@ fn pick_for(job: &TaskIn, min_runs: MinRuns) -> Result<PickOut> {
         .filter(|i| job.rows[*i].verdict == "recommended")
         .collect();
     if recommended.is_empty() {
-        let tried: usize = job.rows.iter().map(row_key).collect::<HashSet<_>>().len();
-        let obs_top: Vec<usize> = job
-            .rows
+        // One chosen row per model, so the count of models tried is the count of these.
+        let tried = chosen.len();
+        let obs_top: Vec<usize> = chosen
             .iter()
-            .enumerate()
-            .filter(|(_, r)| r.n.observed >= min_runs)
-            .map(|(i, _)| i)
+            .copied()
+            .filter(|i| job.rows[*i].n.observed >= min_runs)
             .collect();
         let why = if tried == 1 {
-            let x = &job.rows[0];
+            let x = &job.rows[chosen[0]];
             vec![run(format!(
                 "{} is the only model tried ({} runs, {}).",
                 name(&x.label, &x.effort),
@@ -1519,7 +1540,8 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
         meta: vec![
             strong(out_models.len().to_string()),
             run(format!(
-                " models with runs · a verdict needs {min_runs} runs of that job"
+                " {} with runs · a verdict needs {min_runs} runs of that job",
+                if out_models.len() == 1 { "model" } else { "models" }
             )),
         ],
         picks,
@@ -1645,8 +1667,16 @@ pub fn by_model(view: &ViewIn) -> Result<ByModel> {
         &["planning", "building", "pm-users"],
     )?;
     let band_summary = match &summary {
-        Some(summary) => format!("{} models with runs · {summary}", pipeline.models.len()),
-        None => format!("{} models with runs", pipeline.models.len()),
+        Some(summary) => format!(
+            "{} {} with runs · {summary}",
+            pipeline.models.len(),
+            if pipeline.models.len() == 1 { "model" } else { "models" }
+        ),
+        None => format!(
+            "{} {} with runs",
+            pipeline.models.len(),
+            if pipeline.models.len() == 1 { "model" } else { "models" }
+        ),
     };
     Ok(ByModel {
         default_view: "pipeline",
