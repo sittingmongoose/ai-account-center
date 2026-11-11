@@ -202,11 +202,14 @@ export class PinnedThreadsCollector {
     answers: readonly AnswerHistoryEntry[],
     docs?: StatusDocsState
   ): Promise<void> {
+    const statuses = docs ?? this.docs.snapshot();
+    // Check receipts describe reader acceptance even when pins or native composition are unavailable.
+    this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
+    this.deps.readersCheck?.flushSoon();
     if (!this.handle) return;
     // Before the first collect there are no pins to compose over; the reports scan that runs
     // first must not publish an empty panel.
     if (!this.collected) return;
-    const statuses = docs ?? this.docs.snapshot();
     const input = {
       nowMs: this.now(),
       utcOffsetMinutes: zoneOffsetMinutes(this.deps.timeZone?.() ?? 'UTC', this.now()),
@@ -288,11 +291,6 @@ export class PinnedThreadsCollector {
     const composed = await composePinned(input, { handle: this.handle });
     if ('view' in composed) this.composed = composed.view as unknown as PinnedView;
     // A refused compose keeps the last good view; its own asOfMs shows its age.
-    // The check file says what the dashboard did with every write this scan read: the same
-    // rows the pinned updates were composed from, plus the pin each report is shown under.
-    this.deps.readersCheck?.recordStatusScan(reports, statuses, this.merged);
-    // Fire and forget (F2): a hung share must never stall the collect; the next scan retries.
-    this.deps.readersCheck?.flushSoon();
   }
 
   /** The merged pins of the last collect, for the pin match the check file reports. */
