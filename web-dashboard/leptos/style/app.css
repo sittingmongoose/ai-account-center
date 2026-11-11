@@ -2106,6 +2106,9 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 
 .signin-page { min-height: 100dvh; display: grid; place-items: center; padding: calc(var(--safe-top) + 24px) calc(var(--safe-right) + 16px) calc(var(--safe-bottom) + 24px) calc(var(--safe-left) + 16px); }
 .signin-card { width: min(400px, 100%); padding: 24px; display: grid; gap: 14px; }
+/* In the rail's chrome the strip holds the clock and the signal ring (the folded Duo), so the card keeps clear of it. */
+:root[data-chrome='rail'] .signin-page { padding-right: calc(var(--rail-w, 0px) + 16px); }
+:root[data-chrome='rail'][data-rail-side='left'] .signin-page { padding-left: calc(var(--rail-w, 0px) + 16px); padding-right: calc(var(--safe-right) + 16px); }
 .signin-brand { display: flex; align-items: center; gap: 10px; color: var(--ink); }
 .signin-brand .brand-name { font-weight: 640; font-variation-settings: 'wght' 640; font-size: 15.5px; }
 .signin-title { font-size: 22px; line-height: 1.2; font-weight: 620; font-variation-settings: 'wght' 620; letter-spacing: -.01em; }

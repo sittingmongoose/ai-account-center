@@ -65,3 +65,8 @@ test("an iPhone's rail keeps its buttons inside the safe area, out of the island
 	assert.match(css, /:root\[data-chrome='rail'\] \.rail \{[^}]*padding-right: var\(--rail-pad, 0px\)/, 'right rail padded on the edge side');
 	assert.match(css, /:root\[data-chrome='rail'\]\[data-rail-side='left'\] \.rail \{[^}]*padding-left: var\(--rail-pad, 0px\)/, 'left rail padded on the edge side');
 });
+
+test("the sign-in card clears the rail's strip, where the Duo's clock and signal ring sit (wave-2 device M5)", () => {
+	assert.match(css, /:root\[data-chrome='rail'\] \.signin-page \{[^}]*padding-right: calc\(var\(--rail-w, 0px\) \+ 16px\)/, 'strip on the right');
+	assert.match(css, /:root\[data-chrome='rail'\]\[data-rail-side='left'\] \.signin-page \{[^}]*padding-left: calc\(var\(--rail-w, 0px\) \+ 16px\)/, 'strip on the left');
+});
