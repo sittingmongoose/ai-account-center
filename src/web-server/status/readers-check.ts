@@ -115,10 +115,14 @@ export class ReadersCheckWriter {
 
   /** Replaces the status-side rows (thread.json, tasks.json, status.json, cards) from one scan. */
   recordStatusScan(reports: AgentReportsState, statuses: StatusDocsState, pins: MergedPin[]): void {
+    // Only the pairs put during this call count for the refusal skip (N3): a row from an
+    // earlier scan must never hide this scan's refusal.
+    const current = new Set<string>();
     const put = (writer: string, row: ReaderFileRow) => {
       // A folder that is not a writer id never gets a check file: a name like VM.Lead
       // would write VM.Lead.json beside vm.lead.json on case-insensitive shares (F9).
       if (!isWriterName(writer)) return;
+      current.add(`${writer}\n${row.file}`);
       const mine = this.rows().get(writer) ?? new Map<string, ReaderFileRow>();
       mine.set(row.file, row);
       this.rows().set(writer, mine);
@@ -167,12 +171,12 @@ export class ReadersCheckWriter {
       });
     }
     // Files the readers refused with no good copy to keep: the row is the refusal itself.
-    // A file that still has its good copy already has a row above (with its seq, sha and
-    // pin): the problem must not overwrite it (F6).
+    // A file whose good copy this scan rowed keeps its seq, sha and pin (F6); a row from
+    // an earlier scan never hides this scan's refusal (N3).
     for (const problem of [...reports.problems, ...statuses.problems]) {
       const [writer, rest] = writerAndFile(problem.file);
       if (!writer || !rest) continue;
-      if (this.rows().get(writer)?.has(rest)) continue;
+      if (current.has(`${writer}\n${rest}`)) continue;
       put(writer, {
         file: rest,
         seq: null,
@@ -187,9 +191,12 @@ export class ReadersCheckWriter {
 
   /** Replaces the runs rows from one Scoreboard runs scan. */
   recordRuns(runs: RunsState): void {
+    // Only the pairs put during this call count for the refusal skip (N3).
+    const current = new Set<string>();
     const put = (writer: string, row: ReaderFileRow) => {
       // As in recordStatusScan: an invalid writer id never becomes a check file (F9).
       if (!isWriterName(writer)) return;
+      current.add(`${writer}\n${row.file}`);
       const mine = this.rows().get(writer) ?? new Map<string, ReaderFileRow>();
       mine.set(row.file, row);
       this.rows().set(writer, mine);
@@ -210,7 +217,7 @@ export class ReadersCheckWriter {
     for (const problem of runs.problems) {
       const [writer, rest] = writerAndFile(problem.file);
       if (!writer || !rest || !rest.startsWith('runs/')) continue;
-      if (this.rows().get(writer)?.has(rest)) continue;
+      if (current.has(`${writer}\n${rest}`)) continue;
       put(writer, {
         file: rest,
         seq: null,

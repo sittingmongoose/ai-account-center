@@ -452,6 +452,45 @@ describe('the readers check file', () => {
     release?.();
   });
 
+  it('a newer refusal replaces an older row, not hidden by an earlier scan (N3)', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-rerefuse-'));
+    try {
+      const check = new ReadersCheckWriter({ root: () => root, now: () => NOW });
+      const empty = (reason: string) => ({
+        state: 'ok' as const,
+        scannedAt: NOW,
+        complete: true,
+        threads: [],
+        tasks: [],
+        cards: [],
+        problems: [
+          { file: 'writers/vm.lead/thread.json', reason, since: NOW },
+        ],
+        boards: new Map(),
+      });
+      check.recordStatusScan(
+        empty('not valid JSON'),
+        { state: 'ok', scannedAt: NOW, docs: [], problems: [] },
+        []
+      );
+      expect(check.rowsFor('vm.lead')[0].reason).toBe('not valid JSON');
+      // The same file refused again, with a new reason and no good copy: the row updates.
+      check.recordStatusScan(
+        empty('state is missing or not valid'),
+        { state: 'ok', scannedAt: NOW, docs: [], problems: [] },
+        []
+      );
+      expect(check.rowsFor('vm.lead')[0]).toMatchObject({
+        file: 'thread.json',
+        result: 'refused',
+        reason: 'state is missing or not valid',
+        seq: null,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('one hung flush per root is shared by every writer over it (N1)', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-shared-'));
     try {
