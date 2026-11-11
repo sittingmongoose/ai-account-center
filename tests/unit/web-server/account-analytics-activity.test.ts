@@ -716,6 +716,8 @@ describe('native local analytics activity', () => {
       expect((await restarted.get(QUERY, FROM, NOW)).totals?.inputTokens).toBe(total);
       finishLocal();
       await new Promise((resolve) => setTimeout(resolve, 10));
+      await restarted.get(QUERY, FROM, NOW);
+      await new Promise<void>((resolve) => setImmediate(resolve));
       const localPublished = await restarted.get(QUERY, FROM, NOW);
       expect(localPublished.totals?.inputTokens).toBe(total);
       expect(localPublished.refreshing).toBe(true);
@@ -1424,7 +1426,7 @@ describe('native local analytics activity', () => {
       }
       const answer = await settled(service);
       expect(answer.sources.find((s) => s.tool === 'claude' && s.host === 'mac')).toMatchObject({
-        state: 'ok',
+        state: 'cached',
         lastScanAt: new Date(NOW).toISOString(),
         rowCount: 1,
       });
@@ -1518,7 +1520,7 @@ describe('native local analytics activity', () => {
     complete = true;
     now += 60000;
     const warm = await settled(service);
-    expect(warm.status).toBe('ok');
+    expect(warm.status).toBe('cached');
     expect(warm.sources?.find((s) => s.tool === 'codex' && s.host === 'ubuntu')).toMatchObject({
       state: 'ok',
       lastScanAt: new Date(now).toISOString(),
@@ -1844,8 +1846,9 @@ describe('native local analytics activity', () => {
     resolve(data('gpt-5.4', 20, 0.001));
     await pending;
     await new Promise((complete) => setTimeout(complete, 0));
-    const completed = await service.get(QUERY, FROM, NOW);
-    expect(completed.status).toBe('ok');
+    const completed = await settled(service);
+    expect(['ok', 'cached']).toContain(completed.status);
+    expect(completed.refreshing).toBe(false);
     expect(completed.totals?.inputTokens).toBe(20);
     expect(calls).toBe(1);
   });
@@ -1880,7 +1883,7 @@ describe('native local analytics activity', () => {
     expect(refreshing.refreshing).toBe(true);
     expect(refreshing.totals?.inputTokens).toBe(20);
     const refreshed = await settled(service);
-    expect(refreshed.status).toBe('ok');
+    expect(refreshed.status).toBe('cached');
     expect(refreshed.totals?.inputTokens).toBe(50);
     expect(refreshed.providers.map((row) => row.provider)).toEqual(['claude', 'codex']);
     expect(calls).toBe(4);
@@ -2027,8 +2030,9 @@ describe('native local analytics activity', () => {
     expect(reads[0].message).toContain('refreshing');
     resolvers.forEach((resolve) => resolve(data('fixture-model', 30, 0)));
     await new Promise((complete) => setTimeout(complete, 0));
-    const completed = await service.get(QUERY, FROM, NOW);
-    expect(completed.status).toBe('ok');
+    const completed = await settled(service);
+    expect(['ok', 'cached']).toContain(completed.status);
+    expect(completed.refreshing).toBe(false);
     expect(completed.totals?.inputTokens).toBe(60);
     expect(calls).toBe(4);
   });
@@ -2073,8 +2077,9 @@ describe('native local analytics activity', () => {
     expect(calls).toBe(3);
     resolvers[1](data('gpt-5.4', 30, 0));
     await new Promise((complete) => setTimeout(complete, 0));
-    const completed = await service.get(QUERY, FROM, now);
-    expect(completed.status).toBe('ok');
+    const completed = await settled(service, QUERY, FROM, now);
+    expect(['ok', 'cached']).toContain(completed.status);
+    expect(completed.refreshing).toBe(false);
     expect(completed.totals?.inputTokens).toBe(30);
     expect(completed.fetchedAt).toBe(new Date(now).toISOString());
     expect(calls).toBe(3);
@@ -2335,7 +2340,7 @@ describe('native local analytics activity', () => {
       expect(instant.refreshing).toBe(true);
       expect(instant.totals?.inputTokens).toBe(10);
       const fresh = await settled(second);
-      expect(fresh.status).toBe('ok');
+      expect(fresh.status).toBe('cached');
       expect(fresh.refreshing).toBe(false);
       expect(fresh.totals?.inputTokens).toBe(20);
     } finally {

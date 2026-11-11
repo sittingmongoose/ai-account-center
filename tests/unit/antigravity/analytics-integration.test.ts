@@ -161,6 +161,7 @@ describe('Antigravity distinct quota history', () => {
       scope: () => '/fixture-injected-no-files',
       now: () => NOW,
     });
+    await service.sample();
     const all = await service.get({
       platform: 'mac',
       range: '24h',
@@ -201,9 +202,11 @@ describe('Antigravity distinct quota history', () => {
       scope: () => '/fixture-injected-no-files',
       now: () => now,
     });
+    await service.sample();
     await service.get({ platform: 'mac', range: '24h', provider: 'all', account: 'all' });
     now += 3_600_000;
     current = { ...current, sampledAt: new Date(now).toISOString(), windows: [window(OTHER_POOL)] };
+    await service.sample();
     const result = await service.get({
       platform: 'mac',
       range: '24h',

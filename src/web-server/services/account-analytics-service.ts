@@ -135,6 +135,7 @@ function notifySample(event: AccountAnalyticsSampleEvent): void {
 
 interface HistoryState {
   queue: Promise<void>;
+  revision: number;
   loaded: boolean;
   data: AccountAnalyticsHistoryData | null;
   available: boolean;
@@ -291,6 +292,10 @@ async function longBurnFor(
 
 /** Independent snapshot history keeps quotas separate from billed/token activity. */
 export class AccountAnalyticsService {
+  private readonly answers = new Map<
+    string,
+    { activity: AccountAnalyticsActivityResult; answer: AccountAnalytics }
+  >();
   private readonly histories = new Map<string, HistoryState>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingSample: Promise<void> | null = null;
@@ -304,6 +309,7 @@ export class AccountAnalyticsService {
     if (!state) {
       state = {
         queue: Promise.resolve(),
+        revision: 0,
         loaded: false,
         data: null,
         available: true,
@@ -383,6 +389,7 @@ export class AccountAnalyticsService {
         state.available = false;
       });
     await state.queue;
+    state.revision++;
     return state;
   }
 
@@ -459,7 +466,23 @@ export class AccountAnalyticsService {
     const checkedAt = clock();
     resolveAccountAnalyticsRange(query, checkedAt, checkedAt - ACCOUNT_ANALYTICS_RETAINED_MS);
     const dashboard = await (this.deps.getDashboard ?? getAccountDashboard)(query.platform, false);
-    const state = await this.record(dashboard.accounts, scope);
+    const state = this.state(scope);
+    // Reads initialise history but never append observations; the sampler owns writes.
+    if (!state.loaded) {
+      state.queue = state.queue.then(async () => {
+        if (state.loaded) return;
+        state.usageStore = await this.usageStoreFor(scope).catch(() => null);
+        if (!state.usageStore) {
+          try {
+            state.data = await state.store.read();
+          } catch {
+            state.available = false;
+          }
+        }
+        state.loaded = true;
+      });
+      await state.queue;
+    }
     const now = clock();
     const retainedFrom = now - ACCOUNT_ANALYTICS_RETAINED_MS;
     // Every range except `all` resolves without the data; `all` reads the
@@ -473,6 +496,23 @@ export class AccountAnalyticsService {
     ).catch((): AccountAnalyticsActivityResult =>
       unavailableActivity('Local usage history is temporarily unavailable.', tz)
     );
+    const answerKey = JSON.stringify([
+      scope,
+      query,
+      state.revision,
+      Math.floor(now / 60_000),
+      dashboard.accounts,
+      dashboard.providers,
+      dashboard.settings,
+      (this.deps.providerTable ?? defaultAnalyticsProviderTable)(),
+    ]);
+    const retained = this.answers.get(answerKey);
+    if (retained?.activity === activityResult)
+      return {
+        ...retained.answer,
+        cached: true,
+        cacheAgeSeconds: Math.max(0, now - Date.parse(retained.answer.updatedAt)) / 1000,
+      };
     const { coverage, ...activity } = activityResult;
     let oldestQuota = Infinity;
     if (state.usageStore) {
@@ -533,7 +573,7 @@ export class AccountAnalyticsService {
     const activeCodexAccountId =
       dashboard.accounts.find((account) => account.provider === 'codex' && account.isActive)?.id ??
       null;
-    return {
+    const answer: AccountAnalytics = {
       schemaVersion: 1,
       updatedAt: new Date(now).toISOString(),
       range: {
@@ -577,6 +617,13 @@ export class AccountAnalyticsService {
       accounts: series,
       activity,
     };
+    this.answers.set(answerKey, { activity: activityResult, answer });
+    while (this.answers.size > 32) {
+      const oldest = this.answers.keys().next().value;
+      if (oldest === undefined) break;
+      this.answers.delete(oldest);
+    }
+    return answer;
   }
 
   /** Samples already-bounded dashboard collectors, coalescing both platforms. */

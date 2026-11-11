@@ -680,6 +680,12 @@ function localSourcePresence(
 }
 
 export class AccountAnalyticsActivityService {
+  private readonly latestProjections = new Map<string, AccountAnalyticsActivityResult>();
+  private readonly pendingProjections = new Set<string>();
+  private readonly projections = new WeakMap<
+    SourceData[],
+    Map<string, AccountAnalyticsActivityResult>
+  >();
   private readonly states = new Map<string, ActivityState>();
   private readonly largeCodexReads: LargeCodexReadQueue;
   private readonly onShutdown = (): void => {
@@ -1683,39 +1689,103 @@ export class AccountAnalyticsActivityService {
           ? ` ${completedFiles} of ${totalFiles} local log files have been read; remaining files resume from saved positions on the next check.`
           : ` All ${totalFiles} local log files have been read; ${failedFiles > 0 ? `${failedFiles} local scan failures will be retried` : 'the scan could not confirm complete discovery'}.`
       : '';
-    const projectionStart = elapsed();
-    const activity = projectAccountAnalyticsActivity(
-      state.sources,
+    // Publication replaces sources; flags and the minute head invalidate a rolling range.
+    const projectionKey = JSON.stringify([
       query,
-      from,
-      to,
+      tz,
+      Math.floor(from / 60_000),
+      Math.floor(to / 60_000),
+      state.generation,
       status,
-      status === 'loading'
-        ? 'CLI history is being read. Quota history is available immediately.'
-        : status === 'unavailable'
-          ? 'No usable Claude Code, Codex, OMP, Muse or zcode history is available.'
-          : state.pending
-            ? 'CLI activity is refreshing. Records read so far are shown; the Included usage grid says what each source contributed. Cost is an API-equivalent estimate, not a subscription charge.'
-            : state.partial
-              ? 'Records read so far are shown while a bounded scan completes in the background; the Included usage grid says what each source contributed. Cost is an API-equivalent estimate, not a subscription charge.' +
-                scanProgress
-              : `CLI activity from Ubuntu, Mac, Windows and Nas1 (Claude Code, Codex, OMP, Muse and zcode), across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
-      {
-        tz,
-        pricing: state.pricing,
-        sources: answerSourceStates,
-        refreshing: state.pending !== null,
-        refreshingRemote: [...state.remotePending],
+      answerSourceStates,
+      state.pending !== null,
+      state.remotePending,
+    ]);
+    let projections = this.projections.get(state.sources);
+    if (!projections) {
+      projections = new Map();
+      this.projections.set(state.sources, projections);
+    }
+    const retained = projections.get(projectionKey);
+    if (retained) return retained;
+    const snapshotSources = state.sources;
+    const snapshotGeneration = state.generation;
+    const latestKey = JSON.stringify([scope, query, tz]);
+    const calculate = (): AccountAnalyticsActivityResult => {
+      const projectionStart = elapsed();
+      const activity = projectAccountAnalyticsActivity(
+        snapshotSources,
+        query,
+        from,
+        to,
+        status,
+        status === 'loading'
+          ? 'CLI history is being read. Quota history is available immediately.'
+          : status === 'unavailable'
+            ? 'No usable Claude Code, Codex, OMP, Muse or zcode history is available.'
+            : state.pending
+              ? 'CLI activity is refreshing. Records read so far are shown; the Included usage grid says what each source contributed. Cost is an API-equivalent estimate, not a subscription charge.'
+              : state.partial
+                ? 'Records read so far are shown while a bounded scan completes in the background; the Included usage grid says what each source contributed. Cost is an API-equivalent estimate, not a subscription charge.' +
+                  scanProgress
+                : `CLI activity from Ubuntu, Mac, Windows and Nas1 (Claude Code, Codex, OMP, Muse and zcode), across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
+        {
+          tz,
+          pricing: state.pricing,
+          sources: answerSourceStates,
+          refreshing: state.pending !== null,
+          refreshingRemote: [...state.remotePending],
+        }
+      );
+      const coverage = accountAnalyticsActivityCoverage(snapshotSources, from, to);
+      // Keep the dearest recent projection (halving older ones), capped at the
+      // budget, so a cheap 24h answer does not starve the next 31-day one.
+      state.projectionMs = Math.min(
+        budget,
+        Math.max(elapsed() - projectionStart, state.projectionMs / 2)
+      );
+      const result = { ...activity, coverage };
+      projections.set(projectionKey, {
+        ...result,
+        status: result.status === 'ok' ? 'cached' : result.status,
+      });
+      while (projections.size > 32) {
+        const oldest = projections.keys().next().value;
+        if (oldest === undefined) break;
+        projections.delete(oldest);
       }
-    );
-    const coverage = accountAnalyticsActivityCoverage(state.sources, from, to);
-    // Keep the dearest recent projection (halving older ones), capped at the
-    // budget, so a cheap 24h answer does not starve the next 31-day one.
-    state.projectionMs = Math.min(
-      budget,
-      Math.max(elapsed() - projectionStart, state.projectionMs / 2)
-    );
-    return { ...activity, coverage };
+      this.latestProjections.set(latestKey, result);
+      while (this.latestProjections.size > 32) {
+        const oldest = this.latestProjections.keys().next().value;
+        if (oldest === undefined) break;
+        this.latestProjections.delete(oldest);
+      }
+      return result;
+    };
+    const previous = this.latestProjections.get(latestKey);
+    if (previous?.totals && query.refresh !== true) {
+      const pendingKey = JSON.stringify([scope, projectionKey]);
+      if (!this.pendingProjections.has(pendingKey)) {
+        this.pendingProjections.add(pendingKey);
+        setImmediate(() => {
+          try {
+            if (state.sources === snapshotSources && state.generation === snapshotGeneration)
+              calculate();
+          } catch {
+            // Keep the previous measured answer if re-projection fails.
+          } finally {
+            this.pendingProjections.delete(pendingKey);
+          }
+        });
+      }
+      return {
+        ...previous,
+        status: previous.totals ? 'cached' : previous.status,
+        refreshing: true,
+        refreshingRemote: [...state.remotePending],
+      };
+    }
+    return calculate();
   }
 }
 

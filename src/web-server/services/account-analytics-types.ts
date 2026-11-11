@@ -251,6 +251,8 @@ export interface AccountAnalyticsActivityCoverage {
 }
 
 export interface AccountAnalytics {
+  cached?: boolean;
+  cacheAgeSeconds?: number;
   schemaVersion: 1;
   updatedAt: string;
   range: {

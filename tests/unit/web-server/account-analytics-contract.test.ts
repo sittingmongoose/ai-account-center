@@ -282,7 +282,7 @@ function analyticsService(
 ): AccountAnalyticsService {
   return new AccountAnalyticsService({
     getDashboard: async () => dashboard(accounts, options.extra),
-    createHistoryStore: () => memory(options.history ?? null),
+    createHistoryStore: () => memory(appendAccountAnalyticsSnapshot(options.history ?? null, accounts, options.now ?? NOW)),
     getActivity: options.activity ?? (async () => noActivity),
     now: () => options.now ?? NOW,
     scope: () => ccsHome,
@@ -516,7 +516,7 @@ describe('analytics contract: range review fixes', () => {
     });
     expect([dashboards, writes]).toEqual([0, 0]);
     await service.get(QUERY);
-    expect([dashboards, writes]).toEqual([1, 1]);
+    expect([dashboards, writes]).toEqual([1, 0]);
   });
 });
 

@@ -130,6 +130,31 @@ function memory(
 }
 
 describe('account quota analytics', () => {
+  it('reads without writes, memoises series, and invalidates on a new sample', async () => {
+    const store = memory();
+    let now = NOW;
+    const current = account();
+    const service = new AccountAnalyticsService({
+      getDashboard: async () => dashboard([current]),
+      getActivity: async () => noActivity,
+      createHistoryStore: () => store,
+      now: () => now,
+    });
+    const cold = await service.get(QUERY);
+    expect(store.writes).toBe(0);
+    expect(cold.summary.sampleCount).toBe(0);
+    expect((await service.get(QUERY)).accounts).toBe(cold.accounts);
+    expect((await service.get(QUERY)).cached).toBe(true);
+    await service.sample();
+    const sampled = await service.get(QUERY);
+    expect(sampled.summary.sampleCount).toBe(1);
+    expect(store.writes).toBe(1);
+    now += 60_000;
+    current.sampledAt = new Date(now).toISOString();
+    current.windows[0].usedPercent = 55;
+    await service.sample();
+    expect((await service.get(QUERY)).accounts[0].windows[0].points.at(-1)?.usedPercent).toBe(55);
+  });
   it('passes explicit activity refresh through without forcing quota sources twice or exposing the flag as a filter', async () => {
     const dashboardCalls: Array<[string | undefined, boolean | undefined]> = [];
     const activityCalls: AccountAnalyticsQuery[] = [];
@@ -180,6 +205,7 @@ describe('account quota analytics', () => {
       getActivity: async () => noActivity,
       now: () => NOW,
     });
+    await service.sample();
     const result = await service.get(QUERY);
     expect(result.summary).toEqual({
       accountCount: 14,
@@ -190,7 +216,7 @@ describe('account quota analytics', () => {
     });
     expect(result.providers).toHaveLength(9);
     expect(result.accounts).toHaveLength(14);
-    expect(calls).toEqual([['mac', false]]);
+    expect(calls).toEqual([['mac', false], ['windows', false], ['mac', false]]);
     expect(result.accounts[0].windows[0].points[0].usedPercent).toBe(50);
     expect(result.accounts[0].windows[0].points[0].resetAt).toBe('2026-10-01T19:00:00.000Z');
     expect(store.writes).toBe(1);
@@ -208,6 +234,7 @@ describe('account quota analytics', () => {
       getActivity: async (query) => ({ ...noActivity, message: query.account }),
       now: () => NOW,
     });
+    await service.sample();
     const result = await service.get({ ...QUERY, provider: 'codex', account: first.id });
     expect(result.accounts.map((row) => row.id)).toEqual([first.id]);
     // The provider list stays stable under filters; its counts and quota
@@ -255,11 +282,13 @@ describe('account quota analytics', () => {
     };
     const service = new AccountAnalyticsService(deps);
     const query = { ...QUERY, range: '24h' as const };
+    await service.sample();
     await service.get(query);
     for (let index = 1; index <= 2; index++) {
       now = NOW + index * 3_600_000;
       current.sampledAt = current.fetchedAt = new Date(now).toISOString();
       current.windows[0].usedPercent = 50 + index;
+      await service.sample();
       await service.get(query);
     }
     // A new service simulates loading persisted normalized observations cold.
@@ -302,6 +331,7 @@ describe('account quota analytics', () => {
       getActivity: async () => noActivity,
       now: () => NOW,
     });
+    await service.sample();
     const result = await service.get({ ...QUERY, range: '24h' });
     expect(
       result.accounts[0].windows.find((window) => window.key === 'extra_usage')?.points
@@ -335,9 +365,11 @@ describe('account quota analytics', () => {
       createHistoryStore: () => store,
       getActivity: async () => noActivity,
     });
+    await service.sample();
     await service.get(QUERY);
     now += 3_600_000;
     current = { ...current, status: 'error', windows: [] };
+    await service.sample();
     await service.get(QUERY);
     now += 3_600_000;
     current = account();
@@ -345,6 +377,7 @@ describe('account quota analytics', () => {
     current.windows[0].usedPercent = 0;
     current.windows[0].remainingPercent = 100;
     current.windows[0].resetAt = null;
+    await service.sample();
     const result = await service.get(QUERY);
     const points = result.accounts[0].windows.find((row) => row.key === 'five_hour')?.points;
     expect(points?.map((point) => point.usedPercent)).toEqual([50, null, 0]);
@@ -397,6 +430,7 @@ describe('account quota analytics', () => {
         createHistoryStore: () => store,
         getActivity: async () => noActivity,
       });
+      await service.sample();
       await service.get(QUERY);
       now += 3_600_000;
       current = {
@@ -408,6 +442,7 @@ describe('account quota analytics', () => {
         fetchedAt: new Date(now).toISOString(),
         sampledAt: new Date(now).toISOString(),
       };
+      await service.sample();
       const result = await service.get(QUERY);
       expect(result.accounts[0].source).toBe('Muse signed native account on Mac');
       expect(result.accounts[0].status).toBe(status);
@@ -470,6 +505,7 @@ describe('account quota analytics', () => {
       createHistoryStore: () => memory(),
       getActivity: async () => noActivity,
     });
+    await service.sample();
     await service.get(QUERY);
     now += 3_600_000;
     current = {
@@ -477,6 +513,7 @@ describe('account quota analytics', () => {
       sampledAt: new Date(now).toISOString(),
       windows: [{ ...current.windows[0], label: 'Tokens', unit: 'tokens', remaining: 700 }],
     };
+    await service.sample();
     const result = await service.get(QUERY);
     const credits = result.accounts[0].windows.find((window) => window.unit === 'credits');
     const tokens = result.accounts[0].windows.find((window) => window.unit === 'tokens');
@@ -495,8 +532,10 @@ describe('account quota analytics', () => {
       getActivity: async () => noActivity,
       now: () => NOW,
     });
+    await service.sample();
     await service.get(QUERY);
     current = { ...current, email: 'other@example.com', windows: [] };
+    await service.sample();
     const result = await service.get(QUERY);
     expect(result.accounts[0].sampleCount).toBe(0);
     expect(result.accounts[0].windows).toEqual([]);
@@ -542,6 +581,7 @@ describe('account quota analytics', () => {
       getActivity: async () => noActivity,
       now: () => NOW,
     });
+    await service.sample();
     const result = await service.get({ ...QUERY, range: '24h' });
     expect(result.range.bucketMinutes).toBe(10);
     expect(result.accounts[0].windows[0].points.length).toBeLessThanOrEqual(145);
