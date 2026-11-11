@@ -1670,6 +1670,10 @@ describe('native local analytics activity', () => {
             kind: 'codex',
             codexHome: path.join(root, 'codex'),
             cacheDir: path.join(root, 'cache'),
+            activity: {
+              minDate: Date.parse('2026-10-01T00:00:00Z'),
+              cacheDir: path.join(root, 'cache'),
+            },
           },
           1
         )

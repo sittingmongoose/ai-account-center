@@ -22,7 +22,6 @@ import {
   isDashboardWebSocketUpgradeAllowed,
 } from './middleware/auth-middleware';
 import { requestLoggingMiddleware } from './middleware/request-logging-middleware';
-import { shutdownUsageAggregator } from './usage/aggregator';
 import { createLogger } from '../services/logging';
 import { DEFAULT_DASHBOARD_HOST, isLoopbackHost } from '../commands/config-dashboard-host';
 import { getCodexAutoSwitchService } from './services/codex-auto-switch-service';
@@ -332,7 +331,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopCgroupForeignCheck?.();
     stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
-    shutdownUsageAggregator();
     // Saves the sign-ins and stops the session store's timers (the shutdown handlers await it).
     void closeDashboardSessions();
   };
