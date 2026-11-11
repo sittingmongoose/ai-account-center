@@ -449,6 +449,40 @@ impl Store {
         sql(tx.commit())?;
         Ok(write)
     }
+    fn committed_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
+        let (g, stored, previous_success): (String, String, bool) = sql(tx.query_row(
+            "SELECT grant_json,outcome,provider_success FROM attempts WHERE key=? AND account=?",
+            params![attempt, account],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ))?;
+        let details: Option<String> = sql(tx
+            .query_row(
+                "SELECT details FROM history WHERE event='verification' AND target_hash=? ORDER BY seq DESC LIMIT 1",
+                [hash(attempt)],
+                |r| r.get(0),
+            )
+            .optional())?;
+        let details: Value = details
+            .and_then(|v| serde_json::from_str(&v).ok())
+            .unwrap_or(Value::Null);
+        let grant: Grant = serde_json::from_str(&g).map_err(|_| "shape")?;
+        let windows: Vec<Value> = if stored == "claimed" {
+            grant
+                .clears
+                .iter()
+                .filter_map(|k| {
+                    details["afterWindows"][k]
+                        .as_f64()
+                        .map(|v| json!({"id":k,"usedPercent":v}))
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        Ok(
+            json!({"attemptKey":attempt,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows}),
+        )
+    }
     /// Called after provider send; errors and unknown bodies MUST map to Ambiguous.
     pub fn finish(
         &mut self,
@@ -459,11 +493,17 @@ impl Store {
         now: i64,
         retry_after_ms: Option<i64>,
     ) -> Result<Value> {
-        let (before, g): (String, String) = sql(self.db.query_row(
-            "SELECT before_json,grant_json FROM attempts WHERE key=? AND account=? AND pending=1",
+        let tx = sql(self
+            .db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let (before, g, pending, previous_success): (String, String, bool, bool) = sql(tx.query_row(
+            "SELECT before_json,grant_json,pending,provider_success FROM attempts WHERE key=? AND account=?",
             params![attempt, account],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         ))?;
+        if !pending {
+            return Self::committed_result(&tx, account, attempt);
+        }
         let before: Snapshot = serde_json::from_str(&before).map_err(|_| "shape")?;
         let g: Grant = serde_json::from_str(&g).map_err(|_| "shape")?;
         let verified = matches!(outcome, Outcome::Reset | Outcome::Ambiguous | Outcome::PriorSuccess)
@@ -484,19 +524,14 @@ impl Store {
                 Outcome::Unavailable => ("unavailable", false),
             }
         };
-        let tx = sql(self
-            .db
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
-        let previous_success: bool = sql(tx.query_row(
-            "SELECT provider_success FROM attempts WHERE key=? AND account=?",
-            params![attempt, account],
-            |r| r.get(0),
-        ))?;
         let provider_success = previous_success || matches!(outcome, Outcome::Reset | Outcome::PriorSuccess);
-        sql(tx.execute(
+        let changed = sql(tx.execute(
             "UPDATE attempts SET outcome=?,pending=?,provider_success=? WHERE key=? AND account=? AND pending=1",
             params![result, pending, provider_success, attempt, account],
         ))?;
+        if changed == 0 {
+            return Self::committed_result(&tx, account, attempt);
+        }
         if matches!(outcome, Outcome::Cooldown | Outcome::RateLimited) {
             let delay = retry_after_ms.unwrap_or(60_000).clamp(1_000, 86_400_000);
             sql(tx.execute("INSERT INTO holds VALUES(?,?) ON CONFLICT(account) DO UPDATE SET until_ms=max(until_ms,excluded.until_ms)",params![hash(&encode(&(&before.identity.provider,&before.identity.account,&before.identity.organization))?),now+delay]))?;
