@@ -784,7 +784,7 @@
         },
         {
           "file": "src/web-server/status/answers.ts",
-          "loc": 1743
+          "loc": 1744
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -800,7 +800,7 @@
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 993
+          "loc": 999
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
@@ -808,7 +808,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 974
+          "loc": 976
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
