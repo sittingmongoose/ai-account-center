@@ -22,9 +22,9 @@ function browserPair({ channel = true } = {}) {
       postMessage(data) { for (const peer of channels) if (peer !== this && peer.name === this.name) peer.onmessage?.({ data }); }
       close() { channels.delete(this); }
     };
-    win.localStorage = { setItem(key) {
+    win.localStorage = { setItem(key, value) {
       for (const peer of windows) if (peer !== win) {
-        const event = new Event('storage'); event.key = key; peer.dispatchEvent(event);
+        const event = new Event('storage'); event.key = key; event.newValue = value; peer.dispatchEvent(event);
       }
     } };
     windows.push(win);
@@ -82,4 +82,18 @@ test('all listener owners must detach before the shared transport is disposed', 
   const a = bus.subscribe(() => {}), b = bus.subscribe(() => {});
   assert.equal(win.sockets.length, 1); a(); assert.ok(!win.sockets[0].closed);
   b(); assert.ok(win.sockets[0].closed);
+});
+
+
+test('a server hint relays once to browser peers even when their own sockets have missed it', () => {
+  const { browser } = browserPair(); const a = browser(), b = browser();
+  let first=0, second=0;
+  const stopA=createResetHints(a).subscribe(() => first++);
+  const stopB=createResetHints(b).subscribe(() => second++);
+  const data=JSON.stringify({type:'reset-claims-changed',id:'server-event-1'});
+  a.sockets[0].onmessage({data});
+  assert.equal(first,1); assert.equal(second,1); // BC and storage duplicates share one id.
+  b.sockets[0].onmessage({data});
+  assert.equal(first,1); assert.equal(second,1); // A delayed WS copy cannot re-fence a recovered view.
+  stopA(); stopB();
 });

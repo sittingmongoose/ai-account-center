@@ -177,9 +177,10 @@ cannot extend or prematurely expire a token. Direct Store tests retain explicit
 injectable clocks; the production ABI always selects the trusted wall clock.
 
 Prepare, begin and settlement notify signed-in dashboard browser sockets through
-the existing `/ws` server with a data-free `reset-claims-changed` hint. Paired
+the existing `/ws` server with a data-free `reset-claims-changed` hint and opaque event id. Paired
 devices and anonymous sockets receive none. Pages also publish same-origin hints
-through BroadcastChannel and storage events. The reset view invalidates its cache
+through BroadcastChannel and storage events. Server hints are relayed to browser
+peers, and event ids suppress duplicate WebSocket/channel/storage deliveries. The reset view invalidates its cache
 and blocks both new Use actions and an open confirmation until a read in the
 current invalidation generation arrives. A delayed read from an earlier generation
 cannot discharge that requirement, even when millisecond timestamps are equal.

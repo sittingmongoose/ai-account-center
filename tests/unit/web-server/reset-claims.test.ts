@@ -432,6 +432,12 @@ test('prepare, begin before provider completion, and settlement push to all brow
   expect(received[1]).toHaveLength(3);
   expect(received[2]).toEqual([]);
   expect(received[3]).toEqual([]);
-  for (const message of received[0])
-    expect(JSON.parse(message)).toEqual({ type: 'reset-claims-changed' });
+  expect(received[0]).toEqual(received[1]);
+  expect(new Set(received[0].map((message) => JSON.parse(message).id)).size).toBe(3);
+  for (const message of received[0]) {
+    const event = JSON.parse(message);
+    expect(event.type).toBe('reset-claims-changed');
+    expect(event.id).toMatch(/^[a-f0-9]{32}$/);
+    expect(Object.keys(event).sort()).toEqual(['id', 'type']);
+  }
 });

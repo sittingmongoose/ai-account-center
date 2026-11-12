@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'http';
+import { randomBytes } from 'crypto';
 import { WebSocket, type WebSocketServer } from 'ws';
 import type { RequestAuthKind } from './middleware/request-auth';
 import type { SignInJob } from './services/signin-jobs';
@@ -16,7 +17,7 @@ import type { SignInJob } from './services/signin-jobs';
  */
 export type DashboardEvent =
   | { type: 'accounts-changed' }
-  | { type: 'reset-claims-changed' }
+  | { type: 'reset-claims-changed'; id: string }
   | { type: 'signin-job'; job: SignInJob }
   /** A Status tab source changed; the page re-reads /api/status. Browser sessions only. */
   | { type: 'status-changed' };
@@ -159,7 +160,6 @@ export function closeStaleSessionClients(isCurrent: (epoch: number | null) => bo
 
 /** Reset state hints contain no account data and go only to signed-in browser sessions. */
 export function broadcastResetClaimChange(): number {
-  return broadcastDashboardEvent((client) =>
-    client.authKind === 'session' ? { type: 'reset-claims-changed' } : null
-  );
+  const event = { type: 'reset-claims-changed' as const, id: randomBytes(16).toString('hex') };
+  return broadcastDashboardEvent((client) => (client.authKind === 'session' ? event : null));
 }
