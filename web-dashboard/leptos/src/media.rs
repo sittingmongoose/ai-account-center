@@ -186,6 +186,10 @@ fn upright_screen() -> bool {
 #[component]
 pub fn ViewerOverlay() -> impl IntoView {
     let viewer = expect_context::<Viewer>();
+    // The viewer goes with the signed-in page tree. Its shared selection must not survive that owner's unmount.
+    on_cleanup(move || {
+        viewer.open.try_set(None);
+    });
     // Turned sideways (fills an upright screen with wide media); showing a screenshot at full size.
     let rotated = RwSignal::new(false);
     let actual = RwSignal::new(false);

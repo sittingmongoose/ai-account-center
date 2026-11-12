@@ -388,8 +388,8 @@ pub fn OverlayPortal(
     // Routes stay mounted under hidden containers. A body portal needs its own route lifetime.
     // Once retired it cannot reappear on Forward, even if a busy owner's close callback is deferred.
     let retired = RwSignal::new(false);
-    // The global viewer is a sibling of Frame, so this lifetime uses the shared logical page event,
-    // not component context. Embedded pages also retire when their shell hides the document.
+    // Logical page events work independently of component context, including embedded owners.
+    // Embedded pages also retire when their shell hides the document.
     let page = crate::active_page();
     crate::owned::listen(&window(), crate::PAGE_EVENT, move || {
         if !crate::owns_page(page) {

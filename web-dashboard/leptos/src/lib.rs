@@ -284,10 +284,7 @@ pub fn start() {
     ACTIVE.store(page as u8, Ordering::Relaxed);
     mount_to_body(move || {
         media::provide_viewer();
-        view! {
-            <frame::Frame initial=page/>
-            <media::ViewerOverlay/>
-        }
+        view! { <frame::Frame initial=page/> }
     });
 }
 

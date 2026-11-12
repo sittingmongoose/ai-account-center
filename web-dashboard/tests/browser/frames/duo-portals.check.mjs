@@ -313,7 +313,7 @@ tests['duo portals: Scoreboard model sheet reflows and retires on Back'] = async
   await retired(t, 'Scoreboard');
 };
 
-// The global viewer is outside FrameCtx, and embedded documents have no FrameCtx at all.
+// Embedded documents have no FrameCtx; they share the same logical owner retirement rule.
 tests['duo portals: embedded shell hides retire pin and global viewer owners'] = async (t) => {
   const view = fixture(true);
   await t.newContext({
@@ -362,3 +362,38 @@ tests['duo portals: embedded shell hides retire pin and global viewer owners'] =
     (await t.page.locator('.overlay-root').count()) === 0
   );
 };
+
+// Use the dashboard's authenticated source/origin seam to exercise actual signed-in-owner teardown.
+tests['duo portals: expired-session owner unmount retires the viewer and clears its selection'] =
+  async (t) => {
+    await pin(t, fixture(true), true, true);
+    await t.page.locator('.c2-sheet-host [data-focus-role="media-enlarge"]').first().click();
+    await t.page.waitForSelector('.viewer');
+    await t.page
+      .locator('iframe.slint-frame')
+      .evaluate((el) =>
+        el.contentWindow.eval(
+          `parent.postMessage({type:'aac-content',kind:'auth',signedIn:false,state:'expired',reason:'revoked'},location.origin)`
+        )
+      );
+    await t.page.waitForSelector('.shell', { state: 'detached' });
+    await frames(t);
+    await t.check(
+      'expired-session message unmounts the signed-in page tree',
+      (await t.page.locator('.shell').count()) === 0
+    );
+    await t.check(
+      'page owner unmount removes the viewer and restores scrolling',
+      await t.page.evaluate(
+        () => !document.querySelector('.overlay-root') && document.body.style.position !== 'fixed'
+      )
+    );
+    // The fixture auth endpoint remains synthetic authenticated=true: a normal controller recheck starts a fresh owner.
+    await t.page.evaluate(() => window.aacFrameSession.recheck());
+    await t.page.waitForSelector('.shell');
+    await frames(t);
+    await t.check(
+      'a fresh signed-in owner cannot reopen the previous viewer selection',
+      (await t.page.locator('.overlay-root').count()) === 0
+    );
+  };

@@ -732,6 +732,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
                 <details::DetailsOverlay ctx=ctx/>
             </FrameShell>
             <ActivationDialog/>
+            <crate::media::ViewerOverlay/>
         </Show>
         <Toasts ctx=ctx/>
         <Show when=move || !ctx.new_build.get().is_empty()>
