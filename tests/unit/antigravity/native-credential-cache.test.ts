@@ -8,9 +8,11 @@ import type { NativeCredential, VerifiedIdentity } from '../../../src/antigravit
 import type { AntigravitySwitchDriver } from '../../../src/antigravity/types';
 import type { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
 import { AntigravitySwitchService } from '../../../src/antigravity/switch-service';
+import { stopProcessBroker } from '../../../src/utils/managed-process';
 
 const roots: string[] = [];
-afterEach(() => {
+afterEach(async () => {
+  await stopProcessBroker();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 function fixture() {
@@ -61,6 +63,65 @@ function fixture() {
 }
 
 describe.skipIf(process.platform === 'win32')('inventory credential identity cache', () => {
+  it('does not join a plain credential read from before a file replacement through the real transport', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-credential-overlap-'));
+    roots.push(home);
+    const file = path.join(home, '.gemini/antigravity-cli/antigravity-oauth-token');
+    const started = path.join(home, 'plain-started');
+    const release = path.join(home, 'release-plain');
+    const script = path.join(home, 'read-fixture.py');
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, 'account-A', { mode: 0o600 });
+    fs.writeFileSync(
+      script,
+      [
+        'import sys,json,pathlib,base64,hashlib,time',
+        'home=pathlib.Path(sys.argv[-1])',
+        'json.load(sys.stdin)',
+        "raw=(home/'.gemini/antigravity-cli/antigravity-oauth-token').read_bytes()",
+        "with (home/'reads').open('a') as stream: stream.write(raw.decode()+'\\n')",
+        "if raw == b'account-A':",
+        " (home/'plain-started').touch()",
+        ' deadline=time.monotonic()+2',
+        " while not (home/'release-plain').exists() and time.monotonic()<deadline: time.sleep(.01)",
+        "print(json.dumps({'format':'antigravity-consumer-json','credentialBase64':base64.b64encode(raw).decode(),'revision':hashlib.sha256(raw).hexdigest()}))",
+      ].join('\n')
+    );
+    const store = createUbuntuNativeCredentialStore({ home, scriptPath: script });
+    const validate = async (credential: NativeCredential): Promise<VerifiedIdentity> => ({
+      email: `${credential.bytes.toString()}@example.test`,
+      subject: 'fixture-subject',
+      plan: null,
+      verifiedAt: new Date().toISOString(),
+      source: 'provider-userinfo',
+    });
+    const plain = store.read();
+    try {
+      for (let attempt = 0; attempt < 200 && !fs.existsSync(started); attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(fs.existsSync(started)).toBe(true);
+      fs.writeFileSync(`${file}.new`, 'account-B', { mode: 0o600 });
+      fs.renameSync(`${file}.new`, file);
+      const [guarded, inventories] = await Promise.all([
+        store.read(),
+        Promise.all(Array.from({ length: 5 }, () => store.readInventoryIdentity!(validate))),
+      ]);
+      const cached = await store.readInventoryIdentity!(validate);
+      expect(guarded.bytes.toString()).toBe('account-B');
+      expect(inventories.every((identity) => identity.email === 'account-B@example.test')).toBe(
+        true
+      );
+      expect(cached.email).toBe('account-B@example.test');
+      expect(fs.readFileSync(path.join(home, 'reads'), 'utf8').trim().split('\n')).toEqual([
+        'account-A',
+        'account-B',
+        'account-B',
+      ]);
+    } finally {
+      fs.writeFileSync(release, 'release');
+      expect((await plain).bytes.toString()).toBe('account-A');
+    }
+  });
   it('reads no native credential when there are no saved profiles to mark selected', async () => {
     let reads = 0;
     const service = new AntigravitySwitchService({

@@ -38,11 +38,13 @@ const pending = new Map<
   }
 >();
 const identical = new Map<string, Promise<ManagedCommandResult>>();
+const retired = new Map<ChildProcess, Promise<void>>();
 let broker: ChildProcess | undefined;
 let starting: Promise<ChildProcess> | undefined;
 let sequence = 0;
 let launches = 0;
 let stopping = false;
+let stoppingWork: Promise<void> | undefined;
 let outstanding = 0;
 let inputBytes = 0;
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -82,6 +84,42 @@ function settle(id: number, result: ManagedCommandResult): void {
   }
 }
 
+/** Every lost child keeps its own teardown deadline and ownership until exit. */
+function retire(child: ChildProcess): Promise<void> {
+  const existing = retired.get(child);
+  if (existing) return existing;
+  if (
+    child.pid === undefined ||
+    typeof child.exitCode === 'number' ||
+    typeof child.signalCode === 'string'
+  )
+    return Promise.resolve();
+  const done = new Promise<void>((resolve) => {
+    const force = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // Keep ownership until the exit event, even if signalling fails.
+      }
+    }, 1000);
+    child.once('exit', () => {
+      clearTimeout(force);
+      retired.delete(child);
+      resolve();
+    });
+    // An unresponsive broker cannot handle SIGTERM or its IPC disconnect itself.
+    child.ref();
+    child.channel?.ref?.();
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      // Its independent force timer still applies.
+    }
+  });
+  retired.set(child, done);
+  return done;
+}
+
 function lost(child: ChildProcess): void {
   if (broker !== child) return;
   broker = undefined;
@@ -93,11 +131,7 @@ function lost(child: ChildProcess): void {
   }
   // Never retry an in-flight operation: it may have been a credential install.
   // The next call starts a new broker; failed providers remain unavailable.
-  try {
-    child.kill('SIGTERM');
-  } catch {
-    /* Already gone. */
-  }
+  void retire(child);
 }
 
 /** Start early, before analytics loads its large heap. Also lazy for standalone transports. */
@@ -234,30 +268,28 @@ export function processBrokerStats(): {
   launches: number;
   pending: number;
   coalesced: number;
+  retired: number;
 } {
-  return { pid: broker?.pid ?? null, launches, pending: pending.size, coalesced: identical.size };
+  return {
+    pid: broker?.pid ?? null,
+    launches,
+    pending: pending.size,
+    coalesced: identical.size,
+    retired: retired.size,
+  };
 }
 
-export async function stopProcessBroker(): Promise<void> {
+export function stopProcessBroker(): Promise<void> {
+  if (stoppingWork) return stoppingWork;
   stopping = true;
   const child = broker;
-  if (child) {
-    lost(child);
-    await new Promise<void>((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        resolve();
-        return;
-      }
-      const timer = setTimeout(() => {
-        child.kill('SIGKILL');
-        resolve();
-      }, 1000);
-      child.once('exit', () => {
-        clearTimeout(timer);
-        resolve();
-      });
+  if (child) lost(child);
+  stoppingWork = Promise.all([...retired.values()])
+    .then(() => undefined)
+    .finally(() => {
+      identical.clear();
+      stopping = false;
+      stoppingWork = undefined;
     });
-  }
-  identical.clear();
-  stopping = false;
+  return stoppingWork;
 }

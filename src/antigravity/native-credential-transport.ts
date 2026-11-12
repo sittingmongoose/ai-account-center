@@ -33,7 +33,9 @@ export function createUbuntuNativeCredentialStore(options: {
         timeoutMs: 25_000,
         graceMs: 0,
         maxBytes: MAX_BYTES,
-        coalesce: packet.operation === 'read',
+        // A guarded read must capture the file anew. Inventory reads dedupe above
+        // this transport, using the validated credential file identity.
+        coalesce: false,
       }).then((result) => {
         if (result.failed) throw failure();
         try {

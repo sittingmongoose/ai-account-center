@@ -8,6 +8,7 @@ import {
   startProcessBroker,
   stopProcessBroker,
 } from '../../../src/utils/managed-process';
+import { withDeadline } from '../../../src/utils/settle-deadline';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -18,7 +19,71 @@ const options = { timeoutMs: 2000, maxBytes: 65536, env: { PATH: '/usr/bin:/bin'
 const python = (source: string, extra: Partial<typeof options> = {}) =>
   runManagedCommand('/usr/bin/python3', ['-I', '-c', source], { ...options, ...extra });
 
+async function hangOwnedBroker() {
+  const child = await startProcessBroker();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-hung-'));
+  roots.push(root);
+  const marker = path.join(root, 'command-started');
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  const work = python(
+    `import time;open(${JSON.stringify(marker)},'w').write('started');time.sleep(10)`,
+    { timeoutMs: 500, ...{ graceMs: 20 } }
+  );
+  for (let attempt = 0; attempt < 100 && !fs.existsSync(marker); attempt++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(fs.existsSync(marker)).toBe(true);
+  // Only this fixture's returned process handle is ever stopped or signalled.
+  expect(child.kill('SIGSTOP')).toBe(true);
+  return { child, exited, work };
+}
+
 describe.skipIf(process.platform === 'win32')('small command parent', () => {
+  it('forces a lost unresponsive broker to exit without harming its replacement', async () => {
+    const { child, exited, work } = await hangOwnedBroker();
+    try {
+      expect((await work).failed).toBe(true);
+      expect(processBrokerStats().pid).toBeNull();
+      expect(processBrokerStats().retired).toBe(1);
+      const replacement = await startProcessBroker();
+      expect(replacement.pid).not.toBe(child.pid);
+      await withDeadline(exited, 2000);
+      expect(child.signalCode).toBe('SIGKILL');
+      expect(processBrokerStats().retired).toBe(0);
+      expect((await python('print("replacement-alive")')).stdout).toBe('replacement-alive\n');
+      expect(processBrokerStats().pid).toBe(replacement.pid!);
+    } finally {
+      child.kill('SIGKILL');
+      await exited;
+    }
+  });
+
+  it('shutdown waits for a broker already retired by the request watchdog', async () => {
+    const { child, exited, work } = await hangOwnedBroker();
+    let didExit = false;
+    void exited.then(() => {
+      didExit = true;
+    });
+    try {
+      expect((await work).failed).toBe(true);
+      expect(processBrokerStats().pid).toBeNull();
+      expect(processBrokerStats().retired).toBe(1);
+      const replacement = await startProcessBroker();
+      let replacementExited = false;
+      replacement.once('exit', () => {
+        replacementExited = true;
+      });
+      const shutdown = stopProcessBroker();
+      expect(stopProcessBroker()).toBe(shutdown);
+      await shutdown;
+      expect(didExit).toBe(true);
+      expect(replacementExited).toBe(true);
+      expect(child.signalCode).toBe('SIGKILL');
+      expect(processBrokerStats().retired).toBe(0);
+    } finally {
+      child.kill('SIGKILL');
+      await exited;
+    }
+  });
   it('accepts an account-collection burst without refusing valid concurrent commands', async () => {
     const results = await Promise.all(
       Array.from({ length: 20 }, (_, i) => python(`import time;time.sleep(.1);print(${i})`))
