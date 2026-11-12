@@ -404,24 +404,36 @@ describe('agent reports reader', () => {
     expect(shareLocalPath('relative/F.md', root)).toBeNull();
   });
 
-  it('skips dormant writers quietly, not counted against the cap', async () => {
+  it('keeps an old writer with a waiting thread and open card across a cold start', async () => {
     const root = dirs.make();
-    // Active writers: recent thread.json.
-    for (const writer of ['vm.now1', 'vm.now2']) {
-      writeReport(root, writer, 'thread.json', threadDoc(writer));
-      const file = path.join(root, 'v1', 'writers', writer, 'thread.json');
-      fs.utimesSync(file, new Date(NOW), new Date(NOW));
-    }
-    // Dormant writer: 8 days old on thread.json (and no other files).
-    writeReport(root, 'vm.old', 'thread.json', threadDoc('vm.old'));
-    const dormant = path.join(root, 'v1', 'writers', 'vm.old', 'thread.json');
+    writeReport(
+      root,
+      'vm.waiting',
+      'thread.json',
+      threadDoc('vm.waiting', {
+        state: 'waiting',
+        ttlSeconds: null,
+        blockedOn: { kind: 'owner', what: 'Choose A or B', since: null },
+      })
+    );
+    writeCard(root, cardDoc('vm.waiting', 'Q1'));
+    // Eight days old on every activity path: a cold reader must still read it.
     const old = new Date(NOW - 8 * 24 * 60 * 60 * 1000);
-    fs.utimesSync(dormant, old, old);
-    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.old'), old, old);
-    const r = new AgentReportsReader({ root: () => root, now: () => NOW, limits: { writers: 2 } });
+    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.waiting', 'thread.json'), old, old);
+    fs.utimesSync(
+      path.join(root, 'v1', 'writers', 'vm.waiting', 'cards', 'vm.waiting--Q1.json'),
+      old,
+      old
+    );
+    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.waiting', 'cards'), old, old);
+    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.waiting'), old, old);
+    const r = new AgentReportsReader({ root: () => root, now: () => NOW });
     await r.scan();
     const state = r.snapshot();
-    expect(state.threads.map((t) => t.writer).sort()).toEqual(['vm.now1', 'vm.now2']);
+    expect(state.threads).toHaveLength(1);
+    expect(state.threads[0].writer).toBe('vm.waiting');
+    expect(state.threads[0].doc.state).toBe('waiting');
+    expect(state.cards.map((c) => c.doc.id)).toEqual(['vm.waiting--Q1']);
     expect(state.problems).toEqual([]);
     expect(state.complete).toBe(true);
   });

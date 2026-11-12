@@ -16,7 +16,6 @@ import {
   PERSISTENT_LISTING_ERROR,
   SEQ_WENT_BACK,
   TransientMisses,
-  filterDormantWriters,
   folderRowProblem,
   isTransientShareError,
   newestFolders,
@@ -139,14 +138,7 @@ export class StatusDocsReader {
       if (this.recordProblem(rel, name, this.entries.get(rel) ?? null, NOT_A_WRITER, now))
         changed = true;
     }
-    const writersDir = `${this.root}/v1/writers`;
-    const { active } = await filterDormantWriters(
-      writers,
-      writersDir,
-      (file) => this.fs.stat(file),
-      now
-    );
-    const scanned = await newestFolders(active, limits.writers, (name) =>
+    const scanned = await newestFolders(writers, limits.writers, (name) =>
       this.fs.stat(`${this.root}/v1/writers/${name}`)
     );
     for (const writer of scanned) {

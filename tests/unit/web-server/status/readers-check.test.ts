@@ -722,42 +722,4 @@ describe('the readers check file', () => {
     }
   });
 
-  it('writes a reader@1 check file for every active writer that was read, skipping dormant', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-readers-dormant-'));
-    try {
-      // Active writer.
-      writeReport(root, 'vm.active', 'thread.json', threadDoc('vm.active', { seq: 5 }));
-      const activeFile = path.join(root, 'v1', 'writers', 'vm.active', 'thread.json');
-      fs.utimesSync(activeFile, new Date(NOW), new Date(NOW));
-      fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.active'), new Date(NOW), new Date(NOW));
-      // Dormant writer: 8 days old.
-      writeReport(root, 'vm.old', 'thread.json', threadDoc('vm.old', { seq: 9 }));
-      const dormantFile = path.join(root, 'v1', 'writers', 'vm.old', 'thread.json');
-      const old = new Date(NOW - 8 * 24 * 60 * 60 * 1000);
-      fs.utimesSync(dormantFile, old, old);
-      fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.old'), old, old);
-      const reports = new AgentReportsReader({ root: () => root, now: () => NOW });
-      await reports.scan();
-      // Only the active writer is read.
-      expect(reports.snapshot().threads.map((t) => t.writer)).toEqual(['vm.active']);
-      const docs = new StatusDocsReader({
-        root: () => root,
-        now: () => NOW,
-        // No native handle: scan only stamps time, keeps check empty for status.json.
-        handle: () => null,
-      });
-      await docs.scan();
-      const check = new ReadersCheckWriter({ root: () => root, now: () => NOW });
-      check.recordStatusScan(reports.snapshot(), docs.snapshot(), []);
-      await check.flush();
-      const aac = path.join(root, 'v1/readers/aac');
-      expect(fs.existsSync(path.join(aac, 'vm.active.json'))).toBe(true);
-      expect(fs.existsSync(path.join(aac, 'vm.old.json'))).toBe(false);
-      const lead = JSON.parse(fs.readFileSync(path.join(aac, 'vm.active.json'), 'utf8'));
-      expect(lead.writer).toBe('vm.active');
-      expect(lead.files[0]).toMatchObject({ file: 'thread.json', seq: 5, result: 'accepted' });
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
 });

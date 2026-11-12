@@ -94,6 +94,7 @@ export function runsSource(
     parts.unshift(
       `${plural(fileProblems.length, 'file')} unreadable since ${clockText(since, timeZone)}: ${problemList(fileProblems)}.`
     );
+    for (const problem of limitProblems) parts.push(problem.reason);
     return { ...base, state: 'unreadable', detail: parts.join(' ') } as const;
   }
   if (limitProblems.length > 0) {

@@ -183,10 +183,12 @@ function reportsSource(inputs: StatusInputs): Source {
   const limitProblems = reports.problems.filter((p) => p.file.startsWith('limits/'));
   if (fileProblems.length > 0) {
     const since = Math.min(...fileProblems.map((p) => p.since));
+    const limits =
+      limitProblems.length > 0 ? ` ${limitProblems.map((p) => p.reason).join(' ')}` : '';
     return {
       ...base,
       state: 'unreadable',
-      detail: `${plural(fileProblems.length, 'file')} unreadable since ${clockText(since, timeZone)}: ${problemList(fileProblems)}.`,
+      detail: `${plural(fileProblems.length, 'file')} unreadable since ${clockText(since, timeZone)}: ${problemList(fileProblems)}.${limits}`,
     };
   }
   if (limitProblems.length > 0) {
