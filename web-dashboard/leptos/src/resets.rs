@@ -824,7 +824,8 @@ pub struct ResetCtx {
     pub provider: RwSignal<String>,
     pub load: RwSignal<Load>,
     pub dialog: RwSignal<Dialog>,
-    /// Current account action/result, with server attempts and independent local send obligations.
+    /// The shown account's current text: `AccountState::current`, a pure function of its admitted snapshot, its local
+    /// action and its unanswered sends (plus a view notice).
     pub said: RwSignal<Option<Said>>,
     /// The shown account's lock, projected from server evidence and unanswered sends.
     pub unresolved: RwSignal<Unresolved>,
@@ -1148,6 +1149,8 @@ impl ResetCtx {
     fn action_not_sent(&self, identity: &str, action: u64, text: String) {
         self.update_state(identity, |s| s.action_not_sent(action, text));
     }
+    /// A claim or check answer for the canonical account it names. `send` is the claim's own action id: its receipt
+    /// records provenance even when a newer snapshot is already admitted (see `reset_state`).
     fn receive(&self, identity: &str, result: &ClaimResult, send: Option<u64>) -> bool {
         if result
             .evidence
@@ -2168,3 +2171,7 @@ mod action_tests;
 #[cfg(test)]
 #[path = "reset_receipt_tests.rs"]
 mod receipt_tests;
+
+#[cfg(test)]
+#[path = "reset_projection_tests.rs"]
+mod projection_tests;
