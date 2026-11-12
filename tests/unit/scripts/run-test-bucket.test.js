@@ -91,13 +91,13 @@ describe('run-test-bucket', () => {
     const runs = bucket.getBunRuns('fast', [
       'tests/unit/scripts/run-test-bucket.test.js',
       'tests/unit/utils/fetch-proxy-setup.test.ts',
-      'tests/unit/web-server/usage/account-attribution.test.ts',
+      'tests/unit/commands/bar-command.test.ts',
     ]);
 
     expect(runs.map((run) => run.label)).toEqual([
       'shared',
       'tests/unit/utils/fetch-proxy-setup.test.ts',
-      'tests/unit/web-server/usage/account-attribution.test.ts',
+      'tests/unit/commands/bar-command.test.ts',
     ]);
   });
 
