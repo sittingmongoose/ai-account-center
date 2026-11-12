@@ -44,7 +44,7 @@ process.on('message', (packet) => {
       result: { code: null, stdout: '', timedOut: false, missing: false, failed: true },
     });
   if (
-    jobs.size >= 16 ||
+    jobs.size >= 64 ||
     typeof file !== 'string' ||
     !Array.isArray(args) ||
     !args.every((arg) => typeof arg === 'string') ||

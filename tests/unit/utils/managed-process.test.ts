@@ -19,6 +19,14 @@ const python = (source: string, extra: Partial<typeof options> = {}) =>
   runManagedCommand('/usr/bin/python3', ['-I', '-c', source], { ...options, ...extra });
 
 describe('small command parent', () => {
+  it('accepts an account-collection burst without refusing valid concurrent commands', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 20 }, (_, i) => python(`import time;time.sleep(.1);print(${i})`))
+    );
+    expect(
+      results.every((result, i) => result.code === 0 && result.stdout.trim() === String(i))
+    ).toBe(true);
+  });
   it('preserves argv, stdin, env and cwd without a shell; stderr stays private', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-'));
     roots.push(root);

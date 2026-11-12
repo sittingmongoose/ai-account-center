@@ -192,7 +192,7 @@ export function runManagedCommand(
     } catch {
       return failed();
     }
-    if (pending.size >= 16 || broker !== child || stopping) return failed();
+    if (pending.size >= 64 || broker !== child || stopping) return failed();
     const id = ++sequence;
     clearTimeout(idleTimer);
     child.ref();
