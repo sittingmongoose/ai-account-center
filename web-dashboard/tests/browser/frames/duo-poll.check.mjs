@@ -374,3 +374,6 @@ tests['duo polling: removing a lower pin never refocuses over the viewer'] = asy
     !(await state(t)).viewer && !(await state(t)).locked
   );
 };
+
+// Shared synthetic polling setup for the reorder regression suite.
+export { fixture, open, update };

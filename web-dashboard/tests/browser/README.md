@@ -107,3 +107,9 @@ Chromium uses the kit's `safe=` override; it cannot verify iOS Home Screen insta
 pass must remove the old AAC Home Screen icon and add the new served build again: the status-bar setting can
 be captured when the icon is added. Reloading the old icon is insufficient. Confirm the band is physically
 beside the clock/signal symbols, and record the viewport/insets rather than assuming the meta was honored.
+
+`frames/duo-reorder.check.mjs` (`--grep duo-reorder`) exercises ordinary timestamp-driven deliverable
+sorting with a focused playing video: sibling reorder, up/down/first/last and a matched metadata control.
+It requires the same keyed row/player/control, retained playback/focus and working Enter. Removal variants
+choose the next row’s same action (previous for the last row), a replaced action restores its row key/control
+role, and covered-sheet updates must preserve top-viewer focus, including return after its trigger was removed.

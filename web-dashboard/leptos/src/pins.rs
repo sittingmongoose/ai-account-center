@@ -313,7 +313,7 @@ fn copy_text(text: String, done: RwSignal<Option<bool>>) {
 fn open_action(o: Opener, main: bool, on_open: Callback<()>) -> AnyView {
     match o {
         Opener::Route(href) | Opener::Link(href) => view! {
-            <a class="btn sm" class:primary=main href=href target="_blank" rel="noopener noreferrer"
+            <a class="btn sm" data-focus-role="deliverable-open" class:primary=main href=href target="_blank" rel="noopener noreferrer"
                 on:click=move |_| on_open.run(())>"Open"</a>
         }
         .into_any(),
@@ -321,7 +321,7 @@ fn open_action(o: Opener, main: bool, on_open: Callback<()>) -> AnyView {
             let done = RwSignal::new(None::<bool>);
             let p2 = path.clone();
             view! {
-                <button class="btn sm" on:click=move |_| copy_text(p2.clone(), done)>
+                <button class="btn sm" data-focus-role="deliverable-open" on:click=move |_| copy_text(p2.clone(), done)>
                     {move || match done.get() { Some(true) => "Copied", _ => "Copy path" }}
                 </button>
                 {move || (done.get() == Some(false)).then(|| view! { <span class="to-path mono">{path.clone()}</span> })}
@@ -424,7 +424,7 @@ fn ToOpenRow(pin: String, d: Deliverable) -> impl IntoView {
                 {(n_old > 0).then(|| view! {
                     <p class="to-sub q3">
                         {if n_old == 1 { "1 older version".to_string() } else { format!("{n_old} older versions") }}" "
-                        <button class="link" aria-expanded=move || show_old.get().to_string() on:click=move |_| show_old.update(|s| *s = !*s)>
+                        <button class="link" data-focus-role="versions-toggle" aria-expanded=move || show_old.get().to_string() on:click=move |_| show_old.update(|s| *s = !*s)>
                             {move || if show_old.get() { "Hide" } else { "Show" }}
                         </button>
                     </p>
@@ -518,7 +518,7 @@ fn LiveMediaThumbs(items: Memo<Vec<ReportedMedia>>) -> impl IntoView {
     view! {
         <div class="to-media">
             <LiveMediaList items=shown/>
-            <Show when={move || more.get() > 0}><button class="link" on:click=move |_| all.update(|all| *all = !*all)>
+            <Show when={move || more.get() > 0}><button class="link" data-focus-role="media-more" on:click=move |_| all.update(|all| *all = !*all)>
                 {move || if all.get() { "Fewer".to_string() } else { format!("{} more", more.get()) }}
             </button></Show>
             {move || parsed.with(|(_, outside)| (*outside > 0).then(|| view! { <p class="q3 to-sub">{format!("{} kept outside the share, so not shown here.", if *outside == 1 { "1 more is".to_string() } else { format!("{outside} more are") })}</p> }))}
@@ -527,7 +527,7 @@ fn LiveMediaThumbs(items: Memo<Vec<ReportedMedia>>) -> impl IntoView {
 }
 
 #[component]
-fn LiveToOpenRow(pin: String, d: Memo<Deliverable>) -> impl IntoView {
+fn LiveToOpenRow(pin: String, d: Memo<Deliverable>, identity: String) -> impl IntoView {
     let store = expect_context::<OpenedStore>();
     let pin = StoredValue::new(pin);
     let id = StoredValue::new(d.get_untracked().id);
@@ -549,7 +549,7 @@ fn LiveToOpenRow(pin: String, d: Memo<Deliverable>) -> impl IntoView {
         ))
     });
     view! {
-        <li class="to-row" class:main=move || main.get()>
+        <li class="to-row" class:main=move || main.get() data-focus-key=identity>
             <span class="to-kind cap">{move || d.with(|d| kind_words(&d.kind).to_string())}</span>
             <div class="to-main">
                 <b class="to-name">{move || d.with(|d| d.name.clone())}</b>
@@ -564,7 +564,7 @@ fn LiveToOpenRow(pin: String, d: Memo<Deliverable>) -> impl IntoView {
                 <Show when=move || !older.with(Vec::is_empty)>
                     <p class="to-sub q3">
                         {move || older.with(|versions| if versions.len() == 1 { "1 older version".to_string() } else { format!("{} older versions", versions.len()) })}" "
-                        <button class="link" aria-expanded=move || show_old.get().to_string() on:click=move |_| show_old.update(|s| *s = !*s)>{move || if show_old.get() { "Hide" } else { "Show" }}</button>
+                        <button class="link" data-focus-role="versions-toggle" aria-expanded=move || show_old.get().to_string() on:click=move |_| show_old.update(|s| *s = !*s)>{move || if show_old.get() { "Hide" } else { "Show" }}</button>
                     </p>
                 </Show>
                 <Show when=move || show_old.get()>
@@ -575,7 +575,7 @@ fn LiveToOpenRow(pin: String, d: Memo<Deliverable>) -> impl IntoView {
                             let action = Memo::new(move |_| row.with(|v| opener(v.path.as_deref(), v.url.as_deref())));
                             let on_open = Callback::new(move |_| store.record(opened_key(&pin.get_value(), &id.get_value(), &label.get_value())));
                             view! {
-                                <li><span><b>{label.get_value()}</b>
+                                <li data-focus-key=format!("version:{}", serde_json::to_string(&(label.get_value(), occurrence)).unwrap_or_default())><span><b>{label.get_value()}</b>
                                     {move || row.with(|v| v.updated_at.as_deref().map(fmt::clock).filter(|s| !s.is_empty()).map(|when| format!(", {when}")))}
                                     ", "<span class="q3">{move || format!("Superseded by {}", version.get())}</span>
                                     {move || opened.with(|opened| opened.iter().find(|(v, _)| *v == label.get_value()).map(|(_, at)| view! { " "{mark_view(Mark::Opened(*at))} }))}
@@ -615,8 +615,9 @@ fn LiveToOpenSection(pin: String, list: Memo<Vec<Deliverable>>) -> impl IntoView
             <Show when=move || !list.with(Vec::is_empty) fallback=|| view! { <p class="q3 c2-none">"Nothing reported to open."</p> }>
                 <ul class="to-list">
                     <For each=move || keys.get() key=|key| key.clone() children=move |(id, occurrence)| {
+                        let identity = format!("deliverable:{}", serde_json::to_string(&(id.clone(), occurrence)).unwrap_or_default());
                         let d = Memo::new(move |_| list.with(|list| list.iter().filter(|d| d.id == id).nth(occurrence).cloned().unwrap_or_default()));
-                        view! { <LiveToOpenRow pin=pin.get_value() d=d/> }
+                        view! { <LiveToOpenRow pin=pin.get_value() d=d identity=identity/> }
                     }/>
                 </ul>
                 <Show when={move || more.get() > 0}><p class="c2-fold"><span>{move || format!("and {} more", more.get())}</span>

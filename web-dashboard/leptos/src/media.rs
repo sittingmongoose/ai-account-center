@@ -67,26 +67,27 @@ pub fn LiveMediaList(items: Memo<Vec<Media>>) -> impl IntoView {
     view! {
         <div class="media-list">
             <For each=move || keys.get() key=|key| key.clone() children=move |(kind, url, occurrence)| {
+                let identity = format!("media:{}", serde_json::to_string(&(kind.clone(), url.clone(), occurrence)).unwrap_or_default());
                 let media = Memo::new(move |_| items.with(|items| items.iter().filter(|m| m.kind == kind && m.url == url).nth(occurrence).cloned().unwrap_or_default()));
-                view! { <LiveMediaItem media=media/> }
+                view! { <LiveMediaItem media=media identity=identity/> }
             }/>
         </div>
     }
 }
 
 #[component]
-fn LiveMediaItem(media: Memo<Media>) -> impl IntoView {
+fn LiveMediaItem(media: Memo<Media>, identity: String) -> impl IntoView {
     let viewer = expect_context::<Viewer>();
     // Kind and URL are the list key; assigning src once prevents a metadata poll from reloading the player.
     let initial = media.get_untracked();
     let caption = Memo::new(move |_| media.with(caption_line));
     if initial.kind == "video" {
         view! {
-            <figure class="media" data-kind="video">
-                <video src=initial.url poster=move || media.with(|m| m.poster_url.clone().unwrap_or_default())
+            <figure class="media" data-kind="video" data-focus-key=identity>
+                <video data-focus-role="media-player" src=initial.url poster=move || media.with(|m| m.poster_url.clone().unwrap_or_default())
                     controls=true playsinline=true preload="metadata"></video>
                 <figcaption><span>{move || caption.get()}</span>
-                    <button class="link" on:click=move |_| viewer.open.set(Some(media.get_untracked()))>"Full screen"</button>
+                    <button class="link" data-focus-role="media-enlarge" on:click=move |_| viewer.open.set(Some(media.get_untracked()))>"Full screen"</button>
                 </figcaption>
             </figure>
         }.into_any()
@@ -100,8 +101,8 @@ fn LiveMediaItem(media: Memo<Media>) -> impl IntoView {
             }
         });
         view! {
-            <figure class="media" data-kind="image">
-                <button class="media-open" aria-label=move || format!("Enlarge: {}", alt.get()) on:click=move |_| viewer.open.set(Some(media.get_untracked()))>
+            <figure class="media" data-kind="image" data-focus-key=identity>
+                <button class="media-open" data-focus-role="media-enlarge" aria-label=move || format!("Enlarge: {}", alt.get()) on:click=move |_| viewer.open.set(Some(media.get_untracked()))>
                     <img src=initial.url alt=move || alt.get() loading="lazy"/>
                     <span class="enlarge" aria-hidden="true">"Tap to enlarge"</span>
                 </button>

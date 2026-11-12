@@ -3,6 +3,7 @@
 use leptos::portal::Portal;
 use leptos::prelude::*;
 use std::cell::RefCell;
+use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 
@@ -16,6 +17,7 @@ struct ScrollLock {
 thread_local! {
     static LOCK: RefCell<Option<ScrollLock>> = const { RefCell::new(None) };
     static STACK: RefCell<Vec<(u64, bool)>> = const { RefCell::new(Vec::new()) };
+    static REPAIR: RefCell<std::collections::BTreeMap<u64, Rc<dyn Fn()>>> = const { RefCell::new(std::collections::BTreeMap::new()) };
     static NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -215,6 +217,114 @@ fn top_overlay(id: u64) -> bool {
     STACK.with(|s| s.borrow().last().map(|(n, _)| *n) == Some(id))
 }
 
+// insertBefore preserves keyed DOM objects but can silently clear focus to BODY. Keep a semantic
+// bookmark as well as the exact node, so reconciliation can recover moved or replaced controls.
+#[derive(Clone)]
+struct FocusTarget {
+    element: web_sys::HtmlElement,
+    path: Vec<String>,
+    role: String,
+}
+
+impl FocusTarget {
+    fn new(root: &web_sys::Element, element: web_sys::HtmlElement) -> Self {
+        let mut path = Vec::new();
+        let mut ancestor = Some(element.clone().unchecked_into::<web_sys::Element>());
+        while let Some(el) = ancestor {
+            if let Some(key) = el.get_attribute("data-focus-key") {
+                path.push(key);
+            }
+            if el == *root {
+                break;
+            }
+            ancestor = el.parent_element();
+        }
+        path.reverse();
+        let role = element.get_attribute("data-focus-role").unwrap_or_else(|| {
+            format!(
+                "{}:{}:{}",
+                element.tag_name(),
+                element.get_attribute("type").unwrap_or_default(),
+                element
+                    .get_attribute("aria-label")
+                    .or_else(|| element.get_attribute("data-probe"))
+                    .unwrap_or_else(|| element.text_content().unwrap_or_default())
+            )
+        });
+        Self {
+            element,
+            path,
+            role,
+        }
+    }
+
+    fn resolve(&self, current: &[FocusTarget]) -> Option<web_sys::HtmlElement> {
+        current
+            .iter()
+            .find(|t| t.element == self.element)
+            .or_else(|| {
+                current
+                    .iter()
+                    .find(|t| t.path == self.path && t.role == self.role)
+            })
+            .map(|t| t.element.clone())
+    }
+}
+
+#[derive(Default)]
+struct FocusMemory {
+    target: Option<FocusTarget>,
+    order: Vec<FocusTarget>,
+}
+
+impl FocusMemory {
+    fn remember(&mut self, root: &web_sys::Element, target: web_sys::HtmlElement) {
+        self.target = Some(FocusTarget::new(root, target));
+        self.order = tab_stops(root)
+            .into_iter()
+            .map(|el| FocusTarget::new(root, el))
+            .collect();
+    }
+
+    fn destination(&self, root: &web_sys::Element) -> Option<web_sys::HtmlElement> {
+        let current: Vec<_> = tab_stops(root)
+            .into_iter()
+            .map(|el| FocusTarget::new(root, el))
+            .collect();
+        if let Some(target) = &self.target {
+            if let Some(el) = target.resolve(&current) {
+                return Some(el);
+            }
+            if let Some(at) = self.order.iter().position(|t| t.element == target.element) {
+                // Prefer the next row's same action, or the previous row when the last row was removed.
+                let neighbours: Vec<_> = self.order[at + 1..]
+                    .iter()
+                    .chain(self.order[..at].iter().rev())
+                    .collect();
+                for neighbour in neighbours
+                    .iter()
+                    .copied()
+                    .filter(|t| t.role == target.role)
+                    .chain(neighbours.iter().copied())
+                {
+                    if let Some(el) = neighbour.resolve(&current) {
+                        return Some(el);
+                    }
+                }
+            }
+        }
+        current.first().map(|t| t.element.clone())
+    }
+}
+
+fn repair_top_focus() {
+    let top = STACK.with(|s| s.borrow().last().map(|(id, _)| *id));
+    let repair = top.and_then(|id| REPAIR.with(|r| r.borrow().get(&id).cloned()));
+    if let Some(repair) = repair {
+        repair();
+    }
+}
+
 /// Mount only while open. Existing scrim/grab/X handlers stay with the sheet; Escape and Tab use the top overlay.
 #[component]
 pub fn OverlayPortal(
@@ -237,6 +347,73 @@ pub fn OverlayPortal(
     let backwards = StoredValue::new(false);
     let last_focus = StoredValue::new_local(None::<web_sys::HtmlElement>);
     let preparing_reverse = StoredValue::new(false);
+    let memory = Rc::new(RefCell::new(FocusMemory::default()));
+    let repair: Rc<dyn Fn()> = {
+        let memory = memory.clone();
+        Rc::new(move || {
+            if !trap_focus || !top_overlay(id) || preparing_reverse.get_value() {
+                return;
+            }
+            let Some(root) = node.get_untracked() else {
+                return;
+            };
+            if let Some(active) = document()
+                .active_element()
+                .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+            {
+                if root.contains(Some(active.as_ref()))
+                    && !active.has_attribute("data-overlay-guard")
+                {
+                    memory.borrow_mut().remember(root.as_ref(), active);
+                    return;
+                }
+            }
+            // Release the borrow before focus(), whose synchronous focusin records the new bookmark.
+            let destination = memory.borrow().destination(root.as_ref());
+            if let Some(el) = destination {
+                focus(&el);
+            } else if let Ok(Some(dialog)) = root.query_selector("[role='dialog']") {
+                if let Ok(dialog) = dialog.dyn_into::<web_sys::HtmlElement>() {
+                    let _ = dialog.set_attribute("tabindex", "-1");
+                    focus(&dialog);
+                }
+            }
+        })
+    };
+    REPAIR.with(|r| {
+        r.borrow_mut().insert(id, repair.clone());
+    });
+    let observer = StoredValue::new_local(
+        None::<(
+            web_sys::MutationObserver,
+            Closure<dyn Fn(js_sys::Array, web_sys::MutationObserver)>,
+        )>,
+    );
+    let repair_after_update = repair.clone();
+    Effect::new(move |_| {
+        let Some(root) = node.get() else {
+            return;
+        };
+        let repair = repair_after_update.clone();
+        let callback =
+            Closure::<dyn Fn(js_sys::Array, web_sys::MutationObserver)>::new(move |_, _| repair());
+        if let Ok(observer_value) =
+            web_sys::MutationObserver::new(callback.as_ref().unchecked_ref())
+        {
+            let options = web_sys::MutationObserverInit::new();
+            options.set_child_list(true);
+            options.set_subtree(true);
+            options.set_attributes(true);
+            options.set_attribute_filter(&js_sys::Array::of4(
+                &"disabled".into(),
+                &"hidden".into(),
+                &"inert".into(),
+                &"aria-hidden".into(),
+            ));
+            let _ = observer_value.observe_with_options(root.as_ref(), &options);
+            observer.set_value(Some((observer_value, callback)));
+        }
+    });
     let keys = window_event_listener(leptos::ev::keydown, move |e| {
         if !top_overlay(id) {
             return;
@@ -286,6 +463,7 @@ pub fn OverlayPortal(
     });
     // Redirecting focus dispatches focusin synchronously. This callback must be Fn (reentrant), rather than
     // window_event_listener's FnMut wrapper, which rejects a recursive invocation during focus().
+    let focus_memory = memory.clone();
     let containment = Closure::<dyn Fn(web_sys::FocusEvent)>::new(move |e: web_sys::FocusEvent| {
         if !trap_focus || !top_overlay(id) || preparing_reverse.get_value() {
             return;
@@ -303,6 +481,9 @@ pub fn OverlayPortal(
         let elements = tab_stops(root.as_ref());
         place_start_guard(root.as_ref(), &elements);
         if edge.is_none() && root.contains(Some(target.as_ref())) {
+            focus_memory
+                .borrow_mut()
+                .remember(root.as_ref(), target.clone());
             last_focus.set_value(Some(target));
             return;
         }
@@ -382,6 +563,12 @@ pub fn OverlayPortal(
     });
     on_cleanup(move || {
         keys.remove();
+        if let Some(Some((observer, _callback))) = observer.try_update_value(|o| o.take()) {
+            observer.disconnect();
+        }
+        REPAIR.with(|r| {
+            r.borrow_mut().remove(&id);
+        });
         if let Some(Some(handler)) = containment.try_update_value(|h| h.take()) {
             let _ = window()
                 .remove_event_listener_with_callback("focusin", handler.as_ref().unchecked_ref());
@@ -395,6 +582,7 @@ pub fn OverlayPortal(
                     focus(&el);
                 }
             }
+            repair_top_focus();
         }
     });
     view! {
