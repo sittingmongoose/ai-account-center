@@ -62,6 +62,7 @@ import {
 import { StatusService } from '../../../../src/web-server/status/status-service';
 import { buildStatusView } from '../../../../src/web-server/status/status-view';
 import { cardDoc, NOW, tempDirs, threadDoc, writeCard, writeReport } from './status-test-helpers';
+import { waitUntil } from '../../../shared/fixtures/process-state';
 
 const dirs = tempDirs();
 let server: Server | undefined;
@@ -706,6 +707,7 @@ describe('an unavailable share', () => {
       entry(`vm.lead--${id}`, writeCard(root, cardDoc('vm.lead', id)))
     );
     await answers.submitSet(cards, 'Mac');
+    expect(answers.list()).toHaveLength(cards.length);
     fs.rmSync(path.join(root, 'v1', 'answers'));
     const attempts = () => answers.list().reduce((sum, e) => sum + e.share.attempts, 0);
     const before = attempts();
@@ -717,7 +719,20 @@ describe('an unavailable share', () => {
     }
     // Out of budget before the last record: what is left waits, its attempts uncounted.
     expect(attempts() - before).toBeLessThan(cards.length);
-    await answers.retryPending();
+    expect(attempts() - before).toBeGreaterThan(0);
+    // Recovery still has a 50 ms budget per pass. It must clear the flag and make
+    // progress on every pass, but eight real signed writes need not fit in one.
+    await waitUntil(
+      async () => {
+        if (answers.list().every((e) => e.share.state === 'done')) return true;
+        const previous = attempts();
+        await soon(answers.retryPending(), 1000);
+        expect(attempts()).toBeGreaterThan(previous);
+        return answers.list().every((e) => e.share.state === 'done');
+      },
+      'Recovered share deliveries',
+      5000
+    );
     expect(answers.list().every((e) => e.share.state === 'done')).toBe(true);
   });
 
