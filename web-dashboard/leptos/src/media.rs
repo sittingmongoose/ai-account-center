@@ -5,6 +5,7 @@
 //! rotation lock.
 
 use crate::api::Media;
+use crate::ui::OverlayPortal;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -132,19 +133,7 @@ pub fn ViewerOverlay() -> impl IntoView {
             rotated.set(w > h * 1.15 && upright_screen());
         }
     };
-    let _ = window_event_listener(leptos::ev::keydown, move |e| {
-        if e.key() == "Escape" && viewer.open.with_untracked(|m| m.is_some()) {
-            close();
-        }
-    });
-    Effect::new(move |_| {
-        let open = viewer.open.with(|m| m.is_some());
-        if let Some(body) = document().body() {
-            let _ = body
-                .style()
-                .set_property("overflow", if open { "hidden" } else { "" });
-        }
-    });
+    let on_close = Callback::new(move |_| close());
     let video_ref = NodeRef::<leptos::html::Video>::new();
     view! {
         <Show when=move || viewer.open.with(|m| m.is_some())>
@@ -152,6 +141,7 @@ pub fn ViewerOverlay() -> impl IntoView {
                 let caption = caption_line(&m);
                 let is_video = m.kind == "video";
                 view! {
+                    <OverlayPortal on_close=on_close>
                     <div class="viewer" role="dialog" aria-modal="true" aria-label=if is_video { "Video" } else { "Screenshot" }
                         data-rotated=move || rotated.get().then_some("1") data-actual=move || actual.get().then_some("1")>
                         <div class="viewer-bar">
@@ -193,6 +183,7 @@ pub fn ViewerOverlay() -> impl IntoView {
                             }}</span>
                         </p>
                     </div>
+                    </OverlayPortal>
                 }
             })}
         </Show>

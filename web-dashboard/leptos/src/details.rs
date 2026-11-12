@@ -204,7 +204,7 @@ fn DetailMeter(m: MeterView) -> impl IntoView {
 fn inside(target: Option<web_sys::EventTarget>) -> bool {
     target
         .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-        .and_then(|el| el.closest(".details, .toasts").ok().flatten())
+        .and_then(|el| el.closest(".details, .toasts, .ascrim").ok().flatten())
         .is_some()
 }
 
@@ -235,11 +235,8 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
         dash.act("details-closed", "");
     };
     // Escape, and a click anywhere else (desktop: the scrim lets clicks through, as the Slint slide-over did)
-    let keys = window_event_listener(leptos::ev::keydown, move |e| {
-        if e.key() == "Escape"
-            && open.get_untracked()
-            && dash.activation.with_untracked(|a| a.is_empty())
-        {
+    let on_close = Callback::new(move |_| {
+        if dash.activation.with_untracked(|a| a.is_empty()) {
             close();
         }
     });
@@ -312,16 +309,21 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
     down.forget();
     up.forget();
     lifted.forget();
-    on_cleanup(move || keys.remove());
     let busy = dash.busy;
     // The phone sheet's grabber drags it down to close it, as the Status and Scoreboard sheets do.
     let drag = RwSignal::new(0.0);
+    Effect::new(move |_| {
+        if !open.get() {
+            drag.set(0.0);
+        }
+    });
     let grab_close = Callback::new(move |_| {
         close();
         drag.set(0.0);
     });
     view! {
         <Show when=move || open.get()>
+            <OverlayPortal on_close=on_close trap_focus=false>
             // A button, so iOS sends the tap's click; the window's listeners above close the panel.
             <button type="button" class="details-scrim" tabindex="-1" aria-label="Close"></button>
             <aside class="details" role="dialog" aria-modal="false" data-probe="details"
@@ -415,6 +417,7 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                     }
                 })}
             </aside>
+            </OverlayPortal>
         </Show>
     }
 }

@@ -2,6 +2,7 @@
 //! its size, the shape morph, the hover tip and the anchored popover. Drawing only: every value and label comes from
 //! the page's view.
 
+use super::OverlayPortal;
 use super::icons::Icon;
 use leptos::prelude::*;
 use std::cell::RefCell;
@@ -584,6 +585,8 @@ pub fn Popover(
     #[prop(optional, into)] label: String,
     children: ChildrenFn,
 ) -> impl IntoView {
+    let children = StoredValue::new(children);
+    let label = StoredValue::new(label);
     let width = width.unwrap_or(320) as f64;
     let style = RwSignal::new(String::new());
     let panel = NodeRef::<leptos::html::Div>::new();
@@ -634,11 +637,7 @@ pub fn Popover(
             place();
         }
     });
-    let keys = window_event_listener(leptos::ev::keydown, move |e| {
-        if e.key() == "Escape" {
-            open.set(false);
-        }
-    });
+    let close = Callback::new(move |_| open.set(false));
     let outside = window_event_listener(leptos::ev::pointerdown, move |e| {
         if !open.get_untracked() {
             return;
@@ -662,17 +661,18 @@ pub fn Popover(
         }
     });
     on_cleanup(move || {
-        keys.remove();
         outside.remove();
         scrolled.remove();
     });
     view! {
         <Show when=move || open.get()>
+            <OverlayPortal on_close=close lock_scroll=viewport() < 600.0 trap_focus=viewport() < 600.0>
             <div class="pop-scrim" on:click=move |_| open.set(false)></div>
-            <div class="pop" node_ref=panel role="dialog" aria-label=label.clone() style=move || style.get()>
+            <div class="pop" node_ref=panel role="dialog" aria-label=label.get_value() style=move || style.get()>
                 <div class="pop-grab" aria-hidden="true"></div>
-                {children()}
+                {children.with_value(|f| f())}
             </div>
+            </OverlayPortal>
         </Show>
     }
 }

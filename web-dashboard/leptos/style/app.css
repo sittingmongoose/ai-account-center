@@ -1959,10 +1959,11 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-vis
 .stream-items .note { grid-column: 2 / -1; color: var(--ink-3); }
 .stream-items .note:is(b, strong, span, p, em, div, dd, td, li)[data-tone='warn'] { color: var(--warn-text); }
 .row-note.q3 { color: var(--ink-3); }
+.overlay-root { display: contents; }
 .sheet-host { position: fixed; inset: 0; z-index: 40; }
 .sheet-host .sheet-scrim { position: absolute; inset: 0; background: var(--sheet-scrim); border: 0; padding: 0; width: 100%; }
 .sheet-host .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--paper); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-pop);
-  padding: 8px 16px calc(var(--safe-bottom) + 16px); max-height: calc(100dvh - var(--safe-top) - 12px); overflow: auto; }
+  padding: 8px 16px calc(var(--safe-bottom) + 16px); max-height: calc(100dvh - var(--safe-top) - 12px); overflow: auto; overscroll-behavior: contain; }
 .sheet-close { position: absolute; right: 8px; top: 8px; z-index: 3; } /* above the sticky drag zone */
 .sheet-top .sheet-close { top: 12px; }
 .side-host { position: fixed; inset: 0; z-index: 40; }
@@ -2654,7 +2655,8 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   .c2-row { border: 1px solid var(--rule); border-radius: var(--r-card); background: var(--paper); box-shadow: var(--shadow-1); padding: 12px 14px; gap: 4px; }
   .c2-row:hover { background: var(--paper); }
   .c2-l3 { border-top: 1px solid var(--rule-2); padding-top: 8px; margin-top: 4px; }
-  .c2-row.open .c2-prob { display: none; }
+  /* Keep the background row height while its modal is open, so locking/unlocking at the page bottom cannot clamp the saved scroll. */
+  .c2-row.open .c2-prob { visibility: hidden; }
   .c2-silent ul { display: block; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-1); }
   .c2-silent li:first-child { border-top: 0; }
   .c2-silent li { padding: 10px 14px; }

@@ -609,6 +609,13 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
     let sheet = RwSignal::new(None::<String>);
     let open_sheet = Callback::new(move |m: ModelRow| sheet.set(Some(m.key)));
     let close_sheet = Callback::new(move |_: ()| sheet.set(None));
+    if let Some(frame) = use_context::<crate::frame::FrameCtx>() {
+        Effect::new(move |_| {
+            if frame.route.get() != crate::Page::Scoreboard {
+                sheet.set(None);
+            }
+        });
+    }
     let sheet_key = Memo::new(move |_| sheet.get());
     let sheet_model = Memo::new(move |_| {
         let key = sheet.get()?;
@@ -949,6 +956,7 @@ fn ModelSheet(
             .with(|v| v.as_ref().map(|v| v.recent.clone()).unwrap_or_default())
     };
     view! {
+        <OverlayPortal on_close=on_close>
         <div class="sheet-host" role="dialog" aria-modal="true">
             <button class="sheet-scrim" aria-label="Close" on:click=move |_| on_close.run(())></button>
             <div class="sheet" style=move || sheet_drag_style(offset.get())>
@@ -971,6 +979,7 @@ fn ModelSheet(
                 </Show>
             </div>
         </div>
+        </OverlayPortal>
     }
 }
 

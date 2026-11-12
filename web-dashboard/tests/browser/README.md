@@ -66,3 +66,10 @@ export default async function (t) {
 - **A probe reports even while its control is hidden.** A reported rectangle proves layout, not visibility. Judge visibility from pixels (`t.crop` at the rectangle, `t.painted`) or a frame.
 - **Synthetic data only:** made-up names and emails, never real account data.
 - **DPR:** Slint under Playwright's DPR emulation has rendered at double scale. Judge HiDPI on a real device, or treat a DPR above 1 as unverified.
+
+`frames/duo-fixes.check.mjs` reproduces delayed Duo insets and scrolled pin sheets with the synthetic fixture server
+(`browser-check run web-dashboard/tests/browser/frames --grep 'duo regression'`). `?safe=t,r,b,l` initializes the
+same padding probe that reads `env()` on devices; only with that override the probe is marked `data-safe-probe`.
+Changing its inline padding after load simulates delayed insets without a resize. It affects display only.
+The startup/lifecycle checks suppress only that probe's observer to exercise the 1.5-second settle fallback.
+`--grep 'duo interactions'` checks Escape, focus return, scrim tap, fling and fresh sheet state on reopen.

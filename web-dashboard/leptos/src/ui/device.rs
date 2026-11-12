@@ -99,11 +99,12 @@ fn remember(
     reserve: f64,
     width: f64,
     height: f64,
+    trigger: &str,
 ) {
     LAST.with(|l| *l.borrow_mut() = (insets, chrome, duo, reserve));
     let d = js_sys::Date::new_0();
     let line = format!(
-        "{:02}:{:02}:{:02} {:.0}x{:.0} safe {:.0}/{:.0}/{:.0}/{:.0} -> {chrome}",
+        "{:02}:{:02}:{:02} {:.0}x{:.0} safe {:.0}/{:.0}/{:.0}/{:.0} -> {chrome} reserve {reserve} [{trigger}]",
         d.get_hours(),
         d.get_minutes(),
         d.get_seconds(),
@@ -190,12 +191,10 @@ fn strip(insets: Insets) -> f64 {
 
 /// How far below the top of the strip the app's tabs may start: past the iOS clock and the signal and battery ring
 /// (measured on the device, 2026-11-10: the cluster ends near 168 pt folded and 116 pt open). On its side the folded
-/// Duo shows no status cluster in its strip, on either side, and with no strip at all (iOS kept its status bar on top)
-/// the rail starts near the top too.
-pub fn rail_reserve(width: f64, height: f64, insets: Insets) -> f64 {
-    if strip(insets) < 44.0 {
-        12.0
-    } else if width >= 760.0 {
+/// Duo shows no status cluster in its strip, on either side. The open landscape panel must reserve its cluster
+/// even while iOS briefly reports no strip at launch, on resume or during rotation.
+pub fn rail_reserve(width: f64, height: f64, _insets: Insets) -> f64 {
+    if width >= 760.0 {
         136.0
     } else if width > height {
         12.0
@@ -330,7 +329,7 @@ fn measure(probe: &web_sys::HtmlElement) -> Insets {
     }
 }
 
-/// Sets the chrome now and whenever the window changes shape (a fold or a rotation changes the insets too).
+/// Follows both the viewport and the env() padding probe, including late launch/resume insets without a resize.
 pub fn start(embed: bool) {
     let doc = document();
     let root: web_sys::HtmlElement = match doc.document_element().and_then(|e| e.dyn_into().ok()) {
@@ -348,6 +347,14 @@ pub fn start(embed: bool) {
             "position:fixed;left:0;top:0;width:0;height:0;overflow:hidden;pointer-events:none;visibility:hidden;\
              padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);",
         );
+        if let Some(i) = forced {
+            // Display-only test seam: changing this probe's padding exercises the real inset observer.
+            let _ = probe.set_attribute("data-safe-probe", "");
+            let _ = probe.style().set_property(
+                "padding",
+                &format!("{}px {}px {}px {}px", i.top, i.right, i.bottom, i.left),
+            );
+        }
         let _ = body.append_child(probe);
     }
     let screen = window().screen().ok();
@@ -365,10 +372,15 @@ pub fn start(embed: bool) {
     // The layout width and insets the chrome was last chosen for, so a pinch-zoom can be told from a fold (zoom_only).
     let seen: std::rc::Rc<std::cell::Cell<Option<(f64, Insets)>>> =
         std::rc::Rc::new(std::cell::Cell::new(None));
-    let read_insets = move || {
-        forced
-            .or_else(|| probe.as_ref().filter(|_| !embed).map(measure))
-            .unwrap_or_default()
+    let read_insets = {
+        let probe = probe.clone();
+        move || {
+            probe
+                .as_ref()
+                .filter(|_| !embed)
+                .map(measure)
+                .unwrap_or_default()
+        }
     };
     let layout_width = || {
         document()
@@ -379,8 +391,12 @@ pub fn start(embed: bool) {
     let apply = {
         let read_insets = read_insets.clone();
         let seen = seen.clone();
-        move || {
+        move |trigger: &str| {
             let insets = read_insets();
+            let scale = window().visual_viewport().map(|v| v.scale()).unwrap_or(1.0);
+            if zoom_only(scale, seen.get(), layout_width(), insets) {
+                return;
+            }
             let size = |v: Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>, or: f64| {
                 v.ok().and_then(|v| v.as_f64()).unwrap_or(or)
             };
@@ -425,7 +441,7 @@ pub fn start(embed: bool) {
                 0.0
             };
             let _ = style.set_property("--rail-reserve", &px(reserve));
-            remember(insets, chrome, duo, reserve, width, height);
+            remember(insets, chrome, duo, reserve, width, height, trigger);
             let _ = style.set_property(
                 "--rail-w",
                 &px(if chrome == "rail" {
@@ -448,46 +464,88 @@ pub fn start(embed: bool) {
             );
         }
     };
-    apply();
-    // iOS reports a fold's or a rotation's new insets after the resize, so the chrome is worked out again on every
-    // change of the window, the visual viewport or the orientation, and twice more while iOS settles.
-    let settle = Closure::<dyn Fn()>::new(apply.clone());
-    let blur_apply = Closure::<dyn Fn()>::new(apply.clone());
-    let on_change = Closure::<dyn Fn()>::new(move || {
-        // A pinch-zoom resizes the visual viewport too: it keeps the chrome, a fold or a rotation does not.
-        let scale = window().visual_viewport().map(|v| v.scale()).unwrap_or(1.0);
-        if zoom_only(scale, seen.get(), layout_width(), read_insets()) {
-            return;
+    let apply = std::rc::Rc::new(apply);
+    // Observe the padding box (border-box with no border). The probe's content box stays 0x0, so the default
+    // content-box observation would miss env() padding changes. Keep the observer alive for this document.
+    if let Some(probe) = probe {
+        let apply = apply.clone();
+        let observed =
+            Closure::<dyn Fn(js_sys::Array, web_sys::ResizeObserver)>::new(move |_, _| {
+                apply("insets")
+            });
+        if let Ok(observer) = web_sys::ResizeObserver::new(observed.as_ref().unchecked_ref()) {
+            let options = web_sys::ResizeObserverOptions::new();
+            options.set_box(web_sys::ResizeObserverBoxOptions::BorderBox);
+            observer.observe_with_options(&probe, &options);
+            // ResizeObserver remains active until document teardown, like the window listeners below.
+            std::mem::forget(observer);
+            observed.forget();
         }
-        apply();
-        for ms in [120, 350] {
-            let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(
-                settle.as_ref().unchecked_ref(),
-                ms,
-            );
+    }
+    // A new lifecycle/viewport event replaces outstanding settle passes instead of stacking timers during resize.
+    let generation = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let changed = {
+        let apply = apply.clone();
+        move |trigger: &'static str| {
+            let next = generation.get().wrapping_add(1);
+            generation.set(next);
+            apply(trigger);
+            // Measured iOS insets can arrive beyond 350 ms on launch/resume. The observer handles later changes too.
+            for (ms, pass) in [
+                (120, "settle120"),
+                (350, "settle350"),
+                (750, "settle750"),
+                (1500, "settle1500"),
+            ] {
+                let apply = apply.clone();
+                let generation = generation.clone();
+                let later = Closure::once_into_js(move || {
+                    if generation.get() == next {
+                        apply(&format!("{trigger}/{pass}"));
+                    }
+                });
+                let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(
+                    later.unchecked_ref(),
+                    ms,
+                );
+            }
         }
-    });
-    for event in ["resize", "orientationchange"] {
-        let _ =
-            window().add_event_listener_with_callback(event, on_change.as_ref().unchecked_ref());
+    };
+    changed("start");
+    for event in ["resize", "orientationchange", "pageshow", "focus"] {
+        let changed = changed.clone();
+        let handler = Closure::<dyn Fn()>::new(move || changed(event));
+        let _ = window().add_event_listener_with_callback(event, handler.as_ref().unchecked_ref());
+        handler.forget();
     }
     if let Some(viewport) = window().visual_viewport() {
+        let changed = changed.clone();
+        let handler = Closure::<dyn Fn()>::new(move || changed("visualViewport"));
         let _ =
-            viewport.add_event_listener_with_callback("resize", on_change.as_ref().unchecked_ref());
+            viewport.add_event_listener_with_callback("resize", handler.as_ref().unchecked_ref());
+        handler.forget();
     }
     {
-        // Blur may outrun the keyboard-close resize: re-choose on the next tick (review L1).
-        let on_blur = Closure::<dyn Fn()>::new(move || {
-            let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(
-                blur_apply.as_ref().unchecked_ref(),
-                0,
-            );
+        let changed = changed.clone();
+        let handler = Closure::<dyn Fn()>::new(move || {
+            if document().visibility_state() == web_sys::VisibilityState::Visible {
+                changed("visibilitychange");
+            }
         });
         let _ = document()
-            .add_event_listener_with_callback("focusout", on_blur.as_ref().unchecked_ref());
-        on_blur.forget();
+            .add_event_listener_with_callback("visibilitychange", handler.as_ref().unchecked_ref());
+        handler.forget();
     }
-    on_change.forget();
+    // Blur may outrun the keyboard-close resize: re-choose on the next tick (review L1).
+    let handler = Closure::<dyn Fn()>::new(move || {
+        let apply = apply.clone();
+        let later = Closure::once_into_js(move || apply("focusout"));
+        let _ = window()
+            .set_timeout_with_callback_and_timeout_and_arguments_0(later.unchecked_ref(), 0);
+    });
+    let _ =
+        document().add_event_listener_with_callback("focusout", handler.as_ref().unchecked_ref());
+    handler.forget();
 }
 
 #[cfg(test)]
@@ -500,6 +558,31 @@ mod tests {
             right,
             bottom,
             left,
+        }
+    }
+
+    #[test]
+    fn late_portrait_insets_choose_the_band_without_a_size_change() {
+        assert_eq!(
+            chrome_for(false, true, 669.0, 869.0, Insets::default()),
+            "phone"
+        );
+        assert_eq!(
+            chrome_for(false, true, 669.0, 869.0, insets(82.0, 0.0, 34.0, 0.0)),
+            "band"
+        );
+    }
+
+    #[test]
+    fn landscape_reserve_survives_transient_zero_insets() {
+        for height in [669.0, 587.0] {
+            for i in [
+                insets(0.0, 84.0, 34.0, 0.0),
+                Insets::default(),
+                insets(0.0, 0.0, 34.0, 84.0),
+            ] {
+                assert_eq!(rail_reserve(951.0, height, i), 136.0, "{height} {i:?}");
+            }
         }
     }
 
@@ -653,8 +736,8 @@ mod tests {
         assert_eq!(rail_reserve(951.0, 669.0, right), 136.0, "open on its side");
         assert_eq!(
             rail_reserve(951.0, 669.0, Insets::default()),
-            12.0,
-            "no strip reported"
+            136.0,
+            "open landscape clears the cluster even without a reported strip"
         );
         // folded on its side: no status cluster in the strip, whichever side it is on
         assert_eq!(rail_reserve(678.0, 466.0, right), 12.0);

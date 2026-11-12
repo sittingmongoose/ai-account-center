@@ -5,6 +5,7 @@
 
 use crate::api::nullable;
 use crate::dash::DashCtx;
+use crate::ui::OverlayPortal;
 use leptos::prelude::*;
 use serde::Deserialize;
 
@@ -68,12 +69,7 @@ pub fn ActivationDialog() -> impl IntoView {
             dash.act("activation-cancel", "");
         }
     };
-    let esc = window_event_listener(leptos::ev::keydown, move |ev| {
-        if ev.key() == "Escape" && open.get_untracked() {
-            cancel();
-        }
-    });
-    on_cleanup(move || esc.remove());
+    let close = Callback::new(move |_| cancel());
     // The dialog takes the focus when it opens, so the keyboard and screen readers land on it.
     Effect::new(move |_| {
         if open.get() {
@@ -104,6 +100,7 @@ pub fn ActivationDialog() -> impl IntoView {
             let keep_hint = format!("Keep every {product} process and account unchanged");
             let go_hint = format!("Stop the listed processes and switch the {product} account");
             view! {
+                <OverlayPortal on_close=close>
                 <div class="ascrim" on:click=move |_| cancel()>
                     <div class="adialog" role="dialog" aria-modal="true" aria-labelledby="adialog-title"
                         on:click=|ev| ev.stop_propagation()>
@@ -122,15 +119,16 @@ pub fn ActivationDialog() -> impl IntoView {
                             }}
                         </ul>
                         <p class="a-exp tnum">{v.expires_at.clone()}</p>
-                        {status.map(|(text, bad)| view! { <p class="a-status" class:w-crit=bad>{text}</p> })}
+                        {status.clone().map(|(text, bad)| view! { <p class="a-status" class:w-crit=bad>{text}</p> })}
                         <div class="a-btns">
-                            <button class="btn" title=keep_hint aria-disabled=v.in_progress.to_string()
+                            <button class="btn" title=keep_hint.clone() aria-disabled=v.in_progress.to_string()
                                 on:click=move |_| cancel()>"Cancel"</button>
-                            <button class="btn primary" title=go_hint aria-disabled=(!can).to_string()
+                            <button class="btn primary" title=go_hint.clone() aria-disabled=(!can).to_string()
                                 on:click=move |_| { if can { dash.act("activation-confirm", ""); } }>"Yes, stop and restart"</button>
                         </div>
                     </div>
                 </div>
+                </OverlayPortal>
             }
         })
     }

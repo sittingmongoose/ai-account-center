@@ -910,7 +910,13 @@ pub fn PinnedPanelView() -> impl IntoView {
         }
     });
     let close_sheet = Callback::new(move |_: ()| sheet_id.set(None));
-    let offset = RwSignal::new(0.0f64);
+    if let Some(frame) = use_context::<crate::frame::FrameCtx>() {
+        Effect::new(move |_| {
+            if frame.route.get() != crate::Page::Status {
+                sheet_id.set(None);
+            }
+        });
+    }
     view! {
         <section class="plate sec-pinned c2" id="pinned">
             <div class="plate-head">
@@ -976,7 +982,10 @@ pub fn PinnedPanelView() -> impl IntoView {
                     }.into_any()
                 }
             }}
-            {move || sheet_pin.get().map(|p| view! {
+            {move || sheet_pin.get().map(|p| {
+                let offset = RwSignal::new(0.0f64);
+                view! {
+                <OverlayPortal on_close=close_sheet>
                 <div class="sheet-host c2-sheet-host" role="dialog" aria-modal="true" aria-label=p.title()>
                     <button class="sheet-scrim" aria-label="Close" on:click=move |_| close_sheet.run(())></button>
                     <div class="sheet" style=move || sheet_drag_style(offset.get())>
@@ -987,7 +996,8 @@ pub fn PinnedPanelView() -> impl IntoView {
                         <article class="c2-sheet">{sheet_body(&p, live.elapsed_seconds())}</article>
                     </div>
                 </div>
-            })}
+                </OverlayPortal>
+            } })}
         </section>
     }
 }

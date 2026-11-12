@@ -6,7 +6,9 @@ mod controls;
 pub mod device;
 mod icons;
 pub mod meter;
+mod overlay;
 mod parts;
+pub use overlay::OverlayPortal;
 
 pub use chrome::{ChromeInfo, FrameShell, PageShell, apply_theme, stored_theme};
 pub use controls::*;
