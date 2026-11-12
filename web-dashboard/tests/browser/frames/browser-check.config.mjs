@@ -29,7 +29,7 @@ export default async (ctx) => {
     viewport: { width: 1440, height: 900 },
     isolate: true,
     // The fixture server has no /ws: the page's hint socket retrying is expected.
-    consoleErrors: { fail: false },
+    consoleErrors: { fail: true, allow: [/WebSocket.*(?:failed|handshake)/i] },
     failedRequests: { fail: false },
   };
 };

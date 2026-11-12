@@ -73,3 +73,12 @@ same padding probe that reads `env()` on devices; only with that override the pr
 Changing its inline padding after load simulates delayed insets without a resize. It affects display only.
 The startup/lifecycle checks suppress only that probe's observer to exercise the 1.5-second settle fallback.
 `--grep 'duo interactions'` checks Escape, focus return, scrim tap, fling and fresh sheet state on reopen.
+
+`frames/duo-focus.check.mjs` (`--grep duo-focus`) checks actual keyboard navigation in the body overlay, including
+native video playback, seek and mute through Chromium's accessibility tree, reverse navigation and wrapping,
+summary, iframe content, editing hosts, audio controls and positive tabindex ordering. The `keyboard-controls.mp4`
+fixture copies the synthetic option-b video stream and adds silent AAC audio so the mute control is enabled:
+
+```sh
+ffmpeg -i option-b.mp4 -f lavfi -i anullsrc=r=44100:cl=stereo -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -shortest -movflags +faststart keyboard-controls.mp4
+```

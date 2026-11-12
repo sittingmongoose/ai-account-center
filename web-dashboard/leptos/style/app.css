@@ -1960,6 +1960,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-vis
 .stream-items .note:is(b, strong, span, p, em, div, dd, td, li)[data-tone='warn'] { color: var(--warn-text); }
 .row-note.q3 { color: var(--ink-3); }
 .overlay-root { display: contents; }
+.overlay-focus-guard { position: fixed; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .sheet-host { position: fixed; inset: 0; z-index: 40; }
 .sheet-host .sheet-scrim { position: absolute; inset: 0; background: var(--sheet-scrim); border: 0; padding: 0; width: 100%; }
 .sheet-host .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: var(--paper); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-pop);
