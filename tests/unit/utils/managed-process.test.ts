@@ -121,6 +121,42 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
     expect(Date.now() - began).toBeLessThan(350);
   });
 
+  it('rejects an expired shared waiter when a queued result beats its overdue timer', async () => {
+    await startProcessBroker();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const began = Date.now();
+      const source = 'import time;time.sleep(.1);print("fresh")';
+      const early = python(source, { coalesce: true, deadlineAt: began + 300 });
+      const later = python(source, { coalesce: true, deadlineAt: began + 1200 });
+      const stalled = new Promise<void>((resolve) =>
+        setTimeout(() => {
+          // Only the fixture parent stalls. The real broker completes its command meanwhile.
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+          resolve();
+        }, 50)
+      );
+      const [earlyResult, laterResult] = await Promise.all([early, later]);
+      await stalled;
+      expect(Date.now() - began).toBeGreaterThanOrEqual(500);
+      expect(earlyResult).toEqual({
+        code: null,
+        stdout: '',
+        timedOut: true,
+        missing: false,
+        failed: true,
+      });
+      expect(laterResult).toEqual({
+        code: 0,
+        stdout: 'fresh\n',
+        timedOut: false,
+        missing: false,
+        failed: false,
+      });
+      expect(processBrokerStats().pending).toBe(0);
+      expect(processBrokerStats().coalesced).toBe(0);
+    }
+  });
+
   it('kills the shared owned process group when its last waiter expires', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-cancel-'));
     roots.push(root);

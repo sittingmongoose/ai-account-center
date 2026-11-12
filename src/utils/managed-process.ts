@@ -40,6 +40,7 @@ const pending = new Map<
   }
 >();
 interface CommandWaiter {
+  deadlineAt: number;
   resolve: (result: ManagedCommandResult) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -292,7 +293,8 @@ export function runManagedCommand(
   void work.then((value) => {
     for (const waiter of job.waiters) {
       clearTimeout(waiter.timer);
-      waiter.resolve(value);
+      // Queued IPC can beat an overdue timer after the caller's event loop stalls.
+      waiter.resolve(Date.now() >= waiter.deadlineAt ? { ...failed(), timedOut: true } : value);
     }
     job.waiters.clear();
   });
@@ -328,6 +330,7 @@ function join(job: CommandJob, deadlineAt: number): Promise<ManagedCommandResult
   }
   return new Promise((resolve) => {
     const waiter: CommandWaiter = {
+      deadlineAt,
       resolve,
       timer: setTimeout(
         () => {
