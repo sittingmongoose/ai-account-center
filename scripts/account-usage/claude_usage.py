@@ -1248,7 +1248,28 @@ def claude_plan_class(account, organization=None, name=None):
 SAFE_FLAG = re.compile(r"has_claude_[a-z0-9_]{1,40}")
 
 
-def collect(profile_id, platform, home=None, expected_email=None, profile_dir=None, is_default=False, private_reset_sink=None):
+def reset_login_binding(account, cache):
+    return hashlib.sha256(json.dumps([account, cache], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def capture_reset_login(request):
+    """Read saved credentials only; no OAuth/provider call belongs in the Store capture section."""
+    profile_id = request["profile"]
+    if (sys.platform != "win32" or not valid_profile_id(profile_id)
+            or resolve_expected_email(request["expectedEmail"]) is None):
+        raise UsageUnavailable()
+    root = resolve_profile_path(profile_id, request.get("profileDir"), None, request.get("isDefault") is True)
+    account, cache = decrypt_cache(root)
+    candidates = eligible_entries(account, cache)
+    if not candidates:
+        raise UsageUnavailable()
+    if resolve_profile_path(profile_id, request.get("profileDir"), None, request.get("isDefault") is True) != root:
+        raise UsageUnavailable()
+    return {"account": account, "organization": candidates[0][1][2], "savedLoginBinding": reset_login_binding(account, cache),
+            "observedAtMs": int(time.time() * 1000)}
+
+
+def collect(profile_id, platform, home=None, expected_email=None, profile_dir=None, is_default=False, private_reset_sink=None, expected_saved_binding=None, expected_saved_organization=None):
     result = {
         "schemaVersion": 1, "provider": "claude", "profileId": profile_id,
         "platform": platform, "status": "unavailable", "email": None,
@@ -1269,17 +1290,24 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
 
         account_uuid, cache = decrypt_cache(profile_root)
         candidates = eligible_entries(account_uuid, cache)
-        saved_binding = hashlib.sha256(json.dumps([account_uuid, cache], sort_keys=True, separators=(",", ":")).encode()).digest() if private_reset_sink is not None else None
+        saved_binding = reset_login_binding(account_uuid, cache) if private_reset_sink is not None else None
+
+        if expected_saved_binding is not None and (private_reset_sink is None or saved_binding != expected_saved_binding):
+            raise UsageUnavailable()
 
         def verify_login():
             verify_root()
             current_account, current_cache = decrypt_cache(profile_root)
-            current_binding = hashlib.sha256(json.dumps([current_account, current_cache], sort_keys=True, separators=(",", ":")).encode()).digest()
+            current_binding = reset_login_binding(current_account, current_cache)
             if current_binding != saved_binding:
                 raise UsageUnavailable()
 
         if not candidates:
             raise UsageUnavailable("needs_sign_in")
+        if expected_saved_organization is not None:
+            candidates = [entry for entry in candidates if entry[1][2] == expected_saved_organization]
+            if not candidates:
+                raise UsageUnavailable()
         client = Client()
         for _, identities, token in candidates:
             verify_root()
@@ -1348,7 +1376,7 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 # Internal host seam only. Never put this on result/public usage or a cache.
                 private_reset_sink({"account": account_uuid, "organization": organization["uuid"],
                                     "usage": usage, "token": token, "verifyRoot": verify_root,
-                                    "verifyLogin": verify_login, "observedAtMs": identity_verified_ms})
+                                    "verifyLogin": verify_login, "observedAtMs": identity_verified_ms, "savedLoginBinding": saved_binding})
             return result
         raise UsageUnavailable("needs_sign_in")
     except UsageUnavailable as error:
@@ -1369,10 +1397,13 @@ def reset_host(request):
     """
     try:
         profile_id = request["profile"]
+        if request.get("action") == "capture":
+            return capture_reset_login(request)
         captured = []
         result = collect(profile_id, "windows", expected_email=request["expectedEmail"],
                          profile_dir=request.get("profileDir"), is_default=request.get("isDefault") is True,
-                         private_reset_sink=captured.append)
+                         private_reset_sink=captured.append, expected_saved_binding=request.get("expectedSavedBinding"),
+                         expected_saved_organization=request.get("expectedSavedOrganization"))
         if result.get("status") != "ok" or len(captured) != 1:
             return {"unavailable": True}
         private = captured[0]
@@ -1394,7 +1425,7 @@ def reset_host(request):
             expiries.append(int(dt.datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp() * 1000) if end else None)
         if request.get("action") == "read":
             private["verifyLogin"]()
-            return {"identity": identity, "observedAtMs": private["observedAtMs"], "raw": cedar,
+            return {"identity": identity, "observedAtMs": private["observedAtMs"], "savedLoginBinding": private.get("savedLoginBinding"), "raw": cedar,
                     "expiries": expiries, "windows": windows, "sourceBinding": binding, "accountLabel": request["expectedEmail"]}
         write = request.get("write", {})
         body = write.get("body", {})

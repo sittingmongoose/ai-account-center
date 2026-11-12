@@ -1,6 +1,6 @@
 //! Profile-bound, short-lived Codex app-server transport. No HTTPS consume guess.
 //! Protocol evidence: local t3code-ref generated V2 schema (creditId is mandatory here).
-use crate::reset::{Grant, Identity, Result, Snapshot};
+use crate::reset::{Grant, Identity, Result, Snapshot, Store};
 use base64::Engine;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -120,16 +120,54 @@ pub fn codex(home: &str, profile: &str, host: &str, write: Option<&Value>) -> Re
     codex_with_binary(home, profile, host, write, Path::new("codex"))
 }
 
-/// Offline fixtures supply their own executable; the Node ABI never accepts one.
-pub fn codex_with_binary(home: &str, profile: &str, host: &str, write: Option<&Value>, binary: &Path) -> Result<Value> {
-    // Keep the identity verification's time, never promote a slow RPC by its completion time.
-    let observed_at_ms = std::time::SystemTime::now()
+pub struct ReadContext<'a> {
+    pub db_path: &'a Path,
+    pub route_account: &'a str,
+}
+
+fn observed_now() -> Result<i64> {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| "clock")?
         .as_millis()
         .try_into()
-        .map_err(|_| "clock")?;
-    let (account, email, binding) = auth(home)?;
+        .map_err(|_| "clock")
+}
+
+/// Offline fixtures supply their own executable; the Node ABI never accepts one.
+/// Unticketed transport reads cannot establish Store inventory authority.
+pub fn codex_with_binary(home: &str, profile: &str, host: &str, write: Option<&Value>, binary: &Path) -> Result<Value> {
+    codex_inner(home, profile, host, write, binary, None)
+}
+
+/// The production capture boundary also serves fake-process source regressions.
+pub fn codex_read_with_binary(
+    home: &str,
+    profile: &str,
+    host: &str,
+    binary: &Path,
+    context: &ReadContext<'_>,
+) -> Result<Value> {
+    codex_inner(home, profile, host, None, binary, Some(context))
+}
+
+fn codex_inner(
+    home: &str,
+    profile: &str,
+    host: &str,
+    write: Option<&Value>,
+    binary: &Path,
+    context: Option<&ReadContext<'_>>,
+) -> Result<Value> {
+    let capture = || Ok((auth(home)?, observed_now()?));
+    let ((login_capture, observed_at_ms), read_ticket) = if let Some(context) = context {
+        let mut store = Store::open(context.db_path)?;
+        let (captured, ticket) = store.capture_read(context.route_account, capture)?;
+        (captured, Some(ticket))
+    } else {
+        (capture()?, None)
+    };
+    let (account, email, binding) = login_capture;
     let mut rpc = Rpc::start(home, binary)?;
     let login = rpc.call("account/read", json!({"refreshToken":false}))?;
     if login["account"]["type"] != "chatgpt" || login["account"]["email"].as_str() != Some(email.as_str()) {
@@ -240,7 +278,7 @@ pub fn codex_with_binary(home: &str, profile: &str, host: &str, write: Option<&V
         return Err("stale-inventory");
     }
     Ok(json!(Snapshot {
-        read_ticket: None,
+        read_ticket,
         identity,
         observed_at_ms,
         grants,
@@ -261,6 +299,8 @@ pub fn dispatch(args: &str) -> Result<Value> {
         profile: String,
         host: String,
         write: Option<Value>,
+        db_path: Option<String>,
+        route_account: Option<String>,
     }
     let a: Input = serde_json::from_str(args).map_err(|_| "shape")?;
     if a.expected_account.is_empty() {
@@ -271,7 +311,15 @@ pub fn dispatch(args: &str) -> Result<Value> {
     {
         return Err("identity-changed");
     }
-    let result = codex(&a.home, &a.profile, &a.host, a.write.as_ref())?;
+    let result = if a.write.is_none() {
+        let context = ReadContext {
+            db_path: Path::new(a.db_path.as_deref().ok_or("source-capture-required")?),
+            route_account: a.route_account.as_deref().ok_or("source-capture-required")?,
+        };
+        codex_read_with_binary(&a.home, &a.profile, &a.host, Path::new("codex"), &context)?
+    } else {
+        codex(&a.home, &a.profile, &a.host, a.write.as_ref())?
+    };
     if a.write.is_none() && result["identity"]["account"] != a.expected_account {
         return Err("identity-changed");
     }

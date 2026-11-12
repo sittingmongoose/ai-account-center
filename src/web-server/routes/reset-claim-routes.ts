@@ -93,12 +93,11 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
   async function readSnapshot(account: string): Promise<unknown> {
     const source = deps.source;
     if (!source) throw new ProviderError('Reset source unavailable.', 'reset-claims');
-    const readTicket = await call('readTicket', account);
     const snapshot = await source.read(account);
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
       throw new ProviderError('Reset source unavailable.', 'reset-claims');
     }
-    return { ...snapshot, readTicket };
+    return snapshot;
   }
   router.use('/:accountId/reset-claims', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');

@@ -18,6 +18,7 @@ pub mod ops;
 pub mod pinned;
 pub mod pins;
 pub mod reset;
+pub mod reset_claude_source;
 pub mod reset_inventory;
 pub mod reset_source;
 pub mod scoreboard;

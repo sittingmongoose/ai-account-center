@@ -1729,5 +1729,34 @@ class ResetReadIdentityTests(unittest.TestCase):
         self.assertLess(captured[0]["observedAtMs"], clock[0] * 1000)
 
 
+class ResetCaptureTests(unittest.TestCase):
+    def test_capture_reads_saved_identity_without_constructing_provider_client(self):
+        saved = (ACCOUNT, cache())
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "resolve_profile_path", return_value=Path("fixture-profile")), \
+                mock.patch.object(usage, "decrypt_cache", return_value=saved), \
+                mock.patch.object(usage, "Client") as client:
+            result = usage.reset_host({"profile": "fixture", "expectedEmail": EMAIL,
+                "host": "windows:fixture", "action": "capture"})
+        client.assert_not_called()
+        self.assertEqual(result["account"], ACCOUNT)
+        self.assertEqual(result["savedLoginBinding"], usage.reset_login_binding(*saved))
+        self.assertEqual(result["organization"], ORG)
+        self.assertEqual(set(result), {"account", "organization", "savedLoginBinding", "observedAtMs"})
+        self.assertNotIn(TOKEN, json.dumps(result))
+
+    def test_changed_login_between_capture_and_read_is_refused_before_provider_io(self):
+        old = (ACCOUNT, cache())
+        changed = (OTHER, cache(key(account=OTHER)))
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "resolve_profile_path", return_value=Path("fixture-profile")), \
+                mock.patch.object(usage, "decrypt_cache", return_value=changed), \
+                mock.patch.object(usage, "Client") as client:
+            result = usage.reset_host({"profile": "fixture", "expectedEmail": EMAIL,
+                "host": "windows:fixture", "action": "read", "expectedSavedBinding": usage.reset_login_binding(*old)})
+        self.assertTrue(result.get("unavailable"))
+        client.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

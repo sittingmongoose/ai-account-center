@@ -665,12 +665,12 @@ fn source_tickets_refuse_old_same_or_different_identity_and_replay_without_mutat
     for empty in [false, true] {
         let (dir, mut store) = open();
         let mut x = snap("x", "reused", "h");
-        x.read_ticket = Some(store.read_ticket("route").unwrap());
+        x.read_ticket = Some(store.captured_ticket("route").unwrap());
         store.inventory("route", &x, NOW, &nonce(960)).unwrap();
         let mut old_same = snap("y", "reused", "h");
-        old_same.read_ticket = Some(store.read_ticket("route").unwrap());
+        old_same.read_ticket = Some(store.captured_ticket("route").unwrap());
         let mut y = old_same.clone();
-        y.read_ticket = Some(store.read_ticket("route").unwrap());
+        y.read_ticket = Some(store.captured_ticket("route").unwrap());
         if empty {
             y.grants.clear();
         }
@@ -692,7 +692,7 @@ fn source_tickets_refuse_old_same_or_different_identity_and_replay_without_mutat
             assert_eq!(got["evidence"], newest["evidence"]);
             assert_eq!(got["history"], newest["history"]);
         }
-        y.read_ticket = Some(store.read_ticket("route").unwrap());
+        y.read_ticket = Some(store.captured_ticket("route").unwrap());
         assert!(store.inventory("route", &y, NOW, &nonce(966)).is_ok());
     }
 }
@@ -759,11 +759,11 @@ fn clock_correction_recovers_replacement_after_restart_without_waiting_for_old_w
 fn tickets_survive_restart_between_issuance_read_and_acceptance() {
     let (dir, mut store) = open();
     let mut x = snap("x", "reused", "h");
-    x.read_ticket = Some(store.read_ticket("route").unwrap());
+    x.read_ticket = Some(store.captured_ticket("route").unwrap());
     drop(store);
     let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
     let mut y = snap("y", "reused", "h");
-    y.read_ticket = Some(store.read_ticket("route").unwrap());
+    y.read_ticket = Some(store.captured_ticket("route").unwrap());
     assert!(
         y.read_ticket.as_ref().unwrap().sequence.parse::<u64>().unwrap()
             > x.read_ticket.as_ref().unwrap().sequence.parse::<u64>().unwrap()
@@ -791,9 +791,9 @@ fn missing_wrong_route_and_unissued_tickets_do_not_mutate_account_evidence() {
     let before = snap("x", "p", "h");
     let inv = store.read_inventory("route", &before, NOW, &nonce(1130)).unwrap();
     let mut wrong_route = before.clone();
-    wrong_route.read_ticket = Some(store.read_ticket("sibling").unwrap());
+    wrong_route.read_ticket = Some(store.captured_ticket("sibling").unwrap());
     let mut unissued = before.clone();
-    unissued.read_ticket = Some(store.read_ticket("route").unwrap());
+    unissued.read_ticket = Some(store.captured_ticket("route").unwrap());
     unissued.read_ticket.as_mut().unwrap().sequence = i64::MAX.to_string();
     for (i, bad) in [before, wrong_route, unissued].into_iter().enumerate() {
         assert_eq!(
@@ -815,7 +815,7 @@ fn concurrent_read_issuance_is_unique_and_does_not_advance_account_revisions() {
     let workers: Vec<_> = (0..4)
         .map(|_| {
             let path = dir.path().join("claims.sqlite");
-            std::thread::spawn(move || Store::open(&path).unwrap().read_ticket("route").unwrap())
+            std::thread::spawn(move || Store::open(&path).unwrap().captured_ticket("route").unwrap())
         })
         .collect();
     let mut orders: Vec<_> = workers
@@ -834,14 +834,14 @@ fn ticket_order_verifies_an_attempt_after_wall_clock_correction() {
     let future = NOW + 86_400_000;
     let mut before = snap("x", "p", "h");
     before.observed_at_ms = future;
-    before.read_ticket = Some(store.read_ticket("route").unwrap());
+    before.read_ticket = Some(store.captured_ticket("route").unwrap());
     let inv = store.inventory("route", &before, future, &nonce(1150)).unwrap();
     let key = inv["grants"][0]["grantKey"].as_str().unwrap();
-    before.read_ticket = Some(store.read_ticket("route").unwrap());
+    before.read_ticket = Some(store.captured_ticket("route").unwrap());
     let prep = store
         .prepare("route", key, "local", &before, future, &nonce(1151))
         .unwrap();
-    before.read_ticket = Some(store.read_ticket("route").unwrap());
+    before.read_ticket = Some(store.captured_ticket("route").unwrap());
     store
         .begin(
             "route",
@@ -855,7 +855,7 @@ fn ticket_order_verifies_an_attempt_after_wall_clock_correction() {
         .unwrap();
     let mut after = confirmed(&before);
     after.observed_at_ms = NOW;
-    after.read_ticket = Some(store.read_ticket("route").unwrap());
+    after.read_ticket = Some(store.captured_ticket("route").unwrap());
     let checked = store.check("route", &nonce(1152), &after, NOW).unwrap();
     assert_eq!(checked["outcome"], "claimed");
     assert_eq!(checked["verification"], "confirmed");
@@ -877,7 +877,7 @@ fn every_source_ticket_delivery_order_keeps_the_newest_identity_and_its_pending_
                     let mut samples = vec![];
                     for who in ["x", "y", "x", "y"] {
                         let mut sample = snap(who, "reused", "h");
-                        sample.read_ticket = Some(store.read_ticket("route").unwrap());
+                        sample.read_ticket = Some(store.captured_ticket("route").unwrap());
                         samples.push(sample);
                     }
                     let mut latest = None;
@@ -903,29 +903,132 @@ fn every_source_ticket_delivery_order_keeps_the_newest_identity_and_its_pending_
 }
 
 #[test]
-fn read_ticket_abi_commits_before_return_and_ignores_request_wall_clock() {
-    let (dir, mut store) = open();
-    let issue = |now| {
-        dispatch(
-            &serde_json::json!({
-                "dbPath":dir.path().join("claims.sqlite"),"account":"route","op":"readTicket","nowMs":now
-            })
-            .to_string(),
-        )
-        .unwrap()
-    };
-    let first: ReadTicket = serde_json::from_value(issue(i64::MAX)).unwrap();
-    let second: ReadTicket = serde_json::from_value(issue(0)).unwrap();
+fn capture_commit_ignores_wall_clock_and_retires_admission_only_abi() {
+    let (dir, _) = open();
+    let mut store = Store::open_with_clock(&dir.path().join("claims.sqlite"), |_| Err("clock")).unwrap();
+    let (first_capture, first) = store.capture_read("route", || Ok("first-identity")).unwrap();
+    let (second_capture, second) = store.capture_read("route", || Ok("second-identity")).unwrap();
+    assert_eq!(first_capture, "first-identity");
+    assert_eq!(second_capture, "second-identity");
+    assert_eq!(first.capture_version, 1);
     assert!(second.sequence.parse::<u64>().unwrap() > first.sequence.parse::<u64>().unwrap());
-    let third = store.read_ticket("route").unwrap();
-    assert!(third.sequence.parse::<u64>().unwrap() > second.sequence.parse::<u64>().unwrap());
-    // A later read merely issued, not yet accepted, does not drop a positively named earlier response.
-    let mut snapshot = snap("x", "p", "h");
-    snapshot.read_ticket = Some(second);
-    assert!(store.inventory("route", &snapshot, NOW, &nonce(1180)).is_ok());
-    snapshot.read_ticket = Some(first);
+    let result = dispatch(&serde_json::json!({"dbPath":dir.path().join("claims.sqlite"),"account":"route","op":"readTicket","nowMs":i64::MAX}).to_string());
+    assert_eq!(result.unwrap_err(), "unknown-method");
+}
+
+#[test]
+fn admission_only_inflight_tickets_cannot_override_captured_identity_after_upgrade() {
+    let (_dir, mut store) = open();
+    let mut old = snap("x", "p", "h");
+    old.read_ticket = Some(store.captured_ticket("route").unwrap());
+    old.read_ticket.as_mut().unwrap().capture_version = 0;
     assert_eq!(
-        store.inventory("route", &snapshot, NOW, &nonce(1181)).unwrap_err(),
+        store.inventory("route", &old, NOW, &nonce(1180)).unwrap_err(),
         "stale-inventory"
     );
+    assert!(
+        store
+            .read_inventory("route", &snap("y", "p", "h"), NOW, &nonce(1181))
+            .is_ok()
+    );
+}
+
+#[test]
+fn capture_and_allocation_serialize_across_connections_without_time_ordering() {
+    let (dir, _) = open();
+    let db = dir.path().join("claims.sqlite");
+    let (captured, seen) = std::sync::mpsc::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let first_db = db.clone();
+    let first = std::thread::spawn(move || {
+        Store::open(&first_db)
+            .unwrap()
+            .capture_read("route", || {
+                captured.send(()).unwrap();
+                wait.recv().unwrap();
+                Ok("identity-x")
+            })
+            .unwrap()
+    });
+    seen.recv().unwrap();
+    let (second_captured, second_seen) = std::sync::mpsc::channel();
+    let second = std::thread::spawn(move || {
+        Store::open(&db)
+            .unwrap()
+            .capture_read("route", || {
+                second_captured.send(()).unwrap();
+                Ok("identity-y")
+            })
+            .unwrap()
+    });
+    assert!(second_seen.recv_timeout(std::time::Duration::from_millis(100)).is_err());
+    release.send(()).unwrap();
+    let (x, xt) = first.join().unwrap();
+    let (y, yt) = second.join().unwrap();
+    assert_eq!(x, "identity-x");
+    assert_eq!(y, "identity-y");
+    assert!(yt.sequence.parse::<u64>().unwrap() > xt.sequence.parse::<u64>().unwrap());
+}
+
+#[test]
+fn failed_capture_rolls_back_without_consuming_an_order_or_account_evidence() {
+    let (_dir, mut store) = open();
+    let first = store.captured_ticket("route").unwrap();
+    let error: Result<((), ReadTicket)> = store.capture_read("route", || Err("signed-out"));
+    assert_eq!(error.unwrap_err(), "signed-out");
+    let next = store.captured_ticket("route").unwrap();
+    assert_eq!(
+        next.sequence.parse::<u64>().unwrap(),
+        first.sequence.parse::<u64>().unwrap() + 1
+    );
+    assert!(store.pending("route", NOW).unwrap()["canonicalAccountKey"].is_null());
+}
+
+#[cfg(unix)]
+#[test]
+fn capture_crash_child_fixture() {
+    let Ok(path) = std::env::var("AAC_CAPTURE_CRASH_DB") else {
+        return;
+    };
+    let mut store = Store::open(std::path::Path::new(&path)).unwrap();
+    let _: Result<((), ReadTicket)> = store.capture_read("route", || {
+        std::fs::write(std::env::var("AAC_CAPTURE_CRASH_READY").unwrap(), "locked").unwrap();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn a_crashed_capture_process_cannot_retain_the_critical_section() {
+    let (dir, _) = open();
+    let db = dir.path().join("claims.sqlite");
+    let ready = dir.path().join("ready");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "capture_crash_child_fixture", "--nocapture"])
+        .env("AAC_CAPTURE_CRASH_DB", &db)
+        .env("AAC_CAPTURE_CRASH_READY", &ready)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    for _ in 0..1000 {
+        if ready.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    if !ready.exists() {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("capture child did not reach its barrier");
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let mut store = Store::open(&db).unwrap();
+    let (identity, ticket) = store.capture_read("route", || Ok("replacement")).unwrap();
+    assert_eq!(identity, "replacement");
+    assert_eq!(ticket.capture_version, 1);
+    assert_eq!(ticket.sequence, "1");
 }

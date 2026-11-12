@@ -36,10 +36,12 @@ pub fn provider_words(raw: &str) -> Option<String> {
     let kept = kept.split_whitespace().collect::<Vec<_>>().join(" ");
     (!kept.is_empty()).then_some(kept)
 }
-/// Private Store-issued order, committed before the source read starts.
+/// Private Store-issued order, committed with saved-login capture before provider I/O.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReadTicket {
+    #[serde(default)]
+    pub capture_version: u8,
     pub route_key: String,
     pub sequence: String,
 }

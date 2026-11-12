@@ -250,28 +250,20 @@ export function usageHelperDeadlineMs(action: UsageHelperRequest['action']): num
   return usageHelperProcessTimeoutMs(action) + PROCESS_SETTLE_GRACE_MS;
 }
 
-export async function runPrivateUsageHelper(
+/** A server-resolved process description for the native reset reader's bounded capture/read phases. */
+export function privateUsageInvocation(
   host: UsageHost,
   request: UsageHelperRequest,
-  privateSource?: string,
-  callerDeadlineAt?: number
-): Promise<string> {
+  helperSource: string,
+  privateRequest: unknown = request
+): { executable: string; args: string[]; payload: { helperSource: string; request: unknown } } {
   if (host.sshHost !== null && !isSafeUsageSshAlias(host.sshHost))
     throw new ValidationError('Invalid usage host.');
   if (host.sshHost === null && host.platform !== localUsageHost().platform)
     throw new ValidationError('Usage source is not local.');
-  let expired = false;
-  const deadlineAt = Math.min(
-    callerDeadlineAt ?? Infinity,
-    Date.now() + usageHelperDeadlineMs(request.action)
-  );
-  const run = async (): Promise<string> => {
-    if (Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
-    const helperSource = privateSource ?? (await usageHelperBundle());
-    if (expired || Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
-    const input = JSON.stringify({ helperSource, request });
-    const executable = host.sshHost ? 'ssh' : localUsagePython(request);
-    const args = host.sshHost
+  return {
+    executable: host.sshHost ? 'ssh' : localUsagePython(request),
+    args: host.sshHost
       ? [
           '-T',
           '-o',
@@ -288,7 +280,39 @@ export async function runPrivateUsageHelper(
           host.sshHost,
           usageHelperCommand(host.platform),
         ]
-      : ['-c', BOOTSTRAP];
+      : ['-c', BOOTSTRAP],
+    payload: { helperSource, request: privateRequest },
+  };
+}
+
+export async function runPrivateUsageHelper(
+  host: UsageHost,
+  request: UsageHelperRequest,
+  privateSource?: string,
+  privateRequest?: unknown,
+  callerDeadlineAt?: number
+): Promise<string> {
+  if (host.sshHost !== null && !isSafeUsageSshAlias(host.sshHost))
+    throw new ValidationError('Invalid usage host.');
+  if (host.sshHost === null && host.platform !== localUsageHost().platform)
+    throw new ValidationError('Usage source is not local.');
+  let expired = false;
+  const deadlineAt = Math.min(
+    callerDeadlineAt ?? Infinity,
+    Date.now() + usageHelperDeadlineMs(request.action)
+  );
+  const run = async (): Promise<string> => {
+    if (Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
+    const helperSource = privateSource ?? (await usageHelperBundle());
+    if (expired || Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
+    const invocation = privateUsageInvocation(
+      host,
+      request,
+      helperSource,
+      privateRequest ?? request
+    );
+    const input = JSON.stringify(invocation.payload);
+    const { executable, args } = invocation;
     const result = await runManagedCommand(executable, args, {
       timeoutMs: usageHelperProcessTimeoutMs(request.action),
       deadlineAt,
@@ -316,7 +340,7 @@ export async function runUsageHelper(
   request: UsageHelperRequest,
   callerDeadlineAt?: number
 ): Promise<UsageHelperResponse> {
-  const stdout = await runPrivateUsageHelper(host, request, undefined, callerDeadlineAt);
+  const stdout = await runPrivateUsageHelper(host, request, undefined, undefined, callerDeadlineAt);
   const response = parseUsageHelperResponse(stdout);
   if (response.action !== request.action) throw new ValidationError('Invalid usage response.');
   if (

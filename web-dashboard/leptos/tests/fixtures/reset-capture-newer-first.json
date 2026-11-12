@@ -1,0 +1,90 @@
+{
+  "newer": {
+    "bindingRevision": "10",
+    "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
+    "evidence": {
+      "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
+      "claimTokens": {
+        "tokenKeys": [],
+        "untilMs": null
+      },
+      "latestAttempt": {
+        "attemptKey": "9b863cd0eefad492000f445baf43455e4c9cc888fb364176acf141b8c9257c49",
+        "attemptOrder": "2",
+        "outcome": "claimed-unconfirmed",
+        "pending": true,
+        "providerSuccess": false,
+        "verification": "unconfirmed",
+        "windows": []
+      },
+      "pendingAttempts": [
+        {
+          "attemptKey": "9b863cd0eefad492000f445baf43455e4c9cc888fb364176acf141b8c9257c49",
+          "attemptOrder": "2"
+        }
+      ],
+      "revision": "10"
+    },
+    "grants": [
+      {
+        "claimBlockedReason": null,
+        "claimable": true,
+        "expiresAtMs": null,
+        "grantKey": "f9181002e9ae5f7907c3ea49f366c8a45bf6837407aef016ecd62d64a133c8fb",
+        "kind": "banked",
+        "label": "Banked reset",
+        "providerWords": null,
+        "refillsText": "Refills the eligible Codex usage windows.",
+        "resetsLeft": 1
+      }
+    ],
+    "history": [
+      {
+        "atMs": 1794476803010,
+        "details": {
+          "beforeCount": 1,
+          "callerHash": "25bf8e1a2393f1108d37029b3df5593236c755742ec93465bbafa9b290bddcf6",
+          "callerKind": "local",
+          "grantHash": "a04e13dd95a0f781ce38c39e777ed0e907b83b632e11ee070c914035e7d25d7a",
+          "identityHash": "4a782ca2a887e5b11b72b72f4554f9505646994d4997242ca1daa296cb0690c1",
+          "kind": "banked",
+          "provider": "codex"
+        },
+        "event": "prepare",
+        "outcome": "prepared",
+        "sequence": "4",
+        "targetHash": "a0c5b7a4bf348743c5329ba0cde897d73b496d8bdfba62b0743cbba2662aeffb"
+      },
+      {
+        "atMs": 1794476803151,
+        "details": {
+          "beforeCount": 1,
+          "beforeWindows": {
+            "primary": 100
+          },
+          "callerHash": "25bf8e1a2393f1108d37029b3df5593236c755742ec93465bbafa9b290bddcf6",
+          "callerKind": "local",
+          "grantHash": "a04e13dd95a0f781ce38c39e777ed0e907b83b632e11ee070c914035e7d25d7a",
+          "idempotencyHash": "04ea25b455b637b2b39d848aa1d0a60eaaa886cf82af74ba1a3bda8482be5717",
+          "identityHash": "4a782ca2a887e5b11b72b72f4554f9505646994d4997242ca1daa296cb0690c1",
+          "kind": "banked",
+          "provider": "codex"
+        },
+        "event": "attempt",
+        "outcome": "claimed-unconfirmed",
+        "sequence": "5",
+        "targetHash": "a0c5b7a4bf348743c5329ba0cde897d73b496d8bdfba62b0743cbba2662aeffb"
+      }
+    ],
+    "observedAtMs": 1794476803282,
+    "pendingAttempt": "9b863cd0eefad492000f445baf43455e4c9cc888fb364176acf141b8c9257c49",
+    "sourceAgeMs": 84,
+    "status": "ok"
+  },
+  "older": {
+    "status": "unavailable",
+    "code": "reset-inventory-unavailable"
+  },
+  "savedAccount": "account-y",
+  "providerSends": 0
+}

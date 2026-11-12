@@ -76,7 +76,7 @@ fn begin(s: &mut Store, snap: &Snapshot) -> (String, String) {
     let k = inventory(s, snap);
     let t = prepare(s, &k, snap);
     let mut fresh = snap.clone();
-    fresh.read_ticket = Some(s.read_ticket("route-account").unwrap());
+    fresh.read_ticket = Some(s.captured_ticket("route-account").unwrap());
     s.begin("route-account", &k, &caller(), &t, &fresh, NOW, &entropy(3))
         .unwrap();
     (k, entropy(3))
@@ -252,7 +252,7 @@ fn fresh_verification_requires_exact_decrement_and_refill() {
     for mode in 0..6 {
         let (_d, mut s) = open();
         let mut snap = snapshot("claude");
-        snap.read_ticket = Some(s.read_ticket("route-account").unwrap());
+        snap.read_ticket = Some(s.captured_ticket("route-account").unwrap());
         let (_, a) = begin(&mut s, &snap);
         let mut after = snap.clone();
         after.observed_at_ms += 1;

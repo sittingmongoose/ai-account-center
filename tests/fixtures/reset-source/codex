@@ -1,0 +1,19 @@
+#!/usr/bin/python3
+import json,os,sys
+home=os.environ['CODEX_HOME']
+# AAC_RESET_FIXTURE_CODEX: offline app-server, no network or provider writes.
+who=json.load(open(os.path.join(home,'auth.json')))['tokens']['account_id']
+with open(os.path.join(home,'fixture-reader-started'),'a') as marker:marker.write(who+'\n')
+for line in sys.stdin:
+ r=json.loads(line)
+ if 'id' not in r: continue
+ method=r['method']
+ if method=='initialize':result={}
+ elif method=='account/read':result={'account':{'type':'chatgpt','email':'fixture-'+who}}
+ elif method=='account/rateLimits/read':
+  spent=who=='account-x' and os.path.exists(os.path.join(home,'spent-x'))
+  result={'accountId':who,'rateLimits':{'primary':{'usedPercent':0 if spent else 100}},'rateLimitResetCredits':{'availableCount':0 if spent else 1,'credits':[{'id':'credit-'+who,'resetType':'codexRateLimits','status':'redeemed' if spent else 'available'}]}}
+ else:
+  open(os.path.join(home,'unexpected-send'),'w').close()
+  result={}
+ print(json.dumps({'id':r['id'],'result':result}),flush=True)

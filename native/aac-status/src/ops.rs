@@ -143,6 +143,8 @@ pub fn dispatch(method: &str, args: &str) -> Result<String> {
     let answer = match method {
         "resetCodexSource" => crate::reset_source::dispatch(args)
             .map_err(|code| crate::error::Error::new(code, "Reset source unavailable."))?,
+        "resetClaudeSource" => crate::reset_claude_source::dispatch(args)
+            .map_err(|code| crate::error::Error::new(code, "Reset source unavailable."))?,
         "resetNormalizeClaude" => crate::reset_inventory::normalize_claude(args)
             .map_err(|code| crate::error::Error::new(code, "Reset inventory unavailable."))?,
         "resetClaims" => {

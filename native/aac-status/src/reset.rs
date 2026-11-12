@@ -353,12 +353,14 @@ impl Store {
         Ok(value)
     }
 
-    /// Commit a route-bound sequence before starting any source I/O. Issuance changes
-    /// no account revision, alias, token or audit state, including on a failed read.
-    pub fn read_ticket(&mut self, account: &str) -> Result<ReadTicket> {
+    /// Capture the saved login and allocate its order while holding one immediate
+    /// transaction. The callback must do only bounded credential capture, never provider I/O.
+    /// Process exit or unwinding rolls back the transaction and releases its lock.
+    pub fn capture_read<T>(&mut self, account: &str, capture: impl FnOnce() -> Result<T>) -> Result<(T, ReadTicket)> {
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let captured = capture()?;
         let sequence: i64 = sql(tx.query_row(
             "UPDATE source_read_clock SET value=value+1 WHERE singleton=1 AND value<9223372036854775807 RETURNING value",
             [], |r| r.get(0),
@@ -368,11 +370,12 @@ impl Store {
             params![account, sequence],
         ))?;
         let ticket = ReadTicket {
+            capture_version: 1,
             route_key: hash(account),
             sequence: sequence.to_string(),
         };
         sql(tx.commit())?;
-        Ok(ticket)
+        Ok((captured, ticket))
     }
 
     pub fn inventory(&mut self, account: &str, s: &Snapshot, now: i64, entropy: &str) -> Result<Value> {
@@ -387,7 +390,7 @@ impl Store {
         let canonical = Self::canonical(s)?;
         let ticket = s.read_ticket.as_ref().ok_or("stale-inventory")?;
         let sequence = ticket.order().ok_or("stale-inventory")?;
-        if ticket.route_key != hash(account) {
+        if ticket.capture_version != 1 || ticket.route_key != hash(account) {
             return Err("stale-inventory");
         }
         let (issued, accepted): (i64, i64) = sql(tx.query_row(
@@ -1000,9 +1003,17 @@ impl Write {
     }
 }
 fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64) -> bool {
-    let after_order = after.read_ticket.as_ref().and_then(ReadTicket::order);
+    let after_order = after
+        .read_ticket
+        .as_ref()
+        .filter(|ticket| ticket.capture_version == 1)
+        .and_then(ReadTicket::order);
     // Retained attempts without a ticket precede the new source-read epoch.
-    let before_order = before.read_ticket.as_ref().map_or(Some(0), ReadTicket::order);
+    let before_order = before
+        .read_ticket
+        .as_ref()
+        .filter(|ticket| ticket.capture_version == 1)
+        .map_or(Some(0), ReadTicket::order);
     let newer = matches!((before_order, after_order), (Some(before), Some(after)) if after > before);
     if after.validate(now).is_err() || after.identity != before.identity || !newer {
         return false;
@@ -1069,7 +1080,6 @@ pub fn dispatch(args: &str) -> Result<Value> {
             s.gate(&a.account, &a.key, now_ms, a.op == "prepareGate")?;
             Ok(json!({"ok":true}))
         }
-        "readTicket" => Ok(json!(s.read_ticket(&a.account)?)),
         "inventory" => s.inventory(&a.account, snapshot()?, now_ms, &a.entropy),
         "prepare" => s.prepare(&a.account, &a.key, &a.caller, snapshot()?, now_ms, &a.entropy),
         "begin" => {

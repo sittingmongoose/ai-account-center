@@ -66,18 +66,24 @@ Both private provider readers recheck the saved login after their read finishes
 and immediately before accepting its snapshot. A changed or removed login makes
 the read unavailable. Its observation time belongs to the identity verification
 before the usage RPC, so a slow response cannot acquire a newer observation time.
-Before every private provider read, the reset router asks the Store to commit a
-`readTicket` from its independent durable logical clock. The private snapshot
-carries that ticket as a decimal sequence and route hash; provider-returned
-metadata cannot override it. Issuance changes no account revision, alias, token
-or audit state. A failed ticket commit prevents provider I/O.
+Each native reader captures the saved login identity/hash and allocates its
+read ticket inside one SQLite immediate transaction. This short section orders
+identity observations across workers and processes; it commits before provider
+I/O. Codex captures `auth.json` locally. Claude's credential-host helper captures
+saved credentials without OAuth, then pins its separate provider read to that
+account, organization and hash. Capture failures roll back; process exit releases
+the SQLite lock. The bounded Claude capture helper cannot retain it indefinitely.
+The private snapshot carries a capture-version marker, decimal sequence and route
+hash; provider-returned metadata cannot override them. Issuance changes no account
+revision, alias, token or audit state. A failed commit prevents provider I/O.
+The router never assigns or replaces tickets.
 
 Inventory accepts only a route-bound ticket newer than that route's last accepted
 ticket. Older reads and repeated tickets are rejected before any revision, alias,
 target or expiry changes, even when the identity is unchanged. Counter issuance
 and acceptance survive restart; wall-clock corrections cannot lower or strand the
-route's authority. The old timestamp fence is retired on upgrade. Unticketed old
-in-flight inventories fail closed, while retained targets and attempts stay
+route's authority. The old timestamp fence is retired on upgrade. Unticketed or
+admission-only old in-flight inventories fail closed, while retained targets and attempts stay
 readable. A new ticketed read can verify an attempt from before the upgrade.
 Ticket metadata is excluded from the confirmation fingerprint: a new read of
 unchanged account/grant state still matches its confirmation.

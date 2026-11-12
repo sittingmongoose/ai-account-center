@@ -1022,3 +1022,43 @@ fn delayed_old_login_read_cannot_hide_the_current_accounts_pending_claim() {
         });
     }
 }
+
+// Max-4 M1: production HTTP/native traces with admission and actual capture in opposite orders.
+#[test]
+fn actual_native_capture_order_keeps_the_current_pending_account_in_both_delivery_orders() {
+    for (newer_first, source) in [
+        (
+            true,
+            include_str!("../tests/fixtures/reset-capture-newer-first.json"),
+        ),
+        (
+            false,
+            include_str!("../tests/fixtures/reset-capture-older-first.json"),
+        ),
+    ] {
+        let trace: serde_json::Value = serde_json::from_str(source).unwrap();
+        let fresh: Inventory = serde_json::from_value(trace["newer"].clone()).unwrap();
+        let older: Inventory = serde_json::from_value(trace["older"].clone()).unwrap();
+        Owner::new().with(|| {
+            let rc = ResetCtx::new();
+            rc.show("codex:reused", "codex", false);
+            if !newer_first {
+                rc.take("codex:reused", older.clone(), 20.);
+            }
+            rc.take("codex:reused", fresh.clone(), 10.);
+            if newer_first {
+                rc.take("codex:reused", older.clone(), 20.);
+            }
+            pending(rc, fresh.pending_attempt.as_deref().unwrap());
+            assert_eq!(
+                rc.lock_key("codex:reused"),
+                fresh.canonical_account_key.clone().unwrap()
+            );
+            rc.show("other-route", "codex", false);
+            rc.show("codex:reused", "codex", false);
+            pending(rc, fresh.pending_attempt.as_deref().unwrap());
+            assert_eq!(trace["savedAccount"], "account-y");
+            assert_eq!(trace["providerSends"], 0);
+        });
+    }
+}

@@ -9,7 +9,12 @@ import { loadNativeStatus } from '../../status-native/native-loader';
 import type { ResetSource, ResetWrite } from '../routes/reset-claim-routes';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
 import { isDefaultClaudeDataFolder } from './claude-account-records';
-import { localUsageHost, runPrivateUsageHelper } from './usage-failover-transport';
+import {
+  localUsageHost,
+  privateUsageInvocation,
+  runPrivateUsageHelper,
+} from './usage-failover-transport';
+import { getCcsDir } from '../../utils/config-manager';
 import type { UsageHelperRequest, UsageHost } from './usage-failover-contract';
 
 export function createResetSourceAdapter(): ResetSource {
@@ -19,6 +24,12 @@ export function createResetSourceAdapter(): ResetSource {
     return JSON.parse(await new loaded.module.NativeStatus().call(method, JSON.stringify(input)));
   }
   async function execute(account: string, write?: ResetWrite): Promise<unknown> {
+    let context: { dbPath: string; routeAccount: string } | undefined;
+    if (!write) {
+      const dir = path.join(getCcsDir(), 'account-usage', 'reset-claims');
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      context = { dbPath: path.join(dir, 'claims.sqlite'), routeAccount: account };
+    }
     if (account.startsWith('codex:')) {
       const name = account.slice('codex:'.length);
       const summary = await getCodexAuthProfilesSummary();
@@ -34,6 +45,7 @@ export function createResetSourceAdapter(): ResetSource {
         profile: profile.name,
         host: localUsageHost().host,
         write: write ?? null,
+        ...context,
       });
     }
     if (!account.startsWith('claude:'))
@@ -66,7 +78,7 @@ export function createResetSourceAdapter(): ResetSource {
       'import json,sys',
       'scope={"__name__":"aac_private_reset"}',
       `exec(compile(json.loads(${JSON.stringify(JSON.stringify(script))}),"managed-reset","exec"),scope)`,
-      `request=json.loads(${JSON.stringify(JSON.stringify(input))})`,
+      'request=json.load(sys.stdin)',
       'print(json.dumps(scope["reset_host"](request),allow_nan=False))',
     ].join('\n');
     const transportRequest: UsageHelperRequest = {
@@ -74,9 +86,12 @@ export function createResetSourceAdapter(): ResetSource {
       action: 'inventory',
       provider: 'claude',
     };
-    const response = JSON.parse(await runPrivateUsageHelper(host, transportRequest, source));
-    if (write) return response;
-    return native('resetNormalizeClaude', response);
+    if (write)
+      return JSON.parse(await runPrivateUsageHelper(host, transportRequest, source, input));
+    return native('resetClaudeSource', {
+      ...context,
+      command: privateUsageInvocation(host, transportRequest, source, input),
+    });
   }
   return {
     read: (account) => execute(account),
