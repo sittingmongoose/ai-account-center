@@ -137,7 +137,7 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
     expect(seen.other).toEqual([]);
     expect(seen.ssh.length).toBeGreaterThan(0);
     expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(6);
-    for (const call of seen.ssh.filter(call => call.args.includes('nas1-agent'))) {
+    for (const call of seen.ssh.filter((call) => call.args.includes('nas1-agent'))) {
       expect(call.file).toBe('ssh');
       const separator = call.args.indexOf('--');
       expect(separator).toBeGreaterThan(0);
