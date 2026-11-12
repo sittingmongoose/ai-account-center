@@ -60,7 +60,7 @@ function fixture() {
   };
 }
 
-describe('inventory credential identity cache', () => {
+describe.skipIf(process.platform === 'win32')('inventory credential identity cache', () => {
   it('reads no native credential when there are no saved profiles to mark selected', async () => {
     let reads = 0;
     const service = new AntigravitySwitchService({

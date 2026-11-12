@@ -18,7 +18,7 @@ const options = { timeoutMs: 2000, maxBytes: 65536, env: { PATH: '/usr/bin:/bin'
 const python = (source: string, extra: Partial<typeof options> = {}) =>
   runManagedCommand('/usr/bin/python3', ['-I', '-c', source], { ...options, ...extra });
 
-describe('small command parent', () => {
+describe.skipIf(process.platform === 'win32')('small command parent', () => {
   it('accepts an account-collection burst without refusing valid concurrent commands', async () => {
     const results = await Promise.all(
       Array.from({ length: 20 }, (_, i) => python(`import time;time.sleep(.1);print(${i})`))
