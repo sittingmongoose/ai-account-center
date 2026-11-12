@@ -20,6 +20,7 @@ import { parseAccountRegistry } from '../../../src/web-server/services/account-r
 import type { AccountRegistryRead } from '../../../src/web-server/services/account-registry-v2';
 import { createUsageHubAccountSource } from '../../../src/web-server/usage-hub/usage-hub-accounts';
 import type { AccountDashboard } from '../../../src/web-server/services/account-dashboard-types';
+import { waitUntil } from '../../shared/fixtures/process-state';
 import {
   spawnLargeCodexReader,
   type UsageWorkerResult,
@@ -27,10 +28,10 @@ import {
 
 const NOW = Date.parse('2026-10-16T18:00:00Z');
 const never = <T>() => new Promise<T>(() => undefined);
-const cleanups: Array<() => void> = [];
-afterEach(() => {
+const cleanups: Array<() => void | Promise<void>> = [];
+afterEach(async () => {
   mock.restore();
-  for (const cleanup of cleanups.splice(0)) cleanup();
+  for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
 /** A writer lets a stuck open of `fifo` return, as a share that answers again; never blocks. */
@@ -53,15 +54,24 @@ describe('analytics threads on a hung disk', () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-hung-thread-'));
       const fifo = path.join(dir, 'hung');
       execFileSync('mkfifo', [fifo]);
-      let released = false;
-      const release = () => {
-        if (released) return;
-        released = true;
-        answer(fifo);
+      let writer: number | undefined;
+      const release = (): boolean => {
+        if (writer !== undefined) return true;
+        try {
+          writer = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+          return true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENXIO') return false;
+          throw error;
+        }
       };
-      cleanups.push(() => {
-        release();
-        fs.rmSync(dir, { recursive: true, force: true });
+      cleanups.push(async () => {
+        try {
+          await waitUntil(release, 'FIFO reader available for cleanup');
+        } finally {
+          if (writer !== undefined) fs.closeSync(writer);
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
       });
       const stuck = path.join(dir, 'stuck-worker.js');
       fs.writeFileSync(
@@ -88,13 +98,19 @@ describe('analytics threads on a hung disk', () => {
       // Other logs are unaffected.
       await expect(runAnalyticsThread(healthy, {}, 1_000, 'other-logs')).resolves.toBe('answered');
 
-      release();
+      // A one-shot nonblocking writer can see ENXIO while Bun's worker is still
+      // entering openSync. Confirm a reader, then keep its writer until exit.
+      await waitUntil(release, 'FIFO reader available for recovery');
       let reply: unknown;
-      for (let attempt = 0; attempt < 100 && reply === undefined; attempt++) {
-        reply = await runAnalyticsThread(healthy, {}, 1_000, 'fixture-logs').catch(() => {
-          return new Promise((resolve) => setTimeout(() => resolve(undefined), 20));
+      await waitUntil(async () => {
+        reply = await runAnalyticsThread(healthy, {}, 1_000, 'fixture-logs').catch((error) => {
+          // Only the quarantined thread's exit may unlock these logs.
+          if (!(error instanceof Error) || !error.message.includes('has not stopped yet'))
+            throw error;
+          return undefined;
         });
-      }
+        return reply === 'answered';
+      }, 'Analytics thread exits and unlocks its logs');
       expect(reply).toBe('answered');
     },
     8_000
