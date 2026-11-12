@@ -270,6 +270,7 @@ async function server() {
   const loop = monitorEventLoopDelay({ resolution: 10 });
   loop.enable();
   let spawns = 0;
+  let completedCommands = 0;
   let polling = false;
   const poll = async () => {
     if (polling) return;
@@ -283,6 +284,10 @@ async function server() {
             timeoutMs: 1000,
             maxBytes: 65536,
             env: { PATH: '/usr/bin:/bin' },
+          }).then((result) => {
+            if (result.code !== 0 || result.timedOut || result.stdout.trim() !== String(i))
+              throw new Error('Synthetic polling command failed');
+            completedCommands++;
           });
         })
       );
@@ -338,6 +343,7 @@ async function server() {
       retention,
       caches,
       spawns,
+      completedCommands,
       brokerRss,
       fixture: {
         accounts: accounts.length,
