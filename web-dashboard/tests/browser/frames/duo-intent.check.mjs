@@ -128,7 +128,7 @@ tests[
 };
 for (const abandoned of [false, true]) {
   tests[
-    `duo focus intent: timestamp reorder ${abandoned ? 'after abandonment stays abandoned' : 'while focused is still repaired'}`
+    `duo focus intent: timestamp reorder ${abandoned ? 'after abandonment stays abandoned' : 'while focused is deferred'}`
   ] = async (t) => {
     const view = await setup(t, true);
     if (abandoned) await t.page.locator('.c2-sheet-host .to-name').first().click();
@@ -137,12 +137,13 @@ for (const abandoned of [false, true]) {
     await update(t, view, `Reorder with abandoned=${abandoned}`);
     const after = await state(t);
     await t.check(
-      'normal timestamp sorting actually moved the sibling first',
-      (await t.page.locator('.c2-sheet-host .to-name').first().textContent()) === 'Sibling evidence'
+      'normal sorting applies immediately only after focus was abandoned',
+      (await t.page.locator('.c2-sheet-host .to-name').first().textContent()) ===
+        (abandoned ? 'Sibling evidence' : 'Synthetic evidence')
     );
     await t.check(
-      'only a control focused before this update can be recovered',
-      after.same && (abandoned ? after.body && !after.events.length : !after.body),
+      'the poll preserves actual focus or deliberate abandonment without refocusing',
+      after.same && !after.events.length && (abandoned ? after.body : !after.body),
       JSON.stringify(after)
     );
     await t.page.keyboard.press('Enter');
@@ -193,7 +194,8 @@ tests['duo focus intent: capture occurs after a delayed fetch, just before recon
   };
 
 // One-shot fixture-only renderer interception places an input after the pre-update capture,
-// during a real keyed DOM move. A child consumes bubbling, as real widgets can do.
+// during a real focused-media removal. Sorts preserve focused DOM now; removals still need recovery.
+// A child consumes bubbling, as real widgets can do.
 for (const event of ['pointerdown', 'keydown', 'focusin']) {
   tests[`duo focus intent: consumed ${event} during reconciliation cancels recovery`] = async (
     t
@@ -201,12 +203,16 @@ for (const event of ['pointerdown', 'keydown', 'focusin']) {
     const view = await setup(t, true);
     await remember(t);
     await t.page.evaluate((event) => {
-      const list = document.querySelector('.c2-sheet-host .to-list');
       const sheet = document.querySelector('.c2-sheet-host .sheet');
       const action = document.activeElement;
-      for (const method of ['insertBefore', 'appendChild']) {
-        const native = list[method];
-        list[method] = function (child, ...args) {
+      const media = action.closest('.to-media');
+      for (const [target, method] of [
+        [media, 'remove'],
+        [media.parentNode, 'removeChild'],
+      ]) {
+        const native = target[method];
+        target[method] = function (...args) {
+          const child = method === 'remove' ? this : args[0];
           if (!window.__intentRaceFired && child.contains(action)) {
             window.__intentRaceFired = true;
             const target =
@@ -231,15 +237,15 @@ for (const event of ['pointerdown', 'keydown', 'focusin']) {
               action.blur();
             }
           }
-          return native.call(this, child, ...args);
+          return native.apply(this, args);
         };
       }
     }, event);
-    view.pinned.updates[0].reported.deliverables[1].updatedAt = '2026-11-12T08:00:00Z';
-    await update(t, view, `Consumed ${event} during the list move`);
+    view.pinned.updates[0].reported.deliverables[0].media = [];
+    await update(t, view, `Consumed ${event} during media removal`);
     const after = await state(t);
     await t.check(
-      'the input occurs during the actual keyed move and is consumed by a child',
+      'the input occurs during the actual media removal and is consumed by a child',
       await t.page.evaluate(() => window.__intentRaceFired && window.__intentStopped)
     );
     await t.check(

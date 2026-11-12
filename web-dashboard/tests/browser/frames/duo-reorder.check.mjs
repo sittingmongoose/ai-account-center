@@ -42,6 +42,12 @@ async function watch(t, label) {
     window.__reorderRow = document.activeElement.closest('.to-row');
     window.__reorderSheet = document.querySelector('.c2-sheet-host .sheet');
     window.__reorderMediaEvents = [];
+    window.__reorderMoves = 0;
+    new MutationObserver((records) => {
+      for (const record of records)
+        for (const removed of record.removedNodes)
+          if (removed.contains(window.__reorderControl)) window.__reorderMoves++;
+    }).observe(window.__reorderRow.parentNode, { childList: true });
     for (const name of ['pause', 'emptied', 'loadstart'])
       window.__reorderVideo.addEventListener(name, () => window.__reorderMediaEvents.push(name));
   });
@@ -60,6 +66,7 @@ async function state(t) {
     active: document.activeElement?.tagName,
     playing: window.__reorderVideo && !window.__reorderVideo.paused,
     mediaEvents: window.__reorderMediaEvents,
+    moves: window.__reorderMoves,
     viewer: !!document.querySelector('.viewer'),
   }));
 }
@@ -85,8 +92,8 @@ for (const variant of [
     await t.page.waitForTimeout(150);
     const actual = await state(t);
     await t.check(
-      'timestamp sort updates the visible row order',
-      actual.names.join(',') === [...variant.order].map((s) => `Evidence ${s}`).join(','),
+      'timestamp sort holds the focused subtree without moving its row',
+      actual.names.join(',') === 'Evidence A,Evidence B,Evidence C,Evidence D' && !actual.moves,
       JSON.stringify(actual)
     );
     await t.check(
@@ -106,6 +113,17 @@ for (const variant of [
     );
     await t.page.keyboard.press('Enter');
     await t.check('Enter activates the surviving focused control', (await state(t)).viewer);
+    await t.page.waitForFunction(
+      (expected) =>
+        [...document.querySelectorAll('.c2-sheet-host .to-name')]
+          .map((e) => e.textContent)
+          .join(',') === expected,
+      [...variant.order].map((s) => `Evidence ${s}`).join(',')
+    );
+    await t.check(
+      'the latest timestamp order applies after focus leaves for the viewer',
+      (await state(t)).names.join(',') === [...variant.order].map((s) => `Evidence ${s}`).join(',')
+    );
     if ((await state(t)).viewer) await t.page.keyboard.press('Escape');
     if (variant.name === 'reviewer sibling timestamp')
       await t.shot(

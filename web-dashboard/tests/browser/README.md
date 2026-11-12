@@ -110,12 +110,21 @@ beside the clock/signal symbols, and record the viewport/insets rather than assu
 
 `frames/duo-reorder.check.mjs` (`--grep duo-reorder`) exercises ordinary timestamp-driven deliverable
 sorting with a focused playing video: sibling reorder, up/down/first/last and a matched metadata control.
-It requires the same keyed row/player/control, retained playback/focus and working Enter. Removal variants
+While a deliverable row owns focus, the list defers its sorted order so the keyed renderer cannot move the
+focused subtree; data and text stay live. The latest order applies when focus leaves the deliverable list,
+including opening a viewer, and a fresh sheet starts in the latest order. It requires the same keyed
+row/player/control, no focused-subtree move, retained playback/focus and working Enter. Removal variants
 choose the next row’s same action (previous for the last row), a replaced action restores its row key/control
 role, and covered-sheet updates must preserve top-viewer focus, including return after its trigger was removed.
 
 `frames/duo-intent.check.mjs` (`--grep duo-intent`) guards deliberate focus abandonment. Real reading-text
 and sheet-background clicks, explicit blur, Tab-away, delayed fetches and abandoned reorders must not re-arm
 an action. A focused reorder still recovers. Fixture-only one-shot DOM insertion interception injects consumed
-pointer/key/focus events after capture during a real keyed move, verifying cancellation even when a child
+pointer/key/focus events after capture during a real focused-media removal, verifying cancellation even when a child
 stops bubbling. These timing injections are isolated to the fixture page; no product test hook is exposed.
+
+`frames/duo-native-poll.check.mjs` (`--grep duo-native-poll`) selects native Mute with trusted Tab, records its
+actual AX backend node, and compares it after a metadata control and a timestamp poll. Space must keep
+toggling mute while paused. It also observes that no focused row is removed/reinserted, checks live captions,
+Open-action deferral over repeated polls, latest order after blur/reopen, native-focused row removal recovery,
+and a neighbouring removal plus new row in one poll without moving the surviving native focus scope.

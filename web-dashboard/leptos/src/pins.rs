@@ -501,6 +501,42 @@ fn row_keys(values: impl Iterator<Item = String>) -> Vec<(String, usize)> {
         .collect()
 }
 
+// A keyed DOM move resets browser-owned media/frame focus, which focusing its host cannot restore.
+// Keep the current visible order while a row owns focus. Remove deleted rows, fill vacant places with
+// new rows, and publish the latest sorted order after focus leaves the list. Row data stays reactive.
+fn focus_safe_order(
+    previous: Option<&Vec<(String, usize)>>,
+    available: Vec<(String, usize)>,
+    limit: usize,
+    focused: bool,
+) -> Vec<(String, usize)> {
+    let desired: Vec<_> = available.iter().take(limit).cloned().collect();
+    let Some(previous) = previous.filter(|_| focused) else {
+        return desired;
+    };
+    let present: std::collections::HashSet<_> = available.iter().collect();
+    let mut held: Vec<_> = previous
+        .iter()
+        .filter(|key| present.contains(key))
+        .take(limit)
+        .cloned()
+        .collect();
+    // Mixing removals and additions can make the keyed diff reinsert a surviving row. Apply removals
+    // alone in this pass; a later update or blur can append new entries without moving the survivors.
+    if held.len() != previous.len() {
+        return held;
+    }
+    for key in desired {
+        if held.len() >= limit {
+            break;
+        }
+        if !held.contains(&key) {
+            held.push(key);
+        }
+    }
+    held
+}
+
 #[component]
 fn LiveMediaThumbs(items: Memo<Vec<ReportedMedia>>) -> impl IntoView {
     let parsed = Memo::new(move |_| items.with(|items| media_of(items)));
@@ -595,12 +631,21 @@ fn LiveToOpenSection(pin: String, list: Memo<Vec<Deliverable>>) -> impl IntoView
     let store = expect_context::<OpenedStore>();
     let pin = StoredValue::new(pin);
     let all = RwSignal::new(false);
-    let keys = Memo::new(move |_| {
+    let rows = NodeRef::<leptos::html::Ul>::new();
+    let focus_changed = RwSignal::new(0_u64);
+    let keys = Memo::new(move |previous| {
+        focus_changed.track();
         list.with(|list| {
-            row_keys(
-                list.iter()
-                    .take(if all.get() { list.len() } else { 6 })
-                    .map(|d| d.id.clone()),
+            let focused = rows.get_untracked().is_some_and(|root| {
+                document()
+                    .active_element()
+                    .is_some_and(|active| root.contains(Some(active.as_ref())))
+            });
+            focus_safe_order(
+                previous,
+                row_keys(list.iter().map(|d| d.id.clone())),
+                if all.get() { list.len() } else { 6 },
+                focused,
             )
         })
     });
@@ -613,7 +658,11 @@ fn LiveToOpenSection(pin: String, list: Memo<Vec<Deliverable>>) -> impl IntoView
                 </Show>
             </div>
             <Show when=move || !list.with(Vec::is_empty) fallback=|| view! { <p class="q3 c2-none">"Nothing reported to open."</p> }>
-                <ul class="to-list">
+                <ul class="to-list" node_ref=rows on:focusout=move |_| {
+                    // focusout precedes the next selection. Recheck after it settles, including native
+                    // subcontrol transitions whose activeElement remains the same media host.
+                    let _ = request_animation_frame(move || { focus_changed.try_update(|n| *n += 1); });
+                }>
                     <For each=move || keys.get() key=|key| key.clone() children=move |(id, occurrence)| {
                         let identity = format!("deliverable:{}", serde_json::to_string(&(id.clone(), occurrence)).unwrap_or_default());
                         let d = Memo::new(move |_| list.with(|list| list.iter().filter(|d| d.id == id).nth(occurrence).cloned().unwrap_or_default()));
@@ -1217,5 +1266,62 @@ pub fn PinnedPanelView() -> impl IntoView {
                 </OverlayPortal>
             } }/>
         </section>
+    }
+}
+
+#[cfg(test)]
+mod focus_order_tests {
+    use super::*;
+
+    fn keys(labels: &str) -> Vec<(String, usize)> {
+        row_keys(labels.chars().map(|label| label.to_string()))
+    }
+
+    #[test]
+    fn focused_rows_keep_their_dom_order_until_focus_leaves() {
+        let previous = keys("ABC");
+        assert_eq!(
+            focus_safe_order(Some(&previous), keys("CAB"), 6, true),
+            previous
+        );
+        assert_eq!(
+            focus_safe_order(Some(&previous), keys("BCA"), 6, false),
+            keys("BCA")
+        );
+    }
+
+    #[test]
+    fn removed_rows_disappear_without_moving_surviving_rows() {
+        assert_eq!(
+            focus_safe_order(Some(&keys("ABC")), keys("DCA"), 6, true),
+            keys("AC")
+        );
+        assert_eq!(
+            focus_safe_order(Some(&keys("AC")), keys("DCA"), 6, true),
+            keys("ACD")
+        );
+    }
+
+    #[test]
+    fn a_focused_visible_row_is_not_evicted_by_a_new_top_six() {
+        let previous = keys("ABCDEF");
+        assert_eq!(
+            focus_safe_order(Some(&previous), keys("GFEDCBA"), 6, true),
+            previous
+        );
+        assert_eq!(
+            focus_safe_order(Some(&previous), keys("GFEDCBA"), 6, false),
+            keys("GFEDCB")
+        );
+    }
+
+    #[test]
+    fn initial_order_and_duplicate_occurrences_remain_keyed() {
+        let previous = keys("ABA");
+        assert_eq!(focus_safe_order(None, previous.clone(), 6, true), previous);
+        assert_eq!(
+            focus_safe_order(Some(&previous), keys("AAB"), 6, true),
+            previous
+        );
     }
 }
