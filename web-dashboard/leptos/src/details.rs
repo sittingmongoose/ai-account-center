@@ -492,8 +492,8 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                     }
                 })}
             </aside>
-            <ResetDialog rc=rc/>
             </OverlayPortal>
+            <ResetDialog rc=rc/>
         </Show>
     }
 }

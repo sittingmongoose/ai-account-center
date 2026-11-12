@@ -14,6 +14,7 @@
 
 use crate::api::{FetchError, send};
 use crate::dash::nullable;
+use crate::ui::OverlayPortal;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
@@ -1621,9 +1622,27 @@ fn ResetRow(rc: ResetCtx, row: Row, ready_total: Memo<u32>) -> impl IntoView {
 }
 
 /// The confirmation, over the panel: the account as prepare read it, the exact grant, what it refills, its expiry,
-/// the cost. Cancel and Escape close it; nothing is sent until Use this reset.
+/// the cost. Cancel and Escape close it; nothing is sent until Use this reset. It is a modal overlay of its own above
+/// Details: the shared overlay owner portals it, traps Tab, takes the first focus, locks the page scroll, routes
+/// Escape to the top overlay and returns focus when it closes or its page retires.
 #[component]
 pub fn ResetDialog(rc: ResetCtx) -> impl IntoView {
+    let open = Memo::new(move |_| {
+        rc.dialog
+            .with(|d| matches!(d, Dialog::Open { .. } | Dialog::Sending { .. }))
+    });
+    let close = Callback::new(move |_| rc.close());
+    view! {
+        <Show when=move || open.get()>
+            <OverlayPortal on_close=close>
+                <ResetConfirm rc=rc/>
+            </OverlayPortal>
+        </Show>
+    }
+}
+
+#[component]
+fn ResetConfirm(rc: ResetCtx) -> impl IntoView {
     let now = RwSignal::new(js_sys::Date::now());
     let tick = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
         let _ = now.try_set(js_sys::Date::now());
@@ -1638,32 +1657,6 @@ pub fn ResetDialog(rc: ResetCtx) -> impl IntoView {
     on_cleanup(move || {
         if let Some(id) = timer {
             window().clear_interval_with_handle(id);
-        }
-    });
-    let keys = window_event_listener(leptos::ev::keydown, move |e| {
-        if e.key() == "Escape" && rc.dialog_open() {
-            e.stop_propagation();
-            rc.close();
-        }
-    });
-    on_cleanup(move || keys.remove());
-    let open = Memo::new(move |_| {
-        rc.dialog
-            .with(|d| matches!(d, Dialog::Open { .. } | Dialog::Sending { .. }))
-    });
-    Effect::new(move |_| {
-        if open.get() {
-            let focus = wasm_bindgen::closure::Closure::once_into_js(|| {
-                if let Some(el) = document()
-                    .query_selector(".reset-dialog .btn.primary, .reset-dialog .btn")
-                    .ok()
-                    .flatten()
-                    .and_then(|e| wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(e).ok())
-                {
-                    let _ = el.focus();
-                }
-            });
-            let _ = window().request_animation_frame(wasm_bindgen::JsCast::unchecked_ref(&focus));
         }
     });
     move || {
@@ -1735,7 +1728,7 @@ pub fn ResetDialog(rc: ResetCtx) -> impl IntoView {
                             let confirmation_key = confirmation_key.clone();
                             view! {
                                 <button class="btn primary" disabled=move || sending || !rc.unresolved.with(|lock| lock.can_confirm(&confirmation_key)) aria-disabled=sending.to_string() data-probe="reset-dialog-use"
-                                    on:click=move |_| { if !sending { rc.confirm(); } }>"Use this reset"</button>
+                                    on:click=move |_| { if !sending { crate::ui::reconcile_overlay_focus(|| rc.confirm()); } }>"Use this reset"</button>
                             }.into_any()
                         }}
                     </div>
