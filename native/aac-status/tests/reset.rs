@@ -237,11 +237,10 @@ fn account_aliases_cannot_bypass_pending_lock() {
         .as_str()
         .unwrap()
         .to_owned();
-    let t = s.prepare("alias", &k, &caller(), &snap, NOW, &entropy(11)).unwrap()["confirmationToken"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert!(s.begin("alias", &k, &caller(), &t, &snap, NOW, &entropy(12)).is_err());
+    assert_eq!(
+        s.prepare("alias", &k, &caller(), &snap, NOW, &entropy(11)).unwrap_err(),
+        "check-again-required"
+    );
 }
 #[test]
 fn fresh_verification_requires_exact_decrement_and_refill() {
@@ -434,12 +433,13 @@ fn simultaneous_confirmations_produce_only_one_write_permission() {
     let snap = snapshot("claude");
     let k = inventory(&mut s, &snap);
     let t1 = prepare(&mut s, &k, &snap);
-    let t2 = s
-        .prepare("route-account", &k, &caller(), &snap, NOW, &entropy(6))
-        .unwrap()["confirmationToken"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    assert_eq!(
+        s.prepare("route-account", &k, &caller(), &snap, NOW, &entropy(6))
+            .unwrap_err(),
+        "claim-token-outstanding"
+    );
+    // Racing replays of the originating token still yield exactly one Write.
+    let t2 = t1.clone();
     drop(s);
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
     let mut workers = vec![];

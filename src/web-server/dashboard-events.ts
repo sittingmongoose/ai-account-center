@@ -16,6 +16,7 @@ import type { SignInJob } from './services/signin-jobs';
  */
 export type DashboardEvent =
   | { type: 'accounts-changed' }
+  | { type: 'reset-claims-changed' }
   | { type: 'signin-job'; job: SignInJob }
   /** A Status tab source changed; the page re-reads /api/status. Browser sessions only. */
   | { type: 'status-changed' };
@@ -154,4 +155,11 @@ export function closeStaleSessionClients(isCurrent: (epoch: number | null) => bo
     }
   }
   return closed;
+}
+
+/** Reset state hints contain no account data and go only to signed-in browser sessions. */
+export function broadcastResetClaimChange(): number {
+  return broadcastDashboardEvent((client) =>
+    client.authKind === 'session' ? { type: 'reset-claims-changed' } : null
+  );
 }

@@ -147,8 +147,17 @@ fn fingerprint(s: &Snapshot, g: &Grant) -> Result<String> {
 /// Each call must supply fresh 32-byte CSPRNG hex. It is not written to audit history.
 pub struct Store {
     db: Connection,
+    // Direct Store tests inject their explicit clock; production refreshes after every lock.
+    clock: fn(i64) -> Result<i64>,
 }
 impl Store {
+    /// Trusted execution clocks are sampled after acquiring each transaction. Direct
+    /// Store callers can inject deterministic clocks; the public ABI always uses wall time.
+    pub fn open_with_clock(path: &Path, clock: fn(i64) -> Result<i64>) -> Result<Self> {
+        let mut store = Self::open(path)?;
+        store.clock = clock;
+        Ok(store)
+    }
     pub fn open(path: &Path) -> Result<Self> {
         if let Ok(meta) = std::fs::symlink_metadata(path)
             && (meta.file_type().is_symlink() || !meta.is_file())
@@ -227,7 +236,7 @@ impl Store {
             Self::advance(&tx, &canonical)?;
         }
         sql(tx.commit())?;
-        Ok(Self { db })
+        Ok(Self { db, clock: Ok })
     }
     fn audit(
         tx: &Connection,
@@ -330,14 +339,15 @@ impl Store {
     }
 
     pub fn inventory(&mut self, account: &str, s: &Snapshot, now: i64, entropy: &str) -> Result<Value> {
-        s.validate(now)?;
         if !opaque(entropy) {
             return Err("entropy");
         }
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let now = (self.clock)(now)?;
         Self::expire_tokens(&tx, now)?;
+        s.validate(now)?;
         let canonical = Self::canonical(s)?;
         let revision = Self::advance(&tx, &canonical)?;
         sql(tx.execute(
@@ -417,9 +427,6 @@ impl Store {
             serde_json::from_str(&g).map_err(|_| "shape")?,
         ))
     }
-    fn selected(&self, account: &str, key: &str, fresh: &Snapshot, now: i64) -> Result<Grant> {
-        Self::selected_from(&self.db, account, key, fresh, now)
-    }
     fn selected_from(db: &Connection, account: &str, key: &str, fresh: &Snapshot, now: i64) -> Result<Grant> {
         fresh.validate(now)?;
         let (old, g) = Self::target_from(db, account, key)?;
@@ -449,6 +456,7 @@ impl Store {
     /// Refuse known holds/limits before the adapter performs any provider read.
     /// The main prepare/begin transaction still rechecks them after the fresh read.
     pub fn gate(&self, account: &str, key: &str, now: i64, prepare: bool) -> Result<()> {
+        let now = (self.clock)(now)?;
         let (snapshot, _) = self.target(account, key)?;
         let canonical = hash(&encode(&(
             &snapshot.identity.provider,
@@ -471,6 +479,14 @@ impl Store {
             return Err("check-again-required");
         }
         if prepare {
+            let outstanding: bool = sql(self.db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM claim_tokens WHERE lock_key=? AND expires>?)",
+                params![canonical, now],
+                |r| r.get(0),
+            ))?;
+            if outstanding {
+                return Err("claim-token-outstanding");
+            }
             let n: i64 = sql(self.db.query_row(
                 "SELECT count(*) FROM budgets WHERE account=? AND at_ms>?",
                 params![canonical, now - 60_000],
@@ -506,11 +522,13 @@ impl Store {
         if !opaque(token) {
             return Err("entropy");
         }
-        let g = self.selected(account, key, fresh, now)?;
-        let fp = fingerprint(fresh, &g)?;
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let now = (self.clock)(now)?;
+        Self::expire_tokens(&tx, now)?;
+        let g = Self::selected_from(&tx, account, key, fresh, now)?;
+        let fp = fingerprint(fresh, &g)?;
         let lock_key = hash(&encode(&(
             &fresh.identity.provider,
             &fresh.identity.account,
@@ -525,14 +543,21 @@ impl Store {
             return Err("rate-limited");
         }
         let pending: i64 = sql(tx.query_row(
-            "SELECT count(*) FROM attempts WHERE account=? AND pending=1",
-            [account],
+            "SELECT count(*) FROM attempts WHERE lock_key=? AND pending=1",
+            [&lock_key],
             |r| r.get(0),
         ))?;
         if pending > 0 {
             return Err("check-again-required");
         }
-        Self::expire_tokens(&tx, now)?;
+        let outstanding: bool = sql(tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM claim_tokens WHERE lock_key=? AND expires>?)",
+            params![lock_key, now],
+            |r| r.get(0),
+        ))?;
+        if outstanding {
+            return Err("claim-token-outstanding");
+        }
         sql(tx.execute(
             "INSERT INTO confirmations VALUES(?,?,?,?,?,?)",
             params![hash(token), hash(caller), account, key, fp, now + 120_000],
@@ -579,6 +604,7 @@ impl Store {
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let now = (self.clock)(now)?;
         Self::expire_tokens(&tx, now)?;
         let c: Option<(String, String, String, String, i64)> = sql(tx
             .query_row(
@@ -704,6 +730,7 @@ impl Store {
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let now = (self.clock)(now)?;
         Self::expire_tokens(&tx, now)?;
         let (before, g, pending, previous_success): (String, String, bool, bool) = sql(tx.query_row(
             "SELECT before_json,grant_json,pending,provider_success FROM attempts WHERE key=? AND account=?",
@@ -769,6 +796,7 @@ impl Store {
             &self.db,
             rusqlite::TransactionBehavior::Immediate,
         ))?;
+        let now = (self.clock)(now)?;
         Self::expire_tokens(&tx, now)?;
         let canonical = Self::account_canonical_from(&tx, account)?;
         let binding: Option<i64> = sql(tx
@@ -944,6 +972,15 @@ fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64) -> bool {
             })
 }
 
+fn wall_now() -> Result<i64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "clock")?
+        .as_millis()
+        .try_into()
+        .map_err(|_| "clock")
+}
+
 /// Native ABI used only by the internal adapter. Errors are fixed codes, never raw provider bodies.
 pub fn dispatch(args: &str) -> Result<Value> {
     #[derive(Deserialize)]
@@ -966,13 +1003,11 @@ pub fn dispatch(args: &str) -> Result<Value> {
         retry_after_ms: Option<i64>,
     }
     let a: Input = serde_json::from_str(args).map_err(|_| "shape")?;
-    // Enforce TTL when the libuv task actually runs, not when it was queued.
+    // The request timestamp never authorizes execution. Each transaction samples the
+    // trusted clock after acquiring its lock, including pending recovery.
     let _request_clock = a.now_ms;
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "clock")?
-        .as_millis() as i64;
-    let mut s = Store::open(Path::new(&a.db_path))?;
+    let mut s = Store::open_with_clock(Path::new(&a.db_path), |_| wall_now())?;
+    let now_ms = wall_now()?;
     let snapshot = || a.snapshot.as_ref().ok_or("inventory-unavailable");
     match a.op.as_str() {
         "prepareGate" | "claimGate" => {
@@ -1005,7 +1040,7 @@ pub fn dispatch(args: &str) -> Result<Value> {
         }
         "check" => s.check(&a.account, &a.key, snapshot()?, now_ms),
         "history" => s.history(&a.account),
-        "pending" => s.pending(&a.account, a.now_ms),
+        "pending" => s.pending(&a.account, now_ms),
         _ => Err("unknown-method"),
     }
 }

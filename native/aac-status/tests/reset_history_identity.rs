@@ -164,7 +164,7 @@ fn reassignment_keeps_both_sibling_histories_and_unclaimed_prepares_after_restar
         store.inventory("new-sibling", &new_alias, NOW, &nonce(31)).unwrap();
         // A prepare with no attempt still belongs to its immutable inventory target.
         let inventory = store.inventory("reused", &before, NOW, &nonce(32)).unwrap();
-        store
+        let prepared = store
             .prepare(
                 "reused",
                 inventory["grants"][0]["grantKey"].as_str().unwrap(),
@@ -174,6 +174,21 @@ fn reassignment_keeps_both_sibling_histories_and_unclaimed_prepares_after_restar
                 &nonce(33),
             )
             .unwrap();
+        // Burn without an attempt: its permanent prepare audit must retain original ownership.
+        assert_eq!(
+            store
+                .begin(
+                    "reused",
+                    inventory["grants"][0]["grantKey"].as_str().unwrap(),
+                    &format!("session:{}", nonce(998)),
+                    prepared["confirmationToken"].as_str().unwrap(),
+                    &before,
+                    NOW,
+                    &nonce(35)
+                )
+                .unwrap_err(),
+            "confirmation-invalid"
+        );
         let attempt = begin(&mut store, "reused", &before, 1);
         store
             .finish(

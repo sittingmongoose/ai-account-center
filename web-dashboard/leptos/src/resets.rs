@@ -22,6 +22,14 @@ use serde::{Deserialize, Serialize};
 mod reset_state;
 use reset_state::{AccountState, Evidence, Unresolved};
 
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = aacResetHints, js_name = subscribe)]
+    fn subscribe_reset_changes(callback: &js_sys::Function) -> js_sys::Function;
+    #[wasm_bindgen(js_namespace = aacResetHints, js_name = publish)]
+    fn publish_reset_change();
+}
+
 // ---- the wire (reset-claim-routes.ts) ----------------------------------------------------------------------------
 
 /// GET `/api/accounts/:id/reset-claims`.
@@ -251,6 +259,7 @@ pub fn why_not(reason: &str, provider: &str) -> String {
         "signed-out" => "This login is signed out.".into(),
         "cooldown" => "The provider asked AAC to wait before another reset.".into(),
         "rate-limited" => "Too many reset tries in a short time; wait a minute.".into(),
+        "claim-token-outstanding" => "A claim started on another page may still arrive. Check again before using another reset.".into(),
         "check-again-required" => "A reset claim on this account is still unconfirmed.".into(),
         _ => "AAC can't use this reset from here right now.".into(),
     }
@@ -585,6 +594,10 @@ pub fn refusal_said(r: &Refusal, provider: &str) -> Said {
         Some("confirmation-invalid") => bad("This confirmation expired, open it again.".into()),
         Some("grant-changed") => bad("The resets changed since this list was read. Nothing was sent; look again.".into()),
         Some("stale-inventory") => bad("AAC's fresh read came back too old. Nothing was sent; try again.".into()),
+        Some("claim-token-outstanding") => Said {
+            text: "A claim started on another page may still arrive. Check again before using another reset.".into(),
+            bad: true, check: true,
+        },
         Some("check-again-required") => Said {
             text: "A reset claim on this account is still unconfirmed. Check it before using another.".into(),
             bad: true,
@@ -838,13 +851,13 @@ pub struct ResetCtx {
     /// Canonical account state survives navigation and saved-profile reassignment.
     states: StoredValue<Vec<(String, AccountState)>>,
     aliases: StoredValue<Vec<(String, String, u64)>>,
+    read_epoch: StoredValue<u64>,
     send_id: StoredValue<u64>,
     notice: RwSignal<Option<Said>>,
     older: RwSignal<Vec<String>>,
     histories: StoredValue<Vec<(String, Vec<HistoryEvent>)>>,
 }
 
-const REUSE_MS: f64 = 60_000.0;
 const ACCOUNT_CHANGED: &str = "The account for this saved profile changed. Reset claims now shows the new account. Earlier claim results stay with the previous account.";
 
 impl ResetCtx {
@@ -861,6 +874,7 @@ impl ResetCtx {
             cache: StoredValue::new(vec![]),
             states: StoredValue::new(vec![]),
             aliases: StoredValue::new(vec![]),
+            read_epoch: StoredValue::new(0),
             send_id: StoredValue::new(0),
             notice: RwSignal::new(None),
             older: RwSignal::new(vec![]),
@@ -883,24 +897,7 @@ impl ResetCtx {
         self.load.set(Load::Idle);
         self.project();
         if fetch && !account.is_empty() {
-            let now = js_sys::Date::now();
-            let cached = self.cache.with_value(|c| {
-                c.iter()
-                    .find(|(a, at, i)| {
-                        a == account
-                            && now - at < REUSE_MS
-                            && !self.lock_of(account).blocks()
-                            && i.evidence
-                                .as_ref()
-                                .is_some_and(|e| self.state_of(account).matches(e))
-                    })
-                    .map(|(_, at, i)| (*at, i.clone()))
-            });
-            if let Some((started, inv)) = cached {
-                self.take(account, inv, started);
-            } else {
-                self.refresh();
-            }
+            self.refresh();
         }
     }
     fn lock_key(&self, account: &str) -> String {
@@ -1013,7 +1010,11 @@ impl ResetCtx {
             entries.sort_by_key(|e| e.sequence.parse::<u64>().unwrap_or(0));
         });
     }
-    fn take(&self, account: &str, mut inv: Inventory, started_ms: f64) {
+    #[cfg(test)]
+    fn take(&self, account: &str, inv: Inventory, started_ms: f64) {
+        self.take_at(account, inv, started_ms, self.read_epoch.get_value());
+    }
+    fn take_at(&self, account: &str, mut inv: Inventory, started_ms: f64, epoch: u64) {
         let (Some(canonical), Some(binding), Some(evidence)) = (
             &inv.canonical_account_key,
             &inv.binding_revision,
@@ -1034,7 +1035,17 @@ impl ResetCtx {
             return;
         }
         self.merge_history(canonical, &inv.history);
-        let accepted = self.update_state(canonical, |s| s.observe(evidence, Some(started_ms)));
+        let current = epoch == self.read_epoch.get_value();
+        let accepted = self.update_state(canonical, |s| {
+            let unproved = s.needs_refresh();
+            let accepted = s.observe(evidence, Some(started_ms));
+            if accepted && current {
+                s.refreshed();
+            } else if !current && unproved {
+                s.invalidate();
+            }
+            accepted
+        });
         if !accepted || !self.bind_alias(account, canonical, binding) {
             return;
         }
@@ -1052,7 +1063,62 @@ impl ResetCtx {
             self.load.set(Load::Ready(inv));
         }
     }
-    /// A read starts after the send's proof interval before it can retire an unanswered send.
+    /// Hints invalidate cached views and confirmation permission before starting recovery.
+    fn invalidate(&self) {
+        self.read_epoch.update_value(|epoch| *epoch += 1);
+        self.cache.set_value(vec![]);
+        self.states.update_value(|states| {
+            for (_, state) in states {
+                state.invalidate();
+            }
+        });
+        let account = self.account.get_untracked();
+        self.update_state(&account, |s| s.invalidate());
+    }
+    async fn read_current(&self, account: &str) -> bool {
+        // A hint or a later response can overtake this read. Retry reads until the
+        // current generation has proof; no claim/prepare is retried here.
+        loop {
+            let epoch = self.read_epoch.get_value();
+            let started = js_sys::Date::now();
+            let got = load(account).await;
+            if self.account.try_get_untracked().is_none() {
+                return false;
+            }
+            if let Answer::Ok(inv) = got {
+                let readable = inv.evidence.as_ref().is_some_and(|e| {
+                    e.valid()
+                        && inv.canonical_account_key.as_ref() == Some(&e.canonical_account_key)
+                }) && inv
+                    .binding_revision
+                    .as_ref()
+                    .is_some_and(|r| r.parse::<u64>().is_ok());
+                self.take_at(account, inv, started, epoch);
+                if readable
+                    && epoch == self.read_epoch.get_value()
+                    && !self.state_of(account).needs_refresh()
+                {
+                    return true;
+                }
+                if !readable || self.account.get_untracked() != account {
+                    return false;
+                }
+                continue;
+            }
+            self.update_state(account, |s| s.invalidate());
+            if self.account.try_get_untracked().as_deref() == Some(account) {
+                let text = match got {
+                    Answer::Refused(r) if r.code == "browser-session-required" => {
+                        "Resets can be used only from a signed-in dashboard session.".into()
+                    }
+                    Answer::Failed(text) => text,
+                    _ => "AAC couldn't read which resets it can use right now.".into(),
+                };
+                self.load.set(Load::Failed(text));
+            }
+            return false;
+        }
+    }
     pub fn refresh(&self) {
         let me = *self;
         let account = self.account.get_untracked();
@@ -1062,24 +1128,22 @@ impl ResetCtx {
         if !matches!(self.load.get_untracked(), Load::Ready(_)) {
             self.load.set(Load::Loading);
         }
-        let started = js_sys::Date::now();
         spawn_local(async move {
-            let got = load(&account).await;
-            if let Answer::Ok(inv) = got {
-                me.take(&account, inv, started);
-                return;
+            me.read_current(&account).await;
+        });
+    }
+    pub fn watch_changes(&self) {
+        let me = *self;
+        let callback = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
+            if me.account.try_get_untracked().is_some() {
+                me.invalidate();
+                me.refresh();
             }
-            if me.account.try_get_untracked().as_deref() != Some(account.as_str()) {
-                return;
-            }
-            let text = match got {
-                Answer::Refused(r) if r.code == "browser-session-required" => {
-                    "Resets can be used only from a signed-in dashboard session.".into()
-                }
-                Answer::Failed(text) => text,
-                _ => "AAC couldn't read which resets it can use right now.".into(),
-            };
-            me.load.set(Load::Failed(text));
+        });
+        let stop = subscribe_reset_changes(wasm_bindgen::JsCast::unchecked_ref(callback.as_ref()));
+        crate::owned::on_owner_cleanup(move || {
+            let _ = stop.call0(&wasm_bindgen::JsValue::NULL);
+            drop(callback);
         });
     }
     fn transient(&self, identity: &str, said: Said) {
@@ -1146,16 +1210,29 @@ impl ResetCtx {
         let provider = self.provider.get_untracked();
         self.notice.set(None);
         self.project();
+        self.invalidate();
         self.dialog.set(Dialog::Opening {
             grant_key: grant_key.clone(),
         });
         let sent_at = js_sys::Date::now();
         spawn_local(async move {
+            let fresh = me.read_current(&account).await;
+            if me.account.try_get_untracked().as_deref() != Some(account.as_str()) {
+                return;
+            }
+            if !fresh || me.lock_key(&account) != identity || me.lock_of(&identity).blocks() {
+                me.dialog.set(Dialog::Closed);
+                return;
+            }
             let got = prepare(&account, &grant_key).await;
+            if me.account.try_get_untracked().is_none() {
+                return;
+            }
             let accepted = if let Answer::Ok(p) = &got {
                 p.evidence.as_ref().is_some_and(|e| {
                     e.canonical_account_key == identity
-                        && me.update_state(&identity, |s| s.observe(e, None))
+                        && (me.update_state(&identity, |s| s.observe(e, None))
+                            || me.lock_of(&identity).owns_confirmation(&p.confirmation_key))
                 })
             } else {
                 false
@@ -1165,6 +1242,9 @@ impl ResetCtx {
             } else {
                 false
             };
+            if accepted {
+                publish_reset_change();
+            }
             let still = me.account.try_get_untracked().as_deref() == Some(account.as_str())
                 && me.lock_key(&account) == identity
                 && me.dialog.try_with_untracked(
@@ -1178,7 +1258,7 @@ impl ResetCtx {
                     if accepted
                         && me
                             .lock_of(&identity)
-                            .can_confirm(&prepared.confirmation_key)
+                            .owns_confirmation(&prepared.confirmation_key)
                         && !prepared.confirmation_token.is_empty()
                         && !prepared.account.label.is_empty() =>
                 {
@@ -1275,8 +1355,10 @@ impl ResetCtx {
             .update_value(|c| c.retain(|(a, _, _)| *a != account));
         // This obligation exists before transport starts, including across aliases and navigation.
         let id = self.begin_send(&identity, js_sys::Date::now());
+        publish_reset_change();
         spawn_local(async move {
             let got = claim(&account, &grant_key, &prepared.confirmation_token).await;
+            publish_reset_change();
             match got {
                 Answer::Ok(result) => {
                     me.receive(&identity, &result, Some(id));

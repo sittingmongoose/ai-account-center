@@ -352,9 +352,34 @@ fn token_burn_and_other_token_expiry_are_independently_ordered() {
     let inventory = store.inventory("route", &before, NOW, &nonce(330)).unwrap();
     let key = inventory["grants"][0]["grantKey"].as_str().unwrap();
     let first = store.prepare("route", key, "local", &before, NOW, &nonce(331)).unwrap();
-    let second = store
-        .prepare("route", key, "local", &before, NOW + 1, &nonce(332))
-        .unwrap();
+    assert_eq!(
+        store
+            .prepare("route", key, "local", &before, NOW + 1, &nonce(332))
+            .unwrap_err(),
+        "claim-token-outstanding"
+    );
+    // Preserve independent burn coverage for a legacy database with two issued tokens.
+    let db = rusqlite::Connection::open(_dir.path().join("claims.sqlite")).unwrap();
+    use sha2::Digest;
+    let token = nonce(332);
+    let token_key: String = sha2::Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    db.execute("INSERT INTO confirmations SELECT ?,caller,account,target,fingerprint,expires+1 FROM confirmations WHERE token=?", rusqlite::params![token_key, first["confirmationKey"].as_str().unwrap()]).unwrap();
+    db.execute(
+        "INSERT INTO claim_tokens SELECT ?,lock_key,expires+1 FROM claim_tokens WHERE token=?",
+        rusqlite::params![token_key, first["confirmationKey"].as_str().unwrap()],
+    )
+    .unwrap();
+    drop(db);
+    let mut second = store.inventory("route", &before, NOW + 1, &nonce(339)).unwrap();
+    second["confirmationKey"] = serde_json::json!(token_key);
+    second["confirmationToken"] = serde_json::json!(token);
+    golden(
+        "reset-legacy-tokens.json",
+        &serde_json::json!({"first":first,"two":second}),
+    );
     assert_eq!(
         second["evidence"]["claimTokens"]["tokenKeys"].as_array().unwrap().len(),
         2
@@ -446,4 +471,182 @@ fn concurrent_token_consumption_never_exposes_an_empty_reservation_gap() {
             .unwrap();
         reader.join().unwrap();
     }
+}
+
+#[test]
+fn recorded_pre_prepare_read_requires_invalidation_and_second_prepare_is_refused() {
+    let (_dir, mut store) = open();
+    let before = snap("account-x", "profile-a", "host-a");
+    let old = store.inventory("route", &before, NOW, &nonce(900)).unwrap();
+    let key = old["grants"][0]["grantKey"].as_str().unwrap();
+    let prepared = store
+        .prepare("route", key, "local", &before, NOW + 1, &nonce(901))
+        .unwrap();
+    assert!(revision(&prepared) > revision(&old));
+    assert_eq!(
+        store
+            .prepare("route", key, "local", &before, NOW + 2, &nonce(903))
+            .unwrap_err(),
+        "claim-token-outstanding"
+    );
+    assert_eq!(
+        store.gate("route", key, NOW + 2, true).unwrap_err(),
+        "claim-token-outstanding"
+    );
+    // The originating token remains actionable; a second page cannot issue another.
+    let current = store.inventory("route", &before, NOW + 3, &nonce(904)).unwrap();
+    store
+        .begin(
+            "route",
+            key,
+            "local",
+            prepared["confirmationToken"].as_str().unwrap(),
+            &before,
+            NOW + 20,
+            &nonce(902),
+        )
+        .unwrap();
+    let pending = store.pending("route", NOW + 21).unwrap();
+    let settled = store
+        .finish("route", &nonce(902), Outcome::Nothing, None, NOW + 22, None)
+        .unwrap();
+    let final_read = store.inventory("route", &before, NOW + 23, &nonce(905)).unwrap();
+    golden(
+        "reset-live-fence.json",
+        &serde_json::json!({"old":old,"prepared":prepared,"current":current,"pending":pending,"settled":settled,"final":final_read}),
+    );
+}
+fn wall() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+// RECHECK-4 M2: unchanged 120-second TTL, real SQLite lock wait, production ABI.
+#[test]
+fn review_dispatch_must_recheck_expiry_after_database_lock_wait() {
+    let (dir, mut store) = open();
+    let issued = wall() - 119_000;
+    let mut before = snap("account-x", "profile-a", "host-a");
+    before.observed_at_ms = issued;
+    let inv = store.inventory("route", &before, issued, &nonce(910)).unwrap();
+    let key = inv["grants"][0]["grantKey"].as_str().unwrap();
+    let prep = store
+        .prepare("route", key, "local", &before, issued, &nonce(911))
+        .unwrap();
+    let expiry = prep["expiresAtMs"].as_i64().unwrap();
+    before.observed_at_ms = wall();
+    let dbpath = dir.path().join("claims.sqlite");
+    let args = serde_json::json!({"dbPath":dbpath,"op":"begin","account":"route","nowMs":wall(),"key":key,"caller":"local","token":prep["confirmationToken"],"snapshot":before,"entropy":nonce(912)}).to_string();
+    let lock = rusqlite::Connection::open(&dbpath).unwrap();
+    lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let worker = std::thread::spawn(move || dispatch(&args));
+    std::thread::sleep(std::time::Duration::from_millis(1800));
+    assert!(wall() >= expiry);
+    lock.execute_batch("COMMIT").unwrap();
+    let got = worker.join().unwrap();
+    assert_eq!(
+        got.unwrap_err(),
+        "confirmation-invalid",
+        "execution wall={} expiry={expiry}",
+        wall()
+    );
+}
+#[test]
+fn execution_and_pending_sample_their_clock_after_begin_immediate_waits() {
+    for recovery in [false, true] {
+        let (dir, mut store) = open();
+        let issued = wall() - 119_000;
+        let mut before = snap("x", "a", "h");
+        before.observed_at_ms = issued;
+        let inv = store.inventory("route", &before, issued, &nonce(920)).unwrap();
+        let key = inv["grants"][0]["grantKey"].as_str().unwrap().to_owned();
+        let prep = store
+            .prepare("route", &key, "local", &before, issued, &nonce(921))
+            .unwrap();
+        let path = dir.path().join("claims.sqlite");
+        // Open first, so this wait occurs in execution's BEGIN, after migration has finished.
+        let mut executor = Store::open_with_clock(&path, |_| Ok(wall())).unwrap();
+        let lock = rusqlite::Connection::open(&path).unwrap();
+        lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+        before.observed_at_ms = wall();
+        let queued_at = wall();
+        let worker = std::thread::spawn(move || {
+            if recovery {
+                let got = executor.pending("route", queued_at).unwrap();
+                assert!(got["evidence"]["claimTokens"]["untilMs"].is_null());
+            } else {
+                assert_eq!(
+                    executor
+                        .begin(
+                            "route",
+                            &key,
+                            "local",
+                            prep["confirmationToken"].as_str().unwrap(),
+                            &before,
+                            queued_at,
+                            &nonce(922)
+                        )
+                        .unwrap_err(),
+                    "confirmation-invalid"
+                );
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(1800));
+        lock.execute_batch("COMMIT").unwrap();
+        worker.join().unwrap();
+    }
+}
+#[test]
+fn pending_abi_ignores_request_clock_and_direct_store_clocks_remain_injectable() {
+    let (dir, mut store) = open();
+    let issued = wall();
+    let mut before = snap("x", "a", "h");
+    before.observed_at_ms = issued;
+    let inv = store.inventory("route", &before, issued, &nonce(930)).unwrap();
+    let key = inv["grants"][0]["grantKey"].as_str().unwrap();
+    store
+        .prepare("route", key, "local", &before, issued, &nonce(931))
+        .unwrap();
+    let path = dir.path().join("claims.sqlite");
+    let got =
+        dispatch(&serde_json::json!({"dbPath":path,"op":"pending","account":"route","nowMs":i64::MAX}).to_string())
+            .unwrap();
+    assert_eq!(got["evidence"]["claimTokens"]["untilMs"], issued + 120_000);
+    let deterministic = Store::open_with_clock(&path, |given| Ok(given + 120_000)).unwrap();
+    assert!(deterministic.pending("route", issued).unwrap()["evidence"]["claimTokens"]["untilMs"].is_null());
+}
+#[test]
+fn concurrent_prepares_on_sibling_aliases_issue_exactly_one_confirmation() {
+    let (dir, mut store) = open();
+    let mut keys = vec![];
+    for (route, profile) in [("a", "profile-a"), ("b", "profile-b")] {
+        let s = snap("x", profile, "h");
+        let inv = store
+            .inventory(route, &s, NOW, &nonce(if route == "a" { 940 } else { 941 }))
+            .unwrap();
+        keys.push((
+            route.to_owned(),
+            s,
+            inv["grants"][0]["grantKey"].as_str().unwrap().to_owned(),
+        ));
+    }
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut workers = vec![];
+    for (i, (route, s, key)) in keys.into_iter().enumerate() {
+        let path = dir.path().join("claims.sqlite");
+        let barrier = barrier.clone();
+        workers.push(std::thread::spawn(move || {
+            let mut store = Store::open(&path).unwrap();
+            barrier.wait();
+            store.prepare(&route, &key, "local", &s, NOW, &nonce(942 + i as u64))
+        }));
+    }
+    let results: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert_eq!(
+        results.iter().find(|r| r.is_err()).unwrap().as_ref().unwrap_err(),
+        &"claim-token-outstanding"
+    );
 }

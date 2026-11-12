@@ -828,3 +828,159 @@ fn every_token_lifecycle_permutation_preserves_global_and_local_obligations() {
     visit(&mut [0, 1, 2, 3, 4, 5, 6], 0, &recorded, &mut count);
     assert_eq!(count, 5040);
 }
+
+fn live_inventory(name: &str) -> Inventory {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/reset-live-fence.json")).unwrap();
+    serde_json::from_value(fixture[name].clone()).unwrap()
+}
+// RECHECK-4 M1: old inventory can arrive after prepare. A hint fences its read generation.
+#[test]
+fn pre_prepare_inventory_delivered_after_prepare_cannot_clear_invalidation() {
+    Owner::new().with(|| {
+        let rc = ResetCtx::new();
+        rc.show("route", "codex", false);
+        let old_epoch = rc.read_epoch.get_value();
+        rc.invalidate(); // WS/BroadcastChannel/storage callback, before the old response.
+        rc.take_at("route", live_inventory("old"), 1., old_epoch);
+        assert!(!enabled(rc));
+        let epoch = rc.read_epoch.get_value();
+        rc.take_at("route", live_inventory("current"), 3., epoch);
+        assert!(!enabled(rc));
+        assert!(
+            rc.said
+                .get_untracked()
+                .unwrap()
+                .text
+                .contains("may still arrive")
+        );
+    });
+}
+#[test]
+fn already_open_second_client_is_blocked_until_a_post_hint_read() {
+    Owner::new().with(|| {
+        let rc = ResetCtx::new();
+        rc.show("route", "codex", false);
+        rc.take("route", live_inventory("old"), 1.);
+        assert!(enabled(rc));
+        rc.invalidate();
+        assert!(!enabled(rc));
+        rc.take_at("route", live_inventory("old"), 1., 0);
+        assert!(!enabled(rc));
+        rc.take("route", live_inventory("current"), 3.);
+        assert!(!enabled(rc));
+        rc.take("route", live_inventory("pending"), 21.);
+        assert!(!enabled(rc));
+        rc.take("route", live_inventory("final"), 23.);
+        assert!(enabled(rc));
+        // A late stale callback must neither unlock nor re-block a completed recovery.
+        rc.take_at("route", live_inventory("old"), 1., 0);
+        assert!(enabled(rc));
+    });
+}
+#[test]
+fn hint_disables_originating_dialog_until_fresh_proof_and_legacy_second_token_stays_blocked() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/reset-legacy-tokens.json")).unwrap();
+    let first: Prepared = serde_json::from_value(fixture["first"].clone()).unwrap();
+    let two: Evidence = serde_json::from_value(fixture["two"]["evidence"].clone()).unwrap();
+    let mut state = AccountState::default();
+    state.observe(first.evidence.as_ref().unwrap(), None);
+    assert!(state.lock().can_confirm(&first.confirmation_key));
+    state.invalidate();
+    assert!(!state.lock().can_confirm(&first.confirmation_key));
+    state.observe(&two, Some(100.));
+    state.refreshed();
+    assert!(!state.lock().can_confirm(&first.confirmation_key));
+    assert!(state.lock().blocks());
+}
+#[test]
+fn originating_sole_token_recovers_after_its_own_push_without_losing_local_u1() {
+    Owner::new().with(|| {
+        let rc = ResetCtx::new();
+        rc.show("route", "codex", false);
+        let prepared: Prepared = serde_json::from_value(
+            serde_json::from_str::<serde_json::Value>(include_str!(
+                "../tests/fixtures/reset-live-fence.json"
+            ))
+            .unwrap()["prepared"]
+                .clone(),
+        )
+        .unwrap();
+        rc.take("route", live_inventory("current"), 3.);
+        assert!(
+            rc.unresolved
+                .get_untracked()
+                .can_confirm(&prepared.confirmation_key)
+        );
+        rc.invalidate();
+        assert!(
+            !rc.unresolved
+                .get_untracked()
+                .can_confirm(&prepared.confirmation_key)
+        );
+        rc.take("route", live_inventory("current"), 4.);
+        assert!(
+            rc.unresolved
+                .get_untracked()
+                .can_confirm(&prepared.confirmation_key)
+        );
+        let canonical = rc.lock_key("route");
+        rc.begin_send(&canonical, 100.);
+        rc.invalidate();
+        rc.take("route", live_inventory("final"), 110.);
+        assert!(
+            !enabled(rc),
+            "settlement on another page does not acknowledge this send"
+        );
+        rc.take("route", live_inventory("final"), 120100.);
+        assert!(enabled(rc));
+    });
+}
+#[test]
+fn every_old_read_hint_and_recovery_delivery_order_keeps_the_fence_and_server_state() {
+    fn visit(order: &mut [usize], at: usize, count: &mut usize) {
+        if at < order.len() {
+            for i in at..order.len() {
+                order.swap(at, i);
+                visit(order, at + 1, count);
+                order.swap(at, i);
+            }
+            return;
+        }
+        *count += 1;
+        Owner::new().with(|| {
+            let rc = ResetCtx::new();
+            rc.show("route", "codex", false);
+            rc.take("route", live_inventory("old"), 1.);
+            let mut fenced = false;
+            for event in order.iter().copied() {
+                match event {
+                    0 => rc.take_at("route", live_inventory("old"), 1., 0),
+                    1 | 3 => {
+                        rc.invalidate();
+                        fenced = true;
+                    }
+                    2 => {
+                        rc.take("route", live_inventory("current"), 3.);
+                        fenced = false;
+                    }
+                    4 => {
+                        rc.take("route", live_inventory("pending"), 21.);
+                        fenced = false;
+                    }
+                    _ => unreachable!(),
+                }
+                // Once any post-prepare server evidence is known, every ordering remains blocked.
+                let observed = rc.token_until.get_untracked().is_some()
+                    || rc.unresolved.get_untracked().key.is_some();
+                if fenced || observed {
+                    assert!(!enabled(rc), "order {order:?} event {event}");
+                }
+            }
+        });
+    }
+    let mut count = 0;
+    visit(&mut [0, 1, 2, 3, 4], 0, &mut count);
+    assert_eq!(count, 120);
+}

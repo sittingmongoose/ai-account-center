@@ -28,6 +28,8 @@
           const { installFrameSession } = await import('/frame-session.mjs');
           installFrameSession(window);
         }
+        const { installResetHints } = await import('/reset-live.mjs');
+        installResetHints(window);
         const { default: init } = await import('{{PKG}}/aac_web.js');
         await init({ module_or_path: '{{PKG}}/aac_web_bg.wasm' });
       } catch {

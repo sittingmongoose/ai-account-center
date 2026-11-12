@@ -134,8 +134,8 @@ only its originating obligation and requires a fresh account snapshot. Responses
 without valid ordering metadata cannot enable another claim. Read-only checks do
 not acknowledge local sends.
 
-A cached inventory can be reused only while it matches the account's applied
-snapshot. Learning a later revision through another alias invalidates that reuse.
+Opening reset details always re-reads inventory. Use reset performs another current
+server read before prepare; a cached observation alone cannot open a confirmation.
 
 A native refusal includes its current recovery `evidence` when storage can be read;
 otherwise it includes null. The same revision rules apply to these snapshots.
@@ -161,3 +161,32 @@ The originating dialog may consume its own sole token, identified by prepare's
 `confirmationKey`. Other outstanding tokens block that dialog as well. The local
 unanswered-send interval remains independent: another client's settlement or a
 server token expiry cannot acknowledge that local transport prematurely.
+
+
+Only one unconsumed, unexpired confirmation may be issued per canonical account.
+Prepare checks this inside its immediate transaction, including across sibling
+aliases and devices, and refuses with `claim-token-outstanding` if one exists.
+The originating token may still reach begin. Legacy multiple-token records remain
+visible and independently expire or burn; they never authorize another prepare.
+
+Execution samples the trusted server clock **after** acquiring its immediate
+transaction, including waits during open/migration and during begin itself.
+Pruning, token validation, fingerprint checks, limits and reservation all use that
+sample. Pending recovery follows the same clock rule; a queued request timestamp
+cannot extend or prematurely expire a token. Direct Store tests retain explicit
+injectable clocks; the production ABI always selects the trusted wall clock.
+
+Prepare, begin and settlement notify signed-in dashboard browser sockets through
+the existing `/ws` server with a data-free `reset-claims-changed` hint. Paired
+devices and anonymous sockets receive none. Pages also publish same-origin hints
+through BroadcastChannel and storage events. The reset view invalidates its cache
+and blocks both new Use actions and an open confirmation until a read in the
+current invalidation generation arrives. A delayed read from an earlier generation
+cannot discharge that requirement, even when millisecond timestamps are equal.
+Revisions still govern attempt/token/result state, independently of that local
+freshness fence and the unanswered-send interval. Reads overtaken by another hint
+or newer response are repeated; prepares and provider writes are never retried.
+Focus, visible-again, online and socket reconnection also invalidate and re-read.
+Socket/listener ownership ends with the signed-in view. Hints authorize nothing;
+server exclusion and transaction-time validation protect even a missed hint or
+a delayed pre-prepare response on an already-open page.

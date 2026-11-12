@@ -284,6 +284,7 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
     let confirming = RwSignal::new(false);
     // The reset claims of the account on show: its inventory, the confirm dialog and the result line.
     let rc = ResetCtx::new();
+    rc.watch_changes();
     Effect::new(move |_| {
         let (id, provider, reads) = data.with(|d| {
             d.as_ref()

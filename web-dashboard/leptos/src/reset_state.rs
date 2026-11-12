@@ -34,7 +34,7 @@ fn counter(value: &str) -> Option<u64> {
 }
 
 impl Evidence {
-    fn valid(&self) -> bool {
+    pub(super) fn valid(&self) -> bool {
         if self.canonical_account_key.is_empty() || counter(&self.revision).is_none() {
             return false;
         }
@@ -104,8 +104,11 @@ impl Unresolved {
         self.blocked
     }
     /// Only the originating dialog can consume its own sole outstanding token.
+    pub fn owns_confirmation(&self, key: &str) -> bool {
+        self.key.is_none() && self.confirmation_keys.as_slice() == [key]
+    }
     pub fn can_confirm(&self, key: &str) -> bool {
-        self.claim_ready && self.confirmation_keys.as_slice() == [key]
+        self.claim_ready && self.owns_confirmation(key)
     }
 }
 
@@ -117,8 +120,19 @@ pub struct AccountState {
     receipts: BTreeMap<String, (u64, ClaimResult)>,
     unanswered: BTreeMap<u64, f64>,
     read_after_ms: Option<f64>,
+    refresh_required: bool,
 }
 impl AccountState {
+    pub fn needs_refresh(&self) -> bool {
+        self.refresh_required || self.snapshot.is_none()
+    }
+    pub fn invalidate(&mut self) {
+        self.refresh_required = true;
+    }
+    pub fn refreshed(&mut self) {
+        self.refresh_required = false;
+    }
+    #[cfg(test)]
     pub fn matches(&self, evidence: &Evidence) -> bool {
         self.snapshot.as_ref() == Some(evidence)
     }
@@ -126,7 +140,8 @@ impl AccountState {
         self.snapshot.as_ref()?.claim_tokens.as_ref()?.until_ms
     }
     pub fn lock(&self) -> Unresolved {
-        let claim_ready = self.snapshot.is_some()
+        let claim_ready = !self.refresh_required
+            && self.snapshot.is_some()
             && self.read_after_ms.is_none()
             && self.attempts.is_empty()
             && self.unanswered.is_empty();
@@ -248,7 +263,7 @@ impl AccountState {
         if !self.unanswered.is_empty() {
             return Some(Said { text: "A reset request has no confirmed answer yet. The reset may have been used; check again.".into(), bad:true, check:true });
         }
-        if self.read_after_ms.is_some() || self.snapshot.is_none() {
+        if self.refresh_required || self.read_after_ms.is_some() || self.snapshot.is_none() {
             return Some(Said {
                 text: "AAC needs a current account read before a reset can be used.".into(),
                 bad: true,

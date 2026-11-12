@@ -4,6 +4,7 @@
  * a source. Until that seam exists the production router is explicitly unavailable.
  */
 import { randomBytes } from 'crypto';
+import { broadcastResetClaimChange } from '../dashboard-events';
 import { ProviderError } from '../../errors/error-types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -40,6 +41,7 @@ export interface ResetRouteDeps {
 /** Fixed native refusal codes the browser may word for the owner. They name no account, grant or host. */
 const SAFE_REASONS = new Set([
   'check-again-required',
+  'claim-token-outstanding',
   'confirmation-invalid',
   'cooldown',
   'grant-changed',
@@ -193,6 +195,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
           token: req.body.confirmationToken,
           snapshot,
         })) as ResetWrite;
+        broadcastResetClaimChange();
         let result: { outcome: string; retryAfterMs?: number } = { outcome: 'ambiguous' };
         sent = true;
         try {
@@ -230,6 +233,9 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
           sent,
           evidence,
         });
+      } finally {
+        // Prepare, settlement, and token burns invalidate every signed-in reset view.
+        broadcastResetClaimChange();
       }
     });
   }

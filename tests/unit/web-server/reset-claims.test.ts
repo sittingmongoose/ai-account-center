@@ -5,13 +5,17 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { Server } from 'http';
+import { WebSocket, WebSocketServer } from 'ws';
+import { attachDashboardEventServer } from '../../../src/web-server/dashboard-events';
 import {
   createResetClaimRouter,
   type ResetSource,
 } from '../../../src/web-server/routes/reset-claim-routes';
 const servers: Server[] = [];
 const dirs: string[] = [];
+const socketClosers: Array<() => Promise<void>> = [];
 afterEach(async () => {
+  for (const close of socketClosers.splice(0)) await close();
   for (const server of servers.splice(0)) await new Promise<void>((r) => server.close(() => r()));
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -76,7 +80,7 @@ async function serve(
   servers.push(server);
   await new Promise<void>((r) => server.on('listening', r));
   const url = `http://127.0.0.1:${(server.address() as any).port}`;
-  return { url, calls };
+  return { url, calls, server };
 }
 const grantKey = 'b'.repeat(64);
 test('paired native devices and anonymous callers cannot prepare or read private history', async () => {
@@ -326,4 +330,108 @@ test('a refusal without recovery storage returns null evidence and never invents
   expect(JSON.stringify(body)).not.toContain('private');
   expect(reads).toBe(0);
   expect(calls).toEqual(['prepareGate', 'pending']);
+});
+
+test('an outstanding-token refusal is honest and happens before a provider read', async () => {
+  let reads = 0;
+  const source: ResetSource = {
+    async read() {
+      reads++;
+      return {};
+    },
+    async send() {
+      throw new Error('must not send');
+    },
+  };
+  const { url } = await serve('session', source, false, {
+    op: 'prepareGate',
+    message: 'claim-token-outstanding: private detail',
+  });
+  const response = await fetch(`${url}/accounts/synthetic/reset-claims/prepare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: url },
+    body: JSON.stringify({ grantKey }),
+  });
+  const body = await response.json();
+  expect(response.status).toBe(409);
+  expect(body.reason).toBe('claim-token-outstanding');
+  expect(body.sent).toBe(false);
+  expect(reads).toBe(0);
+  expect(JSON.stringify(body)).not.toContain('private detail');
+});
+
+test('prepare, begin before provider completion, and settlement push to all browser sessions only', async () => {
+  let release!: () => void;
+  const sendDone = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const source: ResetSource = {
+    async read() {
+      return {};
+    },
+    async send() {
+      await sendDone;
+      return { outcome: 'nothingToReset' };
+    },
+  };
+  const { url, server } = await serve('session', source);
+  const wss = new WebSocketServer({ server, path: '/ws' });
+  const detach = attachDashboardEventServer(wss, {
+    authKind: (request) =>
+      request.headers['x-test-auth'] === 'session'
+        ? 'session'
+        : request.headers['x-test-auth'] === 'device'
+          ? 'device'
+          : null,
+  });
+  const sockets: WebSocket[] = [];
+  socketClosers.push(async () => {
+    detach();
+    for (const socket of wss.clients) socket.terminate();
+    for (const socket of sockets) socket.terminate();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  });
+  const received: string[][] = [];
+  for (const kind of ['session', 'session', 'device', 'none']) {
+    const socket = new WebSocket(url.replace('http:', 'ws:') + '/ws', {
+      headers: { 'x-test-auth': kind },
+    });
+    const messages: string[] = [];
+    received.push(messages);
+    sockets.push(socket);
+    socket.on('message', (data) => messages.push(String(data)));
+    await new Promise<void>((resolve, reject) => {
+      socket.once('open', resolve);
+      socket.once('error', reject);
+    });
+  }
+  const next = () =>
+    Promise.all(
+      sockets
+        .slice(0, 2)
+        .map((socket) => new Promise<void>((resolve) => socket.once('message', () => resolve())))
+    );
+  const post = (suffix: string, body: unknown) =>
+    fetch(`${url}/accounts/synthetic/reset-claims${suffix}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: url },
+      body: JSON.stringify(body),
+    });
+  const prepared = next();
+  expect((await post('/prepare', { grantKey })).status).toBe(200);
+  await prepared;
+  const began = next();
+  const claim = post('', { grantKey, confirmationToken: 'c'.repeat(64) });
+  await began;
+  expect(received[0]).toHaveLength(2); // Begin is announced while the provider is still waiting.
+  const settled = next();
+  release();
+  expect((await claim).status).toBe(200);
+  await settled;
+  expect(received[0]).toHaveLength(3);
+  expect(received[1]).toHaveLength(3);
+  expect(received[2]).toEqual([]);
+  expect(received[3]).toEqual([]);
+  for (const message of received[0])
+    expect(JSON.parse(message)).toEqual({ type: 'reset-claims-changed' });
 });

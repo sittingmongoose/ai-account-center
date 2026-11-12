@@ -1,0 +1,88 @@
+{
+  "first": {
+    "account": {
+      "label": "fixture-principal"
+    },
+    "confirmationKey": "e78f1c6f67ad9959afd1695f35733f74d26304d24923a83daf90ecf27a19c660",
+    "confirmationToken": "000000000000000000000000000000000000000000000000000000000000014b",
+    "costText": "Spends one selected reset. This cannot be undone.",
+    "evidence": {
+      "canonicalAccountKey": "e2ba84e43d27e7309ff98123dc4e90dd96e97ef6765f70cc1dd08ab105518c7e",
+      "claimTokens": {
+        "tokenKeys": [
+          "e78f1c6f67ad9959afd1695f35733f74d26304d24923a83daf90ecf27a19c660"
+        ],
+        "untilMs": 1700000120000
+      },
+      "latestAttempt": null,
+      "pendingAttempts": [],
+      "revision": "2"
+    },
+    "expiresAtMs": 1700000120000,
+    "grant": {
+      "claimBlockedReason": null,
+      "claimable": true,
+      "expiresAtMs": null,
+      "grantKey": "4222a411ac9f0ad3e14a004c9f39a8002d7e000ed3aa06f27d9ef1ef5bb03190",
+      "kind": "banked",
+      "label": "Banked reset",
+      "providerWords": null,
+      "refillsText": "Refills the eligible Codex usage windows.",
+      "resetsLeft": 1
+    }
+  },
+  "two": {
+    "bindingRevision": "3",
+    "canonicalAccountKey": "e2ba84e43d27e7309ff98123dc4e90dd96e97ef6765f70cc1dd08ab105518c7e",
+    "confirmationKey": "3671138b85e11f94a21bbed8d9996e39083daa0dab69565c0fcb5295a82ff3d5",
+    "confirmationToken": "000000000000000000000000000000000000000000000000000000000000014c",
+    "evidence": {
+      "canonicalAccountKey": "e2ba84e43d27e7309ff98123dc4e90dd96e97ef6765f70cc1dd08ab105518c7e",
+      "claimTokens": {
+        "tokenKeys": [
+          "3671138b85e11f94a21bbed8d9996e39083daa0dab69565c0fcb5295a82ff3d5",
+          "e78f1c6f67ad9959afd1695f35733f74d26304d24923a83daf90ecf27a19c660"
+        ],
+        "untilMs": 1700000120001
+      },
+      "latestAttempt": null,
+      "pendingAttempts": [],
+      "revision": "3"
+    },
+    "grants": [
+      {
+        "claimBlockedReason": null,
+        "claimable": true,
+        "expiresAtMs": null,
+        "grantKey": "ee696be00d093e88d4e0316295f4f70c515734c474ab9a8c0ebf43d2d1383968",
+        "kind": "banked",
+        "label": "Banked reset",
+        "providerWords": null,
+        "refillsText": "Refills the eligible Codex usage windows.",
+        "resetsLeft": 1
+      }
+    ],
+    "history": [
+      {
+        "atMs": 1700000000000,
+        "details": {
+          "beforeCount": 1,
+          "callerHash": "25bf8e1a2393f1108d37029b3df5593236c755742ec93465bbafa9b290bddcf6",
+          "callerKind": "local",
+          "grantHash": "e85ad1878e76f57cd4818e49a69fd875ccc9b76c9c07c52c79a6c26b94f973d7",
+          "identityHash": "3e2760446c0cb0f25b371774c6ffc32c4d346082bf629970692264c277283378",
+          "kind": "banked",
+          "provider": "codex"
+        },
+        "event": "prepare",
+        "outcome": "prepared",
+        "sequence": "1",
+        "targetHash": "0956f8ae13f9b605c596e9eeee9664be4e7f3793bba9f169acc3f6c4159247ae"
+      }
+    ],
+    "observedAtMs": 1700000000000,
+    "pendingAttempt": null,
+    "sourceAgeMs": 1,
+    "status": "ok"
+  }
+}
