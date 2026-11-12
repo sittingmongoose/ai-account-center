@@ -257,14 +257,19 @@ pub(crate) fn sheet_drag_style(offset: f64) -> String {
 }
 
 /// The machine a pin's T3 runs on, as the page names it.
+fn computer(id: &str) -> Option<&'static serde_json::Value> {
+    static COMPUTERS: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("../../public/computers.json"))
+            .expect("packaged computer registry")
+    });
+    COMPUTERS
+        .as_object()?
+        .values()
+        .find(|row| row["machineId"].as_str() == Some(id))
+}
+
 pub(crate) fn machine_label(id: &str) -> Option<&'static str> {
-    match id {
-        "vm" => Some("VM"),
-        "mac" => Some("Mac"),
-        "windows" => Some("Windows"),
-        "nas1" => Some("Nas1"),
-        _ => None,
-    }
+    computer(id)?["shortLabel"].as_str()
 }
 
 // ---- Machines --------------------------------------------------------------------------------------------------
@@ -310,13 +315,7 @@ fn gb_free(n: f64) -> String {
 }
 
 fn subtitle(id: &str) -> Option<&'static str> {
-    match id {
-        "vm" => Some("this computer"),
-        "mac" => Some("MacBook"),
-        "windows" => Some("desktop"),
-        "nas1" => Some("second Ubuntu computer"),
-        _ => None,
-    }
+    computer(id)?["subtitle"].as_str()
 }
 
 fn machine_notes(m: &Machine) -> Vec<AnyView> {
@@ -879,6 +878,7 @@ mod tests {
             "mac.flash/status.json was refused:"
         );
         assert_eq!(machine_label("nas1"), Some("Nas1"));
+        assert_eq!(machine_label("alexis"), Some("Alexis PC"));
         assert_eq!(machine_label("elsewhere"), None);
     }
 

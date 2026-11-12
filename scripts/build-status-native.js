@@ -40,7 +40,7 @@ function cdylibName() {
 
 /** SHA-256 over the crate's build inputs, in a fixed order. */
 function sourceHash() {
-  const files = ['Cargo.toml', 'Cargo.lock', 'build.rs', 'rust-toolchain.toml'];
+  const files = ['Cargo.toml', 'Cargo.lock', 'build.rs', 'rust-toolchain.toml', '../../web-dashboard/public/computers.json'];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(path.join(CRATE, dir), { withFileTypes: true })) {
       const rel = `${dir}/${entry.name}`;

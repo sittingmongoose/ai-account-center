@@ -356,13 +356,7 @@ fn capitalize(text: &str) -> String {
 
 /// The machine labels a sentence uses, as `pinned.rs::machine_label` writes them.
 fn machine_name(machine: &str) -> String {
-    match machine {
-        "vm" => "the VM".to_string(),
-        "mac" => "the Mac".to_string(),
-        "windows" => "Windows".to_string(),
-        "nas1" => "Nas1".to_string(),
-        other => other.to_string(),
-    }
+    crate::computers::machine_label(machine).to_string()
 }
 
 // The dashboard-zone clock: epoch math over the UTC offset the caller passed, so no

@@ -21,6 +21,7 @@ folder, as the dashboard's owner set it, and `aac-usage rules` includes them.
 - `locations.json`: where each group of computers finds this folder (`where`, `path`), from
   `usage-snapshot set <folder> --location "<where>=<path>"`; empty when none were given.
 - `aac-usage`, `aac-usage.cmd`: the reader below.
+- `computers.json`: the package-owned computer labels, copied from the shared registry.
 - `claude-signins.json`, `claude-signins.md`: when each Claude Code sign-in on each computer ends,
   how its automatic renewal went and anything only a person can do (a CAPTCHA), written by the
   sign-in renewal runner after each run (see `claude-signin/README.md`). `staleAfterSeconds` old

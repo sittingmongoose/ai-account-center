@@ -1,3 +1,4 @@
+import { SSH_ALIASES } from '../../../src/web-server/services/dashboard-hosts';
 /**
  * A hard-mounted share that stops answering leaves file calls pending forever. These tests stand
  * in for it with calls that never settle, and with a FIFO that has no writer: opening it blocks
@@ -231,7 +232,7 @@ describe('small private files on a hung disk', () => {
     ]);
   });
 
-  it('keeps the last remote host aliases while the launcher list read does not answer', async () => {
+  it('uses fixed computer aliases even when the desktop launcher list cannot answer', async () => {
     const originalHome = process.env.CCS_HOME;
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-hung-launchers-'));
     process.env.CCS_HOME = home;
@@ -256,7 +257,7 @@ describe('small private files on a hung disk', () => {
       })
     );
     const first = await resolveAnalyticsRemoteHosts(1_000);
-    expect(first).toMatchObject({ mac: 'mac-fixture', windows: 'win-fixture' });
+    expect(first).toEqual(SSH_ALIASES);
 
     // The backup reader and remote Analytics are not held by the read, nor lose their hosts.
     spyOn(claudeProfiles, 'listClaudeDesktopProfiles').mockImplementation(never);

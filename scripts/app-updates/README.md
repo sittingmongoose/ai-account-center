@@ -13,13 +13,13 @@ Nas1 is a second Ubuntu computer reached as `nas1-agent` (see [Nas1](#nas1-the-f
 
 ## Every computer at once, and never stuck
 
-Ubuntu, Mac, Windows and Nas1 run **at the same time**; each computer runs up to
+Ubuntu, Mac, Windows, Nas1 and Alexis PC run **at the same time**; each computer runs up to
 four independent app updates together. Shared npm, apt and MSIX installers are
 serialized, as are Codex CLI/Desktop runtime operations. ZCode finishes before
 its adapters; Codex CLI finishes before Codex Desktop, which goes last when an
 installer needs serial work. T3 waits for every other app to finish. The job ends when
 the slowest computer finishes, so a busy or unreachable host never holds the
-others back. Four computers x ten apps give 40 result rows. Per-computer
+others back. Five computers x ten apps give 50 result rows. Per-computer
 progress is live: the helper prints one JSON line per event
 (`{"event":"app","appId":...,"phase":"checking"|"updating"}` and
 `{"event":"result","result":{...}}`) when the dashboard sets
@@ -285,7 +285,7 @@ installers. Before that, read-only `--inventory --platform <host>` should show
 ten rows, full T3 nightly versions, Windows Muse's native manager/version, ZCode's
 version and the adapters' `parts`; Codex CLI or Claude Code also lists `strays` when
 another copy sits beside its managed install.
-After an authorized click, confirm 40 result rows and simultaneous host progress.
+After an authorized click, confirm 50 result rows and simultaneous host progress.
 When T3 updates, verify Mac/Windows bundle versions and port 3773 health, then
 wait until the completed job's scheduled Ubuntu restart has finished; inspect
 `t3 service status`, the detached unit journal, port 3773 and that
@@ -935,7 +935,7 @@ unchanged. T3 download refusals use `update_failed`, an existing result code.
 
 Nas1 is a second Ubuntu computer reached over the fixed alias `nas1-agent`
 (label "Nas1"). Its rows are filed under their own computer, so one run returns
-4 computers x 10 apps = 40 result rows, with Nas1's progress beside the other
+4 computers x 10 apps = 50 result rows, with Nas1's progress beside the other
 three. It follows the Ubuntu rows of this guide except where noted here.
 
 - **Command.** `ssh nas1-agent` runs
@@ -996,3 +996,26 @@ cover safe normalization, fixed invocations, authentication/origin/body checks,
 async job coalescing, cross-process persistence/locks, queued Codex idle waits,
 proxy reconnect coordination and retry markers. Real package replacement and real
 app restarts are intentionally exercised only after the user clicks the button.
+
+## Computer registry and Alexis PC
+
+The single package-owned table is `web-dashboard/public/computers.json`. Its rows drive
+update hosts and SSH aliases, OS-specific helper commands, Status machine IDs and pins,
+Analytics remote readers, usage failover and labels in the web UI and `aac-usage`.
+This is shipped code; callers cannot supply a host, command or helper path.
+Alexis PC (`alexis`) uses `alexis-windows`; every helper runs with `--platform windows`.
+Claude desktop profile launchers and the native WPF bar remain Jared's `windows` computer.
+
+To add the next Ubuntu server:
+
+1. Add one row to `computers.json`, copying Nas1 with its new ID, labels, machine ID,
+   known hostname(s) and fixed SSH alias (`os: "linux"`, `legacy: false`).
+2. Add that SSH alias to the dashboard owner's SSH configuration.
+3. Run the registry tests and normal validation, then use the reviewed release process.
+
+Stored account sources keep `platform: "ubuntu"` for every Linux host and
+`platform: "windows"` for every Windows host, with `sshHost` identifying the computer.
+Older packages therefore still parse new account manifests and registries. The new
+package accepts old files. Saved update jobs predating a computer mark its absent
+progress as done rather than inventing a run; their saved expected row count is kept.
+The synthetic sixth-computer regression adds no real host to the shipped table.

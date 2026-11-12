@@ -39,7 +39,19 @@ PROVIDERS = {
     "zai": "zai", "z.ai": "zai", "glm": "zai", "zcode": "zai",
     "opencode": "opencode-go", "opencode-go": "opencode-go",
 }
-HOSTS = {"ubuntu": "Ubuntu VM", "nas1": "Nas1", "mac": "Mac", "windows": "Windows"}
+def computer_labels():
+    # Shipped table in source; the publisher copies it beside the standalone reader.
+    here = Path(__file__).resolve().parent
+    for file in (here / "computers.json", here.parent.parent / "web-dashboard/public/computers.json"):
+        try:
+            rows = json.loads(file.read_text(encoding="utf-8"))
+            return {key: row["machineLabel"] if key == "ubuntu" else row["label"] for key, row in rows.items()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return {}
+
+
+HOSTS = computer_labels()
 STATUS = {"ok": "current", "cached": "cached earlier reading", "unavailable": "no current reading",
           "error": "reading failed", "needs_sign_in": "needs sign-in"}
 

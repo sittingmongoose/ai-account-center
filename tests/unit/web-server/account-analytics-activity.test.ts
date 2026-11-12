@@ -1,3 +1,4 @@
+import { DASHBOARD_HOSTS, REMOTE_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -2250,7 +2251,7 @@ describe('native local analytics activity', () => {
         entry.host !== 'ubuntu' && ['claude', 'codex', 'omp', 'muse', 'zcode'].includes(entry.tool)
     );
     // Five tools on each of the three remote computers.
-    expect(remote).toHaveLength(15);
+    expect(remote).toHaveLength(REMOTE_HOSTS.length * 5);
     for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode'] as const) {
       for (const host of ['mac', 'windows', 'nas1'] as const) {
         expect(remote).toContainEqual(
@@ -2609,13 +2610,13 @@ describe('native local analytics activity', () => {
     // loading page can show per-host progress; the fixed entries ride along.
     const scanning = cold.sources.filter((source) => source.state === 'scanning');
     // Six tools on each of Ubuntu, Mac, Windows and Nas1.
-    expect(scanning).toHaveLength(24);
+    expect(scanning).toHaveLength(DASHBOARD_HOSTS.length * 6);
     expect(scanning.every((source) => source.detail === 'the first scan is running')).toBe(true);
     // Antigravity is scanned on every host now; Cursor stays a fixed no-local-log entry.
     expect(
       cold.sources.filter((source) => source.tool === 'antigravity' && source.state === 'scanning')
-    ).toHaveLength(4);
-    expect(cold.sources.filter((source) => source.tool === 'cursor')).toHaveLength(4);
+    ).toHaveLength(DASHBOARD_HOSTS.length);
+    expect(cold.sources.filter((source) => source.tool === 'cursor')).toHaveLength(DASHBOARD_HOSTS.length);
     gate.resolve([]);
     remote.resolve({ results: [], states: [] });
     await settled(service);
@@ -2628,6 +2629,7 @@ describe('native local analytics activity', () => {
       'cursor:mac',
       'cursor:windows',
       'cursor:nas1',
+      'cursor:alexis',
     ]);
     expect(fixed.every((entry) => entry.state === 'unavailable' && entry.rowCount === 0)).toBe(
       true
@@ -2638,11 +2640,11 @@ describe('native local analytics activity', () => {
   it('orders the cold grid by tool, then Ubuntu, Mac, Windows and Nas1', () => {
     const cold = coldScanningSourceStates();
     // Six scanned tools on four computers, plus the four fixed Cursor rows.
-    expect(cold).toHaveLength(28);
+    expect(cold).toHaveLength(DASHBOARD_HOSTS.length * 7);
     const hostsOf = (tool: string) =>
       cold.filter((entry) => entry.tool === tool).map((entry) => entry.host);
     for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity', 'cursor'])
-      expect(hostsOf(tool)).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
+      expect(hostsOf(tool)).toEqual(DASHBOARD_HOSTS);
     // Generic JSONL sources are local to Ubuntu: never a cold cell, on Nas1 or anywhere else.
     expect(hostsOf('jsonl')).toEqual([]);
     const tools = cold.map((entry) => entry.tool);
@@ -2689,7 +2691,7 @@ describe('native local analytics activity', () => {
   it('keeps the four-computer grid inside the snapshot state cap and serves it after a restart', async () => {
     const scope = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-activity-snapshot-nas1-'));
     try {
-      const remoteStates = (['mac', 'windows', 'nas1'] as const).flatMap((host) =>
+      const remoteStates = REMOTE_HOSTS.flatMap((host) =>
         (['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'] as const).map((tool) => ({
           tool,
           host,
@@ -2725,10 +2727,10 @@ describe('native local analytics activity', () => {
       };
       // Seven local tool cells (Generic JSONL included), six tools on each of the three remote
       // computers and four Cursor rows: 29 states against the validator's cap of 64.
-      expect(saved.sourceStates).toHaveLength(29);
+      expect(saved.sourceStates).toHaveLength(7 + REMOTE_HOSTS.length * 6 + DASHBOARD_HOSTS.length);
       expect(saved.sourceStates.length).toBeLessThanOrEqual(64);
       expect(new Set(saved.sourceStates.map((entry) => entry.host))).toEqual(
-        new Set(['ubuntu', 'mac', 'windows', 'nas1'])
+        new Set(DASHBOARD_HOSTS)
       );
       // A restarted server accepts the snapshot and serves the Nas1 cells from it at once.
       const second = new AccountAnalyticsActivityService({

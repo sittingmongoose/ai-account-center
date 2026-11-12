@@ -1,3 +1,11 @@
+import {
+  COMPUTERS,
+  DASHBOARD_HOSTS,
+  HOST_OS,
+  namedComputer,
+  localComputer,
+  type HostOs,
+} from '../services/dashboard-hosts';
 /**
  * The Status tab's other inputs, each read-only and each with its own failure word:
  * - the pm-mail registry (threads that do not report yet);
@@ -184,11 +192,12 @@ export function nextProblem(
   return { item, reason, since: before?.reason === reason ? before.since : now };
 }
 
-/** A registry host name or working folder -> one of the four machines, or null. */
+/** A registry host name or working folder -> one of the registered machines, or null. */
 export function registryMachine(host: unknown, cwd: unknown): MachineId | null {
   const h = typeof host === 'string' ? host.toLowerCase() : '';
+  const known = namedComputer(h);
+  if (known) return COMPUTERS[known].machineId;
   if (h) {
-    if (h.includes('nas1')) return 'nas1';
     if (h.includes('mac') || h.endsWith('.local')) return 'mac';
     if (h.includes('ubuntu') || h === 'vm') return 'vm';
     if (h.includes('win') || h.includes('pc') || h.includes('desktop')) return 'windows';
@@ -473,7 +482,9 @@ export function parseBrowserSlots(raw: unknown): BrowserMachine[] {
 }
 
 /** The machines that run a Simlock worker; elsewhere browser-check's `phones: null` is the normal answer. */
-const SIMLOCK_MACHINES: readonly MachineId[] = ['vm', 'mac', 'nas1'];
+const SIMLOCK_MACHINES = DASHBOARD_HOSTS.filter((id) => HOST_OS[id] !== 'windows').map(
+  (id) => COMPUTERS[id].machineId
+);
 
 /** browser-check's `phones`: null stays null and a missing count stays null, never zero. */
 function parseSlotPhones(value: unknown): BrowserMachine['phones'] {
@@ -661,13 +672,14 @@ export interface MachineSample {
   cpuTimes: { busy: number; total: number } | null;
 }
 
-type HostOs = 'linux' | 'mac' | 'windows';
-
-export const REMOTE_MACHINES: Readonly<Record<Exclude<MachineId, 'vm'>, HostOs>> = Object.freeze({
-  mac: 'mac',
-  windows: 'windows',
-  nas1: 'linux',
-});
+export const REMOTE_MACHINES = Object.freeze(
+  Object.fromEntries(
+    DASHBOARD_HOSTS.filter((id) => id !== 'ubuntu').map((id) => [
+      COMPUTERS[id].machineId,
+      HOST_OS[id],
+    ])
+  )
+) as Readonly<Record<Exclude<MachineId, 'vm'>, HostOs>>;
 
 const LINUX_PROBE = String.raw`export LC_ALL=C; printf 'cores=%s\n' "$(getconf _NPROCESSORS_ONLN)"; printf 'load=%s\n' "$(cut -d' ' -f1 /proc/loadavg)"; awk '/^MemTotal:/{print "memTotalKb="$2} /^MemAvailable:/{print "memAvailKb="$2}' /proc/meminfo; head -n1 /proc/stat | sed 's/^cpu */cpu=/'; df -Pk / | awk 'NR==2{print "diskTotalKb="$2; print "diskFreeKb="$4; print "mount="$6}'`;
 
@@ -828,14 +840,12 @@ export function busyBetween(
   return Math.max(0, Math.min(100, Math.round(((after.busy - before.busy) / total) * 100)));
 }
 
-/** Which of the four machines this server runs on, by the same host names the registry uses. */
+/** Which registered machine this server runs on, by the same host names the registry uses. */
 export function localMachineId(
   host: string = os.hostname(),
   platform: NodeJS.Platform = process.platform
 ): MachineId {
-  if (platform === 'darwin') return 'mac';
-  if (platform === 'win32') return 'windows';
-  return registryMachine(host, null) === 'nas1' ? 'nas1' : 'vm';
+  return COMPUTERS[localComputer(host, platform)].machineId;
 }
 
 /** This computer, read directly (no process). */

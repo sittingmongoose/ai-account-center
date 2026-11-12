@@ -29,3 +29,7 @@ An unknown task state keeps the board and marks only that task row. A malformed
 JSON document still uses the reader's last good copy. Review finding severity
 counts may be null (unrated); null must never be displayed as zero. The current
 Scoreboard does not draw those severity counts.
+
+The schema files are publication templates. AAC fills machine enums and writer ID
+patterns from `web-dashboard/public/computers.json` before publishing them; the
+live TypeScript and Rust readers enforce that same fixed computer allowlist.

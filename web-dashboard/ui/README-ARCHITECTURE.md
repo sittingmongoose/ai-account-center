@@ -167,7 +167,7 @@ Month, All and custom ranges request the covering window (`apiRangeFor`) and are
 fetched window differs from the range, cost by model, the donut and session stats say which logs they cover.
 
 Usage sources (activity `scope: multi-host-cli`): the server reads Claude Code and Codex on Ubuntu plus OMP,
-Muse Code and zcode on Ubuntu, Mac, Windows and Nas1 (a second Ubuntu computer), and groups every row under the
+Muse Code and zcode on Ubuntu, Mac, Windows, Nas1 and Alexis PC (a second Ubuntu computer), and groups every row under the
 dashboard provider that served it (`src/web-server/services/account-analytics-attribution.ts`): Claude Code,
 Codex and the Muse Code CLI are their own provider; OMP and zcode record a route per call (`alibaba-token-plan`
 is Qwen, `zai` and zcode's
@@ -183,7 +183,7 @@ rate); for every provider, including Claude and Codex, the page leaves it out, s
 is logged (never $0.00) and marks totals that leave it out "partial" (`notLoggedPart`). A model with no known
 rate is never priced at a guess. "Included usage" in the header (`includedView`,
 from `activity.sources`) is a disclosure with one sentence and a tool x computer grid of each source's state and
-last scan: a 660 px popover on D whose four computer columns (Ubuntu, Mac, Windows, Nas1) never elide; below D it
+last scan: a 660 px popover on D whose registered computer columns never elide; below D it
 is as wide as the content allows, and a body too narrow for 120 px columns (always on P) lists the cells grouped by
 tool instead. The states are honest end to end (FW4-N10): `ok` (read, with its age), `no usage in range` (scanned,
 nothing logged in the window), `cached` (the last scan failed or was cut short; older numbers are shown, with

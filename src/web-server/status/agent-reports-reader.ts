@@ -1,3 +1,4 @@
+import { MACHINE_IDS } from '../services/dashboard-hosts';
 /**
  * The agent reports reader: `<reports>/v1/writers/<writer>/{thread.json,tasks.json,cards/*.json}`.
  *
@@ -77,6 +78,17 @@ export function packagedSchemasDir(): string {
   return path.resolve(__dirname, '../../../docs/agent-reports/schemas');
 }
 
+/** Fill the packaged schema templates from the same allowlist as the live reader. */
+export function computerReportSchema(bytes: Buffer): Buffer {
+  const schema = JSON.parse(bytes.toString('utf8'));
+  const writer = schema.properties?.writer;
+  const machine = schema.properties?.agent?.properties?.machine;
+  if (!writer && !machine) return bytes;
+  if (writer) writer.pattern = `^(?!.*--)(${MACHINE_IDS.join('|')})\\.[a-z0-9][a-z0-9.-]{0,62}$`;
+  if (machine) machine.enum = [...MACHINE_IDS, null];
+  return Buffer.from(JSON.stringify(schema, null, 2) + '\n');
+}
+
 /**
  * Copies every packaged `<kind>.json` schema to `<reports>/v1/schemas/` when it is missing there or
  * different (temporary dot file, then rename). Only into an existing `v1/schemas` folder. Resolves
@@ -94,7 +106,7 @@ export async function publishSchemas(
       /^[a-z][a-z0-9-]*\.json$/.test(name)
     );
     for (const name of names.sort()) {
-      const body = await fs.promises.readFile(path.join(sourceDir, name));
+      const body = computerReportSchema(await fs.promises.readFile(path.join(sourceDir, name)));
       const current = await readRegularFile(path.join(target, name), body.length).catch(() => null);
       if (current && current.equals(body)) continue;
       const temp = path.join(target, `.${name}.tmp-${process.pid}-${Date.now()}`);

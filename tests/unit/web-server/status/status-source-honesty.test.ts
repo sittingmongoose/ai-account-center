@@ -40,6 +40,7 @@ function setup(options: { registryDir?: string } = {}) {
     browsers: false,
     registry: false,
     nas1: 'ok' as 'ok' | 'error' | 'absent',
+    alexis: 'ok' as 'ok' | 'error' | 'absent',
     simlock: 'ok' as 'ok' | 'starting' | 'worker',
     /** Fields merged into Nas1's good browser-check state (display_problem, snapshot, phones). */
     nas1Extra: {} as Record<string, unknown>,

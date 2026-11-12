@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import * as path from 'path';
 import type { DashboardAccount } from './account-dashboard-types';
-import { HOST_LABELS, DASHBOARD_HOSTS } from './dashboard-hosts';
+import { HOST_LABELS, DASHBOARD_HOSTS, helperPlatform } from './dashboard-hosts';
 import {
   configuredUsageHosts,
   runUsageHelper,
@@ -467,8 +467,8 @@ export class UsageFailoverService {
         }));
     }
     // Claude's platform selects its launcher. Source identifies where quota was read.
-    if (template.provider !== 'claude') result.platform = host === 'nas1' ? 'ubuntu' : host;
-    if (host === 'nas1') result.host = 'nas1';
+    if (template.provider !== 'claude') result.platform = helperPlatform(host);
+    if (host !== result.platform) result.host = host;
     else delete result.host;
     return this.withSignIn(result, state);
   }

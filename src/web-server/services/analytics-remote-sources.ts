@@ -74,11 +74,12 @@ export interface AnalyticsRemoteSourceDeps {
  * Antigravity instances included) on the Mac, Windows and Nas1. A tool a host does
  * not have reports `not_installed`; the states are measured by the scan, never assumed.
  */
-const REMOTE_TARGETS: Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]> = {
-  mac: ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
-  windows: ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
-  nas1: ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
-};
+const REMOTE_TARGETS = Object.fromEntries(
+  REMOTE_ANALYTICS_HOSTS.map((host) => [
+    host,
+    ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
+  ])
+) as Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]>;
 
 /** The kinds scanned on one remote host, for states when no scan answered. */
 export function analyticsRemoteTargets(host: AnalyticsRemoteHost): AnalyticsRemoteKind[] {

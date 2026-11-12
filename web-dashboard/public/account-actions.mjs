@@ -1,3 +1,4 @@
+import { HOST_LABELS } from './computers.mjs';
 // Account and sign-in actions: what each control sends and what each answer means, as pure functions that
 // bridge.js uses and tests/account-actions.test.mjs covers. The routes and codes are the CLIENT API SHEET of the
 // round-2 base (CONTRACT-registry-lifecycle 6, CONTRACT-auth-devices 3 to 6, the trusted local network rule).
@@ -154,7 +155,7 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const waitText = seconds => finite(seconds) && seconds > 0
   ? (seconds < 60 ? plural(Math.ceil(seconds), 'second', 'seconds') : plural(Math.ceil(seconds / 60), 'minute', 'minutes'))
   : 'a moment';
-const HOSTS = { mac: 'the Mac', windows: 'Windows', ubuntu: 'Ubuntu', nas1: 'Nas1' };
+const HOSTS = { ...HOST_LABELS, mac: 'the Mac' };
 
 /**
  * Calm, specific words for an error answer. `error` is what `send()` throws ({ status, payload }) or a payload.

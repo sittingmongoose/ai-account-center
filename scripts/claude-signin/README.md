@@ -106,7 +106,7 @@ Other keys: `renewWithinHours`, `verifyAfterHours`, `humanWaitMinutes`, `chromeP
 `<CCS dir>/claude-signin/chrome/<email>`; a profile left by the earlier `claude-relogin` tool in
 `~/.claude-relogin/chrome/<email>` is used where it is), `notify`, `nodePath`, `claudePaths`
 (`{"<host>": "<path to claude>"}`). Use the AI Account Center computer names (`mac`, `ubuntu`,
-`windows`, `nas1`) so the dashboard matches the rows.
+`windows`, `nas1`, `alexis`) so the dashboard matches the rows.
 
 ## Privacy
 

@@ -1,3 +1,4 @@
+import { COMPUTER_REGISTRY_FILE } from '../services/dashboard-hosts';
 /**
  * The agent usage snapshot: AI Account Center writes its account usage to a folder every agent
  * can already read (a network share every computer mounts), so
@@ -242,6 +243,12 @@ export async function syncSnapshotClient(
   runnerSource: string | null = runnerSourceFolder()
 ): Promise<void> {
   await syncFiles(directory, source, CLIENT_FILES);
+  await writeAtomically(
+    directory,
+    'computers.json',
+    (await readPackagedSource(COMPUTER_REGISTRY_FILE)).toString('utf8'),
+    0o644
+  );
   if (!runnerSource) return;
   const runner = path.join(directory, RUNNER_FOLDER);
   const info = await fs.promises.lstat(runner).catch(() => null);

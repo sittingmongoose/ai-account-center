@@ -12,7 +12,7 @@ import {
   resolveAnalyticsRemoteHosts,
 } from '../../../src/web-server/services/analytics-remote-transport';
 import { loadAnalyticsRemoteSources } from '../../../src/web-server/services/analytics-remote-sources';
-import { NAS1_SSH_ALIAS } from '../../../src/web-server/services/dashboard-hosts';
+import { NAS1_SSH_ALIAS, SSH_ALIASES } from '../../../src/web-server/services/dashboard-hosts';
 import { forbiddenWordsIn } from './nas1-no-switching';
 
 // Nothing here reaches a real host: the aliases are resolved in a temporary CCS home and the only
@@ -44,13 +44,13 @@ function writeLauncherManifest(profiles: unknown[]): void {
 
 describe('analytics remote host aliases', () => {
   it('gives Nas1 its fixed alias with no Claude desktop launcher at all', async () => {
-    const expected = { mac: null, windows: null, nas1: 'nas1-agent' };
+    const expected = SSH_ALIASES;
     expect(await resolveAnalyticsRemoteHosts()).toEqual(expected);
     expect(fixedAnalyticsRemoteAliases()).toEqual(expected);
     expect(NAS1_SSH_ALIAS).toBe('nas1-agent');
   });
 
-  it('keeps taking the Mac and Windows aliases from the first launcher that names one', async () => {
+  it('keeps computer aliases fixed even when desktop launchers name different aliases', async () => {
     writeLauncherManifest([
       { id: 'one', email: 'one@example.test', mac: { launcherName: 'One', sshHost: 'mac-first' } },
       {
@@ -61,9 +61,7 @@ describe('analytics remote host aliases', () => {
       },
     ]);
     expect(await resolveAnalyticsRemoteHosts()).toEqual({
-      mac: 'mac-first',
-      windows: 'win-first',
-      nas1: 'nas1-agent',
+      ...SSH_ALIASES,
     });
   });
 
@@ -71,17 +69,13 @@ describe('analytics remote host aliases', () => {
     fs.mkdirSync(path.join(ccsHome, '.ccs'), { recursive: true });
     fs.writeFileSync(path.join(ccsHome, '.ccs', 'claude-desktop-profiles.json'), 'not json{');
     expect(await resolveAnalyticsRemoteHosts()).toEqual({
-      mac: null,
-      windows: null,
-      nas1: 'nas1-agent',
+      ...SSH_ALIASES,
     });
     writeLauncherManifest([
       { id: 'one', email: 'one@example.test', mac: { launcherName: 'One', sshHost: 'bad;alias' } },
     ]);
     expect(await resolveAnalyticsRemoteHosts()).toEqual({
-      mac: null,
-      windows: null,
-      nas1: 'nas1-agent',
+      ...SSH_ALIASES,
     });
   });
 
@@ -143,7 +137,7 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
     expect(seen.other).toEqual([]);
     expect(seen.ssh.length).toBeGreaterThan(0);
     expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(6);
-    for (const call of seen.ssh) {
+    for (const call of seen.ssh.filter(call => call.args.includes('nas1-agent'))) {
       expect(call.file).toBe('ssh');
       const separator = call.args.indexOf('--');
       expect(separator).toBeGreaterThan(0);
@@ -203,10 +197,10 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
       const separator = call.args.indexOf('--');
       destinations.set(call.args[separator + 1], call.args[separator + 2]);
     }
-    expect([...destinations.keys()].sort()).toEqual(['mac-alias', 'nas1-agent', 'win-alias']);
+    expect([...destinations.keys()].sort()).toEqual(Object.values(SSH_ALIASES).sort());
     // Nas1 never takes a launcher's alias, and gets the POSIX command, not the Windows one.
     expect(destinations.get('nas1-agent')).toBe(analyticsHelperCommand('nas1'));
-    expect(destinations.get('mac-alias')).toBe(analyticsHelperCommand('mac'));
-    expect(destinations.get('win-alias')).toBe(analyticsHelperCommand('windows'));
+    expect(destinations.get('jared-mac')).toBe(analyticsHelperCommand('mac'));
+    expect(destinations.get('jared-windows')).toBe(analyticsHelperCommand('windows'));
   });
 });

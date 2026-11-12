@@ -1,0 +1,7 @@
+{
+  "ubuntu": {"label": "Ubuntu", "os": "linux", "sshAlias": null, "machineId": "vm", "machineLabel": "Ubuntu VM", "shortLabel": "VM", "subtitle": "this computer", "names": ["ubuntuserver", "ubuntu", "vm"], "legacy": true, "sentenceLabel": "the VM"},
+  "mac": {"label": "Mac", "os": "mac", "sshAlias": "jared-mac", "machineId": "mac", "machineLabel": "Mac", "shortLabel": "Mac", "subtitle": "MacBook", "names": ["mac"], "legacy": true, "sentenceLabel": "the Mac"},
+  "windows": {"label": "Windows", "os": "windows", "sshAlias": "jared-windows", "machineId": "windows", "machineLabel": "Windows PC", "shortLabel": "Windows", "subtitle": "desktop", "names": ["windows", "jared-windows"], "legacy": true, "sentenceLabel": "Windows"},
+  "nas1": {"label": "Nas1", "os": "linux", "sshAlias": "nas1-agent", "machineId": "nas1", "machineLabel": "Nas1", "shortLabel": "Nas1", "subtitle": "second Ubuntu computer", "names": ["nas1"], "legacy": false, "sentenceLabel": "Nas1"},
+  "alexis": {"label": "Alexis PC", "os": "windows", "sshAlias": "alexis-windows", "machineId": "alexis", "machineLabel": "Alexis PC", "shortLabel": "Alexis PC", "subtitle": "Windows computer", "names": ["alexis", "AlexisGamingPC", "192.168.50.31"], "legacy": false, "sentenceLabel": "Alexis PC"}
+}

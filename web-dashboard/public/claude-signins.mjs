@@ -1,3 +1,4 @@
+import { HOST_IDS, HOST_LABELS } from './computers.mjs';
 // Claude Code sign-in renewal (dashboard DTO `claudeSignIns`, from scripts/claude-signin).
 //
 // Every Claude Code sign-in ends about 30 days after it was made; the renewal runner renews each one
@@ -8,7 +9,7 @@ import { lazyFormat } from './time-format.mjs';
 
 const when = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const day = lazyFormat({ month: 'short', day: 'numeric' });
-const HOSTS = { mac: 'Mac', windows: 'Windows', ubuntu: 'Ubuntu', nas1: 'Nas1' };
+const HOSTS = HOST_LABELS;
 const valid = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value));
 const hostWord = (host) => HOSTS[host] || host;
 const RESULT_WORDS = {
@@ -44,7 +45,7 @@ export function signInsFor(data, email) {
   const address = typeof email === 'string' ? email.trim().toLowerCase() : '';
   if (!renewal || !address) return [];
   const rank = (host) => {
-    const index = ['mac', 'windows', 'ubuntu', 'nas1'].indexOf(host);
+    const index = ['mac', 'windows', ...HOST_IDS.filter(id => id !== 'mac' && id !== 'windows')].indexOf(host);
     return index < 0 ? 9 : index;
   };
   return renewal.signIns

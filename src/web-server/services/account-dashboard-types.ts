@@ -84,12 +84,10 @@ export interface DashboardAccount {
   antigravityPlan?: AntigravityPlan;
   platform: DashboardPlatform;
   /**
-   * Display only: 'nas1' on a usage source that runs on Nas1, the second Ubuntu
-   * computer. That source is stored and reported as platform 'ubuntu' with its
-   * fixed ssh alias, so the registry, quota history and older packages are
-   * unchanged. Absent on every other row.
+   * Display-only computer identity when it differs from the OS platform. Stored sources
+   * retain platform + fixed sshHost, so older packages can read new account files.
    */
-  host?: 'nas1';
+  host?: import('./dashboard-hosts').DashboardHost;
   source: string;
   status: DashboardAccountStatus;
   /** Present only with a precise reason; absent otherwise. */

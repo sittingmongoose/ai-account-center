@@ -1,3 +1,4 @@
+import { computerReportSchema } from '../../../../src/web-server/status/agent-reports-reader';
 import { afterEach, describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
@@ -228,7 +229,7 @@ describe('judgement and sample cards', () => {
       timeZone: 'UTC',
       reports: reader.snapshot(),
       registry: empty,
-      machines: { vm: empty, mac: empty, windows: empty, nas1: empty },
+      machines: { vm: empty, mac: empty, windows: empty, nas1: empty, alexis: empty },
       browsers: empty,
       simlock: empty,
       usage: null,
@@ -485,7 +486,7 @@ describe('published schemas', () => {
     fs.writeFileSync(card, '{}');
     expect(await publishSchemas(root)).toEqual(['card.json']);
     expect(
-      fs.readFileSync(card).equals(fs.readFileSync(path.join(packagedSchemasDir(), 'card.json')))
+      fs.readFileSync(card).equals(computerReportSchema(fs.readFileSync(path.join(packagedSchemasDir(), 'card.json'))))
     ).toBe(true);
     expect(
       fs.readdirSync(path.join(root, 'v1', 'schemas')).filter((n) => n.startsWith('.'))

@@ -1,3 +1,4 @@
+import { COMPUTERS } from './dashboard-hosts';
 import { LEGACY_MESSAGES } from './app-update-messages';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
@@ -81,16 +82,13 @@ export interface AppUpdateDependencies {
 }
 
 function waitingHosts(): Record<UpdatePlatform, AppUpdateHostProgress> {
-  return {
-    ubuntu: { state: 'waiting', currentApp: null, phase: null },
-    mac: { state: 'waiting', currentApp: null, phase: null },
-    windows: { state: 'waiting', currentApp: null, phase: null },
-    nas1: { state: 'waiting', currentApp: null, phase: null },
-  };
+  return Object.fromEntries(
+    PLATFORMS.map((host) => [host, { state: 'waiting', currentApp: null, phase: null }])
+  ) as Record<UpdatePlatform, AppUpdateHostProgress>;
 }
 
 /** Computers added after jobs were first saved: an older job has no entry for them. */
-const LATER_PLATFORMS: readonly UpdatePlatform[] = ['nas1'];
+const LATER_PLATFORMS = PLATFORMS.filter((host) => !COMPUTERS[host].legacy);
 
 /**
  * Restores saved host progress only when every field is one of the fixed values.

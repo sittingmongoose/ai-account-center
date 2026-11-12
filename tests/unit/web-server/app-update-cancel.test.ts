@@ -1,3 +1,4 @@
+import { DASHBOARD_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
 import { describe, expect, it } from 'bun:test';
 import {
   AppUpdateService,
@@ -57,13 +58,13 @@ describe('cancellable app updates', () => {
     const queued = job.results.filter((row) => row.platform !== 'ubuntu');
     expect(running).toHaveLength(10);
     expect(running.every((row) => row.status === 'current')).toBe(true);
-    expect(queued).toHaveLength(30);
+    expect(queued).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
     expect(queued.filter((row) => row.platform === 'nas1')).toHaveLength(10);
     expect(queued.every((row) => row.status === 'skipped')).toBe(true);
     expect(queued.every((row) => row.message === MESSAGES.skipped_cancelled)).toBe(true);
     expect(queued.every((row) => row.updateAttempted === false)).toBe(true);
-    expect(job.results).toHaveLength(40);
-    expect(job.expectedResults).toBe(40);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
+    expect(job.expectedResults).toBe(DASHBOARD_HOSTS.length * 10);
     expect(job.state).toBe('completed');
     expect(job.cancelRequested).toBe(true);
     expect(job.activePlatform).toBeNull();
@@ -101,8 +102,8 @@ describe('cancellable app updates', () => {
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(40);
-    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength(30);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
+    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
   });
 
   it('cancel with no job is a no-op', () => {
@@ -143,7 +144,7 @@ describe('cancellable app updates', () => {
       expect(unreachable.every((row) => row.updateAttempted === false)).toBe(true);
       // The other computers still report their own rows.
       const rest = job.results.filter((row) => row.platform !== down);
-      expect(rest).toHaveLength(30);
+      expect(rest).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
       expect(rest.every((row) => row.status === 'current')).toBe(true);
       expect(job.state).toBe('failed');
       expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');

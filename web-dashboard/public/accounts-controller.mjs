@@ -1,3 +1,4 @@
+import { COMPUTERS } from './computers.mjs';
 // The Accounts & Settings controller: the state behind every sign-in and sign-out control (the inline flows,
 // the lines under rows, the trash, show and hide, the password change, other browsers, paired trays and the
 // trusted local network) and what each action sends. All I/O is injected, so tests/accounts-controller.test.mjs
@@ -65,7 +66,7 @@ export function logSourceProblem(tool, host, location, mapping) {
   const hint = LOG_SOURCE_PATH_HINT[tool];
   if (typeof location !== 'string' || !location || location.length > 1024 || location.includes('\0'))
     return `Enter the absolute path to ${hint}.`;
-  const absolute = location.startsWith('/') || (host === 'windows' && /^[A-Za-z]:[\\/]/.test(location));
+  const absolute = location.startsWith('/') || (COMPUTERS[host]?.os === 'windows' && /^[A-Za-z]:[\\/]/.test(location));
   if (!absolute || location.includes('..')) return `Enter the absolute path to ${hint}, with no "..".`;
   if (tool === 'jsonl') {
     if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping))

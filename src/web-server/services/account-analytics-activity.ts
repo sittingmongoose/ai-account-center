@@ -24,7 +24,7 @@ import {
   type AnalyticsSourceTool,
 } from './analytics-remote-sources';
 import { REMOTE_ANALYTICS_HOSTS, type AnalyticsRemoteHost } from './analytics-remote-transport';
-import { DASHBOARD_HOSTS } from './dashboard-hosts';
+import { DASHBOARD_HOSTS, HOST_LABELS } from './dashboard-hosts';
 import {
   defaultAccountAnalyticsPricing,
   memoiseAccountAnalyticsPricing,
@@ -1730,7 +1730,7 @@ export class AccountAnalyticsActivityService {
               : state.partial
                 ? 'Records read so far are shown while a bounded scan completes in the background; the Included usage grid says what each source contributed. Cost is an API-equivalent estimate, not a subscription charge.' +
                   scanProgress
-                : `CLI activity from Ubuntu, Mac, Windows and Nas1 (Claude Code, Codex, OMP, Muse and zcode), across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
+                : `CLI activity from ${DASHBOARD_HOSTS.map((host) => HOST_LABELS[host]).join(', ')} (Claude Code, Codex, OMP, Muse and zcode), across accounts, for UTC hourly buckets starting in this range; days are grouped in ${tz}. Cost is an API-equivalent estimate, not a subscription charge. Usage events are parsed log entries; session counts mean sessions active in this range.`,
         {
           tz,
           pricing: state.pricing,

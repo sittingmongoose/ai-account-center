@@ -255,7 +255,7 @@ describe('analytics activity across sources', () => {
   it('describes the real multi-host coverage', async () => {
     const activity = await service().get(QUERY, FROM, TO, { tz: 'UTC' });
     expect(activity.message).not.toContain('Local Ubuntu CLI activity');
-    expect(activity.message).toContain('CLI activity from Ubuntu, Mac, Windows and Nas1 (');
+    expect(activity.message).toContain('CLI activity from Ubuntu, Mac, Windows, Nas1, Alexis PC (');
     expect(activity.message).not.toContain('Ubuntu, Mac and Windows');
   });
 

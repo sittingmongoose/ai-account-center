@@ -1105,7 +1105,7 @@ test('Update apps results are grouped by computer, never invented', () => {
   assert.equal(done.headRuns.map((r) => r.text).join(''), 'Last run 20m ago · 3 results, 1 failed');
   assert.deepEqual(
     done.hosts.map((h) => h.id),
-    ['mac', 'windows', 'ubuntu', 'nas1']
+    ['mac', 'windows', 'ubuntu', 'nas1', 'alexis']
   );
   // Nas1 is a second Ubuntu computer: its own row, labelled Nas1, with the Ubuntu glyph.
   assert.deepEqual([done.hosts[3].label, done.hosts[3].platform], ['Nas1', 'ubuntu']);
@@ -1137,10 +1137,10 @@ test('Update apps results are grouped by computer, never invented', () => {
     now
   );
   // A job that names no expectedResults counts 10 apps on each of the 4 computers.
-  assert.equal(running.headRuns.map((r) => r.text).join(''), 'Running now · 1 of 40 done');
+  assert.equal(running.headRuns.map((r) => r.text).join(''), 'Running now · 1 of 50 done');
   assert.deepEqual(
     running.hosts.map((h) => h.items.map((i) => i.result)),
-    [['Running'], [''], ['Already current'], ['']]
+    [['Running'], [''], ['Already current'], [''], ['']]
   );
   assert.equal(running.hosts[0].items[0].running, true);
   assert.equal(running.hosts[1].items[0].app, 'Waiting for its turn');
@@ -1294,6 +1294,7 @@ test('A held Antigravity update reads as a warning that names the build waiting 
       [['Antigravity CLI', 'Update held', 'warn']],
       [['Antigravity CLI', 'Update held', 'warn']],
       [['Antigravity CLI', 'Update held', 'warn']],
+      [['No results from this computer', '', '']],
     ]
   );
   assert.equal(
@@ -2423,12 +2424,12 @@ test('the log sources control lists saved extras with labels and waits without p
   assert.equal(vm.logSources.enabled, true);
   assert.equal(vm.logSources.busy, false);
   assert.equal(vm.logSources.error, '');
-  assert.deepEqual(vm.logSources.hosts.omp, ['ubuntu', 'mac', 'windows', 'nas1']);
-  assert.deepEqual(vm.logSources.hosts.muse, ['ubuntu', 'mac', 'nas1']);
+  assert.deepEqual(vm.logSources.hosts.omp, ['ubuntu', 'mac', 'windows', 'nas1', 'alexis']);
+  assert.deepEqual(vm.logSources.hosts.muse, ['ubuntu', 'mac', 'windows', 'nas1', 'alexis']);
   assert.deepEqual(vm.logSources.hosts.jsonl, ['ubuntu']);
   // the Settings host select shows labels, from the same list
-  assert.deepEqual(vm.logSources.hostLabels.omp, ['Ubuntu', 'Mac', 'Windows', 'Nas1']);
-  assert.deepEqual(vm.logSources.hostLabels.zcode, ['Ubuntu', 'Mac', 'Nas1']);
+  assert.deepEqual(vm.logSources.hostLabels.omp, ['Ubuntu', 'Mac', 'Windows', 'Nas1', 'Alexis PC']);
+  assert.deepEqual(vm.logSources.hostLabels.zcode, ['Ubuntu', 'Mac', 'Windows', 'Nas1', 'Alexis PC']);
   assert.deepEqual(vm.logSources.hostLabels.jsonl, ['Ubuntu']);
   assert.deepEqual(Object.keys(vm.logSources.hostLabels), Object.keys(vm.logSources.hosts));
   const waiting = accountsViewModel(data([account()]), { now, prefs: { data: null, busy: '' } });

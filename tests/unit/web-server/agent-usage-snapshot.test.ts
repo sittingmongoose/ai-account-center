@@ -806,6 +806,7 @@ describe('agent usage snapshot publisher', () => {
         SNAPSHOT_MARKDOWN,
         ...CLIENT_FILES.map((file) => file.name),
         RUNNER_FOLDER,
+        'computers.json',
       ].sort()
     );
     // The sign-in renewal runner is kept current beside the reader, byte for byte.

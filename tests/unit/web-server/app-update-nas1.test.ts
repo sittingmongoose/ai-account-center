@@ -34,7 +34,7 @@ import {
   analyticsHelperCommand,
   fixedAnalyticsRemoteAliases,
 } from '../../../src/web-server/services/analytics-remote-transport';
-import { NAS1_SSH_ALIAS } from '../../../src/web-server/services/dashboard-hosts';
+import { NAS1_SSH_ALIAS, DASHBOARD_HOSTS, REMOTE_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
 import { forbiddenWordsIn } from './nas1-no-switching';
 
 const directories: string[] = [];
@@ -64,8 +64,8 @@ const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 
 describe('Nas1 as the fourth update computer', () => {
   it('adds one fixed platform: four computers times ten apps', () => {
-    expect(PLATFORMS).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
-    expect(EXPECTED_RESULTS).toBe(40);
+    expect(PLATFORMS).toEqual(DASHBOARD_HOSTS);
+    expect(EXPECTED_RESULTS).toBe(DASHBOARD_HOSTS.length * 10);
     const rows = normalizeAppUpdateResults(payload(), 'nas1');
     expect(rows).toHaveLength(10);
     expect(rows.every((row) => row.platform === 'nas1' && row.status === 'current')).toBe(true);
@@ -94,14 +94,14 @@ describe('Nas1 as the fourth update computer', () => {
 
   it('picks each remote alias by lookup, never by falling through to another host', () => {
     expect(APP_UPDATE_SSH_HOSTS.nas1).toBe(NAS1_SSH_ALIAS);
-    expect(Object.keys(APP_UPDATE_SSH_HOSTS).sort()).toEqual(['mac', 'nas1', 'windows']);
+    expect(Object.keys(APP_UPDATE_SSH_HOSTS).sort()).toEqual([...REMOTE_HOSTS].sort());
     expect(Object.isFrozen(APP_UPDATE_SSH_HOSTS)).toBe(true);
     const destination = (platform: 'mac' | 'windows' | 'nas1') =>
       appUpdateInvocation(platform).args.at(-2);
     expect(destination('mac')).toBe(APP_UPDATE_SSH_HOSTS.mac);
     expect(destination('windows')).toBe(APP_UPDATE_SSH_HOSTS.windows);
     expect(destination('nas1')).toBe('nas1-agent');
-    expect(new Set(Object.values(APP_UPDATE_SSH_HOSTS)).size).toBe(3);
+    expect(new Set(Object.values(APP_UPDATE_SSH_HOSTS)).size).toBe(REMOTE_HOSTS.length);
   });
 
   it('keeps the Mac on --platform mac and Windows on its PowerShell command', () => {
@@ -211,6 +211,7 @@ describe('a job saved before Nas1 existed', () => {
       mac: done,
       windows: { ...done, currentApp: 'omp' },
       nas1: done,
+      alexis: done,
     });
     // The old job keeps its own total, and never blocks the next four-computer run.
     expect(job.expectedResults).toBe(24);
@@ -219,9 +220,9 @@ describe('a job saved before Nas1 existed', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     const next = service.getStatus().job!;
     expect(next.state).toBe('completed');
-    expect(next.results).toHaveLength(40);
-    expect(next.expectedResults).toBe(40);
-    expect(Object.keys(next.hosts!)).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
+    expect(next.results).toHaveLength(EXPECTED_RESULTS);
+    expect(next.expectedResults).toBe(EXPECTED_RESULTS);
+    expect(Object.keys(next.hosts!)).toEqual(DASHBOARD_HOSTS);
   });
 
   it('still drops a malformed saved host instead of guessing', () => {

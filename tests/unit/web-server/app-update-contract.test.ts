@@ -1,3 +1,4 @@
+import { DASHBOARD_HOSTS, HOST_OS } from '../../../src/web-server/services/dashboard-hosts';
 /**
  * The Update apps row contract for ZCode, the T3 ACP adapters and in-use rows.
  * Fixed rows and fake helpers only: nothing here reaches a real computer or app.
@@ -87,8 +88,8 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     ]);
     expect(UPDATE_APP_LABELS.zcode).toBe('ZCode');
     expect(UPDATE_APP_LABELS['t3-acp-adapters']).toBe('T3 ACP adapters');
-    expect(PLATFORMS).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
-    expect(EXPECTED_RESULTS).toBe(40);
+    expect(PLATFORMS).toEqual(DASHBOARD_HOSTS);
+    expect(EXPECTED_RESULTS).toBe(DASHBOARD_HOSTS.length * 10);
     for (const platform of PLATFORMS) {
       const rows = normalizeAppUpdateResults(payload(), platform);
       expect(rows.map((row) => row.appId)).toEqual(Object.keys(UPDATE_APP_LABELS));
@@ -136,7 +137,7 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       message: MESSAGES.store_no_newer,
     });
     // Only Codex on Windows names the Store check: every other computer and app is refused.
-    for (const platform of PLATFORMS.filter((value) => value !== 'windows'))
+    for (const platform of PLATFORMS.filter((value) => HOST_OS[value] !== 'windows'))
       expect(normalizeAppUpdateRow(noNewer, 'codex-desktop', platform).message).toBe(
         MESSAGES.helper_invalid
       );
@@ -164,7 +165,7 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       status: 'action_required',
       message: MESSAGES.store_update_in_app,
     });
-    for (const platform of PLATFORMS.filter((value) => value !== 'windows'))
+    for (const platform of PLATFORMS.filter((value) => HOST_OS[value] !== 'windows'))
       expect(normalizeAppUpdateRow(storeOnly, 'codex-desktop', platform).message).toBe(
         MESSAGES.helper_invalid
       );
@@ -365,7 +366,7 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       'claude-desktop',
       't3-code',
     ];
-    const rows = PLATFORMS.flatMap((platform) =>
+    const rows = PLATFORMS.filter(platform => platform !== 'alexis').flatMap((platform) =>
       normalizeAppUpdateResults(payload(), platform).filter((row) => before.includes(row.appId))
     );
     expect(rows).toHaveLength(32);
@@ -378,8 +379,8 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     // The old job keeps its own total; the next run covers the full forty rows.
     service.start();
     await finish(service);
-    expect(service.getStatus().job!.results).toHaveLength(40);
-    expect(service.getStatus().job!.expectedResults).toBe(40);
+    expect(service.getStatus().job!.results).toHaveLength(EXPECTED_RESULTS);
+    expect(service.getStatus().job!.expectedResults).toBe(EXPECTED_RESULTS);
   });
 
   it('restores in-use and adapter-part rows from disk with their own words and parts', () => {

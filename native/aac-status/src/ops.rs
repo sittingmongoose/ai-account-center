@@ -86,15 +86,12 @@ struct MergePinsArgs {
     lists: Vec<pins::MachinePinsIn>,
 }
 
-/// The machines whose pins can be merged: this computer's own read plus the three remote ones.
-const MERGE_MACHINES: [&str; 4] = ["vm", "mac", "windows", "nas1"];
-
 fn merge_pins_method(args: &str) -> Result<Json> {
     let parsed: MergePinsArgs = parse(args)?;
     if parsed
         .lists
         .iter()
-        .any(|list| !MERGE_MACHINES.contains(&list.machine.as_str()))
+        .any(|list| !crate::computers::known_machine(&list.machine, false))
     {
         fail!("invalid", "unknown machine in the pin lists");
     }

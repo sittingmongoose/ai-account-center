@@ -9,11 +9,13 @@ export const TASKS_SCHEMA = 'agent-reports/tasks@1';
 export const CARD_SCHEMA = 'agent-reports/card@1';
 export const ANSWER_SCHEMA = 'agent-reports/answer@1';
 
-export const MACHINES = ['vm', 'mac', 'windows', 'nas1'] as const;
-export type MachineId = (typeof MACHINES)[number];
+export { type MachineId } from '../services/dashboard-hosts';
+import { MACHINE_IDS } from '../services/dashboard-hosts';
+import type { MachineId } from '../services/dashboard-hosts';
+export const MACHINES = MACHINE_IDS;
 
 /** `<machine>.<pm-mail name>`, lowercase, 64 characters at most. */
-const WRITER = /^(vm|mac|windows|nas1)\.[a-z0-9][a-z0-9.-]*$/;
+const WRITER = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9.-]*$/;
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const LOCAL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 /** pm-mail's own name rule (`NAME_OK` in pm-mail): lowercase, no dots. */
@@ -27,7 +29,11 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{
 export function isWriterName(value: unknown): value is string {
   // A card id is `<writer>--<local id>`, split on the first `--`, so a writer name cannot hold one.
   return (
-    typeof value === 'string' && value.length <= 64 && WRITER.test(value) && !value.includes('--')
+    typeof value === 'string' &&
+    value.length <= 64 &&
+    WRITER.test(value) &&
+    MACHINES.includes(value.slice(0, value.indexOf('.')) as MachineId) &&
+    !value.includes('--')
   );
 }
 

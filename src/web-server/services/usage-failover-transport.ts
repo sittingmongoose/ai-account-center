@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { resolveAnalyticsRemoteHosts } from './analytics-remote-transport';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
-import { helperPlatform } from './dashboard-hosts';
+import { helperPlatform, REMOTE_HOSTS, localComputer } from './dashboard-hosts';
 import {
   DeadlineExceededError,
   PROCESS_SETTLE_GRACE_MS,
@@ -325,8 +325,7 @@ export async function runUsageHelper(
 }
 
 export function localUsageHost(): UsageHost {
-  const host =
-    process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : 'ubuntu';
+  const host = localComputer();
   return { host, platform: helperPlatform(host), sshHost: null };
 }
 
@@ -336,7 +335,7 @@ export async function configuredUsageHosts(): Promise<UsageHost[]> {
   const aliases = await resolveAnalyticsRemoteHosts();
   return [
     local,
-    ...(['mac', 'windows', 'nas1'] as const).flatMap((host) => {
+    ...REMOTE_HOSTS.flatMap((host) => {
       const sshHost = aliases[host];
       return sshHost && host !== local.host
         ? [{ host, platform: helperPlatform(host), sshHost }]

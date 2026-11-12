@@ -130,12 +130,9 @@ export class StatusService {
   readonly pinned: PinnedThreadsCollector;
   private readonly registryReader: PmMailRegistryReader;
   private registry: Collected<RegistryThread[]> = empty();
-  private machines: Record<MachineId, Collected<MachineSample>> = {
-    vm: empty(),
-    mac: empty(),
-    windows: empty(),
-    nas1: empty(),
-  };
+  private machines = Object.fromEntries(
+    MACHINES.map((id) => [id, empty<MachineSample>()])
+  ) as Record<MachineId, Collected<MachineSample>>;
   private browsers: Collected<BrowserMachine[]> = empty();
   private simlock: Collected<SimlockStatus> = empty();
   private usage: UsageInput | null = null;

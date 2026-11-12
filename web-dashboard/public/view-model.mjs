@@ -1,3 +1,4 @@
+import { HOST_IDS, HOST_LABELS } from './computers.mjs';
 // Dashboard view model, version 2 (Daylight Atlas). Pure functions from the public API DTOs to the
 // JSON that src/lib.rs deserializes into the Slint structs in ui/models.slint. Every truthfulness rule
 // lives here or in the modules it builds on: a missing reading is unavailable, never zero; nothing is
@@ -121,7 +122,7 @@ const dayClock = lazyFormat({
   hour: 'numeric',
   minute: '2-digit',
 });
-const PLATFORM = { mac: 'Mac', windows: 'Windows', ubuntu: 'Ubuntu', nas1: 'Nas1', linux: 'Linux' };
+const PLATFORM = { ...HOST_LABELS, linux: 'Linux' };
 
 export const platformLabel = (id) =>
   PLATFORM[id] || (id ? id[0].toUpperCase() + id.slice(1) : 'Unknown');
@@ -1435,12 +1436,12 @@ const listWords = (words) =>
   words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 
 /** The computers Update all runs on, in the order the header names them. */
-export const UPDATE_HOST_IDS = ['ubuntu', 'mac', 'windows', 'nas1'];
+export const UPDATE_HOST_IDS = HOST_IDS;
 /** The apps the update helper checks on every computer (one result row each). */
 const UPDATE_APPS_PER_HOST = 10;
 /**
  * The result rows a run expects: the job's own `expectedResults`, else one row per app on every
- * computer (40 for four computers), never a stale fixed count.
+ * computer (ten apps per registered computer), never a stale fixed count.
  */
 export const updateTotal = (job) =>
   finite(job?.expectedResults) && job.expectedResults > 0
@@ -1489,7 +1490,7 @@ export function updateViewModel(job, { done = false } = {}) {
     ? `Updating apps on ${where || 'your computers'} · running apps may restart`
     : job
       ? `Last run ${job.state}: ${results.length} results${failed ? `, ${failed} failed` : ''}${action ? `, ${action} need action` : ''}${held ? `, ${held} held` : ''}${catalogWords ? `, ${catalogWords}` : ''}. Details under Accounts & Settings.`
-      : 'Update the Claude and Codex apps and CLIs on Mac, Windows, Ubuntu and Nas1';
+      : `Update the Claude and Codex apps and CLIs on ${listWords(HOST_IDS.map(id => HOST_LABELS[id]))}`;
   return {
     running,
     done: !running && done,

@@ -66,7 +66,7 @@ async function inputs(root: string, extra: Partial<StatusInputs> = {}): Promise<
     timeZone: 'America/New_York',
     reports: reader.snapshot(),
     registry: { data: [], asOf: NOW, error: null },
-    machines: { vm: ok(sample()), mac: ok(sample()), windows: ok(sample()), nas1: ok(sample()) },
+    machines: { vm: ok(sample()), mac: ok(sample()), windows: ok(sample()), nas1: ok(sample()), alexis: ok(sample()) },
     browsers: none(),
     simlock: none(),
     usage: null,
@@ -579,6 +579,7 @@ describe('status view', () => {
             error: { reason: 'ssh did not answer in time.', since: NOW - 120_000 },
           },
           nas1: { data: sample({ memAvailableBytes: 4.2 * GIB }), asOf: NOW - 10_000, error: null },
+          alexis: {data:sample(), asOf:NOW-30_000, error:null},
         },
         browsers: {
           data: [

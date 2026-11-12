@@ -1,3 +1,4 @@
+import { HOST_IDS, HOST_LABELS, hostIcon } from './computers.mjs';
 // Accounts & Settings view model, version 2 (Daylight Atlas, c-daylight-atlas/app-accounts.js and app-auth.js).
 // Pure functions from the public API DTOs to the JSON that src/accounts.rs writes into the AcData global
 // (ui/pages/accounts/ac-data.slint). Every label, every enabled or "coming" decision and every truthfulness rule
@@ -741,7 +742,7 @@ function policies(data, home, ag) {
 
 // ---------------------------------------------------------------- Update apps results
 // Nas1 is a second Ubuntu computer: it reuses the Ubuntu glyph.
-const UPDATE_HOSTS = [['mac', 'Mac', 'apple'], ['windows', 'Windows', 'windows'], ['ubuntu', 'Ubuntu', 'ubuntu'], ['nas1', 'Nas1', 'ubuntu']];
+const UPDATE_HOSTS = ['mac', 'windows', ...HOST_IDS.filter(id => id !== 'mac' && id !== 'windows')].map(id => [id, HOST_LABELS[id], hostIcon(id)]);
 const UPDATE_APP_NAMES = {
   'antigravity-cli': 'Antigravity CLI', 'muse-code': 'Muse Code', omp: 'OMP', 'codex-cli': 'Codex CLI',
   'codex-desktop': 'Codex Desktop', 'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop', zcode: 'ZCode',
@@ -1223,11 +1224,11 @@ export const LOG_SOURCE_TOOL_LABEL = Object.fromEntries(LOG_SOURCE_TOOLS);
 // Nas1 is a second Ubuntu computer (POSIX paths); a generic JSONL log is read on this computer only.
 // The Settings host select shows these hosts' labels; the controller maps a label back to its id.
 export const LOG_SOURCE_HOSTS = {
-  omp: ['ubuntu', 'mac', 'windows', 'nas1'],
-  muse: ['ubuntu', 'mac', 'nas1'],
-  zcode: ['ubuntu', 'mac', 'nas1'],
-  'claude-code': ['ubuntu', 'mac', 'windows', 'nas1'],
-  codex: ['ubuntu', 'mac', 'windows', 'nas1'],
+  omp: HOST_IDS,
+  muse: HOST_IDS,
+  zcode: HOST_IDS,
+  'claude-code': HOST_IDS,
+  codex: HOST_IDS,
   jsonl: ['ubuntu'],
 };
 /** A host the Settings select names by label ("Nas1") or id ("nas1") as its id; '' when it is neither. */

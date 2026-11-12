@@ -1,3 +1,4 @@
+import { DASHBOARD_HOSTS, HOST_OS, type DashboardHost } from './dashboard-hosts';
 import fs from 'fs';
 import { withPrivateFileLock } from './private-json-store';
 import path from 'path';
@@ -26,7 +27,7 @@ export type UsageLogTool = (typeof USAGE_LOG_TOOLS)[number];
  * The computers an extra usage-log folder can sit on. Nas1 is a second Ubuntu computer,
  * so its paths are POSIX.
  */
-export const USAGE_LOG_HOSTS = ['ubuntu', 'mac', 'windows', 'nas1'] as const;
+export const USAGE_LOG_HOSTS = DASHBOARD_HOSTS;
 export type UsageLogHost = (typeof USAGE_LOG_HOSTS)[number];
 
 /** A dot path into a generic JSONL record (`usage.input_tokens`). */
@@ -70,7 +71,7 @@ function isUsageLogSource(value: unknown, allowRemoteJsonl = false): value is Us
     // `..` stays refused everywhere so an extra root cannot escape upward.
     !(
       path.posix.isAbsolute(source.path) ||
-      (source.host === 'windows' && /^[A-Za-z]:[\\/]/.test(source.path))
+      (HOST_OS[source.host as DashboardHost] === 'windows' && /^[A-Za-z]:[\\/]/.test(source.path))
     ) ||
     source.path.includes('..')
   ) {
@@ -251,7 +252,7 @@ export function writeDashboardPreferences(
     throw new ConfigError('Generic JSONL usage log sources are supported only on ubuntu');
   if (!isDashboardPreferences(value)) throw new ConfigError('Invalid dashboard preferences');
   const normalized = value.usageLogSources.map((source) => {
-    const syntax = source.host === 'windows' ? path.win32 : path.posix;
+    const syntax = HOST_OS[source.host as DashboardHost] === 'windows' ? path.win32 : path.posix;
     let root = syntax.normalize(source.path);
     if (source.host === 'ubuntu' && process.platform !== 'win32') {
       try {
@@ -262,7 +263,7 @@ export function writeDashboardPreferences(
     }
     if (source.tool === 'codex') root = syntax.join(root, 'sessions');
     root = root.replace(/[\\/]+$/, '');
-    if (source.host === 'windows') root = root.toLowerCase();
+    if (HOST_OS[source.host as DashboardHost] === 'windows') root = root.toLowerCase();
     return { source, root, sep: syntax.sep };
   });
   for (let index = 0; index < normalized.length; index++) {

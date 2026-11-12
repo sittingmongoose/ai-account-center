@@ -64,13 +64,7 @@ const LOOP_ROUNDS_MIN: usize = 4;
 
 /// The fixed labels a machine gets in a sentence, as the Status page names them.
 fn machine_label(machine: &str) -> String {
-    match machine {
-        "vm" => "the VM".to_string(),
-        "mac" => "the Mac".to_string(),
-        "windows" => "Windows".to_string(),
-        "nas1" => "Nas1".to_string(),
-        other => other.to_string(),
-    }
+    crate::computers::machine_label(machine).to_string()
 }
 
 // ---------------------------------------------------------------------------------------------

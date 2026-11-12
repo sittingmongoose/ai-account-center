@@ -1,3 +1,4 @@
+import { COMPUTERS } from '../services/dashboard-hosts';
 /**
  * The snapshot's view types and the rendering of `usage.md`: pure text production from an
  * `AgentUsageSnapshot`, with the publish-time `signInNow` as its only clock input. The rendered
@@ -163,7 +164,7 @@ const STATUS_WORDS: Record<AgentUsageAccount['status'], string> = {
 };
 
 function hostName(account: AgentUsageAccount): string {
-  return { ubuntu: 'Ubuntu VM', nas1: 'Nas1', mac: 'Mac', windows: 'Windows' }[account.host];
+  return account.host === 'ubuntu' ? COMPUTERS.ubuntu.machineLabel : COMPUTERS[account.host].label;
 }
 
 /** The same snapshot in plain words, one provider section and one line per window. */
