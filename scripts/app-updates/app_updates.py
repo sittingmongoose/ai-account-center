@@ -1417,6 +1417,12 @@ def main():
         progress(event)
     emit = remember
     try:
+        if args.apply:
+            from app_update_t3_rpc import discover, recover_pending
+            pending = pathlib.Path.home() / ".t3/userdata/aac-pending-sessions"
+            if any(pending.glob("aac-acp-*.json")):
+                cli, base, _ = discover(args.platform)
+                recover_pending(cli, base)
         if not args.apply:
             installations = detect(args.platform)
             payload = {"inventory": True, "apps": [
@@ -1444,4 +1450,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from app_update_t3_rpc import unix_signals
+    with unix_signals():
+        main()

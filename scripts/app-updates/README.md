@@ -1124,3 +1124,31 @@ an old reader's later save invalidates the stale companion by digest. Existing
 jobs keep their saved expected count instead of gaining invented rows. Helpers
 sync four additional modules (17 total files); the launcher/generation protocol
 is unchanged.
+
+### T3 ACP CLI discovery and temporary sessions
+
+Unix hosts support Desktop's official `~/.t3/bin/t3` shim and standalone
+runtimes. When `server-runtime.json` includes `serverVersion`, CLI `--version`
+must match it; older installed standalone versions are included in the search.
+Without version metadata, prefer the Desktop shim, then the standalone launcher
+or newest installed runtime. Equal-version matches use the same order.
+Windows keeps the bundled Desktop CLI invocation. All auth commands explicitly
+bind to the discovered local base directory.
+
+Before issuing a session, the helper writes a private random-label record under
+`~/.t3/userdata/aac-pending-sessions`, then records the exact session ID before
+using the token. No token is written to disk or diagnostics. Each record has an
+OS lock held throughout that session. The next apply run (and each subsequent
+session acquisition) revokes abandoned records, including after Windows forced
+termination or Unix SIGKILL. Active overlapping runs stay locked and are skipped.
+If death occurs before the issue reply is recorded, recovery lists sessions and
+matches only that record's exact random label. Failed cleanup retains the record
+for retry. This is next-run recovery: forced-kill cleanup waits for another apply.
+Unix SIGTERM, SIGINT and SIGHUP additionally unwind normal cleanup.
+
+At T3 ab8e488e, `auth session issue --ttl` accepts duration strings, including
+milliseconds, with no positive minimum enforced by the CLI or session store.
+The helper uses the shortest usable lifetime covering its remaining operation
+deadline, rounded up to seconds, instead of a fixed 20 minutes. A literal 1 ms
+TTL would expire before the installer could use it. Scopes remain
+`providers:manage` and `orchestration:read`; T3 alone writes `active.json`.

@@ -260,7 +260,10 @@ class AcpTests(Fixtures):
         issue = next(argv for argv in self.auth if "issue" in argv)
         self.assertEqual([issue[i + 1] for i, arg in enumerate(issue) if arg == "--scope"],
                          ["providers:manage", "orchestration:read"])
-        self.assertIn("20m", issue)
+        ttl = issue[issue.index("--ttl") + 1]
+        self.assertTrue(ttl.endswith("s"))
+        self.assertGreater(int(ttl[:-1]), 0)
+        self.assertLessEqual(int(ttl[:-1]), 900)
         self.assertNotIn(self.TOKEN, str(self.auth))
 
     def test_success_all_platforms_t3_is_the_only_pointer_writer(self):

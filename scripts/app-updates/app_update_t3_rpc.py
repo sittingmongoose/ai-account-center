@@ -8,15 +8,18 @@ import base64
 import contextlib
 import hashlib
 import json
+import math
 import os
 import pathlib
+import signal
+import threading
 import socket
 import struct
 import time
 import urllib.parse
 import uuid
 
-from app_update_common import UpdateFailure, command, environment
+from app_update_common import UpdateFailure, command, environment, write_private_json
 
 
 def remaining(deadline, maximum=30):
@@ -49,57 +52,172 @@ def discover(host):
         else:
             from app_update_t3 import runtime_install
             executable = runtime_install()
-            if executable is None:
+            shim = base / "bin/t3"
+            candidates = ([shim] if shim.is_file() else []) + ([executable] if executable else [])
+            version = state.get("serverVersion")
+            if version:
+                # Match the running server's published version, including older
+                # installed runtimes. Do not silently use a different version.
+                from app_update_t3 import exact_version
+                if exact_version(version):
+                    pinned = base / "runtime/versions" / version / "t3"
+                    if pinned.is_file():
+                        candidates.append(pinned)
+                matched = []
+                for candidate in candidates:
+                    try:
+                        output = command([str(candidate), "--version"], timeout=10,
+                                         env=environment({"ELECTRON_RUN_AS_NODE": "1"}), capture=True,
+                                         kill_tree=True)
+                        words = output.strip().split()
+                        if words and words[-1].removeprefix("v") == version:
+                            matched.append(candidate)
+                    except (UpdateFailure, OSError):
+                        pass
+                candidates = matched
+            # Older metadata has no executable identity: Desktop's official
+            # shim first, then the standalone runtime. Ties use the same order.
+            if not candidates:
                 raise OSError()
-            cli = [str(executable)]
+            cli = [str(candidates[0])]
         return cli, base, origin
     except (OSError, ValueError, KeyError, TypeError):
         raise UpdateFailure("t3_unreachable") from None
 
 
+def auth_command(cli, base, args, timeout=30):
+    return command([*cli, "auth", "session", *args, "--base-dir", str(base)],
+                   timeout=timeout, env=environment({"ELECTRON_RUN_AS_NODE": "1"}),
+                   capture=True, kill_tree=True)
+
+
+def lock_pending(handle):
+    """Nonblocking OS lock; process death releases it on Unix AND Windows."""
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def revoke_pending(cli, base, path):
+    record = json.loads(path.read_text(encoding="utf-8"))
+    label = path.stem
+    if not label.startswith("aac-acp-") or record.get("label") != label:
+        raise ValueError()
+    identifier = record.get("sessionId")
+    ids = [identifier] if isinstance(identifier, str) and identifier else [
+        row["sessionId"] for row in json.loads(auth_command(cli, base, ["list", "--json"]))
+        if row.get("client", {}).get("label") == label
+    ]
+    if not ids:
+        # The issuing CLI may outlive a killed helper and commit later. Keep
+        # its exact label eligible for a future sweep rather than lose it.
+        return
+    for identifier in ids:
+        auth_command(cli, base, ["revoke", identifier])
+    path.unlink()
+
+
+def recover_pending(cli, base):
+    """Next-run supervisor: reap only abandoned records; never an active run.
+
+    The pre-issue label also covers death after CLI commit but before its JSON
+    reply. Only that exact random label is eligible for recovery in that case.
+    Failed revocations retain the record for the next run.
+    """
+    for path in (base / "userdata/aac-pending-sessions").glob("aac-acp-*.json"):
+        lock = path.with_suffix(".lock")
+        try:
+            handle = lock.open("r+b")
+        except FileNotFoundError:
+            continue
+        with handle:
+            try:
+                lock_pending(handle)
+            except OSError:
+                continue
+            try:
+                if path.exists():
+                    revoke_pending(cli, base, path)
+            except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
+                raise UpdateFailure("t3_auth_failed") from None
+        if not path.exists():
+            with contextlib.suppress(OSError):
+                lock.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def unix_signals():
+    """Unwind finally blocks on catchable Unix termination signals."""
+    previous = {}
+    def terminate(signum, frame):
+        raise SystemExit(128 + signum)
+    if os.name != "nt" and threading.current_thread() is threading.main_thread():
+        for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+            number = getattr(signal, name)
+            previous[number] = signal.signal(number, terminate)
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
 @contextlib.contextmanager
 def bearer(cli, base, deadline):
-    """Issue a 20-minute session; revoke even on cancellation or RPC failure.
+    """Issue a deadline-bounded session with durable crash recovery.
 
     CLI stdout stays in memory. A unique label lets finally recover the session
     ID if issuance committed but the CLI timed out before returning JSON.
     """
     label = "aac-acp-" + uuid.uuid4().hex
+    recover_pending(cli, base)
+    path = base / "userdata/aac-pending-sessions" / (label + ".json")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock = path.with_suffix(".lock")
+    handle = os.fdopen(os.open(lock, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600), "r+b")
     session_id = None
     attempted = False
-    env = environment({"ELECTRON_RUN_AS_NODE": "1"})
 
     def auth(args, timeout=30):
-        return command([*cli, "auth", "session", *args, "--base-dir", str(base)],
-                       timeout=timeout, env=env, capture=True, kill_tree=True)
+        return auth_command(cli, base, args, timeout)
 
     try:
+        handle.write(b"0")
+        handle.flush()
+        lock_pending(handle)
         timeout = remaining(deadline)
+        write_private_json(path, {"label": label})
         attempted = True
         try:
+            ttl = str(max(1, math.ceil(deadline - time.monotonic()))) + "s"
             issued = json.loads(auth(["issue", "--scope", "providers:manage", "--scope",
-                                      "orchestration:read", "--ttl", "20m", "--label", label,
+                                      "orchestration:read", "--ttl", ttl, "--label", label,
                                       "--json"], timeout))
             session_id = issued["sessionId"]
             token = issued["token"]
             if (not isinstance(session_id, str) or not session_id or
                     not isinstance(token, str) or not token or "\r" in token or "\n" in token):
                 raise ValueError()
+            write_private_json(path, {"label": label, "sessionId": session_id})
         except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
             raise UpdateFailure("t3_auth_failed") from None
         yield token
     finally:
-        if attempted:
-            try:
-                ids = [session_id] if isinstance(session_id, str) and session_id else [
-                    row["sessionId"] for row in json.loads(auth(["list", "--json"]))
-                    if row.get("client", {}).get("label") == label
-                ]
-                for identifier in ids:
-                    auth(["revoke", identifier])
-            except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
-                # Do not hide a failed revocation behind a successful install.
-                raise UpdateFailure("t3_auth_failed") from None
+        try:
+            if attempted:
+                try:
+                    revoke_pending(cli, base, path)
+                except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
+                    raise UpdateFailure("t3_auth_failed") from None
+        finally:
+            handle.close()
+            if not path.exists():
+                with contextlib.suppress(OSError):
+                    lock.unlink(missing_ok=True)
 
 
 class Rpc:
