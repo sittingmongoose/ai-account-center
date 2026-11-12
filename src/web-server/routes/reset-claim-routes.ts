@@ -17,21 +17,9 @@ import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware
 import { callerKey } from './caller-bound-confirmations';
 import { createApiRouter } from './api-router';
 import { createResetSourceAdapter } from '../services/reset-source-adapter';
+import type { ResetSource, ResetWrite } from '../services/reset-source-contract';
 
-export interface ResetSource {
-  /** Fresh identity-bound private Snapshot JSON; never include credentials or email. */
-  read(account: string): Promise<unknown>;
-  /** Must target exactly request.identity and exact grant in request.body; no fallback. */
-  send(request: ResetWrite): Promise<{ outcome: string; retryAfterMs?: number }>;
-}
-export interface ResetWrite {
-  method: string;
-  body: Record<string, unknown>;
-  identity: Record<string, string>;
-  attemptKey: string;
-  sourceBinding: string;
-  routeAccount: string;
-}
+export type { ResetSource, ResetWrite };
 export interface ResetRouteDeps {
   native?: NativeStatusHandle;
   source?: ResetSource;

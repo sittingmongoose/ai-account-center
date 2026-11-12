@@ -6,7 +6,7 @@ import * as path from 'path';
 import { ProviderError } from '../../errors/error-types';
 import { getCodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashboard-service';
 import { loadNativeStatus } from '../../status-native/native-loader';
-import type { ResetSource, ResetWrite } from '../routes/reset-claim-routes';
+import type { ResetSource, ResetWrite } from './reset-source-contract';
 import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
 import { isDefaultClaudeDataFolder } from './claude-account-records';
 import {
