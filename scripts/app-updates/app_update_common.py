@@ -19,6 +19,7 @@ APP_LABELS = {
     "codex-cli": "Codex CLI", "codex-desktop": "Codex Desktop",
     "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", "zcode": "ZCode",
     "t3-acp-adapters": "T3 ACP adapters", "t3-code": "T3 Code",
+    "cursor-cli": "Cursor CLI", "antigravity-acp": "Antigravity ACP (T3)",
 }
 NO_AUTO_UPDATE = {
     "MUSE_NO_AUTO_UPDATE": "1", "AGY_CLI_DISABLE_AUTO_UPDATE": "true",

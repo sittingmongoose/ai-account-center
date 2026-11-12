@@ -41,7 +41,7 @@ class ParallelUpdateTests(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(updater, "detect", return_value=self.installs))
 
     def workers(self, worker):
-        for name in ("update_cli", "update_desktop", "update_zcode", "update_adapters", "update_t3"):
+        for name in ("update_cli", "update_desktop", "update_zcode", "update_adapters", "update_t3", "update_cursor", "update_antigravity_acp"):
             self.stack.enter_context(mock.patch.object(updater, name, side_effect=worker))
 
     def gated_run(self, cancelled=False):

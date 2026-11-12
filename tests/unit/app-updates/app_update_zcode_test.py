@@ -179,8 +179,8 @@ class ZCodeFixtures(unittest.TestCase):
         self.assertEqual(install.parts, {"muse-acp": "0.10.0", "zcode-acp-server": "0.65.1"})
         self.assertEqual(zcode.adapter_root("mac"), pathlib.Path("/opt/homebrew/lib/node_modules"))
 
-    def test_detect_returns_ten_apps_and_inventory_lists_adapter_parts(self):
-        self.assertEqual(list(common.APP_LABELS)[-3:], ["zcode", "t3-acp-adapters", "t3-code"])
+    def test_detect_returns_twelve_apps_and_inventory_lists_adapter_parts(self):
+        self.assertEqual(list(common.APP_LABELS)[-5:], ["zcode", "t3-acp-adapters", "t3-code", "cursor-cli", "antigravity-acp"])
         self.assertEqual((common.APP_LABELS["zcode"], common.APP_LABELS["t3-acp-adapters"]), ("ZCode", "T3 ACP adapters"))
         self.ubuntu_app()
         self.adapters()
@@ -191,10 +191,10 @@ class ZCodeFixtures(unittest.TestCase):
             with mock.patch.object(sys, "argv", ["helper", "--platform", "ubuntu"]), contextlib.redirect_stdout(output):
                 updater.main()
         self.assertEqual(list(found), list(common.APP_LABELS))
-        self.assertEqual(len(found), 10)
+        self.assertEqual(len(found), 12)
         self.assertEqual(found["zcode"].version, OLD)
         apps = {row["appId"]: row for row in json.loads(output.getvalue())["apps"]}
-        self.assertEqual(len(apps), 10)
+        self.assertEqual(len(apps), 12)
         self.assertEqual(apps["t3-acp-adapters"]["parts"], {"muse-acp": "0.10.0", "zcode-acp-server": "0.65.1"})
         self.assertEqual((apps["zcode"]["version"], apps["zcode"]["manager"]), (OLD, "official-download"))
         self.assertNotIn("parts", apps["zcode"])
@@ -422,13 +422,13 @@ class ZCodeFixtures(unittest.TestCase):
             command = [stack.enter_context(patch) for patch in self.ubuntu_patches(run)][2]
             value = updater.run_apply("ubuntu", emit=events.append)
         rows = {row["appId"]: row for row in value["results"]}
-        self.assertEqual(len(rows), 10)
+        self.assertEqual(len(rows), 12)
         self.assertEqual((rows["zcode"]["status"], rows["t3-acp-adapters"]["status"], rows["t3-code"]["status"]), ("updated", "updated", "not_installed"))
         command.assert_called_once()
         phases = [(event["appId"], event["phase"]) for event in events if event.get("event") == "app" and event.get("appId") in ("zcode", "t3-acp-adapters")]
         self.assertEqual(phases, [("zcode", "checking"), ("zcode", "updating"), ("zcode", "updating"),
                                   ("t3-acp-adapters", "checking"), ("t3-acp-adapters", "updating"), ("t3-acp-adapters", "updating")])
-        self.assertEqual([row["appId"] for row in value["results"]][-4:], ["zcode", "t3-acp-adapters", "codex-desktop", "t3-code"])
+        self.assertEqual([row["appId"] for row in value["results"] if row["appId"] not in ("cursor-cli", "antigravity-acp")][-4:], ["zcode", "t3-acp-adapters", "codex-desktop", "t3-code"])
 
     # ------------------------------------------------------------ Mac
     def mac_run(self, install, gui=None, session=None, fail=None, served=None, entries=None, opened_later=False):

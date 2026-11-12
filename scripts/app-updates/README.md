@@ -19,7 +19,7 @@ serialized, as are Codex CLI/Desktop runtime operations. ZCode finishes before
 its adapters; Codex CLI finishes before Codex Desktop, which goes last when an
 installer needs serial work. T3 waits for every other app to finish. The job ends when
 the slowest computer finishes, so a busy or unreachable host never holds the
-others back. Five computers x ten apps give 50 result rows. Per-computer
+others back. Five computers x twelve apps give 60 result rows. Per-computer
 progress is live: the helper prints one JSON line per event
 (`{"event":"app","appId":...,"phase":"checking"|"updating"}` and
 `{"event":"result","result":{...}}`) when the dashboard sets
@@ -59,7 +59,7 @@ Nothing can wait forever:
 
 The Python helper defaults to **read-only inventory**. Only `--apply` updates or
 restarts apps. It detects the active installation, skips absent apps, and returns
-one bounded, whitelist result for each of the ten fixed apps. A failed or malformed
+one bounded, whitelist result for each of the twelve fixed apps. A failed or malformed
 detection probe reports `unknown` / `readiness_unknown` and never starts an
 updater; a successful absent answer alone reports `not_installed`. It does not copy,
 modify or export account credentials/configuration.
@@ -67,6 +67,8 @@ modify or export account credentials/configuration.
 | App | Detected installation and supported update |
 | --- | --- |
 | Antigravity CLI | Active native `agy update`; on a managed switching installation a paused unreviewed runtime updates without checking running copies (see below) |
+| Cursor CLI | Official managed `cursor-agent update`; Linux/Nas1 directly, Mac in the login GUI session, Windows through its PowerShell launcher in the existing interactive task. No running agent is stopped. |
+| Antigravity ACP (T3) | T3's pinned official Google executable/harness pair, ZIP SHA-256 and byte counts, safe extraction and ACP initialize validation, then atomic `active.json`; running releases are retained. Separate from `agy`. |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; an npm global install (`<prefix>/bin/codex` linked into `<prefix>/lib/node_modules/@openai/codex`, such as Nas1's under `~/.local`) is reported as manager `npm` and updated by npm itself under that prefix, `node npm-cli.js install --global --prefix <prefix> @openai/codex@latest`, never by `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
@@ -89,6 +91,54 @@ Official methods: [Antigravity installer](https://antigravity.google/cli/install
 [Claude Code setup](https://code.claude.com/docs/en/setup),
 [OpenAI Linux package](https://learn.chatgpt.com/docs/linux/linux-app),
 [OpenAI app update management](https://learn.chatgpt.com/docs/manage-app-updates).
+
+
+### Cursor CLI and T3 Antigravity ACP
+
+`cursor-cli` detects the official versioned installation under
+`~/.local/share/cursor-agent/versions` on Linux and Mac and
+`%LOCALAPPDATA%\cursor-agent` on Windows. It uses the CLI's supported `update`
+command (confirmed by `cursor-agent --help`), rather than re-running the Windows
+installer, whose initialization can delete the installation root. Windows uses
+its official `.ps1` launcher, or `.cmd` on an older installation, through
+PowerShell. Its native updater owns in-use staging. A remaining `.new` tree or
+pending launcher reports `action_required` / `cursor_update_staged`, with the
+version the launcher actually reports; AAC never promotes or removes it itself.
+Mac runs the native updater through the GUI LaunchAgent below because older
+Cursor launchers need the login Keychain even for read-only CLI commands. Mac
+detection can read the official symlink's release directory without credentials.
+All versions are bounded and every row reports `previousVersion` and `version`.
+No Cursor update is hidden in the T3 companions anymore. AAC never reads or
+writes `~/.cursor` and never stops a Cursor agent.
+
+`antigravity-acp` updates an existing T3-managed runtime only; an absent
+`active.json` is `not_installed`, and an invalid/incomplete record is `unknown`.
+The package-owned pins in `app_update_antigravity_release.py` match
+[T3's release manifest at ab8e488e](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/antigravityRelease.ts)
+and the installed `0.1.10-nightly.20261112.4580` server: **1.4.5** on all six
+OS/architecture pairs. Keep these pins aligned with T3 when its manifest changes;
+AAC does not guess a newer Google URL or accept one from a caller. The agy CLI's
+version is independent.
+
+The flow mirrors
+[T3's installer](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/AntigravityInstallation.ts):
+download only the pinned `dl.google.com/agy-extensions/releases/` ZIP, verify its
+exact archive size and SHA-256, require exactly the executable and harness with
+their pinned sizes, reject unsafe/non-file/encrypted/extra entries, and extract
+under `versions/.install-*`. Intel Macs receive T3's ad-hoc codesign step after
+verification. An unauthenticated ACP `initialize` in a disposable `GEMINI_HOME`
+checks agent name/version, protocol, resume/logout and `oauth-personal`; it sends
+no prompt or authentication request. Only its own validation process tree is
+stopped. The completion record has T3's `{releaseId,version,executable,harness}`
+shape, and the version directory is the archive's SHA-256. The complete directory
+is published before an atomic `active.json` replacement. Failure leaves the old
+pointer unchanged. Existing release directories are never deleted or overwritten.
+A newer installed runtime is never downgraded.
+
+T3 resolves `active.json` for each new managed session; existing sessions hold
+their acquired version. No T3 restart or automatic provider refresh is performed.
+The row asks the user to refresh the provider in T3 if its cached version display
+is stale. T3's CLI exposes no headless provider-runtime install command.
 
 ### Stray copies beside a managed install
 
@@ -214,10 +264,7 @@ exact version. T3's own tool cache (`~/.t3/tools`, for example cloudflared) is n
 part of this: T3 downloads the tool version it pins on demand.
 
 Companions run beside T3 on Ubuntu, best effort, and none changes the
-`t3-code` row. The Cursor agent CLI behind T3's Cursor provider
-(`~/.local/bin/cursor-agent`, only when it resolves inside
-`~/.local/share/cursor-agent/versions`) runs its own `cursor-agent update` before
-any restart is scheduled. The Muse and ZCode ACP adapters and the extracted ZCode
+`t3-code` row. Cursor CLI updates only in its own `cursor-cli` row, before T3; it never runs twice. The Muse and ZCode ACP adapters and the extracted ZCode
 app belong to their own rows now: the `zcode` and `t3-acp-adapters` rows run
 the owner's `t3-acp-update.service` and wait for it earlier in the same job (see
 [ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)), so the T3 row no
@@ -225,7 +272,7 @@ longer starts it. When a T3 restart is scheduled, the detached worker still star
 the unit, without waiting, right after the verified restart: the restart has just
 stopped the running adapters, so an update the unit deferred for them lands then.
 The outcome goes to `t3-components.json` in the helper state directory: UTC time,
-the Cursor CLI before, after and status, the ACP updater status (`rows` when the
+the Cursor CLI marker (`separate_row`; versions are on its row), the ACP updater status (`rows` when the
 rows ran it in this job, `pending` until the worker starts it, then `started` or
 `failed`; `absent` without the unit), the pruned versions and whether a reload ran.
 The detached worker also writes one line to its journal.
@@ -263,7 +310,15 @@ run or the binary is missing) AAC runs one bounded headless session with the new
 configured default is used, in a neutral temporary directory, with the timeout as min(60s,
 the deadline's remaining time) and no 30s floor; a warm whose deadline has already passed
 never starts. On Windows the run goes through the detected `.muse-launcher.ps1`, as
-detection does for `--version`. The warm is a short-lived synchronous process and the
+detection does for `--version`. On Mac, a short-lived fixed LaunchAgent is
+bootstrapped into `gui/<uid>` (not an SSH `asuser` child), so Muse uses the
+logged-in user's Keychain security session. Its command, prompt and working
+directory are package-owned; it is booted out after completion or timeout, with
+launchd owning the process group. No persistent LaunchAgent or Keychain setting
+is installed. A missing GUI session reports `mac_gui_unavailable`. A Keychain
+refusal even there reports `mac_keychain_locked`, asking the user to unlock or
+approve access on the Mac; it never says merely to open Muse once. A cleanup
+failure reports `mac_gui_cleanup_failed`. The warm is a short-lived synchronous process and the
 only bounded command that opts into whole-tree cleanup (`kill_tree=True`): its whole
 owned process tree is killed at its timeout, so a later process scan never sees it as
 a session to stop or restart. Every other bounded command keeps the pre-tree cleanup
@@ -282,18 +337,18 @@ clean `current`.
 
 Only the owner's explicitly authorized Update apps click should exercise real
 installers. Before that, read-only `--inventory --platform <host>` should show
-ten rows, full T3 nightly versions, Windows Muse's native manager/version, ZCode's
+twelve rows, full T3 nightly versions, Windows Muse's native manager/version, ZCode's
 version and the adapters' `parts`; Codex CLI or Claude Code also lists `strays` when
 another copy sits beside its managed install.
-After an authorized click, confirm 50 result rows and simultaneous host progress.
+After an authorized click, confirm 60 result rows and simultaneous host progress.
 When T3 updates, verify Mac/Windows bundle versions and port 3773 health, then
 wait until the completed job's scheduled Ubuntu restart has finished; inspect
 `t3 service status`, the detached unit journal, port 3773 and that
 `ccs-dashboard.service` remained active. Do not run this live check while agent
 work that must survive a T3 restart is in progress. For Nas1 (inventory there
-runs with `--platform ubuntu`) confirm its ten rows, that a T3 update there
+runs with `--platform ubuntu`) confirm its twelve rows, that a T3 update there
 scheduled the restart of Nas1's own `t3code.service`, that
-`~/.ccs/app-updates/` on Nas1 holds the 13 synced helper files, and that Nas1
+`~/.ccs/app-updates/` on Nas1 holds the 17 synced helper files, and that Nas1
 has no AI Account Center package, command or service and no `~/.ccs` content
 beyond `app-updates/`.
 
@@ -862,7 +917,7 @@ registered.
 Remote sync uses the host's existing Python (`/usr/bin/python3` on Mac/Nas1,
 `python.exe` through encoded PowerShell on Windows). It extracts into a private
 sibling staging folder, rejects unexpected/duplicate/non-file archive entries,
-and verifies all 13 SHA256 checksums before publishing an immutable `helpers-*`
+and verifies all 17 SHA256 checksums before publishing an immutable `helpers-*`
 generation. Only the small `app_updates.py` launcher is atomically replaced;
 state directories, locks, results and restart markers stay in place. Existing
 runs keep their old generation. The hash query follows the selected generation.
@@ -935,7 +990,7 @@ unchanged. T3 download refusals use `update_failed`, an existing result code.
 
 Nas1 is a second Ubuntu computer reached over the fixed alias `nas1-agent`
 (label "Nas1"). Its rows are filed under their own computer, so one run returns
-4 computers x 10 apps = 50 result rows, with Nas1's progress beside the other
+5 computers x 12 apps = 60 result rows, with Nas1's progress beside the other
 three. It follows the Ubuntu rows of this guide except where noted here.
 
 - **Command.** `ssh nas1-agent` runs
@@ -946,7 +1001,7 @@ three. It follows the Ubuntu rows of this guide except where noted here.
   `--state-dir` nor `--dashboard-job`; those belong to the dashboard's own
   Ubuntu run.
 - **Helper sync.** The Python hash query and verified generation publish above
-  keep `~/.ccs/app-updates` private, with 13 files in each helper generation: the 12 source helpers and the
+  keep `~/.ccs/app-updates` private, with 17 files in each helper generation: the 16 source helpers and the
   generated Codex runtime below.
 - **Codex runtime.** Nas1 has no AI Account Center, so its Codex bridge loads
   the bundled `app_update_codex_runtime.cjs` that the sync ships beside the
@@ -959,7 +1014,7 @@ three. It follows the Ubuntu rows of this guide except where noted here.
   user service waits for the helper to exit and 30 seconds, reloads Nas1's unit
   only when it is stale, restarts only Nas1's `t3code.service`, checks its health
   and that the server reports the installed version. Nas1 then prunes its old
-  runtimes and updates its Cursor CLI; its own `zcode` and `t3-acp-adapters` rows
+  runtimes; its separate `cursor-cli` row updates Cursor. Its own `zcode` and `t3-acp-adapters` rows
   run its `t3-acp-update` unit, and the worker starts it again after a T3 restart,
   as the Ubuntu rows above describe, where those are installed. Run without
   `--dashboard-job`, it needs no dashboard job or lock.
@@ -1019,3 +1074,18 @@ Older packages therefore still parse new account manifests and registries. The n
 package accepts old files. Saved update jobs predating a computer mark its absent
 progress as done rather than inventing a run; their saved expected row count is kept.
 The synthetic sixth-computer regression adds no real host to the shipped table.
+
+
+### Saved-job rollback view
+
+New jobs expect 60 rows (five computers times twelve apps). The expanded job
+retains all rows, host progress and the saved `expectedResults`. The digest-bound
+`dashboard-job.json` rollback view freezes the original ten app IDs and four
+storage hosts: at most 40 rows, never new app IDs in results or `currentApp`, and
+`expectedResults` capped at 40. New Muse GUI error messages project to the older
+catalog-failure wording in that file only. The expanded companion retains the
+accurate message. Older readers can restore both running and completed jobs;
+an old reader's later save invalidates the stale companion by digest. Existing
+jobs keep their saved expected count instead of gaining invented rows. Helpers
+sync four additional modules (17 total files); the launcher/generation protocol
+is unchanged.

@@ -63,11 +63,11 @@ function payload() {
 const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
 
 describe('Nas1 as the fourth update computer', () => {
-  it('adds one fixed platform: four computers times ten apps', () => {
+  it('adds one fixed platform: five computers times twelve apps', () => {
     expect(PLATFORMS).toEqual(DASHBOARD_HOSTS);
-    expect(EXPECTED_RESULTS).toBe(DASHBOARD_HOSTS.length * 10);
+    expect(EXPECTED_RESULTS).toBe(DASHBOARD_HOSTS.length * 12);
     const rows = normalizeAppUpdateResults(payload(), 'nas1');
-    expect(rows).toHaveLength(10);
+    expect(rows).toHaveLength(12);
     expect(rows.every((row) => row.platform === 'nas1' && row.status === 'current')).toBe(true);
   });
 
@@ -169,8 +169,8 @@ describe('Nas1 as the fourth update computer', () => {
 
 describe('a job saved before Nas1 existed', () => {
   const done = { state: 'done', currentApp: null, phase: null };
-  // The package that wrote this job had eight apps: ZCode and T3 ACP adapters came later.
-  const LATER_APPS = ['zcode', 't3-acp-adapters'];
+  // The package that wrote this job had eight apps: ZCode, T3 ACP adapters, Cursor CLI and Antigravity ACP came later.
+  const LATER_APPS = ['zcode', 't3-acp-adapters', 'cursor-cli', 'antigravity-acp'];
 
   it('restores its 24 results and every host it saved, with Nas1 done and empty', async () => {
     const root = directory();

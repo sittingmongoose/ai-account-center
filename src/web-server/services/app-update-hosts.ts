@@ -260,6 +260,10 @@ export const HELPER_FILES = [
   'app_update_common.py',
   'app_update_desktop.py',
   'app_update_t3.py',
+  'app_update_cursor.py',
+  'app_update_antigravity.py',
+  'app_update_antigravity_release.py',
+  'app_update_macos.py',
   'app_update_processes.py',
   'app_update_terminal.py',
   'app_update_terminal_child.py',
@@ -318,7 +322,13 @@ const SSH_SYNC_OPTIONS = [
   '-o',
   'ConnectionAttempts=1',
 ];
-/** Stage a complete immutable generation, then atomically replace only its launcher. */
+/**
+ * Stage a complete immutable generation, then atomically replace only its launcher.
+ * Python 3.13's private Windows directories belong to the elevated token's owner
+ * (Administrators); grant the real user's SID access for the Limited interactive task.
+ * Keep this explanation outside the wire script: the complete manifest must fit
+ * Windows OpenSSH's cmd.exe command limit after both encodings.
+ */
 export function helperPublishScript(checksums: Record<string, string>): string {
   return `import hashlib, json, os, pathlib, re, runpy, shutil, subprocess, sys, tarfile, tempfile, uuid
 root = pathlib.Path.home() / '.ccs/app-updates'
@@ -330,9 +340,6 @@ stage = pathlib.Path(tempfile.mkdtemp(prefix='.helpers-stage-', dir=root))
 launcher = root / ('.launcher-' + uuid.uuid4().hex)
 try:
     if os.name == 'nt':
-        # Python 3.13 creates mode-0700 directories for the elevated token's
-        # owner (Administrators). The Limited interactive task needs the real
-        # user's SID on this directory and every extracted helper instead.
         sid = subprocess.check_output(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value'], stdin=subprocess.DEVNULL, text=True, encoding='ascii', timeout=15, creationflags=0x08000000).strip()
         if not re.fullmatch(r'S-1-\\d+(?:-\\d+)+', sid):
             raise ValueError('Invalid helper user identity')
@@ -367,7 +374,7 @@ function pythonCommand(platform: RemotePlatform, script: string): string {
   // complete checksum manifest fits; stdin stays available for the binary tar.
   const windows = HOST_OS[platform] === 'windows';
   const contents = Buffer.from(script);
-  const encoded = (windows ? deflateSync(contents) : contents).toString('base64');
+  const encoded = (windows ? deflateSync(contents, { level: 9 }) : contents).toString('base64');
   const code = windows
     ? 'import base64,zlib,sys;exec(zlib.decompress(base64.b64decode(sys.argv[1])))'
     : 'import base64,sys;exec(base64.b64decode(sys.argv[1]))';

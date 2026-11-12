@@ -73,7 +73,7 @@ const IN_USE_WORDS =
   'is in use (open, or running in a T3 session), so nothing changed; run Update apps again once it is closed.';
 
 describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () => {
-  it('lists ten apps in a fixed order and expects forty rows across four computers', () => {
+  it('lists twelve apps in a fixed order and expects sixty rows across five computers', () => {
     expect(Object.keys(UPDATE_APP_LABELS)).toEqual([
       'antigravity-cli',
       'muse-code',
@@ -85,11 +85,13 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       'zcode',
       't3-acp-adapters',
       't3-code',
+      'cursor-cli',
+      'antigravity-acp',
     ]);
     expect(UPDATE_APP_LABELS.zcode).toBe('ZCode');
     expect(UPDATE_APP_LABELS['t3-acp-adapters']).toBe('T3 ACP adapters');
     expect(PLATFORMS).toEqual(DASHBOARD_HOSTS);
-    expect(EXPECTED_RESULTS).toBe(DASHBOARD_HOSTS.length * 10);
+    expect(EXPECTED_RESULTS).toBe(DASHBOARD_HOSTS.length * 12);
     for (const platform of PLATFORMS) {
       const rows = normalizeAppUpdateResults(payload(), platform);
       expect(rows.map((row) => row.appId)).toEqual(Object.keys(UPDATE_APP_LABELS));
@@ -518,8 +520,8 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
     const pending = row('model_catalog_unrefreshed');
     expect(pending).toMatchObject({ status: 'restart_failed', version: '1.2.4' });
     expect(pending.message).toBe(MESSAGES.model_catalog_unrefreshed);
-    expect(pending.message).toContain('not registered yet');
-    expect(pending.message).toContain('Open Muse once');
+    expect(pending.message).toContain('did not refresh its model catalog');
+    expect(pending.message).toContain('Check Muse sign-in');
     // Already current for the binary, but the warm failed: honest failed.
     const stale = row('model_catalog_unrefreshed', 'muse-code', 'failed');
     expect(stale).toMatchObject({ status: 'failed' });

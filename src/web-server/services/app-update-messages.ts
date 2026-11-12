@@ -57,7 +57,19 @@ export const MESSAGES = {
   zcode_release_unavailable:
     'The official ZCode release could not be checked; no update was attempted. Try Update apps again.',
   model_catalog_unrefreshed:
-    'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.',
+    'Muse did not refresh its model catalog; the new models are not registered yet. Check Muse sign-in on this computer, then run Update apps again.',
+  mac_keychain_locked:
+    'The app could not access the login Keychain even in the Mac GUI session. Unlock the login Keychain or approve its access on the Mac, then run Update apps again.',
+  mac_gui_unavailable:
+    'The Mac login session is unavailable. Sign in to the Mac desktop, then run Update apps again.',
+  mac_gui_cleanup_failed:
+    'The Mac GUI update worker could not be stopped. Check the Mac before running Update apps again.',
+  cursor_updated:
+    'Updated Cursor CLI. Running agents keep their version until they are started again.',
+  cursor_update_staged:
+    'Cursor staged its update while an agent is running. Let the agent finish, then run Update apps again.',
+  antigravity_acp_updated:
+    "Updated T3's Antigravity ACP runtime. Existing sessions keep their version; new sessions use the update. Refresh the provider in T3 if its version display is stale.",
   // Older helpers and saved rows: winget's answer, which never saw this package.
   store_no_newer:
     'Already current from the Microsoft Store: the Store offers no newer build to this computer yet.',
@@ -74,6 +86,8 @@ export type MessageCode = keyof typeof MESSAGES;
 
 /** Fixed older wording remains readable in saved jobs. Never emitted for new results. */
 export const LEGACY_MESSAGES: Partial<Record<MessageCode, string>> = {
+  model_catalog_unrefreshed:
+    'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.',
   updated_unreviewed:
     'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
   runtime_paused_blocked:
