@@ -46,6 +46,71 @@ pub fn MediaList(items: Vec<Media>) -> impl IntoView {
     })
 }
 
+/// Live reports keep media elements and native playback while captions or sibling data change.
+#[component]
+pub fn LiveMediaList(items: Memo<Vec<Media>>) -> impl IntoView {
+    let keys = Memo::new(move |_| {
+        items.with(|items| {
+            let mut seen = std::collections::BTreeMap::new();
+            items
+                .iter()
+                .map(|m| {
+                    let key = (m.kind.clone(), m.url.clone());
+                    let occurrence = seen.entry(key.clone()).or_insert(0usize);
+                    let value = (key.0, key.1, *occurrence);
+                    *occurrence += 1;
+                    value
+                })
+                .collect::<Vec<_>>()
+        })
+    });
+    view! {
+        <div class="media-list">
+            <For each=move || keys.get() key=|key| key.clone() children=move |(kind, url, occurrence)| {
+                let media = Memo::new(move |_| items.with(|items| items.iter().filter(|m| m.kind == kind && m.url == url).nth(occurrence).cloned().unwrap_or_default()));
+                view! { <LiveMediaItem media=media/> }
+            }/>
+        </div>
+    }
+}
+
+#[component]
+fn LiveMediaItem(media: Memo<Media>) -> impl IntoView {
+    let viewer = expect_context::<Viewer>();
+    // Kind and URL are the list key; assigning src once prevents a metadata poll from reloading the player.
+    let initial = media.get_untracked();
+    let caption = Memo::new(move |_| media.with(caption_line));
+    if initial.kind == "video" {
+        view! {
+            <figure class="media" data-kind="video">
+                <video src=initial.url poster=move || media.with(|m| m.poster_url.clone().unwrap_or_default())
+                    controls=true playsinline=true preload="metadata"></video>
+                <figcaption><span>{move || caption.get()}</span>
+                    <button class="link" on:click=move |_| viewer.open.set(Some(media.get_untracked()))>"Full screen"</button>
+                </figcaption>
+            </figure>
+        }.into_any()
+    } else {
+        let alt = Memo::new(move |_| {
+            let caption = caption.get();
+            if caption.is_empty() {
+                "Screenshot".into()
+            } else {
+                caption
+            }
+        });
+        view! {
+            <figure class="media" data-kind="image">
+                <button class="media-open" aria-label=move || format!("Enlarge: {}", alt.get()) on:click=move |_| viewer.open.set(Some(media.get_untracked()))>
+                    <img src=initial.url alt=move || alt.get() loading="lazy"/>
+                    <span class="enlarge" aria-hidden="true">"Tap to enlarge"</span>
+                </button>
+                <Show when=move || !caption.with(String::is_empty)><figcaption><span>{move || caption.get()}</span></figcaption></Show>
+            </figure>
+        }.into_any()
+    }
+}
+
 /// The iPhone only offers its own player for a video (`webkitEnterFullscreen`); elsewhere the standard API.
 fn system_full_screen(video: &web_sys::HtmlVideoElement) {
     let target: &wasm_bindgen::JsValue = video.as_ref();

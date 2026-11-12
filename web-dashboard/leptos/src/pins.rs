@@ -4,7 +4,7 @@
 use crate::api::*;
 use crate::fmt;
 use crate::live::Live;
-use crate::media::MediaList;
+use crate::media::{LiveMediaList, MediaList};
 use crate::roster::*;
 use crate::status::{SheetGrab, cached_notice, refusal_notice, refused_lines, sheet_drag_style};
 use crate::ui::*;
@@ -489,6 +489,144 @@ fn to_open_section(p: &Pin) -> AnyView {
     .into_any()
 }
 
+fn row_keys(values: impl Iterator<Item = String>) -> Vec<(String, usize)> {
+    let mut seen = std::collections::BTreeMap::new();
+    values
+        .map(|id| {
+            let occurrence = seen.entry(id.clone()).or_insert(0usize);
+            let key = (id, *occurrence);
+            *occurrence += 1;
+            key
+        })
+        .collect()
+}
+
+#[component]
+fn LiveMediaThumbs(items: Memo<Vec<ReportedMedia>>) -> impl IntoView {
+    let parsed = Memo::new(move |_| items.with(|items| media_of(items)));
+    let all = RwSignal::new(false);
+    let more = Memo::new(move |_| parsed.with(|(media, _)| media.len().saturating_sub(3)));
+    let shown = Memo::new(move |_| {
+        parsed.with(|(media, _)| {
+            if all.get() {
+                media.clone()
+            } else {
+                media.iter().take(3).cloned().collect()
+            }
+        })
+    });
+    view! {
+        <div class="to-media">
+            <LiveMediaList items=shown/>
+            <Show when={move || more.get() > 0}><button class="link" on:click=move |_| all.update(|all| *all = !*all)>
+                {move || if all.get() { "Fewer".to_string() } else { format!("{} more", more.get()) }}
+            </button></Show>
+            {move || parsed.with(|(_, outside)| (*outside > 0).then(|| view! { <p class="q3 to-sub">{format!("{} kept outside the share, so not shown here.", if *outside == 1 { "1 more is".to_string() } else { format!("{outside} more are") })}</p> }))}
+        </div>
+    }
+}
+
+#[component]
+fn LiveToOpenRow(pin: String, d: Memo<Deliverable>) -> impl IntoView {
+    let store = expect_context::<OpenedStore>();
+    let pin = StoredValue::new(pin);
+    let id = StoredValue::new(d.get_untracked().id);
+    let opened = Signal::derive(move || store.for_one(&pin.get_value(), &id.get_value()));
+    let main = Memo::new(move |_| d.with(|d| d.main == Some(true)));
+    let version = Memo::new(move |_| d.with(|d| d.version.clone()));
+    let action = Memo::new(move |_| d.with(|d| opener(d.path.as_deref(), d.url.as_deref())));
+    let media = Memo::new(move |_| d.with(|d| d.media.clone()));
+    let older = Memo::new(move |_| d.with(|d| d.versions.clone()));
+    let older_keys = Memo::new(move |_| {
+        older.with(|versions| row_keys(versions.iter().map(|v| v.version.clone())))
+    });
+    let show_old = RwSignal::new(false);
+    let on_open = Callback::new(move |_| {
+        store.record(opened_key(
+            &pin.get_value(),
+            &id.get_value(),
+            &version.get_untracked(),
+        ))
+    });
+    view! {
+        <li class="to-row" class:main=move || main.get()>
+            <span class="to-kind cap">{move || d.with(|d| kind_words(&d.kind).to_string())}</span>
+            <div class="to-main">
+                <b class="to-name">{move || d.with(|d| d.name.clone())}</b>
+                <p class="to-line">
+                    <b class="to-ver">{move || version.get()}</b>
+                    {move || d.with(|d| d.updated_at.as_deref().map(fmt::clock).filter(|c| !c.is_empty()).map(|when| view! { <span class="q3">{when}</span> }))}
+                    {move || mark_view(mark(&version.get(), &opened.get()))}
+                </p>
+                <Show when=move || action.with(|o| matches!(o, Opener::CopyPath(_)))><p class="q3 to-sub">"Kept outside the share, so it cannot be opened here"</p></Show>
+                {move || d.with(|d| d.note.clone().map(|note| view! { <p class="to-sub">{note}</p> }))}
+                <Show when=move || !media.with(Vec::is_empty)><LiveMediaThumbs items=media/></Show>
+                <Show when=move || !older.with(Vec::is_empty)>
+                    <p class="to-sub q3">
+                        {move || older.with(|versions| if versions.len() == 1 { "1 older version".to_string() } else { format!("{} older versions", versions.len()) })}" "
+                        <button class="link" aria-expanded=move || show_old.get().to_string() on:click=move |_| show_old.update(|s| *s = !*s)>{move || if show_old.get() { "Hide" } else { "Show" }}</button>
+                    </p>
+                </Show>
+                <Show when=move || show_old.get()>
+                    <ul class="to-older">
+                        <For each=move || older_keys.get() key=|key| key.clone() children=move |(label, occurrence)| {
+                            let label = StoredValue::new(label);
+                            let row = Memo::new(move |_| older.with(|versions| versions.iter().filter(|v| v.version == label.get_value()).nth(occurrence).cloned().unwrap_or_default()));
+                            let action = Memo::new(move |_| row.with(|v| opener(v.path.as_deref(), v.url.as_deref())));
+                            let on_open = Callback::new(move |_| store.record(opened_key(&pin.get_value(), &id.get_value(), &label.get_value())));
+                            view! {
+                                <li><span><b>{label.get_value()}</b>
+                                    {move || row.with(|v| v.updated_at.as_deref().map(fmt::clock).filter(|s| !s.is_empty()).map(|when| format!(", {when}")))}
+                                    ", "<span class="q3">{move || format!("Superseded by {}", version.get())}</span>
+                                    {move || opened.with(|opened| opened.iter().find(|(v, _)| *v == label.get_value()).map(|(_, at)| view! { " "{mark_view(Mark::Opened(*at))} }))}
+                                </span>{move || open_action(action.get(), false, on_open)}</li>
+                            }
+                        }/>
+                    </ul>
+                </Show>
+            </div>
+            <span class="to-act">{move || open_action(action.get(), main.get(), on_open)}</span>
+        </li>
+    }
+}
+
+#[component]
+fn LiveToOpenSection(pin: String, list: Memo<Vec<Deliverable>>) -> impl IntoView {
+    let store = expect_context::<OpenedStore>();
+    let pin = StoredValue::new(pin);
+    let all = RwSignal::new(false);
+    let keys = Memo::new(move |_| {
+        list.with(|list| {
+            row_keys(
+                list.iter()
+                    .take(if all.get() { list.len() } else { 6 })
+                    .map(|d| d.id.clone()),
+            )
+        })
+    });
+    let more = Memo::new(move |_| list.with(|list| list.len().saturating_sub(6)));
+    view! {
+        <section class="c2-sec">
+            <div class="c2-sec-head"><h4 class="cap">"To open"</h4>
+                <Show when=move || !list.with(Vec::is_empty)><span class="n">{move || list.with(|list| list.len().to_string())}</span>
+                    <Show when=move || list.with(|list| list.iter().all(|d| store.for_one(&pin.get_value(), &d.id).is_empty()))><span class="c2-sec-end">"all new to you"</span></Show>
+                </Show>
+            </div>
+            <Show when=move || !list.with(Vec::is_empty) fallback=|| view! { <p class="q3 c2-none">"Nothing reported to open."</p> }>
+                <ul class="to-list">
+                    <For each=move || keys.get() key=|key| key.clone() children=move |(id, occurrence)| {
+                        let d = Memo::new(move |_| list.with(|list| list.iter().filter(|d| d.id == id).nth(occurrence).cloned().unwrap_or_default()));
+                        view! { <LiveToOpenRow pin=pin.get_value() d=d/> }
+                    }/>
+                </ul>
+                <Show when={move || more.get() > 0}><p class="c2-fold"><span>{move || format!("and {} more", more.get())}</span>
+                    <button class="link" on:click=move |_| all.update(|all| *all = !*all)>{move || if all.get() { "Fewer" } else { "Show" }}</button>
+                </p></Show>
+            </Show>
+        </section>
+    }
+}
+
 // ---- The five fixed facts --------------------------------------------------------------------------------------------
 
 fn fact(label: &'static str, main: AnyView, right: Option<AnyView>) -> impl IntoView {
@@ -838,10 +976,12 @@ fn LivePinBody(pin: Memo<Option<Pin>>) -> impl IntoView {
         })
     });
     // A new Now/age/status must not recreate media controls, disclosure state or the focused action.
+    let pin_id = pin.with_untracked(|p| p.as_ref().map(|p| p.u.id.clone()).unwrap_or_default());
     let deliverables = Memo::new(move |_| {
         pin.with(|p| {
             p.as_ref()
-                .map(|p| (p.u.id.clone(), p.r.deliverables.clone()))
+                .map(|p| ordered(&p.r.deliverables))
+                .unwrap_or_default()
         })
     });
     view! {
@@ -850,7 +990,7 @@ fn LivePinBody(pin: Memo<Option<Pin>>) -> impl IntoView {
             <div class="c2-cols" class:dim=move || pin.with(|p| p.as_ref().is_some_and(|p| p.u.report_state == "unreadable"))>
                 <div class="c2-col">
                     {move || pin.with(|p| p.as_ref().map(|p| facts(p, live.elapsed_seconds())))}
-                    {move || { deliverables.track(); pin.with_untracked(|p| p.as_ref().map(to_open_section)) }}
+                    <LiveToOpenSection pin=pin_id.clone() list=deliverables/>
                 </div>
                 <div class="c2-col">
                     {move || pin.with(|p| p.as_ref().map(stages_section))}

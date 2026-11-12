@@ -43,10 +43,10 @@ async function open(t, view, folded = false, bridge = false) {
   );
   await t.page.route(
     (u) => u.pathname === '/api/status/deliverable',
+    // Preserve real HTTP Range responses so seeking is a meaningful playback-state witness.
     (r) =>
-      r.fulfill({
-        path: new URL('fixtures/media/keyboard-controls.mp4', ROOT).pathname,
-        contentType: 'video/mp4',
+      r.continue({
+        url: new URL('/api/status/files/keyboard-controls.mp4', r.request().url()).href,
       })
   );
   await t.goto(folded ? '/app/status?safe=0,84,34,0' : '/app/status?safe=82,0,34,0');
@@ -108,6 +108,10 @@ async function state(t) {
     focusEvents: window.__pollFocusEvents,
     focus: document.activeElement?.outerHTML.slice(0, 200),
     scroll: document.querySelector('.c2-sheet-host .sheet')?.scrollTop,
+    sameVideo: window.__pollVideo === document.querySelector('.c2-sheet-host video'),
+    videoTime: document.querySelector('.c2-sheet-host video')?.currentTime,
+    videoSeeking: document.querySelector('.c2-sheet-host video')?.seeking,
+    videoDuration: document.querySelector('.c2-sheet-host video')?.duration,
     viewer: !!document.querySelector('.viewer'),
     pin: !!document.querySelector('.c2-sheet-host'),
     locked: document.body.style.position === 'fixed',
@@ -192,9 +196,17 @@ export const tests = {
       .getByRole('button', { name: 'Full screen', exact: true });
     await control.focus();
     await remember(t);
+    await t.page.waitForFunction(
+      () => document.querySelector('.c2-sheet-host video')?.readyState >= 2
+    );
     await t.page.locator('.c2-sheet-host video').evaluate((e) => {
       window.__pollVideo = e;
+      e.pause();
+      e.currentTime = 1;
     });
+    await t.page.waitForFunction(
+      () => Math.abs(window.__pollVideo.currentTime - 1) < 0.1 && !window.__pollVideo.seeking
+    );
     await update(t, view, 'Inline media report updated during keyboard use.');
     const after = await state(t);
     await t.check(
@@ -205,6 +217,33 @@ export const tests = {
           () => window.__pollVideo === document.querySelector('.c2-sheet-host video')
         )),
       JSON.stringify(after)
+    );
+    view.pinned.updates[0].reported.deliverables[0].note =
+      'A refreshed description for the same evidence.';
+    view.pinned.updates[0].reported.deliverables[0].media[0].caption = 'Updated clip caption';
+    await update(t, view, 'The same deliverable description changed during keyboard use.');
+    const description = await state(t);
+    await t.check(
+      'deliverable text changes retain the same inline media and focus',
+      description.sameFocus &&
+        !description.focusEvents.length &&
+        (await t.page.evaluate(
+          () =>
+            window.__pollVideo === document.querySelector('.c2-sheet-host video') &&
+            Math.abs(window.__pollVideo.currentTime - 1) < 0.1
+        )),
+      JSON.stringify(description)
+    );
+    await t.check(
+      'deliverable description updates in place',
+      await t.page
+        .locator('.c2-sheet-host')
+        .textContent()
+        .then(
+          (text) =>
+            text.includes('A refreshed description for the same evidence.') &&
+            text.includes('Updated clip caption')
+        )
     );
     await control.press('Enter');
     await t.page.waitForSelector('.viewer');

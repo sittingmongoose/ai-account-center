@@ -33,7 +33,10 @@ Frames that aren't listed are saved as snaps for `browser-check diff <base run> 
 
 `frames/duo-poll.check.mjs` covers ordinary ten-second status polls while a pin sheet is being read or another
 overlay is above it. It requires stable sheet/media DOM, retained internal scroll and focus, newest-overlay
-paint/Tab/Escape ownership, and safe removal of a lower pin. It uses only synthetic status responses and media.
+paint/Tab/Escape ownership, and safe removal of a lower pin. A changed task note, deliverable description and
+media caption must update in place while disclosure state, media playback position and focused controls survive.
+The media fixture uses the development server's HTTP Range support and waits for a completed seek before
+polling. It uses only synthetic status responses and media.
 `frames/duo-fixes.check.mjs` also swaps left/right and top/bottom insets after the final settle pass, with unchanged
 viewport and combined probe dimensions. For those edge regressions, add `--set rawProbe=1` to exercise the
 computed-padding seam. Each edge must update safe properties and content clearance without a viewport event.
