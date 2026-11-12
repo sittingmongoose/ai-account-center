@@ -13,6 +13,8 @@ const {
   assertLockedSlint,
   assertLockedLeptos,
   leptosFingerprint,
+  fingerprintInputs,
+  normalizedFingerprintPaths,
   BRIDGE_IMPORT_ERROR,
   SW_BUILD_ID_ERROR,
 } = require('../../../scripts/build-ui.js');
@@ -798,3 +800,43 @@ describe('Slint browser build integration', () => {
     }
   });
 });
+
+it('normalizes Windows folder paths before sorting mixed file and folder inputs', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-fingerprint-'));
+  roots.push(root);
+  fs.mkdirSync(path.join(root, 'leptos', 'build'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'leptos', 'index.html'), 'page');
+  fs.writeFileSync(path.join(root, 'leptos', 'build', 'strip.cjs'), 'build');
+  const inputs = ['leptos/index.html', 'leptos/build'];
+  const expected = crypto
+    .createHash('sha256')
+    .update('leptos/build/strip.cjs\0build\0leptos/index.html\0page\0')
+    .digest('hex');
+  for (const implementation of [path.posix, path.win32]) {
+    expect(fingerprintInputs(root, inputs, 'fixture', implementation)).toEqual({
+      sha256: expected,
+      files: 2,
+    });
+  }
+});
+
+it('sorts normalized paths, including mixed Windows file and folder inputs', () => {
+  expect(normalizedFingerprintPaths(['leptos/index.html', 'leptos\\build\\strip.cjs'])).toEqual([
+    'leptos/build/strip.cjs',
+    'leptos/index.html',
+  ]);
+});
+
+it.skipIf(process.platform === 'win32')(
+  'rejects linked parents with Windows input separators',
+  () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-fingerprint-link-'));
+    roots.push(root);
+    fs.mkdirSync(path.join(root, 'real'));
+    fs.writeFileSync(path.join(root, 'real', 'input.txt'), 'input');
+    fs.symlinkSync(path.join(root, 'real'), path.join(root, 'linked'), 'dir');
+    expect(() => fingerprintInputs(root, ['linked\\input.txt'], 'fixture', path.win32)).toThrow(
+      'must not be symlinks'
+    );
+  }
+);

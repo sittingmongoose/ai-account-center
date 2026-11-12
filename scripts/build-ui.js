@@ -146,27 +146,32 @@ function lstatOrNull(absolute) {
   }
 }
 
+function normalizedFingerprintPaths(files) {
+  return files.map((file) => file.split(/[\\/]/).join('/')).sort();
+}
+
 /**
  * Hash a crate's build inputs: each input path relative to `root`, walked without following links. The root, every
  * folder on the way to an input and every input must be a real folder or file; any symlink (dangling or not) fails.
  */
-function fingerprintInputs(root, inputs, label) {
+function fingerprintInputs(root, inputs, label, relativePath = path) {
   const rootStat = lstatOrNull(root);
   if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory())
     throw new Error(`${label} build root must be a real folder.`);
   const files = [];
   function collect(relative) {
-    const absolute = path.join(root, relative);
+    const absolute = path.join(root, ...relative.split(/[\\/]/));
     const stat = lstatOrNull(absolute);
     if (!stat) return;
     if (stat.isSymbolicLink()) throw new Error(`${label} build inputs must not be symlinks.`);
     if (stat.isDirectory()) {
-      for (const entry of fs.readdirSync(absolute).sort()) collect(path.join(relative, entry));
+      for (const entry of fs.readdirSync(absolute).sort())
+        collect(relativePath.join(relative, entry));
     } else if (stat.isFile()) files.push(relative);
   }
   for (const input of inputs) {
     // a linked parent folder (such as .cargo) would be followed silently by path.join
-    const parts = input.split('/');
+    const parts = input.split(/[\\/]/);
     let missing = false;
     for (let i = 1; i < parts.length && !missing; i++) {
       const stat = lstatOrNull(path.join(root, ...parts.slice(0, i)));
@@ -177,10 +182,10 @@ function fingerprintInputs(root, inputs, label) {
     if (!missing) collect(input);
   }
   const hash = crypto.createHash('sha256');
-  for (const file of files.sort()) {
-    hash.update(file.split(path.sep).join('/'));
+  for (const file of normalizedFingerprintPaths(files)) {
+    hash.update(file);
     hash.update('\0');
-    hash.update(fs.readFileSync(path.join(root, file)));
+    hash.update(fs.readFileSync(path.join(root, ...file.split('/'))));
     hash.update('\0');
   }
   return { sha256: hash.digest('hex'), files: files.length };
@@ -645,6 +650,8 @@ module.exports = {
   stampedSwSource,
   shellFingerprint,
   sourceFingerprint,
+  fingerprintInputs,
+  normalizedFingerprintPaths,
   leptosFingerprint,
   commandRunner,
   toolPath,
