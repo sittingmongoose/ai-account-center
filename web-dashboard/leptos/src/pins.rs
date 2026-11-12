@@ -501,59 +501,16 @@ fn row_keys(values: impl Iterator<Item = String>) -> Vec<(String, usize)> {
         .collect()
 }
 
-// A keyed DOM move resets browser-owned media/frame focus, which focusing its host cannot restore.
-// Keep the current visible order while a row owns focus. Remove deleted rows, fill vacant places with
-// new rows, and publish the latest sorted order after focus leaves the list. Row data stays reactive.
-fn focus_safe_order(
-    previous: Option<&Vec<(String, usize)>>,
-    available: Vec<(String, usize)>,
-    limit: usize,
-    focused: bool,
-) -> Vec<(String, usize)> {
-    let desired: Vec<_> = available.iter().take(limit).cloned().collect();
-    let Some(previous) = previous.filter(|_| focused) else {
-        return desired;
-    };
-    let present: std::collections::HashSet<_> = available.iter().collect();
-    let mut held: Vec<_> = previous
-        .iter()
-        .filter(|key| present.contains(key))
-        .take(limit)
-        .cloned()
-        .collect();
-    // Mixing removals and additions can make the keyed diff reinsert a surviving row. Apply removals
-    // alone in this pass; a later update or blur can append new entries without moving the survivors.
-    if held.len() != previous.len() {
-        return held;
-    }
-    for key in desired {
-        if held.len() >= limit {
-            break;
-        }
-        if !held.contains(&key) {
-            held.push(key);
-        }
-    }
-    held
-}
-
 #[component]
 fn LiveMediaThumbs(items: Memo<Vec<ReportedMedia>>) -> impl IntoView {
     let parsed = Memo::new(move |_| items.with(|items| media_of(items)));
     let all = RwSignal::new(false);
     let more = Memo::new(move |_| parsed.with(|(media, _)| media.len().saturating_sub(3)));
-    let shown = Memo::new(move |_| {
-        parsed.with(|(media, _)| {
-            if all.get() {
-                media.clone()
-            } else {
-                media.iter().take(3).cloned().collect()
-            }
-        })
-    });
+    let media = Memo::new(move |_| parsed.with(|(media, _)| media.clone()));
+    let limit = Memo::new(move |_| if all.get() { usize::MAX } else { 3 });
     view! {
         <div class="to-media">
-            <LiveMediaList items=shown/>
+            <LiveMediaList items=media limit=limit/>
             <Show when={move || more.get() > 0}><button class="link" data-focus-role="media-more" on:click=move |_| all.update(|all| *all = !*all)>
                 {move || if all.get() { "Fewer".to_string() } else { format!("{} more", more.get()) }}
             </button></Show>
@@ -576,6 +533,7 @@ fn LiveToOpenRow(pin: String, d: Memo<Deliverable>, identity: String) -> impl In
     let older_keys = Memo::new(move |_| {
         older.with(|versions| row_keys(versions.iter().map(|v| v.version.clone())))
     });
+    let (older_keys, older_order_id) = hold_order(older_keys, None);
     let show_old = RwSignal::new(false);
     let on_open = Callback::new(move |_| {
         store.record(opened_key(
@@ -604,7 +562,7 @@ fn LiveToOpenRow(pin: String, d: Memo<Deliverable>, identity: String) -> impl In
                     </p>
                 </Show>
                 <Show when=move || show_old.get()>
-                    <ul class="to-older">
+                    <ul class="to-older" data-focus-list=older_order_id>
                         <For each=move || older_keys.get() key=|key| key.clone() children=move |(label, occurrence)| {
                             let label = StoredValue::new(label);
                             let row = Memo::new(move |_| older.with(|versions| versions.iter().filter(|v| v.version == label.get_value()).nth(occurrence).cloned().unwrap_or_default()));
@@ -631,24 +589,10 @@ fn LiveToOpenSection(pin: String, list: Memo<Vec<Deliverable>>) -> impl IntoView
     let store = expect_context::<OpenedStore>();
     let pin = StoredValue::new(pin);
     let all = RwSignal::new(false);
-    let rows = NodeRef::<leptos::html::Ul>::new();
-    let focus_changed = RwSignal::new(0_u64);
-    let keys = Memo::new(move |previous| {
-        focus_changed.track();
-        list.with(|list| {
-            let focused = rows.get_untracked().is_some_and(|root| {
-                document()
-                    .active_element()
-                    .is_some_and(|active| root.contains(Some(active.as_ref())))
-            });
-            focus_safe_order(
-                previous,
-                row_keys(list.iter().map(|d| d.id.clone())),
-                if all.get() { list.len() } else { 6 },
-                focused,
-            )
-        })
-    });
+    let available =
+        Memo::new(move |_| list.with(|list| row_keys(list.iter().map(|d| d.id.clone()))));
+    let limit = Memo::new(move |_| if all.get() { usize::MAX } else { 6 });
+    let (keys, order_id) = hold_order(available, Some(limit));
     let more = Memo::new(move |_| list.with(|list| list.len().saturating_sub(6)));
     view! {
         <section class="c2-sec">
@@ -658,11 +602,7 @@ fn LiveToOpenSection(pin: String, list: Memo<Vec<Deliverable>>) -> impl IntoView
                 </Show>
             </div>
             <Show when=move || !list.with(Vec::is_empty) fallback=|| view! { <p class="q3 c2-none">"Nothing reported to open."</p> }>
-                <ul class="to-list" node_ref=rows on:focusout=move |_| {
-                    // focusout precedes the next selection. Recheck after it settles, including native
-                    // subcontrol transitions whose activeElement remains the same media host.
-                    let _ = request_animation_frame(move || { focus_changed.try_update(|n| *n += 1); });
-                }>
+                <ul class="to-list" data-focus-list=order_id>
                     <For each=move || keys.get() key=|key| key.clone() children=move |(id, occurrence)| {
                         let identity = format!("deliverable:{}", serde_json::to_string(&(id.clone(), occurrence)).unwrap_or_default());
                         let d = Memo::new(move |_| list.with(|list| list.iter().filter(|d| d.id == id).nth(occurrence).cloned().unwrap_or_default()));
@@ -841,6 +781,49 @@ fn stages_section(p: &Pin) -> AnyView {
 }
 
 #[component]
+fn LiveStages(pin: Memo<Option<Pin>>) -> impl IntoView {
+    let stages = Memo::new(move |_| {
+        pin.with(|p| {
+            p.as_ref()
+                .map(|p| {
+                    p.r.stages
+                        .iter()
+                        .filter(|s| s.state != "skipped")
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
+    });
+    let available =
+        Memo::new(move |_| stages.with(|stages| row_keys(stages.iter().map(|s| s.label.clone()))));
+    let (keys, order_id) = hold_order(available, None);
+    view! {
+        <section class="c2-sec" data-focus-list=order_id>
+            <div class="c2-sec-head"><h4 class="cap">"Stages"</h4>
+                {move || pin.with(|p| p.as_ref().and_then(|p| stage_line(&p.r.stages)).map(|(t, at, of)| view! { <span class="c2-sec-end">{format!("{t}, ")}<b>{at.to_string()}</b>{format!(" of {of}")}</span> }))}
+            </div>
+            <Show when={move || stages.with(Vec::len) >= 2} fallback=move || view! { <p class="q3 c2-none">{move || pin.with(|p| p.as_ref().map(foot_words).unwrap_or_default())}</p> }>
+                <div class="c2-track" aria-hidden="true">
+                    <For each=move || keys.get() key=|key| key.clone() children=move |(label, occurrence)| {
+                        let s = Memo::new(move |_| stages.with(|stages| stages.iter().filter(|s| s.label == label).nth(occurrence).cloned().unwrap_or_default()));
+                        view! { <i class="fill" data-st=move || s.with(stage_tone)></i> }
+                    }/>
+                </div>
+                <ol class="c2-stages" style=move || format!("--n:{}", keys.with(Vec::len))>
+                    <For each=move || keys.get() key=|key| key.clone() children=move |(label, occurrence)| {
+                        let identity = format!("stage:{}", serde_json::to_string(&(label.clone(), occurrence)).unwrap_or_default());
+                        let s = Memo::new(move |_| stages.with(|stages| stages.iter().filter(|s| s.label == label).nth(occurrence).cloned().unwrap_or_default()));
+                        view! { <li data-focus-key=identity data-st=move || s.with(stage_tone)><span class="seg fill"></span><span class="lab">{move || s.with(stage_label)}</span><span class="st">{move || s.with(stage_state_words)}</span></li> }
+                    }/>
+                </ol>
+                {move || stages.with(|stages| { let yours = stages.iter().filter(|s| s.by.as_deref() == Some("owner")).count(); (yours > 0).then(|| view! { <p class="q3 c2-sub">{format!("{yours} of these {} steps {} yours.", stages.len(), if yours == 1 { "is" } else { "are" })}</p> }) })}
+            </Show>
+        </section>
+    }
+}
+
+#[component]
 fn TaskGroupView(g: Signal<TaskGroup>) -> impl IntoView {
     let open = RwSignal::new(false);
     let folds = move || g.with(TaskGroup::folds);
@@ -854,20 +837,26 @@ fn TaskGroupView(g: Signal<TaskGroup>) -> impl IntoView {
             }
         })
     };
+    let rows = Memo::new(move |_| g.with(|g| g.rows.clone()));
+    let available =
+        Memo::new(move |_| rows.with(|rows| row_keys(rows.iter().map(|r| r.id.clone()))));
+    let (keys, order_id) = hold_order(available, None);
     view! {
-        <div class="c2-tg">
+        <div class="c2-tg" data-focus-key=move || g.with(|g| format!("task-group:{}", g.label))>
             <h5 class="cap" data-tone=move || g.with(|g| g.warn.then_some("warn"))>{label}" "<span class="n">{move || n().to_string()}</span></h5>
             <Show when=move || folds() && !open.get() fallback=move || view! {
-                    <ul class="c2-tg-rows">
-                        {move || g.get().rows.into_iter().map(|r| view! {
-                            <li><span class="c2-tg-t">{r.title.clone()}</span>
-                                {match (&r.odd_state, &r.note) {
+                    <ul class="c2-tg-rows" data-focus-list=order_id>
+                        <For each=move || keys.get() key=|key| key.clone() children=move |(id, occurrence)| {
+                            let identity = format!("task:{}", serde_json::to_string(&(id.clone(), occurrence)).unwrap_or_default());
+                            let r = Memo::new(move |_| rows.with(|rows| rows.iter().filter(|r| r.id == id).nth(occurrence).cloned().unwrap_or_default()));
+                            view! { <li data-focus-key=identity><span class="c2-tg-t">{move || r.with(|r| r.title.clone())}</span>
+                                {move || r.with(|r| match (&r.odd_state, &r.note) {
                                     (Some(s), _) => view! { <span class="c2-tg-n" data-tone="warn">{format!("reported as \"{s}\"")}</span> }.into_any(),
                                     (None, Some(n)) => view! { <span class="c2-tg-n">{n.clone()}</span> }.into_any(),
                                     _ => view! { <span class="c2-tg-n"></span> }.into_any(),
-                                }}
-                            </li>
-                        }).collect_view()}
+                                })}
+                            </li> }
+                        }/>
                         <Show when=folds><li class="c2-tg-less"><button class="link" on:click=move |_| open.set(false)>"Fewer"</button></li></Show>
                     </ul>
             }>
@@ -943,14 +932,18 @@ fn LiveTasks(pin: Memo<Option<Pin>>) -> impl IntoView {
                 .unwrap_or_default()
         })
     });
+    let available = Memo::new(move |_| {
+        groups.with(|groups| groups.iter().map(|g| g.label).collect::<Vec<_>>())
+    });
+    let (keys, order_id) = hold_order(available, None);
     view! {
-        <section class="c2-sec">
+        <section class="c2-sec" data-focus-list=order_id>
             <div class="c2-sec-head"><h4 class="cap">"Tasks"</h4><Show when={move || count.get() > 0}><span class="n">{move || count.get().to_string()}</span></Show>
                 {move || pin.with(|p| p.as_ref().and_then(tasks_as_of))}</div>
             <Show when={move || count.get() > 0} fallback=move || view! {
                 <p class="q3 c2-none">{move || pin.with(|p| p.as_ref().and_then(|p| p.u.percent_note.clone()).unwrap_or_else(|| "No task list reported.".into()))}</p>
             }>
-                <For each=move || groups.get().into_iter().map(|g| g.label) key=|label| *label children=move |label| {
+                <For each=move || keys.get() key=|label| *label children=move |label| {
                     let group = Memo::new(move |_| groups.with(|groups| groups.iter().find(|g| g.label == label).cloned().unwrap_or_default()));
                     view! { <TaskGroupView g=group.into()/> }
                 }/>
@@ -1043,7 +1036,7 @@ fn LivePinBody(pin: Memo<Option<Pin>>) -> impl IntoView {
                     <LiveToOpenSection pin=pin_id.clone() list=deliverables/>
                 </div>
                 <div class="c2-col">
-                    {move || pin.with(|p| p.as_ref().map(stages_section))}
+                    <LiveStages pin=pin/>
                     <LiveTasks pin=pin/>
                 </div>
             </div>
@@ -1266,62 +1259,5 @@ pub fn PinnedPanelView() -> impl IntoView {
                 </OverlayPortal>
             } }/>
         </section>
-    }
-}
-
-#[cfg(test)]
-mod focus_order_tests {
-    use super::*;
-
-    fn keys(labels: &str) -> Vec<(String, usize)> {
-        row_keys(labels.chars().map(|label| label.to_string()))
-    }
-
-    #[test]
-    fn focused_rows_keep_their_dom_order_until_focus_leaves() {
-        let previous = keys("ABC");
-        assert_eq!(
-            focus_safe_order(Some(&previous), keys("CAB"), 6, true),
-            previous
-        );
-        assert_eq!(
-            focus_safe_order(Some(&previous), keys("BCA"), 6, false),
-            keys("BCA")
-        );
-    }
-
-    #[test]
-    fn removed_rows_disappear_without_moving_surviving_rows() {
-        assert_eq!(
-            focus_safe_order(Some(&keys("ABC")), keys("DCA"), 6, true),
-            keys("AC")
-        );
-        assert_eq!(
-            focus_safe_order(Some(&keys("AC")), keys("DCA"), 6, true),
-            keys("ACD")
-        );
-    }
-
-    #[test]
-    fn a_focused_visible_row_is_not_evicted_by_a_new_top_six() {
-        let previous = keys("ABCDEF");
-        assert_eq!(
-            focus_safe_order(Some(&previous), keys("GFEDCBA"), 6, true),
-            previous
-        );
-        assert_eq!(
-            focus_safe_order(Some(&previous), keys("GFEDCBA"), 6, false),
-            keys("GFEDCB")
-        );
-    }
-
-    #[test]
-    fn initial_order_and_duplicate_occurrences_remain_keyed() {
-        let previous = keys("ABA");
-        assert_eq!(focus_safe_order(None, previous.clone(), 6, true), previous);
-        assert_eq!(
-            focus_safe_order(Some(&previous), keys("AAB"), 6, true),
-            previous
-        );
     }
 }

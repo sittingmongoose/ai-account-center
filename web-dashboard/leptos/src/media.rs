@@ -5,7 +5,7 @@
 //! rotation lock.
 
 use crate::api::Media;
-use crate::ui::OverlayPortal;
+use crate::ui::{OverlayPortal, hold_order};
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
@@ -48,8 +48,11 @@ pub fn MediaList(items: Vec<Media>) -> impl IntoView {
 
 /// Live reports keep media elements and native playback while captions or sibling data change.
 #[component]
-pub fn LiveMediaList(items: Memo<Vec<Media>>) -> impl IntoView {
-    let keys = Memo::new(move |_| {
+pub fn LiveMediaList(
+    items: Memo<Vec<Media>>,
+    #[prop(optional)] limit: Option<Memo<usize>>,
+) -> impl IntoView {
+    let available = Memo::new(move |_| {
         items.with(|items| {
             let mut seen = std::collections::BTreeMap::new();
             items
@@ -64,8 +67,9 @@ pub fn LiveMediaList(items: Memo<Vec<Media>>) -> impl IntoView {
                 .collect::<Vec<_>>()
         })
     });
+    let (keys, order_id) = hold_order(available, limit);
     view! {
-        <div class="media-list">
+        <div class="media-list" data-focus-list=order_id>
             <For each=move || keys.get() key=|key| key.clone() children=move |(kind, url, occurrence)| {
                 let identity = format!("media:{}", serde_json::to_string(&(kind.clone(), url.clone(), occurrence)).unwrap_or_default());
                 let media = Memo::new(move |_| items.with(|items| items.iter().filter(|m| m.kind == kind && m.url == url).nth(occurrence).cloned().unwrap_or_default()));

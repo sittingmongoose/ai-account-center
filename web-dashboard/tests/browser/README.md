@@ -128,3 +128,12 @@ actual AX backend node, and compares it after a metadata control and a timestamp
 toggling mute while paused. It also observes that no focused row is removed/reinserted, checks live captions,
 Open-action deferral over repeated polls, latest order after blur/reopen, native-focused row removal recovery,
 and a neighbouring removal plus new row in one poll without moving the surviving native focus scope.
+
+`frames/duo-lists.check.mjs` (`--grep duo-lists`) covers the shared `ui/focus_order.rs` policy across nested
+media, display limits, older versions, task rows, stages and task groups; the existing native/reorder suites
+cover deliverables. It ports the two-media Sol witness with real HTTP polls, native Mute AX identity and
+Space behavior. Leaving inner media for the deliverable's Open action must release only the inner order;
+leaving deliverables for Close releases the outer order. Captions and row data update while ordering holds.
+Task/stage rows have no intrinsic Tab stops: those two cases explicitly add fixture-only tabindex to test
+focus/identity without adding product controls. The task-group case uses its actual Fewer button. All
+collection roots bind the id returned by the same `hold_order` helper; keys remain separate from live data.

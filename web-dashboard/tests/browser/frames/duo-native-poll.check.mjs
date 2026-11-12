@@ -159,14 +159,19 @@ export const tests = {
         updatedAt: '2026-11-12T10:00:00Z',
       });
       await update(t, view, 'Neighbour removed and new row reported');
+      await t.page.waitForFunction(() =>
+        [...document.querySelectorAll('.c2-sheet-host .to-name')].some(
+          (el) => el.textContent === 'Native D'
+        )
+      );
       await t.check(
         'a mixed removal/addition never moves or refocuses the surviving native subtree',
         (await focused(cd)).id === before.id &&
           (await t.page.evaluate(() => !window.__nativeMoves && !window.__nativeFocusEvents.length))
       );
       await t.check(
-        'the neighbour is removed while its replacement waits for a safe insertion',
-        (await order(t)).join(',') === 'Native A,Native C'
+        'the new row appends promptly without changing the focused surviving order',
+        (await order(t)).join(',') === 'Native A,Native C,Native D'
       );
       await t.page.keyboard.press('Space');
       await t.check(

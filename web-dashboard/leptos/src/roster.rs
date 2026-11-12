@@ -533,6 +533,7 @@ pub const GROUPS: [&str; 7] = [
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TaskRow {
+    pub id: String,
     pub title: String,
     pub note: Option<String>,
     /// The raw state of an item whose state is not one of the nine.
@@ -647,6 +648,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
             push(
                 group_of(&state, false, false),
                 TaskRow {
+                    id: item.id.clone(),
                     title: cut(&title, 60),
                     note: item.note.clone().filter(|n| !n.is_empty()),
                     odd_state: (!KNOWN.contains(&state.as_str())).then_some(state),
@@ -668,6 +670,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
             push(
                 label,
                 TaskRow {
+                    id: item.id.clone(),
                     title: cut(&it.title, 60),
                     note,
                     odd_state: odd,
@@ -685,6 +688,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
             push(
                 label,
                 TaskRow {
+                    id: item.id.clone(),
                     title: cut(&title, 60),
                     note: item.note.clone().filter(|n| !n.is_empty()),
                     odd_state: odd,
@@ -695,6 +699,7 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
             push(
                 "Done",
                 TaskRow {
+                    id: item.id.clone(),
                     title: cut(&split_odd(&item.title).0, 60),
                     note: item.note.clone().filter(|n| !n.is_empty()),
                     odd_state: None,

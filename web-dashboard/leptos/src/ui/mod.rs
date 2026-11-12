@@ -4,10 +4,12 @@ pub mod charts;
 pub mod chrome;
 mod controls;
 pub mod device;
+mod focus_order;
 mod icons;
 pub mod meter;
 mod overlay;
 mod parts;
+pub(crate) use focus_order::hold_order;
 pub use overlay::OverlayPortal;
 pub(crate) use overlay::reconcile_overlay_focus;
 
