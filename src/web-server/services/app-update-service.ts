@@ -1,6 +1,6 @@
-import { COMPUTERS } from './dashboard-hosts';
+import { COMPUTERS, LEGACY_STORAGE_HOSTS } from './dashboard-hosts';
 import { LEGACY_MESSAGES } from './app-update-messages';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
@@ -489,11 +489,52 @@ export class AppUpdateService {
 
   private save(): void {
     if (this.deps.persist === false) return;
-    const target = path.join(this.directory, 'dashboard-job.json');
-    const temporary = path.join(this.directory, `dashboard-job.${process.pid}.tmp`);
-    fs.writeFileSync(temporary, JSON.stringify({ job: this.job }), { mode: 0o600 });
-    fs.renameSync(temporary, target);
-    fs.chmodSync(target, 0o600);
+    const job = this.job;
+    const hosts = job?.hosts;
+    const legacyJob = job
+      ? {
+          ...job,
+          results: job.results.filter((row) => LEGACY_STORAGE_HOSTS.includes(row.platform)),
+          hosts: hosts
+            ? Object.fromEntries(LEGACY_STORAGE_HOSTS.map((host) => [host, hosts[host]]))
+            : null,
+          activePlatform:
+            job.activePlatform && LEGACY_STORAGE_HOSTS.includes(job.activePlatform)
+              ? job.activePlatform
+              : null,
+          expectedResults:
+            job.expectedResults === null
+              ? null
+              : Math.min(
+                  job.expectedResults,
+                  LEGACY_STORAGE_HOSTS.length * Object.keys(UPDATE_APP_LABELS).length
+                ),
+        }
+      : null;
+    const legacy = JSON.stringify({ job: legacyJob });
+    this.saveFile('dashboard-job.json', legacy);
+    // Bind the companion to this exact legacy save. If an old package later
+    // writes a job, its new file wins over the now-stale expanded companion.
+    this.saveFile(
+      'dashboard-job-expanded.json',
+      JSON.stringify({ legacyDigest: createHash('sha256').update(legacy).digest('hex'), job })
+    );
+  }
+
+  private saveFile(name: string, contents: string): void {
+    const target = path.join(this.directory, name);
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(temporary, contents, { mode: 0o600, flag: 'wx' });
+      fs.renameSync(temporary, target);
+      fs.chmodSync(target, 0o600);
+    } finally {
+      try {
+        fs.unlinkSync(temporary);
+      } catch {
+        /* The rename normally removed the temporary file. */
+      }
+    }
   }
 
   private lockOwnerAlive(file = path.join(this.directory, 'dashboard-update.lock')): boolean {
@@ -526,10 +567,32 @@ export class AppUpdateService {
 
   private restore(): void {
     if (this.deps.persist === false || this.lockHeld) return;
+    for (const name of ['dashboard-job-expanded.json', 'dashboard-job.json']) {
+      if (this.restoreFile(name)) return;
+    }
+  }
+
+  private restoreFile(name: string): boolean {
     try {
-      const file = path.join(this.directory, 'dashboard-job.json');
-      if (fs.statSync(file).size > MAX_OUTPUT) return;
-      const raw = record(record(JSON.parse(fs.readFileSync(file, 'utf8')))?.job);
+      const file = path.join(this.directory, name);
+      if (fs.statSync(file).size > MAX_OUTPUT) return false;
+      const saved = record(JSON.parse(fs.readFileSync(file, 'utf8')));
+      if (name === 'dashboard-job-expanded.json') {
+        if (typeof saved?.legacyDigest !== 'string' || !/^[a-f0-9]{64}$/.test(saved.legacyDigest))
+          return false;
+        try {
+          const legacy = path.join(this.directory, 'dashboard-job.json');
+          if (fs.statSync(legacy).size > MAX_OUTPUT) return false;
+          if (
+            createHash('sha256').update(fs.readFileSync(legacy)).digest('hex') !==
+            saved.legacyDigest
+          )
+            return false;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      }
+      const raw = record(saved?.job);
       if (
         !raw ||
         typeof raw.id !== 'string' ||
@@ -541,7 +604,7 @@ export class AppUpdateService {
         !Array.isArray(raw.results) ||
         raw.results.length > EXPECTED_RESULTS
       )
-        return;
+        return false;
       const results: AppUpdateResult[] = [];
       for (const value of raw.results) {
         const row = record(value);
@@ -600,8 +663,10 @@ export class AppUpdateService {
             ? raw.expectedResults
             : null,
       };
+      return true;
     } catch {
       /* An absent/corrupt result never triggers or replays an update. */
+      return false;
     }
   }
 }

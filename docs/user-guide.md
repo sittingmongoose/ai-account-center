@@ -570,13 +570,18 @@ rolled-back page if that matters. Local changes should be reviewed before pullin
 `ai-account-center update` is retired and cannot update from the upstream package.
 
 Rolling back to an older build touches no account data. An older build
-ignores newer per-computer analytics caches. It does not restore a saved
-update job (`app-updates/dashboard-job.json`) with more result rows than it
-expects (a build that knows fewer computers or apps expects fewer), so the
-last result is not shown there and no update is replayed. It may treat a
-`dashboard-preferences.json` that holds an extra usage-log root for a computer
-it does not know as invalid as a whole: the defaults apply in memory, with a
-warning and without overwriting the file, until the next save of Settings.
+ignores newer per-computer analytics caches. The previous four-computer build
+can still read the time zone, snapshot cleanup and original computers' log
+sources from `dashboard-preferences.json`. Later computers' roots live in
+`dashboard-preferences-extra-sources.json`; the new build merges them with
+the primary file, including Settings changes made during rollback.
+
+Update jobs retain the original four computers in
+`app-updates/dashboard-job.json` and the full run in
+`app-updates/dashboard-job-expanded.json`. The previous four-computer build
+therefore keeps its 40 results. The new build prefers the expanded copy when
+it matches the primary save and still accepts jobs written by an older build.
+Reading either copy never starts or replays an update.
 The usage source and registry files (`account-usage-sources.json`,
 `account-usage-accounts.json`) keep their format, because a second Linux
 computer's source is stored as `ubuntu` plus `sshHost`, which earlier builds
