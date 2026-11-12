@@ -28,7 +28,7 @@ source; there is no configurable host list.
 | Mac | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native bar |
 | Windows | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native tray |
 | Nas1 | Fixed SSH alias `nas1-agent` | App updates, Analytics scan and verified usage fallback |
-| Alexis PC | Fixed SSH alias `alexis-windows` | Windows app updates, Status, Analytics scan and verified usage sources; no Jared desktop profile or native-bar management |
+| Alexis PC | Fixed SSH alias `alexis-windows` | Windows app updates, Status, Analytics scan and verified usage sources; no owner desktop profile or native-bar management |
 
 Nas1 is a second Ubuntu computer. Its fixed helpers run with `--platform
 ubuntu`, and the dashboard files their results under their own computer, Nas1.

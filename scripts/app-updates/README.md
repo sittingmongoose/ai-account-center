@@ -1004,7 +1004,7 @@ update hosts and SSH aliases, OS-specific helper commands, Status machine IDs an
 Analytics remote readers, usage failover and labels in the web UI and `aac-usage`.
 This is shipped code; callers cannot supply a host, command or helper path.
 Alexis PC (`alexis`) uses `alexis-windows`; every helper runs with `--platform windows`.
-Claude desktop profile launchers and the native WPF bar remain Jared's `windows` computer.
+Claude desktop profile launchers and the native WPF bar remain the owner's `windows` computer.
 
 To add the next Ubuntu server:
 

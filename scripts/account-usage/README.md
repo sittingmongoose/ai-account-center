@@ -247,4 +247,4 @@ Computer identity comes from `web-dashboard/public/computers.json`; helper `--pl
 values remain OS kinds. Alexis sources persist as `platform: "windows"` plus
 `sshHost: "alexis-windows"`, just as Nas1 persists as Ubuntu plus its alias. Python
 `PLATFORMS`/`HOST_LABELS` validate OS protocols, not the computer inventory. Claude
-history/profile helpers still cover Jared's own Mac/Windows desktop profiles.
+history/profile helpers still cover the owner's own Mac/Windows desktop profiles.
