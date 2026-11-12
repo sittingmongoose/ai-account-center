@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1377,
-    "filesAffected": 137,
-    "hotpathOccurrences": 718,
-    "hotpathFilesAffected": 78,
+    "totalOccurrences": 1379,
+    "filesAffected": 139,
+    "hotpathOccurrences": 720,
+    "hotpathFilesAffected": 80,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -363,8 +363,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 235,
-    "filesAffected": 78,
+    "totalMarkers": 236,
+    "filesAffected": 79,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -549,16 +549,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 745,
-      "typedThrows": 215,
+      "totalThrows": 752,
+      "typedThrows": 222,
       "plainThrows": 69,
       "otherThrows": 461,
-      "adoptionRatio": 0.2886,
+      "adoptionRatio": 0.2952,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 380,
-          "typed": 149,
+          "count": 387,
+          "typed": 156,
           "plain": 7
         },
         {
@@ -631,8 +631,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 45,
-      "totalSourceFiles": 507,
-      "coverageRatio": 0.0888,
+      "totalSourceFiles": 510,
+      "coverageRatio": 0.0882,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -660,7 +660,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 224,
+          "count": 227,
           "withLogger": 28
         },
         {
