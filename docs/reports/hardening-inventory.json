@@ -541,11 +541,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 744,
+      "totalThrows": 745,
       "typedThrows": 215,
       "plainThrows": 69,
-      "otherThrows": 460,
-      "adoptionRatio": 0.289,
+      "otherThrows": 461,
+      "adoptionRatio": 0.2886,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -555,7 +555,7 @@
         },
         {
           "subdomain": "antigravity",
-          "count": 165,
+          "count": 166,
           "typed": 0,
           "plain": 0
         },
@@ -623,8 +623,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 45,
-      "totalSourceFiles": 504,
-      "coverageRatio": 0.0893,
+      "totalSourceFiles": 507,
+      "coverageRatio": 0.0888,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -657,7 +657,7 @@
         },
         {
           "subdomain": "utils",
-          "count": 43,
+          "count": 46,
           "withLogger": 1
         },
         {
@@ -780,7 +780,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1805
+          "loc": 1802
         },
         {
           "file": "src/web-server/status/answers.ts",
@@ -799,16 +799,16 @@
           "loc": 1023
         },
         {
-          "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1010
-        },
-        {
           "file": "src/web-server/services/usage-failover-service.ts",
           "loc": 993
         },
         {
           "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
           "loc": 990
+        },
+        {
+          "file": "src/web-server/status/status-collectors.ts",
+          "loc": 974
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
