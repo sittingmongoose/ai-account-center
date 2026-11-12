@@ -17,6 +17,10 @@ import type { createAntigravityQuotaWorker } from './quota-worker-transport';
 /** Credential bytes and rollback handles are private application dependencies. */
 export interface UbuntuNativeCredentialStore {
   read(): Promise<NativeCredential>;
+  /** Short-lived, file-identity-bound display cache; never used for activation guards. */
+  readInventoryIdentity?(
+    validate: (credential: NativeCredential) => Promise<VerifiedIdentity>
+  ): Promise<VerifiedIdentity>;
   install(credential: NativeCredential, expectedFingerprint: string): Promise<InstallReceipt>;
   rollback(receipt: InstallReceipt, previous: NativeCredential): Promise<boolean>;
 }
@@ -43,6 +47,7 @@ export function createUbuntuAntigravityDriver(
     expected: VerifiedIdentity;
   } | null = null;
   let ownedStopPending = false;
+  const readInventoryIdentity = deps.nativeStore.readInventoryIdentity?.bind(deps.nativeStore);
   const released = async () => {
     try {
       return deps.releaseGate ? (await deps.releaseGate()) === true : false;
@@ -66,6 +71,12 @@ export function createUbuntuAntigravityDriver(
     canProveRuntimeIdentity: canProve,
     canRestartSupportedNative: released,
     readCurrentCredential: () => deps.nativeStore.read(),
+    ...(readInventoryIdentity
+      ? {
+          readInventoryIdentity: () =>
+            readInventoryIdentity((credential) => deps.quotaWorker.validateCredential(credential)),
+        }
+      : {}),
     validateCredential: (credential) => deps.quotaWorker.validateCredential(credential),
     inspectProcesses: () => deps.bridge.inspectProcesses(),
     approveOwnedIdlePlan: async (plan, expected, fingerprint) =>

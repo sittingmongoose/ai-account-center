@@ -64,9 +64,14 @@ export class AntigravitySwitchService {
   /** Selected native credential and proven running account are deliberately distinct. */
   async readInventory(): Promise<ProfileDto[]> {
     const profiles = this.listProfiles();
+    if (profiles.length === 0) return profiles;
     try {
-      const live = await this.driver.readCurrentCredential();
-      const identity = await this.verified(live);
+      const identity = this.driver.readInventoryIdentity
+        ? checkedIdentity(await this.driver.readInventoryIdentity())
+        : await this.verified(await this.driver.readCurrentCredential());
+      const age = this.now() - Date.parse(identity.verifiedAt);
+      if (age > IDENTITY_MAX_AGE || age < -60_000)
+        throw new AntigravityError('Identity proof is stale.');
       const selectedKey = identityKey(identity);
       return profiles.map((profile) => ({
         ...profile,

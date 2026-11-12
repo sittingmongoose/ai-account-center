@@ -12,12 +12,11 @@
  *   only runs the command.
  * Parsers are pure and exported for tests; nothing here writes anywhere.
  */
-import { execFile, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
-import { DeadlineExceededError, withProcessDeadline } from '../../utils/settle-deadline';
+import { runManagedCommand } from '../../utils/managed-process';
 import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
 import { isSafeUsageSshAlias } from '../services/additional-usage-transport';
 import { PERSISTENT_SHARE_ERROR, TransientMisses } from './agent-reports-reader';
@@ -46,6 +45,8 @@ export type CommandRunner = (
     input?: string;
     /** Time after the timeout's SIGTERM before SIGKILL and settling. */
     graceMs?: number;
+    /** Read-only probes only; never doorbells or other actions. */
+    coalesce?: boolean;
   }
 ) => Promise<CommandResult>;
 
@@ -53,45 +54,8 @@ export type CommandRunner = (
  * execFile without a shell; never rejects, and always settles: a child that ignores the timeout's
  * SIGTERM is killed after the grace, so a caller's `collecting` or `ringing` flag always clears.
  */
-export const runCommand: CommandRunner = (file, args, options) => {
-  let child: ChildProcess | undefined;
-  const work = new Promise<CommandResult>((resolve) => {
-    try {
-      child = execFile(
-        file,
-        args,
-        {
-          encoding: 'utf8',
-          timeout: options.timeoutMs,
-          maxBuffer: options.maxBytes,
-          windowsHide: true,
-          env: options.env ?? childEnv(),
-        },
-        (error, stdout) => {
-          const err = error as
-            (NodeJS.ErrnoException & { killed?: boolean; code?: unknown }) | null;
-          resolve({
-            code: err ? (typeof err.code === 'number' ? err.code : null) : 0,
-            stdout: typeof stdout === 'string' ? stdout : '',
-            timedOut: err?.killed === true,
-            missing: err?.code === 'ENOENT',
-          });
-        }
-      );
-      child.stdin?.on('error', () => undefined);
-      child.stdin?.end(options.input ?? '');
-    } catch {
-      resolve({ code: null, stdout: '', timedOut: false, missing: true });
-    }
-  });
-  return withProcessDeadline(
-    work,
-    () => child,
-    options.timeoutMs,
-    () => new DeadlineExceededError('Command'),
-    options.graceMs
-  ).catch(() => ({ code: null, stdout: '', timedOut: true, missing: false }));
-};
+export const runCommand: CommandRunner = (file, args, options) =>
+  runManagedCommand(file, args, { ...options, env: options.env ?? childEnv() });
 
 /** The dashboard's environment with Node's own folder on PATH (tool scripts start with `env node`). */
 export function childEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -1003,7 +967,7 @@ export async function readRemotePins(
       alias,
       remotePinsCommand(REMOTE_MACHINES[machine]),
     ],
-    { timeoutMs: 30_000, maxBytes: 1024 * 1024 }
+    { timeoutMs: 30_000, maxBytes: 1024 * 1024, coalesce: true }
   );
   if (result.code !== 0) throw new NetworkError(commandFailure('ssh', result));
   return result.stdout;

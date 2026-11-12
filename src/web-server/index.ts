@@ -72,6 +72,8 @@ import { getSignInHealth } from './services/signin-health-service';
 import { readClaudeSignInRenewal } from './services/claude-signin-renewal';
 import { USAGE_HUB_MOUNT } from './usage-hub/usage-hub-contract';
 import { createUsageHubRouter } from './usage-hub/usage-hub-router';
+import { startProcessBroker, stopProcessBroker } from '../utils/managed-process';
+import { startEventLoopMonitor } from '../utils/event-loop-monitor';
 
 export interface ServerOptions {
   port: number;
@@ -301,6 +303,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let stopAgentUsageSnapshot: (() => void) | null = null;
   let stopStoreMaintenance: (() => void) | null = null;
   let stopStatusService: (() => void) | null = null;
+  // Start the small command parent before analytics/collectors populate the server heap.
+  await startProcessBroker().catch(() => {
+    logger.warn('server.command_transport_unavailable', 'Private command transport unavailable');
+  });
+  const stopEventLoopMonitor = startEventLoopMonitor(logger);
+  let cleaned = false;
 
   const codexAutoSwitch = getCodexAutoSwitchService();
   const codexRenewal = getCodexProfileRenewalService();
@@ -315,6 +323,9 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   // Combined cleanup function
   const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    stopEventLoopMonitor();
     httpsServer?.close();
     detachDashboardEvents();
     stopAccountLifecycleMaintenance();
@@ -331,6 +342,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     stopCgroupForeignCheck?.();
     stopCgroupForeignCheck = null;
     wss.clients.forEach((client) => client.close(1001, 'Server shutting down'));
+    void stopProcessBroker();
     // Saves the sign-ins and stops the session store's timers (the shutdown handlers await it).
     void closeDashboardSessions();
   };
