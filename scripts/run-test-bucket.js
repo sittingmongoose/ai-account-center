@@ -45,7 +45,6 @@ const fastJsTests = new Set(['tests/unit/flag-parsing-simple.test.js']);
 const isolatedTests = new Set([
   'tests/unit/commands/bar-command.test.ts',
   'tests/unit/utils/fetch-proxy-setup.test.ts',
-  'tests/unit/web-server/usage/account-attribution.test.ts',
 ]);
 
 const filePattern = /(\.test\.(c|m)?[jt]s|\.spec\.(c|m)?[jt]s|-test\.(c|m)?[jt]s)$/;
