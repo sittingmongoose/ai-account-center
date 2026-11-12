@@ -202,7 +202,30 @@ impl Store {
         }
         sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS reset_clock(singleton INTEGER PRIMARY KEY CHECK(singleton=1), value INTEGER NOT NULL);
             INSERT OR IGNORE INTO reset_clock SELECT 1,COALESCE(MAX(seq),0) FROM history;
-            CREATE TABLE IF NOT EXISTS reset_revisions(lock_key TEXT PRIMARY KEY, revision INTEGER NOT NULL);"))?;
+            CREATE TABLE IF NOT EXISTS reset_revisions(lock_key TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS claim_tokens(token TEXT PRIMARY KEY, lock_key TEXT NOT NULL, expires INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS claim_tokens_account ON claim_tokens(lock_key);"))?;
+        // Recover tokens issued before this additive migration from their immutable target,
+        // never from a saved profile's current alias binding.
+        let missing = {
+            let mut stmt = sql(tx.prepare("SELECT c.token,c.expires,t.snapshot FROM confirmations c JOIN targets t ON t.key=c.target WHERE NOT EXISTS(SELECT 1 FROM claim_tokens k WHERE k.token=c.token)"))?;
+            let rows = sql(stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))
+            }))?;
+            let mut missing = vec![];
+            for row in rows {
+                missing.push(sql(row)?);
+            }
+            missing
+        };
+        for (token, expires, snapshot) in missing {
+            let canonical = Self::canonical(&serde_json::from_str(&snapshot).map_err(|_| "shape")?)?;
+            sql(tx.execute(
+                "INSERT INTO claim_tokens VALUES(?,?,?)",
+                params![token, canonical, expires],
+            ))?;
+            Self::advance(&tx, &canonical)?;
+        }
         sql(tx.commit())?;
         Ok(Self { db })
     }
@@ -245,6 +268,26 @@ impl Store {
         Ok(revision)
     }
 
+    /// Execution and recovery use the same server clock and expiry boundary. Expiration is
+    /// ordered evidence too: a stale read cannot restore or erase a newer token obligation.
+    fn expire_tokens(db: &Connection, now: i64) -> Result<()> {
+        let accounts = {
+            let mut stmt = sql(db.prepare("SELECT DISTINCT lock_key FROM claim_tokens WHERE expires<=?"))?;
+            let rows = sql(stmt.query_map([now], |r| r.get::<_, String>(0)))?;
+            let mut accounts = vec![];
+            for row in rows {
+                accounts.push(sql(row)?);
+            }
+            accounts
+        };
+        sql(db.execute("DELETE FROM confirmations WHERE expires<=?", [now]))?;
+        sql(db.execute("DELETE FROM claim_tokens WHERE expires<=?", [now]))?;
+        for canonical in accounts {
+            Self::advance(db, &canonical)?;
+        }
+        Ok(())
+    }
+
     /// A complete account snapshot, read inside the same transaction as the enclosing response.
     /// Counters are decimal strings so JavaScript never rounds a revision or attempt order.
     fn evidence(db: &Connection, canonical: &str) -> Result<Value> {
@@ -267,8 +310,17 @@ impl Store {
         for row in pending {
             entries.push(sql(row)?);
         }
+        let mut stmt = sql(db.prepare("SELECT token,expires FROM claim_tokens WHERE lock_key=? ORDER BY token"))?;
+        let tokens = sql(stmt.query_map([canonical], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))))?;
+        let mut keys = vec![];
+        let mut until: Option<i64> = None;
+        for token in tokens {
+            let (key, expiry) = sql(token)?;
+            keys.push(key);
+            until = Some(until.unwrap_or(expiry).max(expiry));
+        }
         Ok(
-            json!({"canonicalAccountKey":canonical,"revision":revision.to_string(),"latestAttempt":latest,"pendingAttempts":entries}),
+            json!({"canonicalAccountKey":canonical,"revision":revision.to_string(),"latestAttempt":latest,"pendingAttempts":entries,"claimTokens":{"untilMs":until,"tokenKeys":keys}}),
         )
     }
 
@@ -285,6 +337,7 @@ impl Store {
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        Self::expire_tokens(&tx, now)?;
         let canonical = Self::canonical(s)?;
         let revision = Self::advance(&tx, &canonical)?;
         sql(tx.execute(
@@ -351,7 +404,10 @@ impl Store {
             .transpose()
     }
     fn target(&self, account: &str, key: &str) -> Result<(Snapshot, Grant)> {
-        let (s, g): (String, String) = sql(self.db.query_row(
+        Self::target_from(&self.db, account, key)
+    }
+    fn target_from(db: &Connection, account: &str, key: &str) -> Result<(Snapshot, Grant)> {
+        let (s, g): (String, String) = sql(db.query_row(
             "SELECT snapshot,grant_json FROM targets WHERE key=? AND account=?",
             params![key, account],
             |r| Ok((r.get(0)?, r.get(1)?)),
@@ -362,8 +418,11 @@ impl Store {
         ))
     }
     fn selected(&self, account: &str, key: &str, fresh: &Snapshot, now: i64) -> Result<Grant> {
+        Self::selected_from(&self.db, account, key, fresh, now)
+    }
+    fn selected_from(db: &Connection, account: &str, key: &str, fresh: &Snapshot, now: i64) -> Result<Grant> {
         fresh.validate(now)?;
-        let (old, g) = self.target(account, key)?;
+        let (old, g) = Self::target_from(db, account, key)?;
         if old.identity != fresh.identity {
             return Err("identity-changed");
         }
@@ -473,10 +532,14 @@ impl Store {
         if pending > 0 {
             return Err("check-again-required");
         }
-        sql(tx.execute("DELETE FROM confirmations WHERE expires<=?", [now]))?;
+        Self::expire_tokens(&tx, now)?;
         sql(tx.execute(
             "INSERT INTO confirmations VALUES(?,?,?,?,?,?)",
             params![hash(token), hash(caller), account, key, fp, now + 120_000],
+        ))?;
+        sql(tx.execute(
+            "INSERT INTO claim_tokens VALUES(?,?,?)",
+            params![hash(token), lock_key, now + 120_000],
         ))?;
         sql(tx.execute("INSERT INTO budgets VALUES(?,?)", params![lock_key, now]))?;
         Self::audit(
@@ -491,7 +554,7 @@ impl Store {
         let response = Self::with_evidence(
             &tx,
             &Self::canonical(fresh)?,
-            json!({"account":{"label":fresh.account_label},"confirmationToken":token,"expiresAtMs":now+120_000,"grant":public(fresh,&g,key,now),"costText":"Spends one selected reset. This cannot be undone."}),
+            json!({"account":{"label":fresh.account_label},"confirmationToken":token,"confirmationKey":hash(token),"expiresAtMs":now+120_000,"grant":public(fresh,&g,key,now),"costText":"Spends one selected reset. This cannot be undone."}),
         )?;
         sql(tx.commit())?;
         Ok(response)
@@ -513,70 +576,78 @@ impl Store {
         if !opaque(attempt) {
             return Err("entropy");
         }
-        // Burn even a stale/wrong-caller token. Commit deletion independently of validation.
-        let c: Option<(String, String, String, String, i64)> = sql(self
+        let tx = sql(self
             .db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        Self::expire_tokens(&tx, now)?;
+        let c: Option<(String, String, String, String, i64)> = sql(tx
             .query_row(
                 "SELECT caller,account,target,fingerprint,expires FROM confirmations WHERE token=?",
                 [hash(token)],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .optional())?;
-        if sql(self
-            .db
-            .execute("DELETE FROM confirmations WHERE token=?", [hash(token)]))?
-            != 1
-        {
-            return Err("confirmation-invalid");
-        }
-        let (who, acct, target, fp, expiry) = c.ok_or("confirmation-invalid")?;
-        if who != hash(caller) || acct != account || target != key || expiry <= now {
-            return Err("confirmation-invalid");
-        }
-        let g = self.selected(account, key, fresh, now)?;
-        if fp != fingerprint(fresh, &g)? {
-            return Err("grant-changed");
-        }
-        let write = Write::new(fresh, &g, attempt)?;
-        let lock_key = hash(&encode(&(
-            &fresh.identity.provider,
-            &fresh.identity.account,
-            &fresh.identity.organization,
-        ))?);
-        let tx = sql(self
-            .db
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
-        let hold: Option<i64> = sql(tx
-            .query_row("SELECT until_ms FROM holds WHERE account=?", [&lock_key], |r| r.get(0))
+        let canonical: Option<String> = sql(tx
+            .query_row("SELECT lock_key FROM claim_tokens WHERE token=?", [hash(token)], |r| {
+                r.get(0)
+            })
             .optional())?;
-        if hold.is_some_and(|v| v > now) {
-            return Err("cooldown");
+        sql(tx.execute("DELETE FROM confirmations WHERE token=?", [hash(token)]))?;
+        sql(tx.execute("DELETE FROM claim_tokens WHERE token=?", [hash(token)]))?;
+        if let Some(canonical) = canonical {
+            Self::advance(&tx, &canonical)?;
         }
-        for (window, max) in [(60_000, 3), (3_600_000, 10)] {
-            let n: i64 = sql(tx.query_row(
-                "SELECT count(*) FROM attempts WHERE lock_key=? AND created>?",
-                params![lock_key, now - window],
-                |r| r.get(0),
-            ))?;
-            if n >= max {
-                return Err("rate-limited");
+        // Invalid confirmations are still consumed. Roll back only a failed reservation,
+        // then commit its burn; successful consumption and pending reservation commit together.
+        sql(tx.execute_batch("SAVEPOINT reservation"))?;
+        let reserved = (|| -> Result<Write> {
+            let (who, acct, target, fp, expiry) = c.ok_or("confirmation-invalid")?;
+            if who != hash(caller) || acct != account || target != key || expiry <= now {
+                return Err("confirmation-invalid");
             }
+            let g = Self::selected_from(&tx, account, key, fresh, now)?;
+            if fp != fingerprint(fresh, &g)? {
+                return Err("grant-changed");
+            }
+            let write = Write::new(fresh, &g, attempt)?;
+            let lock_key = Self::canonical(fresh)?;
+            let hold: Option<i64> = sql(tx
+                .query_row("SELECT until_ms FROM holds WHERE account=?", [&lock_key], |r| r.get(0))
+                .optional())?;
+            if hold.is_some_and(|v| v > now) {
+                return Err("cooldown");
+            }
+            for (window, max) in [(60_000, 3), (3_600_000, 10)] {
+                let n: i64 = sql(tx.query_row(
+                    "SELECT count(*) FROM attempts WHERE lock_key=? AND created>?",
+                    params![lock_key, now - window],
+                    |r| r.get(0),
+                ))?;
+                if n >= max {
+                    return Err("rate-limited");
+                }
+            }
+            sql(tx.execute(
+                "INSERT INTO attempts VALUES(?,?,?,?,?,'claimed-unconfirmed',1,?,?,0)",
+                params![attempt, account, key, encode(fresh)?, encode(&g)?, now, lock_key],
+            ))?;
+            Self::audit(
+                &tx,
+                now,
+                account,
+                "attempt",
+                key,
+                "claimed-unconfirmed",
+                json!({"provider":fresh.identity.provider,"kind":g.kind,"grantHash":hash(g.id.as_deref().unwrap_or("")),"callerHash":hash(caller),"callerKind":if caller=="local"{"local"}else{"session"},"identityHash":hash(&encode(&fresh.identity)?),"idempotencyHash":hash(attempt),"beforeCount":g.left,"beforeWindows":fresh.windows}),
+            )?;
+            Ok(write)
+        })();
+        if reserved.is_err() {
+            sql(tx.execute_batch("ROLLBACK TO reservation"))?;
         }
-        sql(tx.execute(
-            "INSERT INTO attempts VALUES(?,?,?,?,?,'claimed-unconfirmed',1,?,?,0)",
-            params![attempt, account, key, encode(fresh)?, encode(&g)?, now, lock_key],
-        ))?;
-        Self::audit(
-            &tx,
-            now,
-            account,
-            "attempt",
-            key,
-            "claimed-unconfirmed",
-            json!({"provider":fresh.identity.provider,"kind":g.kind,"grantHash":hash(g.id.as_deref().unwrap_or("")),"callerHash":hash(caller),"callerKind":if caller=="local"{"local"}else{"session"},"identityHash":hash(&encode(&fresh.identity)?),"idempotencyHash":hash(attempt),"beforeCount":g.left,"beforeWindows":fresh.windows}),
-        )?;
+        sql(tx.execute_batch("RELEASE reservation"))?;
         sql(tx.commit())?;
-        Ok(write)
+        reserved
     }
     fn attempt_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
         let (g, stored, previous_success, order, pending): (String, String, bool, i64, bool) = sql(tx.query_row(
@@ -633,13 +704,16 @@ impl Store {
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        Self::expire_tokens(&tx, now)?;
         let (before, g, pending, previous_success): (String, String, bool, bool) = sql(tx.query_row(
             "SELECT before_json,grant_json,pending,provider_success FROM attempts WHERE key=? AND account=?",
             params![attempt, account],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         ))?;
         if !pending {
-            return Self::committed_result(&tx, account, attempt);
+            let response = Self::committed_result(&tx, account, attempt)?;
+            sql(tx.commit())?;
+            return Ok(response);
         }
         let before: Snapshot = serde_json::from_str(&before).map_err(|_| "shape")?;
         let g: Grant = serde_json::from_str(&g).map_err(|_| "shape")?;
@@ -667,7 +741,9 @@ impl Store {
             params![result, pending, provider_success, attempt, account],
         ))?;
         if changed == 0 {
-            return Self::committed_result(&tx, account, attempt);
+            let response = Self::committed_result(&tx, account, attempt)?;
+            sql(tx.commit())?;
+            return Ok(response);
         }
         if matches!(outcome, Outcome::Cooldown | Outcome::RateLimited) {
             let delay = retry_after_ms.unwrap_or(60_000).clamp(1_000, 86_400_000);
@@ -688,8 +764,12 @@ impl Store {
     }
     /// The route account's unresolved attempt, if any: the browser needs its key to check it again after a reload or
     /// from another signed-in session. Reading it sends nothing and consumes nothing.
-    pub fn pending(&self, account: &str) -> Result<Value> {
-        let tx = sql(self.db.unchecked_transaction())?;
+    pub fn pending(&self, account: &str, now: i64) -> Result<Value> {
+        let tx = sql(rusqlite::Transaction::new_unchecked(
+            &self.db,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
+        Self::expire_tokens(&tx, now)?;
         let canonical = Self::account_canonical_from(&tx, account)?;
         let binding: Option<i64> = sql(tx
             .query_row("SELECT binding_revision FROM aliases WHERE account=?", [account], |r| {
@@ -925,7 +1005,7 @@ pub fn dispatch(args: &str) -> Result<Value> {
         }
         "check" => s.check(&a.account, &a.key, snapshot()?, now_ms),
         "history" => s.history(&a.account),
-        "pending" => s.pending(&a.account),
+        "pending" => s.pending(&a.account, a.now_ms),
         _ => Err("unknown-method"),
     }
 }

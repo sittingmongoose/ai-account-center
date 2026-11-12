@@ -69,6 +69,7 @@ pub struct Prepared {
     pub account: AccountLabel,
     #[serde(deserialize_with = "nullable")]
     pub confirmation_token: String,
+    pub confirmation_key: String,
     pub expires_at_ms: Option<f64>,
     pub grant: Grant,
 }
@@ -830,6 +831,7 @@ pub struct ResetCtx {
     pub said: RwSignal<Option<Said>>,
     /// The shown account's lock, projected from server evidence and unanswered sends.
     pub unresolved: RwSignal<Unresolved>,
+    pub token_until: RwSignal<Option<f64>>,
     pub checking: RwSignal<bool>,
     /// The last good inventory per account, with when its read started (a reopen within a minute reuses it).
     cache: StoredValue<Vec<(String, f64, Inventory)>>,
@@ -854,6 +856,7 @@ impl ResetCtx {
             dialog: RwSignal::new(Dialog::Closed),
             said: RwSignal::new(None),
             unresolved: RwSignal::new(Unresolved::default()),
+            token_until: RwSignal::new(None),
             checking: RwSignal::new(false),
             cache: StoredValue::new(vec![]),
             states: StoredValue::new(vec![]),
@@ -977,6 +980,7 @@ impl ResetCtx {
         };
         let state = self.state_of(&account);
         let _ = self.unresolved.try_set(state.lock());
+        let _ = self.token_until.try_set(state.token_deadline());
         let current = self.said_of(&account);
         let notice = self.notice.try_get_untracked().flatten();
         let said = match (notice, current) {
@@ -1172,7 +1176,9 @@ impl ResetCtx {
             match got {
                 Answer::Ok(prepared)
                     if accepted
-                        && !me.lock_of(&identity).blocks()
+                        && me
+                            .lock_of(&identity)
+                            .can_confirm(&prepared.confirmation_key)
                         && !prepared.confirmation_token.is_empty()
                         && !prepared.account.label.is_empty() =>
                 {
@@ -1188,7 +1194,11 @@ impl ResetCtx {
                 other => {
                     me.dialog.set(Dialog::Closed);
                     let obsolete = match &other {
-                        Answer::Ok(p) => p.evidence.is_some() && !accepted,
+                        Answer::Ok(p) => {
+                            p.evidence.is_some()
+                                && (!accepted
+                                    || !me.lock_of(&identity).can_confirm(&p.confirmation_key))
+                        }
                         Answer::Refused(r) => {
                             stale_refusal
                                 || (r.evidence.is_some()
@@ -1245,7 +1255,10 @@ impl ResetCtx {
         else {
             return;
         };
-        if js_sys::Date::now() >= deadline_ms || self.unresolved.with_untracked(Unresolved::blocks)
+        if js_sys::Date::now() >= deadline_ms
+            || !self
+                .unresolved
+                .with_untracked(|lock| lock.can_confirm(&prepared.confirmation_key))
         {
             return;
         }
@@ -1410,7 +1423,7 @@ pub fn ResetsGroup(
             let show_check = s.check || pending;
             view! {
                 <div class="fg-line fg-said" class:w-crit=s.bad role="status" data-probe="reset-result">
-                    <span>{s.text.clone()}</span>
+                    <span>{s.text.clone()}{move || rc.token_until.get().map(|until| format!(" Unconsumed claim tokens expire by {}. Check again then.", when(until)))}</span>
                     {show_check.then(|| view! {
                         <button type="button" class="btn sm" data-probe="resets-check"
                             disabled=move || rc.checking.get()
@@ -1584,6 +1597,7 @@ pub fn ResetDialog(rc: ResetCtx) -> impl IntoView {
         );
         let expired = move || !sending && now.get() >= deadline;
         let reopen = grant_key.clone();
+        let confirmation_key = prepared.confirmation_key.clone();
         Some(view! {
             <div class="ascrim reset-scrim" on:click=move |_| rc.close()>
                 <div class="adialog reset-dialog" role="dialog" aria-modal="true" aria-labelledby="rdialog-title" data-probe="reset-dialog"
@@ -1613,8 +1627,9 @@ pub fn ResetDialog(rc: ResetCtx) -> impl IntoView {
                                     on:click=move |_| { rc.dialog.set(Dialog::Closed); rc.open(k.clone(), ready); }>"Open it again"</button>
                             }.into_any()
                         } else {
+                            let confirmation_key = confirmation_key.clone();
                             view! {
-                                <button class="btn primary" aria-disabled=sending.to_string() data-probe="reset-dialog-use"
+                                <button class="btn primary" disabled=move || sending || !rc.unresolved.with(|lock| lock.can_confirm(&confirmation_key)) aria-disabled=sending.to_string() data-probe="reset-dialog-use"
                                     on:click=move |_| { if !sending { rc.confirm(); } }>"Use this reset"</button>
                             }.into_any()
                         }}

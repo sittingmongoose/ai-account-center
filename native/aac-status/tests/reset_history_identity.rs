@@ -100,7 +100,7 @@ fn unrelated_account_does_not_inherit_a_repointed_profiles_claim() {
         .unwrap();
     let unrelated_history = store.history("codex:stable-y-profile").unwrap();
     println!("UNRELATED_ACCOUNT_HISTORY={unrelated_history}");
-    assert!(store.pending("codex:stable-y-profile").unwrap()["attemptKey"].is_null());
+    assert!(store.pending("codex:stable-y-profile", NOW).unwrap()["attemptKey"].is_null());
     assert!(store.check("codex:stable-y-profile", &attempt_x, &y, NOW + 3).is_err());
     assert!(
         unrelated_history.as_array().unwrap().is_empty(),

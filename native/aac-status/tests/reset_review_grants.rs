@@ -76,7 +76,7 @@ fn many_connections_restarts_and_alias_forms() {
             let alias = snap(p, h);
             let route = format!("route-{i}");
             let inv = store.inventory(&route, &alias, NOW, &nonce(20 + i as u64)).unwrap();
-            assert_eq!(store.pending(&route).unwrap()["attemptKey"], attempt);
+            assert_eq!(store.pending(&route, NOW).unwrap()["attemptKey"], attempt);
             assert_eq!(
                 store.gate(&route, inv["grants"][1]["grantKey"].as_str().unwrap(), NOW, true),
                 Err("check-again-required")
@@ -131,7 +131,7 @@ fn many_connections_restarts_and_alias_forms() {
         drop(store);
         let mut reopened = Store::open(&path).unwrap();
         for route in ["route-a", "route-0", "route-1"] {
-            assert_eq!(reopened.pending(route).unwrap()["attemptKey"], Value::Null);
+            assert_eq!(reopened.pending(route, NOW).unwrap()["attemptKey"], Value::Null);
             assert_eq!(reopened.check(route, &attempt, &before, NOW + 3).unwrap(), confirmed);
             assert_eq!(reopened.history(route).unwrap(), events);
         }
@@ -166,13 +166,13 @@ fn two_distinct_grants_produce_ordered_attempts_for_ui_delivery() {
     let second = begin(&mut store, "route-a", &next, 11, 1);
     let inv = store.inventory("route-a", &next, NOW + 3, &nonce(21)).unwrap();
     let history = store.history("route-a").unwrap();
-    let pending = store.pending("route-a").unwrap()["attemptKey"].clone();
+    let pending = store.pending("route-a", NOW).unwrap()["attemptKey"].clone();
     assert_eq!(pending, second);
     let old_check = store.check("route-a", &first, &next, NOW + 4).unwrap();
     assert_eq!(old_check["outcome"], result1["outcome"]);
     assert_eq!(old_check["windows"], result1["windows"]);
     assert_eq!(old_check["evidence"]["latestAttempt"]["attemptKey"], second);
-    assert_eq!(store.pending("route-a").unwrap()["attemptKey"], second);
+    assert_eq!(store.pending("route-a", NOW).unwrap()["attemptKey"], second);
     assert_eq!(
         store.gate("route-a", inv["grants"][1]["grantKey"].as_str().unwrap(), NOW + 4, true),
         Err("check-again-required")

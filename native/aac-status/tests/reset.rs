@@ -383,14 +383,14 @@ fn a_confirmed_claim_reports_the_refilled_windows_from_the_verification_read() {
 fn the_pending_attempt_is_readable_for_check_again_and_clears_once_settled() {
     let (d, mut s) = open();
     let snap = snapshot("codex");
-    assert!(s.pending("route-account").unwrap()["attemptKey"].is_null());
+    assert!(s.pending("route-account", NOW).unwrap()["attemptKey"].is_null());
     let (_, a) = begin(&mut s, &snap);
     s.finish("route-account", &a, Outcome::Ambiguous, None, NOW, None)
         .unwrap();
     drop(s);
     let mut s = Store::open(&d.path().join("reset.sqlite")).unwrap();
-    assert_eq!(s.pending("route-account").unwrap()["attemptKey"], a);
-    assert!(s.pending("other-account").unwrap()["attemptKey"].is_null());
+    assert_eq!(s.pending("route-account", NOW).unwrap()["attemptKey"], a);
+    assert!(s.pending("other-account", NOW).unwrap()["attemptKey"].is_null());
     let mut after = snap.clone();
     after.observed_at_ms += 1;
     after.grants[1].left = 0;
@@ -399,7 +399,7 @@ fn the_pending_attempt_is_readable_for_check_again_and_clears_once_settled() {
         s.check("route-account", &a, &after, NOW + 1).unwrap()["outcome"],
         "claimed"
     );
-    assert!(s.pending("route-account").unwrap()["attemptKey"].is_null());
+    assert!(s.pending("route-account", NOW).unwrap()["attemptKey"].is_null());
 }
 
 #[test]

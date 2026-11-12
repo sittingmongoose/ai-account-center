@@ -1,9 +1,13 @@
 [
   {
-    "bindingRevision": "4",
+    "bindingRevision": "5",
     "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
     "evidence": {
       "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
+      "claimTokens": {
+        "tokenKeys": [],
+        "untilMs": null
+      },
       "latestAttempt": {
         "attemptKey": "0000000000000000000000000000000000000000000000000000000000000003",
         "attemptOrder": "1",
@@ -19,7 +23,7 @@
           "attemptOrder": "1"
         }
       ],
-      "revision": "4"
+      "revision": "5"
     },
     "grants": [
       {
@@ -78,13 +82,17 @@
     "status": "ok"
   },
   {
-    "bindingRevision": "5",
+    "bindingRevision": "6",
     "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
     "evidence": {
       "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
+      "claimTokens": {
+        "tokenKeys": [],
+        "untilMs": null
+      },
       "latestAttempt": null,
       "pendingAttempts": [],
-      "revision": "5"
+      "revision": "6"
     },
     "grants": [
       {
@@ -106,10 +114,14 @@
     "status": "ok"
   },
   {
-    "bindingRevision": "6",
+    "bindingRevision": "7",
     "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
     "evidence": {
       "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
+      "claimTokens": {
+        "tokenKeys": [],
+        "untilMs": null
+      },
       "latestAttempt": {
         "attemptKey": "0000000000000000000000000000000000000000000000000000000000000003",
         "attemptOrder": "1",
@@ -125,7 +137,7 @@
           "attemptOrder": "1"
         }
       ],
-      "revision": "6"
+      "revision": "7"
     },
     "grants": [
       {

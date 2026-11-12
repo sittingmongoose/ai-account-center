@@ -94,7 +94,7 @@ fn concurrent_checks_must_not_append_unconfirmed_after_a_confirmed_settlement() 
             .filter(|e| e["event"] == "verification")
             .map(|e| e["outcome"].as_str().unwrap())
             .collect();
-        let pending = store.pending("route").unwrap()["attemptKey"].clone();
+        let pending = store.pending("route", NOW).unwrap()["attemptKey"].clone();
         assert_eq!(ra["outcome"], "claimed");
         assert_eq!(pending, Value::Null);
         if outcomes == ["claimed", "claimed-unconfirmed"] && pending == Value::Null {

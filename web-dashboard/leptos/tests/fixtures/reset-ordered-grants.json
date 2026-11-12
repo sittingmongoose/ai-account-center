@@ -1,10 +1,14 @@
 {
   "firstKey": "0000000000000000000000000000000000000000000000000000000000000003",
   "newInventory": {
-    "bindingRevision": "8",
+    "bindingRevision": "10",
     "canonicalAccountKey": "6392c91a425bc7b57c87cfaec07f5142fa1c3d1cd023924bdc9b976d33531512",
     "evidence": {
       "canonicalAccountKey": "6392c91a425bc7b57c87cfaec07f5142fa1c3d1cd023924bdc9b976d33531512",
+      "claimTokens": {
+        "tokenKeys": [],
+        "untilMs": null
+      },
       "latestAttempt": {
         "attemptKey": "000000000000000000000000000000000000000000000000000000000000000d",
         "attemptOrder": "2",
@@ -20,7 +24,7 @@
           "attemptOrder": "2"
         }
       ],
-      "revision": "8"
+      "revision": "10"
     },
     "grants": [
       {
@@ -158,6 +162,10 @@
     "attemptOrder": "1",
     "evidence": {
       "canonicalAccountKey": "6392c91a425bc7b57c87cfaec07f5142fa1c3d1cd023924bdc9b976d33531512",
+      "claimTokens": {
+        "tokenKeys": [],
+        "untilMs": null
+      },
       "latestAttempt": {
         "attemptKey": "0000000000000000000000000000000000000000000000000000000000000003",
         "attemptOrder": "1",
@@ -173,7 +181,7 @@
         ]
       },
       "pendingAttempts": [],
-      "revision": "4"
+      "revision": "5"
     },
     "outcome": "claimed",
     "pending": false,
@@ -191,6 +199,10 @@
     "attemptOrder": "1",
     "evidence": {
       "canonicalAccountKey": "6392c91a425bc7b57c87cfaec07f5142fa1c3d1cd023924bdc9b976d33531512",
+      "claimTokens": {
+        "tokenKeys": [],
+        "untilMs": null
+      },
       "latestAttempt": {
         "attemptKey": "000000000000000000000000000000000000000000000000000000000000000d",
         "attemptOrder": "2",
@@ -206,7 +218,7 @@
           "attemptOrder": "2"
         }
       ],
-      "revision": "8"
+      "revision": "10"
     },
     "outcome": "claimed",
     "pending": false,

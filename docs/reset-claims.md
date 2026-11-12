@@ -144,3 +144,20 @@ missing sent field leaves the full unanswered-send obligation open. Unversioned
 recovery-required errors additionally require a read started after the error was
 received; neither a delayed earlier read nor a check receipt can retire that local
 read obligation.
+
+Outstanding prepare confirmations are durable canonical-account obligations too.
+Every ordered `evidence` snapshot includes `claimTokens: {untilMs, tokenKeys}`:
+`untilMs` is the latest execution-time expiry of an unconsumed token, or null;
+`tokenKeys` contains only opaque hashes, never usable confirmation secrets.
+Prepare commits this record with the confirmation. Begin consumes it and reserves
+the attempt in one transaction; even invalid confirmations are burned durably.
+Expiry removes the record and advances the account revision using the server
+clock. Upgrade recovers issued tokens from their original immutable targets.
+
+A fresh page, tab or device blocks Use reset while any token remains and says
+that a claim from this or another page may still arrive, with its expiry time.
+Check again reads server evidence; a client clock alone cannot lift the block.
+The originating dialog may consume its own sole token, identified by prepare's
+`confirmationKey`. Other outstanding tokens block that dialog as well. The local
+unanswered-send interval remains independent: another client's settlement or a
+server token expiry cannot acknowledge that local transport prematurely.

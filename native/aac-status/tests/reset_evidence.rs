@@ -117,7 +117,7 @@ fn recorded_three_attempt_snapshots_are_ordered_coherent_and_durable() {
             .unwrap_err(),
         "check-again-required"
     );
-    let recovery3 = store.pending(route).unwrap();
+    let recovery3 = store.pending(route, NOW).unwrap();
     let replay2 = store.check(route, &b, &before, NOW + 4).unwrap();
     assert_eq!(revision(&replay2), revision(&inventory3));
     assert_eq!(replay2["attemptKey"], b);
@@ -149,7 +149,7 @@ fn recorded_three_attempt_snapshots_are_ordered_coherent_and_durable() {
     drop(store);
     let store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
     assert_eq!(
-        store.pending(route).unwrap()["evidence"],
+        store.pending(route, NOW).unwrap()["evidence"],
         fixture["finalInventory"]["evidence"]
     );
 }
@@ -199,5 +199,251 @@ fn revisions_survive_upgrade_from_the_old_schema_and_multiple_connections() {
         .inventory("b", &snap("account-x", "p2", "h2"), NOW, &nonce(101))
         .unwrap();
     assert!(revision(&b) > revision(&a));
-    assert_eq!(first.pending("a").unwrap()["evidence"], b["evidence"]);
+    assert_eq!(first.pending("a", NOW).unwrap()["evidence"], b["evidence"]);
+}
+
+// RECHECK-3 M1: the inventory is newer and has no attempt, but begin can still arrive.
+#[test]
+fn recorded_outstanding_tokens_cover_delayed_begin_and_new_clients() {
+    let (dir, mut store) = open();
+    let before = snap("account-x", "profile-a", "host-a");
+    let first = store.inventory("route", &before, NOW, &nonce(300)).unwrap();
+    let key = first["grants"][0]["grantKey"].as_str().unwrap();
+    let caller = format!("session:{}", nonce(999));
+    let prepared = store.prepare("route", key, &caller, &before, NOW, &nonce(301)).unwrap();
+    drop(store);
+    let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    let reload = store.inventory("route", &before, NOW + 10, &nonce(302)).unwrap();
+    assert!(revision(&reload) > revision(&prepared));
+    assert!(reload["evidence"]["pendingAttempts"].as_array().unwrap().is_empty());
+    assert_eq!(reload["evidence"]["claimTokens"]["untilMs"], NOW + 120_000);
+    assert_eq!(
+        reload["evidence"]["claimTokens"]["tokenKeys"],
+        serde_json::json!([prepared["confirmationKey"]])
+    );
+    assert_ne!(prepared["confirmationKey"], prepared["confirmationToken"]);
+    let recovery = store.pending("route", NOW + 11).unwrap();
+    assert_eq!(recovery["evidence"], reload["evidence"]);
+    store
+        .begin(
+            "route",
+            key,
+            &caller,
+            prepared["confirmationToken"].as_str().unwrap(),
+            &before,
+            NOW + 20,
+            &nonce(303),
+        )
+        .unwrap();
+    let pending = store.pending("route", NOW + 21).unwrap();
+    assert_eq!(pending["attemptKey"], nonce(303));
+    assert!(
+        pending["evidence"]["claimTokens"]["tokenKeys"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(revision(&pending) > revision(&reload));
+    let settled = store
+        .finish("route", &nonce(303), Outcome::Nothing, None, NOW + 22, None)
+        .unwrap();
+    let final_inventory = store.inventory("route", &before, NOW + 23, &nonce(304)).unwrap();
+    let second = store
+        .prepare("route", key, &caller, &before, NOW + 24, &nonce(305))
+        .unwrap();
+    let with_second = store.inventory("route", &before, NOW + 25, &nonce(306)).unwrap();
+    let before_expiry = store.pending("route", NOW + 120_023).unwrap();
+    assert_eq!(before_expiry["evidence"]["claimTokens"]["untilMs"], NOW + 120_024);
+    let expired = store.pending("route", NOW + 120_024).unwrap();
+    assert!(revision(&expired) > revision(&before_expiry));
+    assert!(expired["evidence"]["claimTokens"]["untilMs"].is_null());
+    assert_eq!(
+        store
+            .begin(
+                "route",
+                key,
+                &caller,
+                second["confirmationToken"].as_str().unwrap(),
+                &before,
+                NOW + 120_024,
+                &nonce(307)
+            )
+            .unwrap_err(),
+        "confirmation-invalid"
+    );
+    golden(
+        "reset-outstanding-tokens.json",
+        &serde_json::json!({"first":first,"prepared":prepared,"reload":reload,"recovery":recovery,"pending":pending,"settled":settled,"finalInventory":final_inventory,"second":second,"withSecond":with_second,"beforeExpiry":before_expiry,"expired":expired}),
+    );
+}
+
+#[test]
+fn outstanding_tokens_follow_original_accounts_in_both_reassignment_directions() {
+    for (original, replacement) in [("x", "y"), ("y", "x")] {
+        let (_dir, mut store) = open();
+        let before = snap(original, "reused", "host-a");
+        let inventory = store.inventory("reused", &before, NOW, &nonce(310)).unwrap();
+        let key = inventory["grants"][0]["grantKey"].as_str().unwrap();
+        let prepared = store
+            .prepare("reused", key, "local", &before, NOW, &nonce(311))
+            .unwrap();
+        let mut sibling = before.clone();
+        sibling.identity.profile = "sibling".into();
+        sibling.identity.host = "host-b".into();
+        let sibling_inventory = store.inventory("sibling", &sibling, NOW, &nonce(312)).unwrap();
+        assert_eq!(
+            sibling_inventory["evidence"]["claimTokens"],
+            prepared["evidence"]["claimTokens"]
+        );
+        let replacement = snap(replacement, "reused", "host-a");
+        store.inventory("reused", &replacement, NOW, &nonce(313)).unwrap();
+        assert!(store.pending("reused", NOW).unwrap()["evidence"]["claimTokens"]["untilMs"].is_null());
+        assert_eq!(
+            store.pending("sibling", NOW).unwrap()["evidence"]["claimTokens"],
+            prepared["evidence"]["claimTokens"]
+        );
+        store
+            .begin(
+                "reused",
+                key,
+                "local",
+                prepared["confirmationToken"].as_str().unwrap(),
+                &before,
+                NOW,
+                &nonce(314),
+            )
+            .unwrap();
+        assert_eq!(store.pending("sibling", NOW).unwrap()["attemptKey"], nonce(314));
+        assert!(store.pending("reused", NOW).unwrap()["attemptKey"].is_null());
+    }
+}
+
+#[test]
+fn migration_restores_unconsumed_tokens_from_immutable_targets() {
+    let (dir, mut store) = open();
+    let before = snap("x", "reused", "host-a");
+    let inventory = store.inventory("reused", &before, NOW, &nonce(320)).unwrap();
+    let key = inventory["grants"][0]["grantKey"].as_str().unwrap();
+    let prepared = store
+        .prepare("reused", key, "local", &before, NOW, &nonce(321))
+        .unwrap();
+    let sibling = store.inventory("sibling", &before, NOW, &nonce(322)).unwrap();
+    store
+        .inventory("reused", &snap("y", "reused", "host-a"), NOW, &nonce(323))
+        .unwrap();
+    drop(store);
+    let db = rusqlite::Connection::open(dir.path().join("claims.sqlite")).unwrap();
+    db.execute_batch("DROP TABLE claim_tokens").unwrap();
+    drop(db);
+    let store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    let recovered = store.pending("sibling", NOW).unwrap();
+    assert_eq!(
+        recovered["evidence"]["claimTokens"],
+        prepared["evidence"]["claimTokens"]
+    );
+    assert!(revision(&recovered) > revision(&sibling));
+    assert!(store.pending("reused", NOW).unwrap()["evidence"]["claimTokens"]["untilMs"].is_null());
+}
+
+#[test]
+fn token_burn_and_other_token_expiry_are_independently_ordered() {
+    let (_dir, mut store) = open();
+    let before = snap("x", "a", "h");
+    let inventory = store.inventory("route", &before, NOW, &nonce(330)).unwrap();
+    let key = inventory["grants"][0]["grantKey"].as_str().unwrap();
+    let first = store.prepare("route", key, "local", &before, NOW, &nonce(331)).unwrap();
+    let second = store
+        .prepare("route", key, "local", &before, NOW + 1, &nonce(332))
+        .unwrap();
+    assert_eq!(
+        second["evidence"]["claimTokens"]["tokenKeys"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        store
+            .begin(
+                "route",
+                key,
+                &format!("session:{}", nonce(999)),
+                first["confirmationToken"].as_str().unwrap(),
+                &before,
+                NOW + 2,
+                &nonce(333)
+            )
+            .unwrap_err(),
+        "confirmation-invalid"
+    );
+    let burned = store.pending("route", NOW + 3).unwrap();
+    assert!(revision(&burned) > revision(&second));
+    assert_eq!(
+        burned["evidence"]["claimTokens"]["tokenKeys"],
+        serde_json::json!([second["confirmationKey"]])
+    );
+    assert_eq!(
+        store
+            .begin(
+                "route",
+                key,
+                "local",
+                first["confirmationToken"].as_str().unwrap(),
+                &before,
+                NOW + 4,
+                &nonce(334)
+            )
+            .unwrap_err(),
+        "confirmation-invalid"
+    );
+    store
+        .begin(
+            "route",
+            key,
+            "local",
+            second["confirmationToken"].as_str().unwrap(),
+            &before,
+            NOW + 4,
+            &nonce(335),
+        )
+        .unwrap();
+    assert_eq!(store.pending("route", NOW + 5).unwrap()["attemptKey"], nonce(335));
+}
+
+#[test]
+fn concurrent_token_consumption_never_exposes_an_empty_reservation_gap() {
+    for round in 0..16 {
+        let (dir, mut store) = open();
+        let before = snap("x", "a", "h");
+        let inventory = store.inventory("route", &before, NOW, &nonce(340)).unwrap();
+        let key = inventory["grants"][0]["grantKey"].as_str().unwrap().to_owned();
+        let prepared = store
+            .prepare("route", &key, "local", &before, NOW, &nonce(341))
+            .unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let ready = barrier.clone();
+        let path = dir.path().join("claims.sqlite");
+        let reader = std::thread::spawn(move || {
+            let store = Store::open(&path).unwrap();
+            ready.wait();
+            for _ in 0..16 {
+                let read = store.pending("route", NOW).unwrap();
+                let tokens = read["evidence"]["claimTokens"]["tokenKeys"].as_array().unwrap();
+                assert!(
+                    !tokens.is_empty() || read["attemptKey"] == nonce(342),
+                    "round {round}: consumed token without reserved attempt"
+                );
+            }
+        });
+        barrier.wait();
+        store
+            .begin(
+                "route",
+                &key,
+                "local",
+                prepared["confirmationToken"].as_str().unwrap(),
+                &before,
+                NOW,
+                &nonce(342),
+            )
+            .unwrap();
+        reader.join().unwrap();
+    }
 }

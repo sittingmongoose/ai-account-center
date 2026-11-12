@@ -117,7 +117,7 @@ fn mixed_finish_and_alias_checks_remain_monotone_after_restart() {
             settled = e["outcome"] == "claimed";
         }
         assert!(settled);
-        assert!(store.pending("route-b").unwrap()["attemptKey"].is_null());
+        assert!(store.pending("route-b", NOW).unwrap()["attemptKey"].is_null());
         drop(store);
         let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
         let replay = store.check("route-b", &attempt, &alias, NOW + 3).unwrap();
@@ -150,7 +150,7 @@ fn alias_matrix_and_legacy_discovery_preserve_exact_identity() {
                 db.execute_batch("DROP TABLE aliases").unwrap();
             }
             let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
-            let recovery = store.pending("route-b").unwrap();
+            let recovery = store.pending("route-b", NOW).unwrap();
             assert_eq!(recovery["attemptKey"], attempt);
             assert!(recovery["bindingRevision"].is_string());
             assert!(recovery["evidence"]["revision"].is_string());
@@ -159,13 +159,13 @@ fn alias_matrix_and_legacy_discovery_preserve_exact_identity() {
                 store.check("route-b", &attempt, &confirmed(&alias), NOW + 2).unwrap()["outcome"],
                 "claimed-unconfirmed"
             );
-            assert_eq!(store.pending("route-a").unwrap()["attemptKey"], attempt);
+            assert_eq!(store.pending("route-a", NOW).unwrap()["attemptKey"], attempt);
             let mut different_org = alias.clone();
             different_org.identity.organization = "other-org".into();
             store
                 .inventory("different-org", &different_org, NOW, &nonce(11))
                 .unwrap();
-            assert!(store.pending("different-org").unwrap()["attemptKey"].is_null());
+            assert!(store.pending("different-org", NOW).unwrap()["attemptKey"].is_null());
             assert!(
                 store
                     .check("different-org", &attempt, &confirmed(&before), NOW + 2)

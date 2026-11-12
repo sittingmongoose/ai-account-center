@@ -3,6 +3,10 @@
   "attemptOrder": "1",
   "evidence": {
     "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
+    "claimTokens": {
+      "tokenKeys": [],
+      "untilMs": null
+    },
     "latestAttempt": {
       "attemptKey": "0000000000000000000000000000000000000000000000000000000000000003",
       "attemptOrder": "1",
@@ -18,7 +22,7 @@
       ]
     },
     "pendingAttempts": [],
-    "revision": "7"
+    "revision": "8"
   },
   "outcome": "claimed",
   "pending": false,

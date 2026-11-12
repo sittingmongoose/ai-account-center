@@ -611,3 +611,220 @@ fn a_refusal_without_an_explicit_no_send_proof_preserves_the_full_unknown_interv
         assert!(enabled(rc));
     });
 }
+
+fn token_fixture() -> serde_json::Value {
+    serde_json::from_str(include_str!(
+        "../tests/fixtures/reset-outstanding-tokens.json"
+    ))
+    .unwrap()
+}
+fn token_inventory(name: &str) -> Inventory {
+    serde_json::from_value(token_fixture()[name].clone()).unwrap()
+}
+fn token_evidence(name: &str) -> Evidence {
+    serde_json::from_value(token_fixture()[name]["evidence"].clone()).unwrap()
+}
+fn fresh_client_must_wait() {
+    Owner::new().with(|| {
+        let inv = token_inventory("reload");
+        assert!(inv.pending_attempt.is_none());
+        let rows = rows_from_inventory(&inv, "codex", 1_700_000_000_011.);
+        assert_eq!(rows.iter().filter(|row| row.claimable).count(), 1);
+        let client = ResetCtx::new();
+        client.show("route", "codex", false);
+        client.take("route", inv, 110.);
+        assert!(!enabled(client), "the original token can still reach begin");
+        assert_eq!(client.token_until.get_untracked(), Some(1_700_000_120_000.));
+        assert!(
+            client
+                .said
+                .get_untracked()
+                .unwrap()
+                .text
+                .contains("may still arrive")
+        );
+    });
+}
+
+// RECHECK-3 M1: real Store inventory, before the original delayed begin, in a new context.
+#[test]
+fn review_reload_or_second_tab_must_preserve_unanswered_send_interval() {
+    Owner::new().with(|| {
+        let inv = token_inventory("reload");
+        let identity = inv.canonical_account_key.clone().unwrap();
+        let original = ResetCtx::new();
+        original.show("route", "codex", false);
+        original.take("route", inv.clone(), 1.);
+        original.begin_send(&identity, 100.);
+        original.take("route", inv, 110.);
+        assert!(!enabled(original));
+        fresh_client_must_wait();
+    });
+}
+#[test]
+fn reload_after_original_context_is_destroyed_restores_the_server_token_gate() {
+    let owner = Owner::new();
+    owner.with(|| {
+        let original = ResetCtx::new();
+        let inv = token_inventory("first");
+        let identity = inv.canonical_account_key.clone().unwrap();
+        original.show("route", "codex", false);
+        original.take("route", inv, 1.);
+        original.begin_send(&identity, 100.);
+        assert!(!enabled(original));
+    });
+    owner.cleanup();
+    drop(owner);
+    fresh_client_must_wait();
+}
+#[test]
+fn second_tab_recovers_token_gate_without_any_shared_client_storage() {
+    fresh_client_must_wait();
+}
+#[test]
+fn second_device_recovers_token_gate_from_pending_response_alone() {
+    Owner::new().with(|| {
+        let client = ResetCtx::new();
+        client.show("route", "codex", false);
+        client.take("route", token_inventory("recovery"), 110.);
+        assert!(!enabled(client));
+        assert!(client.token_until.get_untracked().is_some());
+    });
+}
+#[test]
+fn token_consumption_transitions_directly_to_attempt_and_only_own_dialog_can_confirm() {
+    let mut state = AccountState::default();
+    let prepared: Prepared = serde_json::from_value(token_fixture()["prepared"].clone()).unwrap();
+    state.observe(prepared.evidence.as_ref().unwrap(), None);
+    assert!(state.lock().blocks());
+    assert!(state.lock().can_confirm(&prepared.confirmation_key));
+    assert!(!state.lock().can_confirm("another-token"));
+    state.begin_send(1, 120100.);
+    assert!(!state.lock().can_confirm(&prepared.confirmation_key));
+    state.observe(&token_evidence("pending"), Some(110.));
+    assert!(state.lock().blocks());
+    assert!(state.token_deadline().is_none());
+    let settled: ClaimResult = serde_json::from_value(token_fixture()["settled"].clone()).unwrap();
+    state.receipt(&settled, None, None);
+    assert!(
+        state.lock().blocks(),
+        "another client's receipt cannot acknowledge this send"
+    );
+    state.receipt(&settled, None, Some(1));
+    assert!(!state.lock().blocks());
+}
+#[test]
+fn expiry_requires_ordered_server_proof_and_cannot_shorten_the_local_send_interval() {
+    let mut state = AccountState::default();
+    state.observe(&token_evidence("withSecond"), Some(100.));
+    state.begin_send(1, 120100.);
+    assert!(state.lock().blocks());
+    // Merely advancing the client read timestamp does not expire a server token.
+    state.observe(&token_evidence("withSecond"), Some(120099.));
+    assert!(state.token_deadline().is_some());
+    state.observe(&token_evidence("expired"), Some(120099.));
+    assert!(state.lock().blocks());
+    assert!(state.token_deadline().is_none());
+    state.observe(&token_evidence("expired"), Some(120100.));
+    assert!(!state.lock().blocks());
+    assert!(!state.observe(&token_evidence("reload"), Some(130000.)));
+    assert!(!state.lock().blocks());
+}
+#[test]
+fn token_metadata_missing_or_ambiguous_cannot_allow_a_new_claim() {
+    let mut state = AccountState::default();
+    let mut evidence = token_evidence("first");
+    evidence.claim_tokens = None;
+    assert!(!state.observe(&evidence, None));
+    assert!(state.lock().blocks());
+    let mut evidence = token_evidence("reload");
+    evidence
+        .claim_tokens
+        .as_mut()
+        .unwrap()
+        .token_keys
+        .push("f".repeat(64));
+    assert!(state.observe(&evidence, None));
+    let own = token_fixture()["prepared"]["confirmationKey"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        !state.lock().can_confirm(&own),
+        "a second outstanding token blocks this dialog too"
+    );
+}
+
+// Exhaustive lifecycle deliveries, including a fresh client at every prefix and local send deadlines.
+#[test]
+fn every_token_lifecycle_permutation_preserves_global_and_local_obligations() {
+    let recorded: Vec<_> = [
+        "prepared",
+        "reload",
+        "pending",
+        "settled",
+        "withSecond",
+        "beforeExpiry",
+        "expired",
+    ]
+    .iter()
+    .map(|name| token_evidence(name))
+    .collect();
+    fn visit(order: &mut [usize], at: usize, recorded: &[Evidence], count: &mut usize) {
+        if at < order.len() {
+            for i in at..order.len() {
+                order.swap(at, i);
+                visit(order, at + 1, recorded, count);
+                order.swap(at, i);
+            }
+            return;
+        }
+        *count += 1;
+        for local_send in [false, true] {
+            let mut state = AccountState::default();
+            let mut local_open = local_send;
+            if local_send {
+                state.begin_send(1, 120100.);
+            }
+            let mut newest: Option<&Evidence> = None;
+            for (step, index) in order.iter().copied().enumerate() {
+                let e = &recorded[index];
+                let accepted = newest.is_none_or(|n| {
+                    e.revision.parse::<u64>().unwrap() >= n.revision.parse::<u64>().unwrap()
+                });
+                let read_started = if step % 2 == 0 { 110. } else { 120100. };
+                if accepted {
+                    newest = Some(e);
+                    if read_started >= 120100. {
+                        local_open = false;
+                    }
+                }
+                assert_eq!(state.observe(e, Some(read_started)), accepted);
+                let latest = newest.unwrap();
+                let global_block = !latest.pending_attempts.is_empty()
+                    || !latest.claim_tokens.as_ref().unwrap().token_keys.is_empty();
+                assert_eq!(
+                    state.lock().blocks(),
+                    local_open || global_block,
+                    "{order:?} prefix {step}"
+                );
+                // Reload/tab/device has no shared signals or unanswered map. Its server read still blocks.
+                let mut fresh = AccountState::default();
+                assert!(fresh.observe(latest, Some(read_started)));
+                assert_eq!(fresh.lock().blocks(), global_block);
+                if latest.claim_tokens.as_ref().unwrap().until_ms.is_some() {
+                    assert!(
+                        fresh
+                            .current("codex")
+                            .unwrap()
+                            .text
+                            .contains("may still arrive")
+                    );
+                }
+            }
+        }
+    }
+    let mut count = 0;
+    visit(&mut [0, 1, 2, 3, 4, 5, 6], 0, &recorded, &mut count);
+    assert_eq!(count, 5040);
+}

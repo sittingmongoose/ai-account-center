@@ -11,12 +11,20 @@ pub struct AttemptRef {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimTokens {
+    pub until_ms: Option<f64>,
+    pub token_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Evidence {
     pub canonical_account_key: String,
     pub revision: String,
     pub latest_attempt: Option<ClaimResult>,
     pub pending_attempts: Vec<AttemptRef>,
+    pub claim_tokens: Option<ClaimTokens>,
 }
 
 fn counter(value: &str) -> Option<u64> {
@@ -28,6 +36,24 @@ fn counter(value: &str) -> Option<u64> {
 impl Evidence {
     fn valid(&self) -> bool {
         if self.canonical_account_key.is_empty() || counter(&self.revision).is_none() {
+            return false;
+        }
+        let Some(tokens) = &self.claim_tokens else {
+            return false;
+        };
+        if tokens.token_keys.is_empty() != tokens.until_ms.is_none()
+            || tokens.until_ms.is_some_and(|ms| !ms.is_finite() || ms < 0.)
+            || tokens
+                .token_keys
+                .iter()
+                .any(|key| key.len() != 64 || !key.bytes().all(|c| c.is_ascii_hexdigit()))
+            || tokens
+                .token_keys
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != tokens.token_keys.len()
+        {
             return false;
         }
         let Some(latest) = &self.latest_attempt else {
@@ -60,18 +86,26 @@ impl Evidence {
 pub struct Unresolved {
     pub key: Option<String>,
     blocked: bool,
+    claim_ready: bool,
+    confirmation_keys: Vec<String>,
 }
 impl Default for Unresolved {
     fn default() -> Self {
         Self {
             key: None,
             blocked: true,
+            claim_ready: false,
+            confirmation_keys: vec![],
         }
     }
 }
 impl Unresolved {
     pub fn blocks(&self) -> bool {
         self.blocked
+    }
+    /// Only the originating dialog can consume its own sole outstanding token.
+    pub fn can_confirm(&self, key: &str) -> bool {
+        self.claim_ready && self.confirmation_keys.as_slice() == [key]
     }
 }
 
@@ -88,17 +122,29 @@ impl AccountState {
     pub fn matches(&self, evidence: &Evidence) -> bool {
         self.snapshot.as_ref() == Some(evidence)
     }
+    pub fn token_deadline(&self) -> Option<f64> {
+        self.snapshot.as_ref()?.claim_tokens.as_ref()?.until_ms
+    }
     pub fn lock(&self) -> Unresolved {
+        let claim_ready = self.snapshot.is_some()
+            && self.read_after_ms.is_none()
+            && self.attempts.is_empty()
+            && self.unanswered.is_empty();
+        let confirmation_keys = self
+            .snapshot
+            .as_ref()
+            .and_then(|e| e.claim_tokens.as_ref())
+            .map(|tokens| tokens.token_keys.clone())
+            .unwrap_or_default();
         Unresolved {
             key: self
                 .attempts
                 .values()
                 .max_by_key(|a| counter(&a.attempt_order))
                 .map(|a| a.attempt_key.clone()),
-            blocked: self.snapshot.is_none()
-                || self.read_after_ms.is_some()
-                || !self.attempts.is_empty()
-                || !self.unanswered.is_empty(),
+            blocked: !claim_ready || !confirmation_keys.is_empty(),
+            claim_ready,
+            confirmation_keys,
         }
     }
     pub fn begin_send(&mut self, id: u64, proof_after_ms: f64) {
@@ -205,6 +251,13 @@ impl AccountState {
         if self.read_after_ms.is_some() || self.snapshot.is_none() {
             return Some(Said {
                 text: "AAC needs a current account read before a reset can be used.".into(),
+                bad: true,
+                check: true,
+            });
+        }
+        if self.token_deadline().is_some() {
+            return Some(Said {
+                text: "A claim started on this or another page may still arrive.".into(),
                 bad: true,
                 check: true,
             });

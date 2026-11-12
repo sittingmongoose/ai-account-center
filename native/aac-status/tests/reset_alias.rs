@@ -59,7 +59,7 @@ fn aliases_discover_the_canonical_pending_attempt_and_history_without_weakening_
     let ib = store.inventory("route-b", &b, NOW, &nonce(4)).unwrap();
     let kb = ib["grants"][0]["grantKey"].as_str().unwrap();
     assert_eq!(store.gate("route-b", kb, NOW, true), Err("check-again-required"));
-    assert_eq!(store.pending("route-b").unwrap()["attemptKey"], attempt);
+    assert_eq!(store.pending("route-b", NOW).unwrap()["attemptKey"], attempt);
     assert_eq!(store.history("route-b").unwrap(), store.history("route-a").unwrap());
     assert_eq!(ia["canonicalAccountKey"], ib["canonicalAccountKey"]);
     assert!(ia["canonicalAccountKey"].is_string());
@@ -72,13 +72,13 @@ fn aliases_discover_the_canonical_pending_attempt_and_history_without_weakening_
         store.check("route-b", &attempt, &after, NOW + 2).unwrap()["outcome"],
         "claimed-unconfirmed"
     );
-    assert_eq!(store.pending("route-a").unwrap()["attemptKey"], attempt);
+    assert_eq!(store.pending("route-a", NOW).unwrap()["attemptKey"], attempt);
     let mut correct = a.clone();
     correct.observed_at_ms += 1;
     correct.grants[0].left = 0;
     correct.windows.insert("primary".into(), 0.0);
     store.check("route-a", &attempt, &correct, NOW + 2).unwrap();
-    assert_eq!(store.pending("route-b").unwrap()["attemptKey"], Value::Null);
+    assert_eq!(store.pending("route-b", NOW).unwrap()["attemptKey"], Value::Null);
     assert_eq!(store.history("route-b").unwrap(), store.history("route-a").unwrap());
     // Even an inventory with no grants retains canonical discovery after restart.
     drop(store);
