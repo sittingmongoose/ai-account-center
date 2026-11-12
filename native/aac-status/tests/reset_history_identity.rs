@@ -209,3 +209,26 @@ fn reassignment_keeps_both_sibling_histories_and_unclaimed_prepares_after_restar
         );
     }
 }
+
+#[test]
+fn x_y_x_reassignment_and_hosts_do_not_move_canonical_history() {
+    let (_d, mut s) = open();
+    let x = snap("account-x", "reused", "host-a");
+    let y = snap("account-y", "reused", "host-a");
+    let xa = snap("account-x", "x-sibling", "host-b");
+    let ya = snap("account-y", "y-sibling", "host-c");
+    s.inventory("x-sibling", &xa, NOW, &nonce(71)).unwrap();
+    s.inventory("y-sibling", &ya, NOW, &nonce(72)).unwrap();
+    let a = begin(&mut s, "reused", &x, 1);
+    s.finish("reused", &a, Outcome::Nothing, None, NOW + 2, None).unwrap();
+    let hx = s.history("x-sibling").unwrap();
+    let b = begin(&mut s, "reused", &y, 10);
+    s.finish("reused", &b, Outcome::Nothing, None, NOW + 3, None).unwrap();
+    let hy = s.history("y-sibling").unwrap();
+    s.inventory("reused", &x, NOW, &nonce(73)).unwrap();
+    assert_eq!(s.history("reused").unwrap(), hx);
+    assert_eq!(s.history("y-sibling").unwrap(), hy);
+    s.inventory("reused", &y, NOW, &nonce(74)).unwrap();
+    assert_eq!(s.history("reused").unwrap(), hy);
+    assert_eq!(s.history("x-sibling").unwrap(), hx);
+}

@@ -129,17 +129,12 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
   router.get('/:accountId/reset-claims', async (req, res) => {
     try {
       const account = String(req.params.accountId);
-      const history = await call('history', account);
-      // An unresolved attempt blocks every other spend; its key lets any signed-in session check it again.
-      const pendingAttempt = ((await call('pending', account)) as { attemptKey: string | null })
-        .attemptKey;
       if (!deps.source) {
         res.json({
+          ...(await call('pending', account)),
           status: 'unavailable',
           reason: 'credential-host-unavailable',
           grants: [],
-          history,
-          pendingAttempt,
         });
         return;
       }
@@ -147,24 +142,17 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       try {
         snapshot = await deps.source.read(account);
       } catch (error) {
-        // History and the pending attempt stay visible when the fresh read fails; nothing is invented.
+        // Recovery and audit come from one native transaction, including on read failure.
         res.json({
+          ...(await call('pending', account)),
           status: 'unavailable',
           reason: safeReason(error) ?? 'reset-inventory-unavailable',
           grants: [],
-          history,
-          pendingAttempt,
         });
         return;
       }
-      const inventory = await call('inventory', account, { snapshot });
-      // Inventory establishes the current profile's canonical identity before recovery reads.
-      res.json({
-        ...inventory,
-        history: await call('history', account),
-        pendingAttempt: ((await call('pending', account)) as { attemptKey: string | null })
-          .attemptKey,
-      });
+      // The native transaction binds the account and returns inventory, recovery, audit and revision together.
+      res.json(await call('inventory', account, { snapshot }));
     } catch {
       res.status(503).json({ status: 'unavailable', code: 'reset-inventory-unavailable' });
     }

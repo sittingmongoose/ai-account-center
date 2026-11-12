@@ -1,9 +1,8 @@
 # Reset inventory and guarded claims
 
-Owner decisions R1–R6 (2026-11-11) govern this backend. No UI, automatic claim,
-switch-triggered claim, provider refresh during tests, deployment or reset spend
-is part of this change. First real spend requires the owner's explicit
-confirmation in released AAC. The reset UI is a later consumer of this API.
+Owner decisions R1–R6 (2026-11-11) govern reset claims. Automatic claims,
+switch-triggered claims and provider refresh during tests are outside this feature.
+Real spend requires the owner's explicit confirmation in released AAC.
 
 Public inventory names individual opaque `grantKey` targets and reports kind,
 refill sentence, remaining count, expiry, sample time/age and a blocked reason.
@@ -106,5 +105,34 @@ kinds in the provider's words with "AAC doesn't know what this refills yet; it c
 the dialog calls only `prepare`; it shows prepare's `account.label`, the grant, what it refills, its expiry and
 "You have N; this spends one and can't be undone", and counts down the confirmation (ending 10 s early so the
 server's fresh read fits inside its 120 s). Only "Use this reset" calls the claim route. The result line comes from
-the claim answer, then the group reads the inventory again; nothing is shown as used until a read says so. Z.ai
+the server snapshot's newest attempt, then the group reads the inventory again; nothing is shown as used until a read says so. Z.ai
 cards are listed with "Use in Z.ai"; Qwen says its plan has none. Paired native bars never call these routes.
+
+Inventory, pending recovery, prepare, claim and check responses carry `evidence`:
+`{canonicalAccountKey, revision, latestAttempt, pendingAttempts}`. Revisions and
+attempt orders are decimal strings, preserving integer order in JavaScript. The
+private store advances a durable logical clock in the same immediate transaction
+as account observations and audit mutations. Each response reads its complete
+account snapshot in that transaction. Inventory and pending recovery also include
+`bindingRevision`, `history` and `pendingAttempt` from that snapshot; the HTTP
+adapter does not combine separate native reads. Replaying a settled receipt keeps
+its outcome/windows immutable while returning the account's current evidence.
+
+The Details UI applies the highest revision per canonical account. Lower revisions
+can add historical receipts/events but cannot change the pending map or current
+result. Current result text comes only from the snapshot's newest attempt; older
+receipts say "Older claim" without presenting old percentages as current limits.
+A saved profile changing accounts binds the view using its ordered binding revision
+and explicitly reports the change. Each account retains its own state and history.
+
+Before transport starts, each local claim creates a separate unanswered-send
+obligation. An accepted receipt for that request acknowledges only that obligation.
+A lost or malformed answer stays blocked until an accepted inventory/recovery read
+starts after the full 120-second send interval. Observing or settling another
+attempt cannot shorten that interval. A refusal proving no provider send cancels
+only its originating obligation and requires a fresh account snapshot. Responses
+without valid ordering metadata cannot enable another claim. Read-only checks do
+not acknowledge local sends.
+
+A cached inventory can be reused only while it matches the account's applied
+snapshot. Learning a later revision through another alias invalidates that reuse.

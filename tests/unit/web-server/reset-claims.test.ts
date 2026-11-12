@@ -47,7 +47,17 @@ async function serve(
           if (rejectGate && a.op.endsWith('Gate')) throw new Error('synthetic cooldown');
           if (reject && a.op === reject.op) throw new Error(reject.message);
           if (a.op === 'history') return '[]';
-          if (a.op === 'pending') return JSON.stringify({ attemptKey: pendingAttempt });
+          if (a.op === 'pending' || a.op === 'inventory')
+            return JSON.stringify({
+              ...(a.op === 'inventory'
+                ? { status: 'ok', grants: [] }
+                : { attemptKey: pendingAttempt }),
+              pendingAttempt,
+              history: [],
+              canonicalAccountKey: 'synthetic-canonical',
+              bindingRevision: '17',
+              evidence: { canonicalAccountKey: 'synthetic-canonical', revision: '19' },
+            });
           if (a.op === 'begin')
             return JSON.stringify({
               attemptKey: 'a'.repeat(64),
@@ -213,10 +223,14 @@ test('the inventory read names an unresolved attempt so any signed-in session ca
     reason: 'reset-inventory-unavailable',
     grants: [],
     history: [],
+    attemptKey: 'd'.repeat(64),
     pendingAttempt: 'd'.repeat(64),
+    canonicalAccountKey: 'synthetic-canonical',
+    bindingRevision: '17',
+    evidence: { canonicalAccountKey: 'synthetic-canonical', revision: '19' },
   });
   expect(JSON.stringify(body)).not.toContain('private');
-  expect(calls).toEqual(['history', 'pending']);
+  expect(calls).toEqual(['pending']);
 });
 
 test('a refusal passes on only an allowlisted native code, and says whether the write was reached', async () => {
@@ -260,7 +274,7 @@ test('a refusal passes on only an allowlisted native code, and says whether the 
   expect(sends).toBe(1);
 });
 
-test('alias recovery is read after inventory establishes canonical identity', async () => {
+test('inventory recovery and revision are returned from one native transaction', async () => {
   const source: ResetSource = {
     async read() {
       return {};
@@ -272,6 +286,9 @@ test('alias recovery is read after inventory establishes canonical identity', as
   const { url, calls } = await serve('session', source, false, undefined, 'e'.repeat(64));
   const res = await fetch(`${url}/accounts/alias/reset-claims`);
   expect(res.status).toBe(200);
-  expect((await res.json()).pendingAttempt).toBe('e'.repeat(64));
-  expect(calls.slice(-3)).toEqual(['inventory', 'history', 'pending']);
+  const body = await res.json();
+  expect(body.pendingAttempt).toBe('e'.repeat(64));
+  expect(body.evidence.revision).toBe('19');
+  expect(body.bindingRevision).toBe('17');
+  expect(calls).toEqual(['inventory']);
 });

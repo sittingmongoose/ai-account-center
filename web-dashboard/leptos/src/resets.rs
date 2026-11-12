@@ -18,6 +18,10 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
 
+#[path = "reset_state.rs"]
+mod reset_state;
+use reset_state::{AccountState, Evidence, Unresolved};
+
 // ---- the wire (reset-claim-routes.ts) ----------------------------------------------------------------------------
 
 /// GET `/api/accounts/:id/reset-claims`.
@@ -35,6 +39,8 @@ pub struct Inventory {
     pub history: Vec<HistoryEvent>,
     pub pending_attempt: Option<String>,
     pub canonical_account_key: Option<String>,
+    pub binding_revision: Option<String>,
+    pub evidence: Option<Box<Evidence>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -59,6 +65,7 @@ pub struct Grant {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Prepared {
+    pub evidence: Option<Box<Evidence>>,
     pub account: AccountLabel,
     #[serde(deserialize_with = "nullable")]
     pub confirmation_token: String,
@@ -77,6 +84,9 @@ pub struct AccountLabel {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ClaimResult {
+    pub attempt_order: String,
+    pub pending: bool,
+    pub evidence: Option<Box<Evidence>>,
     #[serde(deserialize_with = "nullable")]
     pub attempt_key: String,
     #[serde(deserialize_with = "nullable")]
@@ -109,6 +119,7 @@ pub struct Refusal {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HistoryEvent {
+    pub sequence: String,
     pub at_ms: f64,
     #[serde(deserialize_with = "nullable")]
     pub event: String,
@@ -668,160 +679,10 @@ pub fn countdown(ms_left: f64) -> String {
 
 // ---- the lock on spending while a claim is unresolved ------------------------------------------------------------
 
-/// Whether a claim on the shown account may still be unresolved. While it may be, every Use reset is disabled and only
-/// Check again (a read) is offered. It latches on any answer that may mean a send happened (an unconfirmed result, a
-/// lost or unreadable answer, a refusal after the write was reached) and is cleared only by a definite result, or by
-/// an inventory read that started late enough to prove nothing is unresolved. An older read never clears it, and a
-/// read never brings back the same attempt once it was settled. A different named attempt still blocks spending.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Unresolved {
-    /// The unresolved attempt's key, once an answer or a read names it (Check again needs it).
-    pub key: Option<String>,
-    latched: bool,
-    /// A read that started before this (device clock) can't clear the latch: a claim this page sent might still
-    /// reach the server's reservation after that read looked, or had reached it before it answered.
-    proof_after_ms: f64,
-    /// Settled attempt identities, retained so delayed inventory/check responses cannot revive them.
-    settled: Vec<String>,
-}
-
-/// What an answer means for the lock.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Lock {
-    Keep,
-    Latch {
-        key: Option<String>,
-        proof_after_ms: f64,
-    },
-    Settle {
-        key: String,
-    },
-}
-
-impl Unresolved {
-    pub fn blocks(&self) -> bool {
-        self.latched
-    }
-
-    pub fn apply(&mut self, lock: Lock) {
-        match lock {
-            Lock::Keep => {}
-            Lock::Latch {
-                key,
-                proof_after_ms,
-            } => {
-                if key.as_ref().is_some_and(|k| self.settled.contains(k)) {
-                    return;
-                }
-                self.latched = true;
-                if let Some(k) = key.filter(|k| !k.is_empty()) {
-                    self.key = Some(k);
-                }
-                self.proof_after_ms = self.proof_after_ms.max(proof_after_ms);
-            }
-            Lock::Settle { key } => {
-                if key.is_empty() {
-                    return;
-                }
-                if self.key.as_ref() == Some(&key) {
-                    self.key = None;
-                    self.latched = false;
-                    self.proof_after_ms = 0.0;
-                }
-                if !self.settled.contains(&key) {
-                    self.settled.push(key);
-                }
-            }
-        }
-    }
-
-    /// An inventory read that started at `started_ms` named this pending attempt, or none. True when it cleared the
-    /// latch (the server shows nothing unresolved, and the read is new enough to prove it).
-    pub fn read(&mut self, pending: Option<String>, started_ms: f64) -> bool {
-        match pending.filter(|k| !k.is_empty()) {
-            Some(ref k) if self.settled.contains(k) => false,
-            Some(k) => {
-                self.apply(Lock::Latch {
-                    key: Some(k),
-                    proof_after_ms: started_ms,
-                });
-                false
-            }
-            None if self.latched && started_ms >= self.proof_after_ms => {
-                if let Some(key) = self.key.clone() {
-                    self.apply(Lock::Settle { key });
-                } else {
-                    self.latched = false;
-                    self.proof_after_ms = 0.0;
-                }
-                true
-            }
-            None => false,
-        }
-    }
-}
-
-/// The lock after a claim's answer. `sent_at_ms` is when the claim left; a claim whose answer was lost could still
-/// reserve the account until its confirmation can no longer be used, at most 120 s after it was sent.
-pub fn claim_lock(answer: &Answer<ClaimResult>, sent_at_ms: f64, now_ms: f64) -> Lock {
-    let unknown = Lock::Latch {
-        key: None,
-        proof_after_ms: sent_at_ms + CONFIRM_LIFE_MS,
-    };
-    match answer {
-        Answer::Ok(r) if r.outcome == "claimed-unconfirmed" => Lock::Latch {
-            key: Some(r.attempt_key.clone()),
-            proof_after_ms: now_ms,
-        },
-        Answer::Ok(r) if r.outcome.is_empty() => unknown,
-        Answer::Ok(r) if !r.attempt_key.is_empty() => Lock::Settle {
-            key: r.attempt_key.clone(),
-        },
-        Answer::Ok(_) => unknown,
-        // the write was reached, or another attempt already holds the account: a fresh read names its key
-        Answer::Refused(r) if r.sent || r.reason.as_deref() == Some("check-again-required") => {
-            Lock::Latch {
-                key: None,
-                proof_after_ms: now_ms,
-            }
-        }
-        Answer::Refused(_) => Lock::Keep,
-        Answer::Lost | Answer::Failed(_) => unknown,
-    }
-}
-
-/// The lock after Check again: only a definite result settles it.
-pub fn check_lock(answer: &Answer<ClaimResult>, now_ms: f64) -> Lock {
-    match answer {
-        Answer::Ok(r) if r.outcome == "claimed-unconfirmed" => Lock::Latch {
-            key: Some(r.attempt_key.clone()),
-            proof_after_ms: now_ms,
-        },
-        Answer::Ok(r) if !r.outcome.is_empty() && !r.attempt_key.is_empty() => Lock::Settle {
-            key: r.attempt_key.clone(),
-        },
-        _ => Lock::Keep,
-    }
-}
-
-/// The lock after prepare: the server says another claim on the account is still unresolved.
-pub fn prepare_lock(answer: &Answer<Prepared>, now_ms: f64) -> Lock {
-    match answer {
-        Answer::Refused(r) if r.reason.as_deref() == Some("check-again-required") => Lock::Latch {
-            key: None,
-            proof_after_ms: now_ms,
-        },
-        _ => Lock::Keep,
-    }
-}
-
 /// Whether a row's Use reset can be pressed.
 pub fn use_enabled(claimable: bool, lock: &Unresolved, dialog: &Dialog) -> bool {
     claimable && !lock.blocks() && *dialog == Dialog::Closed
 }
-
-const SETTLED_ELSEWHERE: &str =
-    "The unconfirmed claim has been settled; Reset claims shows how it ended.";
 
 // ---- the server calls -------------------------------------------------------------------------------------------
 
@@ -964,18 +825,20 @@ pub struct ResetCtx {
     pub provider: RwSignal<String>,
     pub load: RwSignal<Load>,
     pub dialog: RwSignal<Dialog>,
-    /// What the last prepare, claim or check came to, shown in place under the table. (A fresh read mints new grant
-    /// keys, so the line belongs to the group rather than to a row.)
+    /// Current result projected from the newest server attempt, with any local send or view notice.
     pub said: RwSignal<Option<Said>>,
-    /// The shown account's lock: while it blocks, every Use reset waits on Check again.
+    /// The shown account's lock, projected from server evidence and unanswered sends.
     pub unresolved: RwSignal<Unresolved>,
     pub checking: RwSignal<bool>,
     /// The last good inventory per account, with when its read started (a reopen within a minute reuses it).
     cache: StoredValue<Vec<(String, f64, Inventory)>>,
-    /// Every account's lock, kept while Details shows another account or is closed.
-    locks: StoredValue<Vec<(String, Unresolved)>>,
-    aliases: StoredValue<Vec<(String, String)>>,
-    results: StoredValue<Vec<(String, Said)>>,
+    /// Canonical account state survives navigation and saved-profile reassignment.
+    states: StoredValue<Vec<(String, AccountState)>>,
+    aliases: StoredValue<Vec<(String, String, u64)>>,
+    send_id: StoredValue<u64>,
+    notice: RwSignal<Option<Said>>,
+    older: RwSignal<Vec<String>>,
+    histories: StoredValue<Vec<(String, Vec<HistoryEvent>)>>,
 }
 
 const REUSE_MS: f64 = 60_000.0;
@@ -983,7 +846,7 @@ const ACCOUNT_CHANGED: &str = "The account for this saved profile changed. Reset
 
 impl ResetCtx {
     pub fn new() -> Self {
-        ResetCtx {
+        Self {
             account: RwSignal::new(String::new()),
             provider: RwSignal::new(String::new()),
             load: RwSignal::new(Load::Idle),
@@ -992,174 +855,199 @@ impl ResetCtx {
             unresolved: RwSignal::new(Unresolved::default()),
             checking: RwSignal::new(false),
             cache: StoredValue::new(vec![]),
-            locks: StoredValue::new(vec![]),
+            states: StoredValue::new(vec![]),
             aliases: StoredValue::new(vec![]),
-            results: StoredValue::new(vec![]),
+            send_id: StoredValue::new(0),
+            notice: RwSignal::new(None),
+            older: RwSignal::new(vec![]),
+            histories: StoredValue::new(vec![]),
         }
     }
-
     pub fn dialog_open(&self) -> bool {
         self.dialog
             .try_with_untracked(|d| *d != Dialog::Closed)
             .unwrap_or(false)
     }
-
-    /// Details shows another account (or closes: ""). Whatever was open for the last one goes.
     pub fn show(&self, account: &str, provider: &str, fetch: bool) {
         if self.account.get_untracked() == account {
             return;
         }
-        self.account.set(account.to_string());
-        self.provider.set(provider.to_string());
+        self.account.set(account.into());
+        self.provider.set(provider.into());
         self.dialog.set(Dialog::Closed);
-        self.said.set(self.said_of(account));
-        let lock = self.lock_of(account);
-        let blocked = lock.blocks();
-        self.unresolved.set(lock);
+        self.notice.set(None);
         self.load.set(Load::Idle);
+        self.project();
         if fetch && !account.is_empty() {
             let now = js_sys::Date::now();
-            // an account with a claim still unresolved is always read fresh
             let cached = self.cache.with_value(|c| {
                 c.iter()
-                    .find(|(a, at, _)| a == account && now - at < REUSE_MS && !blocked)
+                    .find(|(a, at, i)| {
+                        a == account
+                            && now - at < REUSE_MS
+                            && !self.lock_of(account).blocks()
+                            && i.evidence
+                                .as_ref()
+                                .is_some_and(|e| self.state_of(account).matches(e))
+                    })
                     .map(|(_, at, i)| (*at, i.clone()))
             });
-            match cached {
-                Some((started, inv)) => self.take(account, inv, started),
-                None => self.refresh(),
+            if let Some((started, inv)) = cached {
+                self.take(account, inv, started);
+            } else {
+                self.refresh();
             }
         }
     }
-
     fn lock_key(&self, account: &str) -> String {
         self.aliases
             .with_value(|a| {
                 a.iter()
-                    .find(|(route, _)| route == account)
-                    .map(|(_, key)| key.clone())
+                    .find(|(route, _, _)| route == account)
+                    .map(|(_, key, _)| key.clone())
             })
-            .unwrap_or_else(|| account.to_string())
+            .unwrap_or_else(|| account.into())
     }
-    fn bind_alias(&self, account: &str, canonical: &str) {
-        let known = self
+    /// Binding order is global, while attempt state stays with its immutable canonical account.
+    fn bind_alias(&self, account: &str, canonical: &str, revision: u64) -> bool {
+        let old = self
             .aliases
-            .with_value(|a| a.iter().any(|(route, _)| route == account));
-        let previous_key = self.lock_key(account);
-        if known && previous_key == canonical {
-            return;
+            .with_value(|a| a.iter().find(|(route, _, _)| route == account).cloned());
+        if let Some((_, key, at)) = &old
+            && (revision < *at || (revision == *at && key != canonical))
+        {
+            return false;
         }
-        let previous = self.lock_of(account);
-        let previous_result = self.said_of(account);
+        if old.is_none() && account != canonical {
+            let mut previous = self.state_of(account);
+            self.update_state(canonical, |s| s.inherit_sends(&mut previous));
+            self.states
+                .update_value(|s| s.retain(|(key, _)| key != account));
+        }
+        let changed = old.as_ref().is_some_and(|(_, key, _)| key != canonical);
         self.aliases.update_value(|a| {
-            a.retain(|(route, _)| route != account);
-            a.push((account.into(), canonical.into()));
+            a.retain(|(route, _, _)| route != account);
+            a.push((account.into(), canonical.into(), revision));
         });
-        // Only first-time resolution moves route-local state. A replacement login owns
-        // a different lock/result; the original canonical account keeps its own state.
-        if !known {
-            self.update_lock(canonical, |u| {
-                for key in previous.settled {
-                    u.apply(Lock::Settle { key });
-                }
-                if previous.latched {
-                    u.apply(Lock::Latch {
-                        key: previous.key,
-                        proof_after_ms: previous.proof_after_ms,
-                    });
-                }
-            });
-            if let Some(said) = previous_result {
-                self.say_for(canonical, said);
-            }
-            if previous_key != canonical {
-                self.locks
-                    .update_value(|l| l.retain(|(key, _)| key != &previous_key));
-                self.results
-                    .update_value(|r| r.retain(|(key, _)| key != &previous_key));
-            }
-        }
-        if self.account.get_untracked() == account {
-            self.unresolved.set(self.lock_of(canonical));
-            self.said.set(self.said_of(canonical));
-            if known {
+        if changed {
+            self.cache
+                .update_value(|c| c.retain(|(route, _, _)| route != account));
+            if self.account.get_untracked() == account {
                 self.dialog.set(Dialog::Closed);
-                self.said.set(Some(Said {
+                self.notice.set(Some(Said {
                     text: ACCOUNT_CHANGED.into(),
                     bad: false,
                     check: false,
                 }));
-                self.cache
-                    .update_value(|c| c.retain(|(route, _, _)| route != account));
             }
         }
+        self.project();
+        true
     }
-    fn lock_of(&self, account: &str) -> Unresolved {
-        let account = self.lock_key(account);
-        self.locks
-            .try_with_value(|l| {
-                l.iter()
-                    .find(|(a, _)| a == &account)
-                    .map(|(_, u)| u.clone())
-            })
+    fn state_of(&self, account: &str) -> AccountState {
+        let key = self.lock_key(account);
+        self.states
+            .try_with_value(|s| s.iter().find(|(a, _)| *a == key).map(|(_, s)| s.clone()))
             .flatten()
             .unwrap_or_default()
     }
-
-    /// Changes one account's lock, shown or not (an answer may arrive after Details moved on).
-    fn update_lock<R>(&self, account: &str, f: impl FnOnce(&mut Unresolved) -> R) -> R {
-        let mut lock = self.lock_of(account);
+    fn lock_of(&self, account: &str) -> Unresolved {
+        self.state_of(account).lock()
+    }
+    fn said_of(&self, account: &str) -> Option<Said> {
+        self.state_of(account)
+            .current(&self.provider.get_untracked())
+    }
+    fn update_state<R>(&self, account: &str, change: impl FnOnce(&mut AccountState) -> R) -> R {
         let key = self.lock_key(account);
-        let out = f(&mut lock);
-        let _ = self.locks.try_update_value(|l| {
-            l.retain(|(a, _)| a != &key);
-            if lock != Unresolved::default() {
-                l.push((key.clone(), lock.clone()));
-            }
+        let mut state = self.state_of(&key);
+        let out = change(&mut state);
+        let _ = self.states.try_update_value(|s| {
+            s.retain(|(a, _)| *a != key);
+            s.push((key, state));
         });
-        if self
-            .account
-            .try_get_untracked()
-            .is_some_and(|shown| self.lock_key(&shown) == key)
-        {
-            let _ = self.unresolved.try_set(lock);
-        }
+        self.project();
         out
     }
-
-    fn read_lock(&self, account: &str, pending: Option<String>, started_ms: f64) {
-        let cleared = self.update_lock(account, |u| u.read(pending, started_ms));
-        if cleared && self.said_of(account).is_some_and(|s| s.check) {
-            let said = Said {
-                text: SETTLED_ELSEWHERE.into(),
-                bad: false,
-                check: false,
-            };
-            let key = self.remember_said(account, &said);
-            // Reconcile the account's saved result even while a changed-login notice is visible.
-            if self
-                .account
-                .try_get_untracked()
-                .is_some_and(|shown| self.lock_key(&shown) == key)
-                && self
-                    .said
-                    .try_with_untracked(|s| s.as_ref().is_some_and(|s| s.check))
-                    == Some(true)
-            {
-                let _ = self.said.try_set(Some(said));
+    /// Both projections come from the same state; a callback cannot save a separate current result.
+    fn project(&self) {
+        let Some(account) = self.account.try_get_untracked() else {
+            return;
+        };
+        let state = self.state_of(&account);
+        let _ = self.unresolved.try_set(state.lock());
+        let current = self.said_of(&account);
+        let notice = self.notice.try_get_untracked().flatten();
+        let said = match (notice, current) {
+            (Some(mut n), Some(c)) => {
+                n.text = format!("{} {}", n.text, c.text);
+                n.bad |= c.bad;
+                n.check |= c.check;
+                Some(n)
             }
+            (n, c) => n.or(c),
+        };
+        let _ = self.said.try_set(said);
+        let _ = self.older.try_set(state.older_receipts());
+    }
+    fn merge_history(&self, canonical: &str, events: &[HistoryEvent]) {
+        self.histories.update_value(|histories| {
+            if !histories.iter().any(|(key, _)| key == canonical) {
+                histories.push((canonical.into(), vec![]));
+            }
+            let entries = &mut histories
+                .iter_mut()
+                .find(|(key, _)| key == canonical)
+                .unwrap()
+                .1;
+            for event in events {
+                if !entries.contains(event) {
+                    entries.push(event.clone());
+                }
+            }
+            entries.sort_by_key(|e| e.sequence.parse::<u64>().unwrap_or(0));
+        });
+    }
+    fn take(&self, account: &str, mut inv: Inventory, started_ms: f64) {
+        let (Some(canonical), Some(binding), Some(evidence)) = (
+            &inv.canonical_account_key,
+            &inv.binding_revision,
+            &inv.evidence,
+        ) else {
+            self.update_state(account, AccountState::unknown);
+            if self.account.get_untracked() == account {
+                self.load.set(Load::Ready(inv));
+            }
+            return;
+        };
+        let Ok(binding) = binding.parse::<u64>() else {
+            self.update_state(account, AccountState::unknown);
+            return;
+        };
+        if evidence.canonical_account_key != *canonical {
+            self.update_state(account, AccountState::unknown);
+            return;
+        }
+        self.merge_history(canonical, &inv.history);
+        let accepted = self.update_state(canonical, |s| s.observe(evidence, Some(started_ms)));
+        if !accepted || !self.bind_alias(account, canonical, binding) {
+            return;
+        }
+        inv.history = self.histories.with_value(|h| {
+            h.iter()
+                .find(|(key, _)| key == canonical)
+                .map(|(_, e)| e.clone())
+                .unwrap_or_default()
+        });
+        self.cache.update_value(|c| {
+            c.retain(|(a, _, _)| a != account);
+            c.push((account.into(), started_ms, inv.clone()));
+        });
+        if self.account.get_untracked() == account {
+            self.load.set(Load::Ready(inv));
         }
     }
-
-    fn take(&self, account: &str, inv: Inventory, started_ms: f64) {
-        if let Some(key) = &inv.canonical_account_key {
-            self.bind_alias(account, key);
-        }
-        self.read_lock(account, inv.pending_attempt.clone(), started_ms);
-        self.load.set(Load::Ready(inv));
-    }
-
-    /// Reads the inventory again (fresh at the server). Keeps the rows on screen while it reads.
+    /// A read starts after the send's proof interval before it can retire an unanswered send.
     pub fn refresh(&self) {
         let me = *self;
         let account = self.account.get_untracked();
@@ -1172,73 +1060,43 @@ impl ResetCtx {
         let started = js_sys::Date::now();
         spawn_local(async move {
             let got = load(&account).await;
-            if let Answer::Ok(inv) = &got {
-                // the lock learns from every read, even one for an account no longer shown
-                let _ = me.cache.try_update_value(|c| {
-                    c.retain(|(a, _, _)| *a != account);
-                    c.push((account.clone(), started, inv.clone()));
-                });
-                if me.account.try_get_untracked().as_deref() != Some(account.as_str()) {
-                    if let Some(key) = &inv.canonical_account_key {
-                        me.bind_alias(&account, key);
-                    }
-                    me.read_lock(&account, inv.pending_attempt.clone(), started);
-                    return;
-                }
+            if let Answer::Ok(inv) = got {
+                me.take(&account, inv, started);
+                return;
             }
             if me.account.try_get_untracked().as_deref() != Some(account.as_str()) {
                 return;
             }
-            match got {
-                Answer::Ok(inv) => me.take(&account, inv, started),
+            let text = match got {
                 Answer::Refused(r) if r.code == "browser-session-required" => {
-                    me.load.set(Load::Failed(
-                        "Resets can be used only from a signed-in dashboard session.".into(),
-                    ))
+                    "Resets can be used only from a signed-in dashboard session.".into()
                 }
-                Answer::Refused(_) | Answer::Lost => me.load.set(Load::Failed(
-                    "AAC couldn't read which resets it can use right now.".into(),
-                )),
-                Answer::Failed(text) => me.load.set(Load::Failed(text)),
-            }
+                Answer::Failed(text) => text,
+                _ => "AAC couldn't read which resets it can use right now.".into(),
+            };
+            me.load.set(Load::Failed(text));
         });
     }
-
-    fn said_of(&self, account: &str) -> Option<Said> {
-        let key = self.lock_key(account);
-        self.results.with_value(|r| {
-            r.iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, said)| said.clone())
-        })
-    }
-
-    fn remember_said(&self, account: &str, said: &Said) -> String {
-        let key = self.lock_key(account);
-        let _ = self.results.try_update_value(|r| {
-            r.retain(|(k, _)| *k != key);
-            r.push((key.clone(), said.clone()));
-        });
-        key
-    }
-
-    fn say_for(&self, account: &str, said: Said) {
-        let key = self.remember_said(account, &said);
+    fn transient(&self, identity: &str, said: Said) {
         if self
             .account
             .try_get_untracked()
-            .is_some_and(|shown| self.lock_key(&shown) == key)
+            .is_some_and(|a| self.lock_key(&a) == identity)
         {
-            let _ = self.said.try_set(Some(said));
+            self.notice.set(Some(said));
+            self.project();
         }
     }
-
-    #[cfg(test)]
-    fn say(&self, said: Said) {
-        self.say_for(&self.account.get_untracked(), said);
+    fn receive(&self, identity: &str, result: &ClaimResult, send: Option<u64>) -> bool {
+        if result
+            .evidence
+            .as_ref()
+            .is_none_or(|e| e.canonical_account_key != identity)
+        {
+            return false;
+        }
+        self.update_state(identity, |s| s.receipt(result, None, send))
     }
-
-    /// Use reset: asks prepare only. Nothing goes to the provider until Use this reset.
     pub fn open(&self, grant_key: String, ready: u32) {
         if self.unresolved.with_untracked(Unresolved::blocks) || self.dialog_open() {
             return;
@@ -1247,27 +1105,40 @@ impl ResetCtx {
         let account = self.account.get_untracked();
         let identity = self.lock_key(&account);
         let provider = self.provider.get_untracked();
-        self.said.set(None);
+        self.notice.set(None);
+        self.project();
         self.dialog.set(Dialog::Opening {
             grant_key: grant_key.clone(),
         });
         let sent_at = js_sys::Date::now();
         spawn_local(async move {
             let got = prepare(&account, &grant_key).await;
-            me.update_lock(&identity, |u| {
-                u.apply(prepare_lock(&got, js_sys::Date::now()))
-            });
+            let accepted = if let Answer::Ok(p) = &got {
+                p.evidence.as_ref().is_some_and(|e| {
+                    e.canonical_account_key == identity
+                        && me.update_state(&identity, |s| s.observe(e, None))
+                })
+            } else {
+                false
+            };
+            if let Answer::Refused(r) = &got
+                && r.reason.as_deref() == Some("check-again-required")
+            {
+                me.update_state(&identity, AccountState::unknown);
+            }
             let still = me.account.try_get_untracked().as_deref() == Some(account.as_str())
-                && me.lock_key(&account) == me.lock_key(&identity)
+                && me.lock_key(&account) == identity
                 && me.dialog.try_with_untracked(
-                    |d| matches!(d, Dialog::Opening { grant_key: k } if *k == grant_key),
+                    |d| matches!(d,Dialog::Opening{grant_key:k} if *k==grant_key),
                 ) == Some(true);
             if !still {
                 return;
             }
             match got {
                 Answer::Ok(prepared)
-                    if !prepared.confirmation_token.is_empty()
+                    if accepted
+                        && !me.lock_of(&identity).blocks()
+                        && !prepared.confirmation_token.is_empty()
                         && !prepared.account.label.is_empty() =>
                 {
                     let deadline_ms =
@@ -1279,52 +1150,27 @@ impl ResetCtx {
                         ready,
                     });
                 }
-                Answer::Ok(_) => {
+                other => {
                     me.dialog.set(Dialog::Closed);
-                    me.say_for(
-                        &identity,
-                        Said {
-                            text: "The server's answer could not be read. Nothing was sent.".into(),
-                            bad: true,
-                            check: false,
-                        },
-                    );
-                }
-                Answer::Refused(r) => {
-                    me.dialog.set(Dialog::Closed);
-                    let said = refusal_said(&r, &provider);
-                    if said.check || r.reason.as_deref() == Some("grant-changed") {
-                        me.refresh();
-                    }
-                    me.say_for(&identity, said);
-                }
-                Answer::Lost => {
-                    me.dialog.set(Dialog::Closed);
-                    me.say_for(
-                        &identity,
-                        Said {
-                            text: "No connection to AI Account Center. Nothing was sent.".into(),
-                            bad: true,
-                            check: false,
-                        },
-                    );
-                }
-                Answer::Failed(text) => {
-                    me.dialog.set(Dialog::Closed);
-                    me.say_for(
-                        &identity,
-                        Said {
+                    let said = match other {
+                        Answer::Refused(r) => refusal_said(&r, &provider),
+                        Answer::Failed(text) => Said {
                             text: format!("{text} Nothing was sent."),
                             bad: true,
                             check: false,
                         },
-                    );
+                        _ => Said {
+                            text: "The server's answer could not be read. Nothing was sent.".into(),
+                            bad: true,
+                            check: false,
+                        },
+                    };
+                    me.transient(&identity, said);
+                    me.refresh();
                 }
             }
         });
     }
-
-    /// Cancel, Escape or a click beside the dialog. Not while the claim is on its way.
     pub fn close(&self) {
         if self
             .dialog
@@ -1334,8 +1180,12 @@ impl ResetCtx {
         }
         self.dialog.set(Dialog::Closed);
     }
-
-    /// Use this reset: the one claim, with the confirmation prepare gave, if it is still inside its life.
+    fn begin_send(&self, identity: &str, sent_at: f64) -> u64 {
+        let id = self.send_id.get_value() + 1;
+        self.send_id.set_value(id);
+        self.update_state(identity, |s| s.begin_send(id, sent_at + CONFIRM_LIFE_MS));
+        id
+    }
     pub fn confirm(&self) {
         let Dialog::Open {
             grant_key,
@@ -1353,92 +1203,60 @@ impl ResetCtx {
         let me = *self;
         let account = self.account.get_untracked();
         let identity = self.lock_key(&account);
-        let provider = self.provider.get_untracked();
+        self.notice.set(None);
         self.dialog.set(Dialog::Sending {
             grant_key: grant_key.clone(),
             prepared: prepared.clone(),
             ready,
         });
-        let _ = self
-            .cache
-            .try_update_value(|c| c.retain(|(a, _, _)| *a != account));
-        let sent_at = js_sys::Date::now();
+        self.cache
+            .update_value(|c| c.retain(|(a, _, _)| *a != account));
+        // This obligation exists before transport starts, including across aliases and navigation.
+        let id = self.begin_send(&identity, js_sys::Date::now());
         spawn_local(async move {
             let got = claim(&account, &grant_key, &prepared.confirmation_token).await;
-            // latched first, for this account even if Details has moved on: a possible send blocks every Use reset
-            me.update_lock(&identity, |u| {
-                u.apply(claim_lock(&got, sent_at, js_sys::Date::now()))
-            });
             match got {
-                Answer::Ok(result) => me.say_for(&identity, result_said(&result, &provider)),
-                Answer::Refused(r) => me.say_for(&identity, refusal_said(&r, &provider)),
-                // The claim may have reached the provider: the fresh read below names the pending attempt.
-                Answer::Lost => me.say_for(&identity, Said {
-                    text: "The connection dropped while sending, so the reset may have been used. AAC is reading the account again."
-                        .into(),
-                    bad: true,
-                    check: true,
-                }),
-                Answer::Failed(text) => me.say_for(&identity, Said { text: format!("{text} The reset may have been used; check again."), bad: true, check: true }),
+                Answer::Ok(result) => {
+                    me.receive(&identity, &result, Some(id));
+                }
+                Answer::Refused(r) if !r.sent => {
+                    me.update_state(&identity, |s| {
+                        s.not_sent(id);
+                        s.unknown();
+                    });
+                }
+                // Missing/malformed/failed answers cannot associate this send with another attempt.
+                _ => {}
             }
             if me.account.try_get_untracked().as_deref() != Some(account.as_str())
-                || me.lock_key(&account) != me.lock_key(&identity)
+                || me.lock_key(&account) != identity
             {
                 return;
             }
-            let _ = me.dialog.try_set(Dialog::Closed);
+            me.dialog.set(Dialog::Closed);
             me.refresh();
         });
     }
-
-    /// Check again: a read only. It never sends another claim.
     pub fn check_again(&self) {
         if self.checking.get_untracked() {
             return;
         }
         let Some(attempt) = self.unresolved.with_untracked(|u| u.key.clone()) else {
-            // No key yet (a lost answer): the fresh read names it when there is one.
             self.refresh();
             return;
         };
         let me = *self;
         let account = self.account.get_untracked();
         let identity = self.lock_key(&account);
-        let provider = self.provider.get_untracked();
         self.checking.set(true);
         spawn_local(async move {
-            let got = match check(&account, &attempt).await {
-                Answer::Ok(r) if r.attempt_key != attempt => Answer::Failed(
-                    "AAC couldn't match this result to the claim being checked.".into(),
-                ),
-                got => got,
-            };
-            me.update_lock(&identity, |u| {
-                u.apply(check_lock(&got, js_sys::Date::now()))
-            });
-            match got {
-                Answer::Ok(result) => me.say_for(&identity, result_said(&result, &provider)),
-                Answer::Refused(r) => me.say_for(&identity, refusal_said(&r, &provider)),
-                Answer::Lost => me.say_for(
-                    &identity,
-                    Said {
-                        text: "No connection to AI Account Center. The claim is still unconfirmed."
-                            .into(),
-                        bad: true,
-                        check: true,
-                    },
-                ),
-                Answer::Failed(text) => me.say_for(
-                    &identity,
-                    Said {
-                        text,
-                        bad: true,
-                        check: true,
-                    },
-                ),
+            if let Answer::Ok(result) = check(&account, &attempt).await
+                && result.attempt_key == attempt
+            {
+                me.receive(&identity, &result, None);
             }
             if me.account.try_get_untracked().as_deref() != Some(account.as_str())
-                || me.lock_key(&account) != me.lock_key(&identity)
+                || me.lock_key(&account) != identity
             {
                 return;
             }
@@ -1769,11 +1587,12 @@ pub fn ResetHistory(rc: ResetCtx) -> impl IntoView {
     });
     move || {
         let list = rows.get();
-        if list.is_empty() {
+        let older = rc.older.get();
+        if list.is_empty() && older.is_empty() {
             return None;
         }
         let n = list.len();
-        let last = list[0].clone();
+        let last = list.first().cloned();
         let shown: Vec<HistoryRow> = if all.get() {
             list
         } else {
@@ -1782,7 +1601,8 @@ pub fn ResetHistory(rc: ResetCtx) -> impl IntoView {
         Some(view! {
             <section class="fg" data-probe="reset-history">
                 <div class="fg-cap"><h3 class="cap">"Reset claims"</h3><span class="end"><b>{n}</b>{if n == 1 { " claim" } else { " claims" }}</span></div>
-                <p class="fg-sum"><b>{format!("Last: {} on {}.", last.kind, day(last.at_ms))}</b>{format!(" {}. Every claim on this account is kept.", last.result)}</p>
+                {last.map(|last| view! { <p class="fg-sum"><b>{format!("Last: {} on {}.", last.kind, day(last.at_ms))}</b>{format!(" {}. Every claim on this account is kept.", last.result)}</p> })}
+                {older.into_iter().map(|text| view! { <p class="fg-line">{text}</p> }).collect_view()}
                 <table class="ft">
                     <thead><tr><th class="cap">"When"</th><th class="cap">"Reset"</th><th class="cap r">"Result"</th></tr></thead>
                     <tbody>
@@ -2159,185 +1979,6 @@ mod tests {
         );
     }
 
-    fn unconfirmed(key: &str) -> Answer<ClaimResult> {
-        Answer::Ok(ClaimResult {
-            attempt_key: key.into(),
-            outcome: "claimed-unconfirmed".into(),
-            verification: "unconfirmed".into(),
-            provider_success: true,
-            windows: vec![],
-        })
-    }
-
-    fn settled(outcome: &str) -> Answer<ClaimResult> {
-        Answer::Ok(ClaimResult {
-            attempt_key: "k".into(),
-            outcome: outcome.into(),
-            verification: "confirmed".into(),
-            ..Default::default()
-        })
-    }
-
-    /// Review U1: every answer that may mean a send happened blocks every Use reset at once, before any read names
-    /// the attempt, and a read that started too early (or before the answer) can't unblock it.
-    #[test]
-    fn an_ambiguous_claim_answer_blocks_every_use_reset_until_it_is_settled() {
-        let rows = rows_from_inventory(
-            &inventory(vec![
-                grant("weekly", 1, Some(9.0), true, None),
-                grant("weekly", 1, Some(19.0), true, None),
-            ]),
-            "claude",
-            NOW,
-        );
-        let usable = |u: &Unresolved| {
-            rows.iter()
-                .filter(|r| use_enabled(r.claimable, u, &Dialog::Closed))
-                .count()
-        };
-        let sent = NOW;
-        let answered = NOW + 2_000.0;
-        let ambiguous = [
-            Answer::Lost,
-            Answer::Failed("The server answered 502.".into()),
-            Answer::Refused(Refusal {
-                code: "reset-state-unavailable".into(),
-                reason: None,
-                sent: true,
-            }),
-            Answer::Refused(Refusal {
-                code: "reset-state-unavailable".into(),
-                reason: Some("check-again-required".into()),
-                sent: false,
-            }),
-            Answer::Ok(ClaimResult::default()),
-            unconfirmed("k1"),
-        ];
-        for answer in ambiguous {
-            let mut u = Unresolved::default();
-            assert_eq!(usable(&u), 2);
-            u.apply(claim_lock(&answer, sent, answered));
-            assert_eq!(usable(&u), 0, "blocked at once after {answer:?}");
-            // the automatic read, started before the answer arrived, saw no pending attempt: still blocked
-            assert!(!u.read(None, answered - 1.0), "{answer:?}");
-            assert_eq!(
-                usable(&u),
-                0,
-                "an older empty read can't unblock after {answer:?}"
-            );
-        }
-
-        // A lost answer: even a read started after it proves nothing while the claim could still reserve the account.
-        let mut lost = Unresolved::default();
-        lost.apply(claim_lock(&Answer::Lost, sent, answered));
-        assert!(!lost.read(None, answered + 1_000.0));
-        assert!(lost.blocks());
-        // the read names the attempt; Check again settles it, and Use reset comes back
-        lost.read(Some("k2".into()), answered + 2_000.0);
-        assert_eq!(lost.key.as_deref(), Some("k2"));
-        let mut confirmed = match settled("claimed") {
-            Answer::Ok(r) => r,
-            _ => unreachable!(),
-        };
-        confirmed.attempt_key = "k2".into();
-        lost.apply(check_lock(&Answer::Ok(confirmed), answered + 3_000.0));
-        assert_eq!(usable(&lost), 2);
-        // a read that started before that settle can't bring the settled key back
-        assert!(!lost.read(Some("k2".into()), answered + 2_500.0));
-        assert_eq!(usable(&lost), 2);
-        // and once the confirmation can no longer be used, a fresh empty read clears a lost answer by itself
-        let mut late = Unresolved::default();
-        late.apply(claim_lock(&Answer::Lost, sent, answered));
-        assert!(late.read(None, sent + CONFIRM_LIFE_MS));
-        assert_eq!(usable(&late), 2);
-
-        // A known key is never replaced by an older empty read; a newer one shows it was settled elsewhere.
-        let mut known = Unresolved::default();
-        known.apply(claim_lock(&unconfirmed("k3"), sent, answered));
-        assert!(!known.read(None, answered - 500.0));
-        assert_eq!(known.key.as_deref(), Some("k3"));
-        assert!(known.blocks());
-        known.apply(check_lock(&unconfirmed("k3"), answered + 100.0));
-        assert!(known.blocks(), "a check that is still unconfirmed keeps it");
-        assert!(known.read(None, answered + 200.0));
-        assert!(!known.blocks() && known.key.is_none());
-
-        // Settled answers and nothing-sent refusals don't latch.
-        for answer in [
-            settled("claimed"),
-            settled("already-used"),
-            settled("nothing-to-reset"),
-            Answer::Refused(Refusal {
-                code: "reset-state-unavailable".into(),
-                reason: Some("confirmation-invalid".into()),
-                sent: false,
-            }),
-        ] {
-            let mut u = Unresolved::default();
-            u.apply(claim_lock(&answer, sent, answered));
-            assert_eq!(usable(&u), 2, "{answer:?}");
-        }
-        // Check again that is lost or refused keeps the lock; prepare told of another unresolved claim latches it.
-        let mut u = Unresolved::default();
-        u.apply(claim_lock(&unconfirmed("k4"), sent, answered));
-        u.apply(check_lock(&Answer::Lost, answered + 1.0));
-        u.apply(check_lock(&Answer::Failed("x".into()), answered + 2.0));
-        assert!(u.blocks());
-        let mut p = Unresolved::default();
-        p.apply(prepare_lock(
-            &Answer::Refused(Refusal {
-                code: "reset-state-unavailable".into(),
-                reason: Some("check-again-required".into()),
-                sent: false,
-            }),
-            answered,
-        ));
-        assert_eq!(usable(&p), 0);
-        // and an open dialog blocks the rows too
-        assert!(!use_enabled(
-            true,
-            &Unresolved::default(),
-            &Dialog::Opening {
-                grant_key: "g".into()
-            }
-        ));
-    }
-
-    #[test]
-    fn canonical_aliases_share_the_spend_lock_and_pending_recovery() {
-        Owner::new().with(|| {
-            let rc = ResetCtx::new();
-            let canonical = |pending: serde_json::Value| {
-                inv(&serde_json::json!({
-                    "status":"ok", "canonicalAccountKey":"canonical", "pendingAttempt":pending
-                })
-                .to_string())
-            };
-            rc.show("a", "codex", false);
-            rc.take("a", canonical(serde_json::Value::Null), 1.0);
-            rc.show("b", "codex", false);
-            rc.take("b", canonical(serde_json::Value::Null), 2.0);
-            rc.update_lock("a", |u| {
-                u.apply(Lock::Latch {
-                    key: Some("attempt".into()),
-                    proof_after_ms: 10.0,
-                })
-            });
-            assert!(rc.unresolved.get_untracked().blocks());
-            assert!(!use_enabled(
-                true,
-                &rc.unresolved.get_untracked(),
-                &Dialog::Closed
-            ));
-            rc.take("b", canonical(serde_json::json!("attempt")), 11.0);
-            assert!(rc.lock_of("a").blocks());
-            rc.show("a", "codex", false);
-            assert!(rc.unresolved.get_untracked().blocks());
-            rc.take("a", canonical(serde_json::Value::Null), 12.0);
-            assert!(!rc.lock_of("b").blocks());
-        });
-    }
-
     #[test]
     fn nulls_and_missing_fields_read_safely() {
         let i = inv(
@@ -2350,9 +1991,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "reset_attempt_tests.rs"]
-mod attempt_tests;
-
-#[cfg(test)]
-#[path = "reset_identity_tests.rs"]
-mod identity_tests;
+#[path = "reset_order_tests.rs"]
+mod order_tests;

@@ -166,7 +166,7 @@ impl Store {
             }
         }
         // Caller creates a dedicated owner-only directory under getCcsDir(), not a share.
-        let db = sql(Connection::open(path))?;
+        let mut db = sql(Connection::open(path))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -185,6 +185,25 @@ impl Store {
             CREATE TABLE IF NOT EXISTS budgets(account TEXT NOT NULL, at_ms INTEGER NOT NULL);
             CREATE TRIGGER IF NOT EXISTS history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT,'permanent audit'); END;
             CREATE TRIGGER IF NOT EXISTS history_no_update BEFORE UPDATE ON history BEGIN SELECT RAISE(ABORT,'permanent audit'); END;"))?;
+        // Serialize the additive migration with all other connections. The clock is private
+        // protocol metadata; audit rows and attempt identities remain immutable.
+        let tx = sql(db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let has_binding_revision = {
+            let mut stmt = sql(tx.prepare("PRAGMA table_info(aliases)"))?;
+            let columns = sql(stmt.query_map([], |r| r.get::<_, String>(1)))?;
+            let mut found = false;
+            for column in columns {
+                found |= sql(column)? == "binding_revision";
+            }
+            found
+        };
+        if !has_binding_revision {
+            sql(tx.execute_batch("ALTER TABLE aliases ADD COLUMN binding_revision INTEGER NOT NULL DEFAULT 0"))?;
+        }
+        sql(tx.execute_batch("CREATE TABLE IF NOT EXISTS reset_clock(singleton INTEGER PRIMARY KEY CHECK(singleton=1), value INTEGER NOT NULL);
+            INSERT OR IGNORE INTO reset_clock SELECT 1,COALESCE(MAX(seq),0) FROM history;
+            CREATE TABLE IF NOT EXISTS reset_revisions(lock_key TEXT PRIMARY KEY, revision INTEGER NOT NULL);"))?;
+        sql(tx.commit())?;
         Ok(Self { db })
     }
     fn audit(
@@ -200,8 +219,64 @@ impl Store {
             "INSERT INTO history(at_ms,account_hash,event,target_hash,outcome,details) VALUES(?,?,?,?,?,?)",
             params![now, hash(account), event, hash(target), outcome, encode(&details)?],
         ))?;
+        let canonical = if event == "verification" {
+            sql(
+                tx.query_row("SELECT lock_key FROM attempts WHERE key=?", [target], |r| {
+                    r.get::<_, String>(0)
+                }),
+            )?
+        } else {
+            let stored: String = sql(tx.query_row("SELECT snapshot FROM targets WHERE key=?", [target], |r| r.get(0)))?;
+            Self::canonical(&serde_json::from_str(&stored).map_err(|_| "shape")?)?
+        };
+        Self::advance(tx, &canonical)?;
         Ok(())
     }
+    fn advance(db: &Connection, canonical: &str) -> Result<i64> {
+        let revision = sql(db.query_row(
+            "UPDATE reset_clock SET value=value+1 WHERE singleton=1 RETURNING value",
+            [],
+            |r| r.get::<_, i64>(0),
+        ))?;
+        sql(db.execute(
+            "INSERT INTO reset_revisions VALUES(?,?) ON CONFLICT(lock_key) DO UPDATE SET revision=excluded.revision",
+            params![canonical, revision],
+        ))?;
+        Ok(revision)
+    }
+
+    /// A complete account snapshot, read inside the same transaction as the enclosing response.
+    /// Counters are decimal strings so JavaScript never rounds a revision or attempt order.
+    fn evidence(db: &Connection, canonical: &str) -> Result<Value> {
+        let revision: i64 = sql(db.query_row("SELECT COALESCE((SELECT revision FROM reset_revisions WHERE lock_key=?),(SELECT value FROM reset_clock WHERE singleton=1))", [canonical], |r| r.get(0)))?;
+        let latest: Option<(String, String)> = sql(db
+            .query_row(
+                "SELECT account,key FROM attempts WHERE lock_key=? ORDER BY rowid DESC LIMIT 1",
+                [canonical],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional())?;
+        let latest = latest
+            .map(|(owner, key)| Self::attempt_result(db, &owner, &key))
+            .transpose()?;
+        let mut stmt = sql(db.prepare("SELECT key,rowid FROM attempts WHERE lock_key=? AND pending=1 ORDER BY rowid"))?;
+        let pending = sql(stmt.query_map([canonical], |r| {
+            Ok(json!({"attemptKey":r.get::<_,String>(0)?,"attemptOrder":r.get::<_,i64>(1)?.to_string()}))
+        }))?;
+        let mut entries = vec![];
+        for row in pending {
+            entries.push(sql(row)?);
+        }
+        Ok(
+            json!({"canonicalAccountKey":canonical,"revision":revision.to_string(),"latestAttempt":latest,"pendingAttempts":entries}),
+        )
+    }
+
+    fn with_evidence(db: &Connection, canonical: &str, mut value: Value) -> Result<Value> {
+        value["evidence"] = Self::evidence(db, canonical)?;
+        Ok(value)
+    }
+
     pub fn inventory(&mut self, account: &str, s: &Snapshot, now: i64, entropy: &str) -> Result<Value> {
         s.validate(now)?;
         if !opaque(entropy) {
@@ -210,9 +285,11 @@ impl Store {
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let canonical = Self::canonical(s)?;
+        let revision = Self::advance(&tx, &canonical)?;
         sql(tx.execute(
-            "INSERT INTO aliases VALUES(?,?) ON CONFLICT(account) DO UPDATE SET lock_key=excluded.lock_key",
-            params![account, Self::canonical(s)?],
+            "INSERT INTO aliases(account,lock_key,binding_revision) VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET lock_key=excluded.lock_key,binding_revision=excluded.binding_revision",
+            params![account, canonical, revision],
         ))?;
         // Keep old targets so an open confirmation cannot silently select another grant.
         let mut rows = vec![];
@@ -224,10 +301,15 @@ impl Store {
             ))?;
             rows.push(public(s, g, &key, now));
         }
+        let mut response = Self::with_evidence(
+            &tx,
+            &canonical,
+            json!({"status":if s.identity.provider=="qwen"{"unsupported"}else{"ok"},"observedAtMs":s.observed_at_ms,"sourceAgeMs":now-s.observed_at_ms,"canonicalAccountKey":canonical,"bindingRevision":revision.to_string(),"grants":rows}),
+        )?;
+        response["history"] = Self::history_for(&tx, &canonical)?;
+        response["pendingAttempt"] = response["evidence"]["pendingAttempts"][0]["attemptKey"].clone();
         sql(tx.commit())?;
-        Ok(
-            json!({"status":if s.identity.provider=="qwen"{"unsupported"}else{"ok"},"observedAtMs":s.observed_at_ms,"sourceAgeMs":now-s.observed_at_ms,"canonicalAccountKey":Self::canonical(s)?,"grants":rows}),
-        )
+        Ok(response)
     }
     fn canonical(s: &Snapshot) -> Result<String> {
         Ok(hash(&encode(&(
@@ -237,26 +319,26 @@ impl Store {
         ))?))
     }
     fn account_canonical(&self, account: &str) -> Result<Option<String>> {
-        let key: Option<String> = sql(self
-            .db
+        Self::account_canonical_from(&self.db, account)
+    }
+    fn account_canonical_from(db: &Connection, account: &str) -> Result<Option<String>> {
+        let key: Option<String> = sql(db
             .query_row("SELECT lock_key FROM aliases WHERE account=?", [account], |r| r.get(0))
             .optional())?;
         if key.is_some() {
             return Ok(key);
         }
         // Pre-alias-schema attempts and inventory targets remain discoverable after upgrade.
-        let snapshot: Option<String> = sql(self
-            .db
+        let snapshot: Option<String> = sql(db
             .query_row(
-                "SELECT before_json FROM attempts WHERE account=? ORDER BY created DESC LIMIT 1",
+                "SELECT before_json FROM attempts WHERE account=? ORDER BY rowid DESC LIMIT 1",
                 [account],
                 |r| r.get(0),
             )
             .optional())?;
         let snapshot = match snapshot {
             Some(s) => Some(s),
-            None => sql(self
-                .db
+            None => sql(db
                 .query_row(
                     "SELECT snapshot FROM targets WHERE account=? ORDER BY rowid DESC LIMIT 1",
                     [account],
@@ -406,10 +488,13 @@ impl Store {
             "prepared",
             json!({"provider":fresh.identity.provider,"kind":g.kind,"grantHash":hash(g.id.as_deref().unwrap_or("")),"callerHash":hash(caller),"callerKind":if caller=="local"{"local"}else{"session"},"identityHash":hash(&encode(&fresh.identity)?),"beforeCount":g.left}),
         )?;
-        sql(tx.commit())?;
-        Ok(
+        let response = Self::with_evidence(
+            &tx,
+            &Self::canonical(fresh)?,
             json!({"account":{"label":fresh.account_label},"confirmationToken":token,"expiresAtMs":now+120_000,"grant":public(fresh,&g,key,now),"costText":"Spends one selected reset. This cannot be undone."}),
-        )
+        )?;
+        sql(tx.commit())?;
+        Ok(response)
     }
     /// Atomically consumes confirmation and durably reserves the account BEFORE any I/O.
     /// A crashed/ambiguous attempt stays pending forever until a read proves its result.
@@ -493,11 +578,11 @@ impl Store {
         sql(tx.commit())?;
         Ok(write)
     }
-    fn committed_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
-        let (g, stored, previous_success): (String, String, bool) = sql(tx.query_row(
-            "SELECT grant_json,outcome,provider_success FROM attempts WHERE key=? AND account=?",
+    fn attempt_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
+        let (g, stored, previous_success, order, pending): (String, String, bool, i64, bool) = sql(tx.query_row(
+            "SELECT grant_json,outcome,provider_success,rowid,pending FROM attempts WHERE key=? AND account=?",
             params![attempt, account],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         ))?;
         let details: Option<String> = sql(tx
             .query_row(
@@ -524,8 +609,16 @@ impl Store {
             vec![]
         };
         Ok(
-            json!({"attemptKey":attempt,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows}),
+            json!({"attemptKey":attempt,"attemptOrder":order.to_string(),"pending":pending,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows}),
         )
+    }
+    fn committed_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
+        let canonical: String = sql(tx.query_row(
+            "SELECT lock_key FROM attempts WHERE key=? AND account=?",
+            params![attempt, account],
+            |r| r.get(0),
+        ))?;
+        Self::with_evidence(tx, &canonical, Self::attempt_result(tx, account, attempt)?)
     }
     /// Called after provider send; errors and unknown bodies MUST map to Ambiguous.
     pub fn finish(
@@ -589,36 +682,29 @@ impl Store {
             result,
             json!({"provider":before.identity.provider,"kind":g.kind,"grantHash":hash(g.id.as_deref().unwrap_or("")),"idempotencyHash":hash(attempt),"providerSuccess":provider_success,"providerOutcome":outcome.word(),"verified":verified,"beforeCount":g.left,"afterCount":after.and_then(|a|a.grants.iter().find(|n|n.id==g.id).map(|n|n.left)),"beforeWindows":before.windows,"afterWindows":after.map(|a|&a.windows)}),
         )?;
+        let response = Self::committed_result(&tx, account, attempt)?;
         sql(tx.commit())?;
-        // The refilled windows as the verification read saw them; only a confirmed claim reports them.
-        let windows: Vec<Value> = if verified {
-            after
-                .map(|a| {
-                    g.clears
-                        .iter()
-                        .filter_map(|k| a.windows.get(k).map(|v| json!({"id":k,"usedPercent":v})))
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            vec![]
-        };
-        Ok(
-            json!({"attemptKey":attempt,"outcome":result,"verification":if verified{"confirmed"}else{"unconfirmed"},"providerSuccess":provider_success,"windows":windows}),
-        )
+        Ok(response)
     }
     /// The route account's unresolved attempt, if any: the browser needs its key to check it again after a reload or
     /// from another signed-in session. Reading it sends nothing and consumes nothing.
     pub fn pending(&self, account: &str) -> Result<Value> {
-        let key: Option<String> = sql(self
-            .db
-            .query_row(
-                "SELECT key FROM attempts WHERE (lock_key=? OR (account=? AND ? IS NULL)) AND pending=1 ORDER BY created DESC LIMIT 1",
-                params![self.account_canonical(account)?,account,self.account_canonical(account)?],
-                |r| r.get(0),
-            )
+        let tx = sql(self.db.unchecked_transaction())?;
+        let canonical = Self::account_canonical_from(&tx, account)?;
+        let binding: Option<i64> = sql(tx
+            .query_row("SELECT binding_revision FROM aliases WHERE account=?", [account], |r| {
+                r.get(0)
+            })
             .optional())?;
-        Ok(json!({ "attemptKey": key }))
+        let mut response = json!({"attemptKey":null,"pendingAttempt":null,"history":[],"canonicalAccountKey":canonical,"bindingRevision":canonical.as_ref().map(|_|binding.unwrap_or(0).to_string())});
+        if let Some(canonical) = canonical {
+            response = Self::with_evidence(&tx, &canonical, response)?;
+            response["attemptKey"] = response["evidence"]["pendingAttempts"][0]["attemptKey"].clone();
+            response["pendingAttempt"] = response["attemptKey"].clone();
+            response["history"] = Self::history_for(&tx, &canonical)?;
+        }
+        sql(tx.commit())?;
+        Ok(response)
     }
     /// Read-only at the provider: this method has no Write return path.
     pub fn check(&mut self, account: &str, attempt: &str, after: &Snapshot, now: i64) -> Result<Value> {
@@ -632,13 +718,19 @@ impl Store {
         self.finish(&owner, attempt, Outcome::Ambiguous, Some(after), now, None)
     }
     pub fn history(&self, account: &str) -> Result<Value> {
-        let Some(canonical) = self.account_canonical(account)? else {
+        let tx = sql(self.db.unchecked_transaction())?;
+        let Some(canonical) = Self::account_canonical_from(&tx, account)? else {
             return Ok(json!([]));
         };
+        let response = Self::history_for(&tx, &canonical)?;
+        sql(tx.commit())?;
+        Ok(response)
+    }
+    fn history_for(db: &Connection, canonical: &str) -> Result<Value> {
         // Route names can be reused for another login. Audit ownership comes from the
         // immutable target snapshot (prepare/attempt) or reserved attempt (verification).
         let mut targets = std::collections::HashSet::new();
-        let mut stmt = sql(self.db.prepare("SELECT key,snapshot FROM targets"))?;
+        let mut stmt = sql(db.prepare("SELECT key,snapshot FROM targets"))?;
         let rows = sql(stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))))?;
         for row in rows {
             let (key, snapshot) = sql(row)?;
@@ -648,18 +740,16 @@ impl Store {
             }
         }
         let mut attempts = std::collections::HashSet::new();
-        let mut stmt = sql(self.db.prepare("SELECT key,target FROM attempts WHERE lock_key=?"))?;
+        let mut stmt = sql(db.prepare("SELECT key,target FROM attempts WHERE lock_key=?"))?;
         let rows = sql(stmt.query_map([canonical], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))))?;
         for row in rows {
             let (key, target) = sql(row)?;
             attempts.insert(hash(&key));
             targets.insert(hash(&target));
         }
-        let mut stmt = sql(self
-            .db
-            .prepare("SELECT at_ms,event,target_hash,outcome,details FROM history ORDER BY seq"))?;
+        let mut stmt = sql(db.prepare("SELECT at_ms,event,target_hash,outcome,details,seq FROM history ORDER BY seq"))?;
         let rows = sql(stmt.query_map([], |r| {
-            Ok(json!({"atMs":r.get::<_,i64>(0)?,"event":r.get::<_,String>(1)?,"targetHash":r.get::<_,String>(2)?,"outcome":r.get::<_,String>(3)?,"details":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))
+            Ok(json!({"sequence":r.get::<_,i64>(5)?.to_string(),"atMs":r.get::<_,i64>(0)?,"event":r.get::<_,String>(1)?,"targetHash":r.get::<_,String>(2)?,"outcome":r.get::<_,String>(3)?,"details":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))
         }))?;
         let mut events = vec![];
         for row in rows {

@@ -1,0 +1,223 @@
+{
+  "firstKey": "0000000000000000000000000000000000000000000000000000000000000003",
+  "newInventory": {
+    "bindingRevision": "8",
+    "canonicalAccountKey": "6392c91a425bc7b57c87cfaec07f5142fa1c3d1cd023924bdc9b976d33531512",
+    "evidence": {
+      "canonicalAccountKey": "6392c91a425bc7b57c87cfaec07f5142fa1c3d1cd023924bdc9b976d33531512",
+      "latestAttempt": {
+        "attemptKey": "000000000000000000000000000000000000000000000000000000000000000d",
+        "attemptOrder": "2",
+        "outcome": "claimed-unconfirmed",
+        "pending": true,
+        "providerSuccess": false,
+        "verification": "unconfirmed",
+        "windows": []
+      },
+      "pendingAttempts": [
+        {
+          "attemptKey": "000000000000000000000000000000000000000000000000000000000000000d",
+          "attemptOrder": "2"
+        }
+      ],
+      "revision": "8"
+    },
+    "grants": [
+      {
+        "claimBlockedReason": "grant-unavailable",
+        "claimable": false,
+        "expiresAtMs": null,
+        "grantKey": "029263fd9ae2195bb2700c1de587b5f30d94983bcd7303d25b169727a671172a",
+        "kind": "session",
+        "label": "5-hour reset",
+        "providerWords": null,
+        "refillsText": "Refills your 5-hour allowance.",
+        "resetsLeft": 0
+      },
+      {
+        "claimBlockedReason": null,
+        "claimable": true,
+        "expiresAtMs": null,
+        "grantKey": "89400a50ec7cc114fa7536780ee56783fa4ac694aed685d76d57730ec7344554",
+        "kind": "weekly",
+        "label": "Weekly reset",
+        "providerWords": null,
+        "refillsText": "Refills your weekly allowance.",
+        "resetsLeft": 1
+      }
+    ],
+    "history": [
+      {
+        "atMs": 1700000000000,
+        "details": {
+          "beforeCount": 1,
+          "callerHash": "a42d59d7035730324a7a5e14ff1952cf7ec952ee8f938ca85211d5e19ff5f97f",
+          "callerKind": "session",
+          "grantHash": "0b845cbc687783e078f348451924cabacf3666572ebd510a166b3aaa36e31d0e",
+          "identityHash": "96ceb666c73b247e3f8fe003d96afa8e9ae01f180e44db293bbb773bda15e74b",
+          "kind": "session",
+          "provider": "claude"
+        },
+        "event": "prepare",
+        "outcome": "prepared",
+        "sequence": "1",
+        "targetHash": "ddf9ac0ca7d7bf919d8f99b31eb35ed866d1ac8db69c67506232dcb7bb7309e7"
+      },
+      {
+        "atMs": 1700000000000,
+        "details": {
+          "beforeCount": 1,
+          "beforeWindows": {
+            "five_hour": 100.0,
+            "seven_day": 100.0
+          },
+          "callerHash": "a42d59d7035730324a7a5e14ff1952cf7ec952ee8f938ca85211d5e19ff5f97f",
+          "callerKind": "session",
+          "grantHash": "0b845cbc687783e078f348451924cabacf3666572ebd510a166b3aaa36e31d0e",
+          "idempotencyHash": "ac7edb97166f7d682720aca18fea15cdd5d15242dad38297a48633a806236c4f",
+          "identityHash": "96ceb666c73b247e3f8fe003d96afa8e9ae01f180e44db293bbb773bda15e74b",
+          "kind": "session",
+          "provider": "claude"
+        },
+        "event": "attempt",
+        "outcome": "claimed-unconfirmed",
+        "sequence": "2",
+        "targetHash": "ddf9ac0ca7d7bf919d8f99b31eb35ed866d1ac8db69c67506232dcb7bb7309e7"
+      },
+      {
+        "atMs": 1700000000002,
+        "details": {
+          "afterCount": 0,
+          "afterWindows": {
+            "five_hour": 0.0,
+            "seven_day": 100.0
+          },
+          "beforeCount": 1,
+          "beforeWindows": {
+            "five_hour": 100.0,
+            "seven_day": 100.0
+          },
+          "grantHash": "0b845cbc687783e078f348451924cabacf3666572ebd510a166b3aaa36e31d0e",
+          "idempotencyHash": "ac7edb97166f7d682720aca18fea15cdd5d15242dad38297a48633a806236c4f",
+          "kind": "session",
+          "provider": "claude",
+          "providerOutcome": "reset",
+          "providerSuccess": true,
+          "verified": true
+        },
+        "event": "verification",
+        "outcome": "claimed",
+        "sequence": "3",
+        "targetHash": "ac7edb97166f7d682720aca18fea15cdd5d15242dad38297a48633a806236c4f"
+      },
+      {
+        "atMs": 1700000000003,
+        "details": {
+          "beforeCount": 1,
+          "callerHash": "a42d59d7035730324a7a5e14ff1952cf7ec952ee8f938ca85211d5e19ff5f97f",
+          "callerKind": "session",
+          "grantHash": "9cc212a9e7d395b7473040288b1dd663edd931dfaae16b69b0ea4d9665510099",
+          "identityHash": "96ceb666c73b247e3f8fe003d96afa8e9ae01f180e44db293bbb773bda15e74b",
+          "kind": "weekly",
+          "provider": "claude"
+        },
+        "event": "prepare",
+        "outcome": "prepared",
+        "sequence": "4",
+        "targetHash": "24c5f0394dc2a48925ab7fa00277713a0afb7810030b0d9e11c1cdf96615309c"
+      },
+      {
+        "atMs": 1700000000003,
+        "details": {
+          "beforeCount": 1,
+          "beforeWindows": {
+            "five_hour": 0.0,
+            "seven_day": 100.0
+          },
+          "callerHash": "a42d59d7035730324a7a5e14ff1952cf7ec952ee8f938ca85211d5e19ff5f97f",
+          "callerKind": "session",
+          "grantHash": "9cc212a9e7d395b7473040288b1dd663edd931dfaae16b69b0ea4d9665510099",
+          "idempotencyHash": "6cac6fb7b1d694a47536b6c7d7cf7843cc3526b63b9cbc85f73ab9af611bd03a",
+          "identityHash": "96ceb666c73b247e3f8fe003d96afa8e9ae01f180e44db293bbb773bda15e74b",
+          "kind": "weekly",
+          "provider": "claude"
+        },
+        "event": "attempt",
+        "outcome": "claimed-unconfirmed",
+        "sequence": "5",
+        "targetHash": "24c5f0394dc2a48925ab7fa00277713a0afb7810030b0d9e11c1cdf96615309c"
+      }
+    ],
+    "observedAtMs": 1700000000003,
+    "pendingAttempt": "000000000000000000000000000000000000000000000000000000000000000d",
+    "sourceAgeMs": 0,
+    "status": "ok"
+  },
+  "oldResult": {
+    "attemptKey": "0000000000000000000000000000000000000000000000000000000000000003",
+    "attemptOrder": "1",
+    "evidence": {
+      "canonicalAccountKey": "6392c91a425bc7b57c87cfaec07f5142fa1c3d1cd023924bdc9b976d33531512",
+      "latestAttempt": {
+        "attemptKey": "0000000000000000000000000000000000000000000000000000000000000003",
+        "attemptOrder": "1",
+        "outcome": "claimed",
+        "pending": false,
+        "providerSuccess": true,
+        "verification": "confirmed",
+        "windows": [
+          {
+            "id": "five_hour",
+            "usedPercent": 0.0
+          }
+        ]
+      },
+      "pendingAttempts": [],
+      "revision": "4"
+    },
+    "outcome": "claimed",
+    "pending": false,
+    "providerSuccess": true,
+    "verification": "confirmed",
+    "windows": [
+      {
+        "id": "five_hour",
+        "usedPercent": 0.0
+      }
+    ]
+  },
+  "replayedResult": {
+    "attemptKey": "0000000000000000000000000000000000000000000000000000000000000003",
+    "attemptOrder": "1",
+    "evidence": {
+      "canonicalAccountKey": "6392c91a425bc7b57c87cfaec07f5142fa1c3d1cd023924bdc9b976d33531512",
+      "latestAttempt": {
+        "attemptKey": "000000000000000000000000000000000000000000000000000000000000000d",
+        "attemptOrder": "2",
+        "outcome": "claimed-unconfirmed",
+        "pending": true,
+        "providerSuccess": false,
+        "verification": "unconfirmed",
+        "windows": []
+      },
+      "pendingAttempts": [
+        {
+          "attemptKey": "000000000000000000000000000000000000000000000000000000000000000d",
+          "attemptOrder": "2"
+        }
+      ],
+      "revision": "8"
+    },
+    "outcome": "claimed",
+    "pending": false,
+    "providerSuccess": true,
+    "verification": "confirmed",
+    "windows": [
+      {
+        "id": "five_hour",
+        "usedPercent": 0.0
+      }
+    ]
+  },
+  "secondKey": "000000000000000000000000000000000000000000000000000000000000000d"
+}
