@@ -194,7 +194,7 @@ class AcpTests(Fixtures):
             self.assertTrue(asset["url"].startswith("https://dl.google.com/agy-extensions/releases/"))
             self.assertRegex(asset["sha256"], r"^[a-f0-9]{64}$")
 
-    def test_every_os_stages_without_activation_and_preserves_in_use_old_release(self):
+    def test_every_os_activates_pin_and_preserves_in_use_old_release(self):
         for host in ("ubuntu", "mac", "windows"):
             with self.subTest(host=host):
                 install, old = self.old_acp(host)
@@ -203,12 +203,12 @@ class AcpTests(Fixtures):
                 try:
                     with mock.patch.object(acp, "validate_runtime") as validate, mock.patch.object(acp, "command") as run:
                         row = acp.update_antigravity_acp(install)
-                    self.assertEqual((row["previousVersion"], row["version"], row["status"]), ("1.3.0", "1.3.0", "action_required"))
+                    self.assertEqual((row["previousVersion"], row["version"], row["status"]), ("1.3.0", "1.4.5", "updated"))
                     self.assertTrue(old.is_dir()); self.assertIsNone(process.poll())
-                    self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": old.name})
+                    self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": asset["sha256"]})
                     self.assertTrue((install.path / "versions" / asset["sha256"] / acp.RECORD).is_file())
-                    self.assertEqual(row["messageCode"], "antigravity_acp_staged")
-                    self.assertEqual(acp.detect_antigravity_acp(host).version, "1.3.0")
+                    self.assertEqual(row["messageCode"], "antigravity_acp_updated")
+                    self.assertEqual(acp.detect_antigravity_acp(host).version, "1.4.5")
                     self.assertTrue(validate.called)
                     if host == "mac":
                         self.assertEqual(run.call_args.args[0][:4], ["/usr/bin/codesign", "--force", "--sign", "-"])
@@ -221,7 +221,7 @@ class AcpTests(Fixtures):
         install, old = self.old_acp("ubuntu")
         self.release("ubuntu")
         row = acp.update_antigravity_acp(install)
-        self.assertEqual((row["status"], row["version"]), ("action_required", "1.3.0"))
+        self.assertEqual((row["status"], row["version"]), ("updated", "1.4.5"))
         self.assertTrue(old.is_dir())
 
     @unittest.skipIf(os.name == "nt", "executes Unix shebang fixtures")
@@ -296,14 +296,102 @@ class AcpTests(Fixtures):
                 self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": newer.name})
                 self.assertEqual(detect("windows").version, version)
                 self.assertEqual((row["status"], row["messageCode"]),
-                                 ("action_required", "antigravity_acp_staged"))
+                                 ("current", "antigravity_acp_newer_kept" if version == "1.5.0" else "current"))
+
+    def publish_t3(self, old, version="1.5.0", release_id="d" * 64):
+        directory = old.with_name(release_id)
+        directory.mkdir(exist_ok=True)
+        record = acp.read_json(old / acp.RECORD)
+        record.update(releaseId=release_id, version=version)
+        for kind in ("executable", "harness"):
+            shutil.copyfile(old / record[kind]["name"], directory / record[kind]["name"])
+        common.write_private_json(directory / acp.RECORD, record)
+        return directory
+
+    def test_newer_activation_between_check_and_rename_converges(self):
+        install, old = self.old_acp("windows")
+        asset = self.release("windows")
+        replace = os.replace
+        writes = []
+        def race(source, destination):
+            if pathlib.Path(destination) == install.path / "active.json":
+                writes.append(json.loads(pathlib.Path(source).read_text())["releaseId"])
+                if len(writes) == 1:
+                    newer = self.publish_t3(old)
+                    # T3 publishes the complete directory then activates, immediately
+                    # before AAC's actual rename overwrites that activation.
+                    pointer = install.path / "t3-pointer.tmp"
+                    pointer.write_text(json.dumps({"releaseId": newer.name}))
+                    replace(pointer, destination)
+            return replace(source, destination)
+        with mock.patch.object(acp, "validate_runtime"), mock.patch.object(os, "replace", side_effect=race):
+            row = acp.update_antigravity_acp(install)
+        self.assertEqual(writes, [asset["sha256"], "d" * 64])
+        self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": "d" * 64})
+        self.assertEqual((row["status"], row["version"], row["messageCode"]),
+                         ("updated", "1.5.0", "antigravity_acp_updated"))
+
+    def test_t3_pointer_change_after_aac_write_survives(self):
+        install, old = self.old_acp("windows")
+        self.release("windows")
+        replace = os.replace
+        changed = False
+        def race(source, destination):
+            nonlocal changed
+            value = replace(source, destination)
+            if pathlib.Path(destination) == install.path / "active.json" and not changed:
+                changed = True
+                newer = self.publish_t3(old)
+                pointer = install.path / "t3-pointer.tmp"
+                pointer.write_text(json.dumps({"releaseId": newer.name}))
+                replace(pointer, destination)
+            return value
+        with mock.patch.object(acp, "validate_runtime"), mock.patch.object(os, "replace", side_effect=race):
+            row = acp.update_antigravity_acp(install)
+        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.0"))
+        self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": "d" * 64})
+
+    def test_continuing_publications_exhaust_bounded_activation_honestly(self):
+        install, old = self.old_acp("windows")
+        self.release("windows")
+        replace = os.replace
+        writes = []
+        def race(source, destination):
+            if pathlib.Path(destination) == install.path / "active.json":
+                writes.append(destination)
+                self.publish_t3(old, "2.0." + str(len(writes)), format(len(writes), "064x"))
+            return replace(source, destination)
+        with mock.patch.object(acp, "validate_runtime"), mock.patch.object(os, "replace", side_effect=race):
+            row = acp.update_antigravity_acp(install)
+        self.assertEqual(len(writes), 5)
+        self.assertEqual((row["status"], row["messageCode"]),
+                         ("failed", "antigravity_acp_activation_unsettled"))
+        self.assertEqual(row["version"], acp.detect_antigravity_acp("windows").version)
+
+    def test_newest_complete_on_disk_wins_without_t3_activation(self):
+        install, old = self.old_acp("windows")
+        self.release("windows")
+        newer = self.publish_t3(old)
+        incomplete = self.publish_t3(old, "9.0.0", "e" * 64)
+        (incomplete / "localharness_external.exe").unlink()
+        with mock.patch.object(acp, "validate_runtime"):
+            row = acp.update_antigravity_acp(install)
+        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.0"))
+        self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": newer.name})
 
     def test_no_downgrade_or_network_for_current_runtime(self):
-        install, _ = self.old_acp("ubuntu")
-        install.version = "1.5.0"
-        with mock.patch.object(acp, "download") as fetch:
-            self.assertEqual(acp.update_antigravity_acp(install)["status"], "current")
+        install, old = self.old_acp("windows")
+        newer = self.publish_t3(old)
+        common.write_private_json(install.path / "active.json", {"releaseId": newer.name})
+        install = acp.detect_antigravity_acp("windows")
+        pointer = (install.path / "active.json").read_bytes()
+        with mock.patch.object(acp, "download") as fetch, mock.patch.object(acp, "write_private_json") as write:
+            row = acp.update_antigravity_acp(install)
+        self.assertEqual((row["status"], row["version"], row["messageCode"]),
+                         ("current", "1.5.0", "antigravity_acp_newer_kept"))
+        self.assertEqual((install.path / "active.json").read_bytes(), pointer)
         fetch.assert_not_called()
+        write.assert_not_called()
 
 
 class MacGuiTests(Fixtures):

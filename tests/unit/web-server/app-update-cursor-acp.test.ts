@@ -28,7 +28,7 @@ const rows = Object.keys(UPDATE_APP_LABELS).map((appId) => ({
 }));
 
 describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
-  it('keeps staged ACP activation actionable with the observed active version', () => {
+  it('keeps legacy staged rows actionable by rerunning Update apps', () => {
     const staged = {
       ...rows[0],
       status: 'action_required',
@@ -48,6 +48,22 @@ describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
     expect(
       normalizeAppUpdateRow({ ...staged, status: 'updated' }, 'antigravity-acp', 'windows').message
     ).toBe(MESSAGES.helper_invalid);
+  });
+
+  it('reports newer kept and bounded activation failure only for ACP', () => {
+    for (const [status, messageCode] of [
+      ['current', 'antigravity_acp_newer_kept'],
+      ['failed', 'antigravity_acp_activation_unsettled'],
+    ] as const) {
+      const row = { ...rows[0], status, messageCode };
+      expect(normalizeAppUpdateRow(row, 'antigravity-acp', 'windows').message).toBe(
+        MESSAGES[messageCode]
+      );
+      expect(normalizeAppUpdateRow(row, 'cursor-cli', 'windows').message).toBe(
+        MESSAGES.helper_invalid
+      );
+    }
+    expect(MESSAGES.antigravity_acp_staged).toContain('Run Update apps again');
   });
 
   it('expects twelve apps on five computers and keeps the rollback app set frozen', () => {

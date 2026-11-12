@@ -1,7 +1,8 @@
 """T3's managed Antigravity ACP pair, separate from the agy CLI.
 
 Mirrors AntigravityInstallation.ts: pinned Google ZIP, SHA-256 and byte counts,
-exactly two plain files and ACP initialize verification. T3 owns activation.
+exactly two plain files and ACP initialize verification. Activation converges to
+the newest complete release, including releases published by T3.
 Old releases are never removed, even when no running session is visible.
 """
 
@@ -66,7 +67,7 @@ def completed(root, release_id, host):
                        ("harness", "localharness_external" + (".exe" if host == "windows" else ""))):
         item = record.get(kind)
         if (not isinstance(item, dict) or item.get("name") != name or
-                type(item.get("bytes")) is not int or item["bytes"] <= 0):
+                type(item.get("bytes")) is not int or not 0 < item["bytes"] <= 9007199254740991):
             raise UpdateFailure("readiness_unknown")
         path = directory / name
         if (path.is_symlink() or not path.is_file() or path.stat().st_size != item["bytes"] or
@@ -213,16 +214,66 @@ def extract_runtime(archive, directory, asset):
             target.chmod(0o755)
 
 
+def newest_complete(root, host, active):
+    # completed() mirrors T3's manifest, file-name, size and executable checks.
+    # Incomplete staging directories are not candidates. Keep the active ID on ties.
+    target = completed(root, active, host)
+    for directory in sorted((root / "versions").iterdir()):
+        if not RELEASE_ID.fullmatch(directory.name):
+            continue
+        try:
+            candidate = completed(root, directory.name, host)
+        except (UpdateFailure, OSError, ValueError, TypeError):
+            continue
+        if version_tuple(candidate["version"]) > version_tuple(target["version"]):
+            target = candidate
+    return target
+
+
+def activate_newest(root, host, deadline):
+    """Return the verified final record and whether AAC wrote the pointer."""
+    wrote = False
+    # T3 atomically publishes its validated directory BEFORE renaming active.json.
+    # Thus even an activation overwritten between our scan and rename is recoverable
+    # from disk: each pass chooses the maximum complete version, never our pin alone.
+    # This is monotonic at convergence, not a shared CAS: a newly published directory
+    # between scan and rename can cause a transient regression until the next pass.
+    # A T3 write/publication after our final verification (or endless writers beyond
+    # this bounded loop) is outside this guarantee; exhaustion is reported as failure.
+    for _ in range(5):
+        budget(deadline, 1)
+        active = read_json(root / "active.json").get("releaseId")
+        target = newest_complete(root, host, active)
+        if read_json(root / "active.json").get("releaseId") != active:
+            continue
+        if target["releaseId"] != active:
+            write_private_json(root / "active.json", {"releaseId": target["releaseId"]})
+            wrote = True
+        observed = read_json(root / "active.json").get("releaseId")
+        latest = newest_complete(root, host, observed)
+        if (observed == target["releaseId"] and latest["releaseId"] == observed and
+                read_json(root / "active.json").get("releaseId") == observed):
+            return latest, wrote
+    raise UpdateFailure("antigravity_acp_activation_unsettled")
+
+
 def update_antigravity_acp(install, deadline=None, progress=None):
     before, attempted = install.version, False
     asset = RELEASES.get(platform_key(install.platform))
     if asset is None:
         return result(install.app_id, install.platform, "failed", before, before, install.manager, "unsupported")
     try:
-        # Never downgrade a release T3 installed after this AAC package's pin.
-        if version_tuple(before) >= version_tuple(asset["version"]):
-            return result(install.app_id, install.platform, "current", before, before, install.manager)
         root = managed_root(install.platform)
+        current = detect_antigravity_acp(install.platform)
+        if current is None or current.probe:
+            raise UpdateFailure("readiness_unknown")
+        if version_tuple(current.version) >= version_tuple(asset["version"]):
+            attempted = True
+            final, wrote = activate_newest(root, install.platform, deadline)
+            code = "antigravity_acp_updated" if wrote else (
+                "antigravity_acp_newer_kept" if version_tuple(final["version"]) > version_tuple(asset["version"]) else "current")
+            return result(install.app_id, install.platform, "updated" if wrote else "current",
+                          before, final["version"], install.manager, code, wrote)
         versions = root / "versions"
         destination = versions / asset["sha256"]
         attempted = True
@@ -269,20 +320,11 @@ def update_antigravity_acp(install, deadline=None, progress=None):
                     if not matches_asset(record, asset, install.platform):
                         raise UpdateFailure("signature_failed") from None
                     validate_runtime(destination, asset, install.platform, deadline)
-        budget(deadline, 1)
-        current = detect_antigravity_acp(install.platform)
-        if current is None or current.probe:
-            raise UpdateFailure("readiness_unknown")
-        if version_tuple(current.version) >= version_tuple(asset["version"]):
-            # Another T3 install won the race with a newer pin. Keep it.
-            return result(install.app_id, install.platform, "current", before, current.version, install.manager,
-                          attempted=True)
-        # T3's ab8e488e installer uses an in-process semaphore and unconditional
-        # rename, with no shared lock/CAS protocol. Replacing the pointer here
-        # can erase an activation we never observed, even with a post-write read.
-        # Publish only the verified pair; let T3 activate it in provider settings.
-        return result(install.app_id, install.platform, "action_required", before, current.version, install.manager,
-                      "antigravity_acp_staged", True)
+        final, wrote = activate_newest(root, install.platform, deadline)
+        code = "antigravity_acp_updated" if wrote else (
+            "antigravity_acp_newer_kept" if version_tuple(final["version"]) > version_tuple(asset["version"]) else "current")
+        return result(install.app_id, install.platform, "updated" if wrote else "current",
+                      before, final["version"], install.manager, code, attempted)
     except (UpdateFailure, OSError, ValueError, TypeError, zipfile.BadZipFile) as error:
         refreshed = detect_antigravity_acp(install.platform)
         after = refreshed.version if refreshed else None

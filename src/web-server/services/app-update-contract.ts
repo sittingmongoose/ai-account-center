@@ -405,6 +405,10 @@ export function normalizeAppUpdateRow(
         row.status !== 'action_required')) ||
     (code === 'antigravity_acp_updated' &&
       (appId !== 'antigravity-acp' || row.status !== 'updated')) ||
+    (code === 'antigravity_acp_newer_kept' &&
+      (appId !== 'antigravity-acp' || row.status !== 'current')) ||
+    (code === 'antigravity_acp_activation_unsettled' &&
+      (appId !== 'antigravity-acp' || row.status !== 'failed')) ||
     (code === 'antigravity_acp_staged' &&
       (appId !== 'antigravity-acp' || row.status !== 'action_required')) ||
     (['mac_keychain_locked', 'mac_gui_unavailable', 'mac_gui_cleanup_failed'].includes(code) &&
