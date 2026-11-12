@@ -31,6 +31,7 @@ import {
 } from './status-view-panels';
 import type { ReadProblem } from './status-collectors';
 import { buildSpend, quotaSource } from './status-view-quota';
+import { buildStrip, pinnedProblems } from './status-view-strip';
 import type {
   BatchView,
   SectionView,
@@ -678,8 +679,9 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
   const machineRows = MACHINES.map((id) => machineView(inputs, id, browsersSrc));
   const quotaSrc = quotaSource(inputs.quota, now, timeZone);
   const usageSrc = usageSource(inputs);
+  const reportsSrc = reportsSource(inputs);
   const sources: Source[] = [
-    reportsSource(inputs),
+    reportsSrc,
     registrySrc,
     machinesSource(inputs, machineRows),
     browsersSrc,
@@ -716,14 +718,10 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
 
   // The pinned panel's own worst thread, named (D1, PINNED-THREADS.md section 2): looping
   // first, then waiting on the owner. Built from the composed panel, never from fixture text.
-  const pinnedView = inputs.pinned && !('unavailable' in inputs.pinned) ? inputs.pinned : null;
-  const loopingPins = pinnedView?.updates.filter((update) => update.looping.answer === 'yes') ?? [];
-  const waitingPins = pinnedView?.updates.filter((update) => update.blocked?.waitingOnYou) ?? [];
-  const roundsOf = (update: (typeof loopingPins)[number]) => update.looping.rounds ?? 0;
-  const worstLoop = loopingPins.reduce<(typeof loopingPins)[number] | null>(
-    (worst, update) => (worst === null || roundsOf(update) > roundsOf(worst) ? update : worst),
-    null
-  );
+  const pins = pinnedProblems(inputs.pinned);
+  const loopingPins = pins.looping;
+  const waitingPins = pins.waiting;
+  const worstLoop = pins.worstLoop;
 
   const runs: HeadlineRun[] = [];
   if (questions > 0)
@@ -808,6 +806,17 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
         loopingPinned: loopingPins.length,
         waitingPinned: waitingPins.length,
       },
+      strip: buildStrip({
+        questions,
+        decisions,
+        reports: reportsSrc,
+        pins,
+        projects,
+        done,
+        blocked: blockedItems,
+        overLimitBudgets: overLimit,
+        sources,
+      }),
     },
     sources,
     cards,

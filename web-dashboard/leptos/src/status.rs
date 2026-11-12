@@ -42,6 +42,11 @@ fn headline_runs(view: &StatusView) -> Vec<Run> {
 #[component]
 pub fn StatusPage(embedded: bool) -> impl IntoView {
     let live = expect_context::<Live>();
+    // The summary counts (summary.rs); None from a server older than the strip, which keeps the sentence.
+    let strip = Memo::new(move |_| {
+        live.view
+            .with(|v| v.as_ref().and_then(|v| v.headline.strip.clone()))
+    });
     let info = ChromeInfo {
         updated: Signal::derive(move || {
             if live.view.with(|v| v.is_none()) {
@@ -55,6 +60,7 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
             live.view
                 .with(|v| v.as_ref().map(headline_runs).unwrap_or_default())
         }),
+        strip: Some(strip.into()),
         refresh: Callback::new(move |_| live.reload()),
         lead: None,
     };
@@ -73,11 +79,16 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
     view! {
         <PageShell page=crate::Page::Status embedded=embedded info=info>
             <div class="page" data-stale=move || live.error.with(|e| e.is_some()).then_some("1")>
-                <div class="page-head">
-                    <div>
-                        <h1 class="page-title">"Status"</h1>
-                        <p class="headline">{move || runs_view(live.view.with(|v| v.as_ref().map(headline_runs).unwrap_or_default()))}</p>
-                    </div>
+                <div class="page-head st-head">
+                    <h1 class="page-title">"Status"</h1>
+                    <Show
+                        when=move || strip.with(|s| s.is_some())
+                        fallback=move || view! {
+                            <p class="headline">{move || runs_view(live.view.with(|v| v.as_ref().map(headline_runs).unwrap_or_default()))}</p>
+                        }
+                    >
+                        <crate::summary::SummaryStrip strip=strip/>
+                    </Show>
                 </div>
                 {banner}
                 <Show

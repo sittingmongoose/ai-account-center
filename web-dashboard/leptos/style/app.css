@@ -1309,13 +1309,102 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
   .sb-title .lbl-short { display: inline; }
   .sb-title { gap: 6px 10px; }
 }
-/* Duo portrait: the band already names the page and sums it up. */
-:root[data-chrome='band'] .page-head:not(.sb-head) { display: none; }
+/* Duo portrait: the band already names the page and sums it up (Status keeps its worst-thread line, below). */
+:root[data-chrome='band'] .page-head:not(.sb-head):not(.st-head) { display: none; }
 /* Beside the rail, which shows the page, the page's name goes, as on the phone: the summary starts at the top. */
 :root[data-chrome='rail'] .page-title { display: none; }
 /* Beside the rail the page's name and its one-line summary share a line, as wider screens do: no line for a word. */
 :root[data-chrome='rail'] .page-head > div { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
 :root[data-chrome='rail'] .page-head .headline { margin-top: 0; }
+
+/* ==========================================================================
+   Status summary strip (owner, 2026-11-12: the headline sentence "just looks like an out of place paragraph").
+   Counts, each a number in its tone over a short label, then one line naming the worst pinned thread: two rows at
+   most on every screen (one on a desktop, where that line sits beside the counts). Nothing wraps inside a count; a
+   long title is cut to its line and shown whole on a tap. Only the numbers carry a colour. summary.rs.
+   ========================================================================== */
+.page-head.st-head { display: block; }
+.st-head .page-title { margin-bottom: 12px; }
+.sum { display: block; min-width: 0; }
+.sum-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 22px; min-width: 0; }
+.sum-i, .sum-worst { -webkit-appearance: none; appearance: none; background: none; border: 0; margin: 0; padding: 0;
+  font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 6px; -webkit-tap-highlight-color: transparent; }
+.sum-i { flex: none; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sum-n { font-size: 17px; line-height: 1.1; font-weight: 640; font-variation-settings: 'wght' 640; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+.sum-n[data-tone] { font-weight: 640; font-variation-settings: 'wght' 640; }
+.sum-n[data-tone='quiet'] { color: var(--ink-4); }
+.sum-l { font-size: var(--fs-small); line-height: 1.25; color: var(--ink-3); white-space: nowrap; }
+.sum .lbl-short { display: none; }
+@media (hover: hover) { .sum-i:hover .sum-l, .sum-worst:hover .sw-title { color: var(--accent-text); } }
+.sum-i[aria-expanded='true'] .sum-l { color: var(--ink); }
+.sum-i:focus-visible, .sum-worst:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* The worst pinned thread: its own line under the counts, the state word first, the title cut, the task's id last. */
+.sum-worst { flex: 1 1 100%; min-width: 0; display: flex; align-items: baseline; gap: 7px; line-height: 1.35; }
+.sw-word { flex: none; white-space: nowrap; }
+.sw-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink);
+  font-weight: 560; font-variation-settings: 'wght' 560; }
+.sw-task { flex: none; font-family: var(--mono); font-stretch: 87.5%; font-size: 11px; letter-spacing: .02em; color: var(--ink-3); white-space: nowrap; }
+.sum-worst.open .sw-title { white-space: normal; overflow: visible; }
+.sum-more { margin-top: 6px; font-size: var(--fs-small); line-height: 1.4; color: var(--ink-2); max-width: 760px; }
+/* Phones and the folded Duo: the short labels, the counts spread over the whole width. */
+@container content (max-width: 599.98px) {
+  .sum-row { justify-content: space-between; gap: 7px 8px; }
+  .sum-n { font-size: 16px; }
+  .sum-l { font-size: var(--fs-tiny); }
+  .sum .lbl-long { display: none; }
+  .sum .lbl-short { display: inline; }
+  /* Seven counts or more: four columns, so the second row holds three or four, never one. */
+  .sum-row.many { display: grid; grid-template-columns: repeat(4, auto); justify-content: space-between; align-items: end; }
+  .sum-row.many .sum-worst { grid-column: 1 / -1; }
+}
+/* Narrower than any installed pose (a Safari tab beside its own toolbar on the folded Duo, about 290 px): five or six
+   counts go in three columns, two rows of two or three, never one count alone. Up to four fit on one row. */
+@container content (max-width: 349.98px) {
+  .sum-row:not(.many):has(> .sum-i:nth-child(5 of .sum-i)) { display: grid; grid-template-columns: repeat(3, auto);
+    justify-content: space-between; align-items: end; }
+  .sum-row:not(.many) .sum-worst { grid-column: 1 / -1; }
+}
+/* Seven counts or more between phone and tablet: the short labels keep them on one row. */
+@container content (min-width: 600px) and (max-width: 799.98px) {
+  .sum-row.many .lbl-long { display: none; }
+  .sum-row.many .lbl-short { display: inline; }
+}
+/* From 800 px the worst thread's line sits beside the counts, as a cell of its own: the title over its state and task. */
+@container content (min-width: 800px) {
+  .sum-row.has-worst .sum-worst { flex: 1 1 300px; display: grid; grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "title title" "word task"; gap: 2px 8px; align-content: end; padding-left: 22px; border-left: 1px solid var(--rule); }
+  .sum-worst .sw-title { grid-area: title; font-size: calc(var(--fs-body) + 1px); font-weight: 600; font-variation-settings: 'wght' 600; }
+  .sum-worst .sw-word { grid-area: word; font-size: var(--fs-small); line-height: 1.25; }
+  .sum-worst .sw-task { grid-area: task; line-height: 1.25; }
+}
+/* The Duo open on its side and tablets: the short labels, so the counts leave the worst thread room beside them. */
+@container content (min-width: 800px) and (max-width: 1279.98px) {
+  .sum .lbl-long { display: none; }
+  .sum .lbl-short { display: inline; }
+  /* With seven counts or more the row is full: the worst thread takes its own line, as on a phone. */
+  .sum-row.has-worst.many .sum-worst { flex-basis: 100%; display: flex; padding-left: 0; border-left: 0; }
+  .sum-row.many .sum-worst .sw-title { font-size: inherit; font-weight: 560; font-variation-settings: 'wght' 560; }
+  .sum-row.many .sum-worst .sw-word { font-size: inherit; line-height: inherit; }
+}
+@container content (min-width: 1280px) {
+  .sum-row { gap: 8px 28px; }
+  .sum-n { font-size: 21px; }
+  .sum-row.has-worst .sum-worst { padding-left: 28px; }
+  .sum-worst .sw-title { font-size: 15px; }
+}
+/* Duo upright: the counts are in the status band, which takes no taps; the page keeps the worst thread's line. */
+:root[data-chrome='band'] .st-head .sum-i, :root[data-chrome='band'] .st-head .headline { display: none; }
+:root[data-chrome='band'] .st-head:not(:has(.sum-worst)) { display: none; }
+.band-info .bi2.bs { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink-3); }
+.bs-i + .bs-i { margin-left: 12px; }
+.bs-i b { color: var(--ink); font-weight: 640; font-variation-settings: 'wght' 640; font-variant-numeric: tabular-nums; }
+.bs-i b[data-tone] { font-weight: 640; font-variation-settings: 'wght' 640; }
+.bs-i b[data-tone='quiet'] { color: var(--ink-4); }
+/* A count's tap scrolls its section to the top, clear of a sticky header, top bar or band. */
+.status-grid > * { scroll-margin-top: 10px; }
+:root[data-chrome='desk'] .status-grid > * { scroll-margin-top: calc(var(--safe-top) + 75px); }
+:root[data-chrome='phone'] .status-grid > *, :root[data-chrome='band'] .status-grid > * { scroll-margin-top: calc(var(--safe-top) + 57px); }
 
 
 /* ==========================================================================

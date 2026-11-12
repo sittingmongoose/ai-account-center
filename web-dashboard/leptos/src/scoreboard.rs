@@ -591,6 +591,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                 ..Default::default()
             }]
         }),
+        strip: None,
         refresh: Callback::new(move |_| board.reload()),
         lead: None,
     };

@@ -294,6 +294,56 @@ pub struct Headline {
     #[serde(deserialize_with = "nullable")]
     pub runs: Vec<Run>,
     pub counts: HeadlineCounts,
+    /// The same facts as counts (summary.rs). Absent from servers older than 2026-11-12, which the page draws as
+    /// the sentence in `runs`.
+    pub strip: Option<Strip>,
+}
+
+/// The summary strip: the headline as counts and one line naming the worst pinned thread.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Strip {
+    #[serde(deserialize_with = "nullable")]
+    pub items: Vec<StripItem>,
+    pub worst: Option<StripWorst>,
+}
+
+/// One count: the number as the server wrote it ("2", "51/83", "–" when unknown), its words long and short, its
+/// tone, the section that explains it and the whole fact as a sentence.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StripItem {
+    #[serde(deserialize_with = "nullable")]
+    pub key: String,
+    #[serde(deserialize_with = "nullable")]
+    pub value: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    #[serde(deserialize_with = "nullable")]
+    pub short: String,
+    pub tone: Option<String>,
+    pub section: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub detail: String,
+}
+
+/// The worst pinned thread (PINNED-THREADS.md section 2): its state word, title, looping task and the composer's
+/// sentence for it.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StripWorst {
+    #[serde(deserialize_with = "nullable")]
+    pub state: String,
+    #[serde(deserialize_with = "nullable")]
+    pub word: String,
+    pub tone: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub thread_id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub title: String,
+    pub task: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]

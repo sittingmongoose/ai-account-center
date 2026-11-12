@@ -114,6 +114,11 @@ describe('status view', () => {
     expect(only?.board?.path).toBe(board);
     expect(view.headline.counts.blockedItems).toBe(1);
     expect(view.headline.runs.map((r) => r.text).join('')).toContain('2 of 4 items landed');
+    // The summary strip carries the same counts, and names the blocked item by id.
+    const strip = Object.fromEntries(view.headline.strip.items.map((i) => [i.key, i]));
+    expect(strip.done.value).toBe('2/4');
+    expect(strip.blocked.value).toBe('1');
+    expect(strip.blocked.detail).toContain('Blocked: C ');
   });
 
   it('marks stale threads, leaves out quiet ones unless blocked, and adds pm-mail threads', async () => {
@@ -350,6 +355,18 @@ describe('status view', () => {
     expect(view.headline.counts.loopingPinned).toBe(1);
     expect(view.headline.counts.waitingPinned).toBe(1);
     expect(view.headline.tone).toBe('warn');
+    // The strip says the same in counts and names the same worst thread once. This root has
+    // no reports folder, so the questions are unknown ("–"), where the sentence guesses "No".
+    expect(view.headline.strip.items.slice(0, 3).map((i) => [i.key, i.value])).toEqual([
+      ['questions', '–'],
+      ['looping', '1'],
+      ['waiting', '1'],
+    ]);
+    expect(view.headline.strip.worst).toMatchObject({
+      state: 'looping',
+      title: 'Build PMConcept7',
+      task: 'F-07',
+    });
     // Two looping pins: the worst (most rounds) is the one named, the count says both.
     const two = {
       ...panel,
@@ -378,6 +395,12 @@ describe('status view', () => {
     );
     expect(bare.headline.runs.map((run) => run.text).join('')).not.toContain('pinned thread');
     expect(bare.headline.counts.loopingPinned).toBe(0);
+    // The strip says the pinned counts are unknown instead of hiding them as if zero.
+    expect(bare.headline.strip.items.find((i) => i.key === 'pinned')).toMatchObject({
+      value: '–',
+      tone: 'quiet',
+    });
+    expect(bare.headline.strip.worst).toBeNull();
   });
 
   it('counts only question, judgement and action cards as questions for you (D10)', async () => {
@@ -401,6 +424,10 @@ describe('status view', () => {
     // Sample and objection cards never count as questions; the objection is a decision
     // to look at instead.
     expect(view.headline.counts).toMatchObject({ openCards: 5, questions: 3, decisions: 1 });
+    expect(view.headline.strip.items.slice(0, 2).map((i) => [i.key, i.value])).toEqual([
+      ['questions', '3'],
+      ['decisions', '1'],
+    ]);
     const line = view.headline.runs.map((run) => run.text).join('');
     expect(line).toContain('3 questions for you');
     expect(line).toContain('1 decision to look at');

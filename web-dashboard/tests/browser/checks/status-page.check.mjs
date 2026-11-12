@@ -126,6 +126,118 @@ function signedAnswers(t) {
   return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')) : [];
 }
 
+
+// The summary strip's widths (owner, 2026-11-12): iPhone, Duo folded, Duo open upright (top bar, then the status band),
+// Duo open on its side, desktop.
+const STRIP_FORMATS = [
+  { name: 'phone-390', w: 390, h: 844, safe: '0,0,34,0', mobile: true, chrome: 'phone' },
+  { name: 'duo-folded-466', w: 466, h: 678, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
+  { name: 'duo-upright-669', w: 669, h: 869, safe: '0,0,34,0', mobile: true, chrome: 'phone' },
+  { name: 'duo-band-669', w: 669, h: 951, safe: '82,0,34,0', mobile: true, chrome: 'band' },
+  { name: 'duo-landscape-951', w: 951, h: 669, safe: '0,84,34,0', mobile: true, chrome: 'rail' },
+  { name: 'desktop-1440', w: 1440, h: 900, safe: '0,0,0,0', mobile: false, chrome: 'desk' },
+  // Narrower than any installed pose: the folded Duo's Safari tab (382 wide with the rail), counts in two rows of three.
+  { name: 'duo-safari-382', w: 382, h: 580, safe: '0,84,34,0', mobile: true, chrome: 'rail', maxRows: 3, screen: { width: 466, height: 678 } },
+];
+
+// The owner's case of 2026-11-12 (2 questions, 2 looping, 3 waiting on you, 3 blocked, 51 of 83, 1 source not
+// current) with a long synthetic title, shaped as status-view-strip.ts writes it.
+function stripView() {
+  const view = { ...fixture('status-design-view.json'), spendByStream: fixture('spend-by-stream.json') };
+  const long = 'Make every Project Management panel readable at a glance on phones and the Duo';
+  const first = view.pinned.updates[0];
+  view.pinned = {
+    ...view.pinned,
+    updates: [
+      { ...first, id: 'pin-long', title: long, looping: { answer: 'yes', text: 'Yes. P-BATCH2 has gone back for fixes 4 times.', task: 'P-BATCH2', rounds: 4 } },
+      ...view.pinned.updates,
+    ],
+  };
+  view.headline = {
+    ...view.headline,
+    strip: {
+      items: [
+        { key: 'questions', value: '2', label: 'questions for you', short: 'questions', tone: 'warn', section: 'questions', detail: '2 questions for you.' },
+        { key: 'looping', value: '2', label: 'threads looping', short: 'looping', tone: 'bad', section: 'pinned', detail: `2 pinned threads are looping: ${long} (task P-BATCH2), Build PMConcept7 and Background Activity (task F-07).` },
+        { key: 'waiting', value: '3', label: 'waiting on you', short: 'wait on you', tone: 'warn', section: 'pinned', detail: '3 pinned threads wait on you: Build PMConcept7 and Background Activity, Build two new tabs in AI Account Center, Tool improvements 1-12.' },
+        { key: 'blocked', value: '3', label: 'blocked', short: 'blocked', tone: 'warn', section: null, detail: 'Blocked: F-07 Tray icon sharp at 125% scale, B-3 Pick the reviewers, C-1 Disk floor.' },
+        { key: 'done', value: '51/83', label: 'items done', short: 'done', tone: null, section: null, detail: '51 of 83 items landed or done (dropped items are not counted).' },
+        { key: 'sources', value: '1', label: 'source not current', short: 'not current', tone: 'warn', section: null, detail: 'Not current: Agent reports: 1 file unreadable since 5:17 PM.' },
+      ],
+      worst: { state: 'looping', word: 'Looping', tone: 'bad', threadId: 'pin-long', title: long, task: 'P-BATCH2', detail: 'Yes. P-BATCH2 has gone back for fixes 4 times.' },
+    },
+  };
+  return view;
+}
+
+// What the strip draws: each visible count with its number, its shown label and their boxes, the worst thread's line,
+// and how many rows they take.
+async function stripLayout(t) {
+  return t.page.evaluate(() => {
+    const shown = (el) => !!el && el.getClientRects().length > 0;
+    const box = (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height, top: r.top, bottom: r.bottom, left: r.left, right: r.right };
+    };
+    const lineH = (el) => parseFloat(getComputedStyle(el).lineHeight) || parseFloat(getComputedStyle(el).fontSize) * 1.3;
+    const items = [...document.querySelectorAll('.st-head .sum-i')].filter(shown).map((el) => {
+      const n = el.querySelector('.sum-n');
+      const label = [...el.querySelectorAll('.sum-l > span')].find(shown);
+      return {
+        key: el.dataset.key,
+        value: n.textContent,
+        label: label ? label.textContent : '',
+        box: box(el),
+        n: box(n),
+        l: label ? box(label) : null,
+        labelOneLine: !!label && label.getClientRects().length === 1 && label.getBoundingClientRect().height < lineH(label) * 1.5,
+        cut: el.scrollWidth > el.clientWidth + 1,
+      };
+    });
+    const w = document.querySelector('.st-head .sum-worst');
+    const part = (sel) => (shown(w?.querySelector(sel)) ? box(w.querySelector(sel)) : null);
+    const worst = shown(w)
+      ? {
+          box: box(w),
+          title: w.querySelector('.sw-title').textContent,
+          hover: w.getAttribute('title'),
+          task: w.querySelector('.sw-task')?.textContent ?? null,
+          word: part('.sw-word'),
+          t: part('.sw-title'),
+          k: part('.sw-task'),
+          titleLines: w.querySelector('.sw-title').getClientRects().length,
+          titleCut: w.querySelector('.sw-title').scrollWidth > w.querySelector('.sw-title').clientWidth + 1,
+          titleH: w.querySelector('.sw-title').getBoundingClientRect().height,
+          titleLineH: lineH(w.querySelector('.sw-title')),
+        }
+      : null;
+    // Rows, by the cells' bottom edges (the row aligns them at the bottom).
+    const cells = [...items.map((i) => i.box), ...(worst ? [worst.box] : [])];
+    const rows = [];
+    for (const c of cells) {
+      const row = rows.find((r) => Math.abs(r.bottom - c.bottom) < 6);
+      if (row) row.n += 1;
+      else rows.push({ bottom: c.bottom, n: 1, items: 0 });
+    }
+    for (const i of items) rows.find((r) => Math.abs(r.bottom - i.box.bottom) < 6).items += 1;
+    const band = document.querySelector('.band-info .bi2.bs');
+    const strip = document.querySelector('.st-head .sum');
+    return {
+      items,
+      worst,
+      rows: rows.map((r) => ({ n: r.n, items: r.items })),
+      right: Math.max(0, ...cells.map((c) => c.right)),
+      safeRight: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-right')) || 0,
+      width: innerWidth,
+      sideways: document.documentElement.scrollWidth > innerWidth + 1,
+      strip: shown(strip) ? box(strip) : null,
+      band: shown(band)
+        ? { text: band.textContent, h: band.getBoundingClientRect().height, cut: band.scrollWidth > band.clientWidth + 1, values: [...band.querySelectorAll('.bs-i b')].map((b) => b.textContent) }
+        : null,
+    };
+  });
+}
+
 export const tests = {
   async '72 questions stay bounded and searchable'(t) {
     const view = fixture('status-view.json');
@@ -417,6 +529,130 @@ export const tests = {
         await t.count('.plate-tools.only-land .btn', 3);
       }
     }
+  },
+
+  // The summary strip (owner, 2026-11-12: the headline sentence "just looks like an out of place paragraph"). At each
+  // width the counts and the worst pinned thread take at most two rows, no count or word sits alone, nothing is cut
+  // but the long title (whole on hover and on a tap), every number and word drawn is the view's, and a tap jumps to
+  // the count's section or opens its sentence.
+  async 'status summary strip at each width'(t) {
+    const view = stripView();
+    const want = view.headline.strip;
+    for (const f of STRIP_FORMATS) {
+      await t.newContext({ viewport: { width: f.w, height: f.h }, ...(f.screen ? { screen: f.screen } : {}), isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1 });
+      await openStatus(t, view, `?safe=${f.safe}`);
+      await t.page.waitForSelector('.st-head .sum-worst');
+      await t.equal(`${f.name}: chrome`, await t.page.evaluate(() => document.documentElement.dataset.chrome), f.chrome);
+      const m = await stripLayout(t);
+      const name = f.name;
+      // The sentence is gone; the strip is there.
+      await t.count('.st-head .headline', 0);
+      await t.check(`${name}: at most ${f.maxRows ?? 2} rows (${m.rows.map((r) => r.n).join(' + ')})`, m.rows.length <= (f.maxRows ?? 2));
+      await t.check(`${name}: no sideways scroll, the strip inside the screen`, !m.sideways && m.right <= m.width - m.safeRight + 1);
+      if (f.chrome === 'band') {
+        // The band takes no taps: the counts are drawn there on one line, the page keeps the worst thread's line.
+        await t.equal(`${name}: no counts on the page under the band`, m.items.length, 0);
+        await t.check(`${name}: the band's counts on one line, none cut off`, !!m.band && m.band.h <= 22 && !m.band.cut);
+        await t.equal(`${name}: the band's numbers are the view's`, m.band?.values, want.items.map((i) => i.value));
+        for (const i of want.items)
+          await t.check(`${name}: the band says "${i.value} ${i.short}"`, !!m.band && m.band.text.includes(`${i.value} ${i.short}`));
+      } else {
+        await t.equal(`${name}: the counts are the view's, in its order`, m.items.map((i) => [i.key, i.value]), want.items.map((i) => [i.key, i.value]));
+        await t.check(
+          `${name}: each label is the view's long or short words`,
+          m.items.every((i) => { const v = want.items.find((x) => x.key === i.key); return i.label === v.label || i.label === v.short; })
+        );
+        await t.check(`${name}: every label on one line, under its number`, m.items.every((i) => i.labelOneLine && Math.abs(i.l.left - i.n.left) < 1.5 && i.l.top >= i.n.bottom - 2));
+        await t.check(`${name}: no count is cut`, m.items.every((i) => !i.cut));
+        const itemRows = m.rows.filter((r) => r.items > 0);
+        await t.check(`${name}: the counts are one row, or no row holds one count alone`, itemRows.length === 1 || itemRows.every((r) => r.items >= 2));
+      }
+      // The worst pinned thread: one line, its state word and task kept with the title, the title cut and whole on hover.
+      const w = m.worst;
+      await t.check(`${name}: the worst thread's line is drawn`, !!w);
+      await t.equal(`${name}: its title and task are the view's`, [w.title, w.task], [want.worst.title, want.worst.task]);
+      await t.check(`${name}: the title is one line`, w.titleLines === 1 && w.titleH < w.titleLineH * 1.5);
+      await t.check(`${name}: hovering shows the whole title`, (w.hover ?? '').includes(want.worst.title));
+      const beside = Math.abs(w.word.top - w.t.top) > 4;
+      await t.check(
+        `${name}: "Looping" and the task never sit alone (${beside ? 'beside the counts' : 'one line'})`,
+        beside ? Math.abs(w.word.bottom - w.k.bottom) < 4 && w.word.top > w.t.top : Math.abs(w.word.bottom - w.t.bottom) < 4 && Math.abs(w.k.bottom - w.t.bottom) < 4
+      );
+      if (f.chrome === 'desk' || f.name === 'duo-landscape-951')
+        await t.check(`${name}: the worst thread sits beside the counts (one row)`, m.rows.length === 1);
+      if (m.strip) await t.crop(`strip-${name}`, { x: 0, y: Math.max(0, m.strip.y - 8), width: f.w, height: m.strip.h + 16 }, `summary strip at ${f.w}x${f.h} (${f.chrome})`);
+      // A tap on the worst thread opens its whole title and the composer's sentence; a second tap closes them.
+      await t.page.click('.st-head .sum-worst');
+      await t.page.waitForSelector('.sum-more[data-for="worst"]');
+      await t.equal(`${name}: the tap opens the thread's sentence`, await t.page.textContent('.sum-more'), want.worst.detail);
+      await t.check(
+        `${name}: the tapped title shows whole`,
+        await t.page.evaluate(() => { const e = document.querySelector('.sum-worst.open .sw-title'); return !!e && e.scrollWidth <= e.clientWidth + 1; })
+      );
+      await t.page.click('.st-head .sum-worst');
+      await t.count('.sum-more', 0);
+      if (f.chrome === 'band') continue;
+      // A count no one section explains opens its sentence; one that has a section jumps to it, clear of the header.
+      await t.page.click('.sum-i[data-key="sources"]');
+      await t.equal(`${name}: "not current" names the sources`, await t.page.textContent('.sum-more'), want.items.find((i) => i.key === 'sources').detail);
+      await t.equal(`${name}: and says it is open`, await t.page.getAttribute('.sum-i[data-key="sources"]', 'aria-expanded'), 'true');
+      await t.page.click('.sum-i[data-key="looping"]');
+      await t.count('.sum-more', 0);
+      await t.until(`${name}: "looping" scrolls Pinned threads to the top, below the header`, () => {
+        const r = document.querySelector('.sec-pinned').getBoundingClientRect();
+        return r.top >= 0 && r.top < 140;
+      });
+      await t.check(
+        `${name}: Pinned threads' head is not under the sticky header`,
+        await t.page.evaluate(() => {
+          const sec = document.querySelector('.sec-pinned').getBoundingClientRect();
+          const bar = document.querySelector('.chrome, .topbar');
+          const shown = bar && bar.getClientRects().length > 0 && getComputedStyle(bar).position === 'sticky';
+          return !shown || sec.top >= bar.getBoundingClientRect().bottom - 1;
+        })
+      );
+    }
+    // Eight counts (a decision and a budget on top): still no count alone on a row, nothing cut, nothing sideways.
+    const eight = stripView();
+    eight.headline.strip.items.splice(1, 0, { key: 'decisions', value: '1', label: 'decision to look at', short: 'decision', tone: 'warn', section: 'questions', detail: '1 decision to look at.' });
+    eight.headline.strip.items.splice(6, 0, { key: 'budgets', value: '1', label: 'over budget (estimate)', short: 'over budget', tone: 'bad', section: 'spend', detail: '1 budget is at or over its limit (estimate).' });
+    for (const f of STRIP_FORMATS.filter((x) => x.chrome !== 'band')) {
+      await t.newContext({ viewport: { width: f.w, height: f.h }, ...(f.screen ? { screen: f.screen } : {}), isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1 });
+      await openStatus(t, eight, `?safe=${f.safe}`);
+      await t.page.waitForSelector('.st-head .sum-worst');
+      const m = await stripLayout(t);
+      const name = `${f.name}, eight counts`;
+      await t.equal(`${name}: all eight drawn`, m.items.map((i) => i.value).length, 8);
+      await t.check(`${name}: no count alone on a row (${m.rows.map((r) => r.items).join(' + ')})`, m.rows.filter((r) => r.items > 0).every((r) => r.items >= 2 || m.rows.filter((x) => x.items > 0).length === 1));
+      await t.check(`${name}: at most three rows`, m.rows.length <= 3);
+      await t.check(`${name}: every label on one line, nothing cut`, m.items.every((i) => i.labelOneLine && !i.cut));
+      await t.check(`${name}: no sideways scroll`, !m.sideways && m.right <= m.width - m.safeRight + 1);
+      if (m.strip) await t.crop(`strip-eight-${f.name}`, { x: 0, y: Math.max(0, m.strip.y - 8), width: f.w, height: m.strip.h + 16 }, `eight counts at ${f.w}x${f.h}`);
+    }
+    // A server older than the strip keeps its sentence.
+    const old = fixture('status-design-view.json');
+    delete old.headline.strip;
+    await t.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+    await openStatus(t, old, '?safe=0,0,0,0');
+    await t.count('.st-head .sum', 0);
+    await t.count('.st-head .headline', 1);
+  },
+
+  // The design fixture's own strip: the view's numbers, and a quiet unknown drawn as "–", never 0.
+  async 'status summary strip draws the view, unknowns included'(t) {
+    const view = { ...fixture('status-view.json') };
+    await t.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+    await openStatus(t, view, '?safe=0,0,34,0');
+    await t.page.waitForSelector('.st-head .sum-i');
+    const m = await stripLayout(t);
+    await t.equal('the counts are the view\'s', m.items.map((i) => [i.key, i.value]), view.headline.strip.items.map((i) => [i.key, i.value]));
+    await t.check('at most two rows', m.rows.length <= 2);
+    await t.equal(
+      'the unknown pinned count is a quiet "–"',
+      await t.page.evaluate(() => { const n = document.querySelector('.sum-i[data-key="pinned"] .sum-n'); return n && [n.textContent, n.dataset.tone]; }),
+      ['–', 'quiet']
+    );
+    await t.count('.st-head .sum-worst', 0);
   },
 
   // The chrome follows the window, not the screen. The kit leaves the screen at the window size, so every plain

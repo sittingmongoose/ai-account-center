@@ -167,7 +167,9 @@ one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
     // `openCards` counts every open card; `questions` only question, judgement and action
     // cards ("questions for you"), `decisions` the objection cards ("decisions to look at").
     // Sample cards are in `openCards` and in neither of the other two.
-    "counts": { "openCards": 3, "questions": 3, "decisions": 0, "blockedItems": 2, "workingThreads": 9, "staleSources": 1 }
+    "counts": { "openCards": 3, "questions": 3, "decisions": 0, "blockedItems": 2, "workingThreads": 9, "staleSources": 1 },
+    // The same facts as the page's summary strip: counts, then the worst pinned thread (see below).
+    "strip": { "items": [ StripItem ], "worst": StripWorst | null }
   },
   "sources": [ Source ],
   "cards": { "source": "agent-reports", "open": [ Card ], "answered": [ AnsweredCard ], "batches": [ Batch ],
@@ -181,6 +183,18 @@ one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
   "spend": Spend
 }
 ```
+
+**Summary strip** (`headline.strip`, `status-view-strip.ts`): the page draws the headline as counts, not as the
+`runs` sentence, which stays for older pages. Each `StripItem` is `{ key, value, label, short, tone, section, detail }`:
+`value` is the number as drawn ("2", "51/83", "–" when it can't be known), `label`/`short` its words on wide and narrow
+screens, `tone` `warn`/`bad`/null/`quiet` (a zero or an unknown), `section` the plate a tap scrolls to (`questions`,
+`pinned`, `machines`, `phones`, `spend`; null when no one plate explains it, and a tap opens `detail` instead), and
+`detail` the whole fact as a sentence (hover, tap, screen readers). Order: `questions` (always; `–` while the agent
+reports have never been read), `decisions`, `pinned` (`–` while the pinned panel is unavailable) or `looping` and
+`waiting`, `blocked` (its detail names the items), `budgets`, `done` (landed and done of every item but dropped ones),
+`sources` (its detail names each source and why). A problem count of zero is left out. `worst` is the pinned thread the
+headline names (PINNED-THREADS.md section 2): the looping one with the most failing rounds, else the first one waiting
+on the owner, as `{ state, word, tone, threadId, title, task, detail }`, `detail` being the composer's own sentence.
 
 If the private answer journal cannot be read, the rest of the view still returns normally. `cards.answered` is
 `null`, and `cards.answerHistoryProblem` reads "The answer history can't be read right now." (otherwise null).

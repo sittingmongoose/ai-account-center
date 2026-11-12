@@ -5,7 +5,7 @@
 use super::icons::{Icon, Logo};
 use super::parts::runs_view;
 use crate::Page;
-use crate::api::Run;
+use crate::api::{Run, Strip};
 use crate::frame::FrameCtx;
 use leptos::prelude::*;
 
@@ -17,6 +17,8 @@ pub struct ChromeInfo {
     /// False while the last read failed (or the readings are cached).
     pub live: Signal<bool>,
     pub summary: Signal<Vec<Run>>,
+    /// The page's summary counts, drawn in the status band in place of `summary` when the page has them (Status).
+    pub strip: Option<Signal<Option<Strip>>>,
     pub refresh: Callback<()>,
     /// The status line's first word when it isn't "Updated" ("Refreshing", "Account data unavailable").
     pub lead: Option<Signal<String>>,
@@ -208,7 +210,13 @@ pub fn FrameShell(ctx: FrameCtx, children: Children) -> impl IntoView {
                         let updated = info.updated.get();
                         if updated.is_empty() { "reading".to_string() } else { format!("updated {updated}{}", if info.live.get() { " · live" } else { " · old reading" }) }
                     }}</div>
-                    <div class="bi2">{move || ctx.info().map(|i| runs_view(i.summary.get()))}</div>
+                    {move || {
+                        let info = ctx.info()?;
+                        Some(match info.strip.and_then(|s| s.get()) {
+                            Some(strip) => view! { <div class="bi2 bs">{crate::summary::band_line(&strip)}</div> }.into_any(),
+                            None => view! { <div class="bi2">{runs_view(info.summary.get())}</div> }.into_any(),
+                        })
+                    }}
                 </div>
                 <div class="band-tabs">
                     <nav class="band-nav">{tab_links(ctx)}</nav>

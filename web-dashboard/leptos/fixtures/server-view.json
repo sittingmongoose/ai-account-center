@@ -45,6 +45,74 @@
       "blockedItems": 2,
       "workingThreads": 3,
       "staleSources": 2
+    },
+    "strip": {
+      "items": [
+        {
+          "key": "questions",
+          "section": "questions",
+          "value": "7",
+          "label": "questions for you",
+          "short": "questions",
+          "tone": "warn",
+          "detail": "7 questions for you."
+        },
+        {
+          "key": "decisions",
+          "value": "1",
+          "label": "decision to look at",
+          "short": "decision",
+          "tone": "warn",
+          "section": "questions",
+          "detail": "1 decision to look at."
+        },
+        {
+          "key": "pinned",
+          "value": "–",
+          "label": "pinned threads",
+          "short": "pinned",
+          "tone": "quiet",
+          "section": "pinned",
+          "detail": "Pinned threads are unavailable: this server doesn't send them yet."
+        },
+        {
+          "key": "blocked",
+          "value": "2",
+          "label": "blocked",
+          "short": "blocked",
+          "tone": "warn",
+          "section": null,
+          "detail": "Blocked: T-19 Recording codec fallback, FO-33 Lines chart label placement."
+        },
+        {
+          "key": "budgets",
+          "value": "1",
+          "label": "over budget (estimate)",
+          "short": "over budget",
+          "tone": "bad",
+          "section": "spend",
+          "detail": "1 budget is at or over its limit (estimate)."
+        },
+        {
+          "key": "done",
+          "value": "10/26",
+          "label": "items done",
+          "short": "done",
+          "tone": null,
+          "section": null,
+          "detail": "10 of 26 items landed or done (dropped items are not counted)."
+        },
+        {
+          "key": "sources",
+          "value": "2",
+          "label": "sources not current",
+          "short": "not current",
+          "tone": "warn",
+          "section": null,
+          "detail": "Not current: Agent reports: 2 files unreadable since 4:00 PM: vm.fo-welcome/cards/vm.fo-welcome--Q1.json (contains NUL bytes from a damaged write), vm.fo-welcome/tasks.json (not valid JSON); Machines: Windows PC unreachable: ssh did not answer in time (since 3:58 PM). Showing the reading from 3:50 PM. Nas1 unreachable: ssh refused (since 3:59 PM)."
+        }
+      ],
+      "worst": null
     }
   },
   "sources": [

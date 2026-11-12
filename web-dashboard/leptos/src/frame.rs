@@ -693,6 +693,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
         updated: Signal::derive(move || chrome.strong.get()),
         live: Signal::derive(move || chrome.more.get() == "live"),
         summary: Signal::derive(Vec::new),
+        strip: None,
         refresh: Callback::new(move |_| {
             ctx.send("refresh", "");
         }),
@@ -881,6 +882,7 @@ mod tests {
             updated: Signal::derive(String::new),
             live: Signal::derive(|| true),
             summary: Signal::derive(Vec::new),
+            strip: None,
             refresh: Callback::new(|_| {}),
             lead: None,
         }
