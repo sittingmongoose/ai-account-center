@@ -31,7 +31,8 @@ person (the Mac). Each run:
 3. **Verifies** each renewal again `verifyAfterHours` (9) later and 9 hours after the old end: a
    Claude process that was already running can write its old sign-in back. A sign-in that went back
    is renewed again at once; one that keeps going back is reported.
-4. **Publishes** `claude-signins.json` and `claude-signins.md` into the usage snapshot folder. The
+4. **Publishes** `claude-signins.json` and `claude-signins.md` into the usage snapshot folder. The installer copies the computer registry into `app/computers.json`;
+self-update refreshes it from `computers.json` at the snapshot root. The
    dashboard shows them (Claude rows, Details, a notice) and `aac-usage signins` prints them.
 
 Failures back off (1, 2, 4 hours, at most 6). A sign-in that keeps failing within a day of its end is

@@ -88,15 +88,23 @@ DEFAULTS = {
 
 # ---------------------------------------------------------------- paths, config, state, log
 
-def computer_labels():
+def computer_registry_file():
     here = Path(__file__).resolve().parent
-    for file in (here.parent / "computers.json", here.parent.parent / "web-dashboard/public/computers.json"):
+    for file in (here / "computers.json", here.parent / "computers.json", here.parent.parent / "web-dashboard/public/computers.json"):
         try:
             rows = json.loads(file.read_text(encoding="utf-8"))
-            return {key: row["machineLabel"] for key, row in rows.items()}
+            {key: row["machineLabel"] for key, row in rows.items()}
+            return file
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue
-    return {}
+    return None
+
+
+def computer_labels():
+    file = computer_registry_file()
+    if not file:
+        return {}
+    return {key: row["machineLabel"] for key, row in json.loads(file.read_text(encoding="utf-8")).items()}
 
 
 def ccs_dir():
@@ -1363,6 +1371,15 @@ def sync_from_share(cfg):
         return
     names = ("claude_signin.py", "browser_auth.mjs", "README.md")
     fresh = share_read(cfg, "claude-signin", names)
+    registry = share_read(cfg, "", ("computers.json",)).get("computers.json")
+    if registry:
+        try:
+            rows = json.loads(registry)
+            {key: row["machineLabel"] for key, row in rows.items()}
+        except (ValueError, KeyError, TypeError, AttributeError):
+            pass
+        else:
+            write_atomic(os.path.join(install, "computers.json"), registry.decode("utf-8"))
     for name in names:
         b = os.path.join(install, name)
         new = fresh.get(name)
@@ -1386,6 +1403,9 @@ def cmd_install(args, cfg):
         src = os.path.join(HERE, name)
         if os.path.exists(src) and os.path.abspath(src) != os.path.abspath(os.path.join(install, name)):
             shutil.copyfile(src, os.path.join(install, name))
+    registry = computer_registry_file()
+    if registry and registry != Path(install, "computers.json"):
+        shutil.copyfile(registry, os.path.join(install, "computers.json"))
     target = os.path.join(install, "claude_signin.py")
     cfgpath = os.path.join(state_dir(), "config.json")
     user = read_json(cfgpath, {})

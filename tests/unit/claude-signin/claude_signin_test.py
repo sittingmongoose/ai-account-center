@@ -175,5 +175,41 @@ class SecrecyTests(Home):
         self.assertIn("Needs you", (folder / runner.PUBLISH_MD).read_text())
 
 
+
+
+
+class InstalledRegistryTests(Home):
+    def installed_labels(self, install):
+        import runpy
+        return runpy.run_path(str(install / "claude_signin.py"))["computer_labels"]()
+
+    def test_install_delivers_registry_beside_runner(self):
+        with mock.patch.object(runner.subprocess, "run"), mock.patch.object(runner, "node_path", return_value=None):
+            runner.cmd_install(None, CFG)
+        install = pathlib.Path(runner.state_dir()) / "app"
+        self.assertEqual(self.installed_labels(install), runner.computer_labels())
+        self.assertEqual(self.installed_labels(install)["alexis"], "Alexis PC")
+
+    def test_self_update_delivers_snapshot_root_registry(self):
+        import shutil
+        install = pathlib.Path(runner.state_dir()) / "app"
+        install.mkdir(parents=True)
+        shutil.copyfile(runner.SCRIPT, install / "claude_signin.py")
+        snapshot = self.home / "snapshot"
+        (snapshot / "claude-signin").mkdir(parents=True)
+        for name in ("claude_signin.py", "browser_auth.mjs", "README.md"):
+            shutil.copyfile(pathlib.Path(runner.HERE) / name, snapshot / "claude-signin" / name)
+        registry = pathlib.Path(runner.computer_registry_file()).read_bytes()
+        (snapshot / "computers.json").write_bytes(registry)
+        with mock.patch.object(runner, "HERE", str(install)):
+            runner.sync_from_share(dict(CFG, publishDir=str(snapshot), publishVia=None))
+        self.assertEqual(self.installed_labels(install)["alexis"], "Alexis PC")
+        self.assertEqual((install / "computers.json").read_bytes(), registry)
+        (snapshot / "computers.json").write_text("invalid")
+        with mock.patch.object(runner, "HERE", str(install)):
+            runner.sync_from_share(dict(CFG, publishDir=str(snapshot), publishVia=None))
+        self.assertEqual((install / "computers.json").read_bytes(), registry)
+
+
 if __name__ == "__main__":
     unittest.main()
