@@ -1395,7 +1395,8 @@ export class StatusAnswers {
             (this.deps.doorbell ?? pmMailDoorbell())(
               group.to,
               ringSubject(records),
-              ringBody(group.sendId, records, this.answerKey().keyId)
+              ringBody(group.sendId, records, this.answerKey().keyId),
+              Date.now() + this.timing.ringMs
             ),
             this.timing.ringMs,
             undefined,

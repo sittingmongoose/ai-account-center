@@ -10,6 +10,8 @@ export interface ManagedCommandOptions {
   input?: string;
   env?: NodeJS.ProcessEnv;
   cwd?: string;
+  /** Absolute caller deadline, including source loading, startup and IPC queueing. */
+  deadlineAt?: number;
   /** Only for read-only commands: identical concurrent requests share one child. */
   coalesce?: boolean;
 }
@@ -37,7 +39,19 @@ const pending = new Map<
     pid?: number;
   }
 >();
-const identical = new Map<string, Promise<ManagedCommandResult>>();
+interface CommandWaiter {
+  resolve: (result: ManagedCommandResult) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+interface CommandJob {
+  hardDeadlineAt: number;
+  deadlineAt: number;
+  waiters: Set<CommandWaiter>;
+  abandoned: boolean;
+  child?: ChildProcess;
+  id?: number;
+}
+const identical = new Map<string, CommandJob>();
 const retired = new Map<ChildProcess, Promise<void>>();
 let broker: ChildProcess | undefined;
 let starting: Promise<ChildProcess> | undefined;
@@ -195,12 +209,18 @@ export function runManagedCommand(
   options: ManagedCommandOptions
 ): Promise<ManagedCommandResult> {
   if (stopping) return Promise.resolve(failed());
+  const now = Date.now();
+  const hardDeadlineAt = now + options.timeoutMs + (options.graceMs ?? 5000);
+  const deadlineAt = Math.min(options.deadlineAt ?? hardDeadlineAt, hardDeadlineAt);
+  if (!Number.isFinite(deadlineAt)) return Promise.resolve(failed());
+  if (deadlineAt <= now) return Promise.resolve({ ...failed(), timedOut: true });
   const command = {
     file,
     args: [...args],
     options: {
       ...options,
       coalesce: undefined,
+      deadlineAt: undefined,
       input: options.input ?? '',
       env: { ...(options.env ?? process.env) },
       cwd: options.cwd ?? process.cwd(),
@@ -213,12 +233,21 @@ export function runManagedCommand(
   const key = options.coalesce ? createHash('sha256').update(serialized).digest('hex') : null;
   if (key) {
     const existing = identical.get(key);
-    if (existing) return existing;
+    if (existing) return join(existing, Math.min(deadlineAt, existing.hardDeadlineAt));
   }
+  if (Date.now() >= deadlineAt) return Promise.resolve({ ...failed(), timedOut: true });
   // Count callers awaiting startup too; a burst must not retain unbounded stdin/env copies.
   if (outstanding >= 64 || inputBytes + bytes > 16 * 1024 * 1024) return Promise.resolve(failed());
   outstanding++;
   inputBytes += bytes;
+  const job: CommandJob = {
+    hardDeadlineAt,
+    deadlineAt,
+    waiters: new Set(),
+    abandoned: false,
+  };
+  if (key) identical.set(key, job);
+  const result = join(job, deadlineAt);
   const work = (async (): Promise<ManagedCommandResult> => {
     let child: ChildProcess;
     try {
@@ -226,27 +255,31 @@ export function runManagedCommand(
     } catch {
       return failed();
     }
+    // A caller can expire while startup is awaiting readiness. Never submit its work later.
+    if (job.abandoned || Date.now() >= job.deadlineAt) return { ...failed(), timedOut: true };
     if (pending.size >= 64 || broker !== child || stopping) return failed();
     const id = ++sequence;
+    job.id = id;
+    job.child = child;
     clearTimeout(idleTimer);
     child.ref();
     child.channel?.ref?.();
     return new Promise((resolve) => {
-      const timer = setTimeout(
-        () => {
-          const request = pending.get(id);
-          killOwned(request?.pid);
-          settle(id, { ...failed(), timedOut: true });
-          // A missing reply also retires the broker, so no unknown command keeps running.
-          lost(child);
-        },
-        options.timeoutMs + command.options.graceMs + 1000
-      );
+      const timer = watchdog(job, child, id);
       pending.set(id, { resolve, timer });
       try {
-        child.send({ type: 'run', id, ...command }, (error) => {
-          if (error) lost(child);
-        });
+        child.send(
+          {
+            type: 'run',
+            id,
+            ...command,
+            deadlineAt: job.deadlineAt,
+            hardDeadlineAt: job.hardDeadlineAt,
+          },
+          (error) => {
+            if (error) lost(child);
+          }
+        );
       } catch {
         lost(child);
       }
@@ -254,13 +287,77 @@ export function runManagedCommand(
   })().finally(() => {
     outstanding--;
     inputBytes -= bytes;
+    if (key && identical.get(key) === job) identical.delete(key);
   });
-  if (key) {
-    const coalesced = work.finally(() => identical.delete(key));
-    identical.set(key, coalesced);
-    return coalesced;
+  void work.then((value) => {
+    for (const waiter of job.waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(value);
+    }
+    job.waiters.clear();
+  });
+  return result;
+}
+
+function watchdog(job: CommandJob, child: ChildProcess, id: number): ReturnType<typeof setTimeout> {
+  return setTimeout(
+    () => {
+      killOwned(pending.get(id)?.pid);
+      settle(id, { ...failed(), timedOut: true });
+      // No replay: a missing cancellation/result reply retires the owning broker.
+      lost(child);
+    },
+    Math.max(0, job.deadlineAt - Date.now()) + 1000
+  );
+}
+
+function join(job: CommandJob, deadlineAt: number): Promise<ManagedCommandResult> {
+  if (deadlineAt <= Date.now()) return Promise.resolve({ ...failed(), timedOut: true });
+  if (job.waiters.size >= 64) return Promise.resolve(failed());
+  // A later waiter may outlive another caller, but never the first command's hard cap.
+  if (deadlineAt > job.deadlineAt) {
+    job.deadlineAt = deadlineAt;
+    if (job.child && job.id !== undefined) {
+      const request = pending.get(job.id);
+      if (request) {
+        clearTimeout(request.timer);
+        request.timer = watchdog(job, job.child, job.id);
+      }
+      sendControl(job, 'deadline');
+    }
   }
-  return work;
+  return new Promise((resolve) => {
+    const waiter: CommandWaiter = {
+      resolve,
+      timer: setTimeout(
+        () => {
+          job.waiters.delete(waiter);
+          if (job.waiters.size === 0) {
+            job.abandoned = true;
+            for (const [key, value] of identical) if (value === job) identical.delete(key);
+            // Kill directly too: the broker may be stopped or its IPC queue may be delayed.
+            if (job.id !== undefined) killOwned(pending.get(job.id)?.pid);
+            sendControl(job, 'cancel');
+          }
+          resolve({ ...failed(), timedOut: true });
+        },
+        Math.max(0, deadlineAt - Date.now())
+      ),
+    };
+    job.waiters.add(waiter);
+  });
+}
+
+function sendControl(job: CommandJob, type: 'deadline' | 'cancel'): void {
+  if (!job.child || job.id === undefined) return;
+  const child = job.child;
+  try {
+    child.send({ type, id: job.id, deadlineAt: job.deadlineAt }, (error) => {
+      if (error) lost(child);
+    });
+  } catch {
+    lost(child);
+  }
 }
 
 export function processBrokerStats(): {

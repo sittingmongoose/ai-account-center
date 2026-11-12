@@ -275,11 +275,17 @@ export class UsageFailoverService {
       if (beforeStart && !beforeStart()) return null;
       // Every provider shares these three slots: a request whose completion is
       // lost must release its slot, or recovery stops for all of them.
+      // The default is slightly after the transport's deadline; a shorter caller
+      // budget must reach source loading and the command too.
+      const deadlineAt =
+        Date.now() +
+        (this.deps.requestDeadlineMs?.(request.action) ??
+          usageHelperDeadlineMs(request.action) + 1_000);
       const response = await withDeadline(
-        (this.deps.transport ?? runUsageHelper)(host, request),
-        // Slightly after the transport's own deadline, so it can kill its process first.
-        this.deps.requestDeadlineMs?.(request.action) ??
-          usageHelperDeadlineMs(request.action) + 1_000,
+        this.deps.transport
+          ? this.deps.transport(host, request)
+          : runUsageHelper(host, request, deadlineAt),
+        Math.max(0, deadlineAt - Date.now()),
         undefined,
         'Usage helper request'
       );

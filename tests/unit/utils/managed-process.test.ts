@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import {
   runManagedCommand,
+  type ManagedCommandOptions,
   processBrokerStats,
   startProcessBroker,
   stopProcessBroker,
@@ -16,7 +17,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 const options = { timeoutMs: 2000, maxBytes: 65536, env: { PATH: '/usr/bin:/bin' } };
-const python = (source: string, extra: Partial<typeof options> = {}) =>
+const python = (source: string, extra: Partial<ManagedCommandOptions> = {}) =>
   runManagedCommand('/usr/bin/python3', ['-I', '-c', source], { ...options, ...extra });
 
 async function hangOwnedBroker() {
@@ -34,10 +35,132 @@ async function hangOwnedBroker() {
   expect(fs.existsSync(marker)).toBe(true);
   // Only this fixture's returned process handle is ever stopped or signalled.
   expect(child.kill('SIGSTOP')).toBe(true);
-  return { child, exited, work };
+  // Caller expiry cancels its command first; a missing broker acknowledgement retires it.
+  const lostBroker = async () => {
+    for (let attempt = 0; attempt < 200 && processBrokerStats().pid === child.pid; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  return {
+    child,
+    exited,
+    work: work.then(async (result) => {
+      await lostBroker();
+      return result;
+    }),
+  };
 }
 
 describe.skipIf(process.platform === 'win32')('small command parent', () => {
+  it('refuses an already expired command before starting a broker', async () => {
+    const before = processBrokerStats().launches;
+    expect((await python('print("too-late")', { deadlineAt: Date.now() - 1 })).timedOut).toBe(true);
+    expect(processBrokerStats().launches).toBe(before);
+  });
+
+  it('never submits a command whose caller expires during broker startup', async () => {
+    const starting = startProcessBroker();
+    const pid = processBrokerStats().pid!;
+    process.kill(pid, 'SIGSTOP');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-startup-'));
+    roots.push(root);
+    const marker = path.join(root, 'late-command');
+    try {
+      const result = await python(`open(${JSON.stringify(marker)},'w').write('late')`, {
+        deadlineAt: Date.now() + 100,
+      });
+      expect(result.timedOut).toBe(true);
+    } finally {
+      process.kill(pid, 'SIGCONT');
+    }
+    await starting;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(processBrokerStats().pending).toBe(0);
+  });
+
+  it('refuses expired IPC-queued work instead of spawning then cancelling it', async () => {
+    const child = await startProcessBroker();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-queued-'));
+    roots.push(root);
+    const marker = path.join(root, 'late-command');
+    child.kill('SIGSTOP');
+    try {
+      expect(
+        (
+          await python(`open(${JSON.stringify(marker)},'w').write('late')`, {
+            deadlineAt: Date.now() + 100,
+          })
+        ).timedOut
+      ).toBe(true);
+    } finally {
+      child.kill('SIGCONT');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(processBrokerStats().pending).toBe(0);
+  });
+
+  it('keeps a shared command alive for unexpired waiters without extending its original cap', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-waiters-'));
+    roots.push(root);
+    const marker = path.join(root, 'runs');
+    const source = `import time;open(${JSON.stringify(marker)},'a').write('x');time.sleep(.3);print('ok')`;
+    const early = python(source, { coalesce: true, deadlineAt: Date.now() + 150 });
+    const later = python(source, { coalesce: true, deadlineAt: Date.now() + 1200 });
+    expect((await early).timedOut).toBe(true);
+    expect((await later).stdout).toBe('ok\n');
+    expect(fs.readFileSync(marker, 'utf8')).toBe('x');
+
+    const hanging = `import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(10)`;
+    const first = python(hanging, { coalesce: true, timeoutMs: 400, graceMs: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const began = Date.now();
+    const joined = python(hanging, { coalesce: true, timeoutMs: 400, graceMs: 0 });
+    expect((await first).timedOut).toBe(true);
+    expect((await joined).timedOut).toBe(true);
+    expect(Date.now() - began).toBeLessThan(350);
+  });
+
+  it('kills the shared owned process group when its last waiter expires', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-cancel-'));
+    roots.push(root);
+    const marker = path.join(root, 'pids');
+    const source = [
+      'import os,signal,time,json',
+      'signal.signal(signal.SIGTERM,signal.SIG_IGN)',
+      'child=os.fork()',
+      `if child: open(${JSON.stringify(marker)},'w').write(json.dumps([os.getpid(),child]))`,
+      'time.sleep(10)',
+    ].join('\n');
+    const first = python(source, { coalesce: true, deadlineAt: Date.now() + 250 });
+    const last = python(source, { coalesce: true, deadlineAt: Date.now() + 600 });
+    expect((await first).timedOut).toBe(true);
+    const pids: number[] = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    for (const pid of pids) expect(() => process.kill(pid, 0)).not.toThrow();
+    expect((await last).timedOut).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    for (const pid of pids) {
+      if (process.platform === 'linux' && fs.existsSync(`/proc/${pid}/stat`))
+        expect(fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].startsWith('Z ')).toBe(
+          true
+        );
+      else expect(() => process.kill(pid, 0)).toThrow();
+    }
+    expect((await python('print("usable")')).stdout).toBe('usable\n');
+    expect(processBrokerStats().coalesced).toBe(0);
+  });
+
+  it('bounds the number of retained waiters on one shared command', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 70 }, () =>
+        python('import time;time.sleep(.1);print("ok")', { coalesce: true })
+      )
+    );
+    expect(results.filter((result) => result.stdout === 'ok\n')).toHaveLength(64);
+    expect(results.filter((result) => result.failed)).toHaveLength(6);
+    expect(processBrokerStats().coalesced).toBe(0);
+  });
+
   it('forces a lost unresponsive broker to exit without harming its replacement', async () => {
     const { child, exited, work } = await hangOwnedBroker();
     try {
