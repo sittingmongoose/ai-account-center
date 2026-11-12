@@ -29,11 +29,11 @@ def gui_command(action, timeout):
         raise UpdateFailure("unsupported")
     deadline = time.monotonic() + timeout
 
-    def run(argv, maximum=5, capture=False):
+    def run(argv, maximum=5, capture=False, errors=False):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise UpdateFailure("timeout")
-        return command(argv, timeout=min(maximum, remaining), capture=capture)
+        return command(argv, timeout=min(maximum, remaining), capture=capture, errors=errors)
 
     domain = "gui/" + str(os.getuid())
     try:
@@ -60,7 +60,22 @@ def gui_command(action, timeout):
             except UpdateFailure:
                 raise UpdateFailure("mac_gui_unavailable") from None
             while True:
-                output = run(["/bin/launchctl", "print", service], capture=True)
+                try:
+                    output = run(["/bin/launchctl", "print", service], capture=True)
+                except UpdateFailure as error:
+                    if error.code == "timeout":
+                        raise
+                    # A vanished service alone is not evidence of logout.
+                    # Probe the GUI domain to distinguish session loss.
+                    try:
+                        run(["/bin/launchctl", "print", domain], errors=True)
+                    except UpdateFailure as domain_error:
+                        if domain_error.code == "timeout":
+                            raise
+                        if "could not find domain" in domain_error.output.lower():
+                            raise UpdateFailure("mac_gui_unavailable") from None
+                        raise error
+                    raise error
                 state = re.search(r"^\s*state = (.+)$", output, re.M)
                 exited = re.search(r"^\s*last exit code = (\d+)", output, re.M)
                 if state and state[1].strip() in ("not running", "exited") and exited:

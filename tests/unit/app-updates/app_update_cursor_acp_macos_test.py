@@ -37,6 +37,18 @@ class Fixtures(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(pathlib.Path, "home", return_value=self.root))
         self.stack.enter_context(mock.patch.dict(os.environ, {"LOCALAPPDATA": str(self.root / "Local")}))
         self.stack.enter_context(mock.patch.object(acp.platform, "machine", return_value="x86_64"))
+        self.stack.enter_context(mock.patch.object(mac.os, "getuid", return_value=501, create=True))
+        if os.name == "nt":
+            # Simulated Unix runtimes need Unix executable bits, absent on NTFS.
+            real_stat = pathlib.Path.stat
+            def unix_mode(path, *args, **kwargs):
+                value = real_stat(path, *args, **kwargs)
+                if path.name in ("agy_acp_server.par", "localharness_external"):
+                    fields = list(value)
+                    fields[0] |= 0o111
+                    return os.stat_result(fields)
+                return value
+            self.stack.enter_context(mock.patch.object(pathlib.Path, "stat", unix_mode))
 
     def cursor(self, host="ubuntu", version=OLD):
         path = cursor.cursor_launcher(host)
@@ -134,6 +146,7 @@ class CursorTests(Fixtures):
         self.assertEqual((row["status"], row["previousVersion"], row["version"]), ("updated", OLD, NEW))
         self.assertEqual(gui.call_args.args[0], "cursor-update")
 
+    @unittest.skipIf(os.name == "nt", "executes Unix shebang fixtures")
     def test_linux_native_update_keeps_running_process_and_login_files(self):
         install = self.cursor()
         login = self.root / ".cursor/fixture-login"
@@ -181,7 +194,7 @@ class AcpTests(Fixtures):
             self.assertTrue(asset["url"].startswith("https://dl.google.com/agy-extensions/releases/"))
             self.assertRegex(asset["sha256"], r"^[a-f0-9]{64}$")
 
-    def test_every_os_stages_then_activates_and_preserves_in_use_old_release(self):
+    def test_every_os_stages_without_activation_and_preserves_in_use_old_release(self):
         for host in ("ubuntu", "mac", "windows"):
             with self.subTest(host=host):
                 install, old = self.old_acp(host)
@@ -190,10 +203,12 @@ class AcpTests(Fixtures):
                 try:
                     with mock.patch.object(acp, "validate_runtime") as validate, mock.patch.object(acp, "command") as run:
                         row = acp.update_antigravity_acp(install)
-                    self.assertEqual((row["previousVersion"], row["version"], row["status"]), ("1.3.0", "1.4.5", "updated"))
+                    self.assertEqual((row["previousVersion"], row["version"], row["status"]), ("1.3.0", "1.3.0", "action_required"))
                     self.assertTrue(old.is_dir()); self.assertIsNone(process.poll())
-                    self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": asset["sha256"]})
-                    self.assertEqual(acp.detect_antigravity_acp(host).version, "1.4.5")
+                    self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": old.name})
+                    self.assertTrue((install.path / "versions" / asset["sha256"] / acp.RECORD).is_file())
+                    self.assertEqual(row["messageCode"], "antigravity_acp_staged")
+                    self.assertEqual(acp.detect_antigravity_acp(host).version, "1.3.0")
                     self.assertTrue(validate.called)
                     if host == "mac":
                         self.assertEqual(run.call_args.args[0][:4], ["/usr/bin/codesign", "--force", "--sign", "-"])
@@ -201,13 +216,15 @@ class AcpTests(Fixtures):
                 finally:
                     process.terminate(); process.wait(timeout=5)
 
+    @unittest.skipIf(os.name == "nt", "executes Unix shebang fixtures")
     def test_real_fixture_acp_initialize_and_tree_cleanup(self):
         install, old = self.old_acp("ubuntu")
         self.release("ubuntu")
         row = acp.update_antigravity_acp(install)
-        self.assertEqual((row["status"], row["version"]), ("updated", "1.4.5"))
+        self.assertEqual((row["status"], row["version"]), ("action_required", "1.3.0"))
         self.assertTrue(old.is_dir())
 
+    @unittest.skipIf(os.name == "nt", "executes Unix shebang fixtures")
     def test_real_fixture_with_wrong_protocol_identity_never_activates(self):
         install, old = self.old_acp("ubuntu")
         self.release("ubuntu", initialized={"protocolVersion": 1, "agentInfo": {"name": "wrong", "version": "1.4.5"},
@@ -255,6 +272,32 @@ class AcpTests(Fixtures):
         common.write_private_json(install.path / "active.json", {"releaseId": "../outside"})
         self.assertEqual(acp.detect_antigravity_acp("ubuntu").probe, "failed")
 
+    def test_t3_activation_after_final_read_is_never_overwritten(self):
+        for version in ("1.5.0", "1.4.5"):
+            with self.subTest(version=version):
+                install, old = self.old_acp("windows")
+                self.release("windows")
+                newer = old.with_name("c" * 64)
+                newer.mkdir(exist_ok=True)
+                record = acp.read_json(old / acp.RECORD)
+                record.update(releaseId=newer.name, version=version)
+                for kind in ("executable", "harness"):
+                    shutil.copyfile(old / record[kind]["name"], newer / record[kind]["name"])
+                common.write_private_json(newer / acp.RECORD, record)
+                detect = acp.detect_antigravity_acp
+                def concurrent_activation(host):
+                    observed = detect(host)
+                    # Reviewer's exact interleaving: T3 wins after AAC's read.
+                    common.write_private_json(install.path / "active.json", {"releaseId": newer.name})
+                    return observed
+                with mock.patch.object(acp, "validate_runtime"), \
+                        mock.patch.object(acp, "detect_antigravity_acp", side_effect=concurrent_activation):
+                    row = acp.update_antigravity_acp(install)
+                self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": newer.name})
+                self.assertEqual(detect("windows").version, version)
+                self.assertEqual((row["status"], row["messageCode"]),
+                                 ("action_required", "antigravity_acp_staged"))
+
     def test_no_downgrade_or_network_for_current_runtime(self):
         install, _ = self.old_acp("ubuntu")
         install.version = "1.5.0"
@@ -286,7 +329,7 @@ class MacGuiTests(Fixtures):
         seen = self.gui()
         mac.gui_command("muse-warm", 5)
         self.assertEqual(self.plist["ProgramArguments"], [str(self.root / ".local/bin/muse"), "exec", "--contributor-mode", "off", mac.MUSE_WARM_PROMPT])
-        self.assertEqual(seen[1][1:3], ["bootstrap", "gui/" + str(os.getuid())])
+        self.assertEqual(seen[1][1:3], ["bootstrap", "gui/501"])
         self.assertEqual(seen[-1][1], "bootout")
         self.assertFalse(pathlib.Path(self.plist["WorkingDirectory"]).exists())
 
@@ -303,6 +346,23 @@ class MacGuiTests(Fixtures):
                 mac.gui_command("muse-warm", 5)
         self.assertEqual(caught.exception.code, "mac_gui_unavailable")
         self.assertEqual(run.call_count, 1)
+
+    def test_session_loss_after_bootstrap_is_distinguished_from_service_failure(self):
+        for lost in ("missing", "service", "permission"):
+            seen = []
+            def run(argv, **kwargs):
+                seen.append(argv)
+                if argv[1] == "print" and "/com.ccs." in argv[2]:
+                    raise common.UpdateFailure()
+                if argv[1] == "print" and len(seen) > 2 and lost != "service":
+                    raise common.UpdateFailure(output="Could not find domain for" if lost == "missing" else "Permission denied")
+                return ""
+            with mock.patch.object(mac, "command", side_effect=run):
+                with self.assertRaises(common.UpdateFailure) as caught:
+                    mac.gui_command("muse-warm", 5)
+            self.assertEqual(caught.exception.code, "mac_gui_unavailable" if lost == "missing" else "update_failed")
+            self.assertEqual(seen[1][1], "bootstrap")
+            self.assertTrue(any(argv[1] == "bootout" for argv in seen))
 
     def test_no_arbitrary_operation_can_be_launched(self):
         with mock.patch.object(mac, "command") as run:
@@ -332,16 +392,18 @@ class MacGuiTests(Fixtures):
     def test_muse_result_preserves_keychain_error_after_changed_and_unchanged_installs(self):
         install = common.Install("muse-code", "mac", self.root / ".local/bin/muse", "1.4.14")
         install.path.parent.mkdir(parents=True); install.path.touch()
-        for version, status in (("1.4.15", "restart_failed"), ("1.4.14", "failed")):
+        for code, version, status in ((code, version, status)
+                for code in ("mac_keychain_locked", "mac_gui_unavailable")
+                for version, status in (("1.4.15", "restart_failed"), ("1.4.14", "failed"))):
             refreshed = common.Install("muse-code", "mac", install.path, version)
             with self.subTest(version=version), mock.patch.object(updater, "scan", return_value=[]), \
                     mock.patch.object(updater, "cli_contexts", return_value=([], [])), mock.patch.object(updater, "perform_cli_update"), \
                     mock.patch.object(updater, "detect_cli", return_value=refreshed), mock.patch.object(updater, "muse_update_busy", return_value=False), \
                     mock.patch.object(updater, "muse_catalog_fresh", return_value=False), \
-                    mock.patch.object(updater, "gui_command", side_effect=common.UpdateFailure("mac_keychain_locked")), \
+                    mock.patch.object(updater, "gui_command", side_effect=common.UpdateFailure(code)), \
                     mock.patch.object(updater, "restart_cli", return_value=[]):
                 row = updater.update_cli(install, time.monotonic() + 60)
-            self.assertEqual((row["status"], row["messageCode"], row["version"]), (status, "mac_keychain_locked", version))
+            self.assertEqual((row["status"], row["messageCode"], row["version"]), (status, code, version))
 
 
 if __name__ == "__main__":

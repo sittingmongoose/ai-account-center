@@ -131,7 +131,16 @@ checks agent name/version, protocol, resume/logout and `oauth-personal`; it send
 no prompt or authentication request. Only its own validation process tree is
 stopped. The completion record has T3's `{releaseId,version,executable,harness}`
 shape, and the version directory is the archive's SHA-256. The complete directory
-is published before an atomic `active.json` replacement. Failure leaves the old
+is published without writing `active.json`. The row reports
+`action_required` / `antigravity_acp_staged`, with the observed active version,
+asking the user to install in T3 provider settings to activate the staged pair.
+At the pinned commit, T3's `activate` writes a temporary pointer and renames it
+over `active.json`; its `gate` is an in-process Effect semaphore, not a shared
+lock. AAC cannot perform a safe compare-and-swap against that writer. An AAC-only
+lock, another read, or verify-after-write cannot recover an unseen concurrent
+activation. AAC therefore leaves activation entirely to T3, including equal-version
+activations. No AAC activation race window remains. The reported version is an
+observation and T3 can change it after the read. Failure leaves the old
 pointer unchanged. Existing release directories are never deleted or overwritten.
 A newer installed runtime is never downgraded.
 

@@ -405,6 +405,8 @@ export function normalizeAppUpdateRow(
         row.status !== 'action_required')) ||
     (code === 'antigravity_acp_updated' &&
       (appId !== 'antigravity-acp' || row.status !== 'updated')) ||
+    (code === 'antigravity_acp_staged' &&
+      (appId !== 'antigravity-acp' || row.status !== 'action_required')) ||
     (['mac_keychain_locked', 'mac_gui_unavailable', 'mac_gui_cleanup_failed'].includes(code) &&
       (HOST_OS[platform] !== 'mac' ||
         !['muse-code', 'cursor-cli'].includes(appId) ||

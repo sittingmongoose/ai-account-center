@@ -1,7 +1,7 @@
 """T3's managed Antigravity ACP pair, separate from the agy CLI.
 
 Mirrors AntigravityInstallation.ts: pinned Google ZIP, SHA-256 and byte counts,
-exactly two plain files, ACP initialize verification, then an atomic pointer.
+exactly two plain files and ACP initialize verification. T3 owns activation.
 Old releases are never removed, even when no running session is visible.
 """
 
@@ -273,15 +273,16 @@ def update_antigravity_acp(install, deadline=None, progress=None):
         current = detect_antigravity_acp(install.platform)
         if current is None or current.probe:
             raise UpdateFailure("readiness_unknown")
-        if version_tuple(current.version) > version_tuple(asset["version"]):
+        if version_tuple(current.version) >= version_tuple(asset["version"]):
             # Another T3 install won the race with a newer pin. Keep it.
             return result(install.app_id, install.platform, "current", before, current.version, install.manager,
                           attempted=True)
-        # T3 resolves active.json at acquisition of each new session. Existing
-        # sessions keep their acquired version; no server restart is needed.
-        write_private_json(root / "active.json", {"releaseId": asset["sha256"]})
-        return result(install.app_id, install.platform, "updated", before, asset["version"], install.manager,
-                      "antigravity_acp_updated", True)
+        # T3's ab8e488e installer uses an in-process semaphore and unconditional
+        # rename, with no shared lock/CAS protocol. Replacing the pointer here
+        # can erase an activation we never observed, even with a post-write read.
+        # Publish only the verified pair; let T3 activate it in provider settings.
+        return result(install.app_id, install.platform, "action_required", before, current.version, install.manager,
+                      "antigravity_acp_staged", True)
     except (UpdateFailure, OSError, ValueError, TypeError, zipfile.BadZipFile) as error:
         refreshed = detect_antigravity_acp(install.platform)
         after = refreshed.version if refreshed else None

@@ -70,6 +70,8 @@ export const MESSAGES = {
     'Cursor staged its update while an agent is running. Let the agent finish, then run Update apps again.',
   antigravity_acp_updated:
     "Updated T3's Antigravity ACP runtime. Existing sessions keep their version; new sessions use the update. Refresh the provider in T3 if its version display is stale.",
+  antigravity_acp_staged:
+    "Verified and staged T3's Antigravity ACP runtime. Install it in T3 provider settings to activate it safely; the active runtime was left to T3.",
   // Older helpers and saved rows: winget's answer, which never saw this package.
   store_no_newer:
     'Already current from the Microsoft Store: the Store offers no newer build to this computer yet.',

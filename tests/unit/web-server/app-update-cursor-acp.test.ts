@@ -28,6 +28,28 @@ const rows = Object.keys(UPDATE_APP_LABELS).map((appId) => ({
 }));
 
 describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
+  it('keeps staged ACP activation actionable with the observed active version', () => {
+    const staged = {
+      ...rows[0],
+      status: 'action_required',
+      updateAttempted: true,
+      messageCode: 'antigravity_acp_staged',
+    };
+    for (const platform of ['ubuntu', 'mac', 'windows', 'nas1', 'alexis'] as const) {
+      expect(normalizeAppUpdateRow(staged, 'antigravity-acp', platform)).toMatchObject({
+        status: 'action_required',
+        version: '1.3.0',
+        message: MESSAGES.antigravity_acp_staged,
+      });
+    }
+    expect(normalizeAppUpdateRow(staged, 'cursor-cli', 'windows').message).toBe(
+      MESSAGES.helper_invalid
+    );
+    expect(
+      normalizeAppUpdateRow({ ...staged, status: 'updated' }, 'antigravity-acp', 'windows').message
+    ).toBe(MESSAGES.helper_invalid);
+  });
+
   it('expects twelve apps on five computers and keeps the rollback app set frozen', () => {
     expect(EXPECTED_RESULTS).toBe(60);
     expect(Object.keys(UPDATE_APP_LABELS)).toHaveLength(12);
