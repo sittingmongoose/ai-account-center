@@ -5,6 +5,7 @@ import path from 'path';
 import { UsageFailoverService } from '../../../src/web-server/services/usage-failover-service';
 import { localUsageHost } from '../../../src/web-server/services/usage-failover-transport';
 import { stopProcessBroker } from '../../../src/utils/managed-process';
+import { waitForProcessState } from '../../shared/fixtures/process-state';
 import { musePeerBindingFile } from '../../../src/web-server/services/muse-usage-peer-bindings';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
 import type {
@@ -864,8 +865,7 @@ describe('identity-bound usage source failover', () => {
         expect(row.status).toBe('unavailable');
         const pid = Number(await fs.readFile(marker, 'utf8'));
         expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        expect(() => process.kill(pid, 0)).toThrow();
+        await waitForProcessState(pid, [null], 250);
       } finally {
         await stopProcessBroker();
       }

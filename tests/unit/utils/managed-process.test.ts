@@ -10,6 +10,7 @@ import {
   stopProcessBroker,
 } from '../../../src/utils/managed-process';
 import { withDeadline } from '../../../src/utils/settle-deadline';
+import { waitForProcessState, waitUntil } from '../../shared/fixtures/process-state';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -30,15 +31,14 @@ async function hangOwnedBroker() {
     `import time;open(${JSON.stringify(marker)},'w').write('started');time.sleep(10)`,
     { timeoutMs: 500, ...{ graceMs: 20 } }
   );
-  for (let attempt = 0; attempt < 100 && !fs.existsSync(marker); attempt++)
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  await waitUntil(() => fs.existsSync(marker), 'Fixture command startup');
   expect(fs.existsSync(marker)).toBe(true);
   // Only this fixture's returned process handle is ever stopped or signalled.
   expect(child.kill('SIGSTOP')).toBe(true);
+  await waitForProcessState(child.pid!, ['T']);
   // Caller expiry cancels its command first; a missing broker acknowledgement retires it.
   const lostBroker = async () => {
-    for (let attempt = 0; attempt < 200 && processBrokerStats().pid === child.pid; attempt++)
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitUntil(() => processBrokerStats().pid !== child.pid, 'Broker retirement');
   };
   return {
     child,
@@ -65,6 +65,7 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
     roots.push(root);
     const marker = path.join(root, 'late-command');
     try {
+      await waitForProcessState(pid, ['T']);
       const result = await python(`open(${JSON.stringify(marker)},'w').write('late')`, {
         deadlineAt: Date.now() + 100,
       });
@@ -73,7 +74,7 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
       process.kill(pid, 'SIGCONT');
     }
     await starting;
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await waitUntil(() => processBrokerStats().pending === 0, 'Expired startup command settlement');
     expect(fs.existsSync(marker)).toBe(false);
     expect(processBrokerStats().pending).toBe(0);
   });
@@ -85,6 +86,7 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
     const marker = path.join(root, 'late-command');
     child.kill('SIGSTOP');
     try {
+      await waitForProcessState(child.pid!, ['T']);
       expect(
         (
           await python(`open(${JSON.stringify(marker)},'w').write('late')`, {
@@ -95,7 +97,7 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
     } finally {
       child.kill('SIGCONT');
     }
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await waitUntil(() => processBrokerStats().pending === 0, 'Expired queued command settlement');
     expect(fs.existsSync(marker)).toBe(false);
     expect(processBrokerStats().pending).toBe(0);
   });
@@ -174,13 +176,8 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
     const pids: number[] = JSON.parse(fs.readFileSync(marker, 'utf8'));
     for (const pid of pids) expect(() => process.kill(pid, 0)).not.toThrow();
     expect((await last).timedOut).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 100));
     for (const pid of pids) {
-      if (process.platform === 'linux' && fs.existsSync(`/proc/${pid}/stat`))
-        expect(fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].startsWith('Z ')).toBe(
-          true
-        );
-      else expect(() => process.kill(pid, 0)).toThrow();
+      await waitForProcessState(pid, [null, 'Z', 'X']);
     }
     expect((await python('print("usable")')).stdout).toBe('usable\n');
     expect(processBrokerStats().coalesced).toBe(0);
@@ -206,13 +203,14 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
       const replacement = await startProcessBroker();
       expect(replacement.pid).not.toBe(child.pid);
       await withDeadline(exited, 2000);
+      await waitForProcessState(child.pid!, [null]);
       expect(child.signalCode).toBe('SIGKILL');
       expect(processBrokerStats().retired).toBe(0);
       expect((await python('print("replacement-alive")')).stdout).toBe('replacement-alive\n');
       expect(processBrokerStats().pid).toBe(replacement.pid!);
     } finally {
       child.kill('SIGKILL');
-      await exited;
+      await withDeadline(exited, 2000);
     }
   });
 
@@ -234,13 +232,15 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
       const shutdown = stopProcessBroker();
       expect(stopProcessBroker()).toBe(shutdown);
       await shutdown;
+      await waitForProcessState(child.pid!, [null]);
+      await waitForProcessState(replacement.pid!, [null]);
       expect(didExit).toBe(true);
       expect(replacementExited).toBe(true);
       expect(child.signalCode).toBe('SIGKILL');
       expect(processBrokerStats().retired).toBe(0);
     } finally {
       child.kill('SIGKILL');
-      await exited;
+      await withDeadline(exited, 2000);
     }
   });
   it('accepts an account-collection burst without refusing valid concurrent commands', async () => {

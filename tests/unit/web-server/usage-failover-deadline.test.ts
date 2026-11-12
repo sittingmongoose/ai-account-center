@@ -9,6 +9,7 @@ import {
 } from '../../../src/web-server/services/usage-failover-transport';
 import type { UsageHelperRequest } from '../../../src/web-server/services/usage-failover-contract';
 import { stopProcessBroker } from '../../../src/utils/managed-process';
+import { waitForProcessState } from '../../shared/fixtures/process-state';
 
 const roots: string[] = [];
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -133,8 +134,8 @@ describe.skipIf(process.platform === 'win32')('usage helper end-to-end deadlines
         expect(performance.now() - began).toBeLessThan(usageHelperDeadlineMs(action) + 1000);
         pid = Number(fs.readFileSync(marker, 'utf8'));
         expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
-        await delay(250);
-        expect(running(pid)).toBe(false);
+        // Keep the original 250 ms termination allowance; polling must not hide overruns.
+        await waitForProcessState(pid, [null, 'Z', 'X'], 250);
         const beat = fs.readFileSync(heartbeat, 'utf8');
         await delay(250);
         expect(fs.readFileSync(heartbeat, 'utf8')).toBe(beat);
