@@ -270,11 +270,7 @@ pub fn Mark(name: Option<String>, #[prop(default = 20)] size: u32) -> impl IntoV
 /// The platform glyph of a machine row.
 #[component]
 pub fn PlatformGlyph(id: String) -> impl IntoView {
-    let svg = match id.as_str() {
-        "mac" => include_str!("marks/platform-apple.svg"),
-        "windows" => include_str!("marks/platform-windows.svg"),
-        _ => include_str!("marks/platform-ubuntu.svg"),
-    };
+    let svg = platform_svg(&id, crate::status::computer(&id));
     // The drawing's own <title> would show as a tooltip; the row already names the machine.
     let plain = match (svg.find("<title>"), svg.find("</title>")) {
         (Some(a), Some(b)) => format!("{}{}", &svg[..a], &svg[b + 8..]),
@@ -286,4 +282,41 @@ pub fn PlatformGlyph(id: String) -> impl IntoView {
         1,
     );
     view! { <span class="glyph" inner_html=svg></span> }
+}
+
+// Accept either a registry machine id or the OS supplied by other icon callers.
+fn platform_svg(id: &str, computer: Option<&serde_json::Value>) -> &'static str {
+    match computer.and_then(|row| row["os"].as_str()).unwrap_or(id) {
+        "mac" => include_str!("marks/platform-apple.svg"),
+        "windows" => include_str!("marks/platform-windows.svg"),
+        _ => include_str!("marks/platform-ubuntu.svg"),
+    }
+}
+
+#[cfg(test)]
+mod platform_tests {
+    use super::platform_svg;
+
+    #[test]
+    fn registry_machines_and_os_callers_use_their_platform() {
+        for (id, os) in [
+            ("vm", "linux"),
+            ("mac", "mac"),
+            ("windows", "windows"),
+            ("nas1", "linux"),
+            ("alexis", "windows"),
+        ] {
+            assert_eq!(
+                platform_svg(id, crate::status::computer(id)),
+                platform_svg(os, None),
+                "{id}"
+            );
+        }
+        let second_windows = serde_json::json!({"machineId": "other-pc", "os": "windows"});
+        assert_eq!(
+            platform_svg("other-pc", Some(&second_windows)),
+            platform_svg("windows", None)
+        );
+        assert_eq!(platform_svg("unknown", None), platform_svg("linux", None));
+    }
 }

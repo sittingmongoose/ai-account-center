@@ -257,7 +257,7 @@ pub(crate) fn sheet_drag_style(offset: f64) -> String {
 }
 
 /// The machine a pin's T3 runs on, as the page names it.
-fn computer(id: &str) -> Option<&'static serde_json::Value> {
+pub(crate) fn computer(id: &str) -> Option<&'static serde_json::Value> {
     static COMPUTERS: std::sync::LazyLock<serde_json::Value> = std::sync::LazyLock::new(|| {
         serde_json::from_str(include_str!("../../public/computers.json"))
             .expect("packaged computer registry")
