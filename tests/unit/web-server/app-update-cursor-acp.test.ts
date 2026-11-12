@@ -50,7 +50,7 @@ describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
     ).toBe(MESSAGES.helper_invalid);
   });
 
-  it('reports newer kept and bounded activation failure only for ACP', () => {
+  it('reports newer kept and legacy activation failure only for ACP', () => {
     for (const [status, messageCode] of [
       ['current', 'antigravity_acp_newer_kept'],
       ['failed', 'antigravity_acp_activation_unsettled'],
@@ -64,6 +64,30 @@ describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
       );
     }
     expect(MESSAGES.antigravity_acp_staged).toContain('Run Update apps again');
+  });
+
+  it('reports T3 API errors only on ACP with the correct failure status', () => {
+    for (const code of Object.keys(MESSAGES).filter(
+      (code) =>
+        code === 't3_unreachable' ||
+        code === 't3_auth_failed' ||
+        code === 't3_install_timeout' ||
+        code.startsWith('t3_install_failed:')
+    )) {
+      const status = ['t3_unreachable', 't3_auth_failed'].includes(code)
+        ? 'action_required'
+        : 'failed';
+      const row = { ...rows[0], status, messageCode: code };
+      expect(normalizeAppUpdateRow(row, 'antigravity-acp', 'windows').message).toBe(MESSAGES[code]);
+      expect(normalizeAppUpdateRow(row, 'cursor-cli', 'windows').message).toBe(
+        MESSAGES.helper_invalid
+      );
+      expect(
+        normalizeAppUpdateRow({ ...row, status: 'updated' }, 'antigravity-acp', 'windows').message
+      ).toBe(MESSAGES.helper_invalid);
+    }
+    expect(MESSAGES.antigravity_acp_updated).toContain('T3 installed and activated');
+    expect(MESSAGES.t3_unreachable).toContain('AAC did not write');
   });
 
   it('expects twelve apps on five computers and keeps the rollback app set frozen', () => {

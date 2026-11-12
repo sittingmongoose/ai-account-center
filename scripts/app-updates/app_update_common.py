@@ -942,6 +942,11 @@ def write_private_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        json.dump(value, output, ensure_ascii=True, allow_nan=False)
-    os.replace(temporary, path)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(value, output, ensure_ascii=True, allow_nan=False)
+        os.replace(temporary, path)
+    finally:
+        # Cleanup must not replace the original serialization/replace exception.
+        with contextlib.suppress(OSError):
+            temporary.unlink(missing_ok=True)

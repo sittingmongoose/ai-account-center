@@ -260,6 +260,7 @@ export const HELPER_FILES = [
   'app_update_common.py',
   'app_update_desktop.py',
   'app_update_t3.py',
+  'app_update_t3_rpc.py',
   'app_update_cursor.py',
   'app_update_antigravity.py',
   'app_update_antigravity_release.py',

@@ -69,12 +69,36 @@ export const MESSAGES = {
   cursor_update_staged:
     'Cursor staged its update while an agent is running. Let the agent finish, then run Update apps again.',
   antigravity_acp_updated:
-    "Updated T3's Antigravity ACP runtime. Existing sessions keep their version; new sessions use the update. Refresh the provider in T3 if its version display is stale.",
-  antigravity_acp_newer_kept: "Newer kept: T3's Antigravity ACP runtime is newer than AAC's pin.",
+    'T3 installed and activated its pinned Antigravity ACP runtime. Existing sessions keep their version; new sessions use the update.',
+  antigravity_acp_newer_kept:
+    "Newer kept: T3's active Antigravity ACP runtime is newer than its pin.",
   antigravity_acp_activation_unsettled:
     "T3's Antigravity ACP activation kept changing. Update apps could not verify a stable newest runtime; run it again.",
   antigravity_acp_staged:
-    "An earlier update staged T3's Antigravity ACP runtime. Run Update apps again to activate the newest complete version.",
+    'An earlier update staged Antigravity ACP. Run Update apps again with T3 running so T3 can install and activate its pin.',
+  t3_unreachable:
+    'Action required: the local T3 server or bundled CLI is unavailable. Start T3 and run Update apps again. AAC did not write its active runtime pointer.',
+  t3_auth_failed:
+    'Action required: T3 could not issue, authorize, or revoke the temporary update session. Check local T3 access, then run Update apps again.',
+  t3_install_timeout:
+    'T3 installation timed out. Its installer may still be running. Check T3 before retrying.',
+  't3_install_failed:protocol':
+    'T3 returned an unsupported installation response. Update T3 and retry.',
+  't3_install_failed:rpc':
+    'T3 rejected the installation request. Check the provider installation in T3.',
+  't3_install_failed:provider_unavailable':
+    'No Antigravity provider supports managed installation in the local T3 server. Check its provider settings.',
+  't3_install_failed:server_outdated':
+    'The running T3 server pins an older Antigravity runtime than AAC. Update and restart T3 before retrying.',
+  't3_install_failed:readiness_unknown':
+    'The active T3 Antigravity runtime could not be verified. Check its installation in T3.',
+  't3_install_failed:operation_changed':
+    'The T3 installation operation changed while AAC was observing it. Check its status in T3.',
+  't3_install_failed:installer':
+    'T3 could not install Antigravity ACP. See the provider installation error in T3.',
+  't3_install_failed:cancelled': 'The T3 Antigravity installation was cancelled.',
+  't3_install_failed:verification':
+    'T3 reported completion, but its active Antigravity runtime did not verify at or above its pin.',
   // Older helpers and saved rows: winget's answer, which never saw this package.
   store_no_newer:
     'Already current from the Microsoft Store: the Store offers no newer build to this computer yet.',

@@ -68,7 +68,7 @@ modify or export account credentials/configuration.
 | --- | --- |
 | Antigravity CLI | Active native `agy update`; on a managed switching installation a paused unreviewed runtime updates without checking running copies (see below) |
 | Cursor CLI | Official managed `cursor-agent update`; Linux/Nas1 directly, Mac in the login GUI session, Windows through its PowerShell launcher in the existing interactive task. No running agent is stopped. |
-| Antigravity ACP (T3) | T3's pinned official Google executable/harness pair, ZIP SHA-256 and byte counts, safe extraction and ACP initialize validation, then atomic `active.json`; running releases are retained. Separate from `agy`. |
+| Antigravity ACP (T3) | Asks the local T3 server to install its pinned executable/harness pair using a temporary scoped session. Only T3 writes `active.json`. Separate from `agy`. |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; an npm global install (`<prefix>/bin/codex` linked into `<prefix>/lib/node_modules/@openai/codex`, such as Nas1's under `~/.local`) is reported as manager `npm` and updated by npm itself under that prefix, `node npm-cli.js install --global --prefix <prefix> @openai/codex@latest`, never by `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
@@ -120,40 +120,60 @@ OS/architecture pairs. Keep these pins aligned with T3 when its manifest changes
 AAC does not guess a newer Google URL or accept one from a caller. The agy CLI's
 version is independent.
 
-The flow mirrors
-[T3's installer](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/AntigravityInstallation.ts):
-download only the pinned `dl.google.com/agy-extensions/releases/` ZIP, verify its
-exact archive size and SHA-256, require exactly the executable and harness with
-their pinned sizes, reject unsafe/non-file/encrypted/extra entries, and extract
-under `versions/.install-*`. Intel Macs receive T3's ad-hoc codesign step after
-verification. An unauthenticated ACP `initialize` in a disposable `GEMINI_HOME`
-checks agent name/version, protocol, resume/logout and `oauth-personal`; it sends
-no prompt or authentication request. Only its own validation process tree is
-stopped. The completion record has T3's `{releaseId,version,executable,harness}`
-shape, and the version directory is the archive's SHA-256. The complete directory
-is published by atomic rename only after validation and manifest creation.
-AAC scans all SHA-256 version directories using T3's completion checks: matching
-release ID and platform filenames, positive recorded sizes matching regular files,
-nonempty version, and executable bits on Unix. It activates the highest complete
-version, keeping the active release on equal-version ties. Incomplete directories
-are ignored. A newer T3 release can therefore win even when AAC's pin is older.
+AAC reads the completion record and checks platform filenames, regular files,
+recorded sizes and Unix executable bits. It never downloads, stages, repairs,
+writes or renames the pointer or release directories. Download integrity,
+extraction, codesigning and ACP validation belong to T3's installer.
 
-AAC atomically replaces `active.json`, then rereads it and rescans complete versions,
-converging for at most five attempts. A write reports `updated`; an already active
-newer release reports `current` / `antigravity_acp_newer_kept` without touching the
-pointer. Failure to converge reports `antigravity_acp_activation_unsettled` with
-the observed active version. Existing release directories are never removed.
-T3 publishes its verified directory before its pointer, so a newer activation
-lost during AAC's rename is recoverable on the next scan. Without shared CAS,
-a directory published between scan and rename can cause a transient regression;
-a T3 publication/write after final verification cannot be covered, and continuing
-writers may exhaust the bounded attempts. This guarantees monotonic convergence,
-not an atomic monotonic pointer at every instant.
+AAC discovers the local server, issues a temporary bearer session, reads the
+server's Antigravity install state, and compares the active version with the
+**running server's pin**. A current or newer active version never calls install.
+An older server pin than AAC's recorded minimum fails before installation.
+Otherwise AAC sends the same `{instanceId}` input as T3's Install button to
+`provider.install.start`, then follows `provider.install.subscribe` for the
+returned operation ID. T3 remains the only pointer writer; AAC performs no
+reconciliation or repair writes. It verifies the completed active runtime is at
+least the server pin before reporting `updated`. Existing sessions retain their
+runtime; AAC restarts no processes and removes no versions.
 
-T3 resolves `active.json` for each new managed session; existing sessions hold
-their acquired version. No T3 restart or automatic provider refresh is performed.
-The row asks the user to refresh the provider in T3 if its cached version display
-is stale. T3's CLI exposes no headless provider-runtime install command.
+The session lasts at most 20 minutes, has only `providers:manage` and
+`orchestration:read`, and is revoked in `finally`, including failures and
+cancellation. CLI stdout and the bearer stay in memory; they never enter logs,
+row data, argv or AAC files. If issue committed but failed to return its session
+ID, cleanup lists sessions by this run's unique label and revokes only matches.
+Revocation failure reports `t3_auth_failed`, even if installation completed.
+There is no saved AAC credential or auth bypass.
+
+The install observation timeout is 15 minutes, bounded by the host deadline.
+Timeout does not cancel an operation which T3 or another client may own. T3 may
+continue installing. `t3_install_timeout` says so. A missing/unreachable CLI or
+server returns `action_required` / `t3_unreachable`; failed session issue,
+authorization or revocation returns `action_required` / `t3_auth_failed`.
+Other failures use `t3_install_failed:<fixed reason>`; raw server diagnostics
+are never included. No fallback activates or stages a runtime.
+
+#### T3 source evidence and OS discovery
+
+All references below use commit
+[`ab8e488e10d883fa880b0ddcf01917b51839ab07`](https://github.com/pingdotgg/t3code/tree/ab8e488e10d883fa880b0ddcf01917b51839ab07).
+AAC targets the default local `~/.t3` installation explicitly. Custom base
+folders, development servers and non-loopback endpoints fail closed.
+
+| Concern | Implementation and source evidence |
+| --- | --- |
+| Linux and Mac service CLI | Existing AAC `runtime_install()` resolves `~/.local/bin/t3` into `~/.t3/runtime/versions/<v>/t3`, or selects the latest valid runtime binary. AAC passes `--base-dir ~/.t3` for issue, list and revoke. |
+| Windows bundled CLI | Desktop writes `~/.t3/bin/t3.cmd`. Its official invocation sets `ELECTRON_RUN_AS_NODE=1` and runs the Desktop executable with the bundled server entry. AAC invokes that pair directly: `%LOCALAPPDATA%/Programs/t3code/T3 Code (Nightly).exe` and `resources/server.asar/apps/server/dist/bin.mjs`. See [DesktopCliShim.ts:36](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopCliShim.ts#L36), [launcherPath:127](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopCliShim.ts#L127), and [DesktopEnvironment.ts:167](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopEnvironment.ts#L167). No separate Windows binary is needed. |
+| Endpoint and port, all OSes | `~/.t3/userdata/server-runtime.json` holds `origin` and `port`. AAC accepts HTTP loopback origins only, checks matching port, and never guesses a default or connects to a remote host. See [config.ts:143](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/config.ts#L143), [serverRuntimeState.ts:13](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/serverRuntimeState.ts#L13), and T3's own [thread CLI:210](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/thread.ts#L210). Desktop's default is also `~/.t3`; see [DesktopStatePaths.ts:14](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopStatePaths.ts#L14). |
+| Scoped auth | `auth session issue --scope providers:manage --scope orchestration:read --ttl 20m --label <unique> --json`; the actual flag is repeatable **`--scope`**, not `--scopes`. Auth commands access T3's local control plane, not an unauthenticated token-issuing HTTP endpoint. See [auth.ts:157](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/auth.ts#L157), [authScopes.ts:5](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/authScopes.ts#L5), [EnvironmentAuth.ts:1084](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/auth/EnvironmentAuth.ts#L1084). Revoke is [auth.ts:210](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/auth.ts#L210). |
+| RPC wire and scopes | `/ws?orchestrationProtocol=2` accepts bearer authorization and Effect 4 JSON Request/Exit/Chunk/Ack frames. See [ws.ts:3347](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/ws.ts#L3347), [EnvironmentAuth.ts:1243](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/auth/EnvironmentAuth.ts#L1243), [rpc.ts:447](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/packages/contracts/src/rpc.ts#L447), and [RpcAuthorization.ts:82](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/auth/RpcAuthorization.ts#L82). Start/cancel require `providers:manage`; subscribe and config require `orchestration:read`. |
+| Install input and ownership | Config supplies the Antigravity instance ID; no hardcoded account/provider ID is used. The UI constructs this same input in [ProviderSetupSection.tsx:108](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/web/src/components/settings/ProviderSetupSection.tsx#L108). `{instanceId}` is [ProviderSetupInput:14](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/packages/contracts/src/providerSetup.ts#L14). Routing is [ws.ts:2532](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/ws.ts#L2532); [providerInstallation.ts:122](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/providerInstallation.ts#L122) selects the managed installer. Only T3's [AntigravityInstallation.ts:450](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/AntigravityInstallation.ts#L450) activates. |
+
+Offline fixtures cover all platform discovery paths, exact wire envelopes,
+fragmented WS messages, ping/pong, stream acknowledgement, auth denials,
+installation success/failure/timeout, current/newer no-install, a newer live pin,
+read-only verification failure, session revocation and secret-free output. File
+operation guards forbid AAC writes or replacements of `active.json`, including
+its temp files. No test calls a real T3 server or performs an update.
 
 ### Stray copies beside a managed install
 

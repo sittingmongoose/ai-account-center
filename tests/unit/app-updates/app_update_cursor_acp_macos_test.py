@@ -1,7 +1,6 @@
 """Offline fixtures for Cursor, T3's ACP pair, and Mac login-session execution."""
 
 import contextlib
-import hashlib
 import json
 import os
 import pathlib
@@ -13,7 +12,6 @@ import sys
 import tempfile
 import time
 import unittest
-import zipfile
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts/app-updates"))
@@ -78,29 +76,6 @@ class Fixtures(unittest.TestCase):
         common.write_private_json(root / "active.json", {"releaseId": old.name})
         return acp.detect_antigravity_acp(host), old
 
-    def release(self, host, initialized=None, extra=None):
-        initialized = initialized or {"protocolVersion": 1,
-            "agentInfo": {"name": "antigravity-acp", "version": "1.4.5"},
-            "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"resume": {}}, "auth": {"logout": {}}},
-            "authMethods": [{"id": "oauth-personal"}]}
-        script = ("#!" + sys.executable + "\nimport sys,json,time\n"
-                  "json.loads(sys.stdin.readline())\n"
-                  "print(json.dumps({'jsonrpc':'2.0','id':1,'result':" + repr(initialized) + "}),flush=True)\n"
-                  "time.sleep(60)\n").encode()
-        exe = "agy_acp_server" + (".exe" if host == "windows" else ".par")
-        harness = "localharness_external" + (".exe" if host == "windows" else "")
-        archive = self.root / (host + "-fixture.zip")
-        with zipfile.ZipFile(archive, "w") as output:
-            output.writestr(exe, script)
-            output.writestr(harness, b"harness")
-            if extra:
-                output.writestr(*extra)
-        asset = {"version": "1.4.5", "url": "https://dl.google.com/fixture.zip",
-                 "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "archiveBytes": archive.stat().st_size,
-                 "executable": {"name": exe, "bytes": len(script)}, "harness": {"name": harness, "bytes": 7}}
-        self.stack.enter_context(mock.patch.dict(acp.RELEASES, {acp.platform_key(host): asset}))
-        self.stack.enter_context(mock.patch.object(acp, "download", side_effect=lambda url, target, **kw: shutil.copyfile(archive, target)))
-        return asset
 
 
 class CursorTests(Fixtures):
@@ -187,84 +162,202 @@ class CursorTests(Fixtures):
 
 
 class AcpTests(Fixtures):
-    def test_pinned_platforms_are_exact_t3_google_sources(self):
-        self.assertEqual(len(acp.RELEASES), 6)
-        for asset in acp.RELEASES.values():
-            self.assertEqual(asset["version"], "1.4.5")
-            self.assertTrue(asset["url"].startswith("https://dl.google.com/agy-extensions/releases/"))
-            self.assertRegex(asset["sha256"], r"^[a-f0-9]{64}$")
+    TOKEN = "private-fixture-bearer-never-output"
 
-    def test_every_os_activates_pin_and_preserves_in_use_old_release(self):
-        for host in ("ubuntu", "mac", "windows"):
-            with self.subTest(host=host):
-                install, old = self.old_acp(host)
-                asset = self.release(host)
-                process = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"], cwd=old)
-                try:
-                    with mock.patch.object(acp, "validate_runtime") as validate, mock.patch.object(acp, "command") as run:
-                        row = acp.update_antigravity_acp(install)
-                    self.assertEqual((row["previousVersion"], row["version"], row["status"]), ("1.3.0", "1.4.5", "updated"))
-                    self.assertTrue(old.is_dir()); self.assertIsNone(process.poll())
-                    self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": asset["sha256"]})
-                    self.assertTrue((install.path / "versions" / asset["sha256"] / acp.RECORD).is_file())
-                    self.assertEqual(row["messageCode"], "antigravity_acp_updated")
-                    self.assertEqual(acp.detect_antigravity_acp(host).version, "1.4.5")
-                    self.assertTrue(validate.called)
-                    if host == "mac":
-                        self.assertEqual(run.call_args.args[0][:4], ["/usr/bin/codesign", "--force", "--sign", "-"])
-                    self.assertFalse(list((install.path / "versions").glob(".install-*")))
-                finally:
-                    process.terminate(); process.wait(timeout=5)
+    def fake_t3(self, install, phase="succeeded", pin="1.4.5", failure=None, installed="1.4.5"):
+        import app_update_t3_rpc as rpc
+        self.calls, self.auth = [], []
+        state = {"driver": "antigravity", "operationId": "op", "phase": "idle", "version": pin}
+        owner = self
+        old = install.path / "versions" / ("a" * 64)
+        self.t3_writing = False
 
-    @unittest.skipIf(os.name == "nt", "executes Unix shebang fixtures")
-    def test_real_fixture_acp_initialize_and_tree_cleanup(self):
-        install, old = self.old_acp("ubuntu")
-        self.release("ubuntu")
-        row = acp.update_antigravity_acp(install)
-        self.assertEqual((row["status"], row["version"]), ("updated", "1.4.5"))
-        self.assertTrue(old.is_dir())
+        def activate():
+            directory = old.with_name("b" * 64)
+            directory.mkdir(exist_ok=True)
+            record = acp.read_json(old / acp.RECORD)
+            record.update(releaseId=directory.name, version=installed)
+            for kind in ("executable", "harness"):
+                shutil.copyfile(old / record[kind]["name"], directory / record[kind]["name"])
+            owner.t3_writing = True
+            try:
+                common.write_private_json(directory / acp.RECORD, record)
+                common.write_private_json(install.path / "active.json", {"releaseId": directory.name})
+            finally:
+                owner.t3_writing = False
 
-    @unittest.skipIf(os.name == "nt", "executes Unix shebang fixtures")
-    def test_real_fixture_with_wrong_protocol_identity_never_activates(self):
-        install, old = self.old_acp("ubuntu")
-        self.release("ubuntu", initialized={"protocolVersion": 1, "agentInfo": {"name": "wrong", "version": "1.4.5"},
-                     "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"resume": {}}, "auth": {"logout": {}}},
-                     "authMethods": [{"id": "oauth-personal"}]})
-        row = acp.update_antigravity_acp(install)
-        self.assertEqual(row["messageCode"], "signature_failed")
-        self.assertEqual(acp.read_json(install.path / "active.json")["releaseId"], old.name)
+        def auth(argv, **kwargs):
+            self.auth.append(argv)
+            if "issue" in argv:
+                if failure == "auth":
+                    raise common.UpdateFailure(output=self.TOKEN)
+                return json.dumps({"sessionId": "fixture-session", "token": self.TOKEN})
+            if "list" in argv:
+                return "[]"
+            return ""
 
-    def test_failed_checksum_or_protocol_never_changes_active(self):
-        for failure in ("checksum", "protocol"):
-            with self.subTest(failure=failure):
-                install, old = self.old_acp("ubuntu")
-                asset = self.release("ubuntu")
-                if failure == "checksum":
-                    asset["sha256"] = "b" * 64
-                with mock.patch.object(acp, "validate_runtime", side_effect=common.UpdateFailure("signature_failed")):
-                    row = acp.update_antigravity_acp(install)
-                self.assertEqual((row["status"], row["version"], row["messageCode"]), ("failed", "1.3.0", "signature_failed"))
-                self.assertEqual(acp.read_json(install.path / "active.json")["releaseId"], old.name)
-                self.assertFalse((install.path / "versions" / asset["sha256"]).exists())
+        class Client:
+            def __init__(self, origin, token, deadline):
+                owner.assertEqual(token, owner.TOKEN)
+                if failure == "unreachable":
+                    raise OSError(owner.TOKEN)
+                self.started = False
+            def close(self): pass
+            def call(self, method, payload):
+                owner.calls.append((method, payload))
+                if method == "server.getConfig":
+                    return {"providers": [{"driver": "codex", "instanceId": "wrong", "setup": {"canInstall": True}},
+                                          {"driver": "antigravity", "instanceId": "agy-custom-id", "setup": {"canInstall": True}}]}
+                owner.assertEqual(payload, {"instanceId": "agy-custom-id"})
+                self.started = True
+                return {**state, "phase": "downloading"}
+            def request(self, method, payload):
+                owner.calls.append((method, payload))
+                return "subscription"
+            def receive(self, identifier):
+                if not self.started:
+                    yield state
+                else:
+                    if failure == "timeout":
+                        raise TimeoutError(owner.TOKEN)
+                    if failure == "denied":
+                        raise common.UpdateFailure("t3_auth_failed", output=owner.TOKEN)
+                    if phase == "succeeded": activate()
+                    yield {**state, "phase": phase, "message": owner.TOKEN}
+            def send(self, message): pass
 
-    def test_extra_archive_member_is_rejected_even_with_valid_checksum(self):
-        install, old = self.old_acp("ubuntu")
-        self.release("ubuntu", extra=("../outside", b"unsafe"))
-        with mock.patch.object(acp, "validate_runtime") as validate:
+        self.stack.enter_context(mock.patch.object(rpc, "discover", return_value=(["fake-t3"], self.root, "fake-origin")))
+        self.stack.enter_context(mock.patch.object(rpc, "command", side_effect=auth))
+        self.stack.enter_context(mock.patch.object(rpc, "Rpc", Client))
+        # Trap opens AND atomic replacements. Only the fake T3 writer is allowed.
+        original_open, original_os_open, original_replace = pathlib.Path.open, os.open, os.replace
+        def path_open(path, mode="r", *args, **kwargs):
+            if path.name == "active.json" and any(flag in mode for flag in "wax+"):
+                owner.assertTrue(owner.t3_writing, "AAC opened active.json for writing")
+            return original_open(path, mode, *args, **kwargs)
+        def os_open(path, flags, *args, **kwargs):
+            if pathlib.Path(path).name.startswith("active.json") and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT):
+                owner.assertTrue(owner.t3_writing, "AAC created an active.json temp file")
+            return original_os_open(path, flags, *args, **kwargs)
+        def replace(source, target):
+            if pathlib.Path(target).name == "active.json":
+                owner.assertTrue(owner.t3_writing, "AAC replaced active.json")
+            return original_replace(source, target)
+        self.stack.enter_context(mock.patch.object(pathlib.Path, "open", path_open))
+        self.stack.enter_context(mock.patch.object(os, "open", os_open))
+        self.stack.enter_context(mock.patch.object(os, "replace", replace))
+
+    def run_update(self, install):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             row = acp.update_antigravity_acp(install)
-        self.assertEqual(row["messageCode"], "signature_failed")
-        validate.assert_not_called()
-        self.assertEqual(acp.read_json(install.path / "active.json")["releaseId"], old.name)
+        self.assertNotIn(self.TOKEN, out.getvalue() + err.getvalue() + json.dumps(row))
+        return row
 
-    def test_incomplete_existing_destination_is_never_overwritten(self):
-        install, old = self.old_acp("ubuntu")
-        asset = self.release("ubuntu")
-        destination = install.path / "versions" / asset["sha256"]
-        destination.mkdir(); (destination / "keep").write_text("held")
-        row = acp.update_antigravity_acp(install)
-        self.assertEqual(row["status"], "failed")
-        self.assertEqual((destination / "keep").read_text(), "held")
-        self.assertEqual(acp.read_json(install.path / "active.json")["releaseId"], old.name)
+    def assert_revoked(self):
+        self.assertEqual(sum("revoke" in argv for argv in self.auth), 1)
+        issue = next(argv for argv in self.auth if "issue" in argv)
+        self.assertEqual([issue[i + 1] for i, arg in enumerate(issue) if arg == "--scope"],
+                         ["providers:manage", "orchestration:read"])
+        self.assertIn("20m", issue)
+        self.assertNotIn(self.TOKEN, str(self.auth))
+
+    def test_success_all_platforms_t3_is_the_only_pointer_writer(self):
+        for host in ("windows", "mac", "ubuntu"):
+            with self.subTest(host=host), contextlib.ExitStack() as nested:
+                # Keep patches isolated between platform subtests.
+                original = self.stack
+                self.stack = nested
+                try:
+                    install, old = self.old_acp(host)
+                    self.fake_t3(install)
+                    row = self.run_update(install)
+                    self.assertEqual((row["status"], row["version"], row["messageCode"]),
+                                     ("updated", "1.4.5", "antigravity_acp_updated"))
+                    self.assertTrue(old.is_dir())
+                    self.assertEqual(row["restartedProcesses"], 0)
+                    self.assert_revoked()
+                finally: self.stack = original
+
+    def test_current_and_newer_never_call_install(self):
+        for version in ("1.4.5", "1.5.0"):
+            with self.subTest(version=version), contextlib.ExitStack() as nested:
+                original = self.stack; self.stack = nested
+                try:
+                    install, old = self.old_acp("windows")
+                    record = acp.read_json(old / acp.RECORD); record["version"] = version
+                    common.write_private_json(old / acp.RECORD, record)
+                    pointer = (install.path / "active.json").read_bytes()
+                    self.fake_t3(install)
+                    row = self.run_update(install)
+                    self.assertEqual(row["status"], "current")
+                    self.assertEqual(row["messageCode"], "current" if version == "1.4.5" else "antigravity_acp_newer_kept")
+                    self.assertFalse(any(method == "provider.install.start" for method, _ in self.calls))
+                    self.assertEqual((install.path / "active.json").read_bytes(), pointer)
+                    self.assert_revoked()
+                finally: self.stack = original
+
+    def test_live_server_pin_can_be_newer_than_aac(self):
+        install, old = self.old_acp("windows")
+        record = acp.read_json(old / acp.RECORD); record["version"] = "1.4.5"
+        common.write_private_json(old / acp.RECORD, record)
+        self.fake_t3(install, pin="1.5.0", installed="1.5.0")
+        row = self.run_update(install)
+        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.0"))
+        self.assert_revoked()
+
+    def test_failures_never_write_pointer_or_leak_token_and_always_revoke(self):
+        for failure, phase, code in [(None, "failed", "t3_install_failed:installer"),
+                                      (None, "cancelled", "t3_install_failed:cancelled"),
+                                      ("timeout", "succeeded", "t3_install_timeout"),
+                                      ("unreachable", "succeeded", "t3_unreachable"),
+                                      ("denied", "succeeded", "t3_auth_failed")]:
+            with self.subTest(failure=failure, phase=phase), contextlib.ExitStack() as nested:
+                original = self.stack; self.stack = nested
+                try:
+                    install, _ = self.old_acp("windows")
+                    pointer = (install.path / "active.json").read_bytes()
+                    self.fake_t3(install, phase=phase, failure=failure)
+                    row = self.run_update(install)
+                    self.assertEqual(row["messageCode"], code)
+                    self.assertEqual(row["status"], "action_required" if failure in ("unreachable", "denied") else "failed")
+                    self.assertEqual((install.path / "active.json").read_bytes(), pointer)
+                    self.assert_revoked()
+                finally: self.stack = original
+
+    def test_auth_issue_failure_has_no_token_to_revoke(self):
+        install, _ = self.old_acp("windows")
+        self.fake_t3(install, failure="auth")
+        row = self.run_update(install)
+        self.assertEqual((row["status"], row["messageCode"]), ("action_required", "t3_auth_failed"))
+        self.assertTrue(any("list" in argv for argv in self.auth))
+        self.assertFalse(any(method == "provider.install.start" for method, _ in self.calls))
+
+    def test_false_success_is_rejected(self):
+        install, _ = self.old_acp("windows")
+        self.fake_t3(install, installed="1.3.0")
+        row = self.run_update(install)
+        self.assertEqual(row["messageCode"], "t3_install_failed:verification")
+        self.assert_revoked()
+
+    def test_newer_t3_activation_is_preserved_at_completion(self):
+        install, _ = self.old_acp("windows")
+        self.fake_t3(install, installed="1.5.0")
+        row = self.run_update(install)
+        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.0"))
+        self.assertEqual(acp.detect_antigravity_acp("windows").version, "1.5.0")
+        self.assert_revoked()
+
+    def test_older_server_cannot_trigger_a_downgrade(self):
+        install, _ = self.old_acp("windows")
+        pointer = (install.path / "active.json").read_bytes()
+        self.fake_t3(install, pin="1.3.0")
+        row = self.run_update(install)
+        self.assertEqual(row["messageCode"], "t3_install_failed:server_outdated")
+        self.assertFalse(any(method == "provider.install.start" for method, _ in self.calls))
+        self.assertEqual((install.path / "active.json").read_bytes(), pointer)
+        self.assert_revoked()
 
     def test_unknown_pointer_is_unknown_and_absence_does_not_install(self):
         self.assertIsNone(acp.detect_antigravity_acp("ubuntu"))
@@ -272,126 +365,31 @@ class AcpTests(Fixtures):
         common.write_private_json(install.path / "active.json", {"releaseId": "../outside"})
         self.assertEqual(acp.detect_antigravity_acp("ubuntu").probe, "failed")
 
-    def test_t3_activation_after_final_read_is_never_overwritten(self):
-        for version in ("1.5.0", "1.4.5"):
-            with self.subTest(version=version):
-                install, old = self.old_acp("windows")
-                self.release("windows")
-                newer = old.with_name("c" * 64)
-                newer.mkdir(exist_ok=True)
-                record = acp.read_json(old / acp.RECORD)
-                record.update(releaseId=newer.name, version=version)
-                for kind in ("executable", "harness"):
-                    shutil.copyfile(old / record[kind]["name"], newer / record[kind]["name"])
-                common.write_private_json(newer / acp.RECORD, record)
-                detect = acp.detect_antigravity_acp
-                def concurrent_activation(host):
-                    observed = detect(host)
-                    # Reviewer's exact interleaving: T3 wins after AAC's read.
-                    common.write_private_json(install.path / "active.json", {"releaseId": newer.name})
-                    return observed
-                with mock.patch.object(acp, "validate_runtime"), \
-                        mock.patch.object(acp, "detect_antigravity_acp", side_effect=concurrent_activation):
-                    row = acp.update_antigravity_acp(install)
-                self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": newer.name})
-                self.assertEqual(detect("windows").version, version)
-                self.assertEqual((row["status"], row["messageCode"]),
-                                 ("current", "antigravity_acp_newer_kept" if version == "1.5.0" else "current"))
 
-    def publish_t3(self, old, version="1.5.0", release_id="d" * 64):
-        directory = old.with_name(release_id)
-        directory.mkdir(exist_ok=True)
-        record = acp.read_json(old / acp.RECORD)
-        record.update(releaseId=release_id, version=version)
-        for kind in ("executable", "harness"):
-            shutil.copyfile(old / record[kind]["name"], directory / record[kind]["name"])
-        common.write_private_json(directory / acp.RECORD, record)
-        return directory
+class PrivateJsonTests(Fixtures):
+    def test_replace_failure_removes_temp_and_preserves_original_exception(self):
+        target = self.root / "private.json"
+        failure = PermissionError("fixture locked destination")
+        with mock.patch.object(os, "replace", side_effect=failure):
+            with self.assertRaises(PermissionError) as raised:
+                common.write_private_json(target, {"private": "fixture"})
+        self.assertIs(raised.exception, failure)
+        self.assertFalse(target.exists())
+        self.assertEqual(list(self.root.glob("private.json.*.tmp")), [])
 
-    def test_newer_activation_between_check_and_rename_converges(self):
-        install, old = self.old_acp("windows")
-        asset = self.release("windows")
-        replace = os.replace
-        writes = []
-        def race(source, destination):
-            if pathlib.Path(destination) == install.path / "active.json":
-                writes.append(json.loads(pathlib.Path(source).read_text())["releaseId"])
-                if len(writes) == 1:
-                    newer = self.publish_t3(old)
-                    # T3 publishes the complete directory then activates, immediately
-                    # before AAC's actual rename overwrites that activation.
-                    pointer = install.path / "t3-pointer.tmp"
-                    pointer.write_text(json.dumps({"releaseId": newer.name}))
-                    replace(pointer, destination)
-            return replace(source, destination)
-        with mock.patch.object(acp, "validate_runtime"), mock.patch.object(os, "replace", side_effect=race):
-            row = acp.update_antigravity_acp(install)
-        self.assertEqual(writes, [asset["sha256"], "d" * 64])
-        self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": "d" * 64})
-        self.assertEqual((row["status"], row["version"], row["messageCode"]),
-                         ("updated", "1.5.0", "antigravity_acp_updated"))
+    def test_serialization_failure_also_removes_temp(self):
+        target = self.root / "private.json"
+        with self.assertRaises(ValueError): common.write_private_json(target, {"value": float("nan")})
+        self.assertEqual(list(self.root.glob("*.tmp")), [])
 
-    def test_t3_pointer_change_after_aac_write_survives(self):
-        install, old = self.old_acp("windows")
-        self.release("windows")
-        replace = os.replace
-        changed = False
-        def race(source, destination):
-            nonlocal changed
-            value = replace(source, destination)
-            if pathlib.Path(destination) == install.path / "active.json" and not changed:
-                changed = True
-                newer = self.publish_t3(old)
-                pointer = install.path / "t3-pointer.tmp"
-                pointer.write_text(json.dumps({"releaseId": newer.name}))
-                replace(pointer, destination)
-            return value
-        with mock.patch.object(acp, "validate_runtime"), mock.patch.object(os, "replace", side_effect=race):
-            row = acp.update_antigravity_acp(install)
-        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.0"))
-        self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": "d" * 64})
-
-    def test_continuing_publications_exhaust_bounded_activation_honestly(self):
-        install, old = self.old_acp("windows")
-        self.release("windows")
-        replace = os.replace
-        writes = []
-        def race(source, destination):
-            if pathlib.Path(destination) == install.path / "active.json":
-                writes.append(destination)
-                self.publish_t3(old, "2.0." + str(len(writes)), format(len(writes), "064x"))
-            return replace(source, destination)
-        with mock.patch.object(acp, "validate_runtime"), mock.patch.object(os, "replace", side_effect=race):
-            row = acp.update_antigravity_acp(install)
-        self.assertEqual(len(writes), 5)
-        self.assertEqual((row["status"], row["messageCode"]),
-                         ("failed", "antigravity_acp_activation_unsettled"))
-        self.assertEqual(row["version"], acp.detect_antigravity_acp("windows").version)
-
-    def test_newest_complete_on_disk_wins_without_t3_activation(self):
-        install, old = self.old_acp("windows")
-        self.release("windows")
-        newer = self.publish_t3(old)
-        incomplete = self.publish_t3(old, "9.0.0", "e" * 64)
-        (incomplete / "localharness_external.exe").unlink()
-        with mock.patch.object(acp, "validate_runtime"):
-            row = acp.update_antigravity_acp(install)
-        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.0"))
-        self.assertEqual(acp.read_json(install.path / "active.json"), {"releaseId": newer.name})
-
-    def test_no_downgrade_or_network_for_current_runtime(self):
-        install, old = self.old_acp("windows")
-        newer = self.publish_t3(old)
-        common.write_private_json(install.path / "active.json", {"releaseId": newer.name})
-        install = acp.detect_antigravity_acp("windows")
-        pointer = (install.path / "active.json").read_bytes()
-        with mock.patch.object(acp, "download") as fetch, mock.patch.object(acp, "write_private_json") as write:
-            row = acp.update_antigravity_acp(install)
-        self.assertEqual((row["status"], row["version"], row["messageCode"]),
-                         ("current", "1.5.0", "antigravity_acp_newer_kept"))
-        self.assertEqual((install.path / "active.json").read_bytes(), pointer)
-        fetch.assert_not_called()
-        write.assert_not_called()
+    def test_cleanup_failure_preserves_the_replace_exception(self):
+        target = self.root / "private.json"
+        failure = PermissionError("fixture replace failed")
+        with mock.patch.object(os, "replace", side_effect=failure), \
+                mock.patch.object(pathlib.Path, "unlink", side_effect=OSError("fixture cleanup failed")):
+            with self.assertRaises(PermissionError) as raised:
+                common.write_private_json(target, {"private": "fixture"})
+        self.assertIs(raised.exception, failure)
 
 
 class MacGuiTests(Fixtures):

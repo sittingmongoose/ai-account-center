@@ -411,6 +411,10 @@ export function normalizeAppUpdateRow(
       (appId !== 'antigravity-acp' || row.status !== 'failed')) ||
     (code === 'antigravity_acp_staged' &&
       (appId !== 'antigravity-acp' || row.status !== 'action_required')) ||
+    ((code === 't3_unreachable' || code === 't3_auth_failed') &&
+      (appId !== 'antigravity-acp' || row.status !== 'action_required')) ||
+    ((code === 't3_install_timeout' || code.startsWith('t3_install_failed:')) &&
+      (appId !== 'antigravity-acp' || row.status !== 'failed')) ||
     (['mac_keychain_locked', 'mac_gui_unavailable', 'mac_gui_cleanup_failed'].includes(code) &&
       (HOST_OS[platform] !== 'mac' ||
         !['muse-code', 'cursor-cli'].includes(appId) ||

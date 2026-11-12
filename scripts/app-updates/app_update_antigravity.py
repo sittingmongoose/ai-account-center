@@ -1,33 +1,20 @@
-"""T3's managed Antigravity ACP pair, separate from the agy CLI.
+"""Read-only discovery and T3-owned Antigravity ACP installation.
 
-Mirrors AntigravityInstallation.ts: pinned Google ZIP, SHA-256 and byte counts,
-exactly two plain files and ACP initialize verification. Activation converges to
-the newest complete release, including releases published by T3.
-Old releases are never removed, even when no running session is visible.
+AAC never opens, replaces or repairs active.json. T3's running server owns
+validation, publication and activation through provider.install.start.
 """
 
 import contextlib
-import hashlib
 import json
-import os
 import pathlib
 import platform
-import queue
 import re
-import shutil
-import stat
-import subprocess
-import threading
-import tempfile
+import socket
 import time
-import zipfile
 
 from app_update_antigravity_release import RELEASES
-from app_update_common import (
-    CREATE_NO_WINDOW, Install, UpdateFailure, _stop_group, command, download,
-    environment, private_temporary, result, version_text, version_tuple, write_private_json,
-)
-
+from app_update_common import Install, UpdateFailure, result, version_text, version_tuple
+import app_update_t3_rpc as t3_rpc
 
 RELEASE_ID = re.compile(r"^[a-f0-9]{64}$")
 RECORD = ".install-complete.json"
@@ -91,242 +78,78 @@ def detect_antigravity_acp(host):
         return Install("antigravity-acp", host, root, manager="official-download", probe="failed")
 
 
-def budget(deadline, maximum):
-    remaining = maximum if deadline is None else min(maximum, deadline - time.monotonic())
-    if remaining <= 0:
-        raise UpdateFailure("timeout")
-    return remaining
+def install_state(client, instance):
+    identifier = client.request("provider.install.subscribe", {"instanceId": instance})
+    try:
+        yield from client.receive(identifier)
+    finally:
+        with contextlib.suppress(UpdateFailure, OSError):
+            client.send({"_tag": "Interrupt", "requestId": identifier, "interruptors": []})
 
 
-def has_capability(value):
-    # ACP uses empty objects for capabilities; they are truthy in T3's JS.
-    return isinstance(value, dict) or value is True
-
-
-def matches_asset(record, asset, host):
-    if record.get("version") != asset["version"]:
-        return False
-    for kind in ("executable", "harness"):
-        if record[kind]["name"] != asset[kind]["name"]:
-            return False
-        # T3 re-signs Google's Intel Mac pair ad hoc after ZIP verification.
-        # Its completion record stores the resulting file sizes.
-        if platform_key(host) != "darwin-x64" and record[kind]["bytes"] != asset[kind]["bytes"]:
-            return False
-    return True
-
-
-def validate_runtime(directory, asset, host, deadline):
-    """Unauthenticated ACP initialize, with a disposable GEMINI_HOME, as T3 uses.
-
-    No session/new, authenticate or prompt is sent. Stop only this validation
-    process tree; installed/running Antigravity sessions are never scanned.
-    """
-    with private_temporary() as profile:
-        (profile / "antigravity-acp").mkdir(mode=0o700)
-        write_private_json(profile / "antigravity-acp/settings.json", {"auth": {"type": "oauth-personal"}})
-        env = environment()
-        for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
-                    "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_QUOTA_PROJECT",
-                    "GOOGLE_GENAI_USE_VERTEXAI", "GCLOUD_PROJECT", "CLOUDSDK_CORE_PROJECT",
-                    "AGY_ACP_CCPA_PROJECT", "AGY_ACP_ENABLE_OAUTH", "CHROME_CRASHPAD_PIPE_NAME"):
-            env.pop(key, None)
-        env.update(GEMINI_HOME=str(profile), AGY_ACP_FORCE_FILE_STORAGE="1", PYTHONUNBUFFERED="1",
-                   ELECTRON_RUN_AS_NODE="1", ANTIGRAVITY_HARNESS_PATH=str(directory / asset["harness"]["name"]),
-                   BROWSER="false", TEMP=str(profile), TMP=str(profile), TMPDIR=str(profile))
-        if host == "ubuntu" and not env.get("SSL_CERT_FILE") and not env.get("SSL_CERT_DIR"):
-            if pathlib.Path("/etc/ssl/certs/ca-certificates.crt").is_file():
-                env["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
-        argv = [str(directory / asset["executable"]["name"])] + (["--uid="] if host == "ubuntu" else [])
-        options = {"creationflags": CREATE_NO_WINDOW} if host == "windows" else {"start_new_session": True}
-        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, cwd=profile, env=env, **options)
-        responses = queue.Queue(maxsize=1)
-
-        def read_response():
-            try:
-                for _ in range(128):
-                    line = process.stdout.readline(65537)
-                    if not line or len(line) > 65536:
-                        break
-                    value = json.loads(line)
-                    if isinstance(value, dict) and value.get("id") == 1:
-                        responses.put(value.get("result"))
-                        return
-            except (OSError, ValueError):
-                pass
-            responses.put(None)
-
-        reader = threading.Thread(target=read_response, daemon=True)
-        try:
-            reader.start()
-            request = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-                "protocolVersion": 1, "clientCapabilities": {},
-                "clientInfo": {"name": "aac-runtime-validation", "version": "1.0.0"},
-            }}
-            process.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
-            process.stdin.flush()
-            try:
-                initialized = responses.get(timeout=budget(deadline, 90))
-            except queue.Empty:
-                raise UpdateFailure("timeout") from None
-            if not isinstance(initialized, dict):
-                raise UpdateFailure("signature_failed")
-            info, capabilities = initialized.get("agentInfo"), initialized.get("agentCapabilities")
-            if not isinstance(info, dict) or not isinstance(capabilities, dict):
-                raise UpdateFailure("signature_failed")
-            sessions, auth = capabilities.get("sessionCapabilities"), capabilities.get("auth")
-            methods = initialized.get("authMethods")
-            if not isinstance(sessions, dict) or not isinstance(auth, dict) or not isinstance(methods, list):
-                raise UpdateFailure("signature_failed")
-            if (info.get("name") != "antigravity-acp" or info.get("version") != asset["version"] or
-                    initialized.get("protocolVersion") not in (1, 2) or capabilities.get("loadSession") is not True or
-                    not has_capability(sessions.get("resume")) or
-                    not has_capability(auth.get("logout")) or
-                    not any(item.get("id") == "oauth-personal" for item in methods
-                            if isinstance(item, dict))):
-                raise UpdateFailure("signature_failed")
-        finally:
-            _stop_group(process, tree=True)
-            reader.join(timeout=1)
-            with contextlib.suppress(OSError):
-                process.stdin.close()
-                process.stdout.close()
-
-
-def extract_runtime(archive, directory, asset):
-    expected = {asset[kind]["name"]: asset[kind]["bytes"] for kind in ("executable", "harness")}
-    with zipfile.ZipFile(archive) as source:
-        entries = source.infolist()
-        if len(entries) != 2 or {entry.filename for entry in entries} != set(expected):
-            raise UpdateFailure("signature_failed")
-        for entry in entries:
-            mode = (entry.external_attr >> 16) & 0o170000
-            if (entry.file_size != expected[entry.filename] or mode not in (0, stat.S_IFREG) or
-                    entry.external_attr & 0x10 or entry.flag_bits & 1 or
-                    entry.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)):
-                raise UpdateFailure("signature_failed")
-            target = directory / entry.filename
-            with source.open(entry) as incoming, target.open("xb") as outgoing:
-                shutil.copyfileobj(incoming, outgoing, 256 * 1024)
-            if target.stat().st_size != expected[entry.filename]:
-                raise UpdateFailure("signature_failed")
-            target.chmod(0o755)
-
-
-def newest_complete(root, host, active):
-    # completed() mirrors T3's manifest, file-name, size and executable checks.
-    # Incomplete staging directories are not candidates. Keep the active ID on ties.
-    target = completed(root, active, host)
-    for directory in sorted((root / "versions").iterdir()):
-        if not RELEASE_ID.fullmatch(directory.name):
-            continue
-        try:
-            candidate = completed(root, directory.name, host)
-        except (UpdateFailure, OSError, ValueError, TypeError):
-            continue
-        if version_tuple(candidate["version"]) > version_tuple(target["version"]):
-            target = candidate
-    return target
-
-
-def activate_newest(root, host, deadline):
-    """Return the verified final record and whether AAC wrote the pointer."""
-    wrote = False
-    # T3 atomically publishes its validated directory BEFORE renaming active.json.
-    # Thus even an activation overwritten between our scan and rename is recoverable
-    # from disk: each pass chooses the maximum complete version, never our pin alone.
-    # This is monotonic at convergence, not a shared CAS: a newly published directory
-    # between scan and rename can cause a transient regression until the next pass.
-    # A T3 write/publication after our final verification (or endless writers beyond
-    # this bounded loop) is outside this guarantee; exhaustion is reported as failure.
-    for _ in range(5):
-        budget(deadline, 1)
-        active = read_json(root / "active.json").get("releaseId")
-        target = newest_complete(root, host, active)
-        if read_json(root / "active.json").get("releaseId") != active:
-            continue
-        if target["releaseId"] != active:
-            write_private_json(root / "active.json", {"releaseId": target["releaseId"]})
-            wrote = True
-        observed = read_json(root / "active.json").get("releaseId")
-        latest = newest_complete(root, host, observed)
-        if (observed == target["releaseId"] and latest["releaseId"] == observed and
-                read_json(root / "active.json").get("releaseId") == observed):
-            return latest, wrote
-    raise UpdateFailure("antigravity_acp_activation_unsettled")
+def checked_state(value):
+    if (not isinstance(value, dict) or value.get("driver") != "antigravity" or
+            value.get("phase") not in ("idle", "downloading", "extracting", "verifying", "succeeded", "failed", "cancelled") or
+            not isinstance(value.get("version"), str) or version_text(value["version"]) != value["version"]):
+        raise UpdateFailure("t3_install_failed:protocol")
+    return value
 
 
 def update_antigravity_acp(install, deadline=None, progress=None):
     before, attempted = install.version, False
+    deadline = min(deadline or float("inf"), time.monotonic() + 900)
     asset = RELEASES.get(platform_key(install.platform))
     if asset is None:
         return result(install.app_id, install.platform, "failed", before, before, install.manager, "unsupported")
     try:
-        root = managed_root(install.platform)
-        current = detect_antigravity_acp(install.platform)
-        if current is None or current.probe:
-            raise UpdateFailure("readiness_unknown")
-        if version_tuple(current.version) >= version_tuple(asset["version"]):
-            attempted = True
-            final, wrote = activate_newest(root, install.platform, deadline)
-            code = "antigravity_acp_updated" if wrote else (
-                "antigravity_acp_newer_kept" if version_tuple(final["version"]) > version_tuple(asset["version"]) else "current")
-            return result(install.app_id, install.platform, "updated" if wrote else "current",
-                          before, final["version"], install.manager, code, wrote)
-        versions = root / "versions"
-        destination = versions / asset["sha256"]
-        attempted = True
-        if destination.exists() or destination.is_symlink():
-            record = completed(root, asset["sha256"], install.platform)
-            if not matches_asset(record, asset, install.platform):
-                raise UpdateFailure("signature_failed")
-            validate_runtime(destination, asset, install.platform, deadline)
-        else:
-            needed = asset["archiveBytes"] + asset["executable"]["bytes"] + asset["harness"]["bytes"] + 256 * 1024 * 1024
-            if shutil.disk_usage(versions).free < needed:
-                raise UpdateFailure()
-            # Same filesystem: rename publishes the complete pair in one step.
-            with tempfile.TemporaryDirectory(prefix=".install-", dir=versions) as staging:
-                staging = pathlib.Path(staging)
-                archive, pair = staging / "download.zip", staging / "runtime"
-                pair.mkdir(mode=0o700)
-                if progress:
-                    progress("downloading")
-                download(asset["url"], archive, maximum=asset["archiveBytes"], timeout=budget(deadline, 900))
-                digest = hashlib.sha256()
-                with archive.open("rb") as stream:
-                    for chunk in iter(lambda: stream.read(256 * 1024), b""):
-                        digest.update(chunk)
-                if archive.stat().st_size != asset["archiveBytes"] or digest.hexdigest() != asset["sha256"]:
-                    raise UpdateFailure("signature_failed")
+        cli, base, origin = t3_rpc.discover(install.platform)
+        with t3_rpc.bearer(cli, base, deadline) as token:
+            with contextlib.closing(t3_rpc.Rpc(origin, token, deadline)) as client:
+                config = client.call("server.getConfig", {})
+                instances = [p["instanceId"] for p in config.get("providers", [])
+                             if p.get("driver") == "antigravity" and p.get("setup", {}).get("canInstall")]
+                if not instances:
+                    raise UpdateFailure("t3_install_failed:provider_unavailable")
+                instance = instances[0]
+                # Learn the RUNNING server's pin, which can be newer than AAC's
+                # offline pin. Never issue start against an older T3 server.
+                with contextlib.closing(install_state(client, instance)) as states:
+                    initial = checked_state(next(states))
+                pin = initial["version"]
+                current = detect_antigravity_acp(install.platform)
+                if current is None or current.probe:
+                    raise UpdateFailure("t3_install_failed:readiness_unknown")
+                if version_tuple(current.version) >= max(version_tuple(pin), version_tuple(asset["version"])):
+                    code = "antigravity_acp_newer_kept" if version_tuple(current.version) > version_tuple(pin) else "current"
+                    return result(install.app_id, install.platform, "current", before, current.version, install.manager, code)
+                if version_tuple(pin) < version_tuple(asset["version"]):
+                    raise UpdateFailure("t3_install_failed:server_outdated")
                 if progress:
                     progress("updating")
-                extract_runtime(archive, pair, asset)
-                if platform_key(install.platform) == "darwin-x64":
-                    command(["/usr/bin/codesign", "--force", "--sign", "-", pair / asset["executable"]["name"],
-                             pair / asset["harness"]["name"]], timeout=budget(deadline, 30))
-                validate_runtime(pair, asset, install.platform, deadline)
-                record = {"releaseId": asset["sha256"], "version": asset["version"]}
-                for kind in ("executable", "harness"):
-                    name = asset[kind]["name"]
-                    record[kind] = {"name": name, "bytes": (pair / name).stat().st_size}
-                write_private_json(pair / RECORD, record)
-                try:
-                    pair.rename(destination)
-                except OSError:
-                    # T3 may have installed the same release concurrently.
-                    record = completed(root, asset["sha256"], install.platform)
-                    if not matches_asset(record, asset, install.platform):
-                        raise UpdateFailure("signature_failed") from None
-                    validate_runtime(destination, asset, install.platform, deadline)
-        final, wrote = activate_newest(root, install.platform, deadline)
-        code = "antigravity_acp_updated" if wrote else (
-            "antigravity_acp_newer_kept" if version_tuple(final["version"]) > version_tuple(asset["version"]) else "current")
-        return result(install.app_id, install.platform, "updated" if wrote else "current",
-                      before, final["version"], install.manager, code, attempted)
-    except (UpdateFailure, OSError, ValueError, TypeError, zipfile.BadZipFile) as error:
+                attempted = True
+                state = checked_state(client.call("provider.install.start", {"instanceId": instance}))
+                operation = state.get("operationId")
+                if not isinstance(operation, str) or not operation or state["version"] != pin:
+                    raise UpdateFailure("t3_install_failed:protocol")
+                with contextlib.closing(install_state(client, instance)) as states:
+                    while state["phase"] not in ("succeeded", "failed", "cancelled"):
+                        state = checked_state(next(states))
+                        if state.get("operationId") != operation or state["version"] != pin:
+                            raise UpdateFailure("t3_install_failed:operation_changed")
+                if state["phase"] != "succeeded":
+                    # Server messages can contain local paths or credentials.
+                    # Emit only a fixed reason, never arbitrary diagnostic text.
+                    raise UpdateFailure("t3_install_failed:" + ("cancelled" if state["phase"] == "cancelled" else "installer"))
+                final = detect_antigravity_acp(install.platform)
+                if final is None or final.probe or version_tuple(final.version) < version_tuple(pin):
+                    raise UpdateFailure("t3_install_failed:verification")
+                return result(install.app_id, install.platform, "updated", before, final.version,
+                              install.manager, "antigravity_acp_updated", attempted)
+    except (UpdateFailure, OSError, ValueError, TypeError, KeyError, AttributeError, StopIteration) as error:
         refreshed = detect_antigravity_acp(install.platform)
         after = refreshed.version if refreshed else None
-        return result(install.app_id, install.platform, "failed", before, after, install.manager,
-                      error.code if isinstance(error, UpdateFailure) else "update_failed", attempted)
+        code = error.code if isinstance(error, UpdateFailure) else (
+            "t3_install_timeout" if isinstance(error, (TimeoutError, socket.timeout)) else
+            "t3_unreachable" if isinstance(error, OSError) else "t3_install_failed:protocol")
+        return result(install.app_id, install.platform, "action_required" if code in ("t3_unreachable", "t3_auth_failed") else "failed",
+                      before, after, install.manager, code, attempted)
