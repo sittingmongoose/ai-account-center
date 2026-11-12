@@ -9,6 +9,7 @@ pub mod meter;
 mod overlay;
 mod parts;
 pub use overlay::OverlayPortal;
+pub(crate) use overlay::reconcile_overlay_focus;
 
 pub use chrome::{ChromeInfo, FrameShell, PageShell, apply_theme, stored_theme};
 pub use controls::*;

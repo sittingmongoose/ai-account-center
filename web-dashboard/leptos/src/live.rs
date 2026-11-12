@@ -43,23 +43,25 @@ impl Live {
             if live.loading.try_get_untracked().is_none() {
                 return;
             }
-            match result {
-                Ok(view) => {
-                    let now = js_sys::Date::now();
-                    live.view.set(Some(view));
-                    live.fetched_at_ms.set(now);
-                    live.now_ms.set(now);
-                    live.error.set(None);
-                    live.failed_since_ms.set(None);
-                }
-                Err(error) => {
-                    if live.failed_since_ms.get_untracked().is_none() {
-                        live.failed_since_ms.set(Some(js_sys::Date::now()));
+            crate::ui::reconcile_overlay_focus(|| {
+                match result {
+                    Ok(view) => {
+                        let now = js_sys::Date::now();
+                        live.view.set(Some(view));
+                        live.fetched_at_ms.set(now);
+                        live.now_ms.set(now);
+                        live.error.set(None);
+                        live.failed_since_ms.set(None);
                     }
-                    live.error.set(Some(error));
+                    Err(error) => {
+                        if live.failed_since_ms.get_untracked().is_none() {
+                            live.failed_since_ms.set(Some(js_sys::Date::now()));
+                        }
+                        live.error.set(Some(error));
+                    }
                 }
-            }
-            live.loading.set(false);
+                live.loading.set(false);
+            });
         });
     }
 }

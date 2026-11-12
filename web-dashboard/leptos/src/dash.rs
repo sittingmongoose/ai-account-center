@@ -79,7 +79,7 @@ impl DashCtx {
 
     /// One view from the dashboard. Unknown keys are ignored.
     pub(crate) fn receive(&self, key: &str, json: String) {
-        match key {
+        crate::ui::reconcile_overlay_focus(|| match key {
             "dashboard" => self.dashboard.set(json),
             "accounts" => self.accounts.set(json),
             "accounts-strength" => self.strength.set(json),
@@ -93,7 +93,7 @@ impl DashCtx {
             "analytics-head" => self.analytics_head.set(json),
             "analytics-loading" => self.analytics_loading.set(json),
             _ => {}
-        }
+        });
     }
 
     /// The dashboard's page started again: what its overlays showed belongs to the page that is gone.

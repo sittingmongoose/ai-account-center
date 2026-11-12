@@ -466,17 +466,19 @@ impl Board {
             if self.loading.try_get_untracked().is_none() {
                 return;
             }
-            match result {
-                Ok(view) => {
-                    let now = js_sys::Date::now();
-                    self.view.set(Some(view));
-                    self.fetched_at_ms.set(now);
-                    self.now_ms.set(now);
-                    self.error.set(None);
+            crate::ui::reconcile_overlay_focus(|| {
+                match result {
+                    Ok(view) => {
+                        let now = js_sys::Date::now();
+                        self.view.set(Some(view));
+                        self.fetched_at_ms.set(now);
+                        self.now_ms.set(now);
+                        self.error.set(None);
+                    }
+                    Err(e) => self.error.set(Some(e)),
                 }
-                Err(e) => self.error.set(Some(e)),
-            }
-            self.loading.set(false);
+                self.loading.set(false);
+            });
         });
     }
 

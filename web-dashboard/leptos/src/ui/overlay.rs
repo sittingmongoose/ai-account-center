@@ -18,6 +18,8 @@ thread_local! {
     static LOCK: RefCell<Option<ScrollLock>> = const { RefCell::new(None) };
     static STACK: RefCell<Vec<(u64, bool)>> = const { RefCell::new(Vec::new()) };
     static REPAIR: RefCell<std::collections::BTreeMap<u64, Rc<dyn Fn()>>> = const { RefCell::new(std::collections::BTreeMap::new()) };
+    static BEFORE_UPDATE: RefCell<std::collections::BTreeMap<u64, Rc<dyn Fn(u64)>>> = const { RefCell::new(std::collections::BTreeMap::new()) };
+    static UPDATE_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -271,7 +273,7 @@ impl FocusTarget {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct FocusMemory {
     target: Option<FocusTarget>,
     order: Vec<FocusTarget>,
@@ -315,6 +317,46 @@ impl FocusMemory {
         }
         current.first().map(|t| t.element.clone())
     }
+}
+
+struct FocusUpdate {
+    id: u64,
+    before: FocusMemory,
+}
+
+/// Capture actual focus after a response arrives, immediately before its reactive data is applied.
+/// Only DOM-caused losses during this update may recover; historical focus is not a selection.
+pub(crate) fn reconcile_overlay_focus<T>(update: impl FnOnce() -> T) -> T {
+    let id = UPDATE_ID.with(|n| {
+        n.set(n.get() + 1);
+        n.get()
+    });
+    let top = STACK.with(|s| s.borrow().last().map(|(id, _)| *id));
+    let before = top.and_then(|id| BEFORE_UPDATE.with(|all| all.borrow().get(&id).cloned()));
+    if let Some(before) = before {
+        before(id);
+    }
+    update()
+}
+
+fn touched_focus(records: &js_sys::Array, focused: &web_sys::HtmlElement) -> bool {
+    records.iter().any(|record| {
+        let get = |key: &str| js_sys::Reflect::get(&record, &key.into()).ok();
+        if get("type").and_then(|v| v.as_string()).as_deref() == Some("attributes") {
+            return get("target")
+                .and_then(|v| v.dyn_into::<web_sys::Node>().ok())
+                .is_some_and(|node| node.contains(Some(focused.as_ref())));
+        }
+        get("removedNodes")
+            .and_then(|v| v.dyn_into::<web_sys::NodeList>().ok())
+            .is_some_and(|nodes| {
+                (0..nodes.length()).any(|i| {
+                    nodes
+                        .item(i)
+                        .is_some_and(|node| node.contains(Some(focused.as_ref())))
+                })
+            })
+    })
 }
 
 fn repair_top_focus() {
@@ -383,20 +425,95 @@ pub fn OverlayPortal(
     REPAIR.with(|r| {
         r.borrow_mut().insert(id, repair.clone());
     });
+    let pending = Rc::new(RefCell::new(None::<FocusUpdate>));
+    let capture = {
+        let pending = pending.clone();
+        Rc::new(move |update_id: u64| {
+            pending.borrow_mut().take();
+            if !trap_focus || !top_overlay(id) || !document().has_focus().unwrap_or(false) {
+                return;
+            }
+            let Some(root) = node.get_untracked() else {
+                return;
+            };
+            let Some(active) = document()
+                .active_element()
+                .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+            else {
+                return;
+            };
+            if !root.contains(Some(active.as_ref())) || active.has_attribute("data-overlay-guard") {
+                return;
+            }
+            let mut before = FocusMemory::default();
+            before.remember(root.as_ref(), active);
+            *pending.borrow_mut() = Some(FocusUpdate {
+                id: update_id,
+                before,
+            });
+            // Render effects and mutation delivery run before the next paint. A no-op update must not arm
+            // recovery for a later, unrelated mutation. New updates have their own expiration token.
+            let pending = pending.clone();
+            let expire = Closure::once_into_js(move || {
+                let same = pending.borrow().as_ref().is_some_and(|p| p.id == update_id);
+                if same {
+                    pending.borrow_mut().take();
+                }
+            });
+            let _ = window().request_animation_frame(expire.unchecked_ref());
+        })
+    };
+    BEFORE_UPDATE.with(|all| {
+        all.borrow_mut().insert(id, capture);
+    });
     let observer = StoredValue::new_local(
         None::<(
             web_sys::MutationObserver,
             Closure<dyn Fn(js_sys::Array, web_sys::MutationObserver)>,
         )>,
     );
-    let repair_after_update = repair.clone();
+    let pending_mutation = pending.clone();
     Effect::new(move |_| {
         let Some(root) = node.get() else {
             return;
         };
-        let repair = repair_after_update.clone();
+        let pending = pending_mutation.clone();
+        let observed_root = root.clone();
         let callback =
-            Closure::<dyn Fn(js_sys::Array, web_sys::MutationObserver)>::new(move |_, _| repair());
+            Closure::<dyn Fn(js_sys::Array, web_sys::MutationObserver)>::new(move |records, _| {
+                if !trap_focus
+                    || !top_overlay(id)
+                    || preparing_reverse.get_value()
+                    || !document().has_focus().unwrap_or(false)
+                {
+                    return;
+                }
+                let cleared = document().active_element().is_none_or(|active| {
+                    !active.is_connected()
+                        || document()
+                            .body()
+                            .is_some_and(|body| js_sys::Object::is(active.as_ref(), body.as_ref()))
+                });
+                if !cleared {
+                    return;
+                }
+                let eligible = pending.borrow().as_ref().is_some_and(|update| {
+                    update
+                        .before
+                        .target
+                        .as_ref()
+                        .is_some_and(|target| touched_focus(&records, &target.element))
+                });
+                if !eligible {
+                    return;
+                }
+                let Some(update) = pending.borrow_mut().take() else {
+                    return;
+                };
+                if let Some(destination) = update.before.destination(observed_root.as_ref()) {
+                    focus(&destination);
+                }
+            });
         if let Ok(observer_value) =
             web_sys::MutationObserver::new(callback.as_ref().unchecked_ref())
         {
@@ -414,6 +531,20 @@ pub fn OverlayPortal(
             observer.set_value(Some((observer_value, callback)));
         }
     });
+    // Capture phase observes user intent even when a child consumes the key/pointer event.
+    // Cancellation never changes focus: reading text may deliberately leave BODY selected.
+    let intent_pending = pending.clone();
+    let intent = Closure::<dyn Fn(web_sys::Event)>::new(move |_| {
+        intent_pending.borrow_mut().take();
+    });
+    for event in ["pointerdown", "keydown", "focusin"] {
+        let _ = window().add_event_listener_with_callback_and_bool(
+            event,
+            intent.as_ref().unchecked_ref(),
+            true,
+        );
+    }
+    let intent = StoredValue::new_local(Some(intent));
     let keys = window_event_listener(leptos::ev::keydown, move |e| {
         if !top_overlay(id) {
             return;
@@ -464,6 +595,7 @@ pub fn OverlayPortal(
     // Redirecting focus dispatches focusin synchronously. This callback must be Fn (reentrant), rather than
     // window_event_listener's FnMut wrapper, which rejects a recursive invocation during focus().
     let focus_memory = memory.clone();
+    let focus_pending = pending.clone();
     let containment = Closure::<dyn Fn(web_sys::FocusEvent)>::new(move |e: web_sys::FocusEvent| {
         if !trap_focus || !top_overlay(id) || preparing_reverse.get_value() {
             return;
@@ -477,6 +609,7 @@ pub fn OverlayPortal(
         else {
             return;
         };
+        focus_pending.borrow_mut().take();
         let edge = target.get_attribute("data-overlay-guard");
         let elements = tab_stops(root.as_ref());
         place_start_guard(root.as_ref(), &elements);
@@ -561,8 +694,24 @@ pub fn OverlayPortal(
             }
         }
     });
+    let cleanup_pending = StoredValue::new_local(pending);
     on_cleanup(move || {
         keys.remove();
+        if let Some(Some(handler)) = intent.try_update_value(|h| h.take()) {
+            for event in ["pointerdown", "keydown", "focusin"] {
+                let _ = window().remove_event_listener_with_callback_and_bool(
+                    event,
+                    handler.as_ref().unchecked_ref(),
+                    true,
+                );
+            }
+        }
+        if let Some(pending) = cleanup_pending.try_get_value() {
+            pending.borrow_mut().take();
+        }
+        BEFORE_UPDATE.with(|all| {
+            all.borrow_mut().remove(&id);
+        });
         if let Some(Some((observer, _callback))) = observer.try_update_value(|o| o.take()) {
             observer.disconnect();
         }
