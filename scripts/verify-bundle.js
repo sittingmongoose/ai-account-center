@@ -260,19 +260,16 @@ function verifyStoreModule(dir = path.join(__dirname, '../dist/native')) {
 
 /**
  * The status readers' native module for this computer. Absent is allowed (the dashboard runs
- * without the readers); present, it must match the note it was built with and load in Node
+ * without the readers); present, its note must match the current sources and binary, and it must load in Node
  * with the expected binding version. After the history store's verifyStoreModule.
  */
 function verifyStatusModule(dir = path.join(__dirname, '../dist/native')) {
   const name = `aac-status.${process.platform}-${process.arch}.node`;
   const file = path.join(dir, name);
   if (!fs.existsSync(file)) return { present: false, name };
-  const notePath = `${file}.json`;
-  if (fs.existsSync(notePath)) {
-    const note = JSON.parse(fs.readFileSync(notePath, 'utf8'));
-    if (note.sha256 !== sha256(fs.readFileSync(file)))
-      throw new Error(`${name} does not match the build note beside it.`);
-  }
+  const note = require('./build-status-native.js').assertSourceNote(file);
+  if (note.sha256 !== sha256(fs.readFileSync(file)))
+    throw new Error(`${name} does not match the build note beside it.`);
   const { spawnSync } = require('child_process');
   const probe = spawnSync(
     process.execPath,

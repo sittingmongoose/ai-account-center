@@ -11,6 +11,7 @@
 //! the TypeScript one (`jsonFromBytes` in src/web-server/status/schema-helpers.ts); this
 //! crate keeps no copy of it.
 
+pub mod computers;
 pub mod error;
 pub mod ops;
 pub mod pinned;

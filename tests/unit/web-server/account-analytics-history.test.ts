@@ -56,6 +56,36 @@ function account(): DashboardAccount {
 }
 
 describe('private bounded quota history', () => {
+  it.each([
+    ['alexis', 'Verified quota on Alexis PC (fallback)', 'windows'],
+    ['nas1', 'Verified quota on Nas1 (fallback)', 'ubuntu'],
+    ['windows', 'Verified quota on Mac (legacy label)', 'windows'],
+  ] as const)(
+    'persists quota from registry host %s using its OS vocabulary',
+    async (host, source, platform) => {
+      const current: DashboardAccount = {
+        ...account(),
+        provider: 'claude',
+        platform: 'mac',
+        host,
+        source,
+      };
+      const store = new FileAccountAnalyticsHistoryStore(directory());
+      await store.write(appendAccountAnalyticsSnapshot(null, [current], NOW));
+      expect((await store.read())?.records[0].platform).toBe(platform);
+      expect(current.platform).toBe('mac');
+    }
+  );
+
+  it.each([
+    [undefined, 'Verified quota on Windows (fallback)', 'windows'],
+    ['unknown', 'Verified quota on Mac (fallback)', 'mac'],
+    ['constructor', 'Unlabelled quota', 'ubuntu'],
+  ])('preserves source-string and launcher fallbacks for host %s', (host, source, platform) => {
+    const current = { ...account(), host, source } as DashboardAccount;
+    expect(appendAccountAnalyticsSnapshot(null, [current], NOW).records[0].platform).toBe(platform);
+  });
+
   it('writes atomic private normalized data and excludes arbitrary auth/helper fields', async () => {
     const root = directory();
     const store = new FileAccountAnalyticsHistoryStore(root);

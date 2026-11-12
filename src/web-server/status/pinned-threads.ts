@@ -1,3 +1,4 @@
+import { MACHINE_IDS } from '../services/dashboard-hosts';
 import { reportV2 } from './report-v2';
 /**
  * The pinned-threads panel's collector: every machine's T3 pins (the VM's database read by
@@ -31,10 +32,10 @@ import { packagedCatalogDir } from '../scoreboard/catalog';
 import fs from 'fs';
 import path from 'path';
 
-export type PinsMachine = 'vm' | 'mac' | 'windows' | 'nas1';
+export type PinsMachine = MachineId;
 
 /** The machines whose pins are read, in the fixed order the panel names them. */
-export const PINS_MACHINES: readonly PinsMachine[] = ['vm', 'mac', 'windows', 'nas1'];
+export const PINS_MACHINES: readonly PinsMachine[] = MACHINE_IDS;
 
 /** Why one machine's pins are absent: a fixed code the composer puts in words. */
 export type PinsProblemCode = 'did_not_answer' | 'shape' | 'missing' | 'io' | 'limit';

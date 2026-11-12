@@ -215,7 +215,7 @@ pub fn is_writer_name(value: &str) -> bool {
     let Some((machine, rest)) = value.split_once('.') else {
         return false;
     };
-    if !matches!(machine, "vm" | "mac" | "windows" | "nas1") || utf16_len(value) > 64 || value.contains("--") {
+    if !crate::computers::known_machine(machine, false) || utf16_len(value) > 64 || value.contains("--") {
         return false;
     }
     let mut chars = rest.chars();

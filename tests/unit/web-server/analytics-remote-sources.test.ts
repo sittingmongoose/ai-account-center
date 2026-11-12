@@ -1,3 +1,4 @@
+import { SSH_ALIASES, REMOTE_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
 import { createHash } from 'crypto';
@@ -246,7 +247,7 @@ describe('analytics remote transport', () => {
   });
 
   it('scans the Mac, Windows and Nas1 for the same six tools', () => {
-    expect([...REMOTE_ANALYTICS_HOSTS]).toEqual(['mac', 'windows', 'nas1']);
+    expect([...REMOTE_ANALYTICS_HOSTS]).toEqual(REMOTE_HOSTS);
     for (const host of REMOTE_ANALYTICS_HOSTS)
       expect(analyticsRemoteTargets(host)).toEqual([
         'claude',
@@ -391,7 +392,7 @@ describe('analytics remote sources', () => {
     let pass = 0;
     const deps = {
       cacheDir: cache,
-      hosts: async () => ({ mac: 'fixture', windows: 'fixture', nas1: 'fixture' }),
+      hosts: async () => ({ mac: 'fixture', windows: 'fixture', nas1: 'fixture', alexis: 'fixture' }),
       claudeLogNames: () => ({ originals: new Set<string>(), complete: true }),
       now: () => started + pass * 360_000,
       runHelper: async () => {
@@ -958,7 +959,7 @@ describe('analytics remote sources', () => {
     expect(saved.fingerprints.antigravity).toEqual({ [FILE_1]: { size: 10, mtimeMs: 20 } });
   });
 
-  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias' });
+  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias', alexis: 'alexis-alias' });
 
   it('names skipped oversized usage lines in the partial cell state', async () => {
     const answer = await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -984,7 +985,7 @@ describe('analytics remote sources', () => {
         ),
     });
     const cells = answer.states.filter((state) => state.tool === 'claude');
-    expect(cells).toHaveLength(3);
+    expect(cells).toHaveLength(REMOTE_HOSTS.length);
     expect(
       cells.every(
         (state) => state.state === 'cached' && state.detail?.includes('oversized log lines')
@@ -1118,7 +1119,7 @@ describe('analytics remote sources', () => {
           )
         ),
     });
-    expect(results.map((entry) => entry.tool)).toEqual(['omp', 'omp', 'omp']);
+    expect(results.map((entry) => entry.tool)).toEqual(REMOTE_HOSTS.map(() => 'omp'));
     expect(results[0].data.hourly[0].modelBreakdowns[0].modelName).toBe('deepseek-v4.1-flash');
     expect(results[0].data.eventCount).toBe(2);
     const ompMac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
@@ -1151,7 +1152,7 @@ describe('analytics remote sources', () => {
     expect(Object.fromEntries(aliases)).toEqual({
       mac: 'mac-alias',
       windows: 'win-alias',
-      nas1: 'nas1-alias',
+      nas1: 'nas1-alias', alexis: 'alexis-alias',
     });
     for (const host of REMOTE_ANALYTICS_HOSTS)
       expect(fs.existsSync(path.join(cache, 'analytics-remote-v1', `${host}.json`))).toBe(true);
@@ -1176,7 +1177,7 @@ describe('analytics remote sources', () => {
     expect(state('mac')).toBe('ok');
     expect(state('windows')).toBe('ok');
     expect(state('nas1')).toBe('unavailable');
-    expect(onlyNas1Fails.results.filter((entry) => entry.tool === 'omp')).toHaveLength(2);
+    expect(onlyNas1Fails.results.filter((entry) => entry.tool === 'omp')).toHaveLength(REMOTE_HOSTS.length - 1);
     // The other way round: only Nas1 answers, and the Mac and Windows fall back to what they read
     // before, marked cached.
     const failsEverywhereButNas1 = await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -1195,7 +1196,7 @@ describe('analytics remote sources', () => {
     expect(next('windows')).toBe('cached');
   });
 
-  it('scans only Nas1, over its fixed alias, when the launcher aliases cannot be resolved', async () => {
+  it('scans fixed registry aliases when discovery cannot be resolved', async () => {
     const calls: string[] = [];
     const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
       hosts: async () => {
@@ -1207,12 +1208,9 @@ describe('analytics remote sources', () => {
         return parseAnalyticsRemoteResponse(JSON.stringify(response()));
       },
     });
-    expect([...new Set(calls)]).toEqual(['nas1:nas1-agent']);
-    const unconfigured = states.filter((entry) => entry.host !== 'nas1');
-    expect(unconfigured).toHaveLength(12);
-    expect(unconfigured.every((entry) => entry.detail === 'remote host is not configured')).toBe(
-      true
-    );
+    expect([...new Set(calls)]).toEqual(REMOTE_HOSTS.map(host => `${host}:${SSH_ALIASES[host]}`));
+    expect(states).toHaveLength(REMOTE_HOSTS.length * 6);
+    expect(states.every(entry => entry.detail !== 'remote host is not configured')).toBe(true);
   });
 
   it('converts session aggregates to worker sessions without doubling hourly tokens', async () => {
@@ -1632,7 +1630,7 @@ describe('analytics remote sources', () => {
 });
 
 describe('analytics remote scans per kind', () => {
-  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias' });
+  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias', alexis: 'alexis-alias' });
   const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
   const FILE_2 = 'a2'.repeat(32);
   /** A clean answer for exactly the kinds asked, with an OMP row when OMP is asked. */
@@ -1667,7 +1665,7 @@ describe('analytics remote scans per kind', () => {
     calls.length = 0;
     const warm = await readRemoteSources(MIN_DATE, options);
     expect(calls).toHaveLength(0);
-    expect(warm.results.filter((result) => result.tool === 'omp')).toHaveLength(3);
+    expect(warm.results.filter((result) => result.tool === 'omp')).toHaveLength(REMOTE_HOSTS.length);
     expect(warm.states.find((source) => source.host === 'mac' && source.tool === 'omp')?.state).toBe('cached');
     const file = path.join(cache, 'analytics-remote-v1', 'mac.json');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -1707,8 +1705,8 @@ describe('analytics remote scans per kind', () => {
       ).toEqual([...ALL].sort());
     releaseClaude();
     const { results, states } = await loading;
-    expect(results.filter((entry) => entry.tool === 'omp')).toHaveLength(3);
-    expect(states.filter((entry) => entry.state === 'ok')).toHaveLength(3);
+    expect(results.filter((entry) => entry.tool === 'omp')).toHaveLength(REMOTE_HOSTS.length);
+    expect(states.filter((entry) => entry.state === 'ok')).toHaveLength(REMOTE_HOSTS.length);
     // A recent settled answer causes no helper calls.
     calls.length = 0;
     await readRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper: async () => { throw new Error('recent cache must skip helper'); } });
@@ -1727,7 +1725,7 @@ describe('analytics remote scans per kind', () => {
         return answer(request.kinds);
       },
     });
-    expect(calls.map((call) => call.host).sort()).toEqual(['mac', 'nas1', 'windows']);
+    expect(calls.map((call) => call.host).sort()).toEqual([...REMOTE_HOSTS].sort());
     for (const call of calls) {
       expect(call.kinds).toEqual(ALL);
       expect([...call.prints].sort()).toEqual([...ALL].sort());
@@ -1800,7 +1798,7 @@ describe('analytics remote scans per kind', () => {
     const omp = fresh.states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(omp).toMatchObject({ state: 'cached', rowCount: 2 });
     expect(omp?.detail).toBe('remote scan failed; showing previously read aggregates');
-    expect(fresh.results.filter((entry) => entry.tool === 'omp')).toHaveLength(3);
+    expect(fresh.results.filter((entry) => entry.tool === 'omp')).toHaveLength(REMOTE_HOSTS.length);
     expect(
       fresh.states.find((entry) => entry.tool === 'claude' && entry.host === 'mac')?.state
     ).toBe('no_usage');
@@ -1859,7 +1857,7 @@ describe('analytics remote scans per kind', () => {
       },
     });
     expect(results.filter((entry) => entry.tool === 'omp')).toHaveLength(0);
-    expect(results.filter((entry) => entry.tool === 'claude')).toHaveLength(3);
+    expect(results.filter((entry) => entry.tool === 'claude')).toHaveLength(REMOTE_HOSTS.length);
   });
 });
 

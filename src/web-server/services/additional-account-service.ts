@@ -29,7 +29,7 @@ import {
   type AdditionalProvider,
   type AdditionalUsageSource,
 } from './additional-usage-transport';
-import { HOST_LABELS, NAS1_SSH_ALIAS, type DashboardHost } from './dashboard-hosts';
+import { HOST_LABELS, sourceComputer, type DashboardHost } from './dashboard-hosts';
 import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
 import type { UsageFailoverTarget } from './usage-failover-contract';
 
@@ -204,9 +204,7 @@ export function sourceHost(source: {
   platform: DashboardPlatform;
   sshHost?: string | null;
 }): DashboardHost {
-  return source.platform === 'ubuntu' && source.sshHost === NAS1_SSH_ALIAS
-    ? 'nas1'
-    : source.platform;
+  return sourceComputer(source);
 }
 
 function unavailable(
@@ -223,7 +221,7 @@ function unavailable(
     email: null,
     plan: null,
     platform: source.platform,
-    ...(host === 'nas1' ? { host } : {}),
+    ...(host !== source.platform ? { host } : {}),
     source: `Account on ${HOST_LABELS[host]}`,
     status,
     message,

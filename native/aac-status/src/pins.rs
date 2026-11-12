@@ -35,10 +35,6 @@ pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 pub const MAX_PINNED_ROWS: usize = 1000;
 pub const MAX_PIN_BYTES: usize = 1024 * 1024;
 
-/// The machines whose T3 databases can hold pins: this computer's own read plus the three
-/// fixed ssh aliases. Part of the shape, not a setting.
-pub const PIN_MACHINES: [&str; 3] = ["mac", "windows", "nas1"];
-
 /// One pinned top-level thread. `pinned_at` and `pin_order_key` pass through with the JSON
 /// type T3 wrote (text in practice); `pin_order_key` may also carry JSON null when T3 wrote
 /// no key (see the reader), ordered after every keyed row; anything else that is not a
@@ -338,9 +334,9 @@ fn remote_type_name(value: &Json) -> Result<Option<&str>> {
 /// top-level rule is decided here from the lineage shape facts the query carries, by the
 /// same `lineage_of` as the local read, so a wrong-typed lineage is refused instead of read
 /// as "no parent". Empty output means no pinned threads on that machine.
-/// `machine` is one of [`PIN_MACHINES`]; any deviation is a caller error, not a shape claim.
+/// `machine` is a remote computer in the packaged registry; any deviation is a caller error, not a shape claim.
 pub fn parse_remote_pins(machine: &str, text: &str) -> Result<Vec<PinnedThread>> {
-    if !PIN_MACHINES.contains(&machine) {
+    if !crate::computers::known_machine(machine, true) {
         return Err(Error::new("invalid", "unknown machine for remote pins"));
     }
     let trimmed = text.trim();

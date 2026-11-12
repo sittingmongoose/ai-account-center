@@ -1,3 +1,4 @@
+import { DASHBOARD_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import express from 'express';
 import type { Server } from 'http';
@@ -102,11 +103,11 @@ describe('authenticated app updater action', () => {
     const job = (await first.json()).job;
     expect(job.state).toBe('running');
     // One helper run per computer, all four at once.
-    expect(calls).toBe(4);
+    expect(calls).toBe(DASHBOARD_HOSTS.length);
     const second = await start();
     expect(second.status).toBe(409);
     expect((await second.json()).job.id).toBe(job.id);
-    expect(calls).toBe(4);
+    expect(calls).toBe(DASHBOARD_HOSTS.length);
   });
   it('cancel rejects unauthenticated and cross-origin actions', async () => {
     expect((await cancel('{}', base, false)).status).toBe(401);
@@ -149,7 +150,7 @@ describe('authenticated app updater action', () => {
     const second = await cancel();
     expect(second.status).toBe(202);
     expect(await second.json()).toEqual(outcome);
-    expect(calls).toBe(4);
+    expect(calls).toBe(DASHBOARD_HOSTS.length);
   });
   it('cancel answers 409 not_owner when another dashboard process runs the job', async () => {
     const app = express();

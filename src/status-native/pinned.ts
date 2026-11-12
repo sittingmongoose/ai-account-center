@@ -122,7 +122,7 @@ export async function readPinnedThreads(
  * guess; a machine that did not answer never reaches this function.
  */
 export async function parseRemotePins(
-  machine: 'mac' | 'windows' | 'nas1',
+  machine: Exclude<import('../web-server/services/dashboard-hosts').MachineId, 'vm'>,
   json: string,
   options: { handle: NativeStatusHandle }
 ): Promise<PinnedThreadsResult> {

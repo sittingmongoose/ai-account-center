@@ -1,3 +1,4 @@
+import { MACHINE_IDS } from '../../../../src/web-server/services/dashboard-hosts';
 /** Regressions from the blind server review of the Status API (docs/status-tab.md). */
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { execFileSync, spawn, spawnSync } from 'child_process';
@@ -930,7 +931,7 @@ describe('lower seq on disk', () => {
         reports: reader.snapshot(),
         registry: { data: [], asOf: NOW, error: null },
         machines: Object.fromEntries(
-          ['vm', 'mac', 'windows', 'nas1'].map((id) => [
+          MACHINE_IDS.map((id) => [
             id,
             { data: null, asOf: null, error: null },
           ])
@@ -1149,7 +1150,7 @@ describe('cards.complete', () => {
       timeZone: 'UTC',
       reports: reader.snapshot(),
       registry: { data: [], asOf: NOW, error: null },
-      machines: { vm: empty, mac: empty, windows: empty, nas1: empty },
+      machines: { vm: empty, mac: empty, windows: empty, nas1: empty, alexis: empty },
       browsers: empty,
       simlock: empty,
       usage: null,
@@ -1471,7 +1472,7 @@ describe('the machine rows', () => {
     const row = (id: string) => rows.find((machine) => machine.id === id);
     expect(row('mac')?.cpu.cores).toBe(4);
     expect(row('vm')?.cpu?.cores ?? null).toBeNull();
-    expect([...new Set(remote)].sort()).toEqual(['nas1', 'windows']);
+    expect([...new Set(remote)].sort()).toEqual(MACHINE_IDS.filter(id => id !== 'mac' && id !== 'vm').sort());
   });
 });
 
@@ -3186,7 +3187,7 @@ describe('round four', () => {
         timeZone: 'UTC',
         reports: reader.snapshot(),
         registry: { data: [], asOf: NOW, error: null },
-        machines: { vm: empty, mac: empty, windows: empty, nas1: empty },
+        machines: { vm: empty, mac: empty, windows: empty, nas1: empty, alexis: empty },
         browsers: empty,
         simlock: empty,
         usage: null,

@@ -1,3 +1,4 @@
+import { MACHINE_LABELS } from '../services/dashboard-hosts';
 /** The machines and usage panels of the Status tab view. */
 import { MACHINES, type MachineId } from './report-schema';
 import type { MachineSample, ReadProblem } from './status-collectors';
@@ -27,13 +28,6 @@ import {
 
 // ---------------------------------------------------------------------------------------------
 // Machines, Simlock, usage
-
-const MACHINE_LABELS: Record<MachineId, string> = {
-  vm: 'Ubuntu VM',
-  mac: 'Mac',
-  windows: 'Windows PC',
-  nas1: 'Nas1',
-};
 
 /** Floor warnings for one reading. */
 export function machineWarnings(sample: MachineSample | null): string[] {
@@ -210,7 +204,7 @@ export function machinesSource(inputs: StatusInputs, rows: MachineView[]): Sourc
     return {
       ...base,
       state: 'ok',
-      detail: `All four machines read by ${clockText(asOf ?? now, timeZone)}.`,
+      detail: `All ${MACHINES.length} machines read by ${clockText(asOf ?? now, timeZone)}.`,
     };
   return {
     ...base,

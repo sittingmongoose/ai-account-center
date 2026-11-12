@@ -9,19 +9,20 @@ import {
 } from '../../../src/web-server/services/dashboard-hosts';
 
 describe('dashboard host facts', () => {
-  it('names the four fixed computers', () => {
-    expect([...DASHBOARD_HOSTS]).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
+  it('names the five fixed computers', () => {
+    expect([...DASHBOARD_HOSTS]).toEqual(['ubuntu', 'mac', 'windows', 'nas1', 'alexis']);
   });
 
   it('gives every host exactly one OS kind and one label', () => {
     expect(Object.keys(HOST_OS).sort()).toEqual([...DASHBOARD_HOSTS].sort());
     expect(Object.keys(HOST_LABELS).sort()).toEqual([...DASHBOARD_HOSTS].sort());
-    expect(HOST_OS).toEqual({ ubuntu: 'linux', mac: 'mac', windows: 'windows', nas1: 'linux' });
+    expect(HOST_OS).toEqual({ ubuntu: 'linux', mac: 'mac', windows: 'windows', nas1: 'linux', alexis: 'windows' });
     expect(HOST_LABELS).toEqual({
       ubuntu: 'Ubuntu',
       mac: 'Mac',
       windows: 'Windows',
       nas1: 'Nas1',
+      alexis: 'Alexis PC',
     });
   });
 
@@ -30,6 +31,7 @@ describe('dashboard host facts', () => {
     ['nas1', 'ubuntu'],
     ['mac', 'mac'],
     ['windows', 'windows'],
+    ['alexis', 'windows'],
   ] as const)('runs the %s helpers with --platform %s', (host, platform) => {
     expect(helperPlatform(host)).toBe(platform);
   });

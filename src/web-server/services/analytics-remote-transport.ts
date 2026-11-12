@@ -1,22 +1,15 @@
 import { execFile } from 'child_process';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
-import { getCcsDir } from '../../utils/config-manager';
-import {
-  DeadlineExceededError,
-  LOCAL_FILE_DEADLINE_MS,
-  withDeadline,
-} from '../../utils/settle-deadline';
 import { readAnalyticsHelper } from './analytics-remote-helper';
 import { isSafeUsageSshAlias } from './additional-usage-transport';
-import { listClaudeDesktopProfiles } from './claude-desktop-profile-service';
-import { HOST_OS, NAS1_SSH_ALIAS } from './dashboard-hosts';
+import { HOST_OS, REMOTE_HOSTS, SSH_ALIASES } from './dashboard-hosts';
 
 /**
  * The computers the packaged helper scans over ssh, in scan order: the Mac, Windows and Nas1. The
  * local Ubuntu computer is read by the local collectors, never through this transport.
  */
-export const REMOTE_ANALYTICS_HOSTS = ['mac', 'windows', 'nas1'] as const;
+export const REMOTE_ANALYTICS_HOSTS = REMOTE_HOSTS;
 export type AnalyticsRemoteHost = (typeof REMOTE_ANALYTICS_HOSTS)[number];
 /** The ssh alias to reach each remote host, or null when none is configured. */
 export type AnalyticsRemoteAliases = Record<AnalyticsRemoteHost, string | null>;
@@ -526,52 +519,14 @@ export async function runAnalyticsRemoteHelper(
   return parseAnalyticsRemoteResponse(stdout);
 }
 
-/**
- * The aliases that need no Claude desktop launcher: only Nas1's, a fixed alias. Nas1 has no Claude
- * desktop app, so no launcher names it, and a missing or unreadable launcher list never leaves it
- * unscanned. The Mac and Windows have no alias until a launcher gives one.
- */
+/** All remote scans use only aliases in the packaged computer registry. */
 export function fixedAnalyticsRemoteAliases(): AnalyticsRemoteAliases {
-  return { mac: null, windows: null, nas1: NAS1_SSH_ALIAS };
+  return { ...SSH_ALIASES };
 }
 
-/** The aliases the last answered profile read found, for a read that does not answer. */
-let lastResolvedAliases: { scope: string; aliases: AnalyticsRemoteAliases } | null = null;
-
-/**
- * The same ssh host aliases the server already uses for the Mac and Windows:
- * the first Claude desktop launcher on each host that carries one. Null when
- * no launcher configures that host. Nas1 is always its fixed alias. A profile
- * read past `deadlineMs` (a hung disk) keeps the last aliases found, so the
- * backup reader and remote Analytics are not held by it.
- */
+/** The optional deadline remains for existing callers; discovery performs no disk/profile read. */
 export async function resolveAnalyticsRemoteHosts(
-  deadlineMs = LOCAL_FILE_DEADLINE_MS
+  _deadlineMs?: number
 ): Promise<AnalyticsRemoteAliases> {
-  const scope = getCcsDir();
-  let profiles: Array<{ mac?: { sshHost?: string }; windows?: { sshHost?: string } }> = [];
-  try {
-    profiles = await withDeadline(
-      listClaudeDesktopProfiles(),
-      deadlineMs,
-      undefined,
-      'Claude Desktop profile list read'
-    );
-  } catch (error) {
-    if (error instanceof DeadlineExceededError && lastResolvedAliases?.scope === scope)
-      return lastResolvedAliases.aliases;
-    return fixedAnalyticsRemoteAliases();
-  }
-  let mac: string | null = null;
-  let windows: string | null = null;
-  for (const profile of profiles) {
-    if (!mac && profile.mac?.sshHost && isSafeUsageSshAlias(profile.mac.sshHost))
-      mac = profile.mac.sshHost;
-    if (!windows && profile.windows?.sshHost && isSafeUsageSshAlias(profile.windows.sshHost))
-      windows = profile.windows.sshHost;
-    if (mac && windows) break;
-  }
-  const aliases = { ...fixedAnalyticsRemoteAliases(), mac, windows };
-  lastResolvedAliases = { scope, aliases };
-  return aliases;
+  return fixedAnalyticsRemoteAliases();
 }

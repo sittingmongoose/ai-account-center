@@ -40,7 +40,13 @@ function cdylibName() {
 
 /** SHA-256 over the crate's build inputs, in a fixed order. */
 function sourceHash() {
-  const files = ['Cargo.toml', 'Cargo.lock', 'build.rs', 'rust-toolchain.toml'];
+  const files = [
+    'Cargo.toml',
+    'Cargo.lock',
+    'build.rs',
+    'rust-toolchain.toml',
+    '../../web-dashboard/public/computers.json',
+  ];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(path.join(CRATE, dir), { withFileTypes: true })) {
       const rel = `${dir}/${entry.name}`;
@@ -78,6 +84,25 @@ function checkLoads(file) {
   }
 }
 
+/** A present module must have a receipt for this checkout's native inputs. */
+function assertSourceNote(file) {
+  const notePath = `${file}.json`;
+  let note;
+  try {
+    note = JSON.parse(fs.readFileSync(notePath, 'utf8'));
+  } catch {
+    throw new Error(
+      `${path.basename(file)} has a missing or invalid build note. Rebuild it with: bun run status:build`
+    );
+  }
+  if (!note || note.sourceSha256 !== sourceHash()) {
+    throw new Error(
+      `${path.basename(file)} was built from other status sources than this checkout. Rebuild it with: bun run status:build`
+    );
+  }
+  return note;
+}
+
 function copyToDist() {
   const name = moduleName();
   const source = path.join(PREBUILT, name);
@@ -88,18 +113,10 @@ function copyToDist() {
     );
     return false;
   }
-  const notePath = `${source}.json`;
-  const note = fs.existsSync(notePath) ? JSON.parse(fs.readFileSync(notePath, 'utf8')) : null;
-  const current = sourceHash();
-  if (!note || note.sourceSha256 !== current) {
-    console.warn(
-      `[!] ${name} was built from other status sources than this checkout. ` +
-        'Rebuild it with: bun run status:build'
-    );
-  }
+  const note = assertSourceNote(source);
   fs.mkdirSync(DIST, { recursive: true });
   fs.copyFileSync(source, path.join(DIST, name));
-  if (note) fs.writeFileSync(path.join(DIST, `${name}.json`), `${JSON.stringify(note, null, 2)}\n`);
+  fs.writeFileSync(path.join(DIST, `${name}.json`), `${JSON.stringify(note, null, 2)}\n`);
   console.log(`[OK] Status readers module copied into dist/native/${name}`);
   return true;
 }
@@ -148,4 +165,4 @@ if (require.main === module) {
   else build();
 }
 
-module.exports = { moduleName, sourceHash, copyToDist };
+module.exports = { moduleName, sourceHash, assertSourceNote, copyToDist };

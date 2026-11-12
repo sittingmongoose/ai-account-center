@@ -216,8 +216,8 @@ test('Included usage names the tools and computers read, and how usage is groupe
   assert.deepEqual([cell('zcode', 1).text, cell('zcode', 1).tone], ['Unavailable', 'unavailable']);
   assert.equal(cell('Claude Code', 1).text, 'Not read');
   // one column per computer, Nas1 last
-  assert.deepEqual(inc.hosts, ['UBUNTU', 'MAC', 'WINDOWS', 'NAS1']);
-  assert.ok(inc.rows.every(r => r.cells.length === 4 && r.cells[3].id === 'nas1'));
+  assert.deepEqual(inc.hosts, ['UBUNTU', 'MAC', 'WINDOWS', 'NAS1', 'ALEXIS PC']);
+  assert.ok(inc.rows.every(r => r.cells.length === 5 && r.cells[3].id === 'nas1'));
   assert.deepEqual(['Claude Code', 'OMP', 'Muse Code', 'zcode'].map(t => cell(t, 3).text), ['Read 1h 0m ago', 'Read 1h 0m ago', 'No usage in range', 'Not installed']);
   assert.ok(!inc.rows.some(r => r.cells.some(c => c.text === 'No usage log')), 'no per-host no-log rows');
   assert.equal(includedView(payload({ sources: [] }), now).shown, false);
@@ -240,6 +240,7 @@ test('a tool a scan has not reached says Scanning, and the page holds until the 
     { name: 'Mac', detail: '0 of 6 tools · scanning now' },
     { name: 'Windows', detail: '0 of 6 tools · scanning now' },
     { name: 'Nas1', detail: '0 of 6 tools · scanning now' },
+    { name: 'Alexis PC', detail: '0 of 6 tools · scanning now' },
   ]);
   assert.equal(cold.head.updating, true);
   // the same cells with numbers in hand draw the page and update calmly
@@ -304,7 +305,7 @@ test('Antigravity read on every computer is a grid row; Cursor alone keeps no lo
   assert.deepEqual(inc.rows.map(r => r.tool), ['Claude Code', 'Codex', 'OMP', 'Muse Code', 'zcode', 'Antigravity']);
   assert.equal(inc.line, "Includes Claude Code, Codex, OMP, Muse Code, zcode and Antigravity on Ubuntu, Mac, Windows and Nas1. Cursor doesn't keep a local usage log; its quota readings still show on Home.");
   const cells = inc.rows.find(r => r.tool === 'Antigravity').cells;
-  assert.deepEqual(cells.map(c => c.text), ['Read 1h 0m ago', 'No usage in range', 'Read 1h 0m ago', 'Not installed']);
+  assert.deepEqual(cells.map(c => c.text), ['Read 1h 0m ago', 'No usage in range', 'Read 1h 0m ago', 'Not installed', 'Not read']);
   assert.match(cells[0].tip, /2,018 usage events kept/);
   // the six tools count in each computer's progress
   const by = Object.fromEntries(hostProgress(payload({ sources })).map(h => [h.key, h]));

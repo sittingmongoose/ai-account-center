@@ -1,3 +1,9 @@
+import {
+  DASHBOARD_HOSTS,
+  HOST_OS,
+  LEGACY_STORAGE_HOSTS,
+  type DashboardHost,
+} from './dashboard-hosts';
 import fs from 'fs';
 import { withPrivateFileLock } from './private-json-store';
 import path from 'path';
@@ -9,8 +15,9 @@ import { isAccountAnalyticsTimeZone } from './account-analytics-range';
 
 /**
  * Dashboard preferences (Settings): the display time zone, the Claude history
- * snapshot cleanup and the extra usage-log sources. One durable JSON file in
- * the CCS folder, saved through PUT /api/accounts/preferences, read by the
+ * snapshot cleanup and the extra usage-log sources. A legacy-readable JSON file
+ * plus a companion for later computers in the CCS folder, saved through PUT
+ * /api/accounts/preferences, read by the
  * dashboard, the analytics day buckets and the collectors. Same durability as
  * the usage refresh settings: a 0600 temporary file, fsync, rename, folder
  * sync, so a power loss cannot expose a truncated file.
@@ -26,7 +33,7 @@ export type UsageLogTool = (typeof USAGE_LOG_TOOLS)[number];
  * The computers an extra usage-log folder can sit on. Nas1 is a second Ubuntu computer,
  * so its paths are POSIX.
  */
-export const USAGE_LOG_HOSTS = ['ubuntu', 'mac', 'windows', 'nas1'] as const;
+export const USAGE_LOG_HOSTS = DASHBOARD_HOSTS;
 export type UsageLogHost = (typeof USAGE_LOG_HOSTS)[number];
 
 /** A dot path into a generic JSONL record (`usage.input_tokens`). */
@@ -70,7 +77,7 @@ function isUsageLogSource(value: unknown, allowRemoteJsonl = false): value is Us
     // `..` stays refused everywhere so an extra root cannot escape upward.
     !(
       path.posix.isAbsolute(source.path) ||
-      (source.host === 'windows' && /^[A-Za-z]:[\\/]/.test(source.path))
+      (HOST_OS[source.host as DashboardHost] === 'windows' && /^[A-Za-z]:[\\/]/.test(source.path))
     ) ||
     source.path.includes('..')
   ) {
@@ -136,6 +143,7 @@ export function defaultDashboardPreferences(): DashboardPreferences {
 }
 
 const PREFERENCES_FILE = 'dashboard-preferences.json';
+const EXTRA_SOURCES_FILE = 'dashboard-preferences-extra-sources.json';
 const MAX_PREFERENCES_BYTES = 64 * 1024;
 
 const logger = createLogger('dashboard-preferences');
@@ -155,6 +163,35 @@ function warnCorrupt(): void {
 }
 
 export function readDashboardPreferences(ccsDir = getCcsDir()): DashboardPreferences {
+  const primary = readPrimaryPreferences(ccsDir);
+  try {
+    const file = path.join(ccsDir, EXTRA_SOURCES_FILE);
+    const stat = fs.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_PREFERENCES_BYTES)
+      return primary;
+    const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return primary;
+    const extra = value as Record<string, unknown>;
+    if (Object.keys(extra).some((key) => key !== 'usageLogSources')) return primary;
+    const companion = { ...defaultDashboardPreferences(), ...extra };
+    if (
+      !isDashboardPreferences(companion) ||
+      companion.usageLogSources.some((source) => LEGACY_STORAGE_HOSTS.includes(source.host))
+    )
+      return primary;
+    const merged = {
+      ...primary,
+      usageLogSources: [...primary.usageLogSources, ...companion.usageLogSources],
+    };
+    // Keep the combined count and unique-id guards, including after an old-package save.
+    return isDashboardPreferences(merged) ? merged : primary;
+  } catch {
+    // A missing/corrupt companion must not reset the original computers' settings.
+    return primary;
+  }
+}
+
+function readPrimaryPreferences(ccsDir: string): DashboardPreferences {
   const file = path.join(ccsDir, PREFERENCES_FILE);
   let corrupt = false;
   try {
@@ -234,7 +271,11 @@ function removeLeftoverTemporaries(directory: string): void {
     return;
   }
   for (const entry of entries) {
-    if (!entry.startsWith(`${PREFERENCES_FILE}.`) || !entry.endsWith('.tmp')) continue;
+    if (
+      ![PREFERENCES_FILE, EXTRA_SOURCES_FILE].some((file) => entry.startsWith(`${file}.`)) ||
+      !entry.endsWith('.tmp')
+    )
+      continue;
     try {
       fs.unlinkSync(path.join(directory, entry));
     } catch {
@@ -251,7 +292,7 @@ export function writeDashboardPreferences(
     throw new ConfigError('Generic JSONL usage log sources are supported only on ubuntu');
   if (!isDashboardPreferences(value)) throw new ConfigError('Invalid dashboard preferences');
   const normalized = value.usageLogSources.map((source) => {
-    const syntax = source.host === 'windows' ? path.win32 : path.posix;
+    const syntax = HOST_OS[source.host as DashboardHost] === 'windows' ? path.win32 : path.posix;
     let root = syntax.normalize(source.path);
     if (source.host === 'ubuntu' && process.platform !== 'win32') {
       try {
@@ -262,7 +303,7 @@ export function writeDashboardPreferences(
     }
     if (source.tool === 'codex') root = syntax.join(root, 'sessions');
     root = root.replace(/[\\/]+$/, '');
-    if (source.host === 'windows') root = root.toLowerCase();
+    if (HOST_OS[source.host as DashboardHost] === 'windows') root = root.toLowerCase();
     return { source, root, sep: syntax.sep };
   });
   for (let index = 0; index < normalized.length; index++) {
@@ -317,7 +358,30 @@ export function writeDashboardPreferences(
     }
   }
   fs.mkdirSync(ccsDir, { recursive: true, mode: 0o700 });
-  const file = path.join(ccsDir, PREFERENCES_FILE);
+  const legacy = value.usageLogSources.filter((source) =>
+    LEGACY_STORAGE_HOSTS.includes(source.host)
+  );
+  const extra = value.usageLogSources.filter(
+    (source) => !LEGACY_STORAGE_HOSTS.includes(source.host)
+  );
+  writePreferencesFile(PREFERENCES_FILE, { ...value, usageLogSources: legacy }, ccsDir);
+  if (extra.length > 0) {
+    writePreferencesFile(EXTRA_SOURCES_FILE, { usageLogSources: extra }, ccsDir);
+  } else {
+    try {
+      fs.unlinkSync(path.join(ccsDir, EXTRA_SOURCES_FILE));
+      syncDirectory(ccsDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  removeLeftoverTemporaries(ccsDir);
+  return readDashboardPreferences(ccsDir);
+}
+
+/** Both files use the same owner-only, fsynced atomic replacement. */
+function writePreferencesFile(name: string, value: unknown, ccsDir: string): void {
+  const file = path.join(ccsDir, name);
   const temporary = `${file}.${randomBytes(12).toString('hex')}.tmp`;
   let fd: number | undefined;
   try {
@@ -328,7 +392,6 @@ export function writeDashboardPreferences(
     fd = undefined;
     fs.renameSync(temporary, file);
     syncDirectory(ccsDir);
-    removeLeftoverTemporaries(ccsDir);
   } finally {
     if (fd !== undefined) {
       try {
@@ -343,7 +406,6 @@ export function writeDashboardPreferences(
       // The rename normally removed the temporary file.
     }
   }
-  return readDashboardPreferences(ccsDir);
 }
 
 /** The display time zone Settings saved (America/New_York until then). */

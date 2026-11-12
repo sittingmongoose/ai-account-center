@@ -1,3 +1,4 @@
+import { DASHBOARD_HOSTS, helperPlatform, type DashboardHost } from './dashboard-hosts';
 import type { CodexAuthProfilesSummary } from '../../codex-auth/codex-auth-dashboard-service';
 import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
 import { antigravityPlanDisplay } from '../../antigravity/plan';
@@ -375,8 +376,11 @@ export function additionalAccounts(
           )
         : { plan: text(row.plan, 80) }),
       platform,
-      // Display only: Nas1 is an ubuntu source behind its fixed ssh alias.
-      ...(row.host === 'nas1' && platform === 'ubuntu' ? { host: 'nas1' as const } : {}),
+      // Display only: computer identity stays distinct from its persisted OS platform.
+      ...(DASHBOARD_HOSTS.includes(row.host as DashboardHost) &&
+      helperPlatform(row.host as DashboardHost) === platform
+        ? { host: row.host as DashboardHost }
+        : {}),
       source: text(row.source, 80) ?? fallback.source,
       status: ['ok', 'cached', 'unavailable', 'error', 'needs_sign_in'].includes(row.status)
         ? row.status

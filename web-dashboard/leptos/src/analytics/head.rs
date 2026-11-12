@@ -90,7 +90,7 @@ pub fn Header() -> impl IntoView {
 }
 
 /// Which tools' logs on which computers are in these numbers, with each source's state and last scan. A grid on
-/// wide screens; grouped by tool where four computer columns would not fit whole.
+/// wide screens; grouped by tool where the registered computer columns would not fit whole.
 #[component]
 fn IncludedPanel(included: Memo<Included>) -> impl IntoView {
     let detail = RwSignal::new(String::new());

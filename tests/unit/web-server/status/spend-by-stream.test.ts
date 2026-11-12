@@ -106,6 +106,7 @@ describe('spendByStream pass-through', () => {
         mac: { data: null, asOf: null, error: null },
         windows: { data: null, asOf: null, error: null },
         nas1: { data: null, asOf: null, error: null },
+        alexis: { data: null, asOf: null, error: null },
       },
       browsers: { data: null, asOf: null, error: null },
       simlock: { data: null, asOf: null, error: null },

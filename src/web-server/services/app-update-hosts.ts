@@ -7,7 +7,7 @@ import { BinaryError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
 import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/native-version';
-import { HOST_OS, NAS1_SSH_ALIAS, helperPlatform } from './dashboard-hosts';
+import { HOST_OS, SSH_ALIASES, helperPlatform } from './dashboard-hosts';
 
 /**
  * How the dashboard reaches each computer's fixed update helper: the local
@@ -20,11 +20,7 @@ import { HOST_OS, NAS1_SSH_ALIAS, helperPlatform } from './dashboard-hosts';
 type RemotePlatform = Exclude<UpdatePlatform, 'ubuntu'>;
 
 /** The fixed ssh aliases of the Mac, Windows and Nas1 computers. */
-export const APP_UPDATE_SSH_HOSTS: Readonly<Record<RemotePlatform, string>> = Object.freeze({
-  mac: 'jared-mac',
-  windows: 'jared-windows',
-  nas1: NAS1_SSH_ALIAS,
-});
+export const APP_UPDATE_SSH_HOSTS: Readonly<Record<RemotePlatform, string>> = SSH_ALIASES;
 
 /** Total progress output accepted from one host; a runaway helper is stopped. */
 const MAX_STREAM = 1024 * 1024;

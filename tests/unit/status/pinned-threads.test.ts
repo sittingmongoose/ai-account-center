@@ -1,3 +1,4 @@
+import { MACHINE_IDS } from '../../../src/web-server/services/dashboard-hosts';
 import { describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -125,7 +126,7 @@ describe('PinnedThreadsCollector', () => {
     expect(collector.view()).toEqual({ unavailable: 'the pinned threads have not been read yet' });
 
     await collector.collect();
-    expect(mergedLists[0].map((list) => list.machine)).toEqual(['vm', 'mac', 'windows', 'nas1']);
+    expect(mergedLists[0].map((list) => list.machine)).toEqual(MACHINE_IDS);
     await collector.compose(noReports, []);
 
     const input = composeInputs[0] as Record<string, unknown>;

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { ValidationError } from '../../errors/error-types';
 import { displayText, safePoolId } from '../../antigravity/usage-normalization';
+import { DASHBOARD_HOSTS, helperPlatform } from './dashboard-hosts';
 import type {
   DashboardAccount,
   DashboardAccountStatus,
@@ -137,6 +138,7 @@ export function analyticsWindowIdentity(window: DashboardAccountWindow): string 
 
 export function sourcePlatform(account: DashboardAccount): DashboardPlatform {
   // Live Claude quota can come from Windows while the launch selector is Mac.
+  if (account.host && DASHBOARD_HOSTS.includes(account.host)) return helperPlatform(account.host);
   if (account.source.includes('on Windows')) return 'windows';
   if (account.source.includes('on Mac')) return 'mac';
   return account.platform;

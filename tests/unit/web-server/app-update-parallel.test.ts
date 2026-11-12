@@ -1,3 +1,4 @@
+import { DASHBOARD_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
 /**
  * Update apps must never hang and never serialise one computer behind another.
  * Fake hosts and fake helper processes only: nothing here reaches a real
@@ -55,6 +56,7 @@ describe('Update apps runs every computer at once', () => {
       mac: 400,
       windows: 200,
       nas1: 300,
+      alexis: 250,
     };
     const started: Record<string, number> = {};
     const service = new AppUpdateService({
@@ -70,18 +72,13 @@ describe('Update apps runs every computer at once', () => {
     await sleep(50);
     const mid = service.getStatus().job!;
     expect(mid.hosts).not.toBeNull();
-    expect(Object.keys(mid.hosts!)).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
-    expect(Object.values(mid.hosts!).map((host) => host.state)).toEqual([
-      'running',
-      'running',
-      'running',
-      'running',
-    ]);
+    expect(Object.keys(mid.hosts!)).toEqual(DASHBOARD_HOSTS);
+    expect(Object.values(mid.hosts!).map((host) => host.state)).toEqual(DASHBOARD_HOSTS.map(() => 'running'));
     await finish(service);
     const elapsed = Date.now() - t0;
     const job = service.getStatus().job!;
     expect(job.state).toBe('completed');
-    expect(job.results).toHaveLength(40);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
     // Serial would be >= 1500 ms; parallel is the slowest host plus scheduling.
     expect(elapsed).toBeGreaterThanOrEqual(595);
     expect(elapsed).toBeLessThan(1000);
@@ -126,7 +123,7 @@ describe('Update apps runs every computer at once', () => {
     expect(Date.now() - t0).toBeLessThan(1000);
     const job = service.getStatus().job!;
     expect(aborted).toBe(1);
-    expect(job.results).toHaveLength(40);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
     const ubuntu = job.results.filter((value) => value.platform === 'ubuntu');
     expect(ubuntu.find((value) => value.appId === 'antigravity-cli')!.status).toBe('updated');
     const timedOut = ubuntu.filter((value) => value.appId !== 'antigravity-cli');
@@ -134,7 +131,7 @@ describe('Update apps runs every computer at once', () => {
     expect(timedOut.every((value) => value.status === 'unknown')).toBe(true);
     expect(timedOut.every((value) => value.message === MESSAGES.host_timeout)).toBe(true);
     expect(timedOut.every((value) => value.updateAttempted === false)).toBe(true);
-    expect(job.results.filter((value) => value.platform !== 'ubuntu')).toHaveLength(30);
+    expect(job.results.filter((value) => value.platform !== 'ubuntu')).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
     expect(job.state).toBe('failed');
   });
 
@@ -155,7 +152,7 @@ describe('Update apps runs every computer at once', () => {
       expect(stuck.every((value) => value.message === MESSAGES.host_timeout)).toBe(true);
       // The other computers finish normally while that one waits on its sync.
       const rest = job.results.filter((value) => value.platform !== slow);
-      expect(rest).toHaveLength(30);
+      expect(rest).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
       expect(rest.every((value) => value.status === 'current')).toBe(true);
     }
   );
@@ -242,7 +239,7 @@ describe('Update apps runs every computer at once', () => {
     finishUbuntu();
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(40);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
     expect(job.results.filter((value) => value.platform === 'ubuntu')).toHaveLength(10);
     expect(job.state).toBe('completed');
   });
@@ -298,15 +295,15 @@ describe('Update apps runs every computer at once', () => {
     await sleep(10);
     expect(service.cancel().cancelling).toBe(true);
     expect(service.cancel().cancelling).toBe(true);
-    expect(handlers).toEqual({ ubuntu: 1, mac: 1, windows: 1, nas1: 1 });
+    expect(handlers).toEqual(Object.fromEntries(DASHBOARD_HOSTS.map(id => [id, 1])));
     for (const release of releases) release();
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(40);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
     expect(job.results.filter((value) => value.status === 'skipped')).toHaveLength(
-      4 * (APPS.length - 1)
+      DASHBOARD_HOSTS.length * (APPS.length - 1)
     );
-    expect(job.results.filter((value) => value.status === 'current')).toHaveLength(4);
+    expect(job.results.filter((value) => value.status === 'current')).toHaveLength(DASHBOARD_HOSTS.length);
     expect(job.cancelRequested).toBe(true);
     expect(job.state).toBe('completed');
   });
@@ -331,7 +328,7 @@ describe('Update apps runs every computer at once', () => {
     await finish(service);
     expect(runs).toEqual(['ubuntu']);
     const remote = service.getStatus().job!.results.filter((value) => value.platform !== 'ubuntu');
-    expect(remote).toHaveLength(30);
+    expect(remote).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
     expect(remote.filter((value) => value.platform === 'nas1')).toHaveLength(10);
     expect(remote.every((value) => value.status === 'skipped')).toBe(true);
   });
@@ -370,7 +367,7 @@ describe('Update apps runs every computer at once', () => {
     // The previous package saved no nas1 key: that computer was never part of the job.
     save({ ubuntu: done, mac: done, windows: windowsBusy });
     const previous = savedHosts()!;
-    expect(Object.keys(previous)).toEqual(['ubuntu', 'mac', 'windows', 'nas1']);
+    expect(Object.keys(previous)).toEqual(DASHBOARD_HOSTS);
     expect(previous.windows).toEqual({ state: 'done', currentApp: 'omp', phase: 'updating' });
     expect(previous.nas1).toEqual({ state: 'done', currentApp: null, phase: null });
     save({ ubuntu: done, mac: done, windows: { ...done, currentApp: 'rm -rf' } });

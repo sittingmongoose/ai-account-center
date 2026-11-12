@@ -1,3 +1,4 @@
+import { DASHBOARD_HOSTS, HOST_LABELS, type DashboardHost } from '../services/dashboard-hosts';
 import type {
   DashboardAccount,
   DashboardAccountStatus,
@@ -67,10 +68,10 @@ export interface AgentUsageAccount {
   platform: DashboardPlatform;
   /**
    * The computer the quota reading came from: the host a fallback or desktop source names (Claude
-   * quota can come from another computer than its launcher), 'nas1' for a Nas1 source, else the
-   * platform.
+   * quota can come from another computer than its launcher); falls back to the OS platform
+   * for older account rows without a named computer.
    */
-  host: DashboardPlatform | 'nas1';
+  host: DashboardHost;
   /** The account this provider currently uses on its computer. */
   active: boolean;
   /** ok: fresh; cached: an earlier verified reading; the rest carry no usable reading. */
@@ -144,17 +145,19 @@ function profileOf(account: DashboardAccount): string | null {
   return null;
 }
 
-const SOURCE_HOSTS: Record<string, DashboardPlatform | 'nas1'> = {
-  ubuntu: 'ubuntu',
-  mac: 'mac',
-  windows: 'windows',
-  nas1: 'nas1',
-};
-
-function quotaHost(account: DashboardAccount): DashboardPlatform | 'nas1' {
-  const named = /\bon (Ubuntu|Mac|Windows|Nas1)\b/i.exec(account.source ?? '');
-  if (named) return SOURCE_HOSTS[named[1].toLowerCase()];
-  return account.host === 'nas1' ? 'nas1' : account.platform;
+function quotaHost(account: DashboardAccount): DashboardHost {
+  if (account.host && DASHBOARD_HOSTS.includes(account.host)) return account.host;
+  const words = /\bon (.*)/i.exec(account.source ?? '')?.[1]?.toLowerCase() ?? '';
+  return (
+    [...DASHBOARD_HOSTS]
+      .sort((a, b) => HOST_LABELS[b].length - HOST_LABELS[a].length)
+      .find(
+        (id) =>
+          words === HOST_LABELS[id].toLowerCase() ||
+          words.startsWith(HOST_LABELS[id].toLowerCase() + ' ') ||
+          words.startsWith(HOST_LABELS[id].toLowerCase() + ')')
+      ) ?? account.platform
+  );
 }
 
 function sourceOf(account: DashboardAccount): string | null {

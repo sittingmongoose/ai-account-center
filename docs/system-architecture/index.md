@@ -19,7 +19,7 @@ is `ai-account-center dashboard`, with `ccs config` compatibility.
 
 ## Computers
 
-AI Account Center reaches four computers. Hosts and aliases are fixed in
+AI Account Center reaches five computers. Hosts and aliases are fixed in
 source; there is no configurable host list.
 
 | Computer | How it is reached | What AI Account Center does there |
@@ -28,6 +28,7 @@ source; there is no configurable host list.
 | Mac | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native bar |
 | Windows | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native tray |
 | Nas1 | Fixed SSH alias `nas1-agent` | App updates, Analytics scan and verified usage fallback |
+| Alexis PC | Fixed SSH alias `alexis-windows` | Windows app updates, Status, Analytics scan and verified usage sources; no Jared desktop profile or native-bar management |
 
 Nas1 is a second Ubuntu computer. Its fixed helpers run with `--platform
 ubuntu`, and the dashboard files their results under their own computer, Nas1.
@@ -126,7 +127,7 @@ writer overlapped is dropped and done again on the next scan.
 [auto-switch](../../src/web-server/services/codex-auto-switch-service.ts).
 [App updates](../../src/web-server/services/app-update-service.ts) are allowlisted
 jobs triggered explicitly, never from startup or routine polling. One job covers
-the four computers above (32 result rows: four computers x eight apps); each
+the five computers above (50 result rows: five computers x ten apps); each
 computer updates its own apps while the others run in parallel.
 
 The dashboard response lists every supported provider in `providers[]` (labels,

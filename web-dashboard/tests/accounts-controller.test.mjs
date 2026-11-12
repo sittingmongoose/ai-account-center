@@ -934,9 +934,9 @@ test('extra usage-log locations add, validate and remove through one preferences
   await h.ctl.handle('logsource-add', 'omp\nubuntu\nrelative/path\n');
   assert.equal(h.sent.length, count);
   assert.match(h.ctl.state.prefs.logSourcesError, /absolute path/);
-  await h.ctl.handle('logsource-add', 'muse\nwindows\nC:\\muse\n');
+  await h.ctl.handle('logsource-add', 'muse\nunregistered\nC:\\muse\n');
   assert.equal(h.sent.length, count);
-  assert.match(h.ctl.state.prefs.logSourcesError, /only scanned on Ubuntu, Mac and Nas1\./);
+  assert.match(h.ctl.state.prefs.logSourcesError, /only scanned on Ubuntu, Mac, Windows, Nas1 and Alexis PC\./);
   await h.ctl.handle('logsource-add', 'jsonl\nubuntu\n/var/log/h\n');
   assert.equal(h.sent.length, count);
   assert.match(h.ctl.state.prefs.logSourcesError, /field mapping/);
@@ -987,7 +987,7 @@ test('the log source check mirrors the server path and mapping rules', async () 
   assert.ok(logSourceProblem('omp', 'mac', 'relative', undefined));
   assert.ok(logSourceProblem('omp', 'mac', '/x/../y', undefined));
   assert.ok(logSourceProblem('omp', 'ubuntu', 'C:\\x', undefined));
-  assert.ok(logSourceProblem('zcode', 'windows', '/x.db', undefined));
+  assert.equal(logSourceProblem('zcode', 'alexis', 'C:\\x.db', undefined), '');
   assert.ok(logSourceProblem('omp', 'mac', '/x', { timestamp: 'ts' }));
   assert.equal(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: 'm' }), '');
   assert.ok(logSourceProblem('jsonl', 'ubuntu', '/var/log/h', { timestamp: 'ts', model: '0bad' }));

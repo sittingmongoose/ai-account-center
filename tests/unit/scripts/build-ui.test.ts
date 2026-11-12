@@ -283,6 +283,19 @@ describe('Leptos pages in the UI build', () => {
     expect(() => leptosFingerprint(real)).toThrow('must not be symlinks');
   });
 
+  it('refuses a linked shared registry or its linked public folder', () => {
+    const root = fixture();
+    addLeptosCrate(root);
+    const crate = path.join(root, 'web-dashboard');
+    const registry = path.join(crate, 'public', 'computers.json');
+    fs.symlinkSync(path.join(root, 'missing.json'), registry);
+    expect(() => leptosFingerprint(path.join(crate, 'leptos'))).toThrow('must not be symlinks');
+    fs.unlinkSync(registry);
+    fs.renameSync(path.join(crate, 'public'), path.join(crate, 'assets'));
+    fs.symlinkSync(path.join(crate, 'assets'), path.join(crate, 'public'));
+    expect(() => leptosFingerprint(path.join(crate, 'leptos'))).toThrow('must not be symlinks');
+  });
+
   it('builds no pages and adds nothing to the manifest when the crate is absent', () => {
     const root = fixture();
     const manifest = build({ repoRoot: root, run: runner([]) });

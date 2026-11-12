@@ -1,3 +1,4 @@
+import { DASHBOARD_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
 import { afterEach, describe, expect, it } from 'bun:test';
 import fs from 'fs';
 import os from 'os';
@@ -82,21 +83,21 @@ describe('fixed app update service', () => {
     expect(() => service.start()).toThrow(AppUpdateBusyError);
     // Mac, Windows and Nas1 never wait for the blocked Ubuntu run.
     for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
-    expect([...calls].sort()).toEqual(['mac', 'nas1', 'ubuntu', 'windows']);
+    expect([...calls].sort()).toEqual([...DASHBOARD_HOSTS].sort());
     expect(
       service.getStatus().job!.results.filter((row) => row.platform !== 'ubuntu')
-    ).toHaveLength(30);
+    ).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
-    expect(calls).toHaveLength(4);
-    expect(job.results).toHaveLength(40);
+    expect(calls).toHaveLength(DASHBOARD_HOSTS.length);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
     expect(job.state).toBe('failed');
     expect(job.activePlatform).toBeNull();
     expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');
     const clone = service.getStatus().job!;
     clone.results.length = 0;
-    expect(service.getStatus().job!.results).toHaveLength(40);
+    expect(service.getStatus().job!.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
   });
   it('executes only the four fixed host-local helpers', () => {
     const local = appUpdateInvocation('ubuntu');
@@ -330,7 +331,7 @@ describe('fixed app update service', () => {
     expect(service.getStatus().job!.state).toBe('completed');
     const restored = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
     const held = restored.getStatus().job!.results.filter((row) => row.status === 'held');
-    expect(held).toHaveLength(4);
+    expect(held).toHaveLength(DASHBOARD_HOSTS.length);
     expect(held.every((row) => row.heldVersion === '1.3.0')).toBe(true);
   });
   it('restores a quit-first desktop row from disk with its own words', async () => {
@@ -351,7 +352,7 @@ describe('fixed app update service', () => {
     await finish(service);
     const restored = new AppUpdateService({ ccsDir: root, runHost: async () => payload() });
     const quit = restored.getStatus().job!.results.filter((row) => row.appId === 'codex-desktop');
-    expect(quit).toHaveLength(4);
+    expect(quit).toHaveLength(DASHBOARD_HOSTS.length);
     for (const row of quit) {
       expect(row.status).toBe('action_required');
       expect(row.message).toBe(
@@ -534,7 +535,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(first);
     expect(second.getStatus().job!.state).toBe('completed');
-    expect(second.getStatus().job!.results).toHaveLength(40);
+    expect(second.getStatus().job!.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
     expect(fs.existsSync(path.join(root, 'app-updates/dashboard-update.lock'))).toBe(false);
   });
   it('refuses to start while a live T3 restart worker holds its marker, and after a stale one', async () => {
@@ -582,7 +583,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(owner);
     expect(owner.getStatus().job!.results.filter((row) => row.status === 'skipped')).toHaveLength(
-      30
+      (DASHBOARD_HOSTS.length - 1) * 10
     );
   });
   it('marks an interrupted persisted job failed without replaying it', () => {
@@ -627,15 +628,11 @@ describe('fixed app update service', () => {
     service.start();
     await finish(service);
     // Hosts run side by side; each remote host still syncs before it runs.
-    expect(events).toHaveLength(6);
+    expect(events).toHaveLength((DASHBOARD_HOSTS.length - 1) * 2);
     expect(events).not.toContain('run:mac');
     expect(events.indexOf('sync:windows')).toBeLessThan(events.indexOf('run:windows'));
     expect(events.indexOf('sync:nas1')).toBeLessThan(events.indexOf('run:nas1'));
-    expect(events.filter((event) => event.startsWith('sync:')).sort()).toEqual([
-      'sync:mac',
-      'sync:nas1',
-      'sync:windows',
-    ]);
+    expect(events.filter((event) => event.startsWith('sync:')).sort()).toEqual(DASHBOARD_HOSTS.filter(id => id !== 'ubuntu').map(id => `sync:${id}`).sort());
     expect(events).not.toContain('sync:ubuntu');
     expect(service.getStatus().job!.state).toBe('failed');
     expect(

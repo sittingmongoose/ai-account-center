@@ -183,7 +183,7 @@ describe('the status endpoint from real files', () => {
         timeZone: 'America/New_York',
         reports: state,
         registry: { data: [], asOf: NOW, error: null },
-        machines: { vm: empty, mac: empty, windows: empty, nas1: empty },
+        machines: { vm: empty, mac: empty, windows: empty, nas1: empty, alexis: empty },
         browsers: empty,
         simlock: empty,
         usage: null,

@@ -347,7 +347,7 @@ export interface PinnedUpdateView {
   reported?: Record<string, unknown>;
   id: string;
   title: string;
-  /** The machine whose T3 holds the pin: vm, mac, windows or nas1. */
+  /** The machine whose T3 holds the pin: an ID from the computer registry. */
   machine: string;
   /** "Puppet Master · pm7-build · Opus 5.5 xhigh", or null with no report to build it from. */
   who: string | null;

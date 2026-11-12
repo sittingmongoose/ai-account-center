@@ -89,7 +89,7 @@ component IncludedLines inherits VerticalLayout {
     // On P the grid becomes a list grouped by tool (DESIGN-MOBILE 4.2.1).
     in property <bool> narrow: false;
     // So does any body too narrow for every computer's column at 120 px ("Cached, 2h 59m ago"
-    // never elides): with four computers that is a body under 616 px.
+    // never elides): with the registered computers that is a body under 616 px.
     property <bool> list: root.narrow || root.body-w < 96px + AxData.included-hosts.length * 130px;
     // Every computer's column has the same width in the header and in each row. Stretching cells
     // shared the spare width by text length, so "OK, 1m ago" and "Cached, 2h 59m ago" drifted apart.
@@ -519,7 +519,7 @@ export component AxHeader inherits Rectangle {
                             inc-pop := PopupWindow {
                                 x: 0px;
                                 y: inc.height + 8px;
-                                // wide enough for four computer columns that never elide
+                                // wide enough for the registered computer columns that never elide
                                 width: 660px;
                                 height: inc-body.preferred-height;
                                 close-policy: close-on-click-outside;

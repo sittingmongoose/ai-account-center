@@ -1,3 +1,4 @@
+import { HOST_PAIRS } from './computers.mjs';
 // Analytics, Usage blocks (version 3): the header, KPI row, usage trends, cost by model, model donut, session
 // stats, token breakdown, cache efficiency, weekday x hour heatmap and daily cost by provider, built like the
 // approved Daylight Atlas concept (c-daylight-atlas/app-analytics.js). Pure functions of the analytics response
@@ -67,7 +68,7 @@ const run = (value, strong = false, tone = '') => ({ text: String(value), strong
 
 // ---------------------------------------------------------------- the computers whose logs are read
 /** This computer first, then the remote ones in the order the page names them (Nas1 is a second Ubuntu computer). */
-const SOURCE_HOSTS = [['ubuntu', 'Ubuntu'], ['mac', 'Mac'], ['windows', 'Windows'], ['nas1', 'Nas1']];
+const SOURCE_HOSTS = HOST_PAIRS;
 /** The remote computers a background refresh can still be waiting on (activity.refreshingRemote), in page order. */
 const REMOTE_HOSTS = SOURCE_HOSTS.filter(([h]) => h !== 'ubuntu');
 const remoteHosts = list => REMOTE_HOSTS.filter(([h]) => Array.isArray(list) && list.includes(h)).map(([h]) => h);

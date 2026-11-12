@@ -26,6 +26,7 @@ authenticated". This runner renews each sign-in a few days before its end, with 
 Private settings live in <CCS dir>/claude-signin/config.json (see README.md). Token values, codes and
 sign-in links are never printed, logged or published: only times, emails and fixed state words.
 """
+from pathlib import Path
 import argparse
 import datetime as dt
 import hashlib
@@ -86,6 +87,17 @@ DEFAULTS = {
 
 
 # ---------------------------------------------------------------- paths, config, state, log
+
+def computer_labels():
+    here = Path(__file__).resolve().parent
+    for file in (here.parent / "computers.json", here.parent.parent / "web-dashboard/public/computers.json"):
+        try:
+            rows = json.loads(file.read_text(encoding="utf-8"))
+            return {key: row["machineLabel"] for key, row in rows.items()}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return {}
+
 
 def ccs_dir():
     if os.environ.get("CCS_DIR"):
@@ -731,7 +743,7 @@ def captcha_hook(cfg, st, email):
         if name == "captcha" and not told["done"]:
             told["done"] = True
             where = this_host_name(cfg) or socket.gethostname().split(".")[0]
-            where = {"mac": "Mac", "windows": "Windows PC", "ubuntu": "Ubuntu VM", "nas1": "Nas1"}.get(where, where)
+            where = computer_labels().get(where, where)
             need_person(st, email, "captcha", "Solve the CAPTCHA in the Chrome window for %s on the %s; renewal carries on by itself after." % (email, where))
             save_state(st)
             publish(cfg, st)
