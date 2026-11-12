@@ -543,3 +543,71 @@ fn cache_reuse_requires_the_accounts_current_server_snapshot() {
     assert!(!state.matches(&cached));
     assert!(state.matches(&evidence("finalInventory")));
 }
+
+#[test]
+fn recovery_required_without_evidence_needs_a_read_started_after_the_refusal() {
+    let mut state = AccountState::default();
+    state.observe(&evidence("empty"), Some(1.));
+    state.unknown(100.);
+    state.observe(&evidence("empty"), Some(50.));
+    assert!(state.lock().blocks());
+    state.receipt(&result("settled3"), None, None);
+    assert!(
+        state.lock().blocks(),
+        "a check cannot acknowledge a local recovery obligation"
+    );
+    state.observe(&evidence("finalInventory"), Some(99.));
+    assert!(state.lock().blocks());
+    state.observe(&evidence("finalInventory"), Some(100.));
+    assert!(!state.lock().blocks());
+}
+#[test]
+fn ordered_refusals_cannot_replace_newer_pending_or_acknowledge_another_send() {
+    Owner::new().with(|| {
+        let rc = ResetCtx::new();
+        rc.show("a", "codex", false);
+        rc.take("a", inventory("inventory3"), 100.);
+        let id = rc.begin_send(&canonical(), 100.);
+        let mut refusal = Refusal {
+            code: "reset-state-unavailable".into(),
+            reason: Some("check-again-required".into()),
+            sent: Some(false),
+            evidence: Some(Box::new(evidence("empty"))),
+        };
+        rc.refused(&canonical(), &refusal, Some(id), 110.);
+        assert!(
+            rc.said
+                .get_untracked()
+                .unwrap()
+                .text
+                .contains("no confirmed answer")
+        );
+        assert_eq!(rc.lock_of("a").key, inventory("inventory3").pending_attempt);
+        refusal.evidence = Some(Box::new(evidence("inventory3")));
+        rc.refused(&canonical(), &refusal, None, 111.);
+        assert!(
+            rc.said
+                .get_untracked()
+                .unwrap()
+                .text
+                .contains("no confirmed answer")
+        );
+        rc.refused(&canonical(), &refusal, Some(id), 112.);
+        pending(rc, &result("unconfirmed3").attempt_key);
+    });
+}
+#[test]
+fn a_refusal_without_an_explicit_no_send_proof_preserves_the_full_unknown_interval() {
+    Owner::new().with(|| {
+        let rc = ResetCtx::new();
+        rc.show("a", "codex", false);
+        rc.take("a", inventory("empty"), 1.);
+        let id = rc.begin_send(&canonical(), 100.);
+        let refusal: Refusal = serde_json::from_str("{}").unwrap();
+        rc.refused(&canonical(), &refusal, Some(id), 110.);
+        rc.take("a", inventory("finalInventory"), 111.);
+        assert!(!enabled(rc));
+        rc.take("a", inventory("finalInventory"), 120100.);
+        assert!(enabled(rc));
+    });
+}

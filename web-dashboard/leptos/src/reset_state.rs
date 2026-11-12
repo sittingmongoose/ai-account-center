@@ -82,7 +82,7 @@ pub struct AccountState {
     attempts: BTreeMap<String, AttemptRef>,
     receipts: BTreeMap<String, (u64, ClaimResult)>,
     unanswered: BTreeMap<u64, f64>,
-    uncertain: bool,
+    read_after_ms: Option<f64>,
 }
 impl AccountState {
     pub fn matches(&self, evidence: &Evidence) -> bool {
@@ -96,7 +96,7 @@ impl AccountState {
                 .max_by_key(|a| counter(&a.attempt_order))
                 .map(|a| a.attempt_key.clone()),
             blocked: self.snapshot.is_none()
-                || self.uncertain
+                || self.read_after_ms.is_some()
                 || !self.attempts.is_empty()
                 || !self.unanswered.is_empty(),
         }
@@ -104,12 +104,14 @@ impl AccountState {
     pub fn begin_send(&mut self, id: u64, proof_after_ms: f64) {
         self.unanswered.insert(id, proof_after_ms);
     }
-    pub fn unknown(&mut self) {
-        self.uncertain = true;
+    pub fn unknown(&mut self, received_ms: f64) {
+        self.read_after_ms = Some(self.read_after_ms.unwrap_or(received_ms).max(received_ms));
     }
     pub fn inherit_sends(&mut self, previous: &mut Self) {
         self.unanswered.append(&mut previous.unanswered);
-        self.uncertain |= previous.uncertain;
+        if let Some(after) = previous.read_after_ms {
+            self.unknown(after);
+        }
     }
     /// Stale snapshots can add receipts/history outside this method, but cannot mutate current state.
     pub fn observe(&mut self, evidence: &Evidence, read_started_ms: Option<f64>) -> bool {
@@ -143,9 +145,11 @@ impl AccountState {
             .map(|a| (a.attempt_key.clone(), a.clone()))
             .collect();
         self.snapshot = Some(evidence.clone());
-        self.uncertain = false;
         if let Some(started) = read_started_ms.filter(|n| n.is_finite()) {
             self.unanswered.retain(|_, deadline| started < *deadline);
+            if self.read_after_ms.is_some_and(|after| started >= after) {
+                self.read_after_ms = None;
+            }
         }
         true
     }
@@ -198,9 +202,9 @@ impl AccountState {
         if !self.unanswered.is_empty() {
             return Some(Said { text: "A reset request has no confirmed answer yet. The reset may have been used; check again.".into(), bad:true, check:true });
         }
-        if self.uncertain {
+        if self.read_after_ms.is_some() || self.snapshot.is_none() {
             return Some(Said {
-                text: "AAC must read this account again before another reset can be used.".into(),
+                text: "AAC needs a current account read before a reset can be used.".into(),
                 bad: true,
                 check: true,
             });

@@ -110,10 +110,11 @@ pub struct Refilled {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Refusal {
+    pub evidence: Option<Box<Evidence>>,
     #[serde(deserialize_with = "nullable")]
     pub code: String,
     pub reason: Option<String>,
-    pub sent: bool,
+    pub sent: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -589,7 +590,7 @@ pub fn refusal_said(r: &Refusal, provider: &str) -> Said {
             check: true,
         },
         Some(reason) => bad(format!("{} Nothing was sent.", why_not(reason, provider))),
-        None if r.sent => Said {
+        None if r.sent == Some(true) => Said {
             text: "AAC may have sent the reset but couldn't record the answer. Check again before using another."
                 .into(),
             bad: true,
@@ -1014,18 +1015,18 @@ impl ResetCtx {
             &inv.binding_revision,
             &inv.evidence,
         ) else {
-            self.update_state(account, AccountState::unknown);
+            self.update_state(account, |s| s.unknown(started_ms));
             if self.account.get_untracked() == account {
                 self.load.set(Load::Ready(inv));
             }
             return;
         };
         let Ok(binding) = binding.parse::<u64>() else {
-            self.update_state(account, AccountState::unknown);
+            self.update_state(account, |s| s.unknown(started_ms));
             return;
         };
         if evidence.canonical_account_key != *canonical {
-            self.update_state(account, AccountState::unknown);
+            self.update_state(account, |s| s.unknown(started_ms));
             return;
         }
         self.merge_history(canonical, &inv.history);
@@ -1097,6 +1098,40 @@ impl ResetCtx {
         }
         self.update_state(identity, |s| s.receipt(result, None, send))
     }
+    fn refused(
+        &self,
+        identity: &str,
+        refusal: &Refusal,
+        send: Option<u64>,
+        received_ms: f64,
+    ) -> bool {
+        let ordered = refusal
+            .evidence
+            .as_ref()
+            .filter(|e| e.canonical_account_key == identity);
+        if let Some(evidence) = ordered {
+            return self.update_state(identity, |s| {
+                let accepted = s.observe(evidence, None);
+                if accepted
+                    && refusal.sent == Some(false)
+                    && let Some(id) = send
+                {
+                    s.not_sent(id);
+                }
+                accepted
+            });
+        } else if send.is_some() || refusal.reason.as_deref() == Some("check-again-required") {
+            self.update_state(identity, |s| {
+                if refusal.sent == Some(false)
+                    && let Some(id) = send
+                {
+                    s.not_sent(id);
+                }
+                s.unknown(received_ms);
+            });
+        }
+        true
+    }
     pub fn open(&self, grant_key: String, ready: u32) {
         if self.unresolved.with_untracked(Unresolved::blocks) || self.dialog_open() {
             return;
@@ -1121,11 +1156,11 @@ impl ResetCtx {
             } else {
                 false
             };
-            if let Answer::Refused(r) = &got
-                && r.reason.as_deref() == Some("check-again-required")
-            {
-                me.update_state(&identity, AccountState::unknown);
-            }
+            let stale_refusal = if let Answer::Refused(r) = &got {
+                !me.refused(&identity, r, None, js_sys::Date::now())
+            } else {
+                false
+            };
             let still = me.account.try_get_untracked().as_deref() == Some(account.as_str())
                 && me.lock_key(&account) == identity
                 && me.dialog.try_with_untracked(
@@ -1152,6 +1187,20 @@ impl ResetCtx {
                 }
                 other => {
                     me.dialog.set(Dialog::Closed);
+                    let obsolete = match &other {
+                        Answer::Ok(p) => p.evidence.is_some() && !accepted,
+                        Answer::Refused(r) => {
+                            stale_refusal
+                                || (r.evidence.is_some()
+                                    && r.reason.as_deref() == Some("check-again-required"))
+                        }
+                        _ => false,
+                    };
+                    if obsolete {
+                        me.project();
+                        me.refresh();
+                        return;
+                    }
                     let said = match other {
                         Answer::Refused(r) => refusal_said(&r, &provider),
                         Answer::Failed(text) => Said {
@@ -1219,11 +1268,8 @@ impl ResetCtx {
                 Answer::Ok(result) => {
                     me.receive(&identity, &result, Some(id));
                 }
-                Answer::Refused(r) if !r.sent => {
-                    me.update_state(&identity, |s| {
-                        s.not_sent(id);
-                        s.unknown();
-                    });
+                Answer::Refused(r) => {
+                    me.refused(&identity, &r, Some(id), js_sys::Date::now());
                 }
                 // Missing/malformed/failed answers cannot associate this send with another attempt.
                 _ => {}
@@ -1250,10 +1296,14 @@ impl ResetCtx {
         let identity = self.lock_key(&account);
         self.checking.set(true);
         spawn_local(async move {
-            if let Answer::Ok(result) = check(&account, &attempt).await
-                && result.attempt_key == attempt
-            {
-                me.receive(&identity, &result, None);
+            match check(&account, &attempt).await {
+                Answer::Ok(result) if result.attempt_key == attempt => {
+                    me.receive(&identity, &result, None);
+                }
+                Answer::Refused(r) => {
+                    me.refused(&identity, &r, None, js_sys::Date::now());
+                }
+                _ => {}
             }
             if me.account.try_get_untracked().as_deref() != Some(account.as_str())
                 || me.lock_key(&account) != identity
@@ -1909,7 +1959,8 @@ mod tests {
         let r = |reason: Option<&str>, sent: bool| Refusal {
             code: "reset-state-unavailable".into(),
             reason: reason.map(Into::into),
-            sent,
+            sent: Some(sent),
+            ..Default::default()
         };
         assert_eq!(
             refusal_said(&r(Some("confirmation-invalid"), false), "claude").text,

@@ -215,13 +215,20 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
           })
         );
       } catch (error) {
-        // Fixed response: neither native errors nor upstream responses may echo identities. Only an allowlisted
-        // native code, and whether the provider write was reached, are passed on.
+        // A refusal's complete native snapshot is ordered like every successful response. Storage failure
+        // leaves no authoritative evidence; the client retains its independent send/read obligations.
+        let evidence: unknown = null;
+        try {
+          evidence = (await call('pending', account)).evidence ?? null;
+        } catch {
+          // Do not invent evidence when recovery storage cannot be read.
+        }
         res.status(409).json({
           code: 'reset-state-unavailable',
           action: 'check-again',
           reason: safeReason(error),
           sent,
+          evidence,
         });
       }
     });

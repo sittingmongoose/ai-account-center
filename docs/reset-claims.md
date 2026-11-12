@@ -31,7 +31,7 @@ pending discovery, history and the UI's spend lock. Check again still requires e
 the attempt's original profile, host and source binding to confirm settlement; another alias's
 evidence leaves it unconfirmed. A confirmed claim or check answers `windows`:
 each refilled window's id and used percent from the verification read (empty unless confirmed). A refused prepare
-or claim answers 409 `{code, action, reason, sent}`: `reason` is one of a fixed allowlist of native codes (never an
+or claim answers 409 `{code, action, reason, sent, evidence}`: `reason` is one of a fixed allowlist of native codes (never an
 identity) or null, and `sent` says whether the provider write was reached, in which case the UI blocks another
 spend until Check again settles it.
 
@@ -136,3 +136,11 @@ not acknowledge local sends.
 
 A cached inventory can be reused only while it matches the account's applied
 snapshot. Learning a later revision through another alias invalidates that reuse.
+
+A native refusal includes its current recovery `evidence` when storage can be read;
+otherwise it includes null. The same revision rules apply to these snapshots.
+Only an explicit `sent: false` acknowledges a no-send refusal. An unreadable or
+missing sent field leaves the full unanswered-send obligation open. Unversioned
+recovery-required errors additionally require a read started after the error was
+received; neither a delayed earlier read nor a check receipt can retire that local
+read obligation.

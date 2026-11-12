@@ -202,7 +202,7 @@ test('a persisted native hold refuses the request before any provider read', asy
   expect(res.status).toBe(409);
   expect(reads).toBe(0);
   expect(sends).toBe(0);
-  expect(calls).toEqual(['prepareGate']);
+  expect(calls).toEqual(['prepareGate', 'pending']);
 });
 
 test('the inventory read names an unresolved attempt so any signed-in session can check it again', async () => {
@@ -268,7 +268,13 @@ test('a refusal passes on only an allowlisted native code, and says whether the 
     const res = await post(url);
     expect(res.status).toBe(409);
     const body = await res.json();
-    expect(body).toEqual({ code: 'reset-state-unavailable', action: 'check-again', reason, sent });
+    expect(body).toEqual({
+      code: 'reset-state-unavailable',
+      action: 'check-again',
+      reason,
+      sent,
+      evidence: { canonicalAccountKey: 'synthetic-canonical', revision: '19' },
+    });
     expect(JSON.stringify(body)).not.toContain('private');
   }
   expect(sends).toBe(1);
@@ -291,4 +297,33 @@ test('inventory recovery and revision are returned from one native transaction',
   expect(body.evidence.revision).toBe('19');
   expect(body.bindingRevision).toBe('17');
   expect(calls).toEqual(['inventory']);
+});
+
+test('a refusal without recovery storage returns null evidence and never invents a snapshot', async () => {
+  let reads = 0;
+  const source: ResetSource = {
+    async read() {
+      reads++;
+      throw new Error('must not read');
+    },
+    async send() {
+      throw new Error('must not send');
+    },
+  };
+  const { url, calls } = await serve('session', source, true, {
+    op: 'pending',
+    message: 'private storage failure',
+  });
+  const res = await fetch(`${url}/accounts/synthetic/reset-claims/prepare`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: url },
+    body: JSON.stringify({ grantKey }),
+  });
+  expect(res.status).toBe(409);
+  const body = await res.json();
+  expect(body.evidence).toBeNull();
+  expect(body.sent).toBe(false);
+  expect(JSON.stringify(body)).not.toContain('private');
+  expect(reads).toBe(0);
+  expect(calls).toEqual(['prepareGate', 'pending']);
 });
