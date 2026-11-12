@@ -17,9 +17,14 @@
           "type": "string"
         },
         "since": {
-          "type": [
-            "string",
-            "null"
+          "description": "When the wait began (ISO 8601 timestamp), or null when unknown.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "what": {

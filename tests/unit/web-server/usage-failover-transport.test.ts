@@ -16,9 +16,11 @@ import type {
   UsageHelperRequest,
   UsageHelperResponse,
 } from '../../../src/web-server/services/usage-failover-contract';
+import { stopProcessBroker } from '../../../src/utils/managed-process';
 
 const temporary: string[] = [];
 afterEach(async () => {
+  await stopProcessBroker();
   await Promise.all(
     temporary.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true }))
   );
@@ -83,6 +85,40 @@ async function fixture() {
 }
 
 describe('packaged usage failover transport', () => {
+  it.skipIf(process.platform === 'win32')(
+    'coalesces concurrent identical helper launches without caching a settled inventory',
+    async () => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-failover-coalesce-'));
+      temporary.push(home);
+      const python = path.join(home, 'ccs/claude-session-migration/venv/bin/python3');
+      const count = path.join(home, 'invocations');
+      await fs.mkdir(path.dirname(python), { recursive: true });
+      await fs.writeFile(
+        python,
+        [
+          '#!/usr/bin/python3',
+          'import sys,json,time',
+          'sys.stdin.read()',
+          `open(${JSON.stringify(count)},'a').write('x')`,
+          'time.sleep(.1)',
+          `print(json.dumps({'version':1,'action':'inventory','candidates':[]}))`,
+        ].join('\n'),
+        { mode: 0o700 }
+      );
+      const invoke = () =>
+        runUsageHelper(localUsageHost(), {
+          version: 1,
+          action: 'inventory',
+          provider: 'codex',
+          homeDir: home,
+          ccsDir: path.join(home, 'ccs'),
+        });
+      await Promise.all(Array.from({ length: 8 }, invoke));
+      expect(await fs.readFile(count, 'utf8')).toBe('x');
+      await invoke();
+      expect(await fs.readFile(count, 'utf8')).toBe('xx');
+    }
+  );
   it('uses the installed private interpreter on Mac, Linux and Windows without installing one', async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), 'aac-failover-python-'));
     temporary.push(home);

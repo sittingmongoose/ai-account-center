@@ -129,6 +129,15 @@ implemented by
 
 ## Configuration
 
+The dashboard emits `server.event_loop_delay` at info level every 60 seconds. Its context contains
+`p99Ms`, `maxMs`, `meanMs`, `rssBytes`, `heapUsedBytes` and `externalBytes`. Delay values are milliseconds
+over that interval, sampled with `perf_hooks.monitorEventLoopDelay` at 10 ms resolution. The observation
+resets after each log and stops when the server closes. It carries no request, account or credential data.
+
+Dashboard usage helpers, native credential/quota workers and Status commands launch through one private
+IPC command parent. Command arguments, environments, stdin and stderr are never logged by that transport.
+Failed commands remain unavailable; an interrupted command is never automatically replayed.
+
 Account Center logging uses the existing `logging` section in the unified config. Its defaults
 enable logging and redaction at `info` level with bounded rotation, retention,
 and live-buffer settings. Historical `cliproxy.logging` fields remain private

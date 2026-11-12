@@ -28,17 +28,23 @@ export interface RingResult {
   detail: string;
 }
 
-export type Doorbell = (to: string, subject: string, body: string) => Promise<RingResult>;
+export type Doorbell = (
+  to: string,
+  subject: string,
+  body: string,
+  deadlineAt?: number
+) => Promise<RingResult>;
 
 /**
  * `pm-mail --as aac-answers send <to> <subject>` with the body on stdin (a send of 50 notes is
  * longer than one command-line argument may be), spawned with a timeout.
  */
 export function pmMailDoorbell(run: CommandRunner = runCommand): Doorbell {
-  return async (to, subject, body) => {
+  return async (to, subject, body, deadlineAt) => {
     const bin = findExecutable('pm-mail', ['/mnt/Cursor/Inbox/pm-mail']);
     const result = await run(bin, ['--as', DOORBELL_SENDER, 'send', to, subject], {
       timeoutMs: 30_000,
+      deadlineAt,
       maxBytes: 64 * 1024,
       env: childEnv(),
       input: body,

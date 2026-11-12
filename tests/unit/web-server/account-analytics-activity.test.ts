@@ -114,6 +114,34 @@ function sources() {
 }
 
 describe('native local analytics activity', () => {
+  it('bounds projections across query churn while reusing the current hot projection', async () => {
+    const service = new AccountAnalyticsActivityService({
+      scope: () => fixtureConfig,
+      now: () => NOW,
+      requests: () => [
+        { provider: 'claude', request: { kind: 'claude', projectsDir: '/fixture-only' } },
+      ],
+      loadWorker: async () => data('claude-sonnet-4-6', 100, 0.005),
+      remote: async () => ({ results: [], states: [] }),
+    });
+    try {
+      await settled(service);
+      for (let i = 0; i < 80; i++)
+        await service.get(
+          { ...QUERY, tz: `Etc/GMT+${i % 12}`, platform: i % 2 ? 'mac' : 'windows' },
+          FROM,
+          NOW
+        );
+      const cache = (service as unknown as { latestProjections: { size: number; bytes: number } })
+        .latestProjections;
+      expect(cache.size).toBeLessThanOrEqual(4);
+      expect(cache.bytes).toBeLessThanOrEqual(32 * 1024 * 1024);
+      const first = await settled(service);
+      expect(await settled(service)).toBe(first);
+    } finally {
+      await service.shutdown();
+    }
+  });
   // A refresh answers instantly from the last snapshot and runs behind it; poll until the answer
   // is settled (refreshing is false) to assert what the refresh collected.
   async function settled(
@@ -530,13 +558,10 @@ describe('native local analytics activity', () => {
           provider: 'omp',
           request: { kind: 'omp', roots: pass ? ['/fixture/A', '/fixture/B'] : ['/fixture/A'] },
         },
-        ...Array.from(
-          { length: 25 },
-          (_, index): AccountAnalyticsActivityRequest => ({
-            provider: 'claude',
-            request: { kind: 'claude', projectsDir: `/fixture/${index}` },
-          })
-        ),
+        ...Array.from({ length: 25 }, (_, index): AccountAnalyticsActivityRequest => ({
+          provider: 'claude',
+          request: { kind: 'claude', projectsDir: `/fixture/${index}` },
+        })),
       ],
       loadWorker: async (request) => {
         started[pass].push(request.kind);
@@ -813,13 +838,10 @@ describe('native local analytics activity', () => {
         provider: 'omp',
         request: { kind: 'omp', roots: restarted ? ['/fixture/A', '/fixture/B'] : ['/fixture/A'] },
       });
-      const claude = Array.from(
-        { length: 25 },
-        (_, index): AccountAnalyticsActivityRequest => ({
-          provider: 'claude',
-          request: { kind: 'claude', projectsDir: `/fixture/${index}` },
-        })
-      );
+      const claude = Array.from({ length: 25 }, (_, index): AccountAnalyticsActivityRequest => ({
+        provider: 'claude',
+        request: { kind: 'claude', projectsDir: `/fixture/${index}` },
+      }));
       const deps = {
         concurrency: 1,
         now: () => NOW + (restarted ? 61_000 : 0),

@@ -160,15 +160,17 @@ describe('one ring per asker per send, and a signed send summary', () => {
   });
 
   it('sends the ring body on stdin, not as an argument', async () => {
-    const seen: Array<{ args: string[]; input?: string }> = [];
+    const seen: Array<{ args: string[]; input?: string; deadlineAt?: number }> = [];
     const run: CommandRunner = async (_file, args, options) => {
-      seen.push({ args, input: options.input });
+      seen.push({ args, input: options.input, deadlineAt: options.deadlineAt });
       return { code: 0, stdout: 'sent x', timedOut: false, missing: false };
     };
+    const deadlineAt = Date.now() + 100;
     const result = await pmMailDoorbell(run)(
       'lead',
       '1 answer from the owner',
-      'x'.repeat(200_000)
+      'x'.repeat(200_000),
+      deadlineAt
     );
     expect(result.ok).toBe(true);
     expect(seen[0].args).toEqual([
@@ -179,6 +181,7 @@ describe('one ring per asker per send, and a signed send summary', () => {
       '1 answer from the owner',
     ]);
     expect(seen[0].input).toHaveLength(200_000);
+    expect(seen[0].deadlineAt).toBe(deadlineAt);
   });
 });
 

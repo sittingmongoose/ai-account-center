@@ -78,6 +78,8 @@ export interface AntigravitySwitchDriver {
   hostId: AntigravityHostId;
   canProveRuntimeIdentity(): Promise<boolean>;
   readCurrentCredential(): Promise<NativeCredential>;
+  /** Inventory display only; all switch/recovery guards require a fresh credential read. */
+  readInventoryIdentity?(): Promise<VerifiedIdentity>;
   validateCredential(credential: NativeCredential): Promise<VerifiedIdentity>;
   inspectProcesses(): Promise<ProcessPlan>;
   /** Fresh owned idle proof binds the exact plan/account/revision before any stop. */

@@ -1,4 +1,6 @@
 import { getCcsDir } from '../../utils/config-manager';
+import { createHash } from 'crypto';
+import { BoundedCache } from '../../utils/bounded-cache';
 import { getAccountDashboard } from './account-dashboard-service';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import { readDashboardPreferences } from './dashboard-preferences';
@@ -292,10 +294,11 @@ async function longBurnFor(
 
 /** Independent snapshot history keeps quotas separate from billed/token activity. */
 export class AccountAnalyticsService {
-  private readonly answers = new Map<
-    string,
-    { activity: AccountAnalyticsActivityResult; answer: AccountAnalytics }
-  >();
+  private readonly answers = new BoundedCache<{
+    key: string;
+    activity: AccountAnalyticsActivityResult;
+    answer: AccountAnalytics;
+  }>(4, 24 * 1024 * 1024);
   private readonly histories = new Map<string, HistoryState>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingSample: Promise<void> | null = null;
@@ -496,18 +499,25 @@ export class AccountAnalyticsService {
     ).catch((): AccountAnalyticsActivityResult =>
       unavailableActivity('Local usage history is temporarily unavailable.', tz)
     );
-    const answerKey = JSON.stringify([
-      scope,
-      query,
-      state.revision,
-      Math.floor(now / 60_000),
-      dashboard.accounts,
-      dashboard.providers,
-      dashboard.settings,
-      (this.deps.providerTable ?? defaultAnalyticsProviderTable)(),
-    ]);
-    const retained = this.answers.get(answerKey);
-    if (retained?.activity === activityResult)
+    const answerKey = createHash('sha256')
+      .update(
+        JSON.stringify([
+          scope,
+          query,
+          state.revision,
+          Math.floor(now / 60_000),
+          dashboard.accounts,
+          dashboard.providers,
+          dashboard.settings,
+          (this.deps.providerTable ?? defaultAnalyticsProviderTable)(),
+        ])
+      )
+      .digest('hex');
+    const selectionKey = createHash('sha256')
+      .update(JSON.stringify([scope, query]))
+      .digest('hex');
+    const retained = this.answers.get(selectionKey);
+    if (retained?.key === answerKey && retained.activity === activityResult)
       return {
         ...retained.answer,
         cached: true,
@@ -617,12 +627,7 @@ export class AccountAnalyticsService {
       accounts: series,
       activity,
     };
-    this.answers.set(answerKey, { activity: activityResult, answer });
-    while (this.answers.size > 32) {
-      const oldest = this.answers.keys().next().value;
-      if (oldest === undefined) break;
-      this.answers.delete(oldest);
-    }
+    this.answers.set(selectionKey, { key: answerKey, activity: activityResult, answer });
     return answer;
   }
 

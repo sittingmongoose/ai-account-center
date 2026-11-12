@@ -1,5 +1,7 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import type { ChildProcessWithoutNullStreams } from 'child_process';
 import path from 'path';
+import { createHash } from 'crypto';
+import { runManagedCommand } from '../utils/managed-process';
 import { checkedIdentity, credentialFingerprint, identityKey } from './registry';
 import type { NativeCredential, VerifiedIdentity } from './types';
 import type { SavedQuotaRequest, SavedQuotaSnapshot } from './runtime-composition';
@@ -39,11 +41,28 @@ export function createAntigravityQuotaWorker(options: AntigravityWorkerOptions =
   const collectors =
     options.collectorDirectory ?? path.resolve(__dirname, '../../scripts/account-usage');
   if (!path.isAbsolute(script) || !path.isAbsolute(collectors)) throw failure();
-  const launch: PrivateWorkerSpawner =
-    options.spawnWorker ?? ((binary, args, processOptions) => spawn(binary, args, processOptions));
-  const invoke = (packet: Record<string, unknown>): Promise<Record<string, unknown>> => {
+  const launch = options.spawnWorker;
+  const invokeOnce = (packet: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const request = Buffer.from(JSON.stringify(packet));
     if (request.length > MAX_BYTES) return Promise.reject(failure());
+    if (!launch) {
+      return runManagedCommand('/usr/bin/python3', ['-I', script, '--collector-dir', collectors], {
+        input: request.toString('utf8'),
+        timeoutMs: TIMEOUT_MS,
+        graceMs: 0,
+        maxBytes: MAX_BYTES + 1,
+        coalesce: true,
+      }).then((result) => {
+        if (result.failed) throw failure();
+        try {
+          const output: unknown = JSON.parse(result.stdout);
+          if (!record(output)) throw failure();
+          return output;
+        } catch {
+          throw failure();
+        }
+      });
+    }
     return new Promise((resolve, reject) => {
       let child: ChildProcessWithoutNullStreams;
       try {
@@ -119,6 +138,16 @@ export function createAntigravityQuotaWorker(options: AntigravityWorkerOptions =
         finish(failure());
       }
     });
+  };
+  const pending = new Map<string, Promise<Record<string, unknown>>>();
+  const invoke = (packet: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const key = createHash('sha256').update(JSON.stringify(packet)).digest('hex');
+    const existing = pending.get(key);
+    if (existing) return existing;
+    if (pending.size >= 32) return Promise.reject(failure());
+    const work = invokeOnce(packet).finally(() => pending.delete(key));
+    pending.set(key, work);
+    return work;
   };
   const encoded = (credential: NativeCredential): string => {
     if (

@@ -5,6 +5,7 @@ import { Worker } from 'worker_threads';
 import { getCcsDir } from '../../utils/config-manager';
 import { CCSError } from '../../errors/error-types';
 import { withDeadline } from '../../utils/settle-deadline';
+import { BoundedCache } from '../../utils/bounded-cache';
 import { getAccountRefreshIntervalSeconds } from './account-refresh-settings';
 import {
   accountAnalyticsActivityCoverage,
@@ -679,12 +680,13 @@ function localSourcePresence(
 }
 
 export class AccountAnalyticsActivityService {
-  private readonly latestProjections = new Map<string, AccountAnalyticsActivityResult>();
+  private readonly latestProjections = new BoundedCache<{
+    key: string;
+    result: AccountAnalyticsActivityResult;
+  }>(4, 32 * 1024 * 1024);
   private readonly pendingProjections = new Set<string>();
-  private readonly projections = new WeakMap<
-    SourceData[],
-    Map<string, AccountAnalyticsActivityResult>
-  >();
+  private readonly snapshotIds = new WeakMap<SourceData[], number>();
+  private nextSnapshotId = 0;
   private readonly states = new Map<string, ActivityState>();
   private readonly largeCodexReads: LargeCodexReadQueue;
   private readonly onShutdown = (): void => {
@@ -698,6 +700,7 @@ export class AccountAnalyticsActivityService {
 
   async shutdown(): Promise<void> {
     this.closed = true;
+    this.latestProjections.clear();
     process.removeListener('SIGINT', this.onShutdown);
     process.removeListener('SIGTERM', this.onShutdown);
     await this.largeCodexReads.shutdown();
@@ -1692,7 +1695,13 @@ export class AccountAnalyticsActivityService {
           : ` All ${totalFiles} local log files have been read; ${failedFiles > 0 ? `${failedFiles} local scan failures will be retried` : 'the scan could not confirm complete discovery'}.`
       : '';
     // Publication replaces sources; flags and the minute head invalidate a rolling range.
+    let snapshotId = this.snapshotIds.get(state.sources);
+    if (snapshotId === undefined) {
+      snapshotId = ++this.nextSnapshotId;
+      this.snapshotIds.set(state.sources, snapshotId);
+    }
     const projectionKey = JSON.stringify([
+      snapshotId,
       query,
       tz,
       Math.floor(from / 60_000),
@@ -1703,16 +1712,11 @@ export class AccountAnalyticsActivityService {
       state.pending !== null,
       state.remotePending,
     ]);
-    let projections = this.projections.get(state.sources);
-    if (!projections) {
-      projections = new Map();
-      this.projections.set(state.sources, projections);
-    }
-    const retained = projections.get(projectionKey);
-    if (retained) return retained;
     const snapshotSources = state.sources;
     const snapshotGeneration = state.generation;
     const latestKey = JSON.stringify([scope, query, tz]);
+    const retained = this.latestProjections.get(latestKey);
+    if (retained?.key === projectionKey) return retained.result;
     const calculate = (): AccountAnalyticsActivityResult => {
       const projectionStart = elapsed();
       const activity = projectAccountAnalyticsActivity(
@@ -1749,28 +1753,21 @@ export class AccountAnalyticsActivityService {
       const result = { ...activity, coverage };
       // Reusing a projection does not make its completed source scan stale.
       // In particular, background re-projection must publish the settled status.
-      projections.set(projectionKey, result);
-      while (projections.size > 32) {
-        const oldest = projections.keys().next().value;
-        if (oldest === undefined) break;
-        projections.delete(oldest);
-      }
-      this.latestProjections.set(latestKey, result);
-      while (this.latestProjections.size > 32) {
-        const oldest = this.latestProjections.keys().next().value;
-        if (oldest === undefined) break;
-        this.latestProjections.delete(oldest);
-      }
+      this.latestProjections.set(latestKey, { key: projectionKey, result });
       return result;
     };
-    const previous = this.latestProjections.get(latestKey);
+    const previous = retained?.result;
     if (previous?.totals && query.refresh !== true) {
       const pendingKey = JSON.stringify([scope, projectionKey]);
-      if (!this.pendingProjections.has(pendingKey)) {
+      if (!this.pendingProjections.has(pendingKey) && this.pendingProjections.size < 4) {
         this.pendingProjections.add(pendingKey);
         setImmediate(() => {
           try {
-            if (state.sources === snapshotSources && state.generation === snapshotGeneration)
+            if (
+              !this.closed &&
+              state.sources === snapshotSources &&
+              state.generation === snapshotGeneration
+            )
               calculate();
           } catch {
             // Keep the previous measured answer if re-projection fails.

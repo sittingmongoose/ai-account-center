@@ -130,6 +130,20 @@ function memory(
 }
 
 describe('account quota analytics', () => {
+  it('bounds retained complete answers across query churn and keeps a hot selection warm', async () => {
+    const service = new AccountAnalyticsService({
+      getDashboard: async () => dashboard([account()]),
+      getActivity: async () => noActivity,
+      createHistoryStore: () => memory(),
+      now: () => NOW,
+    });
+    for (let i = 0; i < 80; i++) await service.get({ ...QUERY, account: `codex:fixture-${i}` });
+    const cache = (service as unknown as { answers: { size: number; bytes: number } }).answers;
+    expect(cache.size).toBeLessThanOrEqual(4);
+    expect(cache.bytes).toBeLessThanOrEqual(24 * 1024 * 1024);
+    const first = await service.get(QUERY);
+    expect((await service.get(QUERY)).accounts).toBe(first.accounts);
+  });
   it('reads without writes, memoises series, and invalidates on a new sample', async () => {
     const store = memory();
     let now = NOW;
@@ -154,6 +168,8 @@ describe('account quota analytics', () => {
     current.windows[0].usedPercent = 55;
     await service.sample();
     expect((await service.get(QUERY)).accounts[0].windows[0].points.at(-1)?.usedPercent).toBe(55);
+    // Old minute/history heads can never be reused for this selection.
+    expect((service as unknown as { answers: { size: number } }).answers.size).toBe(1);
   });
   it('passes explicit activity refresh through without forcing quota sources twice or exposing the flag as a filter', async () => {
     const dashboardCalls: Array<[string | undefined, boolean | undefined]> = [];
@@ -216,7 +232,11 @@ describe('account quota analytics', () => {
     });
     expect(result.providers).toHaveLength(9);
     expect(result.accounts).toHaveLength(14);
-    expect(calls).toEqual([['mac', false], ['windows', false], ['mac', false]]);
+    expect(calls).toEqual([
+      ['mac', false],
+      ['windows', false],
+      ['mac', false],
+    ]);
     expect(result.accounts[0].windows[0].points[0].usedPercent).toBe(50);
     expect(result.accounts[0].windows[0].points[0].resetAt).toBe('2026-10-01T19:00:00.000Z');
     expect(store.writes).toBe(1);
