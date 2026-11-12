@@ -534,6 +534,12 @@ pub fn TipLayer(children: Children) -> impl IntoView {
             _ => text.set(String::new()),
         }
     };
+    // A touch pointer leaves as the finger lifts; its just-opened explanation must stay until the next tap.
+    let leave = move |e: web_sys::PointerEvent| {
+        if e.pointer_type() == "mouse" {
+            text.set(String::new());
+        }
+    };
     let hide = window_event_listener(leptos::ev::scroll, move |_| text.set(String::new()));
     let layout = Closure::<dyn Fn()>::new(move || text.set(String::new()));
     let _ = window().add_event_listener_with_callback(
@@ -551,7 +557,7 @@ pub fn TipLayer(children: Children) -> impl IntoView {
         }
     });
     view! {
-        <div class="tip-scope" on:pointerover=over on:pointerup=up on:pointerleave=move |_| text.set(String::new())>
+        <div class="tip-scope" on:pointerover=over on:pointerup=up on:pointerleave=leave>
             {children()}
             <div class="tip-card" class:below=move || pos.get().2 hidden=move || text.with(|t| t.is_empty())
                 node_ref=card style=move || { let (x, y, _) = pos.get(); format!("left:{x:.0}px;top:{y:.0}px") }>{move || text.get()}</div>
