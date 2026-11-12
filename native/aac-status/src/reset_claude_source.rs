@@ -1,5 +1,5 @@
 //! Private credential-host capture and read. Capture/ticket commit precedes provider I/O.
-use crate::reset::{Result, Snapshot, Store};
+use crate::reset::{Identity, Result, Snapshot, Store};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -96,15 +96,18 @@ pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Va
         return Err("shape");
     }
     let mut store = Store::open(db_path)?;
-    let (capture, ticket) = store.capture_read(account, || {
-        let mut request = request.clone();
-        request["action"] = json!("capture");
-        request.as_object_mut().ok_or("shape")?.remove("expectedSavedBinding");
-        request
+    let (capture, ticket) = store.capture_identity_read(account, || {
+        let mut capture_request = request.clone();
+        capture_request["action"] = json!("capture");
+        capture_request
+            .as_object_mut()
+            .ok_or("shape")?
+            .remove("expectedSavedBinding");
+        capture_request
             .as_object_mut()
             .ok_or("shape")?
             .remove("expectedSavedOrganization");
-        let captured: Capture = serde_json::from_value(helper(command, request, Duration::from_secs(4))?)
+        let captured: Capture = serde_json::from_value(helper(command, capture_request, Duration::from_secs(4))?)
             .map_err(|_| "credential-host-unavailable")?;
         if captured.account.is_empty()
             || captured.account.len() > 256
@@ -115,7 +118,14 @@ pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Va
         {
             return Err("identity-unconfirmed");
         }
-        Ok(captured)
+        let identity = Identity {
+            provider: "claude".into(),
+            account: captured.account.clone(),
+            organization: captured.organization.clone(),
+            profile: request["profile"].as_str().ok_or("shape")?.into(),
+            host: request["host"].as_str().ok_or("shape")?.into(),
+        };
+        Ok((captured, identity))
     })?;
     // The helper pins its second process to the captured login before any OAuth request,
     // then rechecks it after usage and immediately before returning its snapshot.

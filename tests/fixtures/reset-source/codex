@@ -11,6 +11,10 @@ for line in sys.stdin:
  if method=='initialize':result={}
  elif method=='account/read':result={'account':{'type':'chatgpt','email':'fixture-'+who}}
  elif method=='account/rateLimits/read':
+  if os.path.exists(os.path.join(home,'fail-usage')):
+   open(os.path.join(home,'fixture-usage-failed'),'w').write(who)
+   print(json.dumps({'id':r['id'],'error':{'code':-32000,'message':'fixture unavailable'}}),flush=True)
+   continue
   spent=who=='account-x' and os.path.exists(os.path.join(home,'spent-x'))
   result={'accountId':who,'rateLimits':{'primary':{'usedPercent':0 if spent else 100}},'rateLimitResetCredits':{'availableCount':0 if spent else 1,'credits':[{'id':'credit-'+who,'resetType':'codexRateLimits','status':'redeemed' if spent else 'available'}]}}
  else:

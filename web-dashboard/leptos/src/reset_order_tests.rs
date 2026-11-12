@@ -1062,3 +1062,130 @@ fn actual_native_capture_order_keeps_the_current_pending_account_in_both_deliver
         });
     }
 }
+
+// Max-5 M1: real native/router outage traces, both an invalidated view and a fresh page.
+#[test]
+fn failed_quota_reads_do_not_project_a_prior_accounts_confirmation_and_recovery_is_explicit() {
+    for (changed, source) in [
+        (
+            true,
+            include_str!("../tests/fixtures/reset-source-failure-replacement.json"),
+        ),
+        (
+            false,
+            include_str!("../tests/fixtures/reset-source-failure-same.json"),
+        ),
+    ] {
+        let trace: serde_json::Value = serde_json::from_str(source).unwrap();
+        for fresh_page in [false, true] {
+            Owner::new().with(|| {
+                let rc = ResetCtx::new();
+                rc.show("codex:reused", "codex", false);
+                if !fresh_page {
+                    rc.take(
+                        "codex:reused",
+                        serde_json::from_value(trace["prior"].clone()).unwrap(),
+                        1.,
+                    );
+                    assert!(
+                        rc.said
+                            .get_untracked()
+                            .unwrap()
+                            .text
+                            .contains("Reset applied")
+                    );
+                    rc.invalidate();
+                }
+                let failed: Inventory =
+                    serde_json::from_value(trace["unavailable"].clone()).unwrap();
+                rc.take("codex:reused", failed.clone(), 2.);
+                assert!(rc.unresolved.get_untracked().blocks());
+                let said = rc.said.get_untracked().unwrap();
+                assert!(!said.text.contains("Reset applied"));
+                assert!(said.text.contains("unavailable"));
+                assert!(rc.state_of("codex:reused").needs_refresh());
+                if changed {
+                    assert!(said.text.contains("Account changed"));
+                    assert_eq!(
+                        rc.unresolved.get_untracked().key.as_deref(),
+                        trace["siblingPending"]["pendingAttempt"].as_str()
+                    );
+                    assert_eq!(
+                        rc.lock_key("codex:reused"),
+                        failed.canonical_account_key.unwrap()
+                    );
+                }
+                rc.take(
+                    "codex:reused",
+                    serde_json::from_value(trace["recovered"].clone()).unwrap(),
+                    3.,
+                );
+                assert!(!rc.state_of("codex:reused").needs_refresh());
+                if changed {
+                    assert!(rc.unresolved.get_untracked().blocks());
+                    assert!(
+                        !rc.said
+                            .get_untracked()
+                            .unwrap()
+                            .text
+                            .contains("Reset applied")
+                    );
+                } else {
+                    assert!(
+                        rc.said
+                            .get_untracked()
+                            .unwrap()
+                            .text
+                            .contains("Reset applied")
+                    );
+                }
+                assert_eq!(trace["providerSends"], 0);
+            });
+        }
+    }
+}
+
+#[test]
+fn unavailable_recovery_does_not_shorten_an_unanswered_send_proof_interval() {
+    let trace: serde_json::Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/reset-source-failure-same.json"
+    ))
+    .unwrap();
+    Owner::new().with(|| {
+        let rc = ResetCtx::new();
+        rc.show("codex:reused", "codex", false);
+        rc.take(
+            "codex:reused",
+            serde_json::from_value(trace["prior"].clone()).unwrap(),
+            1.,
+        );
+        let canonical = rc.lock_key("codex:reused");
+        rc.update_state(&canonical, |state| state.begin_send(77, 2.));
+        rc.take(
+            "codex:reused",
+            serde_json::from_value(trace["unavailable"].clone()).unwrap(),
+            100.,
+        );
+        assert!(rc.unresolved.get_untracked().blocks());
+        assert!(
+            rc.said
+                .get_untracked()
+                .unwrap()
+                .text
+                .contains("no confirmed answer")
+        );
+        rc.take(
+            "codex:reused",
+            serde_json::from_value(trace["recovered"].clone()).unwrap(),
+            101.,
+        );
+        assert!(!rc.unresolved.get_untracked().blocks());
+        assert!(
+            rc.said
+                .get_untracked()
+                .unwrap()
+                .text
+                .contains("Reset applied")
+        );
+    });
+}

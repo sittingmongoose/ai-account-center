@@ -226,6 +226,7 @@ impl Store {
             INSERT OR IGNORE INTO source_read_clock VALUES(1,0);
             CREATE TABLE IF NOT EXISTS read_ticket_counters(account TEXT PRIMARY KEY, value INTEGER NOT NULL CHECK(value>0));
             CREATE TABLE IF NOT EXISTS route_read_fences(account TEXT PRIMARY KEY, ticket INTEGER NOT NULL CHECK(ticket>0));
+            CREATE TABLE IF NOT EXISTS route_capture_bindings(account TEXT PRIMARY KEY, lock_key TEXT NOT NULL, since_ticket INTEGER NOT NULL, account_changed INTEGER NOT NULL);
             DROP TABLE IF EXISTS route_sources;"))?;
         // Old timestamp fences are deliberately retired. Ticketless in-flight reads
         // cannot pass inventory; existing immutable targets/attempts remain readable.
@@ -357,10 +358,31 @@ impl Store {
     /// transaction. The callback must do only bounded credential capture, never provider I/O.
     /// Process exit or unwinding rolls back the transaction and releases its lock.
     pub fn capture_read<T>(&mut self, account: &str, capture: impl FnOnce() -> Result<T>) -> Result<(T, ReadTicket)> {
+        self.capture_inner(account, || Ok((capture()?, None)))
+    }
+
+    /// Saved-login identity is authoritative before quotas are available. A failed
+    /// provider RPC must recover this account's obligations, never the previous login's.
+    pub fn capture_identity_read<T>(
+        &mut self,
+        account: &str,
+        capture: impl FnOnce() -> Result<(T, Identity)>,
+    ) -> Result<(T, ReadTicket)> {
+        self.capture_inner(account, || {
+            let (value, identity) = capture()?;
+            Ok((value, Some(identity)))
+        })
+    }
+
+    fn capture_inner<T>(
+        &mut self,
+        account: &str,
+        capture: impl FnOnce() -> Result<(T, Option<Identity>)>,
+    ) -> Result<(T, ReadTicket)> {
         let tx = sql(self
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
-        let captured = capture()?;
+        let (captured, identity) = capture()?;
         let sequence: i64 = sql(tx.query_row(
             "UPDATE source_read_clock SET value=value+1 WHERE singleton=1 AND value<9223372036854775807 RETURNING value",
             [], |r| r.get(0),
@@ -369,6 +391,9 @@ impl Store {
             "INSERT INTO read_ticket_counters VALUES(?,?) ON CONFLICT(account) DO UPDATE SET value=excluded.value",
             params![account, sequence],
         ))?;
+        if let Some(identity) = identity {
+            Self::bind_capture(&tx, account, &identity, sequence)?;
+        }
         let ticket = ReadTicket {
             capture_version: 1,
             route_key: hash(account),
@@ -376,6 +401,44 @@ impl Store {
         };
         sql(tx.commit())?;
         Ok((captured, ticket))
+    }
+
+    fn bind_capture(db: &Connection, account: &str, identity: &Identity, sequence: i64) -> Result<()> {
+        if !matches!(identity.provider.as_str(), "codex" | "claude")
+            || identity.account.is_empty()
+            || identity.profile.is_empty()
+            || identity.host.is_empty()
+            || (identity.provider == "claude" && identity.organization.is_empty())
+        {
+            return Err("identity-unconfirmed");
+        }
+        let canonical = Self::canonical_identity(identity)?;
+        let previous = Self::account_canonical_from(db, account)?;
+        let captured: Option<(String, i64, bool)> = sql(db
+            .query_row(
+                "SELECT lock_key,since_ticket,account_changed FROM route_capture_bindings WHERE account=?",
+                [account],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional())?;
+        let same = previous.as_ref() == Some(&canonical);
+        let (since, changed) = match captured {
+            Some((key, since, changed)) if key == canonical && same => (since, changed),
+            None => (0, previous.is_some() && !same),
+            _ => (sequence, previous.is_some() && !same),
+        };
+        if !same {
+            let revision = Self::advance(db, &canonical)?;
+            sql(db.execute(
+                "INSERT INTO aliases VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET lock_key=excluded.lock_key,binding_revision=excluded.binding_revision",
+                params![account, canonical, revision],
+            ))?;
+        }
+        sql(db.execute(
+            "INSERT INTO route_capture_bindings VALUES(?,?,?,?) ON CONFLICT(account) DO UPDATE SET lock_key=excluded.lock_key,since_ticket=excluded.since_ticket,account_changed=excluded.account_changed",
+            params![account,canonical,since,changed],
+        ))?;
+        Ok(())
     }
 
     pub fn inventory(&mut self, account: &str, s: &Snapshot, now: i64, entropy: &str) -> Result<Value> {
@@ -400,6 +463,18 @@ impl Store {
         if sequence > issued || sequence <= accepted {
             return Err("stale-inventory");
         }
+        let capture: Option<(String, i64)> = sql(tx
+            .query_row(
+                "SELECT lock_key,since_ticket FROM route_capture_bindings WHERE account=?",
+                [account],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional())?;
+        if let Some((key, since)) = capture
+            && (key != canonical || sequence < since)
+        {
+            return Err("stale-inventory");
+        }
         // Refusal precedes every revision, alias and target mutation, including expiry pruning.
         Self::expire_tokens(&tx, now)?;
         sql(tx.execute(
@@ -410,6 +485,10 @@ impl Store {
         sql(tx.execute(
             "INSERT INTO aliases(account,lock_key,binding_revision) VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET lock_key=excluded.lock_key,binding_revision=excluded.binding_revision",
             params![account, canonical, revision],
+        ))?;
+        sql(tx.execute(
+            "UPDATE route_capture_bindings SET account_changed=0 WHERE account=?",
+            [account],
         ))?;
         // Keep old targets so an open confirmation cannot silently select another grant.
         let mut rows = vec![];
@@ -432,10 +511,13 @@ impl Store {
         Ok(response)
     }
     fn canonical(s: &Snapshot) -> Result<String> {
+        Self::canonical_identity(&s.identity)
+    }
+    fn canonical_identity(identity: &Identity) -> Result<String> {
         Ok(hash(&encode(&(
-            &s.identity.provider,
-            &s.identity.account,
-            &s.identity.organization,
+            &identity.provider,
+            &identity.account,
+            &identity.organization,
         ))?))
     }
     fn account_canonical(&self, account: &str) -> Result<Option<String>> {
@@ -867,6 +949,14 @@ impl Store {
             response["attemptKey"] = response["evidence"]["pendingAttempts"][0]["attemptKey"].clone();
             response["pendingAttempt"] = response["attemptKey"].clone();
             response["history"] = Self::history_for(&tx, &canonical)?;
+        }
+        let changed: bool = sql(tx.query_row(
+            "SELECT COALESCE((SELECT account_changed FROM route_capture_bindings WHERE account=?),0)",
+            [account],
+            |r| r.get(0),
+        ))?;
+        if changed {
+            response["reason"] = json!("account-changed-usage-unavailable");
         }
         sql(tx.commit())?;
         Ok(response)

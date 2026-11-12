@@ -121,6 +121,7 @@ pub struct AccountState {
     unanswered: BTreeMap<u64, f64>,
     read_after_ms: Option<f64>,
     refresh_required: bool,
+    source_failure: Option<bool>,
 }
 impl AccountState {
     pub fn needs_refresh(&self) -> bool {
@@ -131,6 +132,11 @@ impl AccountState {
     }
     pub fn refreshed(&mut self) {
         self.refresh_required = false;
+        self.source_failure = None;
+    }
+    pub fn unavailable(&mut self, account_changed: bool) {
+        self.refresh_required = true;
+        self.source_failure = Some(account_changed);
     }
     #[cfg(test)]
     pub fn matches(&self, evidence: &Evidence) -> bool {
@@ -262,6 +268,13 @@ impl AccountState {
     pub fn current(&self, provider: &str) -> Option<Said> {
         if !self.unanswered.is_empty() {
             return Some(Said { text: "A reset request has no confirmed answer yet. The reset may have been used; check again.".into(), bad:true, check:true });
+        }
+        if let Some(changed) = self.source_failure {
+            return Some(Said {
+                text: if changed { "Account changed; usage unavailable. Check again before using a reset." } else { "Usage is unavailable. Earlier claim results are in history; check again before using a reset." }.into(),
+                bad: true,
+                check: true,
+            });
         }
         if self.refresh_required || self.read_after_ms.is_some() || self.snapshot.is_none() {
             return Some(Said {

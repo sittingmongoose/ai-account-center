@@ -185,7 +185,7 @@ for (const newerFirst of [false, true]) {
         } else {
           bDeliver.resolve();
           older = await b;
-          expect(older.status).toBe(200);
+          expect(older.status).toBe(503);
           aDeliver.resolve();
           current = await a;
         }

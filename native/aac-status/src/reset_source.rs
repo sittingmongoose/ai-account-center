@@ -162,7 +162,17 @@ fn codex_inner(
     let capture = || Ok((auth(home)?, observed_now()?));
     let ((login_capture, observed_at_ms), read_ticket) = if let Some(context) = context {
         let mut store = Store::open(context.db_path)?;
-        let (captured, ticket) = store.capture_read(context.route_account, capture)?;
+        let (captured, ticket) = store.capture_identity_read(context.route_account, || {
+            let captured = capture()?;
+            let identity = Identity {
+                provider: "codex".into(),
+                account: captured.0.0.clone(),
+                organization: String::new(),
+                profile: profile.into(),
+                host: host.into(),
+            };
+            Ok((captured, identity))
+        })?;
         (captured, Some(ticket))
     } else {
         (capture()?, None)

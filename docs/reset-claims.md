@@ -74,9 +74,20 @@ saved credentials without OAuth, then pins its separate provider read to that
 account, organization and hash. Capture failures roll back; process exit releases
 the SQLite lock. The bounded Claude capture helper cannot retain it indefinitely.
 The private snapshot carries a capture-version marker, decimal sequence and route
-hash; provider-returned metadata cannot override them. Issuance changes no account
-revision, alias, token or audit state. A failed commit prevents provider I/O.
+hash; provider-returned metadata cannot override them. A captured canonical
+identity change updates the route binding in this same transaction, even before
+quotas are available. Recovery then returns the captured
+account's pending attempts, tokens and history, including obligations through
+sibling aliases; it never falls back to the previous account. The identity epoch
+also rejects earlier snapshots after a replacement or an X/Y/X transition. Capture
+changes no attempt, token or audit ownership. A failed commit prevents provider I/O.
 The router never assigns or replaces tickets.
+If a changed account's quota read fails, recovery says "Account changed; usage
+unavailable" and returns no grant keys. An unavailable read never refreshes the
+UI's quota permission, projects a prior in-place success, or shortens a local
+unanswered-send obligation. Same-account unavailable recovery retains its own
+history and locks. A later successful read restores ordinary current-result
+projection; unavailable reads do not automatically retry the provider.
 
 Inventory accepts only a route-bound ticket newer than that route's last accepted
 ticket. Older reads and repeated tickets are rejected before any revision, alias,

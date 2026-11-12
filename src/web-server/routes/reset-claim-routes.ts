@@ -141,10 +141,11 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
     try {
       const account = String(req.params.accountId);
       if (!deps.source) {
+        const recovery = await call('pending', account);
         res.json({
-          ...(await call('pending', account)),
+          ...recovery,
           status: 'unavailable',
-          reason: 'credential-host-unavailable',
+          reason: recovery.reason ?? 'credential-host-unavailable',
           grants: [],
         });
         return;
@@ -154,10 +155,11 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         snapshot = await readSnapshot(account);
       } catch (error) {
         // Recovery and audit come from one native transaction, including on read failure.
+        const recovery = await call('pending', account);
         res.json({
-          ...(await call('pending', account)),
+          ...recovery,
           status: 'unavailable',
-          reason: safeReason(error) ?? 'reset-inventory-unavailable',
+          reason: recovery.reason ?? safeReason(error) ?? 'reset-inventory-unavailable',
           grants: [],
         });
         return;

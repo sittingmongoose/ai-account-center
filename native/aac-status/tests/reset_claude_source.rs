@@ -38,6 +38,7 @@ class Client:
   with (root/'provider-reads').open('a') as f:f.write(route+'\n')
   account=token[len('fixture-token-'):]
   if route=='/api/oauth/profile':return {'account':{'uuid':account,'email':'fixture@example.com','has_claude_pro':True},'organization':{'uuid':ORG}}
+  if (root/'fail-usage').exists():raise scope['UsageUnavailable']()
   if (root/'hold-usage').exists():
    (root/'waiting').write_text('waiting')
    for _ in range(1000):
@@ -95,7 +96,10 @@ fn native_claude_capture_order_survives_both_response_delivery_orders() {
                 > older.read_ticket.as_ref().unwrap().sequence.parse::<u64>().unwrap()
         );
         if !newer_first {
-            store.inventory("claude:reused", &older, now(), &nonce(1)).unwrap();
+            assert_eq!(
+                store.inventory("claude:reused", &older, now(), &nonce(1)).unwrap_err(),
+                "stale-inventory"
+            );
         }
         let current = store.inventory("claude:reused", &newer, now(), &nonce(2)).unwrap();
         assert_eq!(
@@ -158,4 +162,36 @@ fn a_hung_capture_helper_times_out_without_leaving_a_lock_or_allocating_a_ticket
     let mut store = Store::open(&db).unwrap();
     let (_, ticket) = store.capture_read("claude:reused", || Ok(())).unwrap();
     assert_eq!(ticket.sequence, "1");
+}
+
+#[test]
+fn claude_failed_quota_read_rebinds_to_captured_account_and_recovers_after_restart() {
+    let (dir, command) = setup();
+    let db = dir.path().join("claims.sqlite");
+    let mut store = Store::open(&db).unwrap();
+    let x = read(&db, &command);
+    let xi = store.inventory("claude:reused", &x, now(), &nonce(21)).unwrap();
+    login(dir.path(), Y);
+    std::fs::write(dir.path().join("fail-usage"), "").unwrap();
+    assert!(reset_claude_source::read(&db, "claude:reused", &command).is_err());
+    drop(store);
+    let mut store = Store::open(&db).unwrap();
+    let failed = store.pending("claude:reused", now()).unwrap();
+    assert_ne!(failed["canonicalAccountKey"], xi["canonicalAccountKey"]);
+    assert_eq!(failed["reason"], "account-changed-usage-unavailable");
+    assert_eq!(failed["history"], json!([]));
+    assert_eq!(
+        store.inventory("claude:reused", &x, now(), &nonce(22)).unwrap_err(),
+        "stale-inventory"
+    );
+    std::fs::remove_file(dir.path().join("fail-usage")).unwrap();
+    let y = read(&db, &command);
+    let yi = store.inventory("claude:reused", &y, now(), &nonce(23)).unwrap();
+    assert_eq!(yi["canonicalAccountKey"], failed["canonicalAccountKey"]);
+    assert!(store.pending("claude:reused", now()).unwrap()["reason"].is_null());
+    std::fs::write(dir.path().join("fail-usage"), "").unwrap();
+    assert!(reset_claude_source::read(&db, "claude:reused", &command).is_err());
+    let same = store.pending("claude:reused", now()).unwrap();
+    assert_eq!(same["canonicalAccountKey"], yi["canonicalAccountKey"]);
+    assert!(same["reason"].is_null());
 }

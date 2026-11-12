@@ -248,6 +248,7 @@ pub fn why_not(reason: &str, provider: &str) -> String {
             "AAC can use resets only through a Windows sign-in for now; a Mac-only sign-in is view-only.".into()
         }
         "credential-host-unavailable" => "AAC can't find this login's saved profile on this computer.".into(),
+        "account-changed-usage-unavailable" => "Account changed; usage unavailable. Earlier claim results stay with the previous account.".into(),
         "identity-unconfirmed" | "identity-changed" => {
             "AAC couldn't confirm which account this is, so it won't use this reset.".into()
         }
@@ -1038,8 +1039,11 @@ impl ResetCtx {
         let current = epoch == self.read_epoch.get_value();
         let accepted = self.update_state(canonical, |s| {
             let unproved = s.needs_refresh();
-            let accepted = s.observe(evidence, Some(started_ms));
-            if accepted && current {
+            let readable = inv.status == "ok";
+            let accepted = s.observe(evidence, readable.then_some(started_ms));
+            if accepted && !readable {
+                s.unavailable(inv.reason == "account-changed-usage-unavailable");
+            } else if accepted && current {
                 s.refreshed();
             } else if !current && unproved {
                 s.invalidate();
@@ -1086,13 +1090,15 @@ impl ResetCtx {
                 return false;
             }
             if let Answer::Ok(inv) = got {
-                let readable = inv.evidence.as_ref().is_some_and(|e| {
-                    e.valid()
-                        && inv.canonical_account_key.as_ref() == Some(&e.canonical_account_key)
-                }) && inv
-                    .binding_revision
-                    .as_ref()
-                    .is_some_and(|r| r.parse::<u64>().is_ok());
+                let readable = inv.status == "ok"
+                    && inv.evidence.as_ref().is_some_and(|e| {
+                        e.valid()
+                            && inv.canonical_account_key.as_ref() == Some(&e.canonical_account_key)
+                    })
+                    && inv
+                        .binding_revision
+                        .as_ref()
+                        .is_some_and(|r| r.parse::<u64>().is_ok());
                 self.take_at(account, inv, started, epoch);
                 if readable
                     && epoch == self.read_epoch.get_value()

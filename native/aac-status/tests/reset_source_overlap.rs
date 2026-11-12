@@ -291,7 +291,7 @@ fn ticketed_read(db: &Path, home: &Path, binary: &Path) -> Result<Snapshot> {
     Ok(serde_json::from_value(value).unwrap())
 }
 #[test]
-fn completed_reads_keep_ticket_order_in_both_acceptance_orders() {
+fn completed_reads_keep_the_latest_captured_identity_in_both_delivery_orders() {
     for reverse in [false, true] {
         let (dir, home, binary) = setup();
         let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
@@ -299,7 +299,10 @@ fn completed_reads_keep_ticket_order_in_both_acceptance_orders() {
         login(&home, "account-y");
         let y = ticketed_read(&dir.path().join("claims.sqlite"), &home, &binary).unwrap();
         if !reverse {
-            store.inventory("route", &x, now(), &nonce(1200)).unwrap();
+            assert_eq!(
+                store.inventory("route", &x, now(), &nonce(1200)).unwrap_err(),
+                "stale-inventory"
+            );
         }
         let newest = store.inventory("route", &y, now(), &nonce(1201)).unwrap();
         assert_eq!(
@@ -443,7 +446,12 @@ fn request_admission_cannot_reorder_actual_captures_in_either_delivery_order() {
                 > older.read_ticket.as_ref().unwrap().sequence.parse::<u64>().unwrap()
         );
         if !newer_first {
-            store.inventory("codex:reused", &older, now(), &nonce(2020)).unwrap();
+            assert_eq!(
+                store
+                    .inventory("codex:reused", &older, now(), &nonce(2020))
+                    .unwrap_err(),
+                "stale-inventory"
+            );
         }
         let accepted = store.inventory("codex:reused", &newer, now(), &nonce(2021)).unwrap();
         assert_eq!(accepted["pendingAttempt"], nonce(2012));

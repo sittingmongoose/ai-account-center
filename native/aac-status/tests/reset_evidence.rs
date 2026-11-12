@@ -1032,3 +1032,84 @@ fn a_crashed_capture_process_cannot_retain_the_critical_section() {
     assert_eq!(ticket.capture_version, 1);
     assert_eq!(ticket.sequence, "1");
 }
+
+#[test]
+fn captured_replacement_without_quotas_recovers_its_own_pending_history_and_survives_restart() {
+    let (dir, mut store) = open();
+    let x = snap("x", "reused", "host");
+    let y = snap("y", "sibling", "host");
+    let xa = begin(&mut store, "route", &x, 2000);
+    store
+        .read_finish("route", &xa, Outcome::Reset, Some(&confirmed(&x)), NOW + 2, None)
+        .unwrap();
+    let prior = store.pending("route", NOW + 2).unwrap();
+    assert_eq!(prior["evidence"]["latestAttempt"]["outcome"], "claimed");
+    let ya = begin(&mut store, "sibling", &y, 2010);
+    let (_, old_ticket) = store
+        .capture_identity_read("route", || Ok(((), x.identity.clone())))
+        .unwrap();
+    let mut old = x.clone();
+    old.read_ticket = Some(old_ticket);
+    let (_, ticket) = store
+        .capture_identity_read("route", || Ok(((), y.identity.clone())))
+        .unwrap();
+    // No quota inventory is accepted after this capture, exactly as on a provider failure.
+    drop(store);
+    let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    let failed = store.pending("route", NOW + 2).unwrap();
+    let sibling = store.pending("sibling", NOW + 2).unwrap();
+    assert_eq!(failed["canonicalAccountKey"], sibling["canonicalAccountKey"]);
+    assert_ne!(failed["canonicalAccountKey"], prior["canonicalAccountKey"]);
+    assert_eq!(failed["pendingAttempt"], ya);
+    assert_eq!(failed["reason"], "account-changed-usage-unavailable");
+    assert!(
+        !failed["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["outcome"] == "claimed")
+    );
+    assert_eq!(
+        store.inventory("route", &old, NOW + 2, &nonce(2020)).unwrap_err(),
+        "stale-inventory"
+    );
+    let mut fresh = y.clone();
+    fresh.read_ticket = Some(ticket);
+    let recovered = store.inventory("route", &fresh, NOW + 2, &nonce(2021)).unwrap();
+    assert_eq!(recovered["pendingAttempt"], ya);
+    assert!(store.pending("route", NOW + 2).unwrap()["reason"].is_null());
+    let same = store.pending("route", NOW + 2).unwrap();
+    store
+        .capture_identity_read("route", || Ok(((), y.identity.clone())))
+        .unwrap();
+    assert_eq!(store.pending("route", NOW + 2).unwrap(), same);
+    // Returning to X starts another identity epoch; an old X quota read cannot be reused.
+    store
+        .capture_identity_read("route", || Ok(((), x.identity.clone())))
+        .unwrap();
+    assert_eq!(
+        store.inventory("route", &old, NOW + 2, &nonce(2022)).unwrap_err(),
+        "stale-inventory"
+    );
+    let back = store.pending("route", NOW + 2).unwrap();
+    assert_eq!(back["canonicalAccountKey"], prior["canonicalAccountKey"]);
+    assert_eq!(back["evidence"]["latestAttempt"]["attemptKey"], xa);
+    assert_eq!(store.pending("sibling", NOW + 2).unwrap()["pendingAttempt"], ya);
+}
+
+#[test]
+fn later_same_account_capture_does_not_drop_a_completed_read_during_upgrade() {
+    let (_dir, mut store) = open();
+    let mut x = snap("x", "profile", "host");
+    store.read_inventory("route", &x, NOW, &nonce(2100)).unwrap();
+    x.read_ticket = Some(store.captured_ticket("route").unwrap());
+    store
+        .capture_identity_read("route", || Ok(((), x.identity.clone())))
+        .unwrap();
+    assert!(store.inventory("route", &x, NOW, &nonce(2101)).is_ok());
+    let before = store.pending("route", NOW).unwrap();
+    store
+        .capture_identity_read("route", || Ok(((), x.identity.clone())))
+        .unwrap();
+    assert_eq!(store.pending("route", NOW).unwrap(), before);
+}

@@ -2,7 +2,7 @@
   "currentSavedAccount": "account-y",
   "delayed": {
     "attemptKey": "000000000000000000000000000000000000000000000000000000000000002a",
-    "bindingRevision": "10",
+    "bindingRevision": "12",
     "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
     "evidence": {
       "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
@@ -25,12 +25,12 @@
           "attemptOrder": "2"
         }
       ],
-      "revision": "10"
+      "revision": "12"
     },
     "grants": [],
     "history": [
       {
-        "atMs": 1794460070791,
+        "atMs": 1794488587112,
         "details": {
           "beforeCount": 1,
           "callerHash": "25bf8e1a2393f1108d37029b3df5593236c755742ec93465bbafa9b290bddcf6",
@@ -46,7 +46,7 @@
         "targetHash": "f99e2db9b9b5a5fda7f00b20c60e8ef6cac36cd68e500920c9946d7a54791d7b"
       },
       {
-        "atMs": 1794460070796,
+        "atMs": 1794488587132,
         "details": {
           "beforeCount": 1,
           "beforeWindows": {
@@ -71,7 +71,7 @@
     "status": "unavailable"
   },
   "newer": {
-    "bindingRevision": "10",
+    "bindingRevision": "12",
     "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
     "evidence": {
       "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
@@ -94,7 +94,7 @@
           "attemptOrder": "2"
         }
       ],
-      "revision": "10"
+      "revision": "12"
     },
     "grants": [
       {
@@ -111,7 +111,7 @@
     ],
     "history": [
       {
-        "atMs": 1794460070791,
+        "atMs": 1794488587112,
         "details": {
           "beforeCount": 1,
           "callerHash": "25bf8e1a2393f1108d37029b3df5593236c755742ec93465bbafa9b290bddcf6",
@@ -127,7 +127,7 @@
         "targetHash": "f99e2db9b9b5a5fda7f00b20c60e8ef6cac36cd68e500920c9946d7a54791d7b"
       },
       {
-        "atMs": 1794460070796,
+        "atMs": 1794488587132,
         "details": {
           "beforeCount": 1,
           "beforeWindows": {
@@ -147,7 +147,7 @@
         "targetHash": "f99e2db9b9b5a5fda7f00b20c60e8ef6cac36cd68e500920c9946d7a54791d7b"
       }
     ],
-    "observedAtMs": 1794460070880,
+    "observedAtMs": 1794488587226,
     "pendingAttempt": "000000000000000000000000000000000000000000000000000000000000002a",
     "sourceAgeMs": 35,
     "status": "ok"
@@ -155,7 +155,7 @@
   "providerSends": 0,
   "recovery": {
     "attemptKey": "000000000000000000000000000000000000000000000000000000000000002a",
-    "bindingRevision": "10",
+    "bindingRevision": "12",
     "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
     "evidence": {
       "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
@@ -178,11 +178,11 @@
           "attemptOrder": "2"
         }
       ],
-      "revision": "10"
+      "revision": "12"
     },
     "history": [
       {
-        "atMs": 1794460070791,
+        "atMs": 1794488587112,
         "details": {
           "beforeCount": 1,
           "callerHash": "25bf8e1a2393f1108d37029b3df5593236c755742ec93465bbafa9b290bddcf6",
@@ -198,7 +198,7 @@
         "targetHash": "f99e2db9b9b5a5fda7f00b20c60e8ef6cac36cd68e500920c9946d7a54791d7b"
       },
       {
-        "atMs": 1794460070796,
+        "atMs": 1794488587132,
         "details": {
           "beforeCount": 1,
           "beforeWindows": {
@@ -223,7 +223,7 @@
   "writeGuard": "identity-changed",
   "yRecovery": {
     "attemptKey": "000000000000000000000000000000000000000000000000000000000000002a",
-    "bindingRevision": "6",
+    "bindingRevision": "7",
     "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
     "evidence": {
       "canonicalAccountKey": "c2c848bec210db2109eb18957824d5ba824e3346b6e9d5e2ae54f1156f7dd21f",
@@ -246,11 +246,11 @@
           "attemptOrder": "2"
         }
       ],
-      "revision": "10"
+      "revision": "12"
     },
     "history": [
       {
-        "atMs": 1794460070791,
+        "atMs": 1794488587112,
         "details": {
           "beforeCount": 1,
           "callerHash": "25bf8e1a2393f1108d37029b3df5593236c755742ec93465bbafa9b290bddcf6",
@@ -266,7 +266,7 @@
         "targetHash": "f99e2db9b9b5a5fda7f00b20c60e8ef6cac36cd68e500920c9946d7a54791d7b"
       },
       {
-        "atMs": 1794460070796,
+        "atMs": 1794488587132,
         "details": {
           "beforeCount": 1,
           "beforeWindows": {
