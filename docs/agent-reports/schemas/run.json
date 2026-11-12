@@ -444,8 +444,8 @@
       "type": "number"
     },
     "writer": {
-      "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-closure-lead. AAC fills its machine allowlist from the packaged computer registry when publishing.",
-      "pattern": "^(?!.*--)[a-z0-9][a-z0-9-]*\\.[a-z0-9][a-z0-9.-]{0,62}$",
+      "description": "Writer id: <machine>.<pm-mail name>, e.g. vm.pm-closure-lead.",
+      "pattern": "^(?!.*--)(vm|mac|windows|nas1)\\.[a-z0-9][a-z0-9.-]{0,62}$",
       "type": "string"
     },
     "writtenAt": {

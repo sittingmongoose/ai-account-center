@@ -16,6 +16,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
       'scripts/agent-usage',
       'docs/agent-reports/schemas',
       'native/aac-status/src',
+      'web-dashboard/leptos',
     ]) {
       fs.cpSync(path.join(root, folder), path.join(fixture, folder), { recursive: true });
     }
@@ -23,6 +24,14 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     fs.copyFileSync(
       path.join(root, 'scripts/build-status-native.js'),
       path.join(fixture, 'scripts/build-status-native.js')
+    );
+    fs.copyFileSync(
+      path.join(root, 'scripts/build-ui.js'),
+      path.join(fixture, 'scripts/build-ui.js')
+    );
+    fs.copyFileSync(
+      path.join(root, 'scripts/ui-build-lock.js'),
+      path.join(fixture, 'scripts/ui-build-lock.js')
     );
     for (const name of ['Cargo.toml', 'Cargo.lock', 'build.rs', 'rust-toolchain.toml'])
       fs.copyFileSync(
@@ -50,9 +59,13 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     expect(hosts.helperPlatform('future')).toBe('ubuntu');
     expect(hosts.sourceComputer({ platform: 'ubuntu', sshHost: 'future-linux' })).toBe('future');
     const buildStatus = await load('scripts/build-status-native.js');
+    const buildUi = await load('scripts/build-ui.js');
+    const leptosCrate = path.join(fixture, 'web-dashboard/leptos');
+    const beforeLeptos = buildUi.leptosFingerprint(leptosCrate).sha256;
     const beforeHash = buildStatus.sourceHash();
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8') + '\n');
     expect(buildStatus.sourceHash()).not.toBe(beforeHash);
+    expect(buildUi.leptosFingerprint(leptosCrate).sha256).not.toBe(beforeLeptos);
     const activity = await load('src/web-server/services/account-analytics-activity.ts');
     expect(
       activity

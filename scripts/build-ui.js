@@ -216,11 +216,22 @@ function assertLockedLeptos(lock) {
   }
 }
 
-/** Fingerprint the Leptos pages' inputs (web-dashboard/leptos), the same way as the Slint crate's. */
+/** Fingerprint the Leptos pages and their shared computer registry, with the Slint crate's link guards. */
 function leptosFingerprint(leptosCrate) {
+  // Validate the crate itself before widening the root to include the shared registry.
+  const inputs = [
+    '.cargo/config.toml',
+    'Cargo.toml',
+    'Cargo.lock',
+    'index.html',
+    'build',
+    'src',
+    'style',
+  ];
+  fingerprintInputs(leptosCrate, inputs, 'Leptos');
   return fingerprintInputs(
-    leptosCrate,
-    ['.cargo/config.toml', 'Cargo.toml', 'Cargo.lock', 'index.html', 'build', 'src', 'style'],
+    path.dirname(leptosCrate),
+    [...inputs.map((input) => `${path.basename(leptosCrate)}/${input}`), 'public/computers.json'],
     'Leptos'
   );
 }
