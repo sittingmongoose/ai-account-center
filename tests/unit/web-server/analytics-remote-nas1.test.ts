@@ -200,7 +200,7 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
     expect([...destinations.keys()].sort()).toEqual(Object.values(SSH_ALIASES).sort());
     // Nas1 never takes a launcher's alias, and gets the POSIX command, not the Windows one.
     expect(destinations.get('nas1-agent')).toBe(analyticsHelperCommand('nas1'));
-    expect(destinations.get('jared-mac')).toBe(analyticsHelperCommand('mac'));
-    expect(destinations.get('jared-windows')).toBe(analyticsHelperCommand('windows'));
+    expect(destinations.get(SSH_ALIASES.mac)).toBe(analyticsHelperCommand('mac'));
+    expect(destinations.get(SSH_ALIASES.windows)).toBe(analyticsHelperCommand('windows'));
   });
 });

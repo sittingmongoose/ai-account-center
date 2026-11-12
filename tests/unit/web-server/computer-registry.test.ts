@@ -61,7 +61,7 @@ describe('package-owned computer registry', () => {
       sshHost: 'alexis-windows',
     });
     expect(sourceHost({ platform: 'windows', sshHost: 'alexis-windows' })).toBe('alexis');
-    expect(sourceHost({ platform: 'windows', sshHost: 'jared-windows' })).toBe('windows');
+    expect(sourceHost({ platform: 'windows', sshHost: SSH_ALIASES.windows })).toBe('windows');
     expect(
       parseMuseUsagePeer({
         host: 'alexis',
@@ -70,7 +70,7 @@ describe('package-owned computer registry', () => {
     ).toBe('alexis');
   });
   it('maps agent-report and known Alexis hostnames before the generic PC fallback', () => {
-    for (const name of ['alexis', 'alexis-windows', 'AlexisGamingPC', '192.168.50.31'])
+    for (const name of ['alexis', 'alexis-windows', 'AlexisGamingPC'])
       expect(registryMachine(name, null)).toBe('alexis');
     expect(localComputer('AlexisGamingPC', 'win32')).toBe('alexis');
     expect(isWriterName('alexis.fixture')).toBe(true);
@@ -89,7 +89,7 @@ describe('package-owned computer registry', () => {
     for (const [platform, sshHost, host] of [
       ['windows', 'alexis-windows', 'alexis'],
       ['ubuntu', 'nas1-agent', 'nas1'],
-      ['windows', 'jared-windows', 'windows'],
+      ['windows', SSH_ALIASES.windows, 'windows'],
     ] as const) {
       const manifest = parseSourceManifest(
         JSON.stringify({ version: 1, sources: [{ provider: 'cursor', platform, sshHost }] })

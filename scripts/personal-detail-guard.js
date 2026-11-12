@@ -47,7 +47,7 @@ const ALLOWED = {
   'scripts/claude-history/history_index_remote_v2.py': {
     '0fbcceaae1977bab1d7be30549247fecd78a75b3574d015eb097bcce71fd9f08': 5,
   },
-  'src/web-server/services/app-update-hosts.ts': {
+  'web-dashboard/public/computers.json': {
     '27d300fe53b3b94f115cfd63be02d868bcb8f755e56893709418084c1bfab1cd': 2,
   },
 };
