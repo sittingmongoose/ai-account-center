@@ -129,7 +129,7 @@ def update_antigravity_acp(install, deadline=None, progress=None):
                 while state["phase"] not in ("succeeded", "failed", "cancelled"):
                     state = checked_state(next(states))
                     if state.get("operationId") != operation or state["version"] != pin:
-                        raise UpdateFailure("t3_install_failed:operation_changed")
+                        raise UpdateFailure("t3_install_state_unknown")
             if state["phase"] != "succeeded":
                 # Server messages can contain local paths or credentials.
                 # Emit only a fixed reason, never arbitrary diagnostic text.

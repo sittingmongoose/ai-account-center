@@ -216,6 +216,8 @@ class AcpTests(Fixtures):
                                           {"driver": "antigravity", "instanceId": "agy-custom-id", "setup": {"canInstall": True}}]}
                 owner.assertEqual(payload, {"instanceId": "agy-custom-id"})
                 self.started = True
+                if failure == "ambiguous":
+                    raise OSError(owner.TOKEN)
                 return {**state, "phase": "downloading"}
             def request(self, method, payload):
                 owner.calls.append((method, payload))
@@ -269,7 +271,8 @@ class AcpTests(Fixtures):
         self.assertEqual([issue[i + 1] for i, arg in enumerate(issue) if arg == "--scope"],
                          ["providers:manage", "orchestration:read"])
         ttl = issue[issue.index("--ttl") + 1]
-        self.assertEqual(ttl, "60s")
+        self.assertGreater(float(ttl[:-1]), 0)
+        self.assertLessEqual(float(ttl[:-1]), 900)
         self.assertNotIn(self.TOKEN, str(self.auth))
 
     def test_success_all_platforms_t3_is_the_only_pointer_writer(self):
@@ -290,7 +293,7 @@ class AcpTests(Fixtures):
                     self.assertEqual(len(self.connections), 1)
                 finally: self.stack = original
 
-    def test_renewed_subscription_checks_original_operation_and_never_restarts(self):
+    def test_reconnected_subscription_checks_original_operation_and_never_restarts(self):
         import app_update_t3_rpc as rpc
         for changed in (False, True):
             with self.subTest(changed=changed), contextlib.ExitStack() as nested:
@@ -322,10 +325,10 @@ class AcpTests(Fixtures):
                     nested.enter_context(mock.patch.object(rpc, "Rpc", RenewingClient))
                     nested.enter_context(mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]))
                     row = self.run_update(install)
-                    self.assertEqual(row["messageCode"], "t3_install_failed:operation_changed" if changed else "antigravity_acp_updated")
+                    self.assertEqual(row["messageCode"], "t3_install_state_unknown" if changed else "antigravity_acp_updated")
                     self.assertEqual(len(connections), 2)
                     self.assertEqual(sum(method == "provider.install.start" for method, _ in self.calls), 1)
-                    self.assertEqual(sum("revoke" in argv for argv in self.auth), 2)
+                    self.assertEqual(sum("revoke" in argv for argv in self.auth), 1)
                 finally:
                     self.stack = original
 
@@ -357,7 +360,8 @@ class AcpTests(Fixtures):
         self.assert_revoked()
 
     def test_failures_never_write_pointer_or_leak_token_and_always_revoke(self):
-        for failure, phase, code in [(None, "failed", "t3_install_failed:installer"),
+        for failure, phase, code in [("ambiguous", "succeeded", "t3_install_state_unknown"),
+                                      (None, "failed", "t3_install_failed:installer"),
                                       (None, "cancelled", "t3_install_failed:cancelled"),
                                       ("timeout", "succeeded", "t3_install_timeout"),
                                       ("unreachable", "succeeded", "t3_unreachable"),
@@ -374,6 +378,18 @@ class AcpTests(Fixtures):
                     self.assertEqual((install.path / "active.json").read_bytes(), pointer)
                     self.assert_revoked()
                 finally: self.stack = original
+
+    def test_failed_revoke_is_reported_in_the_row_without_token(self):
+        import app_update_t3_rpc as rpc
+        install, _ = self.old_acp("windows")
+        self.fake_t3(install)
+        clock = [100]
+        with mock.patch.object(rpc, "revoke_session", return_value=False), mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]), mock.patch.object(rpc.time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            row = self.run_update(install)
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(row["messageCode"], "t3_session_revoke_failed")
+        self.assertNotIn(self.TOKEN, json.dumps(row))
+        rpc._known_sessions.clear()
 
     def test_auth_issue_failure_has_no_token_to_revoke(self):
         install, _ = self.old_acp("windows")

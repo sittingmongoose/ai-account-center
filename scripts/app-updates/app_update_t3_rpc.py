@@ -90,20 +90,16 @@ def auth_command(cli, base, args, timeout=30):
                    capture=True, kill_tree=True)
 
 
-# T3 ab8e488e closes live bearer sockets on expiry (SessionStore.ts:1043-1097).
-# 60s bounds crash exposure; rotate at 30s, leaving 30s for local CLI startup
-# and the loopback handshake. The overall install deadline still caps every step.
-SESSION_TTL = 60
-RENEW_AFTER = 30
+# One credential covers the whole run. Hard kills rely on the accepted 15m TTL.
+SESSION_TTL = 900
 REVOKE_TIMEOUT = 1.0
-ROTATION_REVOKE_TIMEOUT = 5.0
-START_MARGIN = 10.0
+FINAL_REVOKE_TIMEOUT = 5.0
 # Memory only. Signals read a snapshot without acquiring a worker-owned lock.
 _known_sessions = {}
 _terminating = False
 
 
-def revoke_session(cli, base, session_id, timeout=ROTATION_REVOKE_TIMEOUT):
+def revoke_session(cli, base, session_id, timeout=FINAL_REVOKE_TIMEOUT):
     """Best effort, no diagnostics, and no common.command's 5s cleanup wait."""
     process = None
     try:
@@ -123,22 +119,17 @@ def revoke_session(cli, base, session_id, timeout=ROTATION_REVOKE_TIMEOUT):
             # Never wait here: the signal handler must exit within the grace.
 
 
-def retire_session(cli, base, session_id, expires):
-    """Keep failed revokes visible to signals; retry even after RPC cleanup."""
-    def attempt():
-        budget = expires - time.monotonic()
-        if budget <= 0 or revoke_session(cli, base, session_id, min(ROTATION_REVOKE_TIMEOUT, budget)):
+def retire_session(cli, base, session_id):
+    """Confirm revocation within one shared budget; no background worker."""
+    end = time.monotonic() + FINAL_REVOKE_TIMEOUT
+    while True:
+        budget = end - time.monotonic()
+        if budget <= 0:
+            raise UpdateFailure("t3_session_revoke_failed")
+        if revoke_session(cli, base, session_id, budget):
             _known_sessions.pop(session_id, None)
-            return True
-        return False
-
-    if not attempt():
-        def retry():
-            while session_id in _known_sessions:
-                time.sleep(2)
-                if attempt():
-                    return
-        threading.Thread(target=retry, daemon=True).start()
+            return
+        time.sleep(min(0.1, max(0, end - time.monotonic())))
 
 
 def terminate(signum, frame=None):
@@ -179,24 +170,19 @@ def session_signals():
 
 
 @contextlib.contextmanager
-def bearer(cli, base, deadline, lifetime=None):
-    """A killed issuer or helper leaves at most a 60s bearer, with no files."""
+def bearer(cli, base, deadline):
+    """Issue once successfully; retry bounded CLI failures without renewal."""
     session_id = None
-    expires = time.monotonic() + SESSION_TTL
     try:
         try:
             backoff = 1
             while True:
-                started = time.monotonic()
+                ttl = remaining(deadline, SESSION_TTL)
                 try:
                     reply = auth_command(cli, base, [
                         "issue", "--scope", "providers:manage", "--scope", "orchestration:read",
-                        "--ttl", str(SESSION_TTL) + "s", "--label", "aac-acp", "--json",
+                        "--ttl", str(ttl) + "s", "--label", "aac-acp", "--json",
                     ], remaining(deadline, max(30, backoff * 15)))
-                    # Conservative: T3 cannot issue before the CLI was started.
-                    expires = time.monotonic() + SESSION_TTL
-                    if lifetime is not None:
-                        lifetime["expires"] = started + SESSION_TTL
                     issued = json.loads(reply)
                     break
                 except (UpdateFailure, OSError):
@@ -215,77 +201,53 @@ def bearer(cli, base, deadline, lifetime=None):
         yield token
     finally:
         if session_id:
-            retire_session(cli, base, session_id, expires)
+            retire_session(cli, base, session_id)
 
 
 class InstallRpc:
-    """Renew bearer connections; only subscriptions may be replayed, never start."""
+    """One session; reconnect subscriptions with the same bearer, never start twice."""
 
     def __init__(self, cli, base, origin, deadline):
-        self.cli, self.base, self.origin, self.deadline = cli, base, origin, deadline
+        self.cli, self.base, self.origin = cli, base, origin
+        self.deadline = min(deadline, time.monotonic() + SESSION_TTL)
         self.stack = contextlib.ExitStack()
         self.client = None
-        self.issue_seconds = 0
-        self.snapshots = {}
+        self.token = None
+        self.started = False
+
+    def disconnect(self):
+        if self.client is not None:
+            self.client.close()
+            self.client = None
 
     def close(self):
-        self.stack.close()
-        self.client = None
-
-    def due(self):
-        return time.monotonic() >= self.renew_at and time.monotonic() < self.deadline
-
-    def refresh(self, margin=0):
-        if self.client is not None and time.monotonic() + margin < self.renew_at:
-            return
-        remaining(self.deadline)
-        replacement = contextlib.ExitStack()
-        started = time.monotonic()
-        lifetime = {}
         try:
-            token = replacement.enter_context(bearer(self.cli, self.base, self.deadline, lifetime))
-            self.issue_seconds = max(self.issue_seconds, time.monotonic() - started)
-            # Begin renewal early enough for measured CLI startup + handshake.
-            # A slow renewal may cross expiry: the server's work survives it.
-            expires = min(self.deadline, lifetime["expires"])
-            renew_at = min(self.deadline, expires - 2, max(time.monotonic() + 1,
-                min(started + RENEW_AFTER, expires - self.issue_seconds - 12)))
-            client = replacement.enter_context(contextlib.closing(Rpc(self.origin, token, min(renew_at, expires))))
-        except BaseException:
-            replacement.close()
-            raise
-        old = self.stack
-        self.stack, self.client, self.renew_at = replacement, client, renew_at
-        self.expires = expires
-        old.close()
-        if margin and expires - time.monotonic() < margin:
-            raise UpdateFailure("t3_auth_failed")
+            self.disconnect()
+        finally:
+            self.token = None
+            self.stack.close()
+
+    def refresh(self):
+        remaining(self.deadline)
+        if self.token is None:
+            self.token = self.stack.enter_context(bearer(self.cli, self.base, self.deadline))
+        if self.client is None:
+            self.client = Rpc(self.origin, self.token, self.deadline)
 
     def call(self, method, payload):
-        self.refresh(START_MARGIN if method == "provider.install.start" else 0)
+        self.refresh()
         if method == "provider.install.start":
-            # A start reply may cross the renewal point, but never expiry.
-            self.client.deadline = min(self.deadline, self.expires - 2)
+            if self.started:
+                raise UpdateFailure("t3_install_state_unknown")
+            self.started = True
         try:
             return self.client.call(method, payload)
         except (UpdateFailure, OSError) as error:
-            if method != "provider.install.start" or not self.recoverable(error):
-                raise
-            instance = payload["instanceId"]
-            previous = self.snapshots.get(instance, {})
-            self.renew_at = 0
-            # Never replay start. SubscriptionRef immediately supplies the
-            # current state, even when installation completed while offline.
-            with contextlib.closing(self.subscribe(instance)) as states:
-                for state in states:
-                    if (state.get("operationId") and
-                            (state.get("operationId") != previous.get("operationId") or
-                             previous.get("phase") in ("downloading", "extracting", "verifying"))):
-                        return state
-            raise UpdateFailure("t3_install_failed:operation_changed")
-        finally:
-            if self.client is not None:
-                self.client.deadline = self.renew_at
+            if method == "provider.install.start" and self.recoverable(error):
+                # T3 generates the ID server-side and exposes only an instance
+                # snapshot. No request key ties a lost reply to that snapshot.
+                raise UpdateFailure("t3_install_state_unknown") from None
+            raise
 
     @staticmethod
     def recoverable(error):
@@ -294,36 +256,23 @@ class InstallRpc:
     def subscribe(self, instance):
         backoff = 1
         while True:
+            client, identifier = None, None
             try:
                 self.refresh()
+                client = self.client
+                identifier = client.request("provider.install.subscribe", {"instanceId": instance})
+                yield from client.receive(identifier)
+                return
             except (UpdateFailure, OSError) as error:
                 if not self.recoverable(error):
                     raise
+                self.disconnect()
                 time.sleep(remaining(self.deadline, backoff))
                 backoff = min(8, backoff * 2)
-                continue
-            client = self.client
-            identifier = None
-            try:
-                identifier = client.request("provider.install.subscribe", {"instanceId": instance})
-                for state in client.receive(identifier):
-                    if self.due():
-                        break
-                    if isinstance(state, dict):
-                        self.snapshots[instance] = state
-                    yield state
-                else:
-                    return
-            except (UpdateFailure, OSError) as error:
-                if not self.recoverable(error):
-                    raise
-                self.renew_at = 0
             finally:
-                if identifier is not None:
+                if identifier is not None and client is self.client:
                     with contextlib.suppress(UpdateFailure, OSError):
                         client.send({"_tag": "Interrupt", "requestId": identifier, "interruptors": []})
-            # Resubscribe to this instance's snapshot; the caller checks the
-            # original operationId/version on every state, including renewals.
 
 
 class Rpc:

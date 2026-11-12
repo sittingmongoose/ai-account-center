@@ -22,74 +22,57 @@ Verified against T3 commit `ab8e488e10d883fa880b0ddcf01917b51839ab07`:
   Following a successor requires a DPoP proof key; issuing another ordinary
   bearer does not extend the original socket.
 
-Thus an authenticated AAC socket cannot safely outlive its token. Renewal
-requires a new connection.
+## Session lifetime
 
-## Lifetime and renewal
+Jared, 2026-11-12 21:23Z, relayed by pm7-build: "Yes, accept 15 minutes (Recommended)".
 
-Each `t3 auth session issue` receives `--ttl 60s` and only `providers:manage`
-and `orchestration:read`. Rotation normally starts 30 seconds after issuance
-starts. Measured issuance duration advances renewal to reserve startup time
-plus 12 seconds for handshake and scheduling. Issue timeouts start at 30 seconds
-and increase on retries; exponential backoff caps at eight seconds. The overall
-install deadline caps every attempt and wait.
+One successful session issuance covers the remaining overall run deadline,
+capped at 900 seconds (15 minutes). Scopes remain `providers:manage` and
+`orchestration:read`. There is no rotation, renewal or overlapping credential.
+Issue timeouts start at 30 seconds and grow on retry, bounded by the remaining
+deadline; exponential backoff caps at eight seconds. A lost issuance reply can
+leave an unknown session valid until its TTL; retries never renew a known token.
 
-AAC issues and connects the replacement before closing the previous socket.
-If renewal crosses expiry, T3 keeps installing and AAC reconnects to recover
-the subscription. Normal revocation checks CLI success with a five-second
-budget. Failures remain in memory and retry every two seconds until revoked
-or expired, including after RPC cleanup. Signal budgets remain unchanged.
+One connection is used until a transport failure. Reconnection uses the same
+token and resumes `provider.install.subscribe`. Start is sent at most once.
+Every resumed state must match the operation ID returned by start and its pin.
+A different operation reports "Install state unknown, check T3".
 
-Start requires ten seconds of remaining connection lifetime, rotating first
-when needed. Its reply can cross the renewal point but cannot outlive the
-credential. An ambiguous reply recovers through subscription without replaying
-start. The prior completed operation is rejected; a new operation or an already
-running operation is followed.
+## Recovery correlation
+
 [providerInstallation.ts:108-125](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/providerInstallation.ts#L108-L125)
-exposes subscriptions by instance. AAC checks the original operation ID and
-pinned version on every subsequent snapshot, including after reconnect.
-`provider.install.start` is never replayed, even if its reply is lost.
-
+accepts an instance for start and subscription, with no caller correlation key.
 [AntigravityInstallation.ts:707-762](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/AntigravityInstallation.ts#L707-L762)
-returns an existing running operation or creates a new ID and updates state
-before returning. Line 758 forks installation in the service scope.
-[Lines 869-870](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/AntigravityInstallation.ts#L869-L870)
-expose state and SubscriptionRef changes. Subscription by instance needs no
-operation ID and supplies the latest snapshot, including completion while
-disconnected.
-
-A killed helper, a lost issue reply or a failed revoke leaves a credential
-with at most 60 seconds of validity from issuance. No later apply is needed.
-AAC creates no session records or locks and never enumerates old sessions.
-Leftover records from previous versions are ignored, including while T3 is
-stopped. Only the ACP row discovers/authenticates with T3.
+returns an existing running operation at line 711, or generates its ID at line
+718, publishes state at line 730 and returns it at line 760. Subscription exposes
+the latest instance snapshot, which another caller can replace. Thus a lost
+start reply has no provable correlation: AAC fails closed with "Install state
+unknown, check T3". It never adopts that snapshot or repeats start. A received
+start reply supplies the operation ID used for subsequent recovery.
 
 ## Termination and privacy
 
-The main thread handles SIGTERM/SIGINT/SIGHUP on Unix and SIGTERM/SIGINT/
-SIGBREAK on Windows where signal delivery is available. It directly revokes
-the in-memory known session ID with a shared one-second budget, suppresses
-all CLI output, then calls `os._exit`. A two-second watchdog also exits if
-process creation or revocation stalls. Neither path unwinds or joins a pool
-worker. Windows hard termination and Unix SIGKILL rely on the short TTL.
-Normal `finally` cleanup also attempts a bounded revoke.
-The scheduler's main-thread wait wakes at least every 250 milliseconds to
-dispatch Python console signals on Windows while the ACP worker is blocked.
+Finally cleanup confirms CLI revocation with retries within a shared five-second
+budget. If confirmation fails, the row reports `t3_session_revoke_failed`, with
+fixed text explaining the TTL. No background retry threads or joins are used.
+The known session remains available to signal cleanup after a failed revoke.
 
-Tokens remain in memory and the loopback Authorization header. They never
-enter argv, AAC files, logs, exceptions or row output. Private JSON cleanup,
-Mac GUI session-loss reporting, Cursor rows and legacy 40-row views are
-unchanged.
+The main thread handles SIGTERM/SIGINT/SIGHUP on Unix and SIGTERM/SIGINT/SIGBREAK
+on Windows where available. Signals share a one-second revoke budget; a
+two-second exit watchdog covers process-creation stalls. Neither path waits on
+workers. Hard termination relies on the accepted TTL, at most 15 minutes from
+issuance. No future run is required to expire credentials.
+
+Tokens stay in memory and the loopback Authorization header, never argv, AAC
+files, logs, exceptions or row output. Only the ACP row contacts T3; stopped T3
+does not delay other rows. AAC never writes the runtime or `active.json`.
+Desktop-shim discovery, private JSON cleanup, Mac GUI session-loss reporting,
+Cursor rows and the legacy 40-row view retain their offline checks.
 
 ## Offline coverage
 
-The RPC fixtures use a fake auth store and abrupt child-process exits before
-issue, after commit before reply, after reply before registration, during
-connection, after authentication, after start before reply, during subscribe,
-before revoke and after renewal. They verify expiry without any future run,
-renewal revocation, retained operation identity, no start replay, bounded
-signal handling with a blocked executor and a stalled revoke, no credential
-output/files, and eleven normal rows plus one ACP error with stopped T3 and
-legacy leftovers. The ACP fixtures cover one transport for a short install,
-renewal with original-operation verification, T3 as the only runtime writer,
-private JSON cleanup and Mac login-session loss.
+Fixtures cover one issuance across reconnect, a 29-second issuance, deadline
+TTL caps, issuance retry/backoff, confirmed final revocation on success and
+exceptions, bounded failed revocation, operation identity on reconnect,
+unrelated-operation rejection, ambiguous-start failure, abrupt process kills
+and bounded signals with blocked workers. No real T3 calls or live updates.

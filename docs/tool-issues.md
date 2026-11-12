@@ -37,3 +37,12 @@ KeyboardInterrupt in the existing scheduling fixture after Windows portability
 failures. These remain the existing tool-batch items; no new false pass or
 product bug was demonstrated by these checks. The ten other relevant Bun files
 pass (124 tests, three platform skips).
+
+R7 single-session validation on AlexisGamingPC: scoped session/RPC/ACP/scheduler
+Python suites pass (69 tests, two platform skips). Broad discovery still exits
+in the existing Windows-incompatible fixtures. Separate unchanged ZCode tests
+have 44 passes, three errors (Unix platform selection and os.getuid on Windows)
+and one Mac GUI race failure (failed/update_failed instead of quit_first).
+No ZCode implementation or fixture changed in R7. These join the existing
+Windows portability batch. Bun update checks have 133 passes, three skips and
+the existing ACL inspection failure; the final contract subset has 37 passes.

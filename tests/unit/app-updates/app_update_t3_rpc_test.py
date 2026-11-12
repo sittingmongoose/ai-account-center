@@ -102,7 +102,7 @@ class FakeAuthStore:
     def command(self, cli, base, args, timeout=30):
         assert args[0] == "issue"
         assert [args[i + 1] for i, v in enumerate(args) if v == "--scope"] == ["providers:manage", "orchestration:read"]
-        ttl = int(args[args.index("--ttl") + 1][:-1])
+        ttl = float(args[args.index("--ttl") + 1][:-1])
         identifier = "session-" + str(len(self.rows) + 1)
         self.rows[identifier] = {"expires": self.now() + ttl, "revoked": False}
         self.events.append(("issue", identifier))
@@ -140,10 +140,12 @@ def crash_fixture(stage, base):
         kill("issue_committed_before_reply")
         return reply
 
+    connections = []
     class Client:
         def __init__(self, origin, token, deadline):
             kill("connect")
-            self.number = len(store.rows)
+            connections.append(self)
+            self.number = len(connections)
         def close(self): pass
         def send(self, value): pass
         def call(self, method, payload):
@@ -156,7 +158,7 @@ def crash_fixture(stage, base):
             if self.number == 1:
                 clock[0] = 130
                 raise TimeoutError()
-            kill("renewed_subscription")
+            kill("reconnected_subscription")
             yield {"operationId": "operation"}
 
     original_loads = json.loads
@@ -232,7 +234,7 @@ class AuthTests(unittest.TestCase):
         with mock.patch.object(rpc, "auth_command", side_effect=store.command) as auth, mock.patch.object(rpc, "revoke_session", side_effect=store.revoke), mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]):
             with rpc.bearer(["fake"], self.base, 10000) as token:
                 self.assertEqual(token, TOKEN)
-                self.assertEqual(store.rows["session-1"]["expires"], 160)
+                self.assertEqual(store.rows["session-1"]["expires"], 1000)
                 self.assertEqual(set(rpc._known_sessions), {"session-1"})
                 self.assertFalse(list(self.base.rglob("*")))
             self.assertEqual(rpc._known_sessions, {})
@@ -240,7 +242,7 @@ class AuthTests(unittest.TestCase):
         self.assertNotIn(TOKEN, str(auth.call_args_list))
 
     def test_actual_kill_at_each_stage_needs_no_future_run_to_expire(self):
-        stages = ("before_issue", "issue_committed_before_reply", "reply_before_registration", "connect", "authenticated", "start_committed_before_reply", "subscribe", "before_revoke", "renewed_subscription")
+        stages = ("before_issue", "issue_committed_before_reply", "reply_before_registration", "connect", "authenticated", "start_committed_before_reply", "subscribe", "before_revoke", "reconnected_subscription")
         script = "import pathlib,sys; sys.path.insert(0,sys.argv[1]); from app_update_t3_rpc_test import crash_fixture; crash_fixture(sys.argv[2],pathlib.Path(sys.argv[3]))"
         for stage in stages:
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
@@ -251,49 +253,10 @@ class AuthTests(unittest.TestCase):
                     if path.is_file(): self.assertNotIn(TOKEN.encode(), path.read_bytes())
                 path = pathlib.Path(temporary) / "fake-t3-auth-store.json"
                 rows = json.loads(path.read_text()) if path.exists() else {}
-                kill_time = 130 if stage in ("before_revoke", "renewed_subscription") else 100
+                kill_time = 130 if stage in ("before_revoke", "reconnected_subscription") else 100
                 for row in rows.values():
-                    self.assertLessEqual(row["expires"], kill_time + 60)
-                    self.assertFalse(not row["revoked"] and kill_time + 60 < row["expires"])
-
-    def test_renewal_revokes_old_session_and_resubscribes_without_restarting_install(self):
-        import app_update_antigravity as acp
-        clock = [100]
-        store = FakeAuthStore(lambda: clock[0])
-        calls, connections = [], []
-        owner = self
-        class Client:
-            def __init__(self, origin, token, deadline):
-                self.identifier = list(store.rows)[-1]
-                self.deadline = deadline
-                connections.append(self)
-            def close(self): calls.append(("close", self.identifier))
-            def send(self, value): pass
-            def call(self, method, payload):
-                calls.append((method, self.identifier))
-                return {"operationId": "op"}
-            def request(self, method, payload):
-                owner.assertEqual(payload, {"instanceId": "agy"})
-                owner.assertTrue(store.valid(self.identifier, clock[0]))
-                calls.append((method, self.identifier))
-                return "subscription"
-            def receive(self, identifier):
-                if self.identifier == "session-1":
-                    clock[0] = self.deadline
-                    raise TimeoutError()
-                yield {"operationId": "op", "phase": "succeeded"}
-        with mock.patch.object(rpc, "auth_command", side_effect=store.command), mock.patch.object(rpc, "revoke_session", side_effect=store.revoke), mock.patch.object(rpc, "Rpc", Client), mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]):
-            with contextlib.closing(rpc.InstallRpc(["fake"], self.base, None, 1000)) as client:
-                client.call("provider.install.start", {})
-                with contextlib.closing(acp.install_state(client, "agy")) as states:
-                    self.assertEqual(next(states), {"operationId": "op", "phase": "succeeded"})
-                self.assertEqual(store.events, [("issue", "session-1"), ("issue", "session-2"), ("revoke", "session-1")])
-            self.assertTrue(all(row["revoked"] for row in store.rows.values()))
-        self.assertEqual(len(connections), 2)
-        self.assertEqual(sum(method == "provider.install.start" for method, _ in calls), 1)
-        self.assertEqual(sum(method == "provider.install.subscribe" for method, _ in calls), 2)
-        self.assertEqual(connections[0].deadline, 130)
-        self.assertEqual(connections[1].deadline, 160)
+                    self.assertLessEqual(row["expires"], kill_time + 900)
+                    self.assertFalse(not row["revoked"] and kill_time + 900 < row["expires"])
 
     def test_issuance_errors_are_sanitized_and_never_enumerate_or_recover(self):
         for reply in (TOKEN, json.dumps({"sessionId": "known", "token": "\r" + TOKEN})):
@@ -313,7 +276,7 @@ class AuthTests(unittest.TestCase):
                     with rpc.bearer(["fake"], self.base, time.monotonic() + 90):
                         if failure: raise failure
                 except BaseException as error: self.assertIs(error, failure)
-                revoke.assert_called_once_with(["fake"], self.base, "session", rpc.ROTATION_REVOKE_TIMEOUT)
+                revoke.assert_called_once_with(["fake"], self.base, "session", mock.ANY)
 
     def test_revoke_timeout_never_uses_common_cleanup_or_waits_again(self):
         process = mock.Mock()
@@ -343,7 +306,7 @@ class AuthTests(unittest.TestCase):
                         future = pool.submit(worker)
                         self.assertTrue(entered.wait(2))
                         threads = []
-                        revoke.side_effect = lambda *a: threads.append(threading.current_thread())
+                        revoke.side_effect = lambda *a: (threads.append(threading.current_thread()), True)[1]
                         start = time.monotonic()
                         with self.assertRaises(SystemExit): rpc.terminate(signum)
                         self.assertLess(time.monotonic() - start, 2)
