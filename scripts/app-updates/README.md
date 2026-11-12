@@ -136,19 +136,27 @@ reconciliation or repair writes. It verifies the completed active runtime is at
 least the server pin before reporting `updated`. Existing sessions retain their
 runtime; AAC restarts no processes and removes no versions.
 
-The session lasts at most 20 minutes, has only `providers:manage` and
+The session lasts at most 15 minutes, bounded by the remaining run deadline,
+has only `providers:manage` and
 `orchestration:read`, and is revoked in `finally`, including failures and
 cancellation. CLI stdout and the bearer stay in memory; they never enter logs,
 row data, argv or AAC files. If issue committed but failed to return its session
 ID, cleanup lists sessions by this run's unique label and revokes only matches.
-Revocation failure reports `t3_auth_failed`, even if installation completed.
+Revocation failure reports `failed` / `t3_session_revoke_failed`, even if
+installation completed.
+There is one session per run, with no rotation or renewal.
 There is no saved AAC credential or auth bypass.
 
 The install observation timeout is 15 minutes, bounded by the host deadline.
 Timeout does not cancel an operation which T3 or another client may own. T3 may
 continue installing. `t3_install_timeout` says so. A missing/unreachable CLI or
-server returns `action_required` / `t3_unreachable`; failed session issue,
-authorization or revocation returns `action_required` / `t3_auth_failed`.
+server returns `action_required` / `t3_unreachable`; failed session issue or
+authorization returns `action_required` / `t3_auth_failed`.
+Unconfirmed revocation returns `failed` / `t3_session_revoke_failed`.
+Ambiguous issuance returns `failed` / `t3_session_issue_unknown`. Failure to
+protect the issuer returns `failed` / `t3_issuer_protection_failed` before T3
+starts. Issuer lifetime guarantees and OS residuals are recorded in
+[the session design](../../docs/app-update-short-sessions.md#issuer-lifetime-r9).
 Other failures use `t3_install_failed:<fixed reason>`; raw server diagnostics
 are never included. No fallback activates or stages a runtime.
 
@@ -164,7 +172,7 @@ folders, development servers and non-loopback endpoints fail closed.
 | Linux and Mac service CLI | Existing AAC `runtime_install()` resolves `~/.local/bin/t3` into `~/.t3/runtime/versions/<v>/t3`, or selects the latest valid runtime binary. AAC passes `--base-dir ~/.t3` for issue, list and revoke. |
 | Windows bundled CLI | Desktop writes `~/.t3/bin/t3.cmd`. Its official invocation sets `ELECTRON_RUN_AS_NODE=1` and runs the Desktop executable with the bundled server entry. AAC invokes that pair directly: `%LOCALAPPDATA%/Programs/t3code/T3 Code (Nightly).exe` and `resources/server.asar/apps/server/dist/bin.mjs`. See [DesktopCliShim.ts:36](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopCliShim.ts#L36), [launcherPath:127](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopCliShim.ts#L127), and [DesktopEnvironment.ts:167](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopEnvironment.ts#L167). No separate Windows binary is needed. |
 | Endpoint and port, all OSes | `~/.t3/userdata/server-runtime.json` holds `origin` and `port`. AAC accepts HTTP loopback origins only, checks matching port, and never guesses a default or connects to a remote host. See [config.ts:143](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/config.ts#L143), [serverRuntimeState.ts:13](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/serverRuntimeState.ts#L13), and T3's own [thread CLI:210](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/thread.ts#L210). Desktop's default is also `~/.t3`; see [DesktopStatePaths.ts:14](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopStatePaths.ts#L14). |
-| Scoped auth | `auth session issue --scope providers:manage --scope orchestration:read --ttl 20m --label <unique> --json`; the actual flag is repeatable **`--scope`**, not `--scopes`. Auth commands access T3's local control plane, not an unauthenticated token-issuing HTTP endpoint. See [auth.ts:157](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/auth.ts#L157), [authScopes.ts:5](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/authScopes.ts#L5), [EnvironmentAuth.ts:1084](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/auth/EnvironmentAuth.ts#L1084). Revoke is [auth.ts:210](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/auth.ts#L210). |
+| Scoped auth | `auth session issue --scope providers:manage --scope orchestration:read --ttl 900s --label <unique> --json`; the actual flag is repeatable **`--scope`**, not `--scopes`. Auth commands access T3's local control plane, not an unauthenticated token-issuing HTTP endpoint. See [auth.ts:157](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/auth.ts#L157), [authScopes.ts:5](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/authScopes.ts#L5), [EnvironmentAuth.ts:1084](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/auth/EnvironmentAuth.ts#L1084). Revoke is [auth.ts:210](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/auth.ts#L210). |
 | RPC wire and scopes | `/ws?orchestrationProtocol=2` accepts bearer authorization and Effect 4 JSON Request/Exit/Chunk/Ack frames. See [ws.ts:3347](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/ws.ts#L3347), [EnvironmentAuth.ts:1243](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/auth/EnvironmentAuth.ts#L1243), [rpc.ts:447](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/packages/contracts/src/rpc.ts#L447), and [RpcAuthorization.ts:82](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/auth/RpcAuthorization.ts#L82). Start/cancel require `providers:manage`; subscribe and config require `orchestration:read`. |
 | Install input and ownership | Config supplies the Antigravity instance ID; no hardcoded account/provider ID is used. The UI constructs this same input in [ProviderSetupSection.tsx:108](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/web/src/components/settings/ProviderSetupSection.tsx#L108). `{instanceId}` is [ProviderSetupInput:14](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/packages/contracts/src/providerSetup.ts#L14). Routing is [ws.ts:2532](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/ws.ts#L2532); [providerInstallation.ts:122](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/providerInstallation.ts#L122) selects the managed installer. Only T3's [AntigravityInstallation.ts:450](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/AntigravityInstallation.ts#L450) activates. |
 
@@ -383,7 +391,7 @@ wait until the completed job's scheduled Ubuntu restart has finished; inspect
 work that must survive a T3 restart is in progress. For Nas1 (inventory there
 runs with `--platform ubuntu`) confirm its twelve rows, that a T3 update there
 scheduled the restart of Nas1's own `t3code.service`, that
-`~/.ccs/app-updates/` on Nas1 holds the 17 synced helper files, and that Nas1
+`~/.ccs/app-updates/` on Nas1 holds the 18 synced helper files, and that Nas1
 has no AI Account Center package, command or service and no `~/.ccs` content
 beyond `app-updates/`.
 
@@ -952,7 +960,7 @@ registered.
 Remote sync uses the host's existing Python (`/usr/bin/python3` on Mac/Nas1,
 `python.exe` through encoded PowerShell on Windows). It extracts into a private
 sibling staging folder, rejects unexpected/duplicate/non-file archive entries,
-and verifies all 17 SHA256 checksums before publishing an immutable `helpers-*`
+and verifies all 18 SHA256 checksums before publishing an immutable `helpers-*`
 generation. Only the small `app_updates.py` launcher is atomically replaced;
 state directories, locks, results and restart markers stay in place. Existing
 runs keep their old generation. The hash query follows the selected generation.
@@ -1036,7 +1044,7 @@ three. It follows the Ubuntu rows of this guide except where noted here.
   `--state-dir` nor `--dashboard-job`; those belong to the dashboard's own
   Ubuntu run.
 - **Helper sync.** The Python hash query and verified generation publish above
-  keep `~/.ccs/app-updates` private, with 17 files in each helper generation: the 16 source helpers and the
+  keep `~/.ccs/app-updates` private, with 18 files in each helper generation: the 17 source helpers and the
   generated Codex runtime below.
 - **Codex runtime.** Nas1 has no AI Account Center, so its Codex bridge loads
   the bundled `app_update_codex_runtime.cjs` that the sync ships beside the
@@ -1122,7 +1130,7 @@ catalog-failure wording in that file only. The expanded companion retains the
 accurate message. Older readers can restore both running and completed jobs;
 an old reader's later save invalidates the stale companion by digest. Existing
 jobs keep their saved expected count instead of gaining invented rows. Helpers
-sync four additional modules (17 total files); the launcher/generation protocol
+sync the expanded helper set (18 total files); the launcher/generation protocol
 is unchanged.
 
 ### T3 ACP CLI discovery and temporary sessions

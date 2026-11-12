@@ -54,3 +54,14 @@ and tests (52 passes, four failures). No real false pass or new product bug was
 demonstrated; retain these in the Windows portability tool batch. Broad Python
 discovery again ends in existing Windows-incompatible T3 fixtures without a
 completed summary. Scoped issuance/RPC/ACP tests pass separately.
+
+R9 inherited Windows test-tool issues (not product bugs):
+
+- `computer-registry.test.ts:58` assumes Alexis is a remote host when the test
+  runs on Alexis itself.
+- `integration/computer-registry.test.ts:155` hard-codes `python3`, which Windows
+  does not have.
+
+R9 stopping bar, before review: a tool finding stops work only when demonstrated
+on real inputs to make a real check falsely pass or reveal a product bug.
+Other findings stay in this list for the six-hour tool batch; none are dropped.

@@ -88,8 +88,8 @@ The known session remains available to signal cleanup after a failed revoke.
 The main thread handles SIGTERM/SIGINT/SIGHUP on Unix and SIGTERM/SIGINT/SIGBREAK
 on Windows where available. Signals share a one-second revoke budget; a
 two-second exit watchdog covers process-creation stalls. Neither path waits on
-workers. Hard termination relies on the accepted TTL, at most 15 minutes from
-issuance. No future run is required to expire credentials.
+workers. Hard termination after session persistence relies on the accepted TTL,
+at most 15 minutes from issuance. No future run is required to expire credentials.
 
 ### Accepted residual: a signal during issuance
 
@@ -118,3 +118,40 @@ TTL caps, pre-spawn retry/backoff, committed-timeout nonce cleanup, confirmed fi
 exceptions, bounded failed revocation, operation identity on reconnect,
 unrelated-operation rejection, ambiguous-start failure, abrupt process kills
 and bounded signals with blocked workers. No real T3 calls or live updates.
+
+## Issuer lifetime (R9)
+
+Jared, 2026-11-12 at 23:39Z, relayed by pm7-build, answering the Astra max
+orphaned-issuer finding, verbatim: "1 B" (fix it, then a cheap recheck and
+Astra max only).
+
+The issuer is tracked before spawning a gated Python launcher. The launcher
+cannot execute T3 until the helper releases its stdin gate; helper death before
+release closes the pipe and prevents issuance. Signals kill tracked issuer trees
+before revoking known sessions, within the existing one-second shared budget,
+without waiting on workers. The two-second exit watchdog remains.
+
+On Windows, a noninherited job handle has JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
+The launcher joins the job before gate release; T3 and its descendants inherit
+membership. Helper death closes the last handle even under TerminateProcess.
+Windows 8+ nested jobs are supported without breakaway; restrictive enclosing
+jobs or creation/assignment errors fail closed with failed /
+t3_issuer_protection_failed. T3 is never released unprotected.
+
+On Linux, start_new_session creates a process group, killed on signals. A fresh
+Python interpreter sets PR_SET_PDEATHSIG(SIGKILL), rechecks its parent PID, then
+reads the gate and execs T3. No preexec_fn runs in a threaded parent. Failure to
+set the death signal exits before T3. A hard kill kills the issuer itself;
+descendants are covered by group termination on the signal path, not PDEATHSIG.
+
+### Accepted residual: macOS hard kill during issuer startup
+
+On macOS, a hard kill of the helper after gate release can leave the issuer
+running; it may subsequently create a session that remains valid for up to
+15 minutes from issuance, potentially beyond the original run deadline.
+
+macOS has no parent-death signal. A pipe monitored by a wrapper cannot provide
+an atomic guarantee between observing EOF and T3 persisting a session without
+changing T3's CLI; no such guarantee is claimed. The process group is killed on
+the signal path. This hard-kill residual is separate from the unchanged accepted
+signal-after-save-before-print residual above.

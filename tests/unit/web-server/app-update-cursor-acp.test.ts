@@ -33,6 +33,7 @@ describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
       't3_install_state_unknown',
       't3_session_revoke_failed',
       't3_session_issue_unknown',
+      't3_issuer_protection_failed',
     ] as const) {
       const row = { ...rows[0], status: 'failed', messageCode };
       expect(normalizeAppUpdateRow(row, 'antigravity-acp', 'windows').message).toBe(

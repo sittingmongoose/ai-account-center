@@ -417,6 +417,7 @@ export function normalizeAppUpdateRow(
       code === 't3_install_state_unknown' ||
       code === 't3_session_revoke_failed' ||
       code === 't3_session_issue_unknown' ||
+      code === 't3_issuer_protection_failed' ||
       code.startsWith('t3_install_failed:')) &&
       (appId !== 'antigravity-acp' || row.status !== 'failed')) ||
     (['mac_keychain_locked', 'mac_gui_unavailable', 'mac_gui_cleanup_failed'].includes(code) &&

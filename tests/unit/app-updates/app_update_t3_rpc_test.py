@@ -286,7 +286,7 @@ class AuthTests(unittest.TestCase):
                 rpc.auth_command(["missing"], self.base, ["issue"])
         child = mock.Mock(returncode=1)
         child.communicate.return_value = (b"private fixture", None)
-        with mock.patch.object(rpc.subprocess, "Popen", return_value=child):
+        with mock.patch.object(rpc.Issuer, "start", return_value=child):
             with self.assertRaisesRegex(common.UpdateFailure, "t3_auth_failed"):
                 rpc.auth_command(["fake"], self.base, ["issue"])
 
@@ -483,6 +483,124 @@ class WireTests(unittest.TestCase):
                 with self.assertRaises(common.UpdateFailure) as raised: rpc.Rpc(urllib.parse.urlsplit("http://localhost:4444"), TOKEN, time.monotonic() + 30)
             self.assertEqual(raised.exception.code, code)
             self.assertTrue(sock.closed)
+
+
+class IssuerLifetimeTests(unittest.TestCase):
+    def witness(self, hard=False):
+        # Retained for review; no real T3, stores or credentials.
+        root = pathlib.Path(tempfile.mkdtemp(prefix="aac-issuer-lifetime-"))
+        self.addCleanup(lambda: print("Retained fixture:", root))
+        fixture = root / "issuer.py"
+        fixture.write_text('''import pathlib, sys, os, time, subprocess
+root = pathlib.Path(sys.argv[1])
+if len(sys.argv) < 3 or sys.argv[2] != 'descendant':
+    subprocess.Popen([sys.executable, __file__, str(root), 'descendant'])
+    (root / 'ready').write_text(str(os.getpid()))
+else:
+    (root / 'descendant-ready').write_text(str(os.getpid()))
+time.sleep(3)
+(root / ('descendant-session' if len(sys.argv) > 2 and sys.argv[2] == 'descendant' else 'session')).write_text('committed')
+''', encoding="utf-8")
+        helper = '''import sys, threading, time, pathlib
+sys.path.insert(0, sys.argv[1])
+import app_update_t3_rpc as rpc
+root = pathlib.Path(sys.argv[2])
+signals = rpc.session_signals()
+signals.__enter__()
+sys.stdin.readline()
+def issue():
+    rpc.auth_command([sys.executable, str(root / 'issuer.py'), str(root)], root, ['issue'])
+threading.Thread(target=issue, daemon=True).start()
+sys.stdin.readline()
+rpc.terminate(15)
+'''
+        child = subprocess.Popen([sys.executable, "-B", "-c", helper,
+                                  str(pathlib.Path(rpc.__file__).parent), str(root)],
+                                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        enclosing = rpc.Issuer() if os.name == "nt" else None
+        try:
+            if enclosing:
+                self.assertTrue(enclosing.kernel.AssignProcessToJobObject(enclosing.job, int(child._handle)))
+            child.stdin.write(b"start\n")
+            child.stdin.flush()
+            end = time.monotonic() + 10
+            while not ((root / "ready").exists() and (root / "descendant-ready").exists()):
+                if child.poll() is not None or time.monotonic() > end:
+                    self.fail("fixture did not start")
+                time.sleep(.02)
+            started = time.monotonic()
+            if hard:
+                child.kill()  # TerminateProcess on Windows, SIGKILL on Unix
+            else:
+                if os.name == "nt":
+                    child.stdin.write(b"terminate\n")
+                    child.stdin.flush()
+                else:
+                    os.kill(child.pid, signal.SIGTERM)
+            child.wait(timeout=2.5)
+            self.assertLess(time.monotonic() - started, 1)
+            if os.name == "nt":
+                import ctypes
+                from ctypes import wintypes as w
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+                kernel.OpenProcess.restype = w.HANDLE
+                kernel.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
+                kernel.CloseHandle.argtypes = [w.HANDLE]
+                for name in ("ready", "descendant-ready"):
+                    handle = kernel.OpenProcess(0x100000, False, int((root / name).read_text()))
+                    if handle:
+                        try:
+                            self.assertEqual(kernel.WaitForSingleObject(handle, 500), 0, "issuer tree still running")
+                        finally:
+                            kernel.CloseHandle(handle)
+            time.sleep(3.3)
+            self.assertFalse((root / "session").exists(), "issuer committed after helper exit")
+            # Linux PDEATHSIG protects the issuer itself, not its descendants.
+            if not hard or os.name == "nt":
+                self.assertFalse((root / "descendant-session").exists())
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=3)
+            if enclosing:
+                enclosing.stop()
+
+    def test_signal_during_slow_start_kills_issuer_tree(self):
+        self.witness()
+
+    @unittest.skipUnless(os.name == "nt" or sys.platform.startswith("linux"), "macOS hard-kill residual")
+    def test_hard_kill_during_slow_start_kills_issuer(self):
+        self.witness(hard=True)
+
+    @unittest.skipUnless(os.name == "nt", "Windows job assignment")
+    def test_job_assignment_failure_does_not_release_launcher(self):
+        issuer = rpc.Issuer()
+        try:
+            with mock.patch.object(issuer.kernel, "AssignProcessToJobObject", return_value=0):
+                with self.assertRaisesRegex(common.UpdateFailure, "t3_issuer_protection_failed"):
+                    issuer.start([sys.executable, "-c", "raise Exception('must not start')"])
+            issuer.process.communicate(timeout=3)
+            self.assertNotEqual(issuer.process.returncode, 0)
+        finally:
+            issuer.stop()
+
+    def test_protection_failure_never_retries_issuance(self):
+        with mock.patch.object(rpc, "auth_command", side_effect=common.UpdateFailure("t3_issuer_protection_failed")) as auth:
+            with self.assertRaisesRegex(common.UpdateFailure, "t3_issuer_protection_failed"):
+                with rpc.bearer(["fixture"], pathlib.Path("unused"), time.monotonic() + 900):
+                    self.fail("must fail closed")
+            self.assertEqual(auth.call_count, 1)
+
+    @unittest.skipUnless(os.name == "nt", "Windows job creation")
+    def test_job_creation_failure_never_spawns(self):
+        import ctypes
+        kernel = mock.Mock()
+        kernel.CreateJobObjectW.return_value = 0
+        with mock.patch.object(ctypes, "WinDLL", return_value=kernel), mock.patch.object(rpc.subprocess, "Popen") as spawn:
+            with self.assertRaisesRegex(common.UpdateFailure, "t3_issuer_protection_failed"):
+                rpc.auth_command(["fixture"], pathlib.Path("unused"), ["issue"])
+            spawn.assert_not_called()
 
 
 if __name__ == "__main__": unittest.main()

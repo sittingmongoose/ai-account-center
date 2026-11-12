@@ -14,6 +14,7 @@ import signal
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -85,17 +86,115 @@ def discover(host):
         raise UpdateFailure("t3_unreachable") from None
 
 
+_issuers = {}
+
+# A fresh interpreter is safe with threaded callers (unlike preexec_fn). The
+# gate prevents T3 starting before tracking/job assignment. EOF fails closed.
+_ISSUER_BOOTSTRAP = """
+import os, sys, signal, subprocess
+parent = int(sys.argv[1])
+if sys.platform.startswith('linux'):
+    import ctypes
+    if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+        sys.exit(125)
+    if os.getppid() != parent:
+        sys.exit(125)
+if sys.stdin.buffer.read(1) != b'1':
+    sys.exit(125)
+os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+if os.name == 'nt':
+    sys.exit(subprocess.call(sys.argv[2:]))
+os.execvp(sys.argv[2], sys.argv[2:])
+"""
+
+
+class Issuer:
+    def __init__(self):
+        self.process = None
+        self.job = None
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes as w
+            class Basic(ctypes.Structure):
+                _fields_ = [("process_time", ctypes.c_int64), ("job_time", ctypes.c_int64),
+                            ("flags", w.DWORD), ("min_ws", ctypes.c_size_t),
+                            ("max_ws", ctypes.c_size_t), ("active", w.DWORD),
+                            ("affinity", ctypes.c_size_t), ("priority", w.DWORD),
+                            ("scheduling", w.DWORD)]
+            class Extended(ctypes.Structure):
+                _fields_ = [("basic", Basic), ("io", ctypes.c_uint64 * 6),
+                            ("process_memory", ctypes.c_size_t), ("job_memory", ctypes.c_size_t),
+                            ("peak_process", ctypes.c_size_t), ("peak_job", ctypes.c_size_t)]
+            self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            self.kernel.CreateJobObjectW.restype = w.HANDLE
+            self.kernel.CreateJobObjectW.argtypes = [w.LPVOID, w.LPCWSTR]
+            self.kernel.SetInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, w.LPVOID, w.DWORD]
+            self.kernel.AssignProcessToJobObject.argtypes = [w.HANDLE, w.HANDLE]
+            self.kernel.CloseHandle.argtypes = [w.HANDLE]
+            self.job = self.kernel.CreateJobObjectW(None, None)
+            info = Extended()
+            info.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not self.job or not self.kernel.SetInformationJobObject(self.job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+                self.stop()
+                raise UpdateFailure("t3_issuer_protection_failed")
+
+    def stop(self):
+        if self.job:
+            self.kernel.CloseHandle(self.job)
+            self.job = None
+        elif self.process is not None and os.name != "nt":
+            with contextlib.suppress(OSError):
+                os.killpg(self.process.pid, signal.SIGKILL)
+
+    def start(self, argv):
+        options = {"creationflags": CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+        self.process = subprocess.Popen(
+            [sys.executable, "-B", "-c", _ISSUER_BOOTSTRAP, str(os.getpid()), *argv],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env=environment({"ELECTRON_RUN_AS_NODE": "1"}), **options)
+        if os.name == "nt" and (not self.job or not self.kernel.AssignProcessToJobObject(self.job, int(self.process._handle))):
+            # Nested jobs work on Windows 8+. Restrictive enclosing jobs fail
+            # closed: the launcher has not received permission to start T3.
+            self.process.stdin.close()
+            self.process.stdin = None
+            self.process.kill()
+            raise UpdateFailure("t3_issuer_protection_failed")
+        if _terminating:
+            self.stop()
+            raise UpdateFailure("t3_issuer_protection_failed")
+        self.process.stdin.write(b"1")
+        self.process.stdin.close()
+        self.process.stdin = None
+        return self.process
+
+
 def auth_command(cli, base, args, timeout=30):
     # Keep spawn failure distinct: command() erases this evidence. Once Popen
     # succeeds, every failure is potentially after the session-store commit.
     options = {"creationflags": CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+    issuer = None
     try:
-        process = subprocess.Popen(
-            [*cli, "auth", "session", *args, "--base-dir", str(base)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            env=environment({"ELECTRON_RUN_AS_NODE": "1"}), **options,
-        )
-    except OSError:
+        if args[0] == "issue":
+            issuer = Issuer()
+            _issuers[id(issuer)] = issuer
+            process = issuer.start([*cli, "auth", "session", *args, "--base-dir", str(base)])
+        else:
+            process = subprocess.Popen(
+                [*cli, "auth", "session", *args, "--base-dir", str(base)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                env=environment({"ELECTRON_RUN_AS_NODE": "1"}), **options,
+            )
+    except (OSError, UpdateFailure) as error:
+        if issuer:
+            issuer.stop()
+            _issuers.pop(id(issuer), None)
+            if issuer.process is not None:
+                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                    issuer.process.communicate(timeout=1)
+        if isinstance(error, UpdateFailure):
+            raise
+        if issuer and issuer.process is not None:
+            raise UpdateFailure("t3_auth_failed") from None
         raise UpdateFailure("t3_cli_not_started") from None
     try:
         output, _ = process.communicate(timeout=timeout)
@@ -105,6 +204,10 @@ def auth_command(cli, base, args, timeout=30):
     except BaseException:
         _stop_group(process, tree=True)
         raise
+    finally:
+        if issuer:
+            issuer.stop()
+            _issuers.pop(id(issuer), None)
     if process.returncode or len(output) > 65536:
         raise UpdateFailure("t3_auth_failed")
     return output.decode("utf-8", "replace")
@@ -123,7 +226,7 @@ def find_issued_session(cli, base, label):
     return None
 
 
-# One credential covers the whole run. Hard kills rely on the accepted 15m TTL.
+# Persisted credentials rely on the accepted 15m TTL after hard termination.
 SESSION_TTL = 900
 REVOKE_TIMEOUT = 1.0
 FINAL_REVOKE_TIMEOUT = 5.0
@@ -177,6 +280,8 @@ def terminate(signum, frame=None):
     watchdog.start()
     try:
         end = time.monotonic() + REVOKE_TIMEOUT
+        for issuer in tuple(_issuers.values()):
+            issuer.stop()
         for session_id, (cli, base) in tuple(_known_sessions.items()):
             budget = end - time.monotonic()
             if budget <= 0:
@@ -188,7 +293,7 @@ def terminate(signum, frame=None):
 
 @contextlib.contextmanager
 def session_signals():
-    """SIGBREAK is Windows' graceful console stop; hard kills rely on TTL."""
+    """SIGBREAK is Windows' graceful console stop; kill issuers before exit."""
     previous = {}
     if threading.current_thread() is threading.main_thread():
         names = ("SIGTERM", "SIGINT", "SIGBREAK") if os.name == "nt" else ("SIGTERM", "SIGINT", "SIGHUP")
@@ -235,7 +340,9 @@ def bearer(cli, base, deadline):
             token = issued["token"]
             if not isinstance(token, str) or not token or "\r" in token or "\n" in token:
                 raise ValueError()
-        except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
+        except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            if isinstance(error, UpdateFailure) and error.code == "t3_issuer_protection_failed":
+                raise
             if attempted and not session_id:
                 session_id = find_issued_session(cli, base, label)
                 if session_id:
