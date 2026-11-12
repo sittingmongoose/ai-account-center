@@ -3,6 +3,10 @@
    also carries the measured display-only override used by the frame kit. Embedded content has no OS strip. */
 :root {
   --system-status-bg: #0C1217;
+  /* The Duo's rail (app.css .rail) is the status surface beside its strip in either theme: its colour and the line on
+     its page side. The rail and the cover over its top share them, so it reads as one column from the top edge. */
+  --system-rail-bg: #131B23;
+  --system-rail-rule: #24313D;
 }
 body::before, body::after {
   content: '';
@@ -32,16 +36,26 @@ body::after {
   width: var(--band-reserve);
 }
 :root[data-chrome] body::after { display: none; }
+/* In the rail's chrome the cover is the rail's own top: the same surface and edge line over the strip's reserve, so the
+   clock and signal ring sit on the rail with no block above it. It stacks with the rail, under every scrim (the lowest
+   is z-index 34), so an open sheet dims the whole column alike. Over the raised dashboard (z-index 45) it rises. */
 :root[data-chrome='rail'] body::after {
   display: block;
+  left: auto;
+  right: 0;
+  width: var(--rail-w);
   height: max(var(--rail-reserve), var(--safe-top));
-  border-left-width: 0;
-  border-right-width: var(--rail-w);
+  border-width: 0 0 0 1px;
+  border-color: var(--system-rail-rule);
+  background: var(--system-rail-bg);
+  z-index: 30;
 }
 :root[data-chrome='rail'][data-rail-side='left'] body::after {
-  border-left-width: var(--rail-w);
-  border-right-width: 0;
+  left: 0;
+  right: auto;
+  border-width: 0 1px 0 0;
 }
+:root[data-chrome='rail']:has(.slint-host.raised) body::after { z-index: 2147483646; }
 :root[data-status-embedded='1'] body::before,
 :root[data-status-embedded='1'] body::after,
 :root[data-chrome='none'] body::before,

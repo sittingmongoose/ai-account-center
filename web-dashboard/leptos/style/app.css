@@ -334,7 +334,7 @@ textarea.note::placeholder { color: var(--ink-4); }
 .tabbar a.on::before { content: ''; position: absolute; top: -1px; left: 30%; right: 30%; height: 3px; border-radius: 0 0 3px 3px; background: var(--accent); }
 
 /* ---------- side rail: the app's nav moved into the iOS status strip (Duo folded, Duo unfolded landscape) ---------- */
-.rail { background: var(--paper); border-left: 1px solid var(--rule); display: flex; flex-direction: column; align-items: center;
+.rail { background: var(--system-rail-bg, #131B23); border-left: 1px solid var(--system-rail-rule, #24313D); display: flex; flex-direction: column; align-items: center;
   padding: max(var(--rail-reserve), var(--safe-top)) 0 max(var(--safe-bottom), 10px); gap: 4px; }
 .rail a { width: 60px; min-height: 46px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   color: var(--ink-3); font-size: 10px; font-weight: 560; font-variation-settings: 'wght' 560; text-align: center; line-height: 1.1; }
@@ -353,7 +353,10 @@ textarea.note::placeholder { color: var(--ink-4); }
 
 /* ---------- Duo unfolded portrait: the band shows the page line and a summary (it takes no taps); the tabs sit under it ---------- */
 .band-head { background: var(--paper); border-bottom: 1px solid var(--rule); }
-.band-info { height: var(--safe-top); box-sizing: border-box; padding: 0 calc(var(--band-reserve) + 8px) 10px 14px; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; min-width: 0; }
+/* The band starts at the screen's rounded top corners (about 55 pt). Its text starts 20 pt in and at least 30 pt down,
+   the least that keeps a line 12 pt clear of the corner (DEVICE-CHECKLIST.md). A short summary sits at the band's foot
+   as before; a long one grows the band down instead of pushing the page line up past the corner and the top edge. */
+.band-info { min-height: var(--safe-top); box-sizing: border-box; padding: 30px calc(var(--band-reserve) + 8px) 10px 20px; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; min-width: 0; }
 .band-info .bi1 { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .band-info .bi1 b { color: var(--ink); font-size: 15px; font-weight: 640; font-variation-settings: 'wght' 640; margin-right: 2px; }
 .band-info .bi2 { font-size: 12.5px; color: var(--ink-2); }
@@ -366,11 +369,13 @@ textarea.note::placeholder { color: var(--ink-4); }
 .band-tools { display: flex; gap: 4px; padding-left: 6px; border-left: 1px solid var(--rule-2); }
 .band-tools .icon-btn { width: 34px; height: 34px; border-radius: 9px; }
 
-/* The standalone status bar uses white symbols in either theme. Keep the display-only band and the phone
-   top bar dark, including their labels, state words and toolbar buttons when the page itself is light. */
-.topbar, .band-info {
-  background: var(--system-status-bg);
+/* The standalone status bar uses white symbols in either theme. Keep the display-only band, the phone top bar and
+   the Duo's rail (its clock and signal ring sit on the rail's top) dark, including their labels, state words, tabs
+   and toolbar buttons when the page itself is light. */
+.topbar, .band-info { background: var(--system-status-bg); }
+.topbar, .band-info, .rail {
   color-scheme: dark;
+  --nav-bg: #0F171E; --nav-active: #E6ECF2; --nav-active-fg: #0F161D;
   --paper: #131B23; --paper-2: #17212A; --paper-3: #1C2731;
   --ink: #E6ECF2; --ink-2: #B0BCC8; --ink-3: #8794A2; --ink-4: #5B6876;
   --rule: #24313D; --rule-2: #1D2832;
@@ -1341,12 +1346,14 @@ body { min-height: 100dvh; }
 /* The rail's page keeps clear of the left and top insets (an iPhone on its side, the Duo with its strip on the left). */
 :root[data-chrome='rail'] .content { padding-left: var(--safe-left); padding-top: var(--safe-top); }
 @media (min-width: 760px) { :root[data-chrome='rail'] .content { padding-left: max(16px, var(--safe-left)); padding-top: max(10px, var(--safe-top)); } }
-:root[data-chrome='rail'] .rail { display: flex; position: sticky; top: 0; height: 100dvh; align-self: start; overflow-y: auto; padding-right: var(--rail-pad, 0px); }
+/* The rail is fixed at the screen's edge, over its own (empty) grid column. A sheet's scroll lock pins the page (body
+   position: fixed, top: -scroll) and carried a sticky rail up with it, leaving the strip's lower part bare. */
+:root[data-chrome='rail'] .rail { display: flex; position: fixed; top: 0; bottom: 0; right: 0; width: var(--rail-w, var(--safe-right)); overflow-y: auto; padding-right: var(--rail-pad, 0px); }
 /* On a phone on its side the rail pads by the safe inset on the edge, so no button sits in the island's band (--rail-pad). */
 /* The strip on the left (the folded Duo turned the other way): the rail sits in it, the page to its right with no left
    gutter (the rail covers the strip), and the screen's right edge gets the side padding instead. */
 :root[data-chrome='rail'][data-rail-side='left'] .shell { grid-template-columns: var(--rail-w, var(--safe-left)) minmax(0, 1fr); }
-:root[data-chrome='rail'][data-rail-side='left'] .rail { grid-column: 1; grid-row: 1; border-left: 0; border-right: 1px solid var(--rule); padding-right: 0; padding-left: var(--rail-pad, 0px); }
+:root[data-chrome='rail'][data-rail-side='left'] .rail { right: auto; left: 0; width: var(--rail-w, var(--safe-left)); grid-column: 1; grid-row: 1; border-left: 0; border-right: 1px solid var(--system-rail-rule, #24313D); padding-right: 0; padding-left: var(--rail-pad, 0px); }
 :root[data-chrome='rail'][data-rail-side='left'] .content { grid-column: 2; grid-row: 1; padding-left: 0; padding-right: var(--safe-right); }
 @media (min-width: 760px) { :root[data-chrome='rail'][data-rail-side='left'] .content { padding-right: max(16px, var(--safe-right)); } }
 /* The folded Duo's screen corners are round (about 55 pt). Beside the rail the page's first line starts 16 pt from the
@@ -2118,6 +2125,12 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .acct-menu { position: fixed; z-index: 41; top: calc(var(--safe-top) + 66px); right: 32px; width: min(300px, calc(100vw - 24px)); background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); padding: 6px; display: grid; gap: 2px; }
 :root[data-chrome='phone'] .acct-menu { top: calc(var(--safe-top) + 52px); right: calc(12px + var(--safe-right)); }
 :root[data-chrome='band'] .acct-menu { top: calc(var(--safe-top) + 50px); right: 10px; }
+/* A long summary grows the band (.band-info): the menu and the toasts follow the band's foot, not the 82 pt strip. */
+:root[data-chrome='band'] .band-head { anchor-name: --band-head; }
+@supports (anchor-name: --a) {
+  :root[data-chrome='band'] .acct-menu { position-anchor: --band-head; top: calc(anchor(bottom) + 3px); }
+  :root[data-chrome='band'] .toasts { position-anchor: --band-head; top: calc(anchor(bottom) + 9px); }
+}
 :root[data-chrome='rail'] .acct-menu { top: auto; bottom: calc(var(--safe-bottom) + 12px); right: calc(var(--rail-w, var(--safe-right)) + 8px); }
 :root[data-chrome='rail'][data-rail-side='left'] .acct-menu { right: auto; left: calc(var(--rail-w, var(--safe-left)) + 8px); }
 .menu-head { padding: 8px 10px; color: var(--ink-3); font-size: 12.5px; border-bottom: 1px solid var(--rule-2); margin-bottom: 2px; }
