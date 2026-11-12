@@ -591,26 +591,27 @@ pub fn refusal_said(r: &Refusal, provider: &str) -> Said {
                 .into(),
         );
     }
+    if r.sent != Some(false) {
+        return Said {
+            text: "AAC could not confirm whether this reset was sent. It may have been used; check again before using another.".into(),
+            bad: true,
+            check: true,
+        };
+    }
     match r.reason.as_deref() {
-        Some("confirmation-invalid") => bad("This confirmation expired, open it again.".into()),
-        Some("grant-changed") => bad("The resets changed since this list was read. Nothing was sent; look again.".into()),
+        Some("confirmation-invalid") => bad("Not used: this confirmation expired or was already used. Nothing was sent; open it again.".into()),
+        Some("grant-changed") => bad("Not used: this grant changed since you opened it. Nothing was sent. Check the grants and try again.".into()),
         Some("stale-inventory") => bad("AAC's fresh read came back too old. Nothing was sent; try again.".into()),
         Some("claim-token-outstanding") => Said {
-            text: "A claim started on another page may still arrive. Check again before using another reset.".into(),
+            text: "Not used: a claim started on another page may still arrive. Nothing was sent for this action; check again before using another reset.".into(),
             bad: true, check: true,
         },
         Some("check-again-required") => Said {
-            text: "A reset claim on this account is still unconfirmed. Check it before using another.".into(),
+            text: "Not used: another reset claim on this account is still unconfirmed. Nothing was sent for this action; check it before using another.".into(),
             bad: true,
             check: true,
         },
-        Some(reason) => bad(format!("{} Nothing was sent.", why_not(reason, provider))),
-        None if r.sent == Some(true) => Said {
-            text: "AAC may have sent the reset but couldn't record the answer. Check again before using another."
-                .into(),
-            bad: true,
-            check: true,
-        },
+        Some(reason) => bad(format!("Not used: {} Nothing was sent.", why_not(reason, provider))),
         None => bad("AAC couldn't use this reset right now. Nothing was sent.".into()),
     }
 }
@@ -841,7 +842,7 @@ pub struct ResetCtx {
     pub provider: RwSignal<String>,
     pub load: RwSignal<Load>,
     pub dialog: RwSignal<Dialog>,
-    /// Current result projected from the newest server attempt, with any local send or view notice.
+    /// Current account action/result, with server attempts and independent local send obligations.
     pub said: RwSignal<Option<Said>>,
     /// The shown account's lock, projected from server evidence and unanswered sends.
     pub unresolved: RwSignal<Unresolved>,
@@ -853,7 +854,7 @@ pub struct ResetCtx {
     states: StoredValue<Vec<(String, AccountState)>>,
     aliases: StoredValue<Vec<(String, String, u64)>>,
     read_epoch: StoredValue<u64>,
-    send_id: StoredValue<u64>,
+    action_id: StoredValue<u64>,
     notice: RwSignal<Option<Said>>,
     older: RwSignal<Vec<String>>,
     histories: StoredValue<Vec<(String, Vec<HistoryEvent>)>>,
@@ -876,7 +877,7 @@ impl ResetCtx {
             states: StoredValue::new(vec![]),
             aliases: StoredValue::new(vec![]),
             read_epoch: StoredValue::new(0),
-            send_id: StoredValue::new(0),
+            action_id: StoredValue::new(0),
             notice: RwSignal::new(None),
             older: RwSignal::new(vec![]),
             histories: StoredValue::new(vec![]),
@@ -1152,15 +1153,8 @@ impl ResetCtx {
             drop(callback);
         });
     }
-    fn transient(&self, identity: &str, said: Said) {
-        if self
-            .account
-            .try_get_untracked()
-            .is_some_and(|a| self.lock_key(&a) == identity)
-        {
-            self.notice.set(Some(said));
-            self.project();
-        }
+    fn action_not_sent(&self, identity: &str, action: u64, text: String) {
+        self.update_state(identity, |s| s.action_not_sent(action, text));
     }
     fn receive(&self, identity: &str, result: &ClaimResult, send: Option<u64>) -> bool {
         if result
@@ -1171,6 +1165,29 @@ impl ResetCtx {
             return false;
         }
         self.update_state(identity, |s| s.receipt(result, None, send))
+    }
+    /// This is the sole claim completion path, including refusals without a server attempt.
+    fn claim_answer(
+        &self,
+        identity: &str,
+        send: u64,
+        answer: Answer<ClaimResult>,
+        received_ms: f64,
+    ) {
+        match answer {
+            Answer::Ok(result) => {
+                self.receive(identity, &result, Some(send));
+            }
+            Answer::Refused(r) => {
+                self.refused(identity, &r, Some(send), received_ms);
+            }
+            Answer::Failed(text) => {
+                self.update_state(identity, |s| s.action_unanswered(send, Some(text)));
+            }
+            Answer::Lost => {
+                self.update_state(identity, |s| s.action_unanswered(send, None));
+            }
+        }
     }
     fn refused(
         &self,
@@ -1192,6 +1209,9 @@ impl ResetCtx {
                 {
                     s.not_sent(id);
                 }
+                if let Some(id) = send {
+                    s.action_refused(id, refusal);
+                }
                 accepted
             });
         } else if send.is_some() || refusal.reason.as_deref() == Some("check-again-required") {
@@ -1202,6 +1222,9 @@ impl ResetCtx {
                     s.not_sent(id);
                 }
                 s.unknown(received_ms);
+                if let Some(id) = send {
+                    s.action_refused(id, refusal);
+                }
             });
         }
         true
@@ -1213,9 +1236,9 @@ impl ResetCtx {
         let me = *self;
         let account = self.account.get_untracked();
         let identity = self.lock_key(&account);
-        let provider = self.provider.get_untracked();
         self.notice.set(None);
         self.project();
+        let action = self.begin_action(&identity);
         self.invalidate();
         self.dialog.set(Dialog::Opening {
             grant_key: grant_key.clone(),
@@ -1226,7 +1249,11 @@ impl ResetCtx {
             if me.account.try_get_untracked().as_deref() != Some(account.as_str()) {
                 return;
             }
+            if !me.state_of(&identity).is_current_action(action) {
+                return;
+            }
             if !fresh || me.lock_key(&account) != identity || me.lock_of(&identity).blocks() {
+                me.action_not_sent(&identity, action, "Not used: AAC could not confirm that this account is ready. Nothing was sent; check again.".into());
                 me.dialog.set(Dialog::Closed);
                 return;
             }
@@ -1244,7 +1271,7 @@ impl ResetCtx {
                 false
             };
             let stale_refusal = if let Answer::Refused(r) = &got {
-                !me.refused(&identity, r, None, js_sys::Date::now())
+                !me.refused(&identity, r, Some(action), js_sys::Date::now())
             } else {
                 false
             };
@@ -1253,6 +1280,7 @@ impl ResetCtx {
             }
             let still = me.account.try_get_untracked().as_deref() == Some(account.as_str())
                 && me.lock_key(&account) == identity
+                && me.state_of(&identity).is_current_action(action)
                 && me.dialog.try_with_untracked(
                     |d| matches!(d,Dialog::Opening{grant_key:k} if *k==grant_key),
                 ) == Some(true);
@@ -1297,20 +1325,17 @@ impl ResetCtx {
                         me.refresh();
                         return;
                     }
-                    let said = match other {
-                        Answer::Refused(r) => refusal_said(&r, &provider),
-                        Answer::Failed(text) => Said {
-                            text: format!("{text} Nothing was sent."),
-                            bad: true,
-                            check: false,
-                        },
-                        _ => Said {
-                            text: "The server's answer could not be read. Nothing was sent.".into(),
-                            bad: true,
-                            check: false,
-                        },
+                    let text = match other {
+                        Answer::Refused(_) => None,
+                        Answer::Failed(text) => Some(format!("Not used: {text} Nothing was sent.")),
+                        _ => Some(
+                            "Not used: the server's answer could not be read. Nothing was sent."
+                                .into(),
+                        ),
                     };
-                    me.transient(&identity, said);
+                    if let Some(text) = text {
+                        me.action_not_sent(&identity, action, text);
+                    }
                     me.refresh();
                 }
             }
@@ -1325,9 +1350,14 @@ impl ResetCtx {
         }
         self.dialog.set(Dialog::Closed);
     }
+    fn begin_action(&self, identity: &str) -> u64 {
+        let id = self.action_id.get_value() + 1;
+        self.action_id.set_value(id);
+        self.update_state(identity, |s| s.begin_action(id));
+        id
+    }
     fn begin_send(&self, identity: &str, sent_at: f64) -> u64 {
-        let id = self.send_id.get_value() + 1;
-        self.send_id.set_value(id);
+        let id = self.begin_action(identity);
         self.update_state(identity, |s| s.begin_send(id, sent_at + CONFIRM_LIFE_MS));
         id
     }
@@ -1365,18 +1395,10 @@ impl ResetCtx {
         spawn_local(async move {
             let got = claim(&account, &grant_key, &prepared.confirmation_token).await;
             publish_reset_change();
-            match got {
-                Answer::Ok(result) => {
-                    me.receive(&identity, &result, Some(id));
-                }
-                Answer::Refused(r) => {
-                    me.refused(&identity, &r, Some(id), js_sys::Date::now());
-                }
-                // Missing/malformed/failed answers cannot associate this send with another attempt.
-                _ => {}
-            }
+            me.claim_answer(&identity, id, got, js_sys::Date::now());
             if me.account.try_get_untracked().as_deref() != Some(account.as_str())
                 || me.lock_key(&account) != identity
+                || !me.state_of(&identity).is_current_action(id)
             {
                 return;
             }
@@ -2067,7 +2089,7 @@ mod tests {
         };
         assert_eq!(
             refusal_said(&r(Some("confirmation-invalid"), false), "claude").text,
-            "This confirmation expired, open it again."
+            "Not used: this confirmation expired or was already used. Nothing was sent; open it again."
         );
         assert!(refusal_said(&r(Some("check-again-required"), false), "claude").check);
         assert!(refusal_said(&r(None, true), "claude").check);
@@ -2147,3 +2169,7 @@ mod tests {
 #[cfg(test)]
 #[path = "reset_order_tests.rs"]
 mod order_tests;
+
+#[cfg(test)]
+#[path = "reset_action_tests.rs"]
+mod action_tests;

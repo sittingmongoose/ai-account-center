@@ -145,8 +145,8 @@ Refills / Expires) with Use reset only on rows the server marks claimable, used 
 kinds in the provider's words with "AAC doesn't know what this refills yet; it can't be used from here". Opening
 the dialog calls only `prepare`; it shows prepare's `account.label`, the grant, what it refills, its expiry and
 "You have N; this spends one and can't be undone", and counts down the confirmation (ending 10 s early so the
-server's fresh read fits inside its 120 s). Only "Use this reset" calls the claim route. The result line comes from
-the server snapshot's newest attempt, then the group reads the inventory again; nothing is shown as used until a read says so. Z.ai
+server's fresh read fits inside its 120 s). Only "Use this reset" calls the claim route. The result line belongs to
+the newest account action or server attempt, then the group reads the inventory again; nothing is shown as used until a read says so. Z.ai
 cards are listed with "Use in Z.ai"; Qwen says its plan has none. Paired native bars never call these routes.
 
 Inventory, pending recovery, prepare, claim and check responses carry `evidence`:
@@ -160,9 +160,16 @@ adapter does not combine separate native reads. Replaying a settled receipt keep
 its outcome/windows immutable while returning the account's current evidence.
 
 The Details UI applies the highest revision per canonical account. Lower revisions
-can add historical receipts/events but cannot change the pending map or current
-result. Current result text comes only from the snapshot's newest attempt; older
-receipts say "Older claim" without presenting old percentages as current limits.
+can add historical receipts/events but cannot change the pending map or the current
+server attempt/result. Each local prepare/confirm action also has an increasing
+request identity and the server attempt/result it followed. Every accepted action
+answer, including a refusal before reservation, becomes that account's current
+line. A higher inventory revision with the same old attempt cannot resurrect the
+old success. A newer local action or a genuinely newer server attempt/result
+supersedes it; delayed older callbacks cannot replace that result or close the
+newer dialog. Older receipts say "Older claim" without presenting old percentages
+as current limits. These action answers survive navigation and sibling aliases.
+They never acknowledge another send or change the server's attempt/token locks.
 A saved profile changing accounts binds the view using its ordered binding revision
 and explicitly reports the change. Each account retains its own state and history.
 

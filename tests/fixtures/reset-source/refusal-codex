@@ -1,0 +1,27 @@
+#!/usr/bin/python3
+import json, os, sys
+home = os.environ['CODEX_HOME']
+who = json.load(open(os.path.join(home, 'auth.json')))['tokens']['account_id']
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request:
+        continue
+    method = request['method']
+    if method == 'initialize':
+        result = {}
+    elif method == 'account/read':
+        result = {'account': {'type': 'chatgpt', 'email': 'fixture-' + who}}
+    elif method == 'account/rateLimits/read':
+        state = json.load(open(os.path.join(home, 'fixture-state.json')))
+        result = {'accountId': who,
+                  'rateLimits': {'primary': {'usedPercent': state['primary']},
+                                 'secondary': {'usedPercent': state['secondary']}},
+                  'rateLimitResetCredits': {'availableCount': int(not state['spentA']) + int(not state.get('spentB',False)),
+                      'credits': [{'id': 'credit-a', 'resetType': 'codexRateLimits',
+                                   'status': 'redeemed' if state['spentA'] else 'available'},
+                                  {'id': 'credit-b', 'resetType': 'codexRateLimits',
+                                   'status': 'redeemed' if state.get('spentB',False) else 'available'}]}}
+    else:
+        open(os.path.join(home, 'unexpected-send'), 'w').close()
+        result = {}
+    print(json.dumps({'id': request['id'], 'result': result}), flush=True)

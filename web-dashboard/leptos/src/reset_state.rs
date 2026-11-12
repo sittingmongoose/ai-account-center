@@ -1,5 +1,5 @@
 //! Server snapshots own attempt state. Local send obligations have a separate lifetime.
-use super::{ClaimResult, Said, result_said};
+use super::{ClaimResult, Refusal, Said, refusal_said, result_said};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
@@ -112,6 +112,24 @@ impl Unresolved {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum ActionAnswer {
+    Preparing,
+    Refused(Refusal),
+    NotSent(String),
+    Unanswered(Option<String>),
+    Completed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LocalAction {
+    id: u64,
+    /// Inventory revisions can advance without creating a new attempt. Keep the
+    /// action's answer until an actual newer attempt/result supersedes this frontier.
+    frontier: Option<ClaimResult>,
+    answer: ActionAnswer,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AccountState {
     snapshot: Option<Evidence>,
@@ -122,8 +140,109 @@ pub struct AccountState {
     read_after_ms: Option<f64>,
     refresh_required: bool,
     source_failure: Option<bool>,
+    action: Option<LocalAction>,
 }
 impl AccountState {
+    pub fn is_current_action(&self, id: u64) -> bool {
+        self.action.as_ref().is_some_and(|a| a.id == id)
+    }
+    fn latest(&self) -> Option<&ClaimResult> {
+        self.snapshot
+            .as_ref()
+            .and_then(|s| s.latest_attempt.as_ref())
+    }
+    pub fn begin_action(&mut self, id: u64) {
+        if self.action.as_ref().is_none_or(|a| id > a.id) {
+            if let Some(snapshot) = &self.snapshot
+                && let Some(result) = &snapshot.latest_attempt
+                && let Some(revision) = counter(&snapshot.revision)
+                && self
+                    .receipts
+                    .get(&result.attempt_key)
+                    .is_none_or(|(old, _)| *old <= revision)
+            {
+                self.receipts
+                    .insert(result.attempt_key.clone(), (revision, result.clone()));
+            }
+            self.action = Some(LocalAction {
+                id,
+                frontier: self.latest().cloned(),
+                answer: ActionAnswer::Preparing,
+            });
+        }
+    }
+    pub fn action_not_sent(&mut self, id: u64, text: String) {
+        let latest = self.latest().cloned();
+        if let Some(action) = &mut self.action
+            && action.id == id
+            && !matches!(action.answer, ActionAnswer::Completed)
+            && action.frontier == latest
+        {
+            action.answer = ActionAnswer::NotSent(text);
+        }
+    }
+    pub fn action_unanswered(&mut self, id: u64, text: Option<String>) {
+        if let Some(action) = &mut self.action
+            && action.id == id
+            && !matches!(action.answer, ActionAnswer::Completed)
+        {
+            action.answer = ActionAnswer::Unanswered(text);
+        }
+    }
+    pub fn action_refused(&mut self, id: u64, refusal: &Refusal) {
+        let latest = self.latest().cloned();
+        let frontier = if let Some(e) = &refusal.evidence {
+            if !e.valid()
+                || self
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.canonical_account_key != e.canonical_account_key)
+            {
+                return;
+            }
+            e.latest_attempt.clone()
+        } else {
+            self.action.as_ref().and_then(|a| a.frontier.clone())
+        };
+        if let Some(action) = &mut self.action
+            && action.id == id
+            && !matches!(action.answer, ActionAnswer::Completed)
+            && latest == frontier
+        {
+            let mut refusal = refusal.clone();
+            refusal.evidence = None;
+            action.frontier = frontier;
+            action.answer = ActionAnswer::Refused(refusal);
+        }
+    }
+    fn action_said(&self, provider: &str) -> Option<Said> {
+        let action = self.action.as_ref()?;
+        if action.frontier.as_ref() != self.latest() {
+            return None;
+        }
+        Some(match &action.answer {
+            ActionAnswer::Completed => return None,
+            ActionAnswer::Preparing => Said {
+                text: "No reset has been sent for this confirmation.".into(),
+                bad: false,
+                check: false,
+            },
+            ActionAnswer::Refused(r) => refusal_said(r, provider),
+            ActionAnswer::NotSent(text) => Said {
+                text: text.clone(),
+                bad: true,
+                check: true,
+            },
+            ActionAnswer::Unanswered(reason) => Said {
+                text: format!(
+                    "{}AAC could not confirm the answer to your latest reset request. Earlier claim results are in history; check again.",
+                    reason.as_ref().map(|s| format!("{s} ")).unwrap_or_default()
+                ),
+                bad: true,
+                check: true,
+            },
+        })
+    }
     pub fn needs_refresh(&self) -> bool {
         self.refresh_required || self.snapshot.is_none()
     }
@@ -169,6 +288,12 @@ impl AccountState {
         }
     }
     pub fn begin_send(&mut self, id: u64, proof_after_ms: f64) {
+        self.begin_action(id);
+        if let Some(action) = &mut self.action
+            && action.id == id
+        {
+            action.answer = ActionAnswer::Unanswered(None);
+        }
         self.unanswered.insert(id, proof_after_ms);
     }
     pub fn unknown(&mut self, received_ms: f64) {
@@ -176,6 +301,12 @@ impl AccountState {
     }
     pub fn inherit_sends(&mut self, previous: &mut Self) {
         self.unanswered.append(&mut previous.unanswered);
+        if let Some(mut action) = previous.action.take()
+            && self.action.as_ref().is_none_or(|a| action.id > a.id)
+        {
+            action.frontier = self.latest().cloned();
+            self.action = Some(action);
+        }
         if let Some(after) = previous.read_after_ms {
             self.unknown(after);
         }
@@ -259,6 +390,11 @@ impl AccountState {
         let accepted = self.observe(evidence, read_started_ms);
         if accepted && let Some(id) = send {
             self.unanswered.remove(&id);
+            if let Some(action) = &mut self.action
+                && action.id == id
+            {
+                action.answer = ActionAnswer::Completed;
+            }
         }
         accepted
     }
@@ -266,8 +402,29 @@ impl AccountState {
         self.unanswered.remove(&id);
     }
     pub fn current(&self, provider: &str) -> Option<Said> {
+        let action = self.action_said(provider);
         if !self.unanswered.is_empty() {
-            return Some(Said { text: "A reset request has no confirmed answer yet. The reset may have been used; check again.".into(), bad:true, check:true });
+            let text = "A reset request has no confirmed answer yet. The reset may have been used; check again.";
+            return Some(Said {
+                text: action
+                    .filter(|_| {
+                        self.action.as_ref().is_some_and(|a| match &a.answer {
+                            ActionAnswer::Unanswered(None) => false,
+                            ActionAnswer::Refused(_) => !self.unanswered.contains_key(&a.id),
+                            _ => true,
+                        })
+                    })
+                    .map_or_else(|| text.into(), |a| format!("{} {text}", a.text)),
+                bad: true,
+                check: true,
+            });
+        }
+        if let Some(mut said) = action {
+            said.check |= self.needs_refresh()
+                || self.read_after_ms.is_some()
+                || !self.attempts.is_empty()
+                || self.token_deadline().is_some();
+            return Some(said);
         }
         if let Some(changed) = self.source_failure {
             return Some(Said {
@@ -297,15 +454,31 @@ impl AccountState {
             .map(|r| result_said(r, provider))
     }
     pub fn older_receipts(&self) -> Vec<String> {
+        let superseded = self.action.as_ref().is_some_and(|a| {
+            !matches!(a.answer, ActionAnswer::Completed) && a.frontier.as_ref() == self.latest()
+        });
         let newest = self
             .snapshot
             .as_ref()
             .and_then(|s| s.latest_attempt.as_ref())
             .map(|r| &r.attempt_key);
-        self.receipts
+        let mut rows: BTreeMap<String, String> = self
+            .receipts
             .iter()
-            .filter(|(key, _)| Some(*key) != newest)
-            .map(|(_, (_, r))| format!("Older claim: {}", super::history_word(&r.outcome)))
-            .collect()
+            .filter(|(key, _)| superseded || Some(*key) != newest)
+            .map(|(key, (_, r))| {
+                (
+                    key.clone(),
+                    format!("Older claim: {}", super::history_word(&r.outcome)),
+                )
+            })
+            .collect();
+        if superseded && let Some(r) = self.latest() {
+            rows.insert(
+                r.attempt_key.clone(),
+                format!("Older claim: {}", super::history_word(&r.outcome)),
+            );
+        }
+        rows.into_values().collect()
     }
 }

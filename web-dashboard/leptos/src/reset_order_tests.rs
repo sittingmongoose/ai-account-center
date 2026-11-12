@@ -1185,7 +1185,7 @@ fn unavailable_recovery_does_not_shorten_an_unanswered_send_proof_interval() {
                 .get_untracked()
                 .unwrap()
                 .text
-                .contains("Reset applied")
+                .contains("could not confirm")
         );
     });
 }
