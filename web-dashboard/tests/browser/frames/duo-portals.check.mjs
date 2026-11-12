@@ -312,3 +312,53 @@ tests['duo portals: Scoreboard model sheet reflows and retires on Back'] = async
   );
   await retired(t, 'Scoreboard');
 };
+
+// The global viewer is outside FrameCtx, and embedded documents have no FrameCtx at all.
+tests['duo portals: embedded shell hides retire pin and global viewer owners'] = async (t) => {
+  const view = fixture(true);
+  await t.newContext({
+    viewport: { width: 466, height: 678 },
+    screen: { width: 466, height: 678 },
+    serviceWorkers: 'block',
+  });
+  await t.page.route(
+    (u) => u.pathname === '/api/status',
+    (r) => r.fulfill({ json: view })
+  );
+  await t.page.route(
+    (u) => u.pathname === '/api/status/deliverable',
+    (r) =>
+      r.continue({
+        url: new URL('/api/status/files/keyboard-controls.mp4', r.request().url()).href,
+      })
+  );
+  await t.goto('/app/status?embed=1');
+  await t.page.locator('.c2-row').first().click();
+  await t.page.waitForSelector('.c2-sheet-host');
+  await t.page.locator('.c2-sheet-host [data-focus-role="media-enlarge"]').first().click();
+  await t.page.waitForSelector('.viewer');
+  await t.check(
+    'embedded nested overlays own their locks before hiding',
+    await t.page.evaluate(
+      () =>
+        document.querySelectorAll('.overlay-root').length === 2 &&
+        document.body.style.position === 'fixed'
+    )
+  );
+  await t.page.evaluate(() =>
+    postMessage({ type: 'aac-visible', visible: false }, location.origin)
+  );
+  await frames(t);
+  await t.check(
+    'logical shell hide retires every embedded body portal',
+    await t.page.evaluate(
+      () => !document.querySelector('.overlay-root') && document.body.style.position !== 'fixed'
+    )
+  );
+  await t.page.evaluate(() => postMessage({ type: 'aac-visible', visible: true }, location.origin));
+  await frames(t);
+  await t.check(
+    'showing the embedded owner again cannot revive its old overlays',
+    (await t.page.locator('.overlay-root').count()) === 0
+  );
+};

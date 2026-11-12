@@ -39,15 +39,34 @@ static ACTIVE: AtomicU8 = AtomicU8::new(Page::Status as u8);
 
 /// Whether `page` is on screen: the tab is visible, the shell shows this page, and the frame's tab is this page.
 pub fn page_on_screen(page: Page) -> bool {
-    document().visibility_state() == web_sys::VisibilityState::Visible
-        && !HIDDEN_BY_SHELL.load(Ordering::Relaxed)
-        && ACTIVE.load(Ordering::Relaxed) == page as u8
+    document().visibility_state() == web_sys::VisibilityState::Visible && owns_page(page)
+}
+
+/// Logical ownership ignores backgrounding: overlays stay open across app suspension, but not another route.
+pub(crate) fn owns_page(page: Page) -> bool {
+    !HIDDEN_BY_SHELL.load(Ordering::Relaxed) && ACTIVE.load(Ordering::Relaxed) == page as u8
+}
+
+pub(crate) fn active_page() -> Page {
+    Page::ALL
+        .into_iter()
+        .find(|p| *p as u8 == ACTIVE.load(Ordering::Relaxed))
+        .unwrap_or(Page::Status)
+}
+
+pub(crate) const PAGE_EVENT: &str = "aac-page";
+
+fn page_owner_changed() {
+    if let Ok(event) = web_sys::Event::new(PAGE_EVENT) {
+        let _ = window().dispatch_event(&event);
+    }
 }
 
 /// The frame shows `page`: readers of a page that comes back on screen read at once (`SHOWN_EVENT`).
 pub fn set_active(page: Page) {
     let was = ACTIVE.swap(page as u8, Ordering::Relaxed);
     if was != page as u8 {
+        page_owner_changed();
         if let Ok(shown) = web_sys::Event::new(SHOWN_EVENT) {
             let _ = window().dispatch_event(&shown);
         }
@@ -203,6 +222,9 @@ fn listen_to_shell() {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
                 let was_hidden = HIDDEN_BY_SHELL.swap(!visible, Ordering::Relaxed);
+                if was_hidden != !visible {
+                    page_owner_changed();
+                }
                 if visible && was_hidden {
                     if let Ok(shown) = web_sys::Event::new(SHOWN_EVENT) {
                         let _ = window().dispatch_event(&shown);

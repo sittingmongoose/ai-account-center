@@ -388,17 +388,17 @@ pub fn OverlayPortal(
     // Routes stay mounted under hidden containers. A body portal needs its own route lifetime.
     // Once retired it cannot reappear on Forward, even if a busy owner's close callback is deferred.
     let retired = RwSignal::new(false);
-    if let Some(frame) = use_context::<crate::frame::FrameCtx>() {
-        let route = frame.route.get_untracked();
-        Effect::new(move |_| {
-            if frame.route.get() != route {
-                retired.set(true);
-                if let Some(close) = on_close {
-                    close.run(());
-                }
+    // The global viewer is a sibling of Frame, so this lifetime uses the shared logical page event,
+    // not component context. Embedded pages also retire when their shell hides the document.
+    let page = crate::active_page();
+    crate::owned::listen(&window(), crate::PAGE_EVENT, move || {
+        if !crate::owns_page(page) {
+            retired.set(true);
+            if let Some(close) = on_close {
+                close.run(());
             }
-        });
-    }
+        }
+    });
     view! {
         <Show when=move || !retired.get()>
             <OverlaySurface on_close=on_close trap_focus=trap_focus lock_scroll=lock_scroll>
@@ -415,6 +415,7 @@ fn OverlaySurface(
     trap_focus: Signal<bool>,
     lock_scroll: Signal<bool>,
 ) -> impl IntoView {
+    let page = crate::active_page();
     let id = NEXT.with(|n| {
         n.set(n.get() + 1);
         n.get()
@@ -776,7 +777,10 @@ fn OverlaySurface(
         unlock(id);
         if was_top {
             if let Some(Some(el)) = previous.try_get_value() {
-                if el.is_connected() && el.get_bounding_client_rect().width() > 0.0 {
+                if crate::owns_page(page)
+                    && el.is_connected()
+                    && el.get_bounding_client_rect().width() > 0.0
+                {
                     focus(&el);
                 } else if let Ok(links) = document().query_selector_all("a[aria-current='page']") {
                     // The trigger's route is gone. Return to a visible destination, never its hidden button.
