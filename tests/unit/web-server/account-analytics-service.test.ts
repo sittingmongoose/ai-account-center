@@ -168,6 +168,8 @@ describe('account quota analytics', () => {
     current.windows[0].usedPercent = 55;
     await service.sample();
     expect((await service.get(QUERY)).accounts[0].windows[0].points.at(-1)?.usedPercent).toBe(55);
+    // Old minute/history heads can never be reused for this selection.
+    expect((service as unknown as { answers: { size: number } }).answers.size).toBe(1);
   });
   it('passes explicit activity refresh through without forcing quota sources twice or exposing the flag as a filter', async () => {
     const dashboardCalls: Array<[string | undefined, boolean | undefined]> = [];

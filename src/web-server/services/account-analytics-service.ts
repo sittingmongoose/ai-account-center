@@ -295,6 +295,7 @@ async function longBurnFor(
 /** Independent snapshot history keeps quotas separate from billed/token activity. */
 export class AccountAnalyticsService {
   private readonly answers = new BoundedCache<{
+    key: string;
     activity: AccountAnalyticsActivityResult;
     answer: AccountAnalytics;
   }>(4, 32 * 1024 * 1024);
@@ -512,8 +513,11 @@ export class AccountAnalyticsService {
         ])
       )
       .digest('hex');
-    const retained = this.answers.get(answerKey);
-    if (retained?.activity === activityResult)
+    const selectionKey = createHash('sha256')
+      .update(JSON.stringify([scope, query]))
+      .digest('hex');
+    const retained = this.answers.get(selectionKey);
+    if (retained?.key === answerKey && retained.activity === activityResult)
       return {
         ...retained.answer,
         cached: true,
@@ -623,7 +627,7 @@ export class AccountAnalyticsService {
       accounts: series,
       activity,
     };
-    this.answers.set(answerKey, { activity: activityResult, answer });
+    this.answers.set(selectionKey, { key: answerKey, activity: activityResult, answer });
     return answer;
   }
 
