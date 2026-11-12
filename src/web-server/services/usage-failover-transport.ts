@@ -252,16 +252,22 @@ export function usageHelperDeadlineMs(action: UsageHelperRequest['action']): num
 
 export async function runUsageHelper(
   host: UsageHost,
-  request: UsageHelperRequest
+  request: UsageHelperRequest,
+  callerDeadlineAt?: number
 ): Promise<UsageHelperResponse> {
   if (host.sshHost !== null && !isSafeUsageSshAlias(host.sshHost))
     throw new ValidationError('Invalid usage host.');
   if (host.sshHost === null && host.platform !== localUsageHost().platform)
     throw new ValidationError('Usage source is not local.');
   let expired = false;
+  const deadlineAt = Math.min(
+    callerDeadlineAt ?? Infinity,
+    Date.now() + usageHelperDeadlineMs(request.action)
+  );
   const run = async (): Promise<string> => {
+    if (Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
     const helperSource = await usageHelperBundle();
-    if (expired) throw new NetworkError('Usage source unavailable.');
+    if (expired || Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
     const input = JSON.stringify({ helperSource, request });
     const executable = host.sshHost ? 'ssh' : localUsagePython(request);
     const args = host.sshHost
@@ -284,6 +290,7 @@ export async function runUsageHelper(
       : ['-c', BOOTSTRAP];
     const result = await runManagedCommand(executable, args, {
       timeoutMs: usageHelperProcessTimeoutMs(request.action),
+      deadlineAt,
       maxBytes: MAX_BYTES,
       env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
       input,
@@ -292,8 +299,8 @@ export async function runUsageHelper(
     if (result.failed) throw new NetworkError('Usage source unavailable.');
     return result.stdout;
   };
-  // Source reads and IPC must settle too; command termination is owned by the broker.
-  const stdout = await withDeadline(run(), usageHelperDeadlineMs(request.action), () => {
+  // The same absolute deadline covers source reads, broker startup and the owned command.
+  const stdout = await withDeadline(run(), Math.max(0, deadlineAt - Date.now()), () => {
     expired = true;
   }).catch((error: unknown) => {
     throw error instanceof DeadlineExceededError

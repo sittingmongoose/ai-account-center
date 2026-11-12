@@ -4,24 +4,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { withDeadline } from '../../../src/utils/settle-deadline';
+import { waitForProcessState } from '../../shared/fixtures/process-state';
 
 const repo = path.resolve(import.meta.dir, '../../..');
 const brokerScript = path.join(repo, 'scripts/process-broker.cjs');
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function processState(pid: number): string | null {
-  try {
-    return fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].split(' ')[0];
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
-async function waitUntilGone(pid: number): Promise<void> {
-  for (let attempt = 0; attempt < 100 && processState(pid) !== null; attempt++) await pause(10);
-  expect(processState(pid)).toBeNull();
-}
 
 async function signalFixture(signal: 'SIGINT' | 'SIGTERM', hungStore = false): Promise<void> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-signal-shutdown-'));
@@ -49,6 +36,7 @@ mock.module(${JSON.stringify(path.join(repo, 'src/store/store-service.ts'))}, ()
 const { startProcessBroker, runManagedCommand, processBrokerStats, stopProcessBroker } =
   await import(${JSON.stringify(path.join(repo, 'src/utils/managed-process.ts'))});
 const { setupGracefulShutdown } = await import(${JSON.stringify(path.join(repo, 'src/web-server/shutdown.ts'))});
+const { waitForProcessState, waitUntil } = await import(${JSON.stringify(path.join(repo, 'tests/shared/fixtures/process-state.ts'))});
 const broker = await startProcessBroker();
 fs.writeFileSync(path.join(root, 'broker.pid'), String(broker.pid));
 const marker = path.join(root, 'command.pid');
@@ -56,10 +44,9 @@ const source = 'import os,time;open(' + JSON.stringify(marker) + ',"w").write(st
 const work = runManagedCommand('/usr/bin/python3', ['-I', '-c', source], {
   timeoutMs: 5000, maxBytes: 65536, env: { PATH: '/usr/bin:/bin' },
 });
-for (let attempt = 0; attempt < 200 && !fs.existsSync(marker); attempt++)
-  await new Promise(resolve => setTimeout(resolve, 10));
-if (!fs.existsSync(marker)) throw new Error('Fixture command did not start');
+await waitUntil(() => fs.existsSync(marker), 'Fixture command startup');
 broker.kill('SIGSTOP');
+await waitForProcessState(broker.pid, ['T']);
 broker.disconnect();
 if (!(await work).failed || processBrokerStats().retired !== 1)
   throw new Error('Fixture broker was not retired');
@@ -104,7 +91,7 @@ console.log('SIGNAL_READY');
   try {
     await withDeadline(ready, 5000);
     const brokerPid = Number(fs.readFileSync(brokerPidFile, 'utf8'));
-    expect(processState(brokerPid)).toBe('T');
+    await waitForProcessState(brokerPid, ['T']);
     const sentAt = Date.now();
     expect(child.kill(signal)).toBe(true);
     await pause(10);
@@ -113,7 +100,7 @@ console.log('SIGNAL_READY');
       child.kill(signal === 'SIGINT' ? 'SIGTERM' : 'SIGINT');
     expect(await withDeadline(closed, 5000)).toBe(0);
     const elapsed = Date.now() - sentAt;
-    await waitUntilGone(brokerPid);
+    await waitForProcessState(brokerPid, [null]);
     const recorded = fs.readFileSync(events, 'utf8').trim().split('\n');
     for (const event of ['cleanup', 'server', 'sessions', 'store'])
       expect(recorded.filter((name) => name === event)).toHaveLength(1);
@@ -123,7 +110,7 @@ console.log('SIGNAL_READY');
     }
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    await withDeadline(closed, 1000).catch(() => {});
+    await withDeadline(closed, 2000);
     // Failure cleanup only signals PIDs recorded by this fixture, after checking their argv.
     for (const [pidFile, ownedArg, group] of [
       [brokerPidFile, brokerScript, false],
@@ -148,9 +135,9 @@ describe.skipIf(process.platform !== 'linux')('real dashboard signal shutdown', 
     async (signal) => {
       await signalFixture(signal);
     },
-    10000
+    15000
   );
   it('keeps the existing three-second deadline when another closer never settles', async () => {
     await signalFixture('SIGTERM', true);
-  }, 10000);
+  }, 15000);
 });

@@ -725,7 +725,9 @@ describe('an unavailable share', () => {
     let calls = 0;
     const { root, answers } = setup({
       timing: { ringMs: 20 },
-      doorbell: (to) => {
+      doorbell: (to, _subject, _body, deadlineAt) => {
+        expect(deadlineAt).toBeGreaterThan(Date.now() - 10);
+        expect(deadlineAt).toBeLessThanOrEqual(Date.now() + 20);
         calls += 1;
         return calls === 1
           ? new Promise(() => undefined)

@@ -43,6 +43,8 @@ export type CommandRunner = (
     maxBytes: number;
     env?: NodeJS.ProcessEnv;
     input?: string;
+    /** An outer caller's absolute deadline, including startup and queueing. */
+    deadlineAt?: number;
     /** Time after the timeout's SIGTERM before SIGKILL and settling. */
     graceMs?: number;
     /** Read-only probes only; never doorbells or other actions. */

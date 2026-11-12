@@ -3,6 +3,9 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { UsageFailoverService } from '../../../src/web-server/services/usage-failover-service';
+import { localUsageHost } from '../../../src/web-server/services/usage-failover-transport';
+import { stopProcessBroker } from '../../../src/utils/managed-process';
+import { waitForProcessState } from '../../shared/fixtures/process-state';
 import { musePeerBindingFile } from '../../../src/web-server/services/muse-usage-peer-bindings';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
 import type {
@@ -829,6 +832,45 @@ describe('identity-bound usage source failover', () => {
       expect(row).toMatchObject({ platform: 'windows', status: 'ok' });
     }
   }, 2000);
+
+  it.skipIf(process.platform === 'win32')(
+    'terminates the real helper when the service has a shorter request deadline',
+    async () => {
+      const h = await harness();
+      const python = path.join(h.target.ccsDir, 'claude-session-migration/venv/bin/python3');
+      const marker = path.join(h.target.ccsDir, 'helper.pid');
+      await fs.mkdir(path.dirname(python), { recursive: true });
+      await fs.writeFile(
+        python,
+        [
+          '#!/usr/bin/python3',
+          'import sys,os,signal,time',
+          'sys.stdin.read()',
+          'signal.signal(signal.SIGTERM,signal.SIG_IGN)',
+          `open(${JSON.stringify(marker)},'w').write(str(os.getpid()))`,
+          'time.sleep(30)',
+        ].join('\n'),
+        { mode: 0o700 }
+      );
+      const local = localUsageHost();
+      const service = new UsageFailoverService({
+        hosts: async () => [local],
+        requestDeadlineMs: () => 1000,
+      });
+      try {
+        const row = await service.collect(
+          { ...h.target, primarySources: [{ ...local, selector: 'discover' }] },
+          template()
+        );
+        expect(row.status).toBe('unavailable');
+        const pid = Number(await fs.readFile(marker, 'utf8'));
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+        await waitForProcessState(pid, [null], 250);
+      } finally {
+        await stopProcessBroker();
+      }
+    }
+  );
 
   it('rejects a changed revision in the helper response before considering its quota', async () => {
     const h = await harness();

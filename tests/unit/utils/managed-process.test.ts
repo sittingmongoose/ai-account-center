@@ -4,11 +4,13 @@ import os from 'os';
 import path from 'path';
 import {
   runManagedCommand,
+  type ManagedCommandOptions,
   processBrokerStats,
   startProcessBroker,
   stopProcessBroker,
 } from '../../../src/utils/managed-process';
 import { withDeadline } from '../../../src/utils/settle-deadline';
+import { waitForProcessState, waitUntil } from '../../shared/fixtures/process-state';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -16,7 +18,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 const options = { timeoutMs: 2000, maxBytes: 65536, env: { PATH: '/usr/bin:/bin' } };
-const python = (source: string, extra: Partial<typeof options> = {}) =>
+const python = (source: string, extra: Partial<ManagedCommandOptions> = {}) =>
   runManagedCommand('/usr/bin/python3', ['-I', '-c', source], { ...options, ...extra });
 
 async function hangOwnedBroker() {
@@ -29,15 +31,169 @@ async function hangOwnedBroker() {
     `import time;open(${JSON.stringify(marker)},'w').write('started');time.sleep(10)`,
     { timeoutMs: 500, ...{ graceMs: 20 } }
   );
-  for (let attempt = 0; attempt < 100 && !fs.existsSync(marker); attempt++)
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  await waitUntil(() => fs.existsSync(marker), 'Fixture command startup');
   expect(fs.existsSync(marker)).toBe(true);
   // Only this fixture's returned process handle is ever stopped or signalled.
   expect(child.kill('SIGSTOP')).toBe(true);
-  return { child, exited, work };
+  await waitForProcessState(child.pid!, ['T']);
+  // Caller expiry cancels its command first; a missing broker acknowledgement retires it.
+  const lostBroker = async () => {
+    await waitUntil(() => processBrokerStats().pid !== child.pid, 'Broker retirement');
+  };
+  return {
+    child,
+    exited,
+    work: work.then(async (result) => {
+      await lostBroker();
+      return result;
+    }),
+  };
 }
 
 describe.skipIf(process.platform === 'win32')('small command parent', () => {
+  it('refuses an already expired command before starting a broker', async () => {
+    const before = processBrokerStats().launches;
+    expect((await python('print("too-late")', { deadlineAt: Date.now() - 1 })).timedOut).toBe(true);
+    expect(processBrokerStats().launches).toBe(before);
+  });
+
+  it('never submits a command whose caller expires during broker startup', async () => {
+    const starting = startProcessBroker();
+    const pid = processBrokerStats().pid!;
+    process.kill(pid, 'SIGSTOP');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-startup-'));
+    roots.push(root);
+    const marker = path.join(root, 'late-command');
+    try {
+      await waitForProcessState(pid, ['T']);
+      const result = await python(`open(${JSON.stringify(marker)},'w').write('late')`, {
+        deadlineAt: Date.now() + 100,
+      });
+      expect(result.timedOut).toBe(true);
+    } finally {
+      process.kill(pid, 'SIGCONT');
+    }
+    await starting;
+    await waitUntil(() => processBrokerStats().pending === 0, 'Expired startup command settlement');
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(processBrokerStats().pending).toBe(0);
+  });
+
+  it('refuses expired IPC-queued work instead of spawning then cancelling it', async () => {
+    const child = await startProcessBroker();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-queued-'));
+    roots.push(root);
+    const marker = path.join(root, 'late-command');
+    child.kill('SIGSTOP');
+    try {
+      await waitForProcessState(child.pid!, ['T']);
+      expect(
+        (
+          await python(`open(${JSON.stringify(marker)},'w').write('late')`, {
+            deadlineAt: Date.now() + 100,
+          })
+        ).timedOut
+      ).toBe(true);
+    } finally {
+      child.kill('SIGCONT');
+    }
+    await waitUntil(() => processBrokerStats().pending === 0, 'Expired queued command settlement');
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(processBrokerStats().pending).toBe(0);
+  });
+
+  it('keeps a shared command alive for unexpired waiters without extending its original cap', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-waiters-'));
+    roots.push(root);
+    const marker = path.join(root, 'runs');
+    const source = `import time;open(${JSON.stringify(marker)},'a').write('x');time.sleep(.3);print('ok')`;
+    const early = python(source, { coalesce: true, deadlineAt: Date.now() + 150 });
+    const later = python(source, { coalesce: true, deadlineAt: Date.now() + 1200 });
+    expect((await early).timedOut).toBe(true);
+    expect((await later).stdout).toBe('ok\n');
+    expect(fs.readFileSync(marker, 'utf8')).toBe('x');
+
+    const hanging = `import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(10)`;
+    const first = python(hanging, { coalesce: true, timeoutMs: 400, graceMs: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const began = Date.now();
+    const joined = python(hanging, { coalesce: true, timeoutMs: 400, graceMs: 0 });
+    expect((await first).timedOut).toBe(true);
+    expect((await joined).timedOut).toBe(true);
+    expect(Date.now() - began).toBeLessThan(350);
+  });
+
+  it('rejects an expired shared waiter when a queued result beats its overdue timer', async () => {
+    await startProcessBroker();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const began = Date.now();
+      const source = 'import time;time.sleep(.1);print("fresh")';
+      const early = python(source, { coalesce: true, deadlineAt: began + 300 });
+      const later = python(source, { coalesce: true, deadlineAt: began + 1200 });
+      const stalled = new Promise<void>((resolve) =>
+        setTimeout(() => {
+          // Only the fixture parent stalls. The real broker completes its command meanwhile.
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+          resolve();
+        }, 50)
+      );
+      const [earlyResult, laterResult] = await Promise.all([early, later]);
+      await stalled;
+      expect(Date.now() - began).toBeGreaterThanOrEqual(500);
+      expect(earlyResult).toEqual({
+        code: null,
+        stdout: '',
+        timedOut: true,
+        missing: false,
+        failed: true,
+      });
+      expect(laterResult).toEqual({
+        code: 0,
+        stdout: 'fresh\n',
+        timedOut: false,
+        missing: false,
+        failed: false,
+      });
+      expect(processBrokerStats().pending).toBe(0);
+      expect(processBrokerStats().coalesced).toBe(0);
+    }
+  });
+
+  it('kills the shared owned process group when its last waiter expires', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-command-cancel-'));
+    roots.push(root);
+    const marker = path.join(root, 'pids');
+    const source = [
+      'import os,signal,time,json',
+      'signal.signal(signal.SIGTERM,signal.SIG_IGN)',
+      'child=os.fork()',
+      `if child: open(${JSON.stringify(marker)},'w').write(json.dumps([os.getpid(),child]))`,
+      'time.sleep(10)',
+    ].join('\n');
+    const first = python(source, { coalesce: true, deadlineAt: Date.now() + 250 });
+    const last = python(source, { coalesce: true, deadlineAt: Date.now() + 600 });
+    expect((await first).timedOut).toBe(true);
+    const pids: number[] = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    for (const pid of pids) expect(() => process.kill(pid, 0)).not.toThrow();
+    expect((await last).timedOut).toBe(true);
+    for (const pid of pids) {
+      await waitForProcessState(pid, [null, 'Z', 'X']);
+    }
+    expect((await python('print("usable")')).stdout).toBe('usable\n');
+    expect(processBrokerStats().coalesced).toBe(0);
+  });
+
+  it('bounds the number of retained waiters on one shared command', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 70 }, () =>
+        python('import time;time.sleep(.1);print("ok")', { coalesce: true })
+      )
+    );
+    expect(results.filter((result) => result.stdout === 'ok\n')).toHaveLength(64);
+    expect(results.filter((result) => result.failed)).toHaveLength(6);
+    expect(processBrokerStats().coalesced).toBe(0);
+  });
+
   it('forces a lost unresponsive broker to exit without harming its replacement', async () => {
     const { child, exited, work } = await hangOwnedBroker();
     try {
@@ -47,13 +203,14 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
       const replacement = await startProcessBroker();
       expect(replacement.pid).not.toBe(child.pid);
       await withDeadline(exited, 2000);
+      await waitForProcessState(child.pid!, [null]);
       expect(child.signalCode).toBe('SIGKILL');
       expect(processBrokerStats().retired).toBe(0);
       expect((await python('print("replacement-alive")')).stdout).toBe('replacement-alive\n');
       expect(processBrokerStats().pid).toBe(replacement.pid!);
     } finally {
       child.kill('SIGKILL');
-      await exited;
+      await withDeadline(exited, 2000);
     }
   });
 
@@ -75,13 +232,15 @@ describe.skipIf(process.platform === 'win32')('small command parent', () => {
       const shutdown = stopProcessBroker();
       expect(stopProcessBroker()).toBe(shutdown);
       await shutdown;
+      await waitForProcessState(child.pid!, [null]);
+      await waitForProcessState(replacement.pid!, [null]);
       expect(didExit).toBe(true);
       expect(replacementExited).toBe(true);
       expect(child.signalCode).toBe('SIGKILL');
       expect(processBrokerStats().retired).toBe(0);
     } finally {
       child.kill('SIGKILL');
-      await exited;
+      await withDeadline(exited, 2000);
     }
   });
   it('accepts an account-collection burst without refusing valid concurrent commands', async () => {

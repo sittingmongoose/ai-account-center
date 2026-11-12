@@ -32,16 +32,20 @@ process.on('message', (packet) => {
   }
   if (packet?.type === 'cancel') {
     const job = jobs.get(packet.id);
-    if (job) job.finish(true);
+    if (job) job.expire();
+    return;
+  }
+  if (packet?.type === 'deadline') {
+    jobs.get(packet.id)?.extendDeadline(packet.deadlineAt);
     return;
   }
   if (packet?.type !== 'run' || !Number.isSafeInteger(packet.id)) return;
   const { id, file, args, options } = packet;
-  const refuse = () =>
+  const refuse = (timedOut = false) =>
     send({
       type: 'result',
       id,
-      result: { code: null, stdout: '', timedOut: false, missing: false, failed: true },
+      result: { code: null, stdout: '', timedOut, missing: false, failed: true },
     });
   if (
     jobs.size >= 64 ||
@@ -59,9 +63,17 @@ process.on('message', (packet) => {
     options.maxBytes > 16 * 1024 * 1024 ||
     !Number.isFinite(options.graceMs) ||
     options.graceMs < 0 ||
-    options.graceMs > 30000
+    options.graceMs > 30000 ||
+    !Number.isFinite(packet.deadlineAt) ||
+    !Number.isFinite(packet.hardDeadlineAt) ||
+    packet.deadlineAt > packet.hardDeadlineAt
   ) {
     refuse();
+    return;
+  }
+  // IPC queueing consumes the caller's lifetime too. Never launch stale work.
+  if (Date.now() >= packet.deadlineAt) {
+    refuse(true);
     return;
   }
   let child;
@@ -85,11 +97,14 @@ process.on('message', (packet) => {
   let settled = false;
   let timedOut = false;
   let forceTimer;
+  let deadlineTimer;
+  let deadlineAt = packet.deadlineAt;
   const finish = (failed, code = null, missing = false) => {
     if (settled) return;
     settled = true;
     clearTimeout(timer);
     clearTimeout(forceTimer);
+    clearTimeout(deadlineTimer);
     // Kill descendants too: a finished wrapper must not leave owned helpers behind.
     signal(child, 'SIGKILL');
     jobs.delete(id);
@@ -107,7 +122,27 @@ process.on('message', (packet) => {
     signal(child, 'SIGTERM');
     forceTimer = setTimeout(() => finish(true), options.graceMs);
   }, options.timeoutMs);
-  jobs.set(id, { child, finish });
+  const expire = () => {
+    timedOut = true;
+    finish(true);
+  };
+  const armDeadline = () => {
+    clearTimeout(deadlineTimer);
+    deadlineTimer = setTimeout(expire, Math.max(0, deadlineAt - Date.now()));
+  };
+  armDeadline();
+  jobs.set(id, {
+    child,
+    expire,
+    extendDeadline(value) {
+      if (!Number.isFinite(value)) return;
+      // Shared waiters cannot restart or extend the original command's lifetime.
+      const next = Math.min(value, packet.hardDeadlineAt);
+      if (next <= deadlineAt) return;
+      deadlineAt = next;
+      armDeadline();
+    },
+  });
   send({ type: 'started', id, pid: child.pid });
   child.once('error', (error) => finish(true, null, error.code === 'ENOENT'));
   child.stdin.once('error', () => finish(true));
