@@ -62,7 +62,8 @@ import {
 import { StatusService } from '../../../../src/web-server/status/status-service';
 import { buildStatusView } from '../../../../src/web-server/status/status-view';
 import { cardDoc, NOW, tempDirs, threadDoc, writeCard, writeReport } from './status-test-helpers';
-import { waitUntil } from '../../../shared/fixtures/process-state';
+import { waitForProcessState, waitUntil } from '../../../shared/fixtures/process-state';
+import { withDeadline } from '../../../../src/utils/settle-deadline';
 
 const dirs = tempDirs();
 let server: Server | undefined;
@@ -695,7 +696,25 @@ describe('an unavailable share', () => {
     expect(answers.list()).toHaveLength(stored);
     expect(answers.list().every((e) => e.share.state === 'failed')).toBe(true);
     expect(answers.sendList()[0].summary.state).toBe('pending');
-    await answers.retryPending();
+    const delivered = () =>
+      answers.list().every((e) => e.share.state === 'done') &&
+      answers.sendList()[0].summary.state === 'done';
+    const attempts = () =>
+      answers.list().reduce((sum, e) => sum + e.share.attempts, 0) +
+      answers.sendList()[0].summary.attempts;
+    // Restoring the share does not remove its 30 ms per-write deadline. A
+    // contended write may need another retry; every recovery pass must progress.
+    await waitUntil(
+      async () => {
+        if (delivered()) return true;
+        const before = attempts();
+        await soon(answers.retryPending(), 1000);
+        expect(attempts()).toBeGreaterThan(before);
+        return delivered();
+      },
+      'Recovered send and signed summary',
+      5000
+    );
     expect(answers.list().every((e) => e.share.state === 'done')).toBe(true);
     expect(answers.sendList()[0].summary.state).toBe('done');
   });
@@ -2566,26 +2585,70 @@ describe('round three', () => {
     const { root, store, make } = setup();
     const q1 = writeCard(root, cardDoc('vm.lead', 'Q1'));
     fs.mkdirSync(store, { recursive: true });
-    // `sleep 0` ends at once, and its parent then becomes `sleep 5`, which never reaps it
-    const parent = spawn('sh', ['-c', 'sleep 0 & echo $!; exec sleep 5']);
+    // A shell can reap `sleep 0` before exec, so it does not guarantee a zombie.
+    // This parent explicitly waits for cleanup on stdin before reaping its child.
+    const parent = spawn(
+      '/usr/bin/python3',
+      [
+        '-I',
+        '-c',
+        [
+          'import os,signal,sys',
+          'signal.signal(signal.SIGCHLD,signal.SIG_DFL)',
+          'child=os.fork()',
+          'if child == 0: os._exit(0)',
+          'print(child,flush=True)',
+          'sys.stdin.readline()',
+          'os.waitpid(child,0)',
+        ].join('\n'),
+      ],
+      { env: { PATH: '/usr/bin:/bin' } }
+    );
+    parent.stdin.on('error', () => {});
+    const closed = new Promise<number | null>((resolve, reject) => {
+      parent.once('error', reject);
+      parent.once('close', resolve);
+    });
+    void closed.catch(() => {});
+    const lines = createInterface({ input: parent.stdout });
+    let zombie: number | undefined;
     try {
-      const zombie = Number(
-        await new Promise<string>((resolve) =>
-          parent.stdout.once('data', (chunk: Buffer) => resolve(chunk.toString().trim()))
+      zombie = Number(
+        await withDeadline(
+          new Promise<string>((resolve, reject) => {
+            lines.once('line', resolve);
+            parent.once('error', reject);
+            parent.once('exit', () => reject(new Error('Zombie fixture exited before readiness')));
+          }),
+          2000
         )
       );
-      for (let tries = 0; tries < 50; tries += 1) {
-        const stat = fs.readFileSync(`/proc/${zombie}/stat`, 'utf8');
-        if (stat.charAt(stat.lastIndexOf(')') + 2) === 'Z') break;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
+      expect(Number.isSafeInteger(zombie) && zombie > 0).toBe(true);
+      await waitForProcessState(zombie, ['Z']);
+      const stat = fs.readFileSync(`/proc/${zombie}/stat`, 'utf8');
+      expect(Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1])).toBe(parent.pid!);
+      expect(() => process.kill(zombie!, 0)).not.toThrow();
+      // The live parent must retain its lock; only its unreaped, ended child is stale.
+      fs.writeFileSync(
+        path.join(store, 'answers.lock'),
+        JSON.stringify({ pid: parent.pid, host: os.hostname(), at: Date.now() })
+      );
+      expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].code).toBe('store_busy');
       fs.writeFileSync(
         path.join(store, 'answers.lock'),
         JSON.stringify({ pid: zombie, host: os.hostname(), at: Date.now() })
       );
       expect((await make().submitSet([entry(CARD, q1)], 'Mac'))[0].outcome).toBe('recorded');
     } finally {
-      parent.kill();
+      lines.close();
+      parent.stdin.end();
+      try {
+        await withDeadline(closed, 2000);
+      } catch {
+        parent.kill('SIGKILL');
+        await withDeadline(closed, 2000);
+      }
+      if (zombie !== undefined) await waitForProcessState(zombie, [null]);
     }
   });
 
