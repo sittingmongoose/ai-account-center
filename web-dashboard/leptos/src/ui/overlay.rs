@@ -241,7 +241,7 @@ pub fn OverlayPortal(
         if !top_overlay(id) {
             return;
         }
-        if e.key() == "Escape" {
+        if e.key() == "Escape" && !e.default_prevented() {
             if let Some(close) = on_close {
                 e.prevent_default();
                 close.run(());
@@ -362,6 +362,9 @@ pub fn OverlayPortal(
     // Portal mounting happens in an effect. Wait for its node, then focus without scrolling the fixed body/page.
     Effect::new(move |_| {
         if let Some(node) = node.get() {
+            if !top_overlay(id) {
+                return;
+            }
             place_start_guard(node.as_ref(), &tab_stops(node.as_ref()));
             let target = [
                 ".sheet-close",
@@ -383,15 +386,19 @@ pub fn OverlayPortal(
             let _ = window()
                 .remove_event_listener_with_callback("focusin", handler.as_ref().unchecked_ref());
         }
+        // Removing a lower overlay (for example a pin deleted by a poll) must not refocus over its viewer.
+        let was_top = top_overlay(id);
         unlock(id);
-        if let Some(Some(el)) = previous.try_get_value() {
-            if el.is_connected() {
-                focus(&el);
+        if was_top {
+            if let Some(Some(el)) = previous.try_get_value() {
+                if el.is_connected() {
+                    focus(&el);
+                }
             }
         }
     });
     view! {
-        <Portal><div class="overlay-root" node_ref=node>
+        <Portal><div class="overlay-root" style:z-index=(70 + id).to_string() node_ref=node>
             {trap_focus.then(|| view! { <span class="overlay-focus-guard" tabindex="0" aria-hidden="true" data-overlay-guard="start"></span> })}
             {children()}
             {trap_focus.then(|| view! { <span class="overlay-focus-guard" tabindex="0" aria-hidden="true" data-overlay-guard="end"></span> })}

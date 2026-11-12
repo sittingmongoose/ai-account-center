@@ -653,28 +653,25 @@ fn stages_section(p: &Pin) -> AnyView {
 }
 
 #[component]
-fn TaskGroupView(g: TaskGroup) -> impl IntoView {
+fn TaskGroupView(g: Signal<TaskGroup>) -> impl IntoView {
     let open = RwSignal::new(false);
-    let folds = g.folds();
-    let n = g.rows.len();
-    let rows = g.rows.clone();
-    let label = if g.label == "Left" {
-        "Not done"
-    } else {
-        g.label
+    let folds = move || g.with(TaskGroup::folds);
+    let n = move || g.with(|g| g.rows.len());
+    let label = move || {
+        g.with(|g| {
+            if g.label == "Left" {
+                "Not done"
+            } else {
+                g.label
+            }
+        })
     };
     view! {
         <div class="c2-tg">
-            <h5 class="cap" data-tone=g.warn.then_some("warn")>{label}" "<span class="n">{n.to_string()}</span></h5>
-            {move || if folds && !open.get() {
-                view! {
-                    <p class="c2-tg-fold"><span>{plural_tasks(n)}</span>
-                        <button class="link" on:click=move |_| open.set(true)>{format!("Show all {n}")}</button></p>
-                }.into_any()
-            } else {
-                view! {
+            <h5 class="cap" data-tone=move || g.with(|g| g.warn.then_some("warn"))>{label}" "<span class="n">{move || n().to_string()}</span></h5>
+            <Show when=move || folds() && !open.get() fallback=move || view! {
                     <ul class="c2-tg-rows">
-                        {rows.iter().map(|r| view! {
+                        {move || g.get().rows.into_iter().map(|r| view! {
                             <li><span class="c2-tg-t">{r.title.clone()}</span>
                                 {match (&r.odd_state, &r.note) {
                                     (Some(s), _) => view! { <span class="c2-tg-n" data-tone="warn">{format!("reported as \"{s}\"")}</span> }.into_any(),
@@ -683,10 +680,12 @@ fn TaskGroupView(g: TaskGroup) -> impl IntoView {
                                 }}
                             </li>
                         }).collect_view()}
-                        {(folds).then(|| view! { <li class="c2-tg-less"><button class="link" on:click=move |_| open.set(false)>"Fewer"</button></li> })}
+                        <Show when=folds><li class="c2-tg-less"><button class="link" on:click=move |_| open.set(false)>"Fewer"</button></li></Show>
                     </ul>
-                }.into_any()
-            }}
+            }>
+                <p class="c2-tg-fold"><span>{move || plural_tasks(n())}</span>
+                    <button class="link" on:click=move |_| open.set(true)>{move || format!("Show all {}", n())}</button></p>
+            </Show>
         </div>
     }
 }
@@ -716,7 +715,18 @@ fn tasks_section(p: &Pin) -> AnyView {
     }
     let groups = task_groups(&p.u, p.board.as_ref());
     // The list's own time, when its board is known; amber when 6 h older than the thread's report.
-    let as_of = p.board.as_ref().and_then(|b| b.as_of.clone()).map(|at| {
+    let as_of = tasks_as_of(p);
+    view! {
+        <section class="c2-sec">
+            <div class="c2-sec-head"><h4 class="cap">"Tasks"</h4><span class="n">{count.to_string()}</span>{as_of}</div>
+            {groups.into_iter().map(|g| view! { <TaskGroupView g=Signal::derive(move || g.clone())/> }).collect_view()}
+        </section>
+    }
+    .into_any()
+}
+
+fn tasks_as_of(p: &Pin) -> Option<AnyView> {
+    p.board.as_ref().and_then(|b| b.as_of.clone()).map(|at| {
         let list_ms = iso_ms(&at);
         let report_ms = p.u.updated.as_ref().and_then(|u| iso_ms(&u.at));
         let old = matches!((list_ms, report_ms), (Some(l), Some(r)) if r - l > 6.0 * 3_600_000.0)
@@ -725,26 +735,50 @@ fn tasks_section(p: &Pin) -> AnyView {
             (true, Some(l)) => format!("as of {}, {} old", fmt::clock(&at), since_ms(l)),
             _ => format!("as of {}", fmt::clock(&at)),
         };
-        view! { <span class="c2-sec-end" data-tone=old.then_some("warn")>{words}</span> }
+        view! { <span class="c2-sec-end" data-tone=old.then_some("warn")>{words}</span> }.into_any()
+    })
+}
+
+#[component]
+fn LiveTasks(pin: Memo<Option<Pin>>) -> impl IntoView {
+    let count = Memo::new(move |_| {
+        pin.with(|p| {
+            p.as_ref()
+                .map(|p| p.u.left.len() + p.u.done.len())
+                .unwrap_or(0)
+        })
+    });
+    let groups = Memo::new(move |_| {
+        pin.with(|p| {
+            p.as_ref()
+                .map(|p| task_groups(&p.u, p.board.as_ref()))
+                .unwrap_or_default()
+        })
     });
     view! {
         <section class="c2-sec">
-            <div class="c2-sec-head"><h4 class="cap">"Tasks"</h4><span class="n">{count.to_string()}</span>{as_of}</div>
-            {groups.into_iter().map(|g| view! { <TaskGroupView g=g/> }).collect_view()}
+            <div class="c2-sec-head"><h4 class="cap">"Tasks"</h4><Show when={move || count.get() > 0}><span class="n">{move || count.get().to_string()}</span></Show>
+                {move || pin.with(|p| p.as_ref().and_then(tasks_as_of))}</div>
+            <Show when={move || count.get() > 0} fallback=move || view! {
+                <p class="q3 c2-none">{move || pin.with(|p| p.as_ref().and_then(|p| p.u.percent_note.clone()).unwrap_or_else(|| "No task list reported.".into()))}</p>
+            }>
+                <For each=move || groups.get().into_iter().map(|g| g.label) key=|label| *label children=move |label| {
+                    let group = Memo::new(move |_| groups.with(|groups| groups.iter().find(|g| g.label == label).cloned().unwrap_or_default()));
+                    view! { <TaskGroupView g=group.into()/> }
+                }/>
+            </Show>
         </section>
     }
-    .into_any()
 }
 
 // ---- The sheet (wide pane, or the phone's bottom sheet) ----------------------------------------------------------------
 
-fn sheet_body(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
+fn sheet_heading(p: &Pin) -> impl IntoView + use<> {
     let since = match p.word {
         Word::ReadyForYou => ready_since(p).map(|t| format!("since {t}")),
         Word::WaitingOnYou => cards_since(p).map(|t| format!("since {t}")),
         _ => None,
     };
-    let quiet = matches!(p.word, Word::Quiet | Word::NotReporting);
     let cached = p.u.report_state == "unreadable";
     let meta = [
         p.u.who.clone(),
@@ -754,26 +788,6 @@ fn sheet_body(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     .flatten()
     .collect::<Vec<_>>();
     let problems = p.problems();
-    let body = if quiet {
-        let note =
-            p.u.stale_note
-                .clone()
-                .or_else(|| p.u.report_note.clone())
-                .unwrap_or_default();
-        let last =
-            p.u.summary
-                .clone()
-                .map(|s| format!(" The last one said: {s}"));
-        view! { <p class="c2-quiet"><span class="w-ink">{note}</span>{last}</p> }.into_any()
-    } else {
-        view! {
-            <div class="c2-cols" class:dim=cached>
-                <div class="c2-col">{facts(p, elapsed)}{to_open_section(p)}</div>
-                <div class="c2-col">{stages_section(p)}{tasks_section(p)}</div>
-            </div>
-        }
-        .into_any()
-    };
     view! {
         <header class="c2-head">
             <p class="c2-state"><b data-tone=p.word.tone()>{p.word.text()}</b>{since.map(|s| view! { " "<span class="q3">{s}</span> })}</p>
@@ -783,7 +797,67 @@ fn sheet_body(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
         {refusal_notice(&p.u)}
         {cached.then(|| cached_notice(&p.u))}
         {problems.into_iter().skip(usize::from(p.u.refusal.is_some() || cached)).map(|(_, full)| view! { <p class="c2-prob" data-tone="warn">{full}</p> }).collect_view()}
-        {body}
+    }
+}
+
+fn quiet_body(p: &Pin) -> impl IntoView + use<> {
+    let note =
+        p.u.stale_note
+            .clone()
+            .or_else(|| p.u.report_note.clone())
+            .unwrap_or_default();
+    let last =
+        p.u.summary
+            .clone()
+            .map(|s| format!(" The last one said: {s}"));
+    view! { <p class="c2-quiet"><span class="w-ink">{note}</span>{last}</p> }
+}
+
+fn sheet_body(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
+    let body = if matches!(p.word, Word::Quiet | Word::NotReporting) {
+        quiet_body(p).into_any()
+    } else {
+        view! {
+            <div class="c2-cols" class:dim={p.u.report_state == "unreadable"}>
+                <div class="c2-col">{facts(p, elapsed)}{to_open_section(p)}</div>
+                <div class="c2-col">{stages_section(p)}{tasks_section(p)}</div>
+            </div>
+        }
+        .into_any()
+    };
+    view! { {sheet_heading(p)}{body} }
+}
+
+#[component]
+fn LivePinBody(pin: Memo<Option<Pin>>) -> impl IntoView {
+    let live = expect_context::<Live>();
+    let quiet = Memo::new(move |_| {
+        pin.with(|p| {
+            p.as_ref()
+                .is_none_or(|p| matches!(p.word, Word::Quiet | Word::NotReporting))
+        })
+    });
+    // A new Now/age/status must not recreate media controls, disclosure state or the focused action.
+    let deliverables = Memo::new(move |_| {
+        pin.with(|p| {
+            p.as_ref()
+                .map(|p| (p.u.id.clone(), p.r.deliverables.clone()))
+        })
+    });
+    view! {
+        {move || pin.with(|p| p.as_ref().map(sheet_heading))}
+        <Show when=move || !quiet.get() fallback=move || pin.with(|p| p.as_ref().map(quiet_body))>
+            <div class="c2-cols" class:dim=move || pin.with(|p| p.as_ref().is_some_and(|p| p.u.report_state == "unreadable"))>
+                <div class="c2-col">
+                    {move || pin.with(|p| p.as_ref().map(|p| facts(p, live.elapsed_seconds())))}
+                    {move || { deliverables.track(); pin.with_untracked(|p| p.as_ref().map(to_open_section)) }}
+                </div>
+                <div class="c2-col">
+                    {move || pin.with(|p| p.as_ref().map(stages_section))}
+                    <LiveTasks pin=pin/>
+                </div>
+            </div>
+        </Show>
     }
 }
 
@@ -982,22 +1056,25 @@ pub fn PinnedPanelView() -> impl IntoView {
                     }.into_any()
                 }
             }}
-            {move || sheet_pin.get().map(|p| {
+            // A status poll changes the report, not the lifetime of the open overlay. Keep the portal,
+            // scroll container, drag state and stack token until this pin closes or a different pin opens.
+            <For each=move || sheet_id.get() key=|id| id.clone() children=move |_| {
                 let offset = RwSignal::new(0.0f64);
                 view! {
                 <OverlayPortal on_close=close_sheet>
-                <div class="sheet-host c2-sheet-host" role="dialog" aria-modal="true" aria-label=p.title()>
+                <div class="sheet-host c2-sheet-host" role="dialog" aria-modal="true"
+                    aria-label=move || sheet_pin.with(|p| p.as_ref().map(Pin::title).unwrap_or_default())>
                     <button class="sheet-scrim" aria-label="Close" on:click=move |_| close_sheet.run(())></button>
                     <div class="sheet" style=move || sheet_drag_style(offset.get())>
                         <div class="sheet-top">
                             <SheetGrab offset=offset on_close=close_sheet/>
                             <button class="icon-btn bare sheet-close" aria-label="Close" on:click=move |_| close_sheet.run(())><Icon name="close"/></button>
                         </div>
-                        <article class="c2-sheet">{sheet_body(&p, live.elapsed_seconds())}</article>
+                        <article class="c2-sheet"><LivePinBody pin=sheet_pin/></article>
                     </div>
                 </div>
                 </OverlayPortal>
-            } })}
+            } }/>
         </section>
     }
 }

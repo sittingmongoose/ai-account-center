@@ -465,8 +465,9 @@ pub fn start(embed: bool) {
         }
     };
     let apply = std::rc::Rc::new(apply);
-    // Observe the padding box (border-box with no border). The probe's content box stays 0x0, so the default
-    // content-box observation would miss env() padding changes. Keep the observer alive for this document.
+    // One box only measures left+right and top+bottom; an opposite-edge swap keeps both sums unchanged.
+    // Each child inherits just one computed padding edge, so every edge has its own observable dimension.
+    // Reading the parent still gives one coherent inset snapshot, including the display-only padding override.
     if let Some(probe) = probe {
         let apply = apply.clone();
         let observed =
@@ -476,7 +477,17 @@ pub fn start(embed: bool) {
         if let Ok(observer) = web_sys::ResizeObserver::new(observed.as_ref().unchecked_ref()) {
             let options = web_sys::ResizeObserverOptions::new();
             options.set_box(web_sys::ResizeObserverBoxOptions::BorderBox);
-            observer.observe_with_options(&probe, &options);
+            for edge in ["top", "right", "bottom", "left"] {
+                if let Ok(el) = doc.create_element("div") {
+                    let _ = el.set_attribute("data-safe-edge", edge);
+                    let _ = el.set_attribute(
+                        "style",
+                        &format!("position:fixed;left:0;top:0;width:0;height:0;padding:0;overflow:hidden;pointer-events:none;visibility:hidden;padding-{edge}:inherit;"),
+                    );
+                    let _ = probe.append_child(&el);
+                    observer.observe_with_options(&el, &options);
+                }
+            }
             // ResizeObserver remains active until document teardown, like the window listeners below.
             std::mem::forget(observer);
             observed.forget();

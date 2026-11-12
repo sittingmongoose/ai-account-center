@@ -81,6 +81,94 @@ const sheetBox = () => {
   );
 };
 export const tests = {
+  async 'duo regression: horizontal inset redistribution after all settles'(t) {
+    await open(t, 678, 466, '0,84,34,0');
+    await t.page.evaluate(() => dispatchEvent(new Event('orientationchange')));
+    await t.page.waitForTimeout(1800);
+    const before = await t.page.evaluate(() => {
+      const probe =
+        document.querySelector('[data-safe-probe]') ||
+        [...document.body.children].find((e) => e.style.padding.includes('safe-area-inset'));
+      const r = probe.getBoundingClientRect();
+      return { width: r.width, height: r.height };
+    });
+    for (const side of ['left', 'right']) {
+      await safe(t, side === 'left' ? '0px 0px 34px 84px' : '0px 84px 34px 0px');
+      await t.page.waitForTimeout(250);
+      const actual = await t.page.evaluate(() => {
+        const root = document.documentElement,
+          css = getComputedStyle(root);
+        const probe =
+          document.querySelector('[data-safe-probe]') ||
+          [...document.body.children].find((e) => e.style.padding.includes('safe-area-inset'));
+        const r = probe.getBoundingClientRect(),
+          p = getComputedStyle(probe),
+          c = document.querySelector('main.content').getBoundingClientRect();
+        return {
+          side: root.dataset.railSide,
+          left: css.getPropertyValue('--safe-left'),
+          right: css.getPropertyValue('--safe-right'),
+          probeLeft: p.paddingLeft,
+          probeRight: p.paddingRight,
+          width: r.width,
+          height: r.height,
+          contentLeft: c.left,
+          contentRight: c.right,
+          controls: [...document.querySelectorAll('.content button')]
+            .filter((e) => e.getBoundingClientRect().width)
+            .map((e) => {
+              const b = e.getBoundingClientRect();
+              return [b.left, b.right];
+            }),
+        };
+      });
+      await t.check(
+        `${side}: witness keeps the original combined probe dimensions`,
+        actual.width === before.width && actual.height === before.height,
+        JSON.stringify(actual)
+      );
+      await t.equal(
+        `${side}: rail follows the new edge without a viewport event`,
+        actual.side,
+        side
+      );
+      await t.check(
+        `${side}: safe properties follow individual edges`,
+        actual.left === (side === 'left' ? '84px' : '0px') &&
+          actual.right === (side === 'right' ? '84px' : '0px'),
+        JSON.stringify(actual)
+      );
+      await t.check(
+        `${side}: content clears the camera-side strip`,
+        Math.abs(actual.contentLeft - (side === 'left' ? 84 : 0)) <= 1 &&
+          Math.abs(actual.contentRight - (side === 'right' ? 594 : 678)) <= 1 &&
+          actual.controls.every(
+            ([l, r]) => l >= (side === 'left' ? 84 : 0) && r <= (side === 'right' ? 594 : 678)
+          ),
+        JSON.stringify(actual)
+      );
+      if (side === 'left')
+        await t.shot(
+          'duo-inset-side-swap',
+          'The late opposite-edge inset moves the rail and content clear of the left camera strip without a resize.'
+        );
+    }
+  },
+  async 'duo regression: vertical inset redistribution after all settles'(t) {
+    await open(t, 402, 874, '62,0,34,0');
+    await t.page.waitForTimeout(1800);
+    await safe(t, '34px 0px 62px 0px');
+    await t.page.waitForTimeout(250);
+    const actual = await t.page.evaluate(() => {
+      const s = getComputedStyle(document.documentElement);
+      return [s.getPropertyValue('--safe-top'), s.getPropertyValue('--safe-bottom')];
+    });
+    await t.check(
+      'top and bottom update even when their sum stays 96px',
+      actual[0] === '34px' && actual[1] === '62px',
+      JSON.stringify(actual)
+    );
+  },
   async 'duo regression: late portrait insets without resize'(t) {
     await open(t, 669, 869, '0,0,34,0');
     await t.equal(
@@ -215,7 +303,11 @@ async function noInsetObserver(t) {
     const Native = window.ResizeObserver;
     window.ResizeObserver = class extends Native {
       observe(el, options) {
-        if (el.hasAttribute('data-safe-probe') || el.style.padding.includes('safe-area-inset'))
+        if (
+          el.hasAttribute('data-safe-probe') ||
+          el.hasAttribute('data-safe-edge') ||
+          el.style.padding.includes('safe-area-inset')
+        )
           return;
         super.observe(el, options);
       }

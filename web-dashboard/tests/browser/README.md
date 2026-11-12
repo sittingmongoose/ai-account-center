@@ -31,6 +31,13 @@ browser-check run web-dashboard/tests/browser/checks --set home=/tmp/fixture-hom
 
 Frames that aren't listed are saved as snaps for `browser-check diff <base run> <candidate run>`.
 
+`frames/duo-poll.check.mjs` covers ordinary ten-second status polls while a pin sheet is being read or another
+overlay is above it. It requires stable sheet/media DOM, retained internal scroll and focus, newest-overlay
+paint/Tab/Escape ownership, and safe removal of a lower pin. It uses only synthetic status responses and media.
+`frames/duo-fixes.check.mjs` also swaps left/right and top/bottom insets after the final settle pass, with unchanged
+viewport and combined probe dimensions. For those edge regressions, add `--set rawProbe=1` to exercise the
+computed-padding seam. Each edge must update safe properties and content clearance without a viewport event.
+
 ## Recording, machines and parallel runs
 
 - **Parallel runs:** each gets its own browser, temporary home and reserved port. Use a worktree per candidate or `--set repo=<tree>`: rebuilding `dist/` during a run breaks that run. `--set port=N` fixes the port, so don't use it in parallel.
