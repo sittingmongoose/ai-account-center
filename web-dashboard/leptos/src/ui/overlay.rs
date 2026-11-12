@@ -236,6 +236,7 @@ pub fn OverlayPortal(
     lock(id, lock_scroll);
     let backwards = StoredValue::new(false);
     let last_focus = StoredValue::new_local(None::<web_sys::HtmlElement>);
+    let preparing_reverse = StoredValue::new(false);
     let keys = window_event_listener(leptos::ev::keydown, move |e| {
         if !top_overlay(id) {
             return;
@@ -245,18 +246,48 @@ pub fn OverlayPortal(
                 e.prevent_default();
                 close.run(());
             }
-        } else if e.key() == "Tab" && trap_focus {
+        } else if e.key() == "Tab"
+            && trap_focus
+            && !e.default_prevented()
+            && !e.ctrl_key()
+            && !e.alt_key()
+            && !e.meta_key()
+        {
             // Do not prevent Tab here: native media/shadow controls and iframe documents own their inner order.
             backwards.set_value(e.shift_key());
             if let Some(root) = node.get_untracked() {
-                place_start_guard(root.as_ref(), &tab_stops(root.as_ref()));
+                let stops = tab_stops(root.as_ref());
+                place_start_guard(root.as_ref(), &stops);
+                // Move the navigation starting point before the trusted key's default action. Focusing a
+                // media/frame host after navigation has ended cannot enter its last internal Tab stop.
+                // Do not intercept keys inside a browser-owned focus scope: its own reverse order is native.
+                if e.shift_key() {
+                    if let Some(first) = stops.first() {
+                        let at_first = document()
+                            .active_element()
+                            .is_some_and(|el| js_sys::Object::is(el.as_ref(), first.as_ref()));
+                        let scope = first
+                            .matches("video[controls], audio[controls], iframe, object, embed")
+                            .unwrap_or(false);
+                        if at_first && !scope {
+                            if let Ok(Some(end)) = root.query_selector("[data-overlay-guard='end']")
+                            {
+                                if let Ok(end) = end.dyn_into::<web_sys::HtmlElement>() {
+                                    preparing_reverse.set_value(true);
+                                    let _ = end.focus();
+                                    preparing_reverse.set_value(false);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     });
     // Redirecting focus dispatches focusin synchronously. This callback must be Fn (reentrant), rather than
     // window_event_listener's FnMut wrapper, which rejects a recursive invocation during focus().
     let containment = Closure::<dyn Fn(web_sys::FocusEvent)>::new(move |e: web_sys::FocusEvent| {
-        if !trap_focus || !top_overlay(id) {
+        if !trap_focus || !top_overlay(id) || preparing_reverse.get_value() {
             return;
         }
         let Some(root) = node.get_untracked() else {

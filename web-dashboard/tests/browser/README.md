@@ -75,8 +75,11 @@ The startup/lifecycle checks suppress only that probe's observer to exercise the
 `--grep 'duo interactions'` checks Escape, focus return, scrim tap, fling and fresh sheet state on reopen.
 
 `frames/duo-focus.check.mjs` (`--grep duo-focus`) checks actual keyboard navigation in the body overlay, including
-native video playback, seek and mute through Chromium's accessibility tree, reverse navigation and wrapping,
-summary, iframe content, editing hosts, audio controls and positive tabindex ordering. The `keyboard-controls.mp4`
+native video playback, seek and mute in both directions through Chromium's accessibility tree. Complete forward
+and reverse tours must visit the same stops in opposite order, including every native media button/slider, summary,
+editing hosts, positive tabindex ordering and multi-control same-origin/opaque iframe content. Separate iframe
+boundary tests reset the frame's remembered focus to its first control, then require reverse entry at its last control.
+`--set packaged=1` runs the same cases against this checkout's fingerprinted `dist/ui` runtime. The `keyboard-controls.mp4`
 fixture copies the synthetic option-b video stream and adds silent AAC audio so the mute control is enabled:
 
 ```sh
