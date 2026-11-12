@@ -73,6 +73,9 @@ for (const priorSuccess of [true, false])
       let sends = 0;
       let allowRetry = false;
       let duringRetry: unknown;
+      let consumedWhilePending: unknown;
+      let oldGrant = '',
+        oldToken = '';
       const app = express();
       app.use(express.json());
       app.use((req: any, _res, next) => {
@@ -91,6 +94,9 @@ for (const priorSuccess of [true, false])
               sends++;
               if (!allowRetry) throw new Error('Unexpected synthetic send');
               duringRetry = await get();
+              consumedWhilePending = (
+                await post('', { grantKey: oldGrant, confirmationToken: oldToken })
+              ).body;
               state(0, 21, priorSuccess, true);
               return { outcome: 'reset' };
             },
@@ -172,6 +178,8 @@ for (const priorSuccess of [true, false])
         expect(sends).toBe(0);
         expect(existsSync(join(home, 'unexpected-send'))).toBe(false);
         const refusedSendCount = sends;
+        oldGrant = key;
+        oldToken = prep.body.confirmationToken;
         allowRetry = true;
         const retryPrep = await post('/prepare', { grantKey: recovered.grants[1].grantKey });
         expect(retryPrep.status).toBe(200);
@@ -183,7 +191,17 @@ for (const priorSuccess of [true, false])
         expect(retry.body.outcome).toBe('claimed');
         expect(retry.body.attemptKey).not.toBe(first?.attemptKey);
         const afterRetry = await get();
+        const consumedAfterSuccess = (
+          await post('', { grantKey: key, confirmationToken: prep.body.confirmationToken })
+        ).body;
         expect(afterRetry.evidence.latestAttempt.attemptKey).toBe(retry.body.attemptKey);
+        expect((consumedWhilePending as any).sent).toBe(false);
+        expect((consumedWhilePending as any).reason).toBe('check-again-required');
+        expect((consumedWhilePending as any).evidence.latestAttempt.pending).toBe(true);
+        expect(consumedAfterSuccess.sent).toBe(false);
+        expect(consumedAfterSuccess.reason).toBe('confirmation-invalid');
+        expect(consumedAfterSuccess.evidence.latestAttempt.attemptKey).toBe(retry.body.attemptKey);
+        expect(consumedAfterSuccess.evidence.latestAttempt.outcome).toBe('claimed');
         expect(sends).toBe(1);
         expect(existsSync(join(home, 'unexpected-send'))).toBe(false);
         if (process.env.AAC_RESET_CAPTURE_TRACES)
@@ -206,6 +224,8 @@ for (const priorSuccess of [true, false])
                 afterRetry,
                 syntheticRetrySends: sends,
                 duringRetry,
+                consumedWhilePending,
+                consumedAfterSuccess,
               },
               null,
               2

@@ -42,13 +42,7 @@ fn real_no_send_refusal_survives_refresh_hints_navigation_and_keeps_success_only
             Owner::new().with(|| {
                 let (rc, canonical) = start(&t);
                 if prior {
-                    assert!(
-                        rc.said
-                            .get_untracked()
-                            .unwrap()
-                            .text
-                            .starts_with("Reset applied")
-                    );
+                    assert!(rc.said.get_untracked().is_none());
                 }
                 rc.take(ROUTE, inventory(&t, "withToken"), 101.);
                 let p: Prepared = serde_json::from_value(t["prepared"].clone()).unwrap();
@@ -242,7 +236,7 @@ fn an_unrelated_newer_attempt_and_its_settlement_supersede_a_delayed_refusal() {
             assert_eq!(rc.said.get_untracked(), before);
             assert_eq!(rc.unresolved.get_untracked(), lock);
             if settled {
-                assert!(before.unwrap().text.starts_with("Reset applied"));
+                assert!(before.is_none());
             } else {
                 no_old_success(rc);
             }

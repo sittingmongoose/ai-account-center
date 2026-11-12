@@ -146,7 +146,8 @@ kinds in the provider's words with "AAC doesn't know what this refills yet; it c
 the dialog calls only `prepare`; it shows prepare's `account.label`, the grant, what it refills, its expiry and
 "You have N; this spends one and can't be undone", and counts down the confirmation (ending 10 s early so the
 server's fresh read fits inside its 120 s). Only "Use this reset" calls the claim route. The result line belongs to
-the newest account action or server attempt, then the group reads the inventory again; nothing is shown as used until a read says so. Z.ai
+the newest local account action; unresolved server claims provide status, while settled receipts appear in dated history.
+The group reads inventory again; current limits come from source readings. Z.ai
 cards are listed with "Use in Z.ai"; Qwen says its plan has none. Paired native bars never call these routes.
 
 Inventory, pending recovery, prepare, claim and check responses carry `evidence`:
@@ -239,3 +240,22 @@ Focus, visible-again, online and socket reconnection also invalidate and re-read
 Socket/listener ownership ends with the signed-in view. Hints authorize nothing;
 server exclusion and transaction-time validation protect even a missed hint or
 a delayed pre-prepare response on an already-open page.
+
+### Receipt provenance and current limits
+
+Only current source readings supply current limits and percentages. A local claim
+answer can say "Reset applied and confirmed", but never treats receipt windows as
+current usage. Durable settled receipts loaded by a fresh page, sibling alias,
+navigation, hint or recovery do not become current action answers. They remain in
+canonical account history with the audit's time. The history summary says "Last
+claim at ..." and uses the same recorded timestamp as the dated table; cached
+history survives navigation and unavailable quota reads. No server-side refusal
+persistence is needed to keep this framing honest.
+
+A local action's server attempt/result frontier is captured once at action start.
+Responses can update account recovery evidence under the existing revision rules,
+but never assign that evidence back to the action's frontier. An old refusal is
+current only while its original frontier still matches. A newer pending or
+confirmed attempt takes precedence even if that newer state arrives inside the
+old refusal body. Provenance for a completed local claim is its own attempt key;
+read-only checks and unrelated receipts cannot manufacture that provenance.

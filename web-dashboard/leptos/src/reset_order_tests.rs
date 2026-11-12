@@ -299,7 +299,7 @@ fn reassignment_in_both_directions_keeps_results_and_locks_with_canonical_accoun
             assert!(rc.receive(&original, &settled, None));
             assert_eq!(rc.said.get_untracked(), shown);
             assert!(!rc.lock_of("old-sibling").blocks());
-            assert!(!rc.said_of("old-sibling").unwrap().check);
+            assert!(rc.said_of("old-sibling").is_none());
             // Delayed original binding cannot redirect the current view back to X.
             rc.take("reused", x.clone(), 5.);
             assert_eq!(rc.lock_key("reused"), replacement);
@@ -316,10 +316,7 @@ fn reassignment_in_both_directions_keeps_results_and_locks_with_canonical_accoun
                     .contains(ACCOUNT_CHANGED)
             );
             rc.show("old-sibling", "codex", false);
-            assert_eq!(
-                rc.said.get_untracked(),
-                Some(result_said(&settled, "codex"))
-            );
+            assert!(rc.said.get_untracked().is_none());
         });
     }
 }
@@ -467,7 +464,14 @@ fn every_permutation_of_recorded_responses_keeps_lock_result_and_unknown_send_co
                             .contains("no confirmed answer")
                     );
                 } else {
-                    assert_eq!(state.current("codex"), Some(result_said(latest, "codex")));
+                    if latest.pending {
+                        let current = state.current("codex").unwrap();
+                        assert!(
+                            current.bad && current.check && current.text.contains("unconfirmed")
+                        );
+                    } else {
+                        assert!(state.current("codex").is_none());
+                    }
                 }
             }
         }
@@ -1087,13 +1091,7 @@ fn failed_quota_reads_do_not_project_a_prior_accounts_confirmation_and_recovery_
                         serde_json::from_value(trace["prior"].clone()).unwrap(),
                         1.,
                     );
-                    assert!(
-                        rc.said
-                            .get_untracked()
-                            .unwrap()
-                            .text
-                            .contains("Reset applied")
-                    );
+                    assert!(rc.said.get_untracked().is_none());
                     rc.invalidate();
                 }
                 let failed: Inventory =
@@ -1131,13 +1129,7 @@ fn failed_quota_reads_do_not_project_a_prior_accounts_confirmation_and_recovery_
                             .contains("Reset applied")
                     );
                 } else {
-                    assert!(
-                        rc.said
-                            .get_untracked()
-                            .unwrap()
-                            .text
-                            .contains("Reset applied")
-                    );
+                    assert!(rc.said.get_untracked().is_none());
                 }
                 assert_eq!(trace["providerSends"], 0);
             });

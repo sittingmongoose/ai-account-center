@@ -506,18 +506,6 @@ pub fn until_words(ms: f64) -> String {
     }
 }
 
-/// A limit window by the name the meters use.
-pub fn window_name(id: &str, provider: &str) -> String {
-    match (provider, id) {
-        (_, "five_hour") => "5-hour".into(),
-        (_, "seven_day") => "Weekly".into(),
-        (_, "seven_day_overage_included") => "Fable included usage".into(),
-        ("codex", "primary") => "5-hour".into(),
-        ("codex", "secondary") => "Weekly".into(),
-        (_, other) => other.replace('_', " "),
-    }
-}
-
 /// How a result reads in place, and what it allows next.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Said {
@@ -528,7 +516,7 @@ pub struct Said {
     pub check: bool,
 }
 
-pub fn result_said(r: &ClaimResult, provider: &str) -> Said {
+pub fn result_said(r: &ClaimResult, _provider: &str) -> Said {
     let plain = |text: &str| Said {
         text: text.into(),
         bad: false,
@@ -540,22 +528,7 @@ pub fn result_said(r: &ClaimResult, provider: &str) -> Said {
         check: false,
     };
     match r.outcome.as_str() {
-        "claimed" => {
-            let parts: Vec<String> = r
-                .windows
-                .iter()
-                .filter_map(|w| {
-                    w.used_percent
-                        .filter(|p| p.is_finite())
-                        .map(|p| format!("{} is back to {}% used", window_name(&w.id, provider), p.round() as i64))
-                })
-                .collect();
-            if parts.is_empty() {
-                plain("Reset applied and confirmed.")
-            } else {
-                plain(&format!("Reset applied: {}.", parts.join(", ")))
-            }
-        }
+        "claimed" => plain("Reset applied and confirmed."),
         "claimed-unconfirmed" if r.provider_success => Said {
             text: "Reset was applied, but AAC could not confirm the new limits. Check again.".into(),
             bad: true,
@@ -666,6 +639,15 @@ pub fn history_rows(events: &[HistoryEvent]) -> Vec<HistoryRow> {
     let mut out: Vec<HistoryRow> = rows.into_iter().map(|(_, r)| r).collect();
     out.sort_by(|a, b| b.at_ms.total_cmp(&a.at_ms));
     out
+}
+
+fn history_summary(row: &HistoryRow, format_time: impl Fn(f64) -> String) -> String {
+    format!(
+        "Last claim at {}: {}. {}. Every claim on this account is kept.",
+        format_time(row.at_ms),
+        row.kind,
+        row.result
+    )
 }
 
 /// The client's own deadline for a confirmation: the server's 120 s counted from when prepare was sent (the server
@@ -1011,6 +993,16 @@ impl ResetCtx {
             }
             entries.sort_by_key(|e| e.sequence.parse::<u64>().unwrap_or(0));
         });
+    }
+    fn history_of(&self, account: &str) -> Vec<HistoryEvent> {
+        let canonical = self.lock_key(account);
+        self.histories.with_value(|histories| {
+            histories
+                .iter()
+                .find(|(key, _)| key == &canonical)
+                .map(|(_, events)| events.clone())
+                .unwrap_or_default()
+        })
     }
     #[cfg(test)]
     fn take(&self, account: &str, inv: Inventory, started_ms: f64) {
@@ -1755,10 +1747,9 @@ pub fn ResetDialog(rc: ResetCtx) -> impl IntoView {
 pub fn ResetHistory(rc: ResetCtx) -> impl IntoView {
     let all = RwSignal::new(false);
     let rows = Memo::new(move |_| {
-        rc.load.with(|l| match l {
-            Load::Ready(inv) => history_rows(&inv.history),
-            _ => vec![],
-        })
+        let account = rc.account.get();
+        rc.load.track();
+        history_rows(&rc.history_of(&account))
     });
     move || {
         let list = rows.get();
@@ -1767,6 +1758,7 @@ pub fn ResetHistory(rc: ResetCtx) -> impl IntoView {
             return None;
         }
         let n = list.len();
+        let awaiting_history = list.is_empty() && !older.is_empty();
         let last = list.first().cloned();
         let shown: Vec<HistoryRow> = if all.get() {
             list
@@ -1776,8 +1768,8 @@ pub fn ResetHistory(rc: ResetCtx) -> impl IntoView {
         Some(view! {
             <section class="fg" data-probe="reset-history">
                 <div class="fg-cap"><h3 class="cap">"Reset claims"</h3><span class="end"><b>{n}</b>{if n == 1 { " claim" } else { " claims" }}</span></div>
-                {last.map(|last| view! { <p class="fg-sum"><b>{format!("Last: {} on {}.", last.kind, day(last.at_ms))}</b>{format!(" {}. Every claim on this account is kept.", last.result)}</p> })}
-                {older.into_iter().map(|text| view! { <p class="fg-line">{text}</p> }).collect_view()}
+                {last.map(|last| view! { <p class="fg-sum">{history_summary(&last,when)}</p> })}
+                {awaiting_history.then(|| view! { <p class="fg-line">"Earlier claim receipts are available. Check again to load their dated history."</p> })}
                 <table class="ft">
                     <thead><tr><th class="cap">"When"</th><th class="cap">"Reset"</th><th class="cap r">"Result"</th></tr></thead>
                     <tbody>
@@ -2040,7 +2032,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             result_said(&ok, "claude").text,
-            "Reset applied: Weekly is back to 0% used."
+            "Reset applied and confirmed."
         );
         let unconfirmed = ClaimResult {
             outcome: "claimed-unconfirmed".into(),
@@ -2076,7 +2068,6 @@ mod tests {
             "That reset was already used."
         );
         assert!(!result_said(&used, "claude").check);
-        assert_eq!(window_name("secondary", "codex"), "Weekly");
     }
 
     #[test]
@@ -2173,3 +2164,7 @@ mod order_tests;
 #[cfg(test)]
 #[path = "reset_action_tests.rs"]
 mod action_tests;
+
+#[cfg(test)]
+#[path = "reset_receipt_tests.rs"]
+mod receipt_tests;

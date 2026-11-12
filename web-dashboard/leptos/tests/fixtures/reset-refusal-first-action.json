@@ -17,7 +17,7 @@
         "claimBlockedReason": null,
         "claimable": true,
         "expiresAtMs": null,
-        "grantKey": "00f0290fe509e556ac6e5bf972662536956667668df6cb6d089bac77d8c0bf88",
+        "grantKey": "cbca11d60585f64e8559dde46755ef9eb6d4d90a19b1b3967ee96bc19de86468",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -28,7 +28,7 @@
         "claimBlockedReason": null,
         "claimable": true,
         "expiresAtMs": null,
-        "grantKey": "248dbdae42dbb81e9093a3eda0beda02dc39fee82a4fcabc2e55a6dfc864c651",
+        "grantKey": "9be798ce1af7d35671e9d5a355273b88c56d535979c831522e9adf5d1cf11e3b",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -37,36 +37,36 @@
       }
     ],
     "history": [],
-    "observedAtMs": 1794493100127,
+    "observedAtMs": 1794495907978,
     "pendingAttempt": null,
-    "sourceAgeMs": 33,
+    "sourceAgeMs": 45,
     "status": "ok"
   },
   "prepared": {
     "account": {
       "label": "fixture-account-x"
     },
-    "confirmationKey": "540fd6fd5e94f01d7687e85a840a0752d25105a07c97ba3169ed6af4a93f291a",
-    "confirmationToken": "88e6cfbd1175457ea804c2d381d253d0c2694cca9b85705f88a90cd5d71a2aad",
+    "confirmationKey": "1ede4eb7f5668a08111a73c9b17be4021554ecdff0793b8348707e31d33a3626",
+    "confirmationToken": "6e5a3be62b5c9a523edc46ec63aa87c09aa5f74f1a8126b1be2744061670045d",
     "costText": "Spends one selected reset. This cannot be undone.",
     "evidence": {
       "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
       "claimTokens": {
         "tokenKeys": [
-          "540fd6fd5e94f01d7687e85a840a0752d25105a07c97ba3169ed6af4a93f291a"
+          "1ede4eb7f5668a08111a73c9b17be4021554ecdff0793b8348707e31d33a3626"
         ],
-        "untilMs": 1794493220213
+        "untilMs": 1794496028094
       },
       "latestAttempt": null,
       "pendingAttempts": [],
       "revision": "3"
     },
-    "expiresAtMs": 1794493220213,
+    "expiresAtMs": 1794496028094,
     "grant": {
       "claimBlockedReason": null,
       "claimable": true,
       "expiresAtMs": null,
-      "grantKey": "248dbdae42dbb81e9093a3eda0beda02dc39fee82a4fcabc2e55a6dfc864c651",
+      "grantKey": "9be798ce1af7d35671e9d5a355273b88c56d535979c831522e9adf5d1cf11e3b",
       "kind": "banked",
       "label": "Banked reset",
       "providerWords": null,
@@ -81,9 +81,9 @@
       "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
       "claimTokens": {
         "tokenKeys": [
-          "540fd6fd5e94f01d7687e85a840a0752d25105a07c97ba3169ed6af4a93f291a"
+          "1ede4eb7f5668a08111a73c9b17be4021554ecdff0793b8348707e31d33a3626"
         ],
-        "untilMs": 1794493220213
+        "untilMs": 1794496028094
       },
       "latestAttempt": null,
       "pendingAttempts": [],
@@ -94,7 +94,7 @@
         "claimBlockedReason": null,
         "claimable": true,
         "expiresAtMs": null,
-        "grantKey": "4ddb62fbcb0d74a1cbc833f86748bc79c52c9f8b864aa7207414c139211aa077",
+        "grantKey": "f0d0e708eeb51d1365e83e3ffd0c2d5b4ef5060dc7cf631001c396b08d92ed4f",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -105,7 +105,7 @@
         "claimBlockedReason": null,
         "claimable": true,
         "expiresAtMs": null,
-        "grantKey": "e5821bd9ae29caa53fae6ceb83c72dd06080851dfbea57941614a8b029dfba9c",
+        "grantKey": "b12d72f1961a759808fdbfae041e35b8ede6566387eaeb396c51fa974930e7fb",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -115,7 +115,7 @@
     ],
     "history": [
       {
-        "atMs": 1794493100213,
+        "atMs": 1794495908094,
         "details": {
           "beforeCount": 1,
           "callerHash": "d7277c6437dfa68423d4179e9ca29fbf20e5a5c75cc8ad57604a546427d162a6",
@@ -128,12 +128,12 @@
         "event": "prepare",
         "outcome": "prepared",
         "sequence": "1",
-        "targetHash": "6c952f936f164df708c766922f0dc2026787007448422ead7caed580eece1148"
+        "targetHash": "f7eee6af3b16b668f5e4c75e21e362028ec3ce453df99e3e6c8fe945f74f75e9"
       }
     ],
-    "observedAtMs": 1794493100233,
+    "observedAtMs": 1794495908117,
     "pendingAttempt": null,
-    "sourceAgeMs": 33,
+    "sourceAgeMs": 39,
     "status": "ok"
   },
   "refused": {
@@ -170,7 +170,7 @@
         "claimBlockedReason": null,
         "claimable": true,
         "expiresAtMs": null,
-        "grantKey": "8d4253eda2dc575d4f3e217037393b96de77b6e0eb0ed8a530cd5119570ba23f",
+        "grantKey": "ddb697758702372783960274b2d4299c66484123a7461afd9aca5ee2b5539da2",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -181,7 +181,7 @@
         "claimBlockedReason": null,
         "claimable": true,
         "expiresAtMs": null,
-        "grantKey": "91d35c241af2f623ac8ed2f4b35bcb6cc6769840da3502cdc6402f738f8bf3c0",
+        "grantKey": "e9be1d70246048978249bd5d12d1045a066f162c6b97b144b453b486c7c34655",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -191,7 +191,7 @@
     ],
     "history": [
       {
-        "atMs": 1794493100213,
+        "atMs": 1794495908094,
         "details": {
           "beforeCount": 1,
           "callerHash": "d7277c6437dfa68423d4179e9ca29fbf20e5a5c75cc8ad57604a546427d162a6",
@@ -204,12 +204,12 @@
         "event": "prepare",
         "outcome": "prepared",
         "sequence": "1",
-        "targetHash": "6c952f936f164df708c766922f0dc2026787007448422ead7caed580eece1148"
+        "targetHash": "f7eee6af3b16b668f5e4c75e21e362028ec3ce453df99e3e6c8fe945f74f75e9"
       }
     ],
-    "observedAtMs": 1794493100339,
+    "observedAtMs": 1794495908248,
     "pendingAttempt": null,
-    "sourceAgeMs": 32,
+    "sourceAgeMs": 40,
     "status": "ok"
   },
   "actualWindows": {
@@ -221,27 +221,27 @@
     "account": {
       "label": "fixture-account-x"
     },
-    "confirmationKey": "7f9d6f73658f635294d6ba43418982a88ae17564a23bd03943922dd9f260e318",
-    "confirmationToken": "ca7d7c8a22b865e6a8cfbf71938eb05a0255ac369dc20fd5f5acb975af247830",
+    "confirmationKey": "32d285d1efad7fc8d082e8214293cb0bdb650ba855361c10f48c460c13ca6fd2",
+    "confirmationToken": "4e86bf10c46c37bbae7738f8e8576037b9862a23a83013284ddada5349ee38cf",
     "costText": "Spends one selected reset. This cannot be undone.",
     "evidence": {
       "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
       "claimTokens": {
         "tokenKeys": [
-          "7f9d6f73658f635294d6ba43418982a88ae17564a23bd03943922dd9f260e318"
+          "32d285d1efad7fc8d082e8214293cb0bdb650ba855361c10f48c460c13ca6fd2"
         ],
-        "untilMs": 1794493220457
+        "untilMs": 1794496028395
       },
       "latestAttempt": null,
       "pendingAttempts": [],
       "revision": "7"
     },
-    "expiresAtMs": 1794493220457,
+    "expiresAtMs": 1794496028395,
     "grant": {
       "claimBlockedReason": null,
       "claimable": true,
       "expiresAtMs": null,
-      "grantKey": "91d35c241af2f623ac8ed2f4b35bcb6cc6769840da3502cdc6402f738f8bf3c0",
+      "grantKey": "e9be1d70246048978249bd5d12d1045a066f162c6b97b144b453b486c7c34655",
       "kind": "banked",
       "label": "Banked reset",
       "providerWords": null,
@@ -250,7 +250,7 @@
     }
   },
   "retry": {
-    "attemptKey": "4074245756ba537a7e3e2dd354efd972b40a383dd07a8f8345c41ca7876360f1",
+    "attemptKey": "0a0b6b138f7f8582c1b585b86fbe5cf1bb9de21d2aabc3f5e997aa064d7de480",
     "attemptOrder": "1",
     "evidence": {
       "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
@@ -259,7 +259,7 @@
         "untilMs": null
       },
       "latestAttempt": {
-        "attemptKey": "4074245756ba537a7e3e2dd354efd972b40a383dd07a8f8345c41ca7876360f1",
+        "attemptKey": "0a0b6b138f7f8582c1b585b86fbe5cf1bb9de21d2aabc3f5e997aa064d7de480",
         "attemptOrder": "1",
         "outcome": "claimed",
         "pending": false,
@@ -296,7 +296,7 @@
         "untilMs": null
       },
       "latestAttempt": {
-        "attemptKey": "4074245756ba537a7e3e2dd354efd972b40a383dd07a8f8345c41ca7876360f1",
+        "attemptKey": "0a0b6b138f7f8582c1b585b86fbe5cf1bb9de21d2aabc3f5e997aa064d7de480",
         "attemptOrder": "1",
         "outcome": "claimed",
         "pending": false,
@@ -317,7 +317,7 @@
         "claimBlockedReason": "refill-windows-unconfirmed",
         "claimable": false,
         "expiresAtMs": null,
-        "grantKey": "53c74b0d67b0f9210ae8d29f93e4e3812eef4d22bbc6ff871ac2687883814bfb",
+        "grantKey": "56bf66070d9e28ffda2f0928a51bba28f0ddd3cf8a0bc74196ee7bb2943608fc",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -328,7 +328,7 @@
         "claimBlockedReason": "grant-unavailable",
         "claimable": false,
         "expiresAtMs": null,
-        "grantKey": "12071679965279bee7dad4f042f1a4a7f6a21209b6aa33e964d860c089c1f573",
+        "grantKey": "0df57246f79b07af030f46d6377a96c35704bcd8529cdd56bc4a5c067846fec5",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -338,7 +338,7 @@
     ],
     "history": [
       {
-        "atMs": 1794493100213,
+        "atMs": 1794495908094,
         "details": {
           "beforeCount": 1,
           "callerHash": "d7277c6437dfa68423d4179e9ca29fbf20e5a5c75cc8ad57604a546427d162a6",
@@ -351,10 +351,10 @@
         "event": "prepare",
         "outcome": "prepared",
         "sequence": "1",
-        "targetHash": "6c952f936f164df708c766922f0dc2026787007448422ead7caed580eece1148"
+        "targetHash": "f7eee6af3b16b668f5e4c75e21e362028ec3ce453df99e3e6c8fe945f74f75e9"
       },
       {
-        "atMs": 1794493100457,
+        "atMs": 1794495908395,
         "details": {
           "beforeCount": 1,
           "callerHash": "d7277c6437dfa68423d4179e9ca29fbf20e5a5c75cc8ad57604a546427d162a6",
@@ -367,10 +367,10 @@
         "event": "prepare",
         "outcome": "prepared",
         "sequence": "2",
-        "targetHash": "25ad89dd9d2848b419465682c816e1a7460c5f2ab40cb839ded3165d50675b11"
+        "targetHash": "dbf0032233df246ac9e15060d13834a5b699e6fea6a2199704165349208ea4da"
       },
       {
-        "atMs": 1794493100511,
+        "atMs": 1794495908460,
         "details": {
           "beforeCount": 1,
           "beforeWindows": {
@@ -380,7 +380,7 @@
           "callerHash": "d7277c6437dfa68423d4179e9ca29fbf20e5a5c75cc8ad57604a546427d162a6",
           "callerKind": "session",
           "grantHash": "46a2bcec168fd7caaf08240159a90222ce229dad040c99240bf2b2f88c482420",
-          "idempotencyHash": "7f5d61dc5e6253775b5bce183139f95169653f3db90eeea5416bd1f33f28556b",
+          "idempotencyHash": "1d9830228ec9aa0b7278d7492796472259307e78b593bafbaee780a3bce82392",
           "identityHash": "53e1f00e4d6bb353d9476f04f1cd89503dc560a7190caf6a9dfcce40a214bdc5",
           "kind": "banked",
           "provider": "codex"
@@ -388,10 +388,10 @@
         "event": "attempt",
         "outcome": "claimed-unconfirmed",
         "sequence": "3",
-        "targetHash": "25ad89dd9d2848b419465682c816e1a7460c5f2ab40cb839ded3165d50675b11"
+        "targetHash": "dbf0032233df246ac9e15060d13834a5b699e6fea6a2199704165349208ea4da"
       },
       {
-        "atMs": 1794493100620,
+        "atMs": 1794495908593,
         "details": {
           "afterCount": 0,
           "afterWindows": {
@@ -404,7 +404,7 @@
             "secondary": 21
           },
           "grantHash": "46a2bcec168fd7caaf08240159a90222ce229dad040c99240bf2b2f88c482420",
-          "idempotencyHash": "7f5d61dc5e6253775b5bce183139f95169653f3db90eeea5416bd1f33f28556b",
+          "idempotencyHash": "1d9830228ec9aa0b7278d7492796472259307e78b593bafbaee780a3bce82392",
           "kind": "banked",
           "provider": "codex",
           "providerOutcome": "reset",
@@ -414,12 +414,12 @@
         "event": "verification",
         "outcome": "claimed",
         "sequence": "4",
-        "targetHash": "7f5d61dc5e6253775b5bce183139f95169653f3db90eeea5416bd1f33f28556b"
+        "targetHash": "1d9830228ec9aa0b7278d7492796472259307e78b593bafbaee780a3bce82392"
       }
     ],
-    "observedAtMs": 1794493100639,
+    "observedAtMs": 1794495908615,
     "pendingAttempt": null,
-    "sourceAgeMs": 33,
+    "sourceAgeMs": 46,
     "status": "ok"
   },
   "syntheticRetrySends": 1,
@@ -433,7 +433,7 @@
         "untilMs": null
       },
       "latestAttempt": {
-        "attemptKey": "4074245756ba537a7e3e2dd354efd972b40a383dd07a8f8345c41ca7876360f1",
+        "attemptKey": "0a0b6b138f7f8582c1b585b86fbe5cf1bb9de21d2aabc3f5e997aa064d7de480",
         "attemptOrder": "1",
         "outcome": "claimed-unconfirmed",
         "pending": true,
@@ -443,7 +443,7 @@
       },
       "pendingAttempts": [
         {
-          "attemptKey": "4074245756ba537a7e3e2dd354efd972b40a383dd07a8f8345c41ca7876360f1",
+          "attemptKey": "0a0b6b138f7f8582c1b585b86fbe5cf1bb9de21d2aabc3f5e997aa064d7de480",
           "attemptOrder": "1"
         }
       ],
@@ -454,7 +454,7 @@
         "claimBlockedReason": null,
         "claimable": true,
         "expiresAtMs": null,
-        "grantKey": "9f194cd12990647afa7659a6bb53bc1bb8ff36d739d33ff0b55042a3153179cd",
+        "grantKey": "72d04503a371cf070c0f430ad9db811ec85c60da4b602d991e7c49ff16e5e5ed",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -465,7 +465,7 @@
         "claimBlockedReason": null,
         "claimable": true,
         "expiresAtMs": null,
-        "grantKey": "596464eb637caf8050924a2f74abc4e922aa19b59005b2824b79230e771cdd72",
+        "grantKey": "d1e0cd0df2a86053255989ccb7ff5c45c05885834bd94b6d80beb98aad93ddd4",
         "kind": "banked",
         "label": "Banked reset",
         "providerWords": null,
@@ -475,7 +475,7 @@
     ],
     "history": [
       {
-        "atMs": 1794493100213,
+        "atMs": 1794495908094,
         "details": {
           "beforeCount": 1,
           "callerHash": "d7277c6437dfa68423d4179e9ca29fbf20e5a5c75cc8ad57604a546427d162a6",
@@ -488,10 +488,10 @@
         "event": "prepare",
         "outcome": "prepared",
         "sequence": "1",
-        "targetHash": "6c952f936f164df708c766922f0dc2026787007448422ead7caed580eece1148"
+        "targetHash": "f7eee6af3b16b668f5e4c75e21e362028ec3ce453df99e3e6c8fe945f74f75e9"
       },
       {
-        "atMs": 1794493100457,
+        "atMs": 1794495908395,
         "details": {
           "beforeCount": 1,
           "callerHash": "d7277c6437dfa68423d4179e9ca29fbf20e5a5c75cc8ad57604a546427d162a6",
@@ -504,10 +504,10 @@
         "event": "prepare",
         "outcome": "prepared",
         "sequence": "2",
-        "targetHash": "25ad89dd9d2848b419465682c816e1a7460c5f2ab40cb839ded3165d50675b11"
+        "targetHash": "dbf0032233df246ac9e15060d13834a5b699e6fea6a2199704165349208ea4da"
       },
       {
-        "atMs": 1794493100511,
+        "atMs": 1794495908460,
         "details": {
           "beforeCount": 1,
           "beforeWindows": {
@@ -517,7 +517,7 @@
           "callerHash": "d7277c6437dfa68423d4179e9ca29fbf20e5a5c75cc8ad57604a546427d162a6",
           "callerKind": "session",
           "grantHash": "46a2bcec168fd7caaf08240159a90222ce229dad040c99240bf2b2f88c482420",
-          "idempotencyHash": "7f5d61dc5e6253775b5bce183139f95169653f3db90eeea5416bd1f33f28556b",
+          "idempotencyHash": "1d9830228ec9aa0b7278d7492796472259307e78b593bafbaee780a3bce82392",
           "identityHash": "53e1f00e4d6bb353d9476f04f1cd89503dc560a7190caf6a9dfcce40a214bdc5",
           "kind": "banked",
           "provider": "codex"
@@ -525,12 +525,70 @@
         "event": "attempt",
         "outcome": "claimed-unconfirmed",
         "sequence": "3",
-        "targetHash": "25ad89dd9d2848b419465682c816e1a7460c5f2ab40cb839ded3165d50675b11"
+        "targetHash": "dbf0032233df246ac9e15060d13834a5b699e6fea6a2199704165349208ea4da"
       }
     ],
-    "observedAtMs": 1794493100531,
-    "pendingAttempt": "4074245756ba537a7e3e2dd354efd972b40a383dd07a8f8345c41ca7876360f1",
-    "sourceAgeMs": 35,
+    "observedAtMs": 1794495908482,
+    "pendingAttempt": "0a0b6b138f7f8582c1b585b86fbe5cf1bb9de21d2aabc3f5e997aa064d7de480",
+    "sourceAgeMs": 40,
     "status": "ok"
+  },
+  "consumedWhilePending": {
+    "code": "reset-state-unavailable",
+    "action": "check-again",
+    "reason": "check-again-required",
+    "sent": false,
+    "evidence": {
+      "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
+      "claimTokens": {
+        "tokenKeys": [],
+        "untilMs": null
+      },
+      "latestAttempt": {
+        "attemptKey": "0a0b6b138f7f8582c1b585b86fbe5cf1bb9de21d2aabc3f5e997aa064d7de480",
+        "attemptOrder": "1",
+        "outcome": "claimed-unconfirmed",
+        "pending": true,
+        "providerSuccess": false,
+        "verification": "unconfirmed",
+        "windows": []
+      },
+      "pendingAttempts": [
+        {
+          "attemptKey": "0a0b6b138f7f8582c1b585b86fbe5cf1bb9de21d2aabc3f5e997aa064d7de480",
+          "attemptOrder": "1"
+        }
+      ],
+      "revision": "10"
+    }
+  },
+  "consumedAfterSuccess": {
+    "code": "reset-state-unavailable",
+    "action": "check-again",
+    "reason": "confirmation-invalid",
+    "sent": false,
+    "evidence": {
+      "canonicalAccountKey": "0fd64d256c7ec2dd8f838ab9a096a77c7aab3e5e885f2bf4f2d8e949fab59497",
+      "claimTokens": {
+        "tokenKeys": [],
+        "untilMs": null
+      },
+      "latestAttempt": {
+        "attemptKey": "0a0b6b138f7f8582c1b585b86fbe5cf1bb9de21d2aabc3f5e997aa064d7de480",
+        "attemptOrder": "1",
+        "outcome": "claimed",
+        "pending": false,
+        "providerSuccess": true,
+        "verification": "confirmed",
+        "windows": [
+          {
+            "id": "primary",
+            "usedPercent": 0
+          }
+        ]
+      },
+      "pendingAttempts": [],
+      "revision": "12"
+    }
   }
 }

@@ -118,7 +118,7 @@ enum ActionAnswer {
     Refused(Refusal),
     NotSent(String),
     Unanswered(Option<String>),
-    Completed,
+    Completed { attempt_key: String },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -175,7 +175,7 @@ impl AccountState {
         let latest = self.latest().cloned();
         if let Some(action) = &mut self.action
             && action.id == id
-            && !matches!(action.answer, ActionAnswer::Completed)
+            && !matches!(action.answer, ActionAnswer::Completed { .. })
             && action.frontier == latest
         {
             action.answer = ActionAnswer::NotSent(text);
@@ -184,44 +184,45 @@ impl AccountState {
     pub fn action_unanswered(&mut self, id: u64, text: Option<String>) {
         if let Some(action) = &mut self.action
             && action.id == id
-            && !matches!(action.answer, ActionAnswer::Completed)
+            && !matches!(action.answer, ActionAnswer::Completed { .. })
         {
             action.answer = ActionAnswer::Unanswered(text);
         }
     }
     pub fn action_refused(&mut self, id: u64, refusal: &Refusal) {
         let latest = self.latest().cloned();
-        let frontier = if let Some(e) = &refusal.evidence {
-            if !e.valid()
+        if let Some(e) = &refusal.evidence
+            && (!e.valid()
                 || self
                     .snapshot
                     .as_ref()
-                    .is_some_and(|s| s.canonical_account_key != e.canonical_account_key)
-            {
-                return;
-            }
-            e.latest_attempt.clone()
-        } else {
-            self.action.as_ref().and_then(|a| a.frontier.clone())
-        };
+                    .is_some_and(|s| s.canonical_account_key != e.canonical_account_key))
+        {
+            return;
+        }
         if let Some(action) = &mut self.action
             && action.id == id
-            && !matches!(action.answer, ActionAnswer::Completed)
-            && latest == frontier
+            && !matches!(action.answer, ActionAnswer::Completed { .. })
+            && latest == action.frontier
         {
             let mut refusal = refusal.clone();
             refusal.evidence = None;
-            action.frontier = frontier;
             action.answer = ActionAnswer::Refused(refusal);
         }
     }
     fn action_said(&self, provider: &str) -> Option<Said> {
         let action = self.action.as_ref()?;
+        if let ActionAnswer::Completed { attempt_key } = &action.answer {
+            return self
+                .latest()
+                .filter(|r| &r.attempt_key == attempt_key)
+                .map(|r| result_said(r, provider));
+        }
         if action.frontier.as_ref() != self.latest() {
             return None;
         }
         Some(match &action.answer {
-            ActionAnswer::Completed => return None,
+            ActionAnswer::Completed { .. } => return None,
             ActionAnswer::Preparing => Said {
                 text: "No reset has been sent for this confirmation.".into(),
                 bad: false,
@@ -301,10 +302,9 @@ impl AccountState {
     }
     pub fn inherit_sends(&mut self, previous: &mut Self) {
         self.unanswered.append(&mut previous.unanswered);
-        if let Some(mut action) = previous.action.take()
+        if let Some(action) = previous.action.take()
             && self.action.as_ref().is_none_or(|a| action.id > a.id)
         {
-            action.frontier = self.latest().cloned();
             self.action = Some(action);
         }
         if let Some(after) = previous.read_after_ms {
@@ -393,7 +393,9 @@ impl AccountState {
             if let Some(action) = &mut self.action
                 && action.id == id
             {
-                action.answer = ActionAnswer::Completed;
+                action.answer = ActionAnswer::Completed {
+                    attempt_key: result.attempt_key.clone(),
+                };
             }
         }
         accepted
@@ -447,15 +449,18 @@ impl AccountState {
                 check: true,
             });
         }
-        self.snapshot
-            .as_ref()?
-            .latest_attempt
-            .as_ref()
-            .map(|r| result_said(r, provider))
+        self.latest().filter(|r| r.pending).map(|_| Said {
+            text:
+                "A reset claim on this account is still unconfirmed. Check it before using another."
+                    .into(),
+            bad: true,
+            check: true,
+        })
     }
     pub fn older_receipts(&self) -> Vec<String> {
         let superseded = self.action.as_ref().is_some_and(|a| {
-            !matches!(a.answer, ActionAnswer::Completed) && a.frontier.as_ref() == self.latest()
+            !matches!(a.answer, ActionAnswer::Completed { .. })
+                && a.frontier.as_ref() == self.latest()
         });
         let newest = self
             .snapshot
@@ -480,5 +485,50 @@ impl AccountState {
             );
         }
         rows.into_values().collect()
+    }
+}
+
+#[cfg(test)]
+mod frontier_invariants {
+    use super::*;
+    fn trace() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/reset-refusal-after-success.json"
+        ))
+        .unwrap()
+    }
+    #[test]
+    fn refusal_evidence_never_reassigns_the_original_action_frontier() {
+        let t = trace();
+        for (start, body) in [
+            ("before", "refused"),
+            ("before", "consumedWhilePending"),
+            ("before", "consumedAfterSuccess"),
+            ("duringRetry", "consumedAfterSuccess"),
+        ] {
+            let mut state = AccountState::default();
+            let before: Evidence = serde_json::from_value(t[start]["evidence"].clone()).unwrap();
+            state.observe(&before, Some(1.));
+            state.begin_action(1);
+            let original = state.action.as_ref().unwrap().frontier.clone();
+            let refusal: Refusal = serde_json::from_value(t[body].clone()).unwrap();
+            state.observe(refusal.evidence.as_ref().unwrap(), None);
+            state.action_refused(1, &refusal);
+            assert_eq!(state.action.as_ref().unwrap().frontier, original);
+        }
+    }
+    #[test]
+    fn canonical_binding_moves_the_action_without_reassigning_its_frontier() {
+        let t = trace();
+        let mut prior = AccountState::default();
+        prior.begin_action(1);
+        let original = prior.action.as_ref().unwrap().frontier.clone();
+        let mut canonical = AccountState::default();
+        canonical.observe(
+            &serde_json::from_value(t["afterRetry"]["evidence"].clone()).unwrap(),
+            None,
+        );
+        canonical.inherit_sends(&mut prior);
+        assert_eq!(canonical.action.as_ref().unwrap().frontier, original);
     }
 }
