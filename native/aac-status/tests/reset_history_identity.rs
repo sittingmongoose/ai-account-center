@@ -1,10 +1,13 @@
+mod support;
 use aac_status::reset::*;
+use support::ReadFixtures;
 const NOW: i64 = 1_700_000_000_000;
 fn nonce(n: u64) -> String {
     format!("{n:064x}")
 }
 fn snap(account: &str, profile: &str, host: &str) -> Snapshot {
     Snapshot {
+        read_ticket: None,
         identity: Identity {
             provider: "codex".into(),
             account: account.into(),
@@ -40,7 +43,7 @@ fn open() -> (tempfile::TempDir, Store) {
 }
 fn begin(store: &mut Store, route: &str, before: &Snapshot, n: u64) -> String {
     let now = before.observed_at_ms;
-    let inv = store.inventory(route, before, now, &nonce(n)).unwrap();
+    let inv = store.read_inventory(route, before, now, &nonce(n)).unwrap();
     let key = inv["grants"][0]["grantKey"].as_str().unwrap();
     let caller = format!("session:{}", nonce(999));
     let prep = store.prepare(route, key, &caller, before, now, &nonce(n + 1)).unwrap();
@@ -71,10 +74,12 @@ fn unrelated_account_does_not_inherit_a_repointed_profiles_claim() {
     let (_dir, mut store) = open();
     let x = snap("account-x", "reusable-profile", "host-a");
     let y = snap("account-y", "stable-y-profile", "host-a");
-    store.inventory("codex:stable-y-profile", &y, NOW, &nonce(50)).unwrap();
+    store
+        .read_inventory("codex:stable-y-profile", &y, NOW, &nonce(50))
+        .unwrap();
     let attempt_x = begin(&mut store, "codex:reusable-profile", &x, 1);
     let result = store
-        .finish(
+        .read_finish(
             "codex:reusable-profile",
             &attempt_x,
             Outcome::Reset,
@@ -98,12 +103,16 @@ fn unrelated_account_does_not_inherit_a_repointed_profiles_claim() {
     replacement.source_binding = "new-login-y".into();
     replacement.observed_at_ms = NOW + 1;
     store
-        .inventory("codex:reusable-profile", &replacement, NOW + 1, &nonce(51))
+        .read_inventory("codex:reusable-profile", &replacement, NOW + 1, &nonce(51))
         .unwrap();
     let unrelated_history = store.history("codex:stable-y-profile").unwrap();
     println!("UNRELATED_ACCOUNT_HISTORY={unrelated_history}");
     assert!(store.pending("codex:stable-y-profile", NOW).unwrap()["attemptKey"].is_null());
-    assert!(store.check("codex:stable-y-profile", &attempt_x, &y, NOW + 3).is_err());
+    assert!(
+        store
+            .read_check("codex:stable-y-profile", &attempt_x, &y, NOW + 3)
+            .is_err()
+    );
     assert!(
         unrelated_history.as_array().unwrap().is_empty(),
         "account Y never claimed, but inherits account X's Used, confirmed record"
@@ -116,11 +125,11 @@ fn canonical_history_does_not_inherit_future_claims_of_a_reused_route() {
     let x = snap("account-x", "reusable-profile", "host-a");
     let alias_x = snap("account-x", "stable-x-profile", "host-a");
     store
-        .inventory("codex:stable-x-profile", &alias_x, NOW, &nonce(60))
+        .read_inventory("codex:stable-x-profile", &alias_x, NOW, &nonce(60))
         .unwrap();
     let attempt_x = begin(&mut store, "codex:reusable-profile", &x, 1);
     store
-        .finish(
+        .read_finish(
             "codex:reusable-profile",
             &attempt_x,
             Outcome::Reset,
@@ -133,7 +142,7 @@ fn canonical_history_does_not_inherit_future_claims_of_a_reused_route() {
     y.observed_at_ms = NOW + 1;
     let attempt_y = begin(&mut store, "codex:reusable-profile", &y, 10);
     store
-        .finish(
+        .read_finish(
             "codex:reusable-profile",
             &attempt_y,
             Outcome::Nothing,
@@ -163,10 +172,14 @@ fn reassignment_keeps_both_sibling_histories_and_unclaimed_prepares_after_restar
         let before = snap(original, "reusable-profile", "host-a");
         let old_alias = snap(original, "stable-original-profile", "host-b");
         let new_alias = snap(replacement, "stable-replacement-profile", "host-b");
-        store.inventory("old-sibling", &old_alias, NOW, &nonce(30)).unwrap();
-        store.inventory("new-sibling", &new_alias, NOW, &nonce(31)).unwrap();
+        store
+            .read_inventory("old-sibling", &old_alias, NOW, &nonce(30))
+            .unwrap();
+        store
+            .read_inventory("new-sibling", &new_alias, NOW, &nonce(31))
+            .unwrap();
         // A prepare with no attempt still belongs to its immutable inventory target.
-        let inventory = store.inventory("reused", &before, NOW, &nonce(32)).unwrap();
+        let inventory = store.read_inventory("reused", &before, NOW, &nonce(32)).unwrap();
         let prepared = store
             .prepare(
                 "reused",
@@ -194,7 +207,7 @@ fn reassignment_keeps_both_sibling_histories_and_unclaimed_prepares_after_restar
         );
         let attempt = begin(&mut store, "reused", &before, 1);
         store
-            .finish(
+            .read_finish(
                 "reused",
                 &attempt,
                 Outcome::Reset,
@@ -207,11 +220,11 @@ fn reassignment_keeps_both_sibling_histories_and_unclaimed_prepares_after_restar
         assert_eq!(original_history.as_array().unwrap().len(), 4);
         let mut after = snap(replacement, "reusable-profile", "host-a");
         after.observed_at_ms = NOW + 1;
-        store.inventory("reused", &after, NOW + 1, &nonce(34)).unwrap();
+        store.read_inventory("reused", &after, NOW + 1, &nonce(34)).unwrap();
         assert!(store.history("new-sibling").unwrap().as_array().unwrap().is_empty());
         let attempt = begin(&mut store, "reused", &after, 10);
         store
-            .finish("reused", &attempt, Outcome::Nothing, None, NOW + 3, None)
+            .read_finish("reused", &attempt, Outcome::Nothing, None, NOW + 3, None)
             .unwrap();
         let replacement_history = store.history("reused").unwrap();
         assert_eq!(replacement_history.as_array().unwrap().len(), 3);
@@ -237,20 +250,22 @@ fn x_y_x_reassignment_and_hosts_do_not_move_canonical_history() {
     y.observed_at_ms = NOW + 1;
     let xa = snap("account-x", "x-sibling", "host-b");
     let ya = snap("account-y", "y-sibling", "host-c");
-    s.inventory("x-sibling", &xa, NOW, &nonce(71)).unwrap();
-    s.inventory("y-sibling", &ya, NOW, &nonce(72)).unwrap();
+    s.read_inventory("x-sibling", &xa, NOW, &nonce(71)).unwrap();
+    s.read_inventory("y-sibling", &ya, NOW, &nonce(72)).unwrap();
     let a = begin(&mut s, "reused", &x, 1);
-    s.finish("reused", &a, Outcome::Nothing, None, NOW + 2, None).unwrap();
+    s.read_finish("reused", &a, Outcome::Nothing, None, NOW + 2, None)
+        .unwrap();
     let hx = s.history("x-sibling").unwrap();
     let b = begin(&mut s, "reused", &y, 10);
-    s.finish("reused", &b, Outcome::Nothing, None, NOW + 3, None).unwrap();
+    s.read_finish("reused", &b, Outcome::Nothing, None, NOW + 3, None)
+        .unwrap();
     let hy = s.history("y-sibling").unwrap();
     x.observed_at_ms = NOW + 2;
-    s.inventory("reused", &x, NOW + 2, &nonce(73)).unwrap();
+    s.read_inventory("reused", &x, NOW + 2, &nonce(73)).unwrap();
     assert_eq!(s.history("reused").unwrap(), hx);
     assert_eq!(s.history("y-sibling").unwrap(), hy);
     y.observed_at_ms = NOW + 3;
-    s.inventory("reused", &y, NOW + 3, &nonce(74)).unwrap();
+    s.read_inventory("reused", &y, NOW + 3, &nonce(74)).unwrap();
     assert_eq!(s.history("reused").unwrap(), hy);
     assert_eq!(s.history("x-sibling").unwrap(), hx);
 }

@@ -1,12 +1,15 @@
+mod support;
 use aac_status::reset::*;
 use serde_json::{Value, json};
 use std::sync::{Arc, Barrier};
+use support::ReadFixtures;
 const NOW: i64 = 1_700_000_000_000;
 fn nonce(n: u64) -> String {
     format!("{n:064x}")
 }
 fn snap(profile: &str, host: &str) -> Snapshot {
     Snapshot {
+        read_ticket: None,
         identity: Identity {
             provider: "codex".into(),
             account: "fixture-account".into(),
@@ -43,7 +46,7 @@ fn open() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 fn begin(store: &mut Store, route: &str, s: &Snapshot, n: u64, index: usize) -> String {
-    let inv = store.inventory(route, s, s.observed_at_ms, &nonce(n)).unwrap();
+    let inv = store.read_inventory(route, s, s.observed_at_ms, &nonce(n)).unwrap();
     let key = inv["grants"][index]["grantKey"].as_str().unwrap();
     let who = format!("session:{}", nonce(90));
     let prep = store
@@ -75,7 +78,9 @@ fn many_connections_restarts_and_alias_forms() {
         {
             let alias = snap(p, h);
             let route = format!("route-{i}");
-            let inv = store.inventory(&route, &alias, NOW, &nonce(20 + i as u64)).unwrap();
+            let inv = store
+                .read_inventory(&route, &alias, NOW, &nonce(20 + i as u64))
+                .unwrap();
             assert_eq!(store.pending(&route, NOW).unwrap()["attemptKey"], attempt);
             assert_eq!(
                 store.gate(&route, inv["grants"][1]["grantKey"].as_str().unwrap(), NOW, true),
@@ -100,9 +105,9 @@ fn many_connections_restarts_and_alias_forms() {
             handles.push(std::thread::spawn(move || {
                 b.wait();
                 if i == 0 {
-                    s.finish("route-a", &a, Outcome::Reset, None, NOW + 2, None)
+                    s.read_finish("route-a", &a, Outcome::Reset, None, NOW + 2, None)
                 } else {
-                    s.check(if i % 2 == 0 { "route-0" } else { "route-a" }, &a, &after, NOW + 2)
+                    s.read_check(if i % 2 == 0 { "route-0" } else { "route-a" }, &a, &after, NOW + 2)
                 }
             }));
         }
@@ -132,7 +137,10 @@ fn many_connections_restarts_and_alias_forms() {
         let mut reopened = Store::open(&path).unwrap();
         for route in ["route-a", "route-0", "route-1"] {
             assert_eq!(reopened.pending(route, NOW).unwrap()["attemptKey"], Value::Null);
-            assert_eq!(reopened.check(route, &attempt, &before, NOW + 3).unwrap(), confirmed);
+            assert_eq!(
+                reopened.read_check(route, &attempt, &before, NOW + 3).unwrap(),
+                confirmed
+            );
             assert_eq!(reopened.history(route).unwrap(), events);
         }
     }
@@ -157,18 +165,18 @@ fn two_distinct_grants_produce_ordered_attempts_for_ui_delivery() {
     after.grants[0].left = 0;
     after.windows.insert("five_hour".into(), 0.);
     let result1 = store
-        .finish("route-a", &first, Outcome::Reset, Some(&after), NOW + 2, None)
+        .read_finish("route-a", &first, Outcome::Reset, Some(&after), NOW + 2, None)
         .unwrap();
     assert_eq!(result1["outcome"], "claimed");
     let mut next = after.clone();
     next.observed_at_ms = NOW + 3;
     next.source_binding = "post-first-claim-binding".into();
     let second = begin(&mut store, "route-a", &next, 11, 1);
-    let inv = store.inventory("route-a", &next, NOW + 3, &nonce(21)).unwrap();
+    let inv = store.read_inventory("route-a", &next, NOW + 3, &nonce(21)).unwrap();
     let history = store.history("route-a").unwrap();
     let pending = store.pending("route-a", NOW).unwrap()["attemptKey"].clone();
     assert_eq!(pending, second);
-    let old_check = store.check("route-a", &first, &next, NOW + 4).unwrap();
+    let old_check = store.read_check("route-a", &first, &next, NOW + 4).unwrap();
     assert_eq!(old_check["outcome"], result1["outcome"]);
     assert_eq!(old_check["windows"], result1["windows"]);
     assert_eq!(old_check["evidence"]["latestAttempt"]["attemptKey"], second);

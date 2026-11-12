@@ -1,12 +1,15 @@
+mod support;
 use aac_status::reset::*;
 use serde_json::Value;
 use std::sync::{Arc, Barrier};
+use support::ReadFixtures;
 const NOW: i64 = 1_700_000_000_000;
 fn nonce(n: u64) -> String {
     format!("{n:064x}")
 }
 fn snap() -> Snapshot {
     Snapshot {
+        read_ticket: None,
         identity: Identity {
             provider: "codex".into(),
             account: "fixture-account".into(),
@@ -44,7 +47,7 @@ fn concurrent_checks_must_not_append_unconfirmed_after_a_confirmed_settlement() 
         let mut store = Store::open(&db_path).unwrap();
         let before = snap();
         let caller = format!("session:{}", nonce(90));
-        let inv = store.inventory("route", &before, NOW, &nonce(1)).unwrap();
+        let inv = store.read_inventory("route", &before, NOW, &nonce(1)).unwrap();
         let key = inv["grants"][0]["grantKey"].as_str().unwrap();
         let prep = store.prepare("route", key, &caller, &before, NOW, &nonce(2)).unwrap();
         let attempt = nonce(3);
@@ -74,13 +77,13 @@ fn concurrent_checks_must_not_append_unconfirmed_after_a_confirmed_settlement() 
         let aa = attempt.clone();
         let wa = std::thread::spawn(move || {
             ba.wait();
-            a.check("route", &aa, &confirmed, NOW + 2)
+            a.read_check("route", &aa, &confirmed, NOW + 2)
         });
         let bb = barrier.clone();
         let ab = attempt.clone();
         let wb = std::thread::spawn(move || {
             bb.wait();
-            b.check("route", &ab, &unconfirmed, NOW + 2)
+            b.read_check("route", &ab, &unconfirmed, NOW + 2)
         });
         barrier.wait();
         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -103,7 +106,7 @@ fn concurrent_checks_must_not_append_unconfirmed_after_a_confirmed_settlement() 
                 "round {round}: confirmed check={ra:?}; stale check={rb:?}; audit={outcomes:?}; pending={pending}"
             );
         }
-        let settled = store.check("route", &attempt, &before, NOW + 3).unwrap();
+        let settled = store.read_check("route", &attempt, &before, NOW + 3).unwrap();
         assert_eq!(settled, ra, "a settled replay returns the committed evidence");
         assert_eq!(
             store.history("route").unwrap(),

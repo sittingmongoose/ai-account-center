@@ -1,12 +1,15 @@
+mod support;
 use aac_status::reset::*;
 use serde_json::Value;
 use std::sync::{Arc, Barrier};
+use support::ReadFixtures;
 const NOW: i64 = 1_700_000_000_000;
 fn nonce(n: u64) -> String {
     format!("{n:064x}")
 }
 fn snap(account: &str, profile: &str, host: &str) -> Snapshot {
     Snapshot {
+        read_ticket: None,
         identity: Identity {
             provider: "codex".into(),
             account: account.into(),
@@ -41,7 +44,7 @@ fn open() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 fn begin(store: &mut Store, route: &str, before: &Snapshot, n: u64) -> String {
-    let inv = store.inventory(route, before, NOW, &nonce(n)).unwrap();
+    let inv = store.read_inventory(route, before, NOW, &nonce(n)).unwrap();
     let key = inv["grants"][0]["grantKey"].as_str().unwrap();
     let caller = format!("session:{}", nonce(999));
     let prep = store.prepare(route, key, &caller, before, NOW, &nonce(n + 1)).unwrap();
@@ -74,7 +77,7 @@ fn mixed_finish_and_alias_checks_remain_monotone_after_restart() {
         let before = snap("account-x", "profile-a", "host-a");
         let alias = snap("account-x", "profile-b", "host-b");
         let attempt = begin(&mut store, "route-a", &before, 1);
-        store.inventory("route-b", &alias, NOW, &nonce(10)).unwrap();
+        store.read_inventory("route-b", &alias, NOW, &nonce(10)).unwrap();
         let barrier = Arc::new(Barrier::new(7));
         let mut connections = Vec::new();
         for _ in 0..6 {
@@ -93,10 +96,10 @@ fn mixed_finish_and_alias_checks_remain_monotone_after_restart() {
             workers.push(std::thread::spawn(move || {
                 barrier.wait();
                 match i {
-                    0 => connection.finish("route-a", &attempt, Outcome::Reset, None, NOW + 2, None),
-                    1 | 2 => connection.check("route-a", &attempt, &good, NOW + 2),
-                    3 => connection.check("route-b", &attempt, &wrong_alias, NOW + 2),
-                    _ => connection.check("route-a", &attempt, &stale, NOW + 2),
+                    0 => connection.read_finish("route-a", &attempt, Outcome::Reset, None, NOW + 2, None),
+                    1 | 2 => connection.read_check("route-a", &attempt, &good, NOW + 2),
+                    3 => connection.read_check("route-b", &attempt, &wrong_alias, NOW + 2),
+                    _ => connection.read_check("route-a", &attempt, &stale, NOW + 2),
                 }
                 .unwrap()
             }));
@@ -120,7 +123,7 @@ fn mixed_finish_and_alias_checks_remain_monotone_after_restart() {
         assert!(store.pending("route-b", NOW).unwrap()["attemptKey"].is_null());
         drop(store);
         let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
-        let replay = store.check("route-b", &attempt, &alias, NOW + 3).unwrap();
+        let replay = store.read_check("route-b", &attempt, &alias, NOW + 3).unwrap();
         for answer in answers.iter().filter(|a| a["outcome"] == "claimed") {
             assert_eq!(*answer, replay);
         }
@@ -143,7 +146,7 @@ fn alias_matrix_and_legacy_discovery_preserve_exact_identity() {
             }
             alias.source_binding = "alias-binding".into();
             let attempt = begin(&mut store, "route-a", &before, 1);
-            store.inventory("route-b", &alias, NOW, &nonce(10)).unwrap();
+            store.read_inventory("route-b", &alias, NOW, &nonce(10)).unwrap();
             drop(store);
             if legacy {
                 let db = rusqlite::Connection::open(dir.path().join("claims.sqlite")).unwrap();
@@ -156,27 +159,31 @@ fn alias_matrix_and_legacy_discovery_preserve_exact_identity() {
             assert!(recovery["evidence"]["revision"].is_string());
             assert_eq!(store.history("route-b").unwrap(), store.history("route-a").unwrap());
             assert_eq!(
-                store.check("route-b", &attempt, &confirmed(&alias), NOW + 2).unwrap()["outcome"],
+                store
+                    .read_check("route-b", &attempt, &confirmed(&alias), NOW + 2)
+                    .unwrap()["outcome"],
                 "claimed-unconfirmed"
             );
             assert_eq!(store.pending("route-a", NOW).unwrap()["attemptKey"], attempt);
             let mut different_org = alias.clone();
             different_org.identity.organization = "other-org".into();
             store
-                .inventory("different-org", &different_org, NOW, &nonce(11))
+                .read_inventory("different-org", &different_org, NOW, &nonce(11))
                 .unwrap();
             assert!(store.pending("different-org", NOW).unwrap()["attemptKey"].is_null());
             assert!(
                 store
-                    .check("different-org", &attempt, &confirmed(&before), NOW + 2)
+                    .read_check("different-org", &attempt, &confirmed(&before), NOW + 2)
                     .is_err()
             );
-            let expected = store.check("route-a", &attempt, &confirmed(&before), NOW + 2).unwrap();
+            let expected = store
+                .read_check("route-a", &attempt, &confirmed(&before), NOW + 2)
+                .unwrap();
             assert_eq!(expected["outcome"], "claimed");
             let mut empty = alias.clone();
             empty.grants.clear();
-            store.inventory("empty-alias", &empty, NOW, &nonce(12)).unwrap();
-            let mut replay = store.check("empty-alias", &attempt, &empty, NOW + 3).unwrap();
+            store.read_inventory("empty-alias", &empty, NOW, &nonce(12)).unwrap();
+            let mut replay = store.read_check("empty-alias", &attempt, &empty, NOW + 3).unwrap();
             let newer = replay.as_object_mut().unwrap().remove("evidence").unwrap();
             let mut expected = expected;
             let previous = expected.as_object_mut().unwrap().remove("evidence").unwrap();

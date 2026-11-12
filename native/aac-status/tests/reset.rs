@@ -1,5 +1,7 @@
+mod support;
 use aac_status::reset::*;
 use serde_json::json;
+use support::ReadFixtures;
 const NOW: i64 = 1_000_000;
 fn entropy(n: u8) -> String {
     format!("{n:064x}")
@@ -9,6 +11,7 @@ fn caller() -> String {
 }
 fn snapshot(provider: &str) -> Snapshot {
     Snapshot {
+        read_ticket: None,
         identity: Identity {
             provider: provider.into(),
             account: "synthetic-account".into(),
@@ -46,7 +49,7 @@ fn snapshot(provider: &str) -> Snapshot {
 fn inventory(s: &mut Store, snap: &Snapshot) -> String {
     static NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1000);
     let nonce = NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    s.inventory("route-account", snap, NOW, &format!("{nonce:064x}"))
+    s.read_inventory("route-account", snap, NOW, &format!("{nonce:064x}"))
         .unwrap()["grants"][1]["grantKey"]
         .as_str()
         .unwrap()
@@ -72,7 +75,9 @@ fn open() -> (tempfile::TempDir, Store) {
 fn begin(s: &mut Store, snap: &Snapshot) -> (String, String) {
     let k = inventory(s, snap);
     let t = prepare(s, &k, snap);
-    s.begin("route-account", &k, &caller(), &t, snap, NOW, &entropy(3))
+    let mut fresh = snap.clone();
+    fresh.read_ticket = Some(s.read_ticket("route-account").unwrap());
+    s.begin("route-account", &k, &caller(), &t, &fresh, NOW, &entropy(3))
         .unwrap();
     (k, entropy(3))
 }
@@ -102,7 +107,7 @@ fn public_inventory_and_audit_have_no_private_identity() {
     let (_d, mut s) = open();
     let snap = snapshot("claude");
     let out = s
-        .inventory("route-account", &snap, NOW, &entropy(1))
+        .read_inventory("route-account", &snap, NOW, &entropy(1))
         .unwrap()
         .to_string();
     for secret in [
@@ -216,7 +221,7 @@ fn ambiguous_survives_restart_and_blocks_new_spend() {
     let snap = snapshot("codex");
     let (k, a) = begin(&mut s, &snap);
     assert_eq!(
-        s.finish("route-account", &a, Outcome::Ambiguous, None, NOW, None)
+        s.read_finish("route-account", &a, Outcome::Ambiguous, None, NOW, None)
             .unwrap()["outcome"],
         "claimed-unconfirmed"
     );
@@ -233,7 +238,7 @@ fn account_aliases_cannot_bypass_pending_lock() {
     let (_d, mut s) = open();
     let snap = snapshot("claude");
     begin(&mut s, &snap);
-    let k = s.inventory("alias", &snap, NOW, &entropy(10)).unwrap()["grants"][0]["grantKey"]
+    let k = s.read_inventory("alias", &snap, NOW, &entropy(10)).unwrap()["grants"][0]["grantKey"]
         .as_str()
         .unwrap()
         .to_owned();
@@ -246,7 +251,8 @@ fn account_aliases_cannot_bypass_pending_lock() {
 fn fresh_verification_requires_exact_decrement_and_refill() {
     for mode in 0..6 {
         let (_d, mut s) = open();
-        let snap = snapshot("claude");
+        let mut snap = snapshot("claude");
+        snap.read_ticket = Some(s.read_ticket("route-account").unwrap());
         let (_, a) = begin(&mut s, &snap);
         let mut after = snap.clone();
         after.observed_at_ms += 1;
@@ -264,9 +270,13 @@ fn fresh_verification_requires_exact_decrement_and_refill() {
             }
             _ => {}
         };
-        let r = s
-            .finish("route-account", &a, Outcome::Reset, Some(&after), NOW + 1, None)
-            .unwrap();
+        let r = if mode == 1 {
+            // This read started before begin; equal wall timestamps cannot make it post-claim proof.
+            s.finish("route-account", &a, Outcome::Reset, Some(&after), NOW + 1, None)
+        } else {
+            s.read_finish("route-account", &a, Outcome::Reset, Some(&after), NOW + 1, None)
+        }
+        .unwrap();
         assert_eq!(r["outcome"], if mode == 0 { "claimed" } else { "claimed-unconfirmed" });
     }
 }
@@ -275,7 +285,7 @@ fn check_again_only_verifies() {
     let (_d, mut s) = open();
     let snap = snapshot("codex");
     let (_, a) = begin(&mut s, &snap);
-    let r = s.check("route-account", &a, &snap, NOW).unwrap();
+    let r = s.read_check("route-account", &a, &snap, NOW).unwrap();
     assert_eq!(r["outcome"], "claimed-unconfirmed");
     assert_eq!(r["providerSuccess"], false);
 }
@@ -285,12 +295,12 @@ fn malformed_and_stale_inventory_are_not_zero() {
     let mut snap = snapshot("claude");
     snap.observed_at_ms = NOW - 30_001;
     assert_eq!(
-        s.inventory("r", &snap, NOW, &entropy(1)).unwrap_err(),
+        s.read_inventory("r", &snap, NOW, &entropy(1)).unwrap_err(),
         "stale-inventory"
     );
     snap.observed_at_ms = NOW;
     snap.grants[1].id = snap.grants[0].id.clone();
-    assert!(s.inventory("r", &snap, NOW, &entropy(1)).is_err());
+    assert!(s.read_inventory("r", &snap, NOW, &entropy(1)).is_err());
 }
 #[test]
 fn cooldown_persists() {
@@ -298,7 +308,7 @@ fn cooldown_persists() {
     let snap = snapshot("claude");
     let (k, a) = begin(&mut s, &snap);
     assert_eq!(
-        s.finish("route-account", &a, Outcome::Cooldown, None, NOW, Some(60_000))
+        s.read_finish("route-account", &a, Outcome::Cooldown, None, NOW, Some(60_000))
             .unwrap()["outcome"],
         "cooldown"
     );
@@ -346,7 +356,7 @@ fn unknown_kinds_keep_bounded_provider_words_and_known_kinds_have_none() {
     snap.grants[0].kind = "unknown".into();
     snap.grants[0].words = Some("seven_day_opus".into());
     snap.grants[1].words = Some("must-not-show".into());
-    let out = s.inventory("route-account", &snap, NOW, &entropy(30)).unwrap();
+    let out = s.read_inventory("route-account", &snap, NOW, &entropy(30)).unwrap();
     assert_eq!(out["grants"][0]["providerWords"], "seven_day_opus");
     assert_eq!(out["grants"][0]["claimable"], false);
     assert_eq!(out["grants"][0]["claimBlockedReason"], "unknown-grant-kind");
@@ -364,7 +374,7 @@ fn a_confirmed_claim_reports_the_refilled_windows_from_the_verification_read() {
     after.grants[1].left = 0;
     after.windows.insert("seven_day".into(), 12.5);
     let r = s
-        .finish("route-account", &a, Outcome::Reset, Some(&after), NOW + 1, None)
+        .read_finish("route-account", &a, Outcome::Reset, Some(&after), NOW + 1, None)
         .unwrap();
     assert_eq!(r["outcome"], "claimed");
     assert_eq!(r["windows"], json!([{"id":"seven_day","usedPercent":12.5}]));
@@ -372,7 +382,7 @@ fn a_confirmed_claim_reports_the_refilled_windows_from_the_verification_read() {
     let (_d, mut s) = open();
     let (_, a) = begin(&mut s, &snap);
     let r = s
-        .finish("route-account", &a, Outcome::Reset, Some(&snap), NOW, None)
+        .read_finish("route-account", &a, Outcome::Reset, Some(&snap), NOW, None)
         .unwrap();
     assert_eq!(r["outcome"], "claimed-unconfirmed");
     assert_eq!(r["windows"], json!([]));
@@ -384,7 +394,7 @@ fn the_pending_attempt_is_readable_for_check_again_and_clears_once_settled() {
     let snap = snapshot("codex");
     assert!(s.pending("route-account", NOW).unwrap()["attemptKey"].is_null());
     let (_, a) = begin(&mut s, &snap);
-    s.finish("route-account", &a, Outcome::Ambiguous, None, NOW, None)
+    s.read_finish("route-account", &a, Outcome::Ambiguous, None, NOW, None)
         .unwrap();
     drop(s);
     let mut s = Store::open(&d.path().join("reset.sqlite")).unwrap();
@@ -395,7 +405,7 @@ fn the_pending_attempt_is_readable_for_check_again_and_clears_once_settled() {
     after.grants[1].left = 0;
     after.windows.insert("seven_day".into(), 0.0);
     assert_eq!(
-        s.check("route-account", &a, &after, NOW + 1).unwrap()["outcome"],
+        s.read_check("route-account", &a, &after, NOW + 1).unwrap()["outcome"],
         "claimed"
     );
     assert!(s.pending("route-account", NOW).unwrap()["attemptKey"].is_null());
@@ -411,7 +421,7 @@ fn known_rejection_does_not_become_provider_success() {
     after.grants[1].left = 0;
     after.windows.insert("seven_day".into(), 0.0);
     let result = s
-        .finish("route-account", &a, Outcome::Nothing, Some(&after), NOW + 1, None)
+        .read_finish("route-account", &a, Outcome::Nothing, Some(&after), NOW + 1, None)
         .unwrap();
     assert_eq!(result["outcome"], "nothing-to-reset");
     assert_eq!(result["providerSuccess"], false);
@@ -421,8 +431,9 @@ fn provider_success_is_retained_across_read_only_check() {
     let (_d, mut s) = open();
     let snap = snapshot("claude");
     let (_, a) = begin(&mut s, &snap);
-    s.finish("route-account", &a, Outcome::Reset, None, NOW, None).unwrap();
-    let result = s.check("route-account", &a, &snap, NOW).unwrap();
+    s.read_finish("route-account", &a, Outcome::Reset, None, NOW, None)
+        .unwrap();
+    let result = s.read_check("route-account", &a, &snap, NOW).unwrap();
     assert_eq!(result["providerSuccess"], true);
     assert_eq!(result["outcome"], "claimed-unconfirmed");
 }
@@ -481,7 +492,7 @@ fn send_limit_is_durable_and_audit_cannot_be_pruned() {
             assert_eq!(result.unwrap_err(), "rate-limited");
         } else {
             result.unwrap();
-            s.finish("route-account", &attempt, Outcome::Nothing, None, NOW, None)
+            s.read_finish("route-account", &attempt, Outcome::Nothing, None, NOW, None)
                 .unwrap();
         }
     }
@@ -503,7 +514,7 @@ fn full_reset_can_confirm_when_an_unused_window_stays_zero() {
     after.grants[1].left = 0;
     after.windows.insert("seven_day".into(), 0.0);
     assert_eq!(
-        s.finish("route-account", &a, Outcome::Reset, Some(&after), NOW + 1, None)
+        s.read_finish("route-account", &a, Outcome::Reset, Some(&after), NOW + 1, None)
             .unwrap()["outcome"],
         "claimed"
     );
@@ -527,7 +538,7 @@ fn preflight_rejects_holds_and_pending_before_source_io() {
         s.gate("route-account", &key, NOW, true).unwrap_err(),
         "check-again-required"
     );
-    s.finish("route-account", &a, Outcome::Cooldown, None, NOW, Some(60_000))
+    s.read_finish("route-account", &a, Outcome::Cooldown, None, NOW, Some(60_000))
         .unwrap();
     assert_eq!(s.gate("route-account", &key, NOW, false).unwrap_err(), "cooldown");
     assert!(s.gate("route-account", &key, NOW + 60_001, true).is_ok());

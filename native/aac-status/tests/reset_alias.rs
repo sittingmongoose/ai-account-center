@@ -1,11 +1,14 @@
+mod support;
 use aac_status::reset::*;
 use serde_json::Value;
+use support::ReadFixtures;
 const NOW: i64 = 1_700_000_000_000;
 fn nonce(n: u64) -> String {
     format!("{n:064x}")
 }
 fn snapshot(profile: &str) -> Snapshot {
     Snapshot {
+        read_ticket: None,
         identity: Identity {
             provider: "codex".into(),
             account: "fixture-account".into(),
@@ -40,7 +43,7 @@ fn aliases_discover_the_canonical_pending_attempt_and_history_without_weakening_
     let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
     let a = snapshot("profile-a");
     let b = snapshot("profile-b");
-    let ia = store.inventory("route-a", &a, NOW, &nonce(1)).unwrap();
+    let ia = store.read_inventory("route-a", &a, NOW, &nonce(1)).unwrap();
     let key = ia["grants"][0]["grantKey"].as_str().unwrap();
     let caller = format!("session:{}", nonce(90));
     let prep = store.prepare("route-a", key, &caller, &a, NOW, &nonce(2)).unwrap();
@@ -56,7 +59,7 @@ fn aliases_discover_the_canonical_pending_attempt_and_history_without_weakening_
             &attempt,
         )
         .unwrap();
-    let ib = store.inventory("route-b", &b, NOW, &nonce(4)).unwrap();
+    let ib = store.read_inventory("route-b", &b, NOW, &nonce(4)).unwrap();
     let kb = ib["grants"][0]["grantKey"].as_str().unwrap();
     assert_eq!(store.gate("route-b", kb, NOW, true), Err("check-again-required"));
     assert_eq!(store.pending("route-b", NOW).unwrap()["attemptKey"], attempt);
@@ -69,7 +72,7 @@ fn aliases_discover_the_canonical_pending_attempt_and_history_without_weakening_
     after.windows.insert("primary".into(), 0.0);
     // Alias discovery does not authorize evidence from another saved profile/host binding.
     assert_eq!(
-        store.check("route-b", &attempt, &after, NOW + 2).unwrap()["outcome"],
+        store.read_check("route-b", &attempt, &after, NOW + 2).unwrap()["outcome"],
         "claimed-unconfirmed"
     );
     assert_eq!(store.pending("route-a", NOW).unwrap()["attemptKey"], attempt);
@@ -77,7 +80,7 @@ fn aliases_discover_the_canonical_pending_attempt_and_history_without_weakening_
     correct.observed_at_ms += 1;
     correct.grants[0].left = 0;
     correct.windows.insert("primary".into(), 0.0);
-    store.check("route-a", &attempt, &correct, NOW + 2).unwrap();
+    store.read_check("route-a", &attempt, &correct, NOW + 2).unwrap();
     assert_eq!(store.pending("route-b", NOW).unwrap()["attemptKey"], Value::Null);
     assert_eq!(store.history("route-b").unwrap(), store.history("route-a").unwrap());
     // Even an inventory with no grants retains canonical discovery after restart.
@@ -85,11 +88,11 @@ fn aliases_discover_the_canonical_pending_attempt_and_history_without_weakening_
     let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
     let mut empty = b;
     empty.grants.clear();
-    store.inventory("route-c", &empty, NOW, &nonce(5)).unwrap();
+    store.read_inventory("route-c", &empty, NOW, &nonce(5)).unwrap();
     assert_eq!(store.history("route-c").unwrap(), store.history("route-a").unwrap());
     let mut other = snapshot("other");
     other.identity.account = "different-account".into();
-    store.inventory("unrelated", &other, NOW, &nonce(6)).unwrap();
+    store.read_inventory("unrelated", &other, NOW, &nonce(6)).unwrap();
     assert!(store.history("unrelated").unwrap().as_array().unwrap().is_empty());
-    assert!(store.check("unrelated", &attempt, &other, NOW + 2).is_err());
+    assert!(store.read_check("unrelated", &attempt, &other, NOW + 2).is_err());
 }

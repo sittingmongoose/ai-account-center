@@ -44,6 +44,9 @@ const snapshot = {
   accountLabel: 'synthetic-principal',
 };
 async function call(op, args = {}) {
+  if (args.snapshot) {
+    args = { ...args, snapshot: { ...args.snapshot, readTicket: await call('readTicket') } };
+  }
   return JSON.parse(
     await handle.call(
       'resetClaims',

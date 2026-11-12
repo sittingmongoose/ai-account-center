@@ -24,7 +24,15 @@ fn opaque(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-pub use crate::reset_inventory::{Grant, Identity, Snapshot};
+pub use crate::reset_inventory::{Grant, Identity, ReadTicket, Snapshot};
+impl ReadTicket {
+    fn order(&self) -> Option<i64> {
+        self.sequence
+            .parse::<i64>()
+            .ok()
+            .filter(|n| *n > 0 && n.to_string() == self.sequence && opaque(&self.route_key))
+    }
+}
 impl Snapshot {
     fn validate(&self, now: i64) -> Result<()> {
         if self.account_label.len() > 254 || self.account_label.chars().any(|c| c.is_control()) {
@@ -214,39 +222,13 @@ impl Store {
             CREATE TABLE IF NOT EXISTS reset_revisions(lock_key TEXT PRIMARY KEY, revision INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS claim_tokens(token TEXT PRIMARY KEY, lock_key TEXT NOT NULL, expires INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS claim_tokens_account ON claim_tokens(lock_key);
-            CREATE TABLE IF NOT EXISTS route_sources(account TEXT PRIMARY KEY, identity TEXT NOT NULL, observed_at_ms INTEGER NOT NULL);"))?;
-        // Backfill only observations matching the current alias. Retained targets from
-        // a former login must never become the route's source high-water mark.
-        let aliases = {
-            let mut stmt = sql(tx.prepare("SELECT account,lock_key FROM aliases WHERE NOT EXISTS(SELECT 1 FROM route_sources s WHERE s.account=aliases.account)"))?;
-            let rows = sql(stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))))?;
-            let mut aliases = vec![];
-            for row in rows {
-                aliases.push(sql(row)?);
-            }
-            aliases
-        };
-        for (account, canonical) in aliases {
-            let mut stmt = sql(tx.prepare("SELECT snapshot FROM targets WHERE account=? ORDER BY rowid DESC"))?;
-            let rows = sql(stmt.query_map([&account], |r| r.get::<_, String>(0)))?;
-            let mut newest: Option<Snapshot> = None;
-            for row in rows {
-                let snapshot: Snapshot = serde_json::from_str(&sql(row)?).map_err(|_| "shape")?;
-                if Self::canonical(&snapshot)? == canonical
-                    && newest
-                        .as_ref()
-                        .is_none_or(|old| snapshot.observed_at_ms > old.observed_at_ms)
-                {
-                    newest = Some(snapshot);
-                }
-            }
-            if let Some(snapshot) = newest {
-                sql(tx.execute(
-                    "INSERT INTO route_sources VALUES(?,?,?)",
-                    params![account, encode(&snapshot.identity)?, snapshot.observed_at_ms],
-                ))?;
-            }
-        }
+            CREATE TABLE IF NOT EXISTS source_read_clock(singleton INTEGER PRIMARY KEY CHECK(singleton=1), value INTEGER NOT NULL);
+            INSERT OR IGNORE INTO source_read_clock VALUES(1,0);
+            CREATE TABLE IF NOT EXISTS read_ticket_counters(account TEXT PRIMARY KEY, value INTEGER NOT NULL CHECK(value>0));
+            CREATE TABLE IF NOT EXISTS route_read_fences(account TEXT PRIMARY KEY, ticket INTEGER NOT NULL CHECK(ticket>0));
+            DROP TABLE IF EXISTS route_sources;"))?;
+        // Old timestamp fences are deliberately retired. Ticketless in-flight reads
+        // cannot pass inventory; existing immutable targets/attempts remain readable.
         // Recover tokens issued before this additive migration from their immutable target,
         // never from a saved profile's current alias binding.
         let missing = {
@@ -371,6 +353,28 @@ impl Store {
         Ok(value)
     }
 
+    /// Commit a route-bound sequence before starting any source I/O. Issuance changes
+    /// no account revision, alias, token or audit state, including on a failed read.
+    pub fn read_ticket(&mut self, account: &str) -> Result<ReadTicket> {
+        let tx = sql(self
+            .db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
+        let sequence: i64 = sql(tx.query_row(
+            "UPDATE source_read_clock SET value=value+1 WHERE singleton=1 AND value<9223372036854775807 RETURNING value",
+            [], |r| r.get(0),
+        ))?;
+        sql(tx.execute(
+            "INSERT INTO read_ticket_counters VALUES(?,?) ON CONFLICT(account) DO UPDATE SET value=excluded.value",
+            params![account, sequence],
+        ))?;
+        let ticket = ReadTicket {
+            route_key: hash(account),
+            sequence: sequence.to_string(),
+        };
+        sql(tx.commit())?;
+        Ok(ticket)
+    }
+
     pub fn inventory(&mut self, account: &str, s: &Snapshot, now: i64, entropy: &str) -> Result<Value> {
         if !opaque(entropy) {
             return Err("entropy");
@@ -381,23 +385,24 @@ impl Store {
         let now = (self.clock)(now)?;
         s.validate(now)?;
         let canonical = Self::canonical(s)?;
-        let identity = encode(&s.identity)?;
-        let previous: Option<(String, i64)> = sql(tx
-            .query_row(
-                "SELECT identity,observed_at_ms FROM route_sources WHERE account=?",
-                [account],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional())?;
-        if previous
-            .as_ref()
-            .is_some_and(|(old, at)| old != &identity && s.observed_at_ms <= *at)
-        {
+        let ticket = s.read_ticket.as_ref().ok_or("stale-inventory")?;
+        let sequence = ticket.order().ok_or("stale-inventory")?;
+        if ticket.route_key != hash(account) {
+            return Err("stale-inventory");
+        }
+        let (issued, accepted): (i64, i64) = sql(tx.query_row(
+            "SELECT COALESCE((SELECT value FROM read_ticket_counters WHERE account=?),0),COALESCE((SELECT ticket FROM route_read_fences WHERE account=?),0)",
+            params![account,account], |r| Ok((r.get(0)?,r.get(1)?)),
+        ))?;
+        if sequence > issued || sequence <= accepted {
             return Err("stale-inventory");
         }
         // Refusal precedes every revision, alias and target mutation, including expiry pruning.
         Self::expire_tokens(&tx, now)?;
-        sql(tx.execute("INSERT INTO route_sources VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET identity=excluded.identity,observed_at_ms=max(observed_at_ms,excluded.observed_at_ms)", params![account,identity,s.observed_at_ms]))?;
+        sql(tx.execute(
+            "INSERT INTO route_read_fences VALUES(?,?) ON CONFLICT(account) DO UPDATE SET ticket=excluded.ticket",
+            params![account, sequence],
+        ))?;
         let revision = Self::advance(&tx, &canonical)?;
         sql(tx.execute(
             "INSERT INTO aliases(account,lock_key,binding_revision) VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET lock_key=excluded.lock_key,binding_revision=excluded.binding_revision",
@@ -995,10 +1000,11 @@ impl Write {
     }
 }
 fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64) -> bool {
-    if after.validate(now).is_err()
-        || after.identity != before.identity
-        || after.observed_at_ms <= before.observed_at_ms
-    {
+    let after_order = after.read_ticket.as_ref().and_then(ReadTicket::order);
+    // Retained attempts without a ticket precede the new source-read epoch.
+    let before_order = before.read_ticket.as_ref().map_or(Some(0), ReadTicket::order);
+    let newer = matches!((before_order, after_order), (Some(before), Some(after)) if after > before);
+    if after.validate(now).is_err() || after.identity != before.identity || !newer {
         return false;
     }
     // Missing grant is not sufficient proof: require an explicit chosen-grant decrement.
@@ -1063,6 +1069,7 @@ pub fn dispatch(args: &str) -> Result<Value> {
             s.gate(&a.account, &a.key, now_ms, a.op == "prepareGate")?;
             Ok(json!({"ok":true}))
         }
+        "readTicket" => Ok(json!(s.read_ticket(&a.account)?)),
         "inventory" => s.inventory(&a.account, snapshot()?, now_ms, &a.entropy),
         "prepare" => s.prepare(&a.account, &a.key, &a.caller, snapshot()?, now_ms, &a.entropy),
         "begin" => {

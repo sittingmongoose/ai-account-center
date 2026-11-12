@@ -37,6 +37,7 @@ async function serve(
     next();
   });
   const calls: string[] = [];
+  const snapshots: Array<Record<string, unknown>> = [];
   const dir = mkdtempSync(join(tmpdir(), 'aac-reset-http-'));
   dirs.push(dir);
   app.use(
@@ -48,8 +49,11 @@ async function serve(
         async call(_method, raw) {
           const a = JSON.parse(raw);
           calls.push(a.op);
+          if (a.snapshot) snapshots.push(a.snapshot);
           if (rejectGate && a.op.endsWith('Gate')) throw new Error('synthetic cooldown');
           if (reject && a.op === reject.op) throw new Error(reject.message);
+          if (a.op === 'readTicket')
+            return JSON.stringify({ routeKey: 'f'.repeat(64), sequence: String(calls.length) });
           if (a.op === 'history') return '[]';
           if (a.op === 'pending' || a.op === 'inventory')
             return JSON.stringify({
@@ -80,7 +84,7 @@ async function serve(
   servers.push(server);
   await new Promise<void>((r) => server.on('listening', r));
   const url = `http://127.0.0.1:${(server.address() as any).port}`;
-  return { url, calls, server };
+  return { url, calls, server, snapshots };
 }
 const grantKey = 'b'.repeat(64);
 test('paired native devices and anonymous callers cannot prepare or read private history', async () => {
@@ -145,7 +149,7 @@ test('check-again reads only and cannot invoke provider send', async () => {
     body: JSON.stringify({ attemptKey: grantKey }),
   });
   expect(res.status).toBe(200);
-  expect(calls).toEqual(['check']);
+  expect(calls).toEqual(['readTicket', 'check']);
   expect(sends).toBe(0);
 });
 test('ambiguous provider send makes one attempt and performs a fresh verification read', async () => {
@@ -168,7 +172,7 @@ test('ambiguous provider send makes one attempt and performs a fresh verificatio
     body: JSON.stringify({ grantKey, confirmationToken: 'c'.repeat(64) }),
   });
   expect(res.status).toBe(200);
-  expect(calls).toEqual(['claimGate', 'begin', 'finish']);
+  expect(calls).toEqual(['claimGate', 'readTicket', 'begin', 'readTicket', 'finish']);
   expect(sends).toBe(1);
   expect(reads).toBe(2);
 });
@@ -234,7 +238,7 @@ test('the inventory read names an unresolved attempt so any signed-in session ca
     evidence: { canonicalAccountKey: 'synthetic-canonical', revision: '19' },
   });
   expect(JSON.stringify(body)).not.toContain('private');
-  expect(calls).toEqual(['pending']);
+  expect(calls).toEqual(['readTicket', 'pending']);
 });
 
 test('a refusal passes on only an allowlisted native code, and says whether the write was reached', async () => {
@@ -300,7 +304,7 @@ test('inventory recovery and revision are returned from one native transaction',
   expect(body.pendingAttempt).toBe('e'.repeat(64));
   expect(body.evidence.revision).toBe('19');
   expect(body.bindingRevision).toBe('17');
-  expect(calls).toEqual(['inventory']);
+  expect(calls).toEqual(['readTicket', 'inventory']);
 });
 
 test('a refusal without recovery storage returns null evidence and never invents a snapshot', async () => {
@@ -440,4 +444,48 @@ test('prepare, begin before provider completion, and settlement push to all brow
     expect(event.id).toMatch(/^[a-f0-9]{32}$/);
     expect(Object.keys(event).sort()).toEqual(['id', 'type']);
   }
+});
+
+test('source reads start only after ticket issuance and cannot replace trusted ticket metadata', async () => {
+  let calls: string[] = [];
+  const source: ResetSource = {
+    async read() {
+      expect(calls).toEqual(['readTicket']);
+      return { readTicket: { routeKey: 'provider-controlled', sequence: '999999' } };
+    },
+    async send() {
+      throw new Error('must not send');
+    },
+  };
+  const served = await serve('session', source);
+  calls = served.calls;
+  const response = await fetch(`${served.url}/accounts/synthetic/reset-claims`);
+  expect(response.status).toBe(200);
+  expect(served.snapshots[0].readTicket).toEqual({ routeKey: 'f'.repeat(64), sequence: '1' });
+  expect(calls).toEqual(['readTicket', 'inventory']);
+});
+
+test('ticket persistence failure prevents every provider read and send', async () => {
+  let reads = 0,
+    sends = 0;
+  const source: ResetSource = {
+    async read() {
+      reads++;
+      return {};
+    },
+    async send() {
+      sends++;
+      return { outcome: 'reset' };
+    },
+  };
+  const served = await serve('session', source, false, {
+    op: 'readTicket',
+    message: 'storage-unavailable',
+  });
+  const response = await fetch(`${served.url}/accounts/synthetic/reset-claims`);
+  expect(response.status).toBe(200);
+  expect((await response.json()).status).toBe('unavailable');
+  expect(reads).toBe(0);
+  expect(sends).toBe(0);
+  expect(served.calls).toEqual(['readTicket', 'pending']);
 });

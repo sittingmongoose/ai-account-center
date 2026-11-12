@@ -66,11 +66,26 @@ Both private provider readers recheck the saved login after their read finishes
 and immediately before accepting its snapshot. A changed or removed login makes
 the read unavailable. Its observation time belongs to the identity verification
 before the usage RPC, so a slow response cannot acquire a newer observation time.
-The Store persists each route's newest verified source identity and observation
-time, including empty inventories. A conflicting identity with an older or equal
-observation time is rejected before any revision, alias or target changes. On
-upgrade, this guard uses the newest retained observation matching the current
-alias; observations from former logins cannot replace it.
+Before every private provider read, the reset router asks the Store to commit a
+`readTicket` from its independent durable logical clock. The private snapshot
+carries that ticket as a decimal sequence and route hash; provider-returned
+metadata cannot override it. Issuance changes no account revision, alias, token
+or audit state. A failed ticket commit prevents provider I/O.
+
+Inventory accepts only a route-bound ticket newer than that route's last accepted
+ticket. Older reads and repeated tickets are rejected before any revision, alias,
+target or expiry changes, even when the identity is unchanged. Counter issuance
+and acceptance survive restart; wall-clock corrections cannot lower or strand the
+route's authority. The old timestamp fence is retired on upgrade. Unticketed old
+in-flight inventories fail closed, while retained targets and attempts stay
+readable. A new ticketed read can verify an attempt from before the upgrade.
+Ticket metadata is excluded from the confirmation fingerprint: a new read of
+unchanged account/grant state still matches its confirmation.
+
+Verification also orders ticketed before/after reads by sequence. Observation
+wall times remain display/freshness data, not an identity or verification-order
+fence; the existing fresh-sample policy remains. Token/grant expiry and execution
+still use the trusted post-lock clock from the execution transaction.
 The consume request always includes the exact `creditId` and `idempotencyKey`;
 no default or next-credit substitution exists. Protocol evidence is the local
 `t3code-ref` generated V2 schema: ConsumeAccountRateLimitResetCreditParams,

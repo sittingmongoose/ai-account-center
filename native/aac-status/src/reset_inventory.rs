@@ -36,10 +36,20 @@ pub fn provider_words(raw: &str) -> Option<String> {
     let kept = kept.split_whitespace().collect::<Vec<_>>().join(" ");
     (!kept.is_empty()).then_some(kept)
 }
+/// Private Store-issued order, committed before the source read starts.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadTicket {
+    pub route_key: String,
+    pub sequence: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Snapshot {
     pub identity: Identity,
+    // Legacy stored attempt/target snapshots predate read tickets; new inventory requires one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_ticket: Option<ReadTicket>,
     pub observed_at_ms: i64,
     pub grants: Vec<Grant>,
     pub windows: std::collections::BTreeMap<String, f64>,
@@ -207,6 +217,7 @@ pub fn normalize_claude(args: &str) -> Result<Value> {
     let a: Read = serde_json::from_str(args).map_err(|_| "inventory-unavailable")?;
     let grants = claude(&a.raw, &a.expiries)?;
     Ok(serde_json::json!(Snapshot {
+        read_ticket: None,
         identity: a.identity,
         observed_at_ms: a.observed_at_ms,
         grants,

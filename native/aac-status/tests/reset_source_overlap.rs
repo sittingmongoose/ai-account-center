@@ -1,4 +1,5 @@
 #![cfg(unix)]
+mod support;
 use aac_status::reset::*;
 use aac_status::reset_source::codex_with_binary;
 use base64::Engine;
@@ -8,6 +9,7 @@ use std::{
     path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use support::ReadFixtures;
 fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
 }
@@ -27,8 +29,10 @@ fn overlapping_production_reads_discard_the_replaced_login_and_preserve_pending_
     let (dir, home, binary) = setup();
     let call =
         |write: Option<&Value>| codex_with_binary(home.to_str().unwrap(), "reused", "fixture-host", write, &binary);
-    let before: Snapshot = serde_json::from_value(call(None).unwrap()).unwrap();
     let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    let before_ticket = store.read_ticket("codex:reused").unwrap();
+    let mut before: Snapshot = serde_json::from_value(call(None).unwrap()).unwrap();
+    before.read_ticket = Some(before_ticket);
     let inv = store.inventory("codex:reused", &before, now(), &nonce(1)).unwrap();
     let key = inv["grants"][0]["grantKey"].as_str().unwrap();
     let prep = store
@@ -47,6 +51,7 @@ fn overlapping_production_reads_discard_the_replaced_login_and_preserve_pending_
         .unwrap();
     let mut after = before.clone();
     after.observed_at_ms += 1;
+    after.read_ticket = Some(store.read_ticket("codex:reused").unwrap());
     after.grants[0].left = 0;
     after.windows.insert("primary".into(), 0.);
     store
@@ -59,7 +64,7 @@ fn overlapping_production_reads_discard_the_replaced_login_and_preserve_pending_
     yp.identity.profile = "y-sibling".into();
     yp.grants[0].id = Some("credit-account-y".into());
     yp.observed_at_ms = now();
-    let yi = store.inventory("codex:y-sibling", &yp, now(), &nonce(40)).unwrap();
+    let yi = store.read_inventory("codex:y-sibling", &yp, now(), &nonce(40)).unwrap();
     let yk = yi["grants"][0]["grantKey"].as_str().unwrap();
     let yt = store
         .prepare("codex:y-sibling", yk, "local", &yp, now(), &nonce(41))
@@ -76,10 +81,13 @@ fn overlapping_production_reads_discard_the_replaced_login_and_preserve_pending_
         )
         .unwrap();
     // A complete, formerly valid source read can also be delayed before Store acceptance.
-    let old_preview: Snapshot = serde_json::from_value(call(None).unwrap()).unwrap();
+    let old_ticket = store.read_ticket("codex:reused").unwrap();
+    let mut old_preview: Snapshot = serde_json::from_value(call(None).unwrap()).unwrap();
+    old_preview.read_ticket = Some(old_ticket);
     std::fs::write(home.join("hold-x"), "").unwrap();
     let old_home = home.clone();
     let old_binary = binary.clone();
+    let _held_ticket = store.read_ticket("codex:reused").unwrap();
     let pending = std::thread::spawn(move || {
         codex_with_binary(old_home.to_str().unwrap(), "reused", "fixture-host", None, &old_binary)
     });
@@ -91,7 +99,9 @@ fn overlapping_production_reads_discard_the_replaced_login_and_preserve_pending_
     }
     assert!(home.join("waiting").exists());
     login(&home, "account-y");
-    let y: Snapshot = serde_json::from_value(call(None).unwrap()).unwrap();
+    let y_ticket = store.read_ticket("codex:reused").unwrap();
+    let mut y: Snapshot = serde_json::from_value(call(None).unwrap()).unwrap();
+    y.read_ticket = Some(y_ticket);
     assert_eq!(y.identity.account, "account-y");
     let newer = store.inventory("codex:reused", &y, now(), &nonce(90)).unwrap();
     std::fs::write(home.join("release"), "").unwrap();
@@ -245,6 +255,67 @@ fn replaced_hash_or_signed_out_login_during_rpc_discards_the_read() {
         }
         std::fs::write(home.join("release"), "").unwrap();
         assert_eq!(worker.join().unwrap().unwrap_err(), "stale-inventory");
+        assert!(!home.join("sent").exists());
+    }
+}
+
+fn ticketed_read(store: &mut Store, home: &Path, binary: &Path) -> Result<Snapshot> {
+    let ticket = store.read_ticket("route")?;
+    let value = codex_with_binary(home.to_str().unwrap(), "reused", "fixture-host", None, binary)?;
+    let mut snapshot: Snapshot = serde_json::from_value(value).unwrap();
+    snapshot.read_ticket = Some(ticket);
+    Ok(snapshot)
+}
+#[test]
+fn completed_reads_keep_ticket_order_in_both_acceptance_orders() {
+    for reverse in [false, true] {
+        let (dir, home, binary) = setup();
+        let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+        let x = ticketed_read(&mut store, &home, &binary).unwrap();
+        login(&home, "account-y");
+        let y = ticketed_read(&mut store, &home, &binary).unwrap();
+        if !reverse {
+            store.inventory("route", &x, now(), &nonce(1200)).unwrap();
+        }
+        let newest = store.inventory("route", &y, now(), &nonce(1201)).unwrap();
+        assert_eq!(
+            store.inventory("route", &x, now(), &nonce(1202)).unwrap_err(),
+            "stale-inventory"
+        );
+        assert_eq!(store.pending("route", now()).unwrap()["evidence"], newest["evidence"]);
+    }
+}
+#[test]
+fn aba_or_double_replacement_cannot_promote_a_held_old_read() {
+    for final_account in ["account-x", "account-z"] {
+        let (dir, home, binary) = setup();
+        let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+        let ticket = store.read_ticket("route").unwrap();
+        std::fs::write(home.join("hold-x"), "").unwrap();
+        let h = home.clone();
+        let b = binary.clone();
+        let worker =
+            std::thread::spawn(move || codex_with_binary(h.to_str().unwrap(), "reused", "fixture-host", None, &b));
+        wait_for_read(&home);
+        login(&home, "account-y");
+        let y = ticketed_read(&mut store, &home, &binary).unwrap();
+        let newest = store.inventory("route", &y, now(), &nonce(1210)).unwrap();
+        login(&home, final_account);
+        std::fs::write(home.join("release"), "").unwrap();
+        let got = worker.join().unwrap();
+        if final_account == "account-x" {
+            let mut old: Snapshot = serde_json::from_value(got.unwrap()).unwrap();
+            old.read_ticket = Some(ticket);
+            assert_eq!(
+                store.inventory("route", &old, now(), &nonce(1211)).unwrap_err(),
+                "stale-inventory"
+            );
+        } else {
+            assert_eq!(got.unwrap_err(), "stale-inventory");
+        }
+        assert_eq!(store.pending("route", now()).unwrap()["evidence"], newest["evidence"]);
+        let fresh = ticketed_read(&mut store, &home, &binary).unwrap();
+        assert!(store.inventory("route", &fresh, now(), &nonce(1212)).is_ok());
         assert!(!home.join("sent").exists());
     }
 }

@@ -240,6 +240,7 @@ pub fn codex_with_binary(home: &str, profile: &str, host: &str, write: Option<&V
         return Err("stale-inventory");
     }
     Ok(json!(Snapshot {
+        read_ticket: None,
         identity,
         observed_at_ms,
         grants,

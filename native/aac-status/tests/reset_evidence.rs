@@ -1,10 +1,13 @@
+mod support;
 use aac_status::reset::*;
+use support::ReadFixtures;
 const NOW: i64 = 1_700_000_000_000;
 fn nonce(n: u64) -> String {
     format!("{n:064x}")
 }
 fn snap(account: &str, profile: &str, host: &str) -> Snapshot {
     Snapshot {
+        read_ticket: None,
         identity: Identity {
             provider: "codex".into(),
             account: account.into(),
@@ -39,7 +42,7 @@ fn open() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 fn begin(store: &mut Store, route: &str, before: &Snapshot, n: u64) -> String {
-    let inv = store.inventory(route, before, NOW, &nonce(n)).unwrap();
+    let inv = store.read_inventory(route, before, NOW, &nonce(n)).unwrap();
     let key = inv["grants"][0]["grantKey"].as_str().unwrap();
     let caller = format!("session:{}", nonce(999));
     let prep = store.prepare(route, key, &caller, before, NOW, &nonce(n + 1)).unwrap();
@@ -92,24 +95,24 @@ fn recorded_three_attempt_snapshots_are_ordered_coherent_and_durable() {
     let route = "reused";
     let mut before = snap("account-x", "profile-a", "host-a");
     before.grants[0].left = 3;
-    let empty = store.inventory(route, &before, NOW, &nonce(80)).unwrap();
+    let empty = store.read_inventory(route, &before, NOW, &nonce(80)).unwrap();
     let a = begin(&mut store, route, &before, 1);
-    let inventory1 = store.inventory(route, &before, NOW, &nonce(81)).unwrap();
+    let inventory1 = store.read_inventory(route, &before, NOW, &nonce(81)).unwrap();
     let settled1 = store
-        .finish(route, &a, Outcome::Reset, Some(&confirmed(&before)), NOW + 2, None)
+        .read_finish(route, &a, Outcome::Reset, Some(&confirmed(&before)), NOW + 2, None)
         .unwrap();
     before.grants[0].left = 2;
     let b = begin(&mut store, route, &before, 10);
-    let inventory2 = store.inventory(route, &before, NOW, &nonce(60)).unwrap();
+    let inventory2 = store.read_inventory(route, &before, NOW, &nonce(60)).unwrap();
     let settled2 = store
-        .finish(route, &b, Outcome::Reset, Some(&confirmed(&before)), NOW + 2, None)
+        .read_finish(route, &b, Outcome::Reset, Some(&confirmed(&before)), NOW + 2, None)
         .unwrap();
     before.grants[0].left = 1;
     let c = begin(&mut store, route, &before, 20);
     let unconfirmed3 = store
-        .finish(route, &c, Outcome::Ambiguous, None, NOW + 3, None)
+        .read_finish(route, &c, Outcome::Ambiguous, None, NOW + 3, None)
         .unwrap();
-    let inventory3 = store.inventory(route, &before, NOW, &nonce(61)).unwrap();
+    let inventory3 = store.read_inventory(route, &before, NOW, &nonce(61)).unwrap();
     let grant = inventory3["grants"][0]["grantKey"].as_str().unwrap();
     assert_eq!(
         store
@@ -118,7 +121,7 @@ fn recorded_three_attempt_snapshots_are_ordered_coherent_and_durable() {
         "check-again-required"
     );
     let recovery3 = store.pending(route, NOW).unwrap();
-    let replay2 = store.check(route, &b, &before, NOW + 4).unwrap();
+    let replay2 = store.read_check(route, &b, &before, NOW + 4).unwrap();
     assert_eq!(revision(&replay2), revision(&inventory3));
     assert_eq!(replay2["attemptKey"], b);
     assert_eq!(replay2["evidence"]["latestAttempt"]["attemptKey"], c);
@@ -126,9 +129,9 @@ fn recorded_three_attempt_snapshots_are_ordered_coherent_and_durable() {
     assert_eq!(recovery3["history"], inventory3["history"]);
     assert_eq!(replay2["windows"], settled2["windows"]);
     let settled3 = store
-        .finish(route, &c, Outcome::Reset, Some(&confirmed(&before)), NOW + 5, None)
+        .read_finish(route, &c, Outcome::Reset, Some(&confirmed(&before)), NOW + 5, None)
         .unwrap();
-    let final_inventory = store.inventory(route, &before, NOW, &nonce(82)).unwrap();
+    let final_inventory = store.read_inventory(route, &before, NOW, &nonce(82)).unwrap();
     let ordered = [
         &empty,
         &inventory1,
@@ -160,10 +163,10 @@ fn recorded_reassignment_has_ordered_bindings_and_separate_accounts() {
     let mut y = snap("account-y", "reused", "host-a");
     y.observed_at_ms = NOW + 1;
     let a = begin(&mut store, "reused", &x, 1);
-    let original = store.inventory("reused", &x, NOW, &nonce(90)).unwrap();
-    let replacement = store.inventory("reused", &y, NOW + 1, &nonce(91)).unwrap();
+    let original = store.read_inventory("reused", &x, NOW, &nonce(90)).unwrap();
+    let replacement = store.read_inventory("reused", &y, NOW + 1, &nonce(91)).unwrap();
     let sibling = store
-        .inventory("x-sibling", &snap("account-x", "sibling", "host-b"), NOW, &nonce(92))
+        .read_inventory("x-sibling", &snap("account-x", "sibling", "host-b"), NOW, &nonce(92))
         .unwrap();
     assert_ne!(original["canonicalAccountKey"], replacement["canonicalAccountKey"]);
     assert_eq!(original["canonicalAccountKey"], sibling["canonicalAccountKey"]);
@@ -176,7 +179,7 @@ fn recorded_reassignment_has_ordered_bindings_and_separate_accounts() {
         &serde_json::json!([original, replacement, sibling]),
     );
     let settled = store
-        .finish("reused", &a, Outcome::Reset, Some(&confirmed(&x)), NOW + 2, None)
+        .read_finish("reused", &a, Outcome::Reset, Some(&confirmed(&x)), NOW + 2, None)
         .unwrap();
     golden("reset-ordered-repoint-settlement.json", &settled);
 }
@@ -194,10 +197,10 @@ fn revisions_survive_upgrade_from_the_old_schema_and_multiple_connections() {
     let mut first = Store::open(&path).unwrap();
     let mut second = Store::open(&path).unwrap();
     let a = first
-        .inventory("a", &snap("account-x", "p", "h"), NOW, &nonce(100))
+        .read_inventory("a", &snap("account-x", "p", "h"), NOW, &nonce(100))
         .unwrap();
     let b = second
-        .inventory("b", &snap("account-x", "p2", "h2"), NOW, &nonce(101))
+        .read_inventory("b", &snap("account-x", "p2", "h2"), NOW, &nonce(101))
         .unwrap();
     assert!(revision(&b) > revision(&a));
     assert_eq!(first.pending("a", NOW).unwrap()["evidence"], b["evidence"]);
@@ -208,13 +211,13 @@ fn revisions_survive_upgrade_from_the_old_schema_and_multiple_connections() {
 fn recorded_outstanding_tokens_cover_delayed_begin_and_new_clients() {
     let (dir, mut store) = open();
     let before = snap("account-x", "profile-a", "host-a");
-    let first = store.inventory("route", &before, NOW, &nonce(300)).unwrap();
+    let first = store.read_inventory("route", &before, NOW, &nonce(300)).unwrap();
     let key = first["grants"][0]["grantKey"].as_str().unwrap();
     let caller = format!("session:{}", nonce(999));
     let prepared = store.prepare("route", key, &caller, &before, NOW, &nonce(301)).unwrap();
     drop(store);
     let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
-    let reload = store.inventory("route", &before, NOW + 10, &nonce(302)).unwrap();
+    let reload = store.read_inventory("route", &before, NOW + 10, &nonce(302)).unwrap();
     assert!(revision(&reload) > revision(&prepared));
     assert!(reload["evidence"]["pendingAttempts"].as_array().unwrap().is_empty());
     assert_eq!(reload["evidence"]["claimTokens"]["untilMs"], NOW + 120_000);
@@ -246,13 +249,13 @@ fn recorded_outstanding_tokens_cover_delayed_begin_and_new_clients() {
     );
     assert!(revision(&pending) > revision(&reload));
     let settled = store
-        .finish("route", &nonce(303), Outcome::Nothing, None, NOW + 22, None)
+        .read_finish("route", &nonce(303), Outcome::Nothing, None, NOW + 22, None)
         .unwrap();
-    let final_inventory = store.inventory("route", &before, NOW + 23, &nonce(304)).unwrap();
+    let final_inventory = store.read_inventory("route", &before, NOW + 23, &nonce(304)).unwrap();
     let second = store
         .prepare("route", key, &caller, &before, NOW + 24, &nonce(305))
         .unwrap();
-    let with_second = store.inventory("route", &before, NOW + 25, &nonce(306)).unwrap();
+    let with_second = store.read_inventory("route", &before, NOW + 25, &nonce(306)).unwrap();
     let before_expiry = store.pending("route", NOW + 120_023).unwrap();
     assert_eq!(before_expiry["evidence"]["claimTokens"]["untilMs"], NOW + 120_024);
     let expired = store.pending("route", NOW + 120_024).unwrap();
@@ -283,7 +286,7 @@ fn outstanding_tokens_follow_original_accounts_in_both_reassignment_directions()
     for (original, replacement) in [("x", "y"), ("y", "x")] {
         let (_dir, mut store) = open();
         let before = snap(original, "reused", "host-a");
-        let inventory = store.inventory("reused", &before, NOW, &nonce(310)).unwrap();
+        let inventory = store.read_inventory("reused", &before, NOW, &nonce(310)).unwrap();
         let key = inventory["grants"][0]["grantKey"].as_str().unwrap();
         let prepared = store
             .prepare("reused", key, "local", &before, NOW, &nonce(311))
@@ -291,14 +294,16 @@ fn outstanding_tokens_follow_original_accounts_in_both_reassignment_directions()
         let mut sibling = before.clone();
         sibling.identity.profile = "sibling".into();
         sibling.identity.host = "host-b".into();
-        let sibling_inventory = store.inventory("sibling", &sibling, NOW, &nonce(312)).unwrap();
+        let sibling_inventory = store.read_inventory("sibling", &sibling, NOW, &nonce(312)).unwrap();
         assert_eq!(
             sibling_inventory["evidence"]["claimTokens"],
             prepared["evidence"]["claimTokens"]
         );
         let mut replacement = snap(replacement, "reused", "host-a");
         replacement.observed_at_ms = NOW + 1;
-        store.inventory("reused", &replacement, NOW + 1, &nonce(313)).unwrap();
+        store
+            .read_inventory("reused", &replacement, NOW + 1, &nonce(313))
+            .unwrap();
         assert!(store.pending("reused", NOW).unwrap()["evidence"]["claimTokens"]["untilMs"].is_null());
         assert_eq!(
             store.pending("sibling", NOW).unwrap()["evidence"]["claimTokens"],
@@ -324,15 +329,17 @@ fn outstanding_tokens_follow_original_accounts_in_both_reassignment_directions()
 fn migration_restores_unconsumed_tokens_from_immutable_targets() {
     let (dir, mut store) = open();
     let before = snap("x", "reused", "host-a");
-    let inventory = store.inventory("reused", &before, NOW, &nonce(320)).unwrap();
+    let inventory = store.read_inventory("reused", &before, NOW, &nonce(320)).unwrap();
     let key = inventory["grants"][0]["grantKey"].as_str().unwrap();
     let prepared = store
         .prepare("reused", key, "local", &before, NOW, &nonce(321))
         .unwrap();
-    let sibling = store.inventory("sibling", &before, NOW, &nonce(322)).unwrap();
+    let sibling = store.read_inventory("sibling", &before, NOW, &nonce(322)).unwrap();
     let mut replacement = snap("y", "reused", "host-a");
     replacement.observed_at_ms = NOW + 1;
-    store.inventory("reused", &replacement, NOW + 1, &nonce(323)).unwrap();
+    store
+        .read_inventory("reused", &replacement, NOW + 1, &nonce(323))
+        .unwrap();
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("claims.sqlite")).unwrap();
     db.execute_batch("DROP TABLE claim_tokens").unwrap();
@@ -351,7 +358,7 @@ fn migration_restores_unconsumed_tokens_from_immutable_targets() {
 fn token_burn_and_other_token_expiry_are_independently_ordered() {
     let (_dir, mut store) = open();
     let before = snap("x", "a", "h");
-    let inventory = store.inventory("route", &before, NOW, &nonce(330)).unwrap();
+    let inventory = store.read_inventory("route", &before, NOW, &nonce(330)).unwrap();
     let key = inventory["grants"][0]["grantKey"].as_str().unwrap();
     let first = store.prepare("route", key, "local", &before, NOW, &nonce(331)).unwrap();
     assert_eq!(
@@ -375,7 +382,7 @@ fn token_burn_and_other_token_expiry_are_independently_ordered() {
     )
     .unwrap();
     drop(db);
-    let mut second = store.inventory("route", &before, NOW + 1, &nonce(339)).unwrap();
+    let mut second = store.read_inventory("route", &before, NOW + 1, &nonce(339)).unwrap();
     second["confirmationKey"] = serde_json::json!(token_key);
     second["confirmationToken"] = serde_json::json!(token);
     golden(
@@ -439,7 +446,7 @@ fn concurrent_token_consumption_never_exposes_an_empty_reservation_gap() {
     for round in 0..16 {
         let (dir, mut store) = open();
         let before = snap("x", "a", "h");
-        let inventory = store.inventory("route", &before, NOW, &nonce(340)).unwrap();
+        let inventory = store.read_inventory("route", &before, NOW, &nonce(340)).unwrap();
         let key = inventory["grants"][0]["grantKey"].as_str().unwrap().to_owned();
         let prepared = store
             .prepare("route", &key, "local", &before, NOW, &nonce(341))
@@ -479,7 +486,7 @@ fn concurrent_token_consumption_never_exposes_an_empty_reservation_gap() {
 fn recorded_pre_prepare_read_requires_invalidation_and_second_prepare_is_refused() {
     let (_dir, mut store) = open();
     let before = snap("account-x", "profile-a", "host-a");
-    let old = store.inventory("route", &before, NOW, &nonce(900)).unwrap();
+    let old = store.read_inventory("route", &before, NOW, &nonce(900)).unwrap();
     let key = old["grants"][0]["grantKey"].as_str().unwrap();
     let prepared = store
         .prepare("route", key, "local", &before, NOW + 1, &nonce(901))
@@ -496,7 +503,7 @@ fn recorded_pre_prepare_read_requires_invalidation_and_second_prepare_is_refused
         "claim-token-outstanding"
     );
     // The originating token remains actionable; a second page cannot issue another.
-    let current = store.inventory("route", &before, NOW + 3, &nonce(904)).unwrap();
+    let current = store.read_inventory("route", &before, NOW + 3, &nonce(904)).unwrap();
     store
         .begin(
             "route",
@@ -510,9 +517,9 @@ fn recorded_pre_prepare_read_requires_invalidation_and_second_prepare_is_refused
         .unwrap();
     let pending = store.pending("route", NOW + 21).unwrap();
     let settled = store
-        .finish("route", &nonce(902), Outcome::Nothing, None, NOW + 22, None)
+        .read_finish("route", &nonce(902), Outcome::Nothing, None, NOW + 22, None)
         .unwrap();
-    let final_read = store.inventory("route", &before, NOW + 23, &nonce(905)).unwrap();
+    let final_read = store.read_inventory("route", &before, NOW + 23, &nonce(905)).unwrap();
     golden(
         "reset-live-fence.json",
         &serde_json::json!({"old":old,"prepared":prepared,"current":current,"pending":pending,"settled":settled,"final":final_read}),
@@ -532,7 +539,7 @@ fn review_dispatch_must_recheck_expiry_after_database_lock_wait() {
     let issued = wall() - 119_000;
     let mut before = snap("account-x", "profile-a", "host-a");
     before.observed_at_ms = issued;
-    let inv = store.inventory("route", &before, issued, &nonce(910)).unwrap();
+    let inv = store.read_inventory("route", &before, issued, &nonce(910)).unwrap();
     let key = inv["grants"][0]["grantKey"].as_str().unwrap();
     let prep = store
         .prepare("route", key, "local", &before, issued, &nonce(911))
@@ -562,7 +569,7 @@ fn execution_and_pending_sample_their_clock_after_begin_immediate_waits() {
         let issued = wall() - 119_000;
         let mut before = snap("x", "a", "h");
         before.observed_at_ms = issued;
-        let inv = store.inventory("route", &before, issued, &nonce(920)).unwrap();
+        let inv = store.read_inventory("route", &before, issued, &nonce(920)).unwrap();
         let key = inv["grants"][0]["grantKey"].as_str().unwrap().to_owned();
         let prep = store
             .prepare("route", &key, "local", &before, issued, &nonce(921))
@@ -606,7 +613,7 @@ fn pending_abi_ignores_request_clock_and_direct_store_clocks_remain_injectable()
     let issued = wall();
     let mut before = snap("x", "a", "h");
     before.observed_at_ms = issued;
-    let inv = store.inventory("route", &before, issued, &nonce(930)).unwrap();
+    let inv = store.read_inventory("route", &before, issued, &nonce(930)).unwrap();
     let key = inv["grants"][0]["grantKey"].as_str().unwrap();
     store
         .prepare("route", key, "local", &before, issued, &nonce(931))
@@ -626,7 +633,7 @@ fn concurrent_prepares_on_sibling_aliases_issue_exactly_one_confirmation() {
     for (route, profile) in [("a", "profile-a"), ("b", "profile-b")] {
         let s = snap("x", profile, "h");
         let inv = store
-            .inventory(route, &s, NOW, &nonce(if route == "a" { 940 } else { 941 }))
+            .read_inventory(route, &s, NOW, &nonce(if route == "a" { 940 } else { 941 }))
             .unwrap();
         keys.push((
             route.to_owned(),
@@ -654,68 +661,271 @@ fn concurrent_prepares_on_sibling_aliases_issue_exactly_one_confirmation() {
 }
 
 #[test]
-fn source_identity_high_water_refuses_older_and_equal_conflicts_without_mutation() {
+fn source_tickets_refuse_old_same_or_different_identity_and_replay_without_mutation() {
     for empty in [false, true] {
         let (dir, mut store) = open();
         let mut x = snap("x", "reused", "h");
-        x.observed_at_ms = NOW + 10;
-        store.inventory("route", &x, NOW + 10, &nonce(960)).unwrap();
-        let mut y = snap("y", "reused", "h");
-        y.observed_at_ms = NOW + 20;
+        x.read_ticket = Some(store.read_ticket("route").unwrap());
+        store.inventory("route", &x, NOW, &nonce(960)).unwrap();
+        let mut old_same = snap("y", "reused", "h");
+        old_same.read_ticket = Some(store.read_ticket("route").unwrap());
+        let mut y = old_same.clone();
+        y.read_ticket = Some(store.read_ticket("route").unwrap());
         if empty {
             y.grants.clear();
         }
-        let newest = store.inventory("route", &y, NOW + 20, &nonce(961)).unwrap();
+        let newest = store.inventory("route", &y, NOW, &nonce(961)).unwrap();
         drop(store);
         let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
-        for at in [NOW + 10, NOW + 20] {
-            x.observed_at_ms = at;
+        // Timestamp equality and apparent later wall times cannot replace ticket ordering.
+        for (index, mut stale) in [x, old_same, y.clone()].into_iter().enumerate() {
+            stale.observed_at_ms = NOW + 10;
             assert_eq!(
-                store.inventory("route", &x, NOW + 22, &nonce(962)).unwrap_err(),
+                store
+                    .inventory("route", &stale, NOW + 10, &nonce(962 + index as u64))
+                    .unwrap_err(),
                 "stale-inventory"
             );
-            let got = store.pending("route", NOW + 22).unwrap();
+            let got = store.pending("route", NOW + 10).unwrap();
             assert_eq!(got["canonicalAccountKey"], newest["canonicalAccountKey"]);
             assert_eq!(got["bindingRevision"], newest["bindingRevision"]);
             assert_eq!(got["evidence"], newest["evidence"]);
             assert_eq!(got["history"], newest["history"]);
         }
-        // A genuinely later verified login can reassign back; stale same-identity reads cannot lower its fence.
-        x.observed_at_ms = NOW + 23;
-        store.inventory("route", &x, NOW + 23, &nonce(963)).unwrap();
-        x.observed_at_ms = NOW + 11;
-        store.inventory("route", &x, NOW + 23, &nonce(964)).unwrap();
-        y.observed_at_ms = NOW + 22;
-        assert_eq!(
-            store.inventory("route", &y, NOW + 24, &nonce(965)).unwrap_err(),
-            "stale-inventory"
-        );
+        y.read_ticket = Some(store.read_ticket("route").unwrap());
+        assert!(store.inventory("route", &y, NOW, &nonce(966)).is_ok());
     }
 }
 
 #[test]
-fn source_observation_migration_uses_the_current_alias_and_rejects_old_identity() {
+fn migration_retires_wall_clock_fences_and_rejects_unticketed_inflight_reads() {
     let (dir, mut store) = open();
     let mut x = snap("x", "reused", "h");
-    x.observed_at_ms = NOW + 10;
-    store.inventory("route", &x, NOW + 10, &nonce(970)).unwrap();
-    let mut y = snap("y", "reused", "h");
-    y.observed_at_ms = NOW + 20;
-    store.inventory("route", &y, NOW + 20, &nonce(971)).unwrap();
-    y.observed_at_ms = NOW + 15;
-    let before = store.inventory("route", &y, NOW + 20, &nonce(973)).unwrap();
-    x.observed_at_ms = NOW + 18;
+    x.observed_at_ms = NOW + 86_400_000;
+    let before = store
+        .read_inventory("route", &x, x.observed_at_ms, &nonce(970))
+        .unwrap();
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("claims.sqlite")).unwrap();
-    db.execute_batch("DROP TABLE route_sources").unwrap();
+    db.execute_batch(
+        "CREATE TABLE route_sources(account TEXT PRIMARY KEY, identity TEXT NOT NULL, observed_at_ms INTEGER NOT NULL)",
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO route_sources VALUES('route','legacy-identity',?)",
+        [x.observed_at_ms],
+    )
+    .unwrap();
     drop(db);
     let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    let mut old = x.clone();
+    old.read_ticket = None;
+    old.observed_at_ms = NOW;
     assert_eq!(
-        store.inventory("route", &x, NOW + 22, &nonce(972)).unwrap_err(),
+        store.inventory("route", &old, NOW, &nonce(971)).unwrap_err(),
+        "stale-inventory"
+    );
+    assert_eq!(store.pending("route", NOW).unwrap()["evidence"], before["evidence"]);
+    let y = snap("y", "reused", "h");
+    let recovered = store.read_inventory("route", &y, NOW, &nonce(972)).unwrap();
+    assert_ne!(recovered["canonicalAccountKey"], before["canonicalAccountKey"]);
+}
+
+// RECHECK-6: every sample is fresh under its current injected clock, including after rollback.
+#[test]
+fn clock_correction_recovers_replacement_after_restart_without_waiting_for_old_wall_time() {
+    for corrected_time in [NOW, NOW + 30_001, NOW + 3_600_000, NOW + 86_400_000] {
+        let (dir, mut store) = open();
+        let future = NOW + 86_400_000;
+        let mut x = snap("x", "reused", "h");
+        x.observed_at_ms = future;
+        store.read_inventory("route", &x, future, &nonce(1100)).unwrap();
+        drop(store);
+        let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+        let mut y = snap("y", "reused", "h");
+        y.observed_at_ms = corrected_time;
+        let recovered = store.read_inventory("route", &y, corrected_time, &nonce(1110)).unwrap();
+        assert_eq!(
+            store.pending("route", corrected_time).unwrap()["canonicalAccountKey"],
+            recovered["canonicalAccountKey"]
+        );
+        x.observed_at_ms = corrected_time;
+        store.read_inventory("route", &x, corrected_time, &nonce(1111)).unwrap();
+        assert!(store.read_inventory("route", &y, corrected_time, &nonce(1112)).is_ok());
+    }
+}
+
+#[test]
+fn tickets_survive_restart_between_issuance_read_and_acceptance() {
+    let (dir, mut store) = open();
+    let mut x = snap("x", "reused", "h");
+    x.read_ticket = Some(store.read_ticket("route").unwrap());
+    drop(store);
+    let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    let mut y = snap("y", "reused", "h");
+    y.read_ticket = Some(store.read_ticket("route").unwrap());
+    assert!(
+        y.read_ticket.as_ref().unwrap().sequence.parse::<u64>().unwrap()
+            > x.read_ticket.as_ref().unwrap().sequence.parse::<u64>().unwrap()
+    );
+    drop(store);
+    let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    let newest = store.inventory("route", &y, NOW, &nonce(1120)).unwrap();
+    drop(store);
+    let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    assert_eq!(
+        store.inventory("route", &x, NOW, &nonce(1121)).unwrap_err(),
         "stale-inventory"
     );
     assert_eq!(
-        store.pending("route", NOW + 22).unwrap()["evidence"],
-        before["evidence"]
+        store.inventory("route", &y, NOW, &nonce(1122)).unwrap_err(),
+        "stale-inventory"
+    );
+    assert_eq!(store.pending("route", NOW).unwrap()["evidence"], newest["evidence"]);
+    assert!(store.read_inventory("route", &x, NOW, &nonce(1123)).is_ok());
+}
+
+#[test]
+fn missing_wrong_route_and_unissued_tickets_do_not_mutate_account_evidence() {
+    let (_dir, mut store) = open();
+    let before = snap("x", "p", "h");
+    let inv = store.read_inventory("route", &before, NOW, &nonce(1130)).unwrap();
+    let mut wrong_route = before.clone();
+    wrong_route.read_ticket = Some(store.read_ticket("sibling").unwrap());
+    let mut unissued = before.clone();
+    unissued.read_ticket = Some(store.read_ticket("route").unwrap());
+    unissued.read_ticket.as_mut().unwrap().sequence = i64::MAX.to_string();
+    for (i, bad) in [before, wrong_route, unissued].into_iter().enumerate() {
+        assert_eq!(
+            store
+                .inventory("route", &bad, NOW, &nonce(1131 + i as u64))
+                .unwrap_err(),
+            "stale-inventory"
+        );
+        assert_eq!(store.pending("route", NOW).unwrap()["evidence"], inv["evidence"]);
+    }
+}
+
+#[test]
+fn concurrent_read_issuance_is_unique_and_does_not_advance_account_revisions() {
+    let (dir, mut store) = open();
+    let inv = store
+        .read_inventory("route", &snap("x", "p", "h"), NOW, &nonce(1140))
+        .unwrap();
+    let workers: Vec<_> = (0..4)
+        .map(|_| {
+            let path = dir.path().join("claims.sqlite");
+            std::thread::spawn(move || Store::open(&path).unwrap().read_ticket("route").unwrap())
+        })
+        .collect();
+    let mut orders: Vec<_> = workers
+        .into_iter()
+        .map(|w| w.join().unwrap().sequence.parse::<u64>().unwrap())
+        .collect();
+    orders.sort_unstable();
+    orders.dedup();
+    assert_eq!(orders.len(), 4);
+    assert_eq!(store.pending("route", NOW).unwrap()["evidence"], inv["evidence"]);
+}
+
+#[test]
+fn ticket_order_verifies_an_attempt_after_wall_clock_correction() {
+    let (_dir, mut store) = open();
+    let future = NOW + 86_400_000;
+    let mut before = snap("x", "p", "h");
+    before.observed_at_ms = future;
+    before.read_ticket = Some(store.read_ticket("route").unwrap());
+    let inv = store.inventory("route", &before, future, &nonce(1150)).unwrap();
+    let key = inv["grants"][0]["grantKey"].as_str().unwrap();
+    before.read_ticket = Some(store.read_ticket("route").unwrap());
+    let prep = store
+        .prepare("route", key, "local", &before, future, &nonce(1151))
+        .unwrap();
+    before.read_ticket = Some(store.read_ticket("route").unwrap());
+    store
+        .begin(
+            "route",
+            key,
+            "local",
+            prep["confirmationToken"].as_str().unwrap(),
+            &before,
+            future,
+            &nonce(1152),
+        )
+        .unwrap();
+    let mut after = confirmed(&before);
+    after.observed_at_ms = NOW;
+    after.read_ticket = Some(store.read_ticket("route").unwrap());
+    let checked = store.check("route", &nonce(1152), &after, NOW).unwrap();
+    assert_eq!(checked["outcome"], "claimed");
+    assert_eq!(checked["verification"], "confirmed");
+}
+
+#[test]
+fn every_source_ticket_delivery_order_keeps_the_newest_identity_and_its_pending_attempt() {
+    let mut count = 0;
+    for a in 0..4 {
+        for b in 0..4 {
+            for c in 0..4 {
+                for d in 0..4 {
+                    let order = [a, b, c, d];
+                    if (0..4).any(|i| (i + 1..4).any(|j| order[i] == order[j])) {
+                        continue;
+                    }
+                    let (_dir, mut store) = open();
+                    let pending = begin(&mut store, "y-sibling", &snap("y", "sibling", "h"), 1160);
+                    let mut samples = vec![];
+                    for who in ["x", "y", "x", "y"] {
+                        let mut sample = snap(who, "reused", "h");
+                        sample.read_ticket = Some(store.read_ticket("route").unwrap());
+                        samples.push(sample);
+                    }
+                    let mut latest = None;
+                    for (step, index) in order.into_iter().enumerate() {
+                        let result = store.inventory("route", &samples[index], NOW, &nonce(1170 + step as u64));
+                        if latest.is_none_or(|old| index > old) {
+                            assert!(result.is_ok());
+                            latest = Some(index);
+                        } else {
+                            assert_eq!(result.unwrap_err(), "stale-inventory");
+                        }
+                    }
+                    let route = store.pending("route", NOW).unwrap();
+                    let sibling = store.pending("y-sibling", NOW).unwrap();
+                    assert_eq!(route["canonicalAccountKey"], sibling["canonicalAccountKey"]);
+                    assert_eq!(route["pendingAttempt"], pending);
+                    count += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(count, 24);
+}
+
+#[test]
+fn read_ticket_abi_commits_before_return_and_ignores_request_wall_clock() {
+    let (dir, mut store) = open();
+    let issue = |now| {
+        dispatch(
+            &serde_json::json!({
+                "dbPath":dir.path().join("claims.sqlite"),"account":"route","op":"readTicket","nowMs":now
+            })
+            .to_string(),
+        )
+        .unwrap()
+    };
+    let first: ReadTicket = serde_json::from_value(issue(i64::MAX)).unwrap();
+    let second: ReadTicket = serde_json::from_value(issue(0)).unwrap();
+    assert!(second.sequence.parse::<u64>().unwrap() > first.sequence.parse::<u64>().unwrap());
+    let third = store.read_ticket("route").unwrap();
+    assert!(third.sequence.parse::<u64>().unwrap() > second.sequence.parse::<u64>().unwrap());
+    // A later read merely issued, not yet accepted, does not drop a positively named earlier response.
+    let mut snapshot = snap("x", "p", "h");
+    snapshot.read_ticket = Some(second);
+    assert!(store.inventory("route", &snapshot, NOW, &nonce(1180)).is_ok());
+    snapshot.read_ticket = Some(first);
+    assert_eq!(
+        store.inventory("route", &snapshot, NOW, &nonce(1181)).unwrap_err(),
+        "stale-inventory"
     );
 }

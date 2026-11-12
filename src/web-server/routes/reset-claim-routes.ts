@@ -90,6 +90,16 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       )
     );
   }
+  async function readSnapshot(account: string): Promise<unknown> {
+    const source = deps.source;
+    if (!source) throw new ProviderError('Reset source unavailable.', 'reset-claims');
+    const readTicket = await call('readTicket', account);
+    const snapshot = await source.read(account);
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      throw new ProviderError('Reset source unavailable.', 'reset-claims');
+    }
+    return { ...snapshot, readTicket };
+  }
   router.use('/:accountId/reset-claims', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     if (authKind(req) !== 'session') {
@@ -142,7 +152,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
       }
       let snapshot: unknown;
       try {
-        snapshot = await deps.source.read(account);
+        snapshot = await readSnapshot(account);
       } catch (error) {
         // Recovery and audit come from one native transaction, including on read failure.
         res.json({
@@ -174,7 +184,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
             key: req.body.grantKey,
           });
         }
-        const snapshot = await deps.source.read(account);
+        const snapshot = await readSnapshot(account);
         if (op === 'prepare') {
           res.json(
             await call('prepare', account, {
@@ -205,7 +215,7 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         }
         let after: unknown = null;
         try {
-          after = await deps.source.read(account);
+          after = await readSnapshot(account);
         } catch {
           // Provider success remains unconfirmed when the post-claim read fails.
         }
