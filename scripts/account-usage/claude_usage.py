@@ -1269,6 +1269,15 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
 
         account_uuid, cache = decrypt_cache(profile_root)
         candidates = eligible_entries(account_uuid, cache)
+        saved_binding = hashlib.sha256(json.dumps([account_uuid, cache], sort_keys=True, separators=(",", ":")).encode()).digest() if private_reset_sink is not None else None
+
+        def verify_login():
+            verify_root()
+            current_account, current_cache = decrypt_cache(profile_root)
+            current_binding = hashlib.sha256(json.dumps([current_account, current_cache], sort_keys=True, separators=(",", ":")).encode()).digest()
+            if current_binding != saved_binding:
+                raise UsageUnavailable()
+
         if not candidates:
             raise UsageUnavailable("needs_sign_in")
         client = Client()
@@ -1291,8 +1300,11 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             ):
                 continue
             verify_root()
+            identity_verified_ms = int(time.time() * 1000)
             usage = client.get("/api/oauth/usage?cedar_ember=1", token)
             verify_root()
+            if private_reset_sink is not None:
+                verify_login()
             windows = normalize_windows(usage)
             # The OAuth usage payload with cedar_ember=1 carries the grant
             # inventory and weekly allowance directly; parse them here so
@@ -1335,7 +1347,8 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             if private_reset_sink is not None:
                 # Internal host seam only. Never put this on result/public usage or a cache.
                 private_reset_sink({"account": account_uuid, "organization": organization["uuid"],
-                                    "usage": usage, "token": token, "verifyRoot": verify_root})
+                                    "usage": usage, "token": token, "verifyRoot": verify_root,
+                                    "verifyLogin": verify_login, "observedAtMs": identity_verified_ms})
             return result
         raise UsageUnavailable("needs_sign_in")
     except UsageUnavailable as error:
@@ -1380,7 +1393,8 @@ def reset_host(request):
                 return {"unavailable": True}
             expiries.append(int(dt.datetime.fromisoformat(end.replace("Z", "+00:00")).timestamp() * 1000) if end else None)
         if request.get("action") == "read":
-            return {"identity": identity, "observedAtMs": int(time.time() * 1000), "raw": cedar,
+            private["verifyLogin"]()
+            return {"identity": identity, "observedAtMs": private["observedAtMs"], "raw": cedar,
                     "expiries": expiries, "windows": windows, "sourceBinding": binding, "accountLabel": request["expectedEmail"]}
         write = request.get("write", {})
         body = write.get("body", {})
@@ -1396,6 +1410,7 @@ def reset_host(request):
         if re.fullmatch(UUID, private["organization"]) is None:
             return {"outcome": "identity-changed"}
         private["verifyRoot"]()
+        private["verifyLogin"]()
         client = Client()
         req = urllib.request.Request(
             "https://api.anthropic.com/api/organizations/" + private["organization"] + "/reset_rate_limits",

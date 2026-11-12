@@ -157,10 +157,11 @@ fn recorded_three_attempt_snapshots_are_ordered_coherent_and_durable() {
 fn recorded_reassignment_has_ordered_bindings_and_separate_accounts() {
     let (_dir, mut store) = open();
     let x = snap("account-x", "reused", "host-a");
-    let y = snap("account-y", "reused", "host-a");
+    let mut y = snap("account-y", "reused", "host-a");
+    y.observed_at_ms = NOW + 1;
     let a = begin(&mut store, "reused", &x, 1);
     let original = store.inventory("reused", &x, NOW, &nonce(90)).unwrap();
-    let replacement = store.inventory("reused", &y, NOW, &nonce(91)).unwrap();
+    let replacement = store.inventory("reused", &y, NOW + 1, &nonce(91)).unwrap();
     let sibling = store
         .inventory("x-sibling", &snap("account-x", "sibling", "host-b"), NOW, &nonce(92))
         .unwrap();
@@ -295,8 +296,9 @@ fn outstanding_tokens_follow_original_accounts_in_both_reassignment_directions()
             sibling_inventory["evidence"]["claimTokens"],
             prepared["evidence"]["claimTokens"]
         );
-        let replacement = snap(replacement, "reused", "host-a");
-        store.inventory("reused", &replacement, NOW, &nonce(313)).unwrap();
+        let mut replacement = snap(replacement, "reused", "host-a");
+        replacement.observed_at_ms = NOW + 1;
+        store.inventory("reused", &replacement, NOW + 1, &nonce(313)).unwrap();
         assert!(store.pending("reused", NOW).unwrap()["evidence"]["claimTokens"]["untilMs"].is_null());
         assert_eq!(
             store.pending("sibling", NOW).unwrap()["evidence"]["claimTokens"],
@@ -328,9 +330,9 @@ fn migration_restores_unconsumed_tokens_from_immutable_targets() {
         .prepare("reused", key, "local", &before, NOW, &nonce(321))
         .unwrap();
     let sibling = store.inventory("sibling", &before, NOW, &nonce(322)).unwrap();
-    store
-        .inventory("reused", &snap("y", "reused", "host-a"), NOW, &nonce(323))
-        .unwrap();
+    let mut replacement = snap("y", "reused", "host-a");
+    replacement.observed_at_ms = NOW + 1;
+    store.inventory("reused", &replacement, NOW + 1, &nonce(323)).unwrap();
     drop(store);
     let db = rusqlite::Connection::open(dir.path().join("claims.sqlite")).unwrap();
     db.execute_batch("DROP TABLE claim_tokens").unwrap();
@@ -648,5 +650,72 @@ fn concurrent_prepares_on_sibling_aliases_issue_exactly_one_confirmation() {
     assert_eq!(
         results.iter().find(|r| r.is_err()).unwrap().as_ref().unwrap_err(),
         &"claim-token-outstanding"
+    );
+}
+
+#[test]
+fn source_identity_high_water_refuses_older_and_equal_conflicts_without_mutation() {
+    for empty in [false, true] {
+        let (dir, mut store) = open();
+        let mut x = snap("x", "reused", "h");
+        x.observed_at_ms = NOW + 10;
+        store.inventory("route", &x, NOW + 10, &nonce(960)).unwrap();
+        let mut y = snap("y", "reused", "h");
+        y.observed_at_ms = NOW + 20;
+        if empty {
+            y.grants.clear();
+        }
+        let newest = store.inventory("route", &y, NOW + 20, &nonce(961)).unwrap();
+        drop(store);
+        let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+        for at in [NOW + 10, NOW + 20] {
+            x.observed_at_ms = at;
+            assert_eq!(
+                store.inventory("route", &x, NOW + 22, &nonce(962)).unwrap_err(),
+                "stale-inventory"
+            );
+            let got = store.pending("route", NOW + 22).unwrap();
+            assert_eq!(got["canonicalAccountKey"], newest["canonicalAccountKey"]);
+            assert_eq!(got["bindingRevision"], newest["bindingRevision"]);
+            assert_eq!(got["evidence"], newest["evidence"]);
+            assert_eq!(got["history"], newest["history"]);
+        }
+        // A genuinely later verified login can reassign back; stale same-identity reads cannot lower its fence.
+        x.observed_at_ms = NOW + 23;
+        store.inventory("route", &x, NOW + 23, &nonce(963)).unwrap();
+        x.observed_at_ms = NOW + 11;
+        store.inventory("route", &x, NOW + 23, &nonce(964)).unwrap();
+        y.observed_at_ms = NOW + 22;
+        assert_eq!(
+            store.inventory("route", &y, NOW + 24, &nonce(965)).unwrap_err(),
+            "stale-inventory"
+        );
+    }
+}
+
+#[test]
+fn source_observation_migration_uses_the_current_alias_and_rejects_old_identity() {
+    let (dir, mut store) = open();
+    let mut x = snap("x", "reused", "h");
+    x.observed_at_ms = NOW + 10;
+    store.inventory("route", &x, NOW + 10, &nonce(970)).unwrap();
+    let mut y = snap("y", "reused", "h");
+    y.observed_at_ms = NOW + 20;
+    store.inventory("route", &y, NOW + 20, &nonce(971)).unwrap();
+    y.observed_at_ms = NOW + 15;
+    let before = store.inventory("route", &y, NOW + 20, &nonce(973)).unwrap();
+    x.observed_at_ms = NOW + 18;
+    drop(store);
+    let db = rusqlite::Connection::open(dir.path().join("claims.sqlite")).unwrap();
+    db.execute_batch("DROP TABLE route_sources").unwrap();
+    drop(db);
+    let mut store = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+    assert_eq!(
+        store.inventory("route", &x, NOW + 22, &nonce(972)).unwrap_err(),
+        "stale-inventory"
+    );
+    assert_eq!(
+        store.pending("route", NOW + 22).unwrap()["evidence"],
+        before["evidence"]
     );
 }

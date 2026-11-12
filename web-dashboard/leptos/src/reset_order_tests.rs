@@ -984,3 +984,41 @@ fn every_old_read_hint_and_recovery_delivery_order_keeps_the_fence_and_server_st
     visit(&mut [0, 1, 2, 3, 4], 0, &mut count);
     assert_eq!(count, 120);
 }
+
+// Max-3 M1: actual source/Store trace; the changed-login response is unavailable and retains Y's pending claim.
+#[test]
+fn delayed_old_login_read_cannot_hide_the_current_accounts_pending_claim() {
+    let trace: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/reset-source-rebind.json")).unwrap();
+    let fresh: Inventory = serde_json::from_value(trace["newer"].clone()).unwrap();
+    let delayed: Inventory = serde_json::from_value(trace["delayed"].clone()).unwrap();
+    for delayed_first in [false, true] {
+        Owner::new().with(|| {
+            let rc = ResetCtx::new();
+            rc.show("codex:reused", "codex", false);
+            if delayed_first {
+                rc.take("codex:reused", delayed.clone(), 50.);
+            }
+            rc.take("codex:reused", fresh.clone(), 100.);
+            if !delayed_first {
+                rc.take("codex:reused", delayed.clone(), 50.);
+            }
+            assert!(rc.unresolved.get_untracked().blocks());
+            assert_eq!(
+                rc.unresolved.get_untracked().key.as_deref(),
+                trace["yRecovery"]["pendingAttempt"].as_str()
+            );
+            assert!(
+                !rc.said
+                    .get_untracked()
+                    .unwrap()
+                    .text
+                    .contains("Reset applied:")
+            );
+            assert_eq!(
+                rc.lock_key("codex:reused"),
+                fresh.canonical_account_key.clone().unwrap()
+            );
+        });
+    }
+}

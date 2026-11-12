@@ -39,10 +39,11 @@ fn open() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 fn begin(store: &mut Store, route: &str, before: &Snapshot, n: u64) -> String {
-    let inv = store.inventory(route, before, NOW, &nonce(n)).unwrap();
+    let now = before.observed_at_ms;
+    let inv = store.inventory(route, before, now, &nonce(n)).unwrap();
     let key = inv["grants"][0]["grantKey"].as_str().unwrap();
     let caller = format!("session:{}", nonce(999));
-    let prep = store.prepare(route, key, &caller, before, NOW, &nonce(n + 1)).unwrap();
+    let prep = store.prepare(route, key, &caller, before, now, &nonce(n + 1)).unwrap();
     let attempt = nonce(n + 2);
     store
         .begin(
@@ -51,7 +52,7 @@ fn begin(store: &mut Store, route: &str, before: &Snapshot, n: u64) -> String {
             &caller,
             prep["confirmationToken"].as_str().unwrap(),
             before,
-            NOW,
+            now,
             &attempt,
         )
         .unwrap();
@@ -95,8 +96,9 @@ fn unrelated_account_does_not_inherit_a_repointed_profiles_claim() {
     let mut replacement = y.clone();
     replacement.identity.profile = x.identity.profile.clone();
     replacement.source_binding = "new-login-y".into();
+    replacement.observed_at_ms = NOW + 1;
     store
-        .inventory("codex:reusable-profile", &replacement, NOW, &nonce(51))
+        .inventory("codex:reusable-profile", &replacement, NOW + 1, &nonce(51))
         .unwrap();
     let unrelated_history = store.history("codex:stable-y-profile").unwrap();
     println!("UNRELATED_ACCOUNT_HISTORY={unrelated_history}");
@@ -127,7 +129,8 @@ fn canonical_history_does_not_inherit_future_claims_of_a_reused_route() {
             None,
         )
         .unwrap();
-    let y = snap("account-y", "reusable-profile", "host-a");
+    let mut y = snap("account-y", "reusable-profile", "host-a");
+    y.observed_at_ms = NOW + 1;
     let attempt_y = begin(&mut store, "codex:reusable-profile", &y, 10);
     store
         .finish(
@@ -202,8 +205,9 @@ fn reassignment_keeps_both_sibling_histories_and_unclaimed_prepares_after_restar
             .unwrap();
         let original_history = store.history("old-sibling").unwrap();
         assert_eq!(original_history.as_array().unwrap().len(), 4);
-        let after = snap(replacement, "reusable-profile", "host-a");
-        store.inventory("reused", &after, NOW, &nonce(34)).unwrap();
+        let mut after = snap(replacement, "reusable-profile", "host-a");
+        after.observed_at_ms = NOW + 1;
+        store.inventory("reused", &after, NOW + 1, &nonce(34)).unwrap();
         assert!(store.history("new-sibling").unwrap().as_array().unwrap().is_empty());
         let attempt = begin(&mut store, "reused", &after, 10);
         store
@@ -228,8 +232,9 @@ fn reassignment_keeps_both_sibling_histories_and_unclaimed_prepares_after_restar
 #[test]
 fn x_y_x_reassignment_and_hosts_do_not_move_canonical_history() {
     let (_d, mut s) = open();
-    let x = snap("account-x", "reused", "host-a");
-    let y = snap("account-y", "reused", "host-a");
+    let mut x = snap("account-x", "reused", "host-a");
+    let mut y = snap("account-y", "reused", "host-a");
+    y.observed_at_ms = NOW + 1;
     let xa = snap("account-x", "x-sibling", "host-b");
     let ya = snap("account-y", "y-sibling", "host-c");
     s.inventory("x-sibling", &xa, NOW, &nonce(71)).unwrap();
@@ -240,10 +245,12 @@ fn x_y_x_reassignment_and_hosts_do_not_move_canonical_history() {
     let b = begin(&mut s, "reused", &y, 10);
     s.finish("reused", &b, Outcome::Nothing, None, NOW + 3, None).unwrap();
     let hy = s.history("y-sibling").unwrap();
-    s.inventory("reused", &x, NOW, &nonce(73)).unwrap();
+    x.observed_at_ms = NOW + 2;
+    s.inventory("reused", &x, NOW + 2, &nonce(73)).unwrap();
     assert_eq!(s.history("reused").unwrap(), hx);
     assert_eq!(s.history("y-sibling").unwrap(), hy);
-    s.inventory("reused", &y, NOW, &nonce(74)).unwrap();
+    y.observed_at_ms = NOW + 3;
+    s.inventory("reused", &y, NOW + 3, &nonce(74)).unwrap();
     assert_eq!(s.history("reused").unwrap(), hy);
     assert_eq!(s.history("x-sibling").unwrap(), hx);
 }

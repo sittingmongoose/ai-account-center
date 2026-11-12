@@ -1615,7 +1615,8 @@ class ResetHostOfflineTests(unittest.TestCase):
                        "eligible": True, "grants": [{"id": "selected_grant", "resets_left": 1,
                        "resets_total": 1, "paused": False, "usable_now": True,
                        "clears": ["seven_day"]}]}},
-                   "token": os.urandom(24).hex(), "verifyRoot": mock.Mock()}
+                   "token": os.urandom(24).hex(), "verifyRoot": mock.Mock(),
+                   "verifyLogin": mock.Mock(), "observedAtMs": 1_700_000_000_000}
         def collect(*args, **kwargs):
             kwargs["private_reset_sink"](private)
             return {"status": "ok"}
@@ -1669,6 +1670,64 @@ class ResetHostOfflineTests(unittest.TestCase):
             with mock.patch.object(usage, "Client") as client:
                 self.assertEqual(usage.reset_host(dict(request, action="claim", write=write))["outcome"], "identity-changed")
                 client.assert_not_called()
+
+class ResetReadIdentityTests(unittest.TestCase):
+    def payload(self):
+        return {"five_hour": {"utilization": 100}, "cedar_ember": {
+            "eligible": True, "grants": [{"id": "fixture_grant", "resets_left": 1,
+            "resets_total": 1, "paused": False, "usable_now": True, "clears": ["five_hour"]}]}}
+
+    def test_private_read_rechecks_saved_account_and_cache_after_usage_rpc(self):
+        for replacement in [(OTHER, cache(key(account=OTHER))), (ACCOUNT, cache(token="rotated-fixture-token"))]:
+            with self.subTest(replacement_account=replacement[0]):
+                initial = (ACCOUNT, cache())
+                state = [initial]
+                class ChangingClient(FakeClient):
+                    def get(client, route, token):
+                        answer = super().get(route, token)
+                        if route.startswith("/api/oauth/usage"):
+                            state[0] = replacement
+                        return answer
+                client = ChangingClient(profile(), self.payload())
+                with mock.patch.object(usage.sys, "platform", "win32"), \
+                        mock.patch.object(usage, "decrypt_cache", side_effect=lambda _: state[0]), \
+                        mock.patch.object(usage, "Client", return_value=client):
+                    result = usage.reset_host({"profile": "fixture", "expectedEmail": EMAIL,
+                        "host": "windows:fixture", "action": "read"})
+                self.assertTrue(result.get("unavailable"))
+                self.assertNotIn("identity", result)
+                self.assertEqual(len(client.calls), 2)
+
+    def test_read_checks_again_at_acceptance_and_preserves_verification_timestamp(self):
+        private, collector, request = ResetHostOfflineTests().setup_host()
+        with mock.patch.object(usage, "collect", side_effect=collector):
+            result = usage.reset_host(request)
+        self.assertEqual(result["observedAtMs"], private["observedAtMs"])
+        private["verifyLogin"].assert_called_once()
+        private["verifyLogin"].side_effect = usage.UsageUnavailable()
+        with mock.patch.object(usage, "collect", side_effect=collector):
+            self.assertTrue(usage.reset_host(request).get("unavailable"))
+
+    def test_private_read_timestamp_precedes_usage_completion(self):
+        saved = (ACCOUNT, cache())
+        clock = [1_700_000_000.]
+        class DelayedClient(FakeClient):
+            def get(client, route, token):
+                answer = super().get(route, token)
+                if route.startswith("/api/oauth/usage"):
+                    clock[0] += 20
+                return answer
+        client = DelayedClient(profile(), self.payload())
+        captured = []
+        with mock.patch.object(usage.sys, "platform", "win32"), \
+                mock.patch.object(usage, "decrypt_cache", return_value=saved), \
+                mock.patch.object(usage, "Client", return_value=client), \
+                mock.patch.object(usage.time, "time", side_effect=lambda: clock[0]):
+            result = usage.collect("fixture", "windows", expected_email=EMAIL, private_reset_sink=captured.append)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(captured[0]["observedAtMs"], 1_700_000_000_000)
+        self.assertLess(captured[0]["observedAtMs"], clock[0] * 1000)
+
 
 if __name__ == "__main__":
     unittest.main()

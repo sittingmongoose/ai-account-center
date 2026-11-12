@@ -62,6 +62,15 @@ Codex uses a short-lived `codex app-server` with `CODEX_HOME` set to the exact
 saved registry profile. It verifies the saved login, account/read identity and
 rate-limit response accountId. Missing account attribution or per-credit IDs
 makes the source unavailable. Only the pinned `codexRateLimits` kind is mapped.
+Both private provider readers recheck the saved login after their read finishes
+and immediately before accepting its snapshot. A changed or removed login makes
+the read unavailable. Its observation time belongs to the identity verification
+before the usage RPC, so a slow response cannot acquire a newer observation time.
+The Store persists each route's newest verified source identity and observation
+time, including empty inventories. A conflicting identity with an older or equal
+observation time is rejected before any revision, alias or target changes. On
+upgrade, this guard uses the newest retained observation matching the current
+alias; observations from former logins cannot replace it.
 The consume request always includes the exact `creditId` and `idempotencyKey`;
 no default or next-credit substitution exists. Protocol evidence is the local
 `t3code-ref` generated V2 schema: ConsumeAccountRateLimitResetCreditParams,

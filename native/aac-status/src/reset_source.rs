@@ -122,6 +122,13 @@ pub fn codex(home: &str, profile: &str, host: &str, write: Option<&Value>) -> Re
 
 /// Offline fixtures supply their own executable; the Node ABI never accepts one.
 pub fn codex_with_binary(home: &str, profile: &str, host: &str, write: Option<&Value>, binary: &Path) -> Result<Value> {
+    // Keep the identity verification's time, never promote a slow RPC by its completion time.
+    let observed_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "clock")?
+        .as_millis()
+        .try_into()
+        .map_err(|_| "clock")?;
     let (account, email, binding) = auth(home)?;
     let mut rpc = Rpc::start(home, binary)?;
     let login = rpc.call("account/read", json!({"refreshToken":false}))?;
@@ -227,13 +234,14 @@ pub fn codex_with_binary(home: &str, profile: &str, host: &str, write: Option<&V
         }
         return rpc.call("account/rateLimitResetCredit/consume", body.clone());
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "clock")?
-        .as_millis() as i64;
+    // Reads have the same saved-login boundary as writes. A replaced or removed
+    // login makes the whole response stale, even when the old process answered correctly.
+    if auth(home).map_err(|_| "stale-inventory")? != (identity.account.clone(), email.clone(), binding) {
+        return Err("stale-inventory");
+    }
     Ok(json!(Snapshot {
         identity,
-        observed_at_ms: now,
+        observed_at_ms,
         grants,
         windows,
         executor_ready: true,

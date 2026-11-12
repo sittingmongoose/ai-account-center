@@ -213,7 +213,40 @@ impl Store {
             INSERT OR IGNORE INTO reset_clock SELECT 1,COALESCE(MAX(seq),0) FROM history;
             CREATE TABLE IF NOT EXISTS reset_revisions(lock_key TEXT PRIMARY KEY, revision INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS claim_tokens(token TEXT PRIMARY KEY, lock_key TEXT NOT NULL, expires INTEGER NOT NULL);
-            CREATE INDEX IF NOT EXISTS claim_tokens_account ON claim_tokens(lock_key);"))?;
+            CREATE INDEX IF NOT EXISTS claim_tokens_account ON claim_tokens(lock_key);
+            CREATE TABLE IF NOT EXISTS route_sources(account TEXT PRIMARY KEY, identity TEXT NOT NULL, observed_at_ms INTEGER NOT NULL);"))?;
+        // Backfill only observations matching the current alias. Retained targets from
+        // a former login must never become the route's source high-water mark.
+        let aliases = {
+            let mut stmt = sql(tx.prepare("SELECT account,lock_key FROM aliases WHERE NOT EXISTS(SELECT 1 FROM route_sources s WHERE s.account=aliases.account)"))?;
+            let rows = sql(stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))))?;
+            let mut aliases = vec![];
+            for row in rows {
+                aliases.push(sql(row)?);
+            }
+            aliases
+        };
+        for (account, canonical) in aliases {
+            let mut stmt = sql(tx.prepare("SELECT snapshot FROM targets WHERE account=? ORDER BY rowid DESC"))?;
+            let rows = sql(stmt.query_map([&account], |r| r.get::<_, String>(0)))?;
+            let mut newest: Option<Snapshot> = None;
+            for row in rows {
+                let snapshot: Snapshot = serde_json::from_str(&sql(row)?).map_err(|_| "shape")?;
+                if Self::canonical(&snapshot)? == canonical
+                    && newest
+                        .as_ref()
+                        .is_none_or(|old| snapshot.observed_at_ms > old.observed_at_ms)
+                {
+                    newest = Some(snapshot);
+                }
+            }
+            if let Some(snapshot) = newest {
+                sql(tx.execute(
+                    "INSERT INTO route_sources VALUES(?,?,?)",
+                    params![account, encode(&snapshot.identity)?, snapshot.observed_at_ms],
+                ))?;
+            }
+        }
         // Recover tokens issued before this additive migration from their immutable target,
         // never from a saved profile's current alias binding.
         let missing = {
@@ -346,9 +379,25 @@ impl Store {
             .db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate))?;
         let now = (self.clock)(now)?;
-        Self::expire_tokens(&tx, now)?;
         s.validate(now)?;
         let canonical = Self::canonical(s)?;
+        let identity = encode(&s.identity)?;
+        let previous: Option<(String, i64)> = sql(tx
+            .query_row(
+                "SELECT identity,observed_at_ms FROM route_sources WHERE account=?",
+                [account],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional())?;
+        if previous
+            .as_ref()
+            .is_some_and(|(old, at)| old != &identity && s.observed_at_ms <= *at)
+        {
+            return Err("stale-inventory");
+        }
+        // Refusal precedes every revision, alias and target mutation, including expiry pruning.
+        Self::expire_tokens(&tx, now)?;
+        sql(tx.execute("INSERT INTO route_sources VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET identity=excluded.identity,observed_at_ms=max(observed_at_ms,excluded.observed_at_ms)", params![account,identity,s.observed_at_ms]))?;
         let revision = Self::advance(&tx, &canonical)?;
         sql(tx.execute(
             "INSERT INTO aliases(account,lock_key,binding_revision) VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET lock_key=excluded.lock_key,binding_revision=excluded.binding_revision",
