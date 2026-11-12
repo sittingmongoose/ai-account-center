@@ -332,7 +332,16 @@ for (const kind of ['details', 'activation']) {
     await t.page.keyboard.press('Escape');
     // Approval close is acknowledged by the bridge, just as in the other isolated frame checks.
     if (kind === 'activation') await bridge(t, kind, null);
-    await t.page.waitForSelector(selector, { state: 'detached' });
+    const closed = await t.page
+      .waitForSelector(selector, { state: 'detached', timeout: 1000 })
+      .then(
+        () => true,
+        (error) => {
+          if (error.name === 'TimeoutError') return false;
+          throw error;
+        }
+      );
+    await t.check(`Escape closes the newest ${kind}`, closed);
     await t.check(
       'closing the newest overlay keeps the pin open',
       (await state(t)).pin && (await state(t)).sameSheet
