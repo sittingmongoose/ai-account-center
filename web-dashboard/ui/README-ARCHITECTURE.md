@@ -167,7 +167,7 @@ Month, All and custom ranges request the covering window (`apiRangeFor`) and are
 fetched window differs from the range, cost by model, the donut and session stats say which logs they cover.
 
 Usage sources (activity `scope: multi-host-cli`): the server reads Claude Code and Codex on Ubuntu plus OMP,
-Muse Code and zcode on Ubuntu, Mac, Windows, Nas1 and Alexis PC (a second Ubuntu computer), and groups every row under the
+Muse Code and zcode on Ubuntu, Mac, Windows, Nas1 (a second Ubuntu computer) and Alexis PC (a second Windows computer), and groups every row under the
 dashboard provider that served it (`src/web-server/services/account-analytics-attribution.ts`): Claude Code,
 Codex and the Muse Code CLI are their own provider; OMP and zcode record a route per call (`alibaba-token-plan`
 is Qwen, `zai` and zcode's
