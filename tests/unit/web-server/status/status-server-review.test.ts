@@ -860,8 +860,38 @@ describe('scan limits', () => {
     const seen = reader.snapshot();
     expect(seen.threads.map((t) => t.writer).sort()).toEqual(['vm.a', 'vm.c']);
     expect(seen.problems.map((p) => p.file)).toEqual(['limits/writers']);
-    expect(seen.problems[0].reason).toContain('1 writer folders past the limit of 2');
+    expect(seen.problems[0].reason).toBe(
+      '1 active writers past the limit of 2 were not read; the most recently changed are kept'
+    );
     expect(seen.complete).toBe(false);
+  });
+
+  it('skips dormant writers quietly and does not count them against the cap', async () => {
+    const root = dirs.make();
+    // Two active writers with recent files, one dormant with files 8 days old.
+    for (const writer of ['vm.active1', 'vm.active2']) {
+      writeReport(root, writer, 'thread.json', threadDoc(writer));
+      const file = path.join(root, 'v1', 'writers', writer, 'thread.json');
+      const at = new Date(NOW);
+      fs.utimesSync(file, at, at);
+    }
+    writeReport(root, 'vm.old', 'thread.json', threadDoc('vm.old'));
+    const dormantFile = path.join(root, 'v1', 'writers', 'vm.old', 'thread.json');
+    const old = new Date(NOW - 8 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(dormantFile, old, old);
+    const oldWriter = path.join(root, 'v1', 'writers', 'vm.old');
+    fs.utimesSync(oldWriter, old, old);
+    const reader = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      limits: { writers: 2 },
+    });
+    await reader.scan();
+    const seen = reader.snapshot();
+    // Dormant is not read, not counted: the two actives are read, no limit notice.
+    expect(seen.threads.map((t) => t.writer).sort()).toEqual(['vm.active1', 'vm.active2']);
+    expect(seen.problems).toEqual([]);
+    expect(seen.complete).toBe(true);
   });
 
   it('names cards and bytes past their limits', async () => {
@@ -889,6 +919,37 @@ describe('scan limits', () => {
     expect(byBytes.snapshot().cards).toHaveLength(1);
     expect(byBytes.snapshot().problems.map((p) => p.file)).toEqual(['limits/bytes']);
     expect(byBytes.snapshot().complete).toBe(false);
+  });
+
+  it('renders a past-limit notice as a plain line, not as unreadable', async () => {
+    const root = dirs.make();
+    for (const writer of ['vm.a', 'vm.b', 'vm.c']) {
+      writeReport(root, writer, 'thread.json', threadDoc(writer));
+      const file = path.join(root, 'v1', 'writers', writer, 'thread.json');
+      fs.utimesSync(file, new Date(NOW), new Date(NOW));
+    }
+    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.a'), new Date(NOW), new Date(NOW));
+    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.b'), new Date(NOW + 1000), new Date(NOW + 1000));
+    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.c'), new Date(NOW + 2000), new Date(NOW + 2000));
+    const reader = new AgentReportsReader({ root: () => root, now: () => NOW, limits: { writers: 2 } });
+    await reader.scan();
+    const view = buildStatusView({
+      now: NOW,
+      timeZone: 'UTC',
+      reports: reader.snapshot(),
+      registry: { data: [], asOf: NOW, error: null },
+      machines: { vm: { data: null, asOf: null, error: null }, mac: { data: null, asOf: null, error: null }, windows: { data: null, asOf: null, error: null }, nas1: { data: null, asOf: null, error: null }, alexis: { data: null, asOf: null, error: null } } as never,
+      browsers: { data: null, asOf: null, error: null },
+      simlock: { data: null, asOf: null, error: null },
+      usage: null,
+      answers: [],
+      hiddenThreadNames: [],
+      quota: { state: 'missing', scannedAt: null, good: null, problem: null },
+    });
+    const source = view.sources.find((s) => s.id === 'agent-reports');
+    expect(source?.state).toBe('ok');
+    expect(source?.detail).toContain('1 active writers past the limit of 2 were not read');
+    expect(source?.detail).not.toContain('unreadable');
   });
 });
 

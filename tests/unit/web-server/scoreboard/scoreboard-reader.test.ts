@@ -372,6 +372,24 @@ describe('scan limits', () => {
     expect(r.snapshot().problems.map((p) => p.file)).toEqual(['limits/run-writers']);
   });
 
+  it('reads runs from dormant writers inside the run window', async () => {
+    const root = dirs.make();
+    // Active writer's run is recent; dormant writer's run is history (old day) but within window.
+    writeRun(root, runDoc('vm.active', 'A'), '2026-11-06');
+    writeRun(root, runDoc('vm.dormant', 'B'), '2026-11-05');
+    // Make the dormant writer's runs folder look old (8 days before NOW) to prove it is dormant
+    // for status but still read for runs.
+    const old = new Date(NOW - 8 * 24 * 60 * 60 * 1000);
+    const dormantRuns = path.join(root, 'v1', 'writers', 'vm.dormant', 'runs');
+    fs.utimesSync(dormantRuns, old, old);
+    // Also make dormant's outer history old: the Scoreboard does not use thread.json for dormancy.
+    const r = new RunsReader({ root: () => root, now: () => NOW });
+    await r.scan();
+    // Both runs are read: dormant is history, not skipped.
+    expect(r.snapshot().runs.map((run) => run.doc.id).sort()).toEqual(['vm.active--A', 'vm.dormant--B']);
+    expect(r.snapshot().problems).toEqual([]);
+  });
+
   it('names a FIFO or a link in a run folder', async () => {
     const root = dirs.make();
     const file = writeRun(root, runDoc('vm.a', 'R'));

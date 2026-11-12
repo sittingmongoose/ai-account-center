@@ -16,6 +16,7 @@ import {
   PERSISTENT_LISTING_ERROR,
   SEQ_WENT_BACK,
   TransientMisses,
+  filterDormantWriters,
   folderRowProblem,
   isTransientShareError,
   newestFolders,
@@ -56,7 +57,7 @@ export interface StatusDocsState {
 
 /** As many writers as the agent-reports reader reads, and how many documents stay retained
  * across scans (not just this scan's selection). */
-export const STATUS_DOCS_LIMITS = { writers: 200, retained: 200 };
+export const STATUS_DOCS_LIMITS = { writers: 1000, retained: 1000 };
 
 /** A handle to the native module, or null when it is not available (the caller says so). */
 export type StatusHandle = () => NativeStatusHandle | null;
@@ -138,7 +139,14 @@ export class StatusDocsReader {
       if (this.recordProblem(rel, name, this.entries.get(rel) ?? null, NOT_A_WRITER, now))
         changed = true;
     }
-    const scanned = await newestFolders(writers, limits.writers, (name) =>
+    const writersDir = `${this.root}/v1/writers`;
+    const { active } = await filterDormantWriters(
+      writers,
+      writersDir,
+      (file) => this.fs.stat(file),
+      now
+    );
+    const scanned = await newestFolders(active, limits.writers, (name) =>
       this.fs.stat(`${this.root}/v1/writers/${name}`)
     );
     for (const writer of scanned) {

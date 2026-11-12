@@ -195,7 +195,10 @@ export interface ReaderFs {
  * without bound. Past a limit the rest is named as a problem; the most recently changed writers are
  * the ones kept.
  */
-export const REPORT_LIMITS = { writers: 200, cards: 500, bytes: 64 * 1024 * 1024 };
+export const REPORT_LIMITS = { writers: 1000, cards: 500, bytes: 64 * 1024 * 1024 };
+
+/** A writer with no file changed in the last 7 days is dormant: skipped quietly, not counted against the cap. */
+export const DORMANT_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const nodeReaderFs: ReaderFs = {
   readdir: (dir) => fs.promises.readdir(dir, { withFileTypes: true }),
@@ -318,6 +321,68 @@ export async function newestFolders(
   await Promise.all(Array.from({ length: NEWEST_STATS_AT_ONCE }, worker));
   dated.sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name));
   return dated.slice(0, limit).map((row) => row.name);
+}
+
+/**
+ * The newest mtime (epoch ms) among a writer's activity: `thread.json`, `status.json`,
+ * `tasks.json`, and `cards/` and `runs/` themselves (one stat per folder, not a listing).
+ * Missing paths count as 0. A writer with 0 here has no activity the reader can see.
+ */
+export async function writerNewestMtime(
+  writersDir: string,
+  name: string,
+  stat: (file: string) => Promise<fs.Stats>
+): Promise<number> {
+  const base = path.join(writersDir, name);
+  const targets = [
+    path.join(base, 'thread.json'),
+    path.join(base, 'status.json'),
+    path.join(base, 'tasks.json'),
+    path.join(base, 'cards'),
+    path.join(base, 'runs'),
+    base,
+  ];
+  let newest = 0;
+  for (const target of targets) {
+    const mtime = await stat(target).then(
+      (s) => s.mtimeMs,
+      () => 0
+    );
+    if (mtime > newest) newest = mtime;
+  }
+  return newest;
+}
+
+/**
+ * Splits writers into active (newest activity within `dormantMs`) and dormant (older or none).
+ * One writer is one unit of work with a bounded number running: the dormant stats stay fast on
+ * the NFS share. Dormant writers are skipped quietly: not counted against the cap, not problems.
+ */
+export async function filterDormantWriters(
+  names: string[],
+  writersDir: string,
+  stat: (file: string) => Promise<fs.Stats>,
+  now: number,
+  dormantMs: number = DORMANT_MS
+): Promise<{ active: string[]; dormant: string[] }> {
+  if (names.length === 0) return { active: [], dormant: [] };
+  const results = new Map<string, number>();
+  let next = 0;
+  const worker = async () => {
+    while (next < names.length) {
+      const name = names[next++];
+      results.set(name, await writerNewestMtime(writersDir, name, stat));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(NEWEST_STATS_AT_ONCE, names.length) }, worker));
+  const active: string[] = [];
+  const dormant: string[] = [];
+  for (const name of names) {
+    const newest = results.get(name) ?? 0;
+    if (now - newest > dormantMs) dormant.push(name);
+    else active.push(name);
+  }
+  return { active, dormant };
 }
 
 export class AgentReportsReader {
@@ -451,15 +516,28 @@ export class AgentReportsReader {
       }
       names.push(name);
     }
-    const kept = await newestFolders(names, limits.writers, (name) =>
+    const nowScan = this.now();
+    const { active, dormant } = await filterDormantWriters(
+      names,
+      writersDir,
+      (file) => this.fs.stat(file),
+      nowScan
+    );
+    const kept = await newestFolders(active, limits.writers, (name) =>
       this.fs.stat(path.join(writersDir, name))
     );
-    if (kept.length < names.length) {
+    if (kept.length < active.length) {
       this.scanPartial = true;
       folderProblem(
         'limits/writers',
-        `${names.length - kept.length} writer folders past the limit of ${limits.writers} were not read (the most recently changed are kept)`
+        `${active.length - kept.length} active writers past the limit of ${limits.writers} were not read; the most recently changed are kept`
       );
+    }
+    // Dormant writers are skipped quietly: their last good copies stay as seen so the grace
+    // sweep does not withdraw them, and no problem is named for the skip.
+    for (const name of dormant) {
+      const prefix = `writers/${name}/`;
+      for (const key of this.entries.keys()) if (key.startsWith(prefix)) seen.add(key);
     }
     let cardsVisited = 0;
     let cardsOver = 0;
