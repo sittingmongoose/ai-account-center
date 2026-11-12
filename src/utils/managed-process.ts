@@ -153,7 +153,7 @@ function lost(child: ChildProcess): void {
 export function startProcessBroker(): Promise<ChildProcess> {
   if (starting) return starting;
   if (stopping) return Promise.reject(new NetworkError('Private command transport unavailable.'));
-  const child = fork(script, [], {
+  const child = fork(script, [String(process.pid)], {
     execArgv: ['--max-old-space-size=48'],
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     // The broker itself needs no credentials, session ids or loader injection.

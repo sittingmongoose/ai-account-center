@@ -2,6 +2,8 @@
 // Private child_process transport. No socket, shell, persistent state or diagnostics.
 // Forking commands here copies this small process's page tables, not the dashboard heap.
 const { spawn } = require('child_process');
+// Pin the owner before startup: it may die before this process loads its script.
+const parentPid = Number(process.argv[2] ?? process.ppid);
 const jobs = new Map();
 let bufferedBytes = 0;
 const send = (packet) => {
@@ -16,9 +18,21 @@ const signal = (child, name) => {
   }
 };
 const shutdown = () => {
+  clearInterval(parentWatchdog);
   for (const job of jobs.values()) signal(job.child, 'SIGKILL');
   process.exit(0);
 };
+const checkParent = () => {
+  if (!process.connected || process.ppid !== parentPid) return shutdown();
+  try {
+    process.kill(parentPid, 0);
+  } catch (error) {
+    if (error.code === 'ESRCH') shutdown();
+  }
+};
+// Independent of IPC notification delivery, including an abrupt owner crash.
+const parentWatchdog = setInterval(checkParent, 250);
+parentWatchdog.unref();
 process.once('disconnect', shutdown);
 process.once('SIGTERM', shutdown);
 process.once('SIGINT', shutdown);
@@ -165,4 +179,5 @@ process.on('message', (packet) => {
   child.once('close', (code) => finish(timedOut || code !== 0, code));
   child.stdin.end(options.input);
 });
+checkParent();
 send({ type: 'ready' });
