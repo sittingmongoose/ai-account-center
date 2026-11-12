@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="AAC" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="color-scheme" content="light dark" />
@@ -12,11 +13,13 @@
     <meta name="theme-color" content="#0C1217" media="(prefers-color-scheme: dark)" />
     <title>AI Account Center</title>
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <script>if(self!==top||/[?&](embed|content)=1(&|$)/.test(location.search))document.documentElement.setAttribute('data-status-embedded','1');</script>
+    <link rel="stylesheet" href="/status-bar.css" />
     <link rel="stylesheet" href="{{CSS}}" />
     <link rel="modulepreload" href="{{PKG}}/aac_web.js" />
   </head>
   <body>
-    <noscript>This page needs JavaScript.</noscript>
+    <noscript><main class="start-message">This page needs JavaScript.</main></noscript>
     <script type="module">
       // The app frame signs in with a real form (public/frame-session.mjs); a page inside today's shell (?embed=1)
       // doesn't load it.
@@ -28,7 +31,10 @@
         const { default: init } = await import('{{PKG}}/aac_web.js');
         await init({ module_or_path: '{{PKG}}/aac_web_bg.wasm' });
       } catch {
-        document.body.textContent = 'This page could not start. Reload it, or update the browser.';
+        const message = document.createElement('main');
+        message.className = 'start-message';
+        message.textContent = 'This page could not start. Reload it, or update the browser.';
+        document.body.replaceChildren(message);
       }
     </script>
   </body>

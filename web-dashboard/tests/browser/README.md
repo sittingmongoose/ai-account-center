@@ -85,3 +85,15 @@ fixture copies the synthetic option-b video stream and adds silent AAC audio so 
 ```sh
 ffmpeg -i option-b.mp4 -f lavfi -i anullsrc=r=44100:cl=stereo -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -shortest -movflags +faststart keyboard-controls.mp4
 ```
+
+`frames/standalone.check.mjs` (`--grep 'standalone status'`) verifies static `black-translucent` metadata,
+actual GPU background pixels behind white system glyphs (minimum 7:1), dark-band labels (4.5:1), and safe
+spacing in light/dark themes on measured Duo and iPhone 17 Pro poses. It includes first-paint/offline pages,
+startup failure, open sheets and the embedded-page opt-out. The development server's `/__fixture/*` routes
+serve the real source documents over HTTP; routing HTML through DevTools changes its private-network
+security context and prevents its styles/fonts loading. These routes exist only in the fixture server.
+
+Chromium uses the kit's `safe=` override; it cannot verify iOS Home Screen installation geometry. The device
+pass must remove the old AAC Home Screen icon and add the new served build again: the status-bar setting can
+be captured when the icon is added. Reloading the old icon is insufficient. Confirm the band is physically
+beside the clock/signal symbols, and record the viewport/insets rather than assuming the meta was honored.

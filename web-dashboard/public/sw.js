@@ -13,14 +13,20 @@ var CACHE = AacSwRoute.cacheName(BUILD_ID);
 // Once the app has loaded, the in-app Offline screen (phase 5) takes over.
 var OFFLINE_PAGE =
   '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
-  '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+  '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">' +
+  '<meta name="mobile-web-app-capable" content="yes">' +
+  '<meta name="apple-mobile-web-app-capable" content="yes">' +
+  '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">' +
   '<meta name="theme-color" media="(prefers-color-scheme: light)" content="#ECF0F3">' +
   '<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0C1217">' +
   '<title>AI Account Center</title>' +
   '<style>html,body{margin:0;height:100%}body{display:flex;align-items:center;justify-content:center;' +
   'background:#ECF0F3;color:#15202B;font:15px/1.5 system-ui,sans-serif;text-align:center}' +
   '@media (prefers-color-scheme:dark){body{background:#0C1217;color:#E6EBF0}}' +
-  'main{padding:24px}a{color:#2552CC}</style></head><body><main>' +
+  'body::before,body::after{content:"";position:fixed;top:0;left:0;right:0;pointer-events:none;z-index:2147483646;box-sizing:border-box}' +
+  'body::before{height:max(env(safe-area-inset-top,0px),var(--safe-top,0px));background:#0C1217}' +
+  'body::after{height:184px;border-style:solid;border-color:#0C1217;border-width:0 env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px)}' +
+  'main{padding:calc(24px + env(safe-area-inset-top,0px)) calc(24px + env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) calc(24px + env(safe-area-inset-left,0px))}a{color:#2552CC}</style></head><body><main>' +
   '<h1>Can&rsquo;t reach the dashboard</h1>' +
   '<p>The app shell has not been downloaded yet, and there is no connection.</p>' +
   '<p><a href="/">Try again</a></p></main></body></html>';

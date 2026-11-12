@@ -1,0 +1,59 @@
+/* black-translucent uses white system symbols in every theme. These viewport-fixed, noninteractive surfaces
+   keep them readable through loading, scroll, and body-level overlays. env() covers first paint; --safe-top
+   also carries the measured display-only override used by the frame kit. Embedded content has no OS strip. */
+:root {
+  --system-status-bg: #0C1217;
+}
+body::before, body::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  z-index: 2147483646;
+  box-sizing: border-box;
+}
+body::before {
+  height: max(env(safe-area-inset-top, 0px), var(--safe-top, 0px));
+  background: var(--system-status-bg);
+}
+/* Before the frame starts, the Duo's side strip may already contain its clock and signal ring. The classic
+   canvas also leaves these safe side insets empty. The frame replaces this conservative height with its
+   measured reserve, and paints only its chosen rail side, including transient zero-inset readings. */
+body::after {
+  height: 184px;
+  border-style: solid;
+  border-color: var(--system-status-bg);
+  border-width: 0 env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
+}
+:root[data-chrome='band'] body::before {
+  left: auto;
+  width: var(--band-reserve);
+}
+:root[data-chrome] body::after { display: none; }
+:root[data-chrome='rail'] body::after {
+  display: block;
+  height: max(var(--rail-reserve), var(--safe-top));
+  border-left-width: 0;
+  border-right-width: var(--rail-w);
+}
+:root[data-chrome='rail'][data-rail-side='left'] body::after {
+  border-left-width: var(--rail-w);
+  border-right-width: 0;
+}
+:root[data-status-embedded='1'] body::before,
+:root[data-status-embedded='1'] body::after,
+:root[data-chrome='none'] body::before,
+:root[data-chrome='none'] body::after { display: none; }
+
+/* This must work before WASM/FrameShell can start, including the no-script and failed-start messages. */
+.start-message {
+  box-sizing: border-box;
+  min-height: 100dvh;
+  padding: calc(24px + max(env(safe-area-inset-top, 0px), var(--safe-top, 0px)))
+    calc(16px + env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px))
+    calc(16px + env(safe-area-inset-left, 0px));
+  background: var(--bg, #ECF0F3);
+  color: var(--ink, #15202B);
+}

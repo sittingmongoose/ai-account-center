@@ -3,6 +3,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -63,7 +64,13 @@ http.createServer((req, res) => {
   if (/^\/app\/(home|analytics|accounts|status|scoreboard)$/.test(p)) {
     const html = fs.readFileSync(path.join(crate, 'index.html'), 'utf8').replaceAll('{{PKG}}', '/app/pkg').replaceAll('{{CSS}}', '/app/app.css');
     res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(html);
-  } else if (/^\/[a-z-]+\.mjs$/.test(p)) file(res, path.join(dashboard, 'public', path.basename(p)));
+  } else if (p === '/__fixture/start-cover') file(res, path.join(dashboard, 'public/index.html'));
+  else if (p === '/__fixture/offline-cover') {
+    const source = fs.readFileSync(path.join(dashboard, 'public/sw.js'), 'utf8');
+    const html = vm.runInNewContext(source.match(/var OFFLINE_PAGE =([\s\S]*?);\r?\n/)[1]);
+    res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(html);
+  } else if (p === '/status-bar.css') file(res, path.join(dashboard, 'public/status-bar.css'));
+  else if (/^\/[a-z-]+\.mjs$/.test(p)) file(res, path.join(dashboard, 'public', path.basename(p)));
   else if (p === '/manifest.webmanifest') file(res, path.join(dashboard, 'public', 'manifest.webmanifest'));
   else if (p === '/api/auth/check') json(res, 200, { authenticated: true, authRequired: true, username: 'fixture', accessMode: 'password' });
   else if (p === '/api/auth/setup') json(res, 200, { configured: true, sessionTimeoutHours: 720 });

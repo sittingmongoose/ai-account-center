@@ -302,7 +302,7 @@ textarea.note::placeholder { color: var(--ink-4); }
 .disclosure.open .ic { transform: rotate(90deg); }
 
 /* ---------- desktop chrome (identical to the Slint Header) ---------- */
-.chrome { position: sticky; top: 0; z-index: 5; background: var(--paper); border-bottom: 1px solid var(--rule); }
+.chrome { position: sticky; top: 0; z-index: 5; padding-top: var(--safe-top); background: var(--paper); border-bottom: 1px solid var(--rule); }
 .chrome-in { height: 62px; display: flex; align-items: center; gap: 24px; padding: 0 32px; }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); }
 .brand .logo { width: 26px; height: 26px; }
@@ -335,7 +335,7 @@ textarea.note::placeholder { color: var(--ink-4); }
 
 /* ---------- side rail: the app's nav moved into the iOS status strip (Duo folded, Duo unfolded landscape) ---------- */
 .rail { background: var(--paper); border-left: 1px solid var(--rule); display: flex; flex-direction: column; align-items: center;
-  padding: var(--rail-reserve) 0 max(var(--safe-bottom), 10px); gap: 4px; }
+  padding: max(var(--rail-reserve), var(--safe-top)) 0 max(var(--safe-bottom), 10px); gap: 4px; }
 .rail a { width: 60px; min-height: 46px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   color: var(--ink-3); font-size: 10px; font-weight: 560; font-variation-settings: 'wght' 560; text-align: center; line-height: 1.1; }
 .rail a .ic { width: 20px; height: 20px; }
@@ -365,6 +365,20 @@ textarea.note::placeholder { color: var(--ink-4); }
 .band-nav a.on { background: var(--nav-active); color: var(--nav-active-fg); }
 .band-tools { display: flex; gap: 4px; padding-left: 6px; border-left: 1px solid var(--rule-2); }
 .band-tools .icon-btn { width: 34px; height: 34px; border-radius: 9px; }
+
+/* The standalone status bar uses white symbols in either theme. Keep the display-only band and the phone
+   top bar dark, including their labels, state words and toolbar buttons when the page itself is light. */
+.topbar, .band-info {
+  background: var(--system-status-bg);
+  color-scheme: dark;
+  --paper: #131B23; --paper-2: #17212A; --paper-3: #1C2731;
+  --ink: #E6ECF2; --ink-2: #B0BCC8; --ink-3: #8794A2; --ink-4: #5B6876;
+  --rule: #24313D; --rule-2: #1D2832;
+  --row-hover: #18232D; --pressed: #1B2530;
+  --accent: #86ABFF; --accent-ink: #0B1424; --accent-text: #9BBAFF;
+  --warn-text: #F5C35D; --crit-text: #FF8469; --good-text: #5AD3BF; --over-text: #FF7AA6;
+  color: var(--ink);
+}
 
 /* ---------- content area, tiers by the content width (container queries) ---------- */
 .content { container-type: inline-size; container-name: content; }
@@ -1120,7 +1134,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
   .dt-title { font-size: 18px; }
   .dt-body { padding: 14px 20px calc(var(--safe-bottom) + 20px); gap: 16px; }
 }
-:root[data-chrome='desk'] .details { top: 63px; }
+:root[data-chrome='desk'] .details { top: calc(var(--safe-top) + 63px); padding-top: 0; }
 /* With the strip on the left the rail is on the left: the Details sheet and panel reach the right edge (review L1). */
 :root[data-chrome='rail'][data-rail-side='left'] .details { right: var(--safe-right, 0px); }
 /* A switch confirmation the dashboard draws shows the dashboard over the tab while it is open. */
@@ -1969,7 +1983,7 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-vis
 .sheet-top .sheet-close { top: 12px; }
 .side-host { position: fixed; inset: 0; z-index: 40; }
 .side-host .sheet-scrim { position: absolute; inset: 0; background: var(--sheet-scrim); border: 0; padding: 0; width: 100%; }
-.side-panel { position: absolute; right: 0; top: 0; bottom: 0; width: min(560px, 100%); background: var(--paper); box-shadow: var(--shadow-pop); padding: 20px; overflow: auto; }
+.side-panel { position: absolute; right: 0; top: var(--safe-top); bottom: 0; width: min(560px, 100%); background: var(--paper); box-shadow: var(--shadow-pop); padding: 20px; overflow: auto; }
 /* Beside the rail a sheet or side panel ends at the rail, never under the status strip, its clock or the camera island,
    and a tall sheet starts low enough to clear the screen's top corner. */
 :root[data-chrome='rail'] .sheet-host .sheet { right: var(--rail-w); left: var(--safe-left, 0px); max-height: calc(100dvh - max(var(--safe-top), 28px) - 12px); }
@@ -2090,9 +2104,9 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .slint-host { height: 100%; }
 .slint-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--bg); }
 
-.toasts { position: fixed; z-index: 60; top: 72px; right: calc(16px + var(--safe-right)); width: min(380px, calc(100vw - 32px)); display: grid; gap: 8px; pointer-events: none; }
+.toasts { position: fixed; z-index: 60; top: calc(var(--safe-top) + 72px); right: calc(16px + var(--safe-right)); width: min(380px, calc(100vw - 32px)); display: grid; gap: 8px; pointer-events: none; }
 :root[data-chrome='phone'] .toasts, :root[data-chrome='band'] .toasts { top: calc(var(--safe-top) + 56px); left: calc(12px + var(--safe-left)); right: calc(12px + var(--safe-right)); width: auto; }
-:root[data-chrome='rail'] .toasts { top: 12px; right: calc(var(--rail-w, var(--safe-right)) + 12px); width: min(380px, calc(100vw - var(--rail-w, 84px) - 24px)); }
+:root[data-chrome='rail'] .toasts { top: max(12px, var(--safe-top)); right: calc(var(--rail-w, var(--safe-right)) + 12px); width: min(380px, calc(100vw - var(--rail-w, 84px) - 24px)); }
 :root[data-chrome='rail'][data-rail-side='left'] .toasts { right: calc(12px + var(--safe-right)); }
 .toast { pointer-events: auto; display: flex; gap: 10px; align-items: flex-start; padding: 10px 8px 10px 14px; background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); font-size: 13px; }
 .toast-text { flex: 1 1 0; min-width: 0; display: grid; gap: 2px; }
@@ -2100,7 +2114,7 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .toast .icon-btn { width: 28px; height: 28px; }
 
 .menu-scrim { position: fixed; inset: 0; z-index: 40; }
-.acct-menu { position: fixed; z-index: 41; top: 66px; right: 32px; width: min(300px, calc(100vw - 24px)); background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); padding: 6px; display: grid; gap: 2px; }
+.acct-menu { position: fixed; z-index: 41; top: calc(var(--safe-top) + 66px); right: 32px; width: min(300px, calc(100vw - 24px)); background: var(--paper); border: 1px solid var(--rule); border-radius: var(--r-card); box-shadow: var(--shadow-pop); padding: 6px; display: grid; gap: 2px; }
 :root[data-chrome='phone'] .acct-menu { top: calc(var(--safe-top) + 52px); right: calc(12px + var(--safe-right)); }
 :root[data-chrome='band'] .acct-menu { top: calc(var(--safe-top) + 50px); right: 10px; }
 :root[data-chrome='rail'] .acct-menu { top: auto; bottom: calc(var(--safe-bottom) + 12px); right: calc(var(--rail-w, var(--safe-right)) + 8px); }
