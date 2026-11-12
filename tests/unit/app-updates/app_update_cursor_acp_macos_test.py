@@ -166,7 +166,7 @@ class AcpTests(Fixtures):
 
     def fake_t3(self, install, phase="succeeded", pin="1.4.5", failure=None, installed="1.4.5"):
         import app_update_t3_rpc as rpc
-        self.calls, self.auth = [], []
+        self.calls, self.auth, self.connections = [], [], []
         state = {"driver": "antigravity", "operationId": "op", "phase": "idle", "version": pin}
         owner = self
         old = install.path / "versions" / ("a" * 64)
@@ -198,6 +198,7 @@ class AcpTests(Fixtures):
 
         class Client:
             def __init__(self, origin, token, deadline):
+                owner.connections.append(self)
                 owner.assertEqual(token, owner.TOKEN)
                 if failure == "unreachable":
                     raise OSError(owner.TOKEN)
@@ -229,6 +230,7 @@ class AcpTests(Fixtures):
         self.stack.enter_context(mock.patch.object(rpc, "discover", return_value=(["fake-t3"], self.root, "fake-origin")))
         self.stack.enter_context(mock.patch.object(rpc, "command", side_effect=auth))
         self.stack.enter_context(mock.patch.object(rpc, "Rpc", Client))
+        self.stack.enter_context(mock.patch.object(rpc, "revoke_session", side_effect=lambda cli, base, identifier: auth([*cli, "auth", "session", "revoke", identifier])))
         # Trap opens AND atomic replacements. Only the fake T3 writer is allowed.
         original_open, original_os_open, original_replace = pathlib.Path.open, os.open, os.replace
         def path_open(path, mode="r", *args, **kwargs):
@@ -261,9 +263,7 @@ class AcpTests(Fixtures):
         self.assertEqual([issue[i + 1] for i, arg in enumerate(issue) if arg == "--scope"],
                          ["providers:manage", "orchestration:read"])
         ttl = issue[issue.index("--ttl") + 1]
-        self.assertTrue(ttl.endswith("s"))
-        self.assertGreater(int(ttl[:-1]), 0)
-        self.assertLessEqual(int(ttl[:-1]), 900)
+        self.assertEqual(ttl, "60s")
         self.assertNotIn(self.TOKEN, str(self.auth))
 
     def test_success_all_platforms_t3_is_the_only_pointer_writer(self):
@@ -281,7 +281,47 @@ class AcpTests(Fixtures):
                     self.assertTrue(old.is_dir())
                     self.assertEqual(row["restartedProcesses"], 0)
                     self.assert_revoked()
+                    self.assertEqual(len(self.connections), 1)
                 finally: self.stack = original
+
+    def test_renewed_subscription_checks_original_operation_and_never_restarts(self):
+        import app_update_t3_rpc as rpc
+        for changed in (False, True):
+            with self.subTest(changed=changed), contextlib.ExitStack() as nested:
+                original = self.stack
+                self.stack = nested
+                try:
+                    install, _ = self.old_acp("windows")
+                    self.fake_t3(install)
+                    transport = rpc.Rpc
+                    clock = [100]
+                    connections = []
+                    class RenewingClient(transport):
+                        def __init__(self, *args):
+                            super().__init__(*args)
+                            connections.append(self)
+                        def receive(self, identifier):
+                            if self.started and len(connections) == 1:
+                                clock[0] = 130
+                                raise TimeoutError()
+                            for state in super().receive(identifier):
+                                if len(connections) > 1:
+                                    if changed:
+                                        state = {**state, "operationId": "different"}
+                                    else:
+                                        # The instance snapshot survives reconnection.
+                                        self.started = True
+                                        state = next(super().receive(identifier))
+                                yield state
+                    nested.enter_context(mock.patch.object(rpc, "Rpc", RenewingClient))
+                    nested.enter_context(mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]))
+                    row = self.run_update(install)
+                    self.assertEqual(row["messageCode"], "t3_install_failed:operation_changed" if changed else "antigravity_acp_updated")
+                    self.assertEqual(len(connections), 2)
+                    self.assertEqual(sum(method == "provider.install.start" for method, _ in self.calls), 1)
+                    self.assertEqual(sum("revoke" in argv for argv in self.auth), 2)
+                finally:
+                    self.stack = original
 
     def test_current_and_newer_never_call_install(self):
         for version in ("1.4.5", "1.5.0"):
@@ -334,7 +374,7 @@ class AcpTests(Fixtures):
         self.fake_t3(install, failure="auth")
         row = self.run_update(install)
         self.assertEqual((row["status"], row["messageCode"]), ("action_required", "t3_auth_failed"))
-        self.assertTrue(any("list" in argv for argv in self.auth))
+        self.assertFalse(any("list" in argv for argv in self.auth))
         self.assertFalse(any(method == "provider.install.start" for method, _ in self.calls))
 
     def test_false_success_is_rejected(self):

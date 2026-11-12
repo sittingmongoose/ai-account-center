@@ -1185,7 +1185,10 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                     running[pool.submit(update_one, app_id)] = (app_id, resources)
                     reserved.update(resources)
                 if running:
-                    finished, _ = wait(running, return_when=FIRST_COMPLETED)
+                    # Windows dispatches Python console signals on the main
+                    # thread between waits. Keep it responsive while an ACP
+                    # worker is blocked, so direct revocation can run promptly.
+                    finished, _ = wait(running, timeout=0.25, return_when=FIRST_COMPLETED)
                     for future in finished:
                         running.pop(future)
                         report(future.result())
@@ -1417,12 +1420,6 @@ def main():
         progress(event)
     emit = remember
     try:
-        if args.apply:
-            from app_update_t3_rpc import discover, recover_pending
-            pending = pathlib.Path.home() / ".t3/userdata/aac-pending-sessions"
-            if any(pending.glob("aac-acp-*.json")):
-                cli, base, _ = discover(args.platform)
-                recover_pending(cli, base)
         if not args.apply:
             installations = detect(args.platform)
             payload = {"inventory": True, "apps": [
@@ -1450,6 +1447,6 @@ def main():
 
 
 if __name__ == "__main__":
-    from app_update_t3_rpc import unix_signals
-    with unix_signals():
+    from app_update_t3_rpc import session_signals
+    with session_signals():
         main()

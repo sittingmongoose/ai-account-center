@@ -1,6 +1,7 @@
 """No-network fixtures for T3 CLI discovery, temporary auth and Effect WS frames."""
 
 import base64
+import contextlib
 import hashlib
 import io
 import json
@@ -11,6 +12,8 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 import unittest
 import urllib.parse
@@ -89,161 +92,334 @@ class DiscoveryTests(unittest.TestCase):
             with self.assertRaises(common.UpdateFailure): rpc.discover("ubuntu")
 
 
+class FakeAuthStore:
+    """Only metadata is persisted by this fake T3 store; never the bearer."""
+
+    def __init__(self, now, path=None):
+        self.now, self.path = now, path
+        self.rows, self.events = {}, []
+
+    def command(self, cli, base, args, timeout=30):
+        assert args[0] == "issue"
+        assert [args[i + 1] for i, v in enumerate(args) if v == "--scope"] == ["providers:manage", "orchestration:read"]
+        ttl = int(args[args.index("--ttl") + 1][:-1])
+        identifier = "session-" + str(len(self.rows) + 1)
+        self.rows[identifier] = {"expires": self.now() + ttl, "revoked": False}
+        self.events.append(("issue", identifier))
+        self.save()
+        return json.dumps({"sessionId": identifier, "token": TOKEN})
+
+    def revoke(self, cli, base, identifier, timeout=1):
+        self.rows[identifier]["revoked"] = True
+        self.events.append(("revoke", identifier))
+        self.save()
+
+    def save(self):
+        if self.path:
+            self.path.write_text(json.dumps(self.rows))
+
+    def valid(self, identifier, now):
+        row = self.rows[identifier]
+        return not row["revoked"] and now < row["expires"]
+
+
+def crash_fixture(stage, base):
+    """An actual abrupt process exit bypasses all finally blocks."""
+    import app_update_antigravity as acp
+    clock = [100]
+    store = FakeAuthStore(lambda: clock[0], base / "fake-t3-auth-store.json")
+
+    def kill(point):
+        if stage == point:
+            os._exit(77)
+
+    def issue(*args, **kwargs):
+        kill("before_issue")
+        reply = store.command(*args, **kwargs)
+        kill("issue_committed_before_reply")
+        return reply
+
+    class Client:
+        def __init__(self, origin, token, deadline):
+            kill("connect")
+            self.number = len(store.rows)
+        def close(self): pass
+        def send(self, value): pass
+        def call(self, method, payload):
+            kill("start_committed_before_reply")
+            return {"operationId": "operation"}
+        def request(self, method, payload):
+            kill("subscribe")
+            return "subscription"
+        def receive(self, identifier):
+            if self.number == 1:
+                clock[0] = 130
+                raise TimeoutError()
+            kill("renewed_subscription")
+            yield {"operationId": "operation"}
+
+    original_loads = json.loads
+    def loads(value):
+        reply = original_loads(value)
+        kill("reply_before_registration")
+        return reply
+
+    def revoke(*args, **kwargs):
+        kill("before_revoke")
+        store.revoke(*args, **kwargs)
+
+    with mock.patch.object(rpc, "auth_command", side_effect=issue), mock.patch.object(rpc, "revoke_session", side_effect=revoke), mock.patch.object(rpc, "Rpc", Client), mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]), mock.patch.object(rpc.json, "loads", side_effect=loads):
+        client = rpc.InstallRpc(["fake"], base, None, 1000)
+        client.refresh()
+        kill("authenticated")
+        client.call("provider.install.start", {})
+        next(acp.install_state(client, "agy"))
+        client.close()
+    raise AssertionError("kill point not reached")
+
+
 class AuthTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.base = pathlib.Path(directory.name)
+        self.addCleanup(rpc._known_sessions.clear)
 
-    def test_next_apply_supervises_before_any_update(self):
+    def test_stopped_t3_with_legacy_leftovers_affects_only_acp_in_twelve_row_apply(self):
         import app_updates as updates
-        pending = self.base / ".t3/userdata/aac-pending-sessions/aac-acp-fixture.json"
-        common.write_private_json(pending, {"sessionId": "abandoned"})
-        host = "windows" if os.name == "nt" else "mac" if sys.platform == "darwin" else "ubuntu"
-        events = []
-        def apply(*args):
-            events.append("apply")
-            return {"results": []}
-        with mock.patch.object(pathlib.Path, "home", return_value=self.base), mock.patch.object(sys, "argv", ["helper", "--apply", "--platform", host]), mock.patch.object(rpc, "discover", return_value=(["fake"], self.base / ".t3", None)), mock.patch.object(rpc, "recover_pending", side_effect=lambda *args: events.append("recover")), mock.patch.object(updates, "windows_interactive_apply", side_effect=apply), mock.patch.object(updates, "run_apply", side_effect=apply), mock.patch("sys.stdout", new_callable=io.StringIO):
+        import app_update_antigravity as acp
+        pending = self.base / ".t3/userdata/aac-pending-sessions/aac-acp-abandoned.json"
+        pending.parent.mkdir(parents=True)
+        pending.write_text('{"label":"aac-acp-abandoned","sessionId":"old"}')
+        pending.with_suffix(".lock").write_bytes(b"0")
+        installs = {key: common.Install(key, "windows", self.base / key, "1.0.0") for key in common.APP_LABELS}
+        def current(install, *args, **kwargs):
+            return common.result(install.app_id, "windows", "current", "1.0.0", "1.0.0", install.manager, "current")
+        out = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(pathlib.Path, "home", return_value=self.base))
+            stack.enter_context(mock.patch.object(sys, "argv", ["helper", "--apply", "--platform", "windows", "--task-child"]))
+            stack.enter_context(mock.patch.object(updates, "os", mock.Mock(wraps=os, name="nt")))
+            # main's platform guard is native even on a Unix test runner.
+            updates.os.name = "nt"
+            stack.enter_context(mock.patch.object(updates, "execution_lock", contextlib.nullcontext))
+            stack.enter_context(mock.patch.object(updates, "detect", return_value=installs))
+            stack.enter_context(mock.patch.object(updates, "check_readiness", return_value=None))
+            stack.enter_context(mock.patch.object(updates, "antigravity_plan", return_value=(None, False)))
+            stack.enter_context(mock.patch.object(updates, "claude_current", return_value=None))
+            stack.enter_context(mock.patch.object(acp, "detect_antigravity_acp", return_value=installs["antigravity-acp"]))
+            stack.enter_context(mock.patch.object(rpc, "auth_command", side_effect=AssertionError("stopped T3 must not issue")))
+            discover = stack.enter_context(mock.patch.object(rpc, "discover", wraps=rpc.discover))
+            for name in ("update_cli", "update_desktop", "update_zcode", "update_adapters", "update_t3", "update_cursor"):
+                stack.enter_context(mock.patch.object(updates, name, side_effect=current))
+            stack.enter_context(mock.patch("sys.stdout", out))
             updates.main()
-        self.assertEqual(events, ["recover", "apply"])
+        rows = json.loads(out.getvalue().splitlines()[-1])["results"]
+        self.assertEqual(len(rows), 12)
+        for row in rows:
+            if row["appId"] == "antigravity-acp":
+                self.assertEqual((row["status"], row["messageCode"]), ("action_required", "t3_unreachable"))
+            else:
+                self.assertEqual(row["status"], "current", row)
+        discover.assert_called_once_with("windows")
+        self.assertTrue(pending.exists(), "legacy records are ignored")
+        self.assertNotIn(TOKEN, out.getvalue())
 
-    def test_killed_process_is_reaped_by_next_run_on_windows_and_unix(self):
-        script = '''import json, pathlib, sys, time
-from unittest import mock
-sys.path.insert(0, sys.argv[1])
-import app_update_t3_rpc as rpc
-def command(argv, **kwargs):
-    if "issue" in argv:
-        return json.dumps({"sessionId": "killed-session", "token": sys.argv[3]})
-    return ""
-with mock.patch.object(rpc, "command", side_effect=command):
-    with rpc.bearer(["fake-t3"], pathlib.Path(sys.argv[2]), time.monotonic()+90):
-        print("ready", flush=True)
-        time.sleep(60)
-'''
-        child = subprocess.Popen([sys.executable, "-B", "-c", script, str(pathlib.Path(rpc.__file__).parent), str(self.base), TOKEN], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        try:
-            self.assertEqual(child.stdout.readline().strip(), "ready")
-            records = list(self.base.rglob("*.json"))
-            self.assertEqual(len(records), 1)
-            self.assertEqual(json.loads(records[0].read_text())["sessionId"], "killed-session")
-            for path in self.base.rglob("*"):
-                if path.suffix == ".json": self.assertNotIn(TOKEN.encode(), path.read_bytes())
-            child.kill()
-            output, errors = child.communicate(timeout=10)
-            self.assertNotIn(TOKEN, output + errors)
-            for path in self.base.rglob("*"):
-                if path.is_file(): self.assertNotIn(TOKEN.encode(), path.read_bytes())
-            with mock.patch.object(rpc, "command", return_value="") as command:
-                rpc.recover_pending(["fake-t3"], self.base)
-            self.assertIn("killed-session", command.call_args.args[0])
-            self.assertFalse(list(self.base.rglob("*.json")))
-        finally:
-            if child.poll() is None: child.kill()
-            child.communicate(timeout=10)
+    def test_ttl_is_fixed_even_for_a_long_install_and_no_aac_files_are_created(self):
+        clock = [100]
+        store = FakeAuthStore(lambda: clock[0])
+        with mock.patch.object(rpc, "auth_command", side_effect=store.command) as auth, mock.patch.object(rpc, "revoke_session", side_effect=store.revoke), mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]):
+            with rpc.bearer(["fake"], self.base, 10000) as token:
+                self.assertEqual(token, TOKEN)
+                self.assertEqual(store.rows["session-1"]["expires"], 160)
+                self.assertEqual(set(rpc._known_sessions), {"session-1"})
+                self.assertFalse(list(self.base.rglob("*")))
+            self.assertEqual(rpc._known_sessions, {})
+            self.assertFalse(store.valid("session-1", 100))
+        self.assertNotIn(TOKEN, str(auth.call_args_list))
 
-    def test_overlapping_runs_are_locked_and_revoke_only_their_own_id(self):
-        issued = iter(("first", "second"))
-        revoked = []
-        def command(argv, **kwargs):
-            if "issue" in argv: return json.dumps({"sessionId": next(issued), "token": TOKEN})
-            if "revoke" in argv: revoked.append(argv[argv.index("revoke") + 1])
-            return ""
-        with mock.patch.object(rpc, "command", side_effect=command):
-            with rpc.bearer(["fake"], self.base, time.monotonic() + 90):
-                with rpc.bearer(["fake"], self.base, time.monotonic() + 90):
-                    rpc.recover_pending(["fake"], self.base)
-                    self.assertEqual(revoked, [])
-                self.assertEqual(revoked, ["second"])
-            self.assertEqual(revoked, ["second", "first"])
+    def test_actual_kill_at_each_stage_needs_no_future_run_to_expire(self):
+        stages = ("before_issue", "issue_committed_before_reply", "reply_before_registration", "connect", "authenticated", "start_committed_before_reply", "subscribe", "before_revoke", "renewed_subscription")
+        script = "import pathlib,sys; sys.path.insert(0,sys.argv[1]); from app_update_t3_rpc_test import crash_fixture; crash_fixture(sys.argv[2],pathlib.Path(sys.argv[3]))"
+        for stage in stages:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                child = subprocess.run([sys.executable, "-B", "-c", script, str(pathlib.Path(__file__).parent), stage, temporary], capture_output=True, text=True, timeout=10)
+                self.assertEqual(child.returncode, 77, child.stderr)
+                self.assertNotIn(TOKEN, child.stdout + child.stderr)
+                for path in pathlib.Path(temporary).rglob("*"):
+                    if path.is_file(): self.assertNotIn(TOKEN.encode(), path.read_bytes())
+                path = pathlib.Path(temporary) / "fake-t3-auth-store.json"
+                rows = json.loads(path.read_text()) if path.exists() else {}
+                kill_time = 130 if stage in ("before_revoke", "renewed_subscription") else 100
+                for row in rows.values():
+                    self.assertLessEqual(row["expires"], kill_time + 60)
+                    self.assertFalse(not row["revoked"] and kill_time + 60 < row["expires"])
 
-    def test_unix_signal_handler_cleanup_with_mock_delivery_on_any_host(self):
-        handlers = {}
-        fake_os = mock.Mock(wraps=os)
-        fake_os.name = "posix"
-        def install(number, handler):
-            previous = handlers.get(number, signal.SIG_DFL)
-            handlers[number] = handler
-            return previous
-        with mock.patch.object(rpc, "command", side_effect=[json.dumps({"sessionId": "signal-session", "token": TOKEN}), ""]) as command, mock.patch.object(signal, "SIGHUP", 1, create=True), mock.patch.object(signal, "signal", side_effect=install):
-            context = rpc.unix_signals()
-            with mock.patch.object(rpc, "os", fake_os):
-                context.__enter__()
-            try:
-                with self.assertRaises(SystemExit):
-                    with rpc.bearer(["fake"], self.base, time.monotonic() + 90):
-                        handlers[signal.SIGTERM](signal.SIGTERM, None)
-            finally:
-                context.__exit__(None, None, None)
-            self.assertIn("signal-session", command.call_args.args[0])
-            self.assertTrue(all(value == signal.SIG_DFL for value in handlers.values()))
+    def test_renewal_revokes_old_session_and_resubscribes_without_restarting_install(self):
+        import app_update_antigravity as acp
+        clock = [100]
+        store = FakeAuthStore(lambda: clock[0])
+        calls, connections = [], []
+        owner = self
+        class Client:
+            def __init__(self, origin, token, deadline):
+                self.identifier = list(store.rows)[-1]
+                self.deadline = deadline
+                connections.append(self)
+            def close(self): calls.append(("close", self.identifier))
+            def send(self, value): pass
+            def call(self, method, payload):
+                calls.append((method, self.identifier))
+                return {"operationId": "op"}
+            def request(self, method, payload):
+                owner.assertEqual(payload, {"instanceId": "agy"})
+                owner.assertTrue(store.valid(self.identifier, clock[0]))
+                calls.append((method, self.identifier))
+                return "subscription"
+            def receive(self, identifier):
+                if self.identifier == "session-1":
+                    clock[0] = self.deadline
+                    raise TimeoutError()
+                yield {"operationId": "op", "phase": "succeeded"}
+        with mock.patch.object(rpc, "auth_command", side_effect=store.command), mock.patch.object(rpc, "revoke_session", side_effect=store.revoke), mock.patch.object(rpc, "Rpc", Client), mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]):
+            with contextlib.closing(rpc.InstallRpc(["fake"], self.base, None, 1000)) as client:
+                client.call("provider.install.start", {})
+                with contextlib.closing(acp.install_state(client, "agy")) as states:
+                    self.assertEqual(next(states), {"operationId": "op", "phase": "succeeded"})
+                self.assertEqual(store.events, [("issue", "session-1"), ("revoke", "session-1"), ("issue", "session-2")])
+            self.assertTrue(all(row["revoked"] for row in store.rows.values()))
+        self.assertEqual(len(connections), 2)
+        self.assertEqual(sum(method == "provider.install.start" for method, _ in calls), 1)
+        self.assertEqual(sum(method == "provider.install.subscribe" for method, _ in calls), 2)
+        self.assertEqual(connections[0].deadline, 130)
+        self.assertEqual(connections[1].deadline, 160)
 
-    def test_death_before_reply_recovers_only_exact_preissue_label(self):
-        path = self.base / "userdata/aac-pending-sessions/aac-acp-fixture.json"
-        common.write_private_json(path, {"label": path.stem})
-        path.with_suffix(".lock").write_bytes(b"0")
-        with mock.patch.object(rpc, "command", return_value="[]"):
-            rpc.recover_pending(["fake"], self.base)
-        self.assertTrue(path.exists(), "issuance may still commit after helper death")
-        rows = [{"sessionId": "owned", "client": {"label": path.stem}},
-                {"sessionId": "other", "client": {"label": "aac-acp-other"}}]
-        with mock.patch.object(rpc, "command", side_effect=[json.dumps(rows), common.UpdateFailure()]) as command:
-            with self.assertRaises(common.UpdateFailure): rpc.recover_pending(["fake"], self.base)
-        self.assertTrue(path.exists())
-        with mock.patch.object(rpc, "command", side_effect=[json.dumps(rows), ""]) as command:
-            rpc.recover_pending(["fake"], self.base)
-        self.assertIn("owned", command.call_args.args[0])
-        self.assertNotIn("other", command.call_args.args[0])
-        self.assertFalse(path.exists())
-
-    @unittest.skipIf(os.name == "nt", "Unix signal delivery only")
-    def test_unix_signal_unwinds_bearer_and_restores_handlers(self):
-        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-            old = signal.getsignal(number)
-            with mock.patch.object(rpc, "command", side_effect=[json.dumps({"sessionId": "signal-session", "token": TOKEN}), ""]) as command:
-                with self.assertRaises(SystemExit):
-                    with rpc.unix_signals(), rpc.bearer(["fake"], self.base, time.monotonic() + 90):
-                        os.kill(os.getpid(), number)
-                self.assertIn("signal-session", command.call_args.args[0])
-                self.assertEqual(signal.getsignal(number), old)
+    def test_issuance_errors_are_sanitized_and_never_enumerate_or_recover(self):
+        for reply in (common.UpdateFailure(output=TOKEN), TOKEN, json.dumps({"sessionId": "known", "token": "\r" + TOKEN})):
+            with self.subTest(reply=type(reply).__name__), mock.patch.object(rpc, "auth_command", side_effect=[reply]) as auth, mock.patch.object(rpc, "revoke_session") as revoke:
+                with self.assertRaises(common.UpdateFailure) as raised:
+                    with rpc.bearer(["fake"], self.base, time.monotonic() + 900): self.fail("invalid issue")
+                self.assertEqual(raised.exception.code, "t3_auth_failed")
+                self.assertNotIn(TOKEN, str(raised.exception))
+                self.assertEqual(auth.call_count, 1)
+                self.assertEqual(revoke.call_count, int(isinstance(reply, str) and reply.startswith("{")))
+                self.assertFalse(list(self.base.rglob("*")))
 
     def test_revoke_on_success_exception_and_cancellation(self):
-        for failure in (None, OSError("fixture"), KeyboardInterrupt()):
-            with self.subTest(failure=type(failure).__name__):
-                with mock.patch.object(rpc, "command", side_effect=[json.dumps({"sessionId": "session-fixture", "token": TOKEN}), ""]) as command:
-                    try:
-                        with rpc.bearer(["fixture-t3"], self.base, time.monotonic() + 90) as token:
-                            self.assertEqual(token, TOKEN)
-                            if failure: raise failure
-                    except BaseException as error:
-                        self.assertIs(error, failure)
-                    self.assertIn("revoke", command.call_args_list[-1].args[0])
-                    self.assertNotIn(TOKEN, str(command.call_args_list))
-                    self.assertTrue(command.call_args.kwargs["capture"])
+        for failure in (None, OSError(TOKEN), KeyboardInterrupt()):
+            with mock.patch.object(rpc, "auth_command", return_value=json.dumps({"sessionId": "session", "token": TOKEN})), mock.patch.object(rpc, "revoke_session") as revoke:
+                try:
+                    with rpc.bearer(["fake"], self.base, time.monotonic() + 90):
+                        if failure: raise failure
+                except BaseException as error: self.assertIs(error, failure)
+                revoke.assert_called_once_with(["fake"], self.base, "session")
 
-    def test_issue_timeout_recovers_by_unique_label_then_revokes(self):
-        commands = []
-        def run(argv, **kwargs):
-            commands.append(argv)
-            if "issue" in argv: raise common.UpdateFailure("timeout", output=TOKEN)
-            if "list" in argv:
-                label = commands[0][commands[0].index("--label") + 1]
-                return json.dumps([{"sessionId": "recovered", "client": {"label": label}},
-                                   {"sessionId": "someone-else", "client": {"label": "unrelated"}}])
-            return ""
-        with mock.patch.object(rpc, "command", side_effect=run):
-            with self.assertRaises(common.UpdateFailure) as raised:
-                with rpc.bearer(["fixture"], self.base, time.monotonic() + 90): self.fail("no token")
-        self.assertEqual(raised.exception.code, "t3_auth_failed")
-        self.assertIn("recovered", commands[-1])
-        self.assertNotIn("someone-else", commands[-1])
+    def test_revoke_timeout_never_uses_common_cleanup_or_waits_again(self):
+        process = mock.Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired("fake", 1)
+        process.poll.return_value = None
+        with mock.patch.object(rpc.subprocess, "Popen", return_value=process) as spawn, mock.patch.object(rpc, "command") as command:
+            rpc.revoke_session(["fake"], self.base, "session")
+        process.wait.assert_called_once_with(timeout=1)
+        process.kill.assert_called_once()
+        command.assert_not_called()
+        self.assertEqual(spawn.call_args.kwargs["stdout"], subprocess.DEVNULL)
+        self.assertEqual(spawn.call_args.kwargs["stderr"], subprocess.DEVNULL)
+        self.assertNotIn(TOKEN, str(spawn.call_args))
 
-    def test_revoke_failure_cannot_claim_success(self):
-        with mock.patch.object(rpc, "command", side_effect=[json.dumps({"sessionId": "fixture", "token": TOKEN}), common.UpdateFailure(output=TOKEN)]):
-            with self.assertRaises(common.UpdateFailure) as raised:
-                with rpc.bearer(["fixture"], self.base, time.monotonic() + 90): pass
-        self.assertEqual(raised.exception.code, "t3_auth_failed")
+    def test_signal_revokes_on_main_thread_and_exits_without_pool_unwind(self):
+        for signum in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", 1), getattr(signal, "SIGBREAK", 21)):
+            with self.subTest(signal=signum):
+                entered, release = threading.Event(), threading.Event()
+                store = FakeAuthStore(time.monotonic)
+                def worker():
+                    with rpc.bearer(["fake"], self.base, time.monotonic() + 90):
+                        entered.set()
+                        release.wait(5)
+                pool = ThreadPoolExecutor(max_workers=1)
+                try:
+                    with mock.patch.object(rpc, "auth_command", side_effect=store.command), mock.patch.object(rpc, "revoke_session") as revoke, mock.patch.object(rpc, "_terminating", False), mock.patch.object(rpc.threading, "Timer") as timer, mock.patch.object(rpc.os, "_exit", side_effect=SystemExit) as exit:
+                        future = pool.submit(worker)
+                        self.assertTrue(entered.wait(2))
+                        threads = []
+                        revoke.side_effect = lambda *a: threads.append(threading.current_thread())
+                        start = time.monotonic()
+                        with self.assertRaises(SystemExit): rpc.terminate(signum)
+                        self.assertLess(time.monotonic() - start, 2)
+                        self.assertFalse(future.done(), "worker must still be blocked at immediate exit")
+                        self.assertEqual(threads, [threading.main_thread()])
+                        self.assertLessEqual(revoke.call_args.args[-1], 1)
+                        self.assertEqual(timer.call_args.args[0], 2)
+                        exit.assert_called_once_with(128 + signum)
+                        release.set()
+                        future.result(2)
+                finally:
+                    release.set()
+                    pool.shutdown()
+
+    def test_signal_process_exits_with_a_blocked_pool_worker_and_revoke(self):
+        script = r'''import json,pathlib,sys,threading,time
+from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
+sys.path.insert(0,sys.argv[1])
+import app_update_t3_rpc as rpc
+base=pathlib.Path(sys.argv[2])
+entered=threading.Event()
+def worker():
+    with rpc.bearer([sys.executable, '-c', "import pathlib,sys,time; pathlib.Path(sys.argv[-1], 'revoked').touch(); time.sleep(30)"],base,time.monotonic()+900):
+        entered.set()
+        threading.Event().wait(60)
+with mock.patch.object(rpc,'auth_command',return_value=json.dumps({'sessionId':'known','token':'fixture'})):
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(worker)
+        entered.wait(2)
+        print('ready', flush=True)
+        rpc.terminate(15)
+'''
+        self.assert_signal_child_exits(script)
+        self.assertTrue((self.base / "revoked").exists())
+
+    def test_signal_watchdog_exits_even_when_revoke_itself_stalls(self):
+        script = r'''import pathlib,sys,time
+from unittest import mock
+sys.path.insert(0,sys.argv[1])
+import app_update_t3_rpc as rpc
+rpc._known_sessions['known']=(['fake'],pathlib.Path(sys.argv[2]))
+with mock.patch.object(rpc,'revoke_session',side_effect=lambda *a: time.sleep(30)):
+    print('ready', flush=True)
+    rpc.terminate(15)
+'''
+        self.assert_signal_child_exits(script)
+
+    def assert_signal_child_exits(self, script):
+        child = subprocess.Popen([sys.executable, "-B", "-c", script, str(pathlib.Path(rpc.__file__).parent), str(self.base)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            # Python startup is outside the host's signal grace. Start the
+            # measurement at delivery, allowing parent/OS observation latency.
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            start = time.monotonic()
+            output, errors = child.communicate(timeout=3)
+            self.assertEqual(child.returncode, 143, errors)
+            self.assertLess(time.monotonic() - start, 3)
+            self.assertNotIn(TOKEN, output + errors)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=3)
+
+    def test_installs_and_restores_native_signal_handlers(self):
+        numbers = [signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGBREAK" if os.name == "nt" else "SIGHUP")]
+        originals = {n: signal.getsignal(n) for n in numbers}
+        with rpc.session_signals():
+            for number in numbers: self.assertIs(signal.getsignal(number), rpc.terminate)
+        for number in numbers: self.assertEqual(signal.getsignal(number), originals[number])
+
+    @unittest.skipIf(os.name == "nt", "Unix signal delivery only")
+    def test_unix_real_signals_use_direct_exit(self):
+        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            with mock.patch.object(rpc.os, "_exit", side_effect=SystemExit), mock.patch.object(rpc.threading, "Timer"), mock.patch.object(rpc, "_terminating", False):
+                with self.assertRaises(SystemExit), rpc.session_signals():
+                    os.kill(os.getpid(), number)
 
 
 def frame(value, opcode=1, final=True):

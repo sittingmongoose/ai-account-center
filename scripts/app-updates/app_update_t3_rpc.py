@@ -8,18 +8,17 @@ import base64
 import contextlib
 import hashlib
 import json
-import math
 import os
 import pathlib
 import signal
-import threading
 import socket
 import struct
+import subprocess
+import threading
 import time
 import urllib.parse
-import uuid
 
-from app_update_common import UpdateFailure, command, environment, write_private_json
+from app_update_common import CREATE_NO_WINDOW, UpdateFailure, command, environment
 
 
 def remaining(deadline, maximum=30):
@@ -91,72 +90,65 @@ def auth_command(cli, base, args, timeout=30):
                    capture=True, kill_tree=True)
 
 
-def lock_pending(handle):
-    """Nonblocking OS lock; process death releases it on Unix AND Windows."""
-    handle.seek(0)
-    if os.name == "nt":
-        import msvcrt
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-    else:
-        import fcntl
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+# T3 ab8e488e closes live bearer sockets on expiry (SessionStore.ts:1043-1097).
+# 60s bounds crash exposure; rotate at 30s, leaving 30s for local CLI startup
+# and the loopback handshake. The overall install deadline still caps every step.
+SESSION_TTL = 60
+RENEW_AFTER = 30
+REVOKE_TIMEOUT = 1.0
+# Memory only. Signals read a snapshot without acquiring a worker-owned lock.
+_known_sessions = {}
+_terminating = False
 
 
-def revoke_pending(cli, base, path):
-    record = json.loads(path.read_text(encoding="utf-8"))
-    label = path.stem
-    if not label.startswith("aac-acp-") or record.get("label") != label:
-        raise ValueError()
-    identifier = record.get("sessionId")
-    ids = [identifier] if isinstance(identifier, str) and identifier else [
-        row["sessionId"] for row in json.loads(auth_command(cli, base, ["list", "--json"]))
-        if row.get("client", {}).get("label") == label
-    ]
-    if not ids:
-        # The issuing CLI may outlive a killed helper and commit later. Keep
-        # its exact label eligible for a future sweep rather than lose it.
-        return
-    for identifier in ids:
-        auth_command(cli, base, ["revoke", identifier])
-    path.unlink()
-
-
-def recover_pending(cli, base):
-    """Next-run supervisor: reap only abandoned records; never an active run.
-
-    The pre-issue label also covers death after CLI commit but before its JSON
-    reply. Only that exact random label is eligible for recovery in that case.
-    Failed revocations retain the record for the next run.
-    """
-    for path in (base / "userdata/aac-pending-sessions").glob("aac-acp-*.json"):
-        lock = path.with_suffix(".lock")
-        try:
-            handle = lock.open("r+b")
-        except FileNotFoundError:
-            continue
-        with handle:
-            try:
-                lock_pending(handle)
-            except OSError:
-                continue
-            try:
-                if path.exists():
-                    revoke_pending(cli, base, path)
-            except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
-                raise UpdateFailure("t3_auth_failed") from None
-        if not path.exists():
+def revoke_session(cli, base, session_id, timeout=REVOKE_TIMEOUT):
+    """Best effort, no diagnostics, and no common.command's 5s cleanup wait."""
+    process = None
+    try:
+        options = {"creationflags": CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+        process = subprocess.Popen(
+            [*cli, "auth", "session", "revoke", session_id, "--base-dir", str(base)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=environment({"ELECTRON_RUN_AS_NODE": "1"}), **options,
+        )
+        process.wait(timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    finally:
+        if process is not None and process.poll() is None:
             with contextlib.suppress(OSError):
-                lock.unlink(missing_ok=True)
+                process.kill()
+            # Never wait here: the signal handler must exit within the grace.
+
+
+def terminate(signum, frame=None):
+    """Main-thread revoke followed by immediate exit; never unwind the pool."""
+    global _terminating
+    if _terminating:
+        return
+    _terminating = True
+    # Includes process creation/OS stalls in the hard 2s bound.
+    watchdog = threading.Timer(2, os._exit, args=(128 + signum,))
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        end = time.monotonic() + REVOKE_TIMEOUT
+        for session_id, (cli, base) in tuple(_known_sessions.items()):
+            budget = end - time.monotonic()
+            if budget <= 0:
+                break
+            revoke_session(cli, base, session_id, budget)
+    finally:
+        os._exit(128 + signum)
 
 
 @contextlib.contextmanager
-def unix_signals():
-    """Unwind finally blocks on catchable Unix termination signals."""
+def session_signals():
+    """SIGBREAK is Windows' graceful console stop; hard kills rely on TTL."""
     previous = {}
-    def terminate(signum, frame):
-        raise SystemExit(128 + signum)
-    if os.name != "nt" and threading.current_thread() is threading.main_thread():
-        for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+    if threading.current_thread() is threading.main_thread():
+        names = ("SIGTERM", "SIGINT", "SIGBREAK") if os.name == "nt" else ("SIGTERM", "SIGINT", "SIGHUP")
+        for name in names:
             number = getattr(signal, name)
             previous[number] = signal.signal(number, terminate)
     try:
@@ -168,56 +160,86 @@ def unix_signals():
 
 @contextlib.contextmanager
 def bearer(cli, base, deadline):
-    """Issue a deadline-bounded session with durable crash recovery.
-
-    CLI stdout stays in memory. A unique label lets finally recover the session
-    ID if issuance committed but the CLI timed out before returning JSON.
-    """
-    label = "aac-acp-" + uuid.uuid4().hex
-    recover_pending(cli, base)
-    path = base / "userdata/aac-pending-sessions" / (label + ".json")
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock = path.with_suffix(".lock")
-    handle = os.fdopen(os.open(lock, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600), "r+b")
+    """A killed issuer or helper leaves at most a 60s bearer, with no files."""
     session_id = None
-    attempted = False
-
-    def auth(args, timeout=30):
-        return auth_command(cli, base, args, timeout)
-
     try:
-        handle.write(b"0")
-        handle.flush()
-        lock_pending(handle)
-        timeout = remaining(deadline)
-        write_private_json(path, {"label": label})
-        attempted = True
         try:
-            ttl = str(max(1, math.ceil(deadline - time.monotonic()))) + "s"
-            issued = json.loads(auth(["issue", "--scope", "providers:manage", "--scope",
-                                      "orchestration:read", "--ttl", ttl, "--label", label,
-                                      "--json"], timeout))
+            issued = json.loads(auth_command(cli, base, [
+                "issue", "--scope", "providers:manage", "--scope", "orchestration:read",
+                "--ttl", str(SESSION_TTL) + "s", "--label", "aac-acp", "--json",
+            ], remaining(deadline, 15)))
             session_id = issued["sessionId"]
-            token = issued["token"]
-            if (not isinstance(session_id, str) or not session_id or
-                    not isinstance(token, str) or not token or "\r" in token or "\n" in token):
+            if not isinstance(session_id, str) or not session_id:
+                session_id = None
                 raise ValueError()
-            write_private_json(path, {"label": label, "sessionId": session_id})
+            _known_sessions[session_id] = (cli, base)
+            token = issued["token"]
+            if not isinstance(token, str) or not token or "\r" in token or "\n" in token:
+                raise ValueError()
         except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
             raise UpdateFailure("t3_auth_failed") from None
         yield token
     finally:
+        if session_id:
+            revoke_session(cli, base, session_id)
+            _known_sessions.pop(session_id, None)
+
+
+class InstallRpc:
+    """Renew bearer connections; only subscriptions may be replayed, never start."""
+
+    def __init__(self, cli, base, origin, deadline):
+        self.cli, self.base, self.origin, self.deadline = cli, base, origin, deadline
+        self.stack = contextlib.ExitStack()
+        self.client = None
+
+    def close(self):
+        self.stack.close()
+        self.client = None
+
+    def due(self):
+        return time.monotonic() >= self.renew_at and time.monotonic() < self.deadline
+
+    def refresh(self):
+        if self.client is not None and not self.due():
+            return
+        self.close()
+        remaining(self.deadline)
+        self.renew_at = min(self.deadline, time.monotonic() + RENEW_AFTER)
         try:
-            if attempted:
-                try:
-                    revoke_pending(cli, base, path)
-                except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
-                    raise UpdateFailure("t3_auth_failed") from None
-        finally:
-            handle.close()
-            if not path.exists():
-                with contextlib.suppress(OSError):
-                    lock.unlink(missing_ok=True)
+            token = self.stack.enter_context(bearer(self.cli, self.base, self.renew_at))
+            self.client = self.stack.enter_context(contextlib.closing(Rpc(self.origin, token, self.renew_at)))
+        except BaseException:
+            self.close()
+            raise
+
+    def call(self, method, payload):
+        self.refresh()
+        return self.client.call(method, payload)
+
+    def subscribe(self, instance):
+        while True:
+            self.refresh()
+            client = self.client
+            identifier = None
+            try:
+                identifier = client.request("provider.install.subscribe", {"instanceId": instance})
+                for state in client.receive(identifier):
+                    if self.due():
+                        break
+                    yield state
+                else:
+                    return
+            except (UpdateFailure, OSError) as error:
+                if (not self.due() or
+                        isinstance(error, UpdateFailure) and error.code != "t3_install_timeout"):
+                    raise
+            finally:
+                if identifier is not None:
+                    with contextlib.suppress(UpdateFailure, OSError):
+                        client.send({"_tag": "Interrupt", "requestId": identifier, "interruptors": []})
+            # Resubscribe to this instance's snapshot; the caller checks the
+            # original operationId/version on every state, including renewals.
 
 
 class Rpc:

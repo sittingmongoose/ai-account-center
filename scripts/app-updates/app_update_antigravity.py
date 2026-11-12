@@ -79,12 +79,7 @@ def detect_antigravity_acp(host):
 
 
 def install_state(client, instance):
-    identifier = client.request("provider.install.subscribe", {"instanceId": instance})
-    try:
-        yield from client.receive(identifier)
-    finally:
-        with contextlib.suppress(UpdateFailure, OSError):
-            client.send({"_tag": "Interrupt", "requestId": identifier, "interruptors": []})
+    yield from client.subscribe(instance)
 
 
 def checked_state(value):
@@ -103,48 +98,47 @@ def update_antigravity_acp(install, deadline=None, progress=None):
         return result(install.app_id, install.platform, "failed", before, before, install.manager, "unsupported")
     try:
         cli, base, origin = t3_rpc.discover(install.platform)
-        with t3_rpc.bearer(cli, base, deadline) as token:
-            with contextlib.closing(t3_rpc.Rpc(origin, token, deadline)) as client:
-                config = client.call("server.getConfig", {})
-                instances = [p["instanceId"] for p in config.get("providers", [])
-                             if p.get("driver") == "antigravity" and p.get("setup", {}).get("canInstall")]
-                if not instances:
-                    raise UpdateFailure("t3_install_failed:provider_unavailable")
-                instance = instances[0]
-                # Learn the RUNNING server's pin, which can be newer than AAC's
-                # offline pin. Never issue start against an older T3 server.
-                with contextlib.closing(install_state(client, instance)) as states:
-                    initial = checked_state(next(states))
-                pin = initial["version"]
-                current = detect_antigravity_acp(install.platform)
-                if current is None or current.probe:
-                    raise UpdateFailure("t3_install_failed:readiness_unknown")
-                if version_tuple(current.version) >= max(version_tuple(pin), version_tuple(asset["version"])):
-                    code = "antigravity_acp_newer_kept" if version_tuple(current.version) > version_tuple(pin) else "current"
-                    return result(install.app_id, install.platform, "current", before, current.version, install.manager, code)
-                if version_tuple(pin) < version_tuple(asset["version"]):
-                    raise UpdateFailure("t3_install_failed:server_outdated")
-                if progress:
-                    progress("updating")
-                attempted = True
-                state = checked_state(client.call("provider.install.start", {"instanceId": instance}))
-                operation = state.get("operationId")
-                if not isinstance(operation, str) or not operation or state["version"] != pin:
-                    raise UpdateFailure("t3_install_failed:protocol")
-                with contextlib.closing(install_state(client, instance)) as states:
-                    while state["phase"] not in ("succeeded", "failed", "cancelled"):
-                        state = checked_state(next(states))
-                        if state.get("operationId") != operation or state["version"] != pin:
-                            raise UpdateFailure("t3_install_failed:operation_changed")
-                if state["phase"] != "succeeded":
-                    # Server messages can contain local paths or credentials.
-                    # Emit only a fixed reason, never arbitrary diagnostic text.
-                    raise UpdateFailure("t3_install_failed:" + ("cancelled" if state["phase"] == "cancelled" else "installer"))
-                final = detect_antigravity_acp(install.platform)
-                if final is None or final.probe or version_tuple(final.version) < version_tuple(pin):
-                    raise UpdateFailure("t3_install_failed:verification")
-                return result(install.app_id, install.platform, "updated", before, final.version,
-                              install.manager, "antigravity_acp_updated", attempted)
+        with contextlib.closing(t3_rpc.InstallRpc(cli, base, origin, deadline)) as client:
+            config = client.call("server.getConfig", {})
+            instances = [p["instanceId"] for p in config.get("providers", [])
+                         if p.get("driver") == "antigravity" and p.get("setup", {}).get("canInstall")]
+            if not instances:
+                raise UpdateFailure("t3_install_failed:provider_unavailable")
+            instance = instances[0]
+            # Learn the RUNNING server's pin, which can be newer than AAC's
+            # offline pin. Never issue start against an older T3 server.
+            with contextlib.closing(install_state(client, instance)) as states:
+                initial = checked_state(next(states))
+            pin = initial["version"]
+            current = detect_antigravity_acp(install.platform)
+            if current is None or current.probe:
+                raise UpdateFailure("t3_install_failed:readiness_unknown")
+            if version_tuple(current.version) >= max(version_tuple(pin), version_tuple(asset["version"])):
+                code = "antigravity_acp_newer_kept" if version_tuple(current.version) > version_tuple(pin) else "current"
+                return result(install.app_id, install.platform, "current", before, current.version, install.manager, code)
+            if version_tuple(pin) < version_tuple(asset["version"]):
+                raise UpdateFailure("t3_install_failed:server_outdated")
+            if progress:
+                progress("updating")
+            attempted = True
+            state = checked_state(client.call("provider.install.start", {"instanceId": instance}))
+            operation = state.get("operationId")
+            if not isinstance(operation, str) or not operation or state["version"] != pin:
+                raise UpdateFailure("t3_install_failed:protocol")
+            with contextlib.closing(install_state(client, instance)) as states:
+                while state["phase"] not in ("succeeded", "failed", "cancelled"):
+                    state = checked_state(next(states))
+                    if state.get("operationId") != operation or state["version"] != pin:
+                        raise UpdateFailure("t3_install_failed:operation_changed")
+            if state["phase"] != "succeeded":
+                # Server messages can contain local paths or credentials.
+                # Emit only a fixed reason, never arbitrary diagnostic text.
+                raise UpdateFailure("t3_install_failed:" + ("cancelled" if state["phase"] == "cancelled" else "installer"))
+            final = detect_antigravity_acp(install.platform)
+            if final is None or final.probe or version_tuple(final.version) < version_tuple(pin):
+                raise UpdateFailure("t3_install_failed:verification")
+            return result(install.app_id, install.platform, "updated", before, final.version,
+                          install.manager, "antigravity_acp_updated", attempted)
     except (UpdateFailure, OSError, ValueError, TypeError, KeyError, AttributeError, StopIteration) as error:
         refreshed = detect_antigravity_acp(install.platform)
         after = refreshed.version if refreshed else None
