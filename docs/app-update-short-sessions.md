@@ -91,6 +91,20 @@ two-second exit watchdog covers process-creation stalls. Neither path waits on
 workers. Hard termination relies on the accepted TTL, at most 15 minutes from
 issuance. No future run is required to expire credentials.
 
+### Accepted residual: a signal during issuance
+
+A signal that arrives after T3 has saved a new session but before
+`t3 auth session issue` prints it (T3 `SessionStore.ts` ~709 commits before
+`cli/auth.ts` ~184-190 replies) finds no known session to revoke, so the helper
+exits and that session stays valid until its TTL, at most 15 minutes. The Sol
+6.1 max review of 2f893548 reproduced it offline (`app_update_t3_rpc.py` ~180,
+signal cleanup, against ~234, where the issued session is registered). This is
+the force-stop risk Jared accepted on decision card ACP-KEY: "If an update is
+force-stopped partway, its key stays usable for up to 15 minutes." A full fix
+cannot fit the one-second signal budget, because finding the session by its
+label means starting another T3 CLI. pm7-build recorded it as an accepted
+residual on 2026-11-12 at 22:36Z, with no further fix round.
+
 Tokens stay in memory and the loopback Authorization header, never argv, AAC
 files, logs, exceptions or row output. Only the ACP row contacts T3; stopped T3
 does not delay other rows. AAC never writes the runtime or `active.json`.
