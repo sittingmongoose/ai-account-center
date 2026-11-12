@@ -6,12 +6,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1371 |
+| Sync fs occurrences (all) | 1377 |
 | Sync fs files affected (all) | 137 |
-| Sync fs occurrences (runtime hotpaths) | 712 |
+| Sync fs occurrences (runtime hotpaths) | 718 |
 | Sync fs files affected (runtime hotpaths) | 78 |
-| Legacy shim markers | 221 |
-| Legacy shim files affected | 75 |
+| Legacy shim markers | 235 |
+| Legacy shim files affected | 78 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -21,12 +21,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/management/shared-manager/diverged-file-adopter.ts` | 29 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync |
 | `src/web-server/usage/analytics-request-plan.ts` | 28 | existsSync, realpathSync, statSync |
 | `src/management/shared-manager/migrations.ts` | 25 | copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, writeFileSync |
+| `src/web-server/services/app-update-service.ts` | 20 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync |
+| `src/web-server/services/dashboard-preferences.ts` | 19 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync |
 | `src/web-server/services/usage-failover-cache.ts` | 19 | closeSync, fstatSync, lstatSync, mkdirSync, opendirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync |
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
 | `src/management/shared-manager/plugin-layout-internals.ts` | 18 | copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync |
 | `src/web-server/status/answer-signing.ts` | 18 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync |
-| `src/web-server/status/writer-lock.ts` | 18 | closeSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync |
-| `src/cliproxy/accounts/registry.ts` | 17 | existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync |
 
 ## Top Legacy Shim Marker Files
 
@@ -38,10 +38,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/utils/config-manager.ts` | 13 |
 | `src/config/schemas/websearch.ts` | 10 |
 | `src/commands/bar/native-app-paths.ts` | 8 |
+| `src/web-server/services/app-update-service.ts` | 8 |
 | `src/auth/profile-registry.ts` | 5 |
 | `src/codex-auth/commands/import-default-command.ts` | 5 |
 | `src/commands/bar/launch-descriptor.ts` | 5 |
-| `src/cliproxy/ai-providers/model-id-normalizer.ts` | 4 |
 
 ## Explicit Shim/Re-export Files
 
@@ -94,8 +94,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/usage-failover-service.ts` | 999 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 990 |
-| `src/web-server/status/status-collectors.ts` | 976 |
-| `src/web-server/services/analytics-remote-sources.ts` | 957 |
+| `src/web-server/status/status-collectors.ts` | 986 |
+| `src/web-server/services/analytics-remote-sources.ts` | 958 |
 | `src/web-server/services/account-dashboard-service.ts` | 941 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
