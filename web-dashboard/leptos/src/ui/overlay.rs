@@ -512,6 +512,11 @@ pub fn OverlayPortal(
                 };
                 if let Some(destination) = update.before.destination(observed_root.as_ref()) {
                     focus(&destination);
+                } else if let Ok(Some(dialog)) = observed_root.query_selector("[role='dialog']") {
+                    if let Ok(dialog) = dialog.dyn_into::<web_sys::HtmlElement>() {
+                        let _ = dialog.set_attribute("tabindex", "-1");
+                        focus(&dialog);
+                    }
                 }
             });
         if let Ok(observer_value) =
