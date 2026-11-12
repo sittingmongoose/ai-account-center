@@ -167,6 +167,10 @@ class AcpTests(Fixtures):
     def fake_t3(self, install, phase="succeeded", pin="1.4.5", failure=None, installed="1.4.5"):
         import app_update_t3_rpc as rpc
         self.calls, self.auth, self.connections = [], [], []
+        self.failure = failure
+        self.clock = [100]
+        if failure in ("auth", "timeout"):
+            self.stack.enter_context(mock.patch.object(rpc.time, "monotonic", side_effect=lambda: self.clock[0]))
         state = {"driver": "antigravity", "operationId": "op", "phase": "idle", "version": pin}
         owner = self
         old = install.path / "versions" / ("a" * 64)
@@ -190,6 +194,7 @@ class AcpTests(Fixtures):
             self.auth.append(argv)
             if "issue" in argv:
                 if failure == "auth":
+                    self.clock[0] += 30
                     raise common.UpdateFailure(output=self.TOKEN)
                 return json.dumps({"sessionId": "fixture-session", "token": self.TOKEN})
             if "list" in argv:
@@ -220,6 +225,7 @@ class AcpTests(Fixtures):
                     yield state
                 else:
                     if failure == "timeout":
+                        owner.clock[0] += 30
                         raise TimeoutError(owner.TOKEN)
                     if failure == "denied":
                         raise common.UpdateFailure("t3_auth_failed", output=owner.TOKEN)
@@ -230,7 +236,7 @@ class AcpTests(Fixtures):
         self.stack.enter_context(mock.patch.object(rpc, "discover", return_value=(["fake-t3"], self.root, "fake-origin")))
         self.stack.enter_context(mock.patch.object(rpc, "command", side_effect=auth))
         self.stack.enter_context(mock.patch.object(rpc, "Rpc", Client))
-        self.stack.enter_context(mock.patch.object(rpc, "revoke_session", side_effect=lambda cli, base, identifier: auth([*cli, "auth", "session", "revoke", identifier])))
+        self.stack.enter_context(mock.patch.object(rpc, "revoke_session", side_effect=lambda cli, base, identifier, timeout=5: (auth([*cli, "auth", "session", "revoke", identifier]), True)[1]))
         # Trap opens AND atomic replacements. Only the fake T3 writer is allowed.
         original_open, original_os_open, original_replace = pathlib.Path.open, os.open, os.replace
         def path_open(path, mode="r", *args, **kwargs):
@@ -253,12 +259,12 @@ class AcpTests(Fixtures):
         import io
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            row = acp.update_antigravity_acp(install)
+            row = acp.update_antigravity_acp(install, deadline=time.monotonic() + 20 if self.failure in ("auth", "timeout") else None)
         self.assertNotIn(self.TOKEN, out.getvalue() + err.getvalue() + json.dumps(row))
         return row
 
     def assert_revoked(self):
-        self.assertEqual(sum("revoke" in argv for argv in self.auth), 1)
+        self.assertEqual(sum("revoke" in argv for argv in self.auth), sum("issue" in argv for argv in self.auth))
         issue = next(argv for argv in self.auth if "issue" in argv)
         self.assertEqual([issue[i + 1] for i, arg in enumerate(issue) if arg == "--scope"],
                          ["providers:manage", "orchestration:read"])

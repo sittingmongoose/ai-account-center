@@ -29,3 +29,11 @@ identity; `test_main_keeps_streamed_rows_after_an_unexpected_coordinator_failure
 hardcodes Ubuntu. All three reproduce from untouched `f00551bd` source and tests
 in a separate fixture. They remain part of the broad Python portability issue
 above; the changed-module and scheduler suites pass on Windows.
+
+R6 rotation recheck on AlexisGamingPC: the helper-sync corrupt-archive check
+passes with a 30-second timeout; the same Windows ACL inspection still exits 1
+(nine helper-sync tests pass). The unchanged T3 Python suite again ends in
+KeyboardInterrupt in the existing scheduling fixture after Windows portability
+failures. These remain the existing tool-batch items; no new false pass or
+product bug was demonstrated by these checks. The ten other relevant Bun files
+pass (124 tests, three platform skips).

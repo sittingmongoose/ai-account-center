@@ -28,20 +28,35 @@ requires a new connection.
 ## Lifetime and renewal
 
 Each `t3 auth session issue` receives `--ttl 60s` and only `providers:manage`
-and `orchestration:read`. Rotation is scheduled 30 seconds after starting
-issuance, independent of the install's 900-second maximum. The issue command
-has a 15-second bound and loopback connection a 10-second bound. A 60-second
-TTL leaves startup and scheduling margin beyond the 30-second rotation point;
-a 30-second TTL would consume that margin. The overall install deadline caps
-all these operations.
+and `orchestration:read`. Rotation normally starts 30 seconds after issuance
+starts. Measured issuance duration advances renewal to reserve startup time
+plus 12 seconds for handshake and scheduling. Issue timeouts start at 30 seconds
+and increase on retries; exponential backoff caps at eight seconds. The overall
+install deadline caps every attempt and wait.
 
-AAC connects immediately, uses that connection for config/start/subscriptions,
-and closes and best-effort revokes it when rotation is due. It issues the next
-60-second bearer, reconnects and subscribes to the same provider instance.
+AAC issues and connects the replacement before closing the previous socket.
+If renewal crosses expiry, T3 keeps installing and AAC reconnects to recover
+the subscription. Normal revocation checks CLI success with a five-second
+budget. Failures remain in memory and retry every two seconds until revoked
+or expired, including after RPC cleanup. Signal budgets remain unchanged.
+
+Start requires ten seconds of remaining connection lifetime, rotating first
+when needed. Its reply can cross the renewal point but cannot outlive the
+credential. An ambiguous reply recovers through subscription without replaying
+start. The prior completed operation is rejected; a new operation or an already
+running operation is followed.
 [providerInstallation.ts:108-125](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/providerInstallation.ts#L108-L125)
 exposes subscriptions by instance. AAC checks the original operation ID and
 pinned version on every subsequent snapshot, including after reconnect.
 `provider.install.start` is never replayed, even if its reply is lost.
+
+[AntigravityInstallation.ts:707-762](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/AntigravityInstallation.ts#L707-L762)
+returns an existing running operation or creates a new ID and updates state
+before returning. Line 758 forks installation in the service scope.
+[Lines 869-870](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/AntigravityInstallation.ts#L869-L870)
+expose state and SubscriptionRef changes. Subscription by instance needs no
+operation ID and supplies the latest snapshot, including completion while
+disconnected.
 
 A killed helper, a lost issue reply or a failed revoke leaves a credential
 with at most 60 seconds of validity from issuance. No later apply is needed.

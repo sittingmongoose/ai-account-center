@@ -113,6 +113,7 @@ class FakeAuthStore:
         self.rows[identifier]["revoked"] = True
         self.events.append(("revoke", identifier))
         self.save()
+        return True
 
     def save(self):
         if self.path:
@@ -286,7 +287,7 @@ class AuthTests(unittest.TestCase):
                 client.call("provider.install.start", {})
                 with contextlib.closing(acp.install_state(client, "agy")) as states:
                     self.assertEqual(next(states), {"operationId": "op", "phase": "succeeded"})
-                self.assertEqual(store.events, [("issue", "session-1"), ("revoke", "session-1"), ("issue", "session-2")])
+                self.assertEqual(store.events, [("issue", "session-1"), ("issue", "session-2"), ("revoke", "session-1")])
             self.assertTrue(all(row["revoked"] for row in store.rows.values()))
         self.assertEqual(len(connections), 2)
         self.assertEqual(sum(method == "provider.install.start" for method, _ in calls), 1)
@@ -295,7 +296,7 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(connections[1].deadline, 160)
 
     def test_issuance_errors_are_sanitized_and_never_enumerate_or_recover(self):
-        for reply in (common.UpdateFailure(output=TOKEN), TOKEN, json.dumps({"sessionId": "known", "token": "\r" + TOKEN})):
+        for reply in (TOKEN, json.dumps({"sessionId": "known", "token": "\r" + TOKEN})):
             with self.subTest(reply=type(reply).__name__), mock.patch.object(rpc, "auth_command", side_effect=[reply]) as auth, mock.patch.object(rpc, "revoke_session") as revoke:
                 with self.assertRaises(common.UpdateFailure) as raised:
                     with rpc.bearer(["fake"], self.base, time.monotonic() + 900): self.fail("invalid issue")
@@ -312,14 +313,14 @@ class AuthTests(unittest.TestCase):
                     with rpc.bearer(["fake"], self.base, time.monotonic() + 90):
                         if failure: raise failure
                 except BaseException as error: self.assertIs(error, failure)
-                revoke.assert_called_once_with(["fake"], self.base, "session")
+                revoke.assert_called_once_with(["fake"], self.base, "session", rpc.ROTATION_REVOKE_TIMEOUT)
 
     def test_revoke_timeout_never_uses_common_cleanup_or_waits_again(self):
         process = mock.Mock()
         process.wait.side_effect = subprocess.TimeoutExpired("fake", 1)
         process.poll.return_value = None
         with mock.patch.object(rpc.subprocess, "Popen", return_value=process) as spawn, mock.patch.object(rpc, "command") as command:
-            rpc.revoke_session(["fake"], self.base, "session")
+            rpc.revoke_session(["fake"], self.base, "session", timeout=1)
         process.wait.assert_called_once_with(timeout=1)
         process.kill.assert_called_once()
         command.assert_not_called()
