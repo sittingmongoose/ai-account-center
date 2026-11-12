@@ -30,8 +30,17 @@ fn focus(el: &web_sys::HtmlElement) {
 }
 
 fn lock(id: u64, scroll: bool) {
-    STACK.with(|s| s.borrow_mut().push((id, scroll)));
+    // A changing modal policy updates this token without changing opening/stack order.
+    STACK.with(|s| {
+        let mut stack = s.borrow_mut();
+        if let Some(entry) = stack.iter_mut().find(|(n, _)| *n == id) {
+            entry.1 = scroll;
+        } else {
+            stack.push((id, scroll));
+        }
+    });
     if !scroll {
+        release_scroll();
         return;
     }
     LOCK.with(|slot| {
@@ -86,12 +95,12 @@ fn lock(id: u64, scroll: bool) {
 }
 
 fn unlock(id: u64) {
-    let empty = STACK.with(|s| {
-        let mut s = s.borrow_mut();
-        s.retain(|(n, _)| *n != id);
-        !s.iter().any(|(_, locked)| *locked)
-    });
-    if !empty {
+    STACK.with(|s| s.borrow_mut().retain(|(n, _)| *n != id));
+    release_scroll();
+}
+
+fn release_scroll() {
+    if STACK.with(|s| s.borrow().iter().any(|(_, locked)| *locked)) {
         return;
     }
     LOCK.with(|slot| {
@@ -372,8 +381,39 @@ fn repair_top_focus() {
 pub fn OverlayPortal(
     children: ChildrenFn,
     #[prop(optional)] on_close: Option<Callback<()>>,
-    #[prop(default = true)] trap_focus: bool,
-    #[prop(default = true)] lock_scroll: bool,
+    #[prop(default = true.into(), into)] trap_focus: Signal<bool>,
+    #[prop(default = true.into(), into)] lock_scroll: Signal<bool>,
+) -> impl IntoView {
+    let children = StoredValue::new(children);
+    // Routes stay mounted under hidden containers. A body portal needs its own route lifetime.
+    // Once retired it cannot reappear on Forward, even if a busy owner's close callback is deferred.
+    let retired = RwSignal::new(false);
+    if let Some(frame) = use_context::<crate::frame::FrameCtx>() {
+        let route = frame.route.get_untracked();
+        Effect::new(move |_| {
+            if frame.route.get() != route {
+                retired.set(true);
+                if let Some(close) = on_close {
+                    close.run(());
+                }
+            }
+        });
+    }
+    view! {
+        <Show when=move || !retired.get()>
+            <OverlaySurface on_close=on_close trap_focus=trap_focus lock_scroll=lock_scroll>
+                {children.with_value(|f| f())}
+            </OverlaySurface>
+        </Show>
+    }
+}
+
+#[component]
+fn OverlaySurface(
+    children: ChildrenFn,
+    on_close: Option<Callback<()>>,
+    trap_focus: Signal<bool>,
+    lock_scroll: Signal<bool>,
 ) -> impl IntoView {
     let id = NEXT.with(|n| {
         n.set(n.get() + 1);
@@ -385,7 +425,8 @@ pub fn OverlayPortal(
             .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok()),
     );
     let node = NodeRef::<leptos::html::Div>::new();
-    lock(id, lock_scroll);
+    lock(id, lock_scroll.get_untracked());
+    Effect::new(move |_| lock(id, lock_scroll.get()));
     let backwards = StoredValue::new(false);
     let last_focus = StoredValue::new_local(None::<web_sys::HtmlElement>);
     let preparing_reverse = StoredValue::new(false);
@@ -393,7 +434,7 @@ pub fn OverlayPortal(
     let repair: Rc<dyn Fn()> = {
         let memory = memory.clone();
         Rc::new(move || {
-            if !trap_focus || !top_overlay(id) || preparing_reverse.get_value() {
+            if !trap_focus.get_untracked() || !top_overlay(id) || preparing_reverse.get_value() {
                 return;
             }
             let Some(root) = node.get_untracked() else {
@@ -430,7 +471,10 @@ pub fn OverlayPortal(
         let pending = pending.clone();
         Rc::new(move |update_id: u64| {
             pending.borrow_mut().take();
-            if !trap_focus || !top_overlay(id) || !document().has_focus().unwrap_or(false) {
+            if !trap_focus.get_untracked()
+                || !top_overlay(id)
+                || !document().has_focus().unwrap_or(false)
+            {
                 return;
             }
             let Some(root) = node.get_untracked() else {
@@ -481,7 +525,7 @@ pub fn OverlayPortal(
         let observed_root = root.clone();
         let callback =
             Closure::<dyn Fn(js_sys::Array, web_sys::MutationObserver)>::new(move |records, _| {
-                if !trap_focus
+                if !trap_focus.get_untracked()
                     || !top_overlay(id)
                     || preparing_reverse.get_value()
                     || !document().has_focus().unwrap_or(false)
@@ -560,7 +604,7 @@ pub fn OverlayPortal(
                 close.run(());
             }
         } else if e.key() == "Tab"
-            && trap_focus
+            && trap_focus.get_untracked()
             && !e.default_prevented()
             && !e.ctrl_key()
             && !e.alt_key()
@@ -602,7 +646,7 @@ pub fn OverlayPortal(
     let focus_memory = memory.clone();
     let focus_pending = pending.clone();
     let containment = Closure::<dyn Fn(web_sys::FocusEvent)>::new(move |e: web_sys::FocusEvent| {
-        if !trap_focus || !top_overlay(id) || preparing_reverse.get_value() {
+        if !trap_focus.get_untracked() || !top_overlay(id) || preparing_reverse.get_value() {
             return;
         }
         let Some(root) = node.get_untracked() else {
@@ -732,8 +776,16 @@ pub fn OverlayPortal(
         unlock(id);
         if was_top {
             if let Some(Some(el)) = previous.try_get_value() {
-                if el.is_connected() {
+                if el.is_connected() && el.get_bounding_client_rect().width() > 0.0 {
                     focus(&el);
+                } else if let Ok(links) = document().query_selector_all("a[aria-current='page']") {
+                    // The trigger's route is gone. Return to a visible destination, never its hidden button.
+                    if let Some(link) = (0..links.length())
+                        .filter_map(|n| links.item(n)?.dyn_into::<web_sys::HtmlElement>().ok())
+                        .find(|link| link.get_bounding_client_rect().width() > 0.0)
+                    {
+                        focus(&link);
+                    }
                 }
             }
             repair_top_focus();
@@ -741,9 +793,9 @@ pub fn OverlayPortal(
     });
     view! {
         <Portal><div class="overlay-root" style:z-index=(70 + id).to_string() node_ref=node>
-            {trap_focus.then(|| view! { <span class="overlay-focus-guard" tabindex="0" aria-hidden="true" data-overlay-guard="start"></span> })}
+            <Show when=move || trap_focus.get()><span class="overlay-focus-guard" tabindex="0" aria-hidden="true" data-overlay-guard="start"></span></Show>
             {children()}
-            {trap_focus.then(|| view! { <span class="overlay-focus-guard" tabindex="0" aria-hidden="true" data-overlay-guard="end"></span> })}
+            <Show when=move || trap_focus.get()><span class="overlay-focus-guard" tabindex="0" aria-hidden="true" data-overlay-guard="end"></span></Show>
         </div></Portal>
     }
 }

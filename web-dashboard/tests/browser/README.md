@@ -137,3 +137,10 @@ leaving deliverables for Close releases the outer order. Captions and row data u
 Task/stage rows have no intrinsic Tab stops: those two cases explicitly add fixture-only tabindex to test
 focus/identity without adding product controls. The task-group case uses its actual Fewer button. All
 collection roots bind the id returned by the same `hold_order` helper; keys remain separate from live data.
+
+`frames/duo-portals.check.mjs` (`--grep duo-portals`) covers live folded/unfolded popover placement,
+reactive modal policy, delayed inset-only changes, browser Back/Forward and keyboard route departure,
+and overlay-local exact-token hover/touch tips. It also exercises pose and route lifetimes for pins,
+viewers, Details, activation dialogs and Scoreboard model sheets. Routes keep their page state while
+open body portals retire on departure; Forward cannot resurrect a retired opening. The fixture server
+serves the same committed computers.json as the product, without a reviewer-only routing wrapper.

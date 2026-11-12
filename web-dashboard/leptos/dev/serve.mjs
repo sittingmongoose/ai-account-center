@@ -71,6 +71,7 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(html);
   } else if (p === '/status-bar.css') file(res, path.join(dashboard, 'public/status-bar.css'));
   else if (/^\/[a-z-]+\.mjs$/.test(p)) file(res, path.join(dashboard, 'public', path.basename(p)));
+  else if (p === '/computers.json') file(res, path.join(dashboard, 'public/computers.json'));
   else if (p === '/manifest.webmanifest') file(res, path.join(dashboard, 'public', 'manifest.webmanifest'));
   else if (p === '/api/auth/check') json(res, 200, { authenticated: true, authRequired: true, username: 'fixture', accessMode: 'password' });
   else if (p === '/api/auth/setup') json(res, 200, { configured: true, sessionTimeoutHours: 720 });

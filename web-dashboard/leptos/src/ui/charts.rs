@@ -535,7 +535,21 @@ pub fn TipLayer(children: Children) -> impl IntoView {
         }
     };
     let hide = window_event_listener(leptos::ev::scroll, move |_| text.set(String::new()));
-    on_cleanup(move || hide.remove());
+    let layout = Closure::<dyn Fn()>::new(move || text.set(String::new()));
+    let _ = window().add_event_listener_with_callback(
+        super::device::LAYOUT_EVENT,
+        layout.as_ref().unchecked_ref(),
+    );
+    let layout = StoredValue::new_local(Some(layout));
+    on_cleanup(move || {
+        hide.remove();
+        if let Some(Some(layout)) = layout.try_update_value(|v| v.take()) {
+            let _ = window().remove_event_listener_with_callback(
+                super::device::LAYOUT_EVENT,
+                layout.as_ref().unchecked_ref(),
+            );
+        }
+    });
     view! {
         <div class="tip-scope" on:pointerover=over on:pointerup=up on:pointerleave=move |_| text.set(String::new())>
             {children()}
@@ -589,6 +603,7 @@ pub fn Popover(
     let label = StoredValue::new(label);
     let width = width.unwrap_or(320) as f64;
     let style = RwSignal::new(String::new());
+    let phone = RwSignal::new(false);
     let panel = NodeRef::<leptos::html::Div>::new();
     let viewport = || {
         window()
@@ -601,6 +616,7 @@ pub fn Popover(
     // the anchor has left the window.
     let place = move || {
         let vw = viewport();
+        phone.set(vw < 600.0);
         let Some(el) = anchor.element().filter(|_| vw >= 600.0) else {
             style.set(String::new());
             return true;
@@ -660,18 +676,37 @@ pub fn Popover(
             open.set(false);
         }
     });
+    // Device geometry is published after its guarded inset/chrome update, including late edge-only changes.
+    let layout = Closure::<dyn Fn()>::new(move || {
+        if open.get_untracked() && !place() {
+            open.set(false);
+        }
+    });
+    let _ = window().add_event_listener_with_callback(
+        super::device::LAYOUT_EVENT,
+        layout.as_ref().unchecked_ref(),
+    );
+    let layout = StoredValue::new_local(Some(layout));
     on_cleanup(move || {
         outside.remove();
         scrolled.remove();
+        if let Some(Some(layout)) = layout.try_update_value(|v| v.take()) {
+            let _ = window().remove_event_listener_with_callback(
+                super::device::LAYOUT_EVENT,
+                layout.as_ref().unchecked_ref(),
+            );
+        }
     });
     view! {
         <Show when=move || open.get()>
-            <OverlayPortal on_close=close lock_scroll=viewport() < 600.0 trap_focus=viewport() < 600.0>
+            <OverlayPortal on_close=close lock_scroll=Signal::derive(move || phone.get()) trap_focus=Signal::derive(move || phone.get())>
+            <TipLayer>
             <div class="pop-scrim" on:click=move |_| open.set(false)></div>
-            <div class="pop" node_ref=panel role="dialog" aria-label=label.get_value() style=move || style.get()>
+            <div class="pop" node_ref=panel role="dialog" aria-modal=move || phone.get().to_string() aria-label=label.get_value() style=move || style.get()>
                 <div class="pop-grab" aria-hidden="true"></div>
                 {children.with_value(|f| f())}
             </div>
+            </TipLayer>
             </OverlayPortal>
         </Show>
     }

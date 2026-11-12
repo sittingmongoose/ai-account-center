@@ -330,6 +330,10 @@ fn measure(probe: &web_sys::HtmlElement) -> Insets {
 }
 
 /// Follows both the viewport and the env() padding probe, including late launch/resume insets without a resize.
+/// Fired only after the effective viewport/chrome/insets change, after all safe CSS variables are written.
+/// Anchored overlays follow this same guarded geometry decision (including delayed inset-only changes).
+pub const LAYOUT_EVENT: &str = "aac-layout";
+
 pub fn start(embed: bool) {
     let doc = document();
     let root: web_sys::HtmlElement = match doc.document_element().and_then(|e| e.dyn_into().ok()) {
@@ -388,7 +392,9 @@ pub fn start(embed: bool) {
             .map(|e| e.client_width() as f64)
             .unwrap_or(0.0)
     };
+    let geometry = std::rc::Rc::new(std::cell::Cell::new(None));
     let apply = {
+        let geometry = geometry.clone();
         let read_insets = read_insets.clone();
         let seen = seen.clone();
         move |trigger: &str| {
@@ -462,6 +468,12 @@ pub fn start(embed: bool) {
                 "--band-reserve",
                 &px(if chrome == "band" { 112.0 } else { 0.0 }),
             );
+            let current = (width, height, insets, chrome, side);
+            if geometry.replace(Some(current)) != Some(current) {
+                if let Ok(event) = web_sys::Event::new(LAYOUT_EVENT) {
+                    let _ = window().dispatch_event(&event);
+                }
+            }
         }
     };
     let apply = std::rc::Rc::new(apply);
