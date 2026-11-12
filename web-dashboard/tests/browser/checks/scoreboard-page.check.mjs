@@ -54,8 +54,14 @@ export const tests = {
 	async 'scoreboard desktop'(t) {
 		await t.viewport(1440, 900);
 		await openBoard(t);
-		await t.count('.pick', 5);
-		await t.count('.sb-matrix tbody tr', 8);
+		// Select explicitly: the page remembers the last view across visits.
+		await t.page.click('.seg button >> text=Our pipeline');
+		await t.page.waitForSelector('.seg button[aria-selected="true"]:has-text("Our pipeline")');
+		// f071ed486 regenerated the golden from the builder (no Review job); a8fa9814e
+		// excludes rows below the review bar. 822a060e9 updated the Rust fixture test;
+		// this browser expectation must follow the same three jobs and seven models.
+		await t.count('.pick', 3);
+		await t.count('.sb-matrix tbody tr', 7);
 		await t.text('.page-title', 'Model Scoreboard');
 		await t.check('the switch shares the title line', async () =>
 			t.page.evaluate(() => {
@@ -69,6 +75,9 @@ export const tests = {
 		await t.text('.detail-grid', /likely between 69% and 100%/);
 		await t.audit('scoreboard 1440');
 		await t.page.click('.seg button >> text=Puppet Master users');
+		await t.page.waitForSelector('.seg button[aria-selected="true"]:has-text("Puppet Master users")');
+		await t.count('.pick', 3);
+		await t.count('.sb-matrix tbody tr', 7);
 		await t.page.waitForFunction(() => /Recommended/.test(document.querySelector('.sb-matrix tbody')?.textContent || ''));
 		await t.page.click('.sb-matrix tbody tr:nth-child(2)');
 		await t.count('.sb-matrix tbody tr.sel', 1);
