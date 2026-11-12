@@ -236,7 +236,7 @@ class AcpTests(Fixtures):
             def send(self, message): pass
 
         self.stack.enter_context(mock.patch.object(rpc, "discover", return_value=(["fake-t3"], self.root, "fake-origin")))
-        self.stack.enter_context(mock.patch.object(rpc, "command", side_effect=auth))
+        self.stack.enter_context(mock.patch.object(rpc, "auth_command", side_effect=lambda cli, base, args, timeout=30: auth([*cli, "auth", "session", *args], timeout=timeout)))
         self.stack.enter_context(mock.patch.object(rpc, "Rpc", Client))
         self.stack.enter_context(mock.patch.object(rpc, "revoke_session", side_effect=lambda cli, base, identifier, timeout=5: (auth([*cli, "auth", "session", "revoke", identifier]), True)[1]))
         # Trap opens AND atomic replacements. Only the fake T3 writer is allowed.
@@ -395,8 +395,9 @@ class AcpTests(Fixtures):
         install, _ = self.old_acp("windows")
         self.fake_t3(install, failure="auth")
         row = self.run_update(install)
-        self.assertEqual((row["status"], row["messageCode"]), ("action_required", "t3_auth_failed"))
-        self.assertFalse(any("list" in argv for argv in self.auth))
+        self.assertEqual((row["status"], row["messageCode"]), ("failed", "t3_session_issue_unknown"))
+        self.assertEqual(sum("issue" in argv for argv in self.auth), 1)
+        self.assertTrue(any("list" in argv for argv in self.auth))
         self.assertFalse(any(method == "provider.install.start" for method, _ in self.calls))
 
     def test_false_success_is_rejected(self):

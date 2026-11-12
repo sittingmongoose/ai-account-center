@@ -104,7 +104,8 @@ class FakeAuthStore:
         assert [args[i + 1] for i, v in enumerate(args) if v == "--scope"] == ["providers:manage", "orchestration:read"]
         ttl = float(args[args.index("--ttl") + 1][:-1])
         identifier = "session-" + str(len(self.rows) + 1)
-        self.rows[identifier] = {"expires": self.now() + ttl, "revoked": False}
+        self.rows[identifier] = {"expires": self.now() + ttl, "revoked": False,
+                                 "label": args[args.index("--label") + 1]}
         self.events.append(("issue", identifier))
         self.save()
         return json.dumps({"sessionId": identifier, "token": TOKEN})
@@ -258,14 +259,45 @@ class AuthTests(unittest.TestCase):
                     self.assertLessEqual(row["expires"], kill_time + 900)
                     self.assertFalse(not row["revoked"] and kill_time + 900 < row["expires"])
 
-    def test_issuance_errors_are_sanitized_and_never_enumerate_or_recover(self):
+    def test_committed_timeout_never_reissues_or_starts_install(self):
+        for listing_available in (False, True):
+            store = FakeAuthStore(time.monotonic)
+            def command(cli, base, args, timeout=30):
+                if args[0] == "issue":
+                    store.command(cli, base, args, timeout)
+                    raise common.UpdateFailure("timeout")
+                self.assertEqual(args, ["list", "--json"])
+                if not listing_available:
+                    raise common.UpdateFailure("timeout")
+                return json.dumps([{"sessionId": key, "client": {"label": row["label"]}}
+                                   for key, row in store.rows.items()] +
+                                  [{"sessionId": "unrelated", "client": {"label": "aac-acp-other"}}])
+            with mock.patch.object(rpc, "auth_command", side_effect=command), mock.patch.object(rpc, "revoke_session", side_effect=store.revoke), mock.patch.object(rpc, "Rpc") as transport:
+                with contextlib.closing(rpc.InstallRpc(["fake"], self.base, None, time.monotonic() + 900)) as client:
+                    with self.assertRaisesRegex(common.UpdateFailure, "t3_session_issue_unknown"):
+                        client.call("provider.install.start", {})
+                transport.assert_not_called()
+            self.assertEqual(len(store.rows), 1)
+            self.assertEqual(store.valid("session-1", time.monotonic()), not listing_available)
+
+    def test_auth_command_distinguishes_spawn_failure_from_nonzero_exit(self):
+        with mock.patch.object(rpc.subprocess, "Popen", side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(common.UpdateFailure, "t3_cli_not_started"):
+                rpc.auth_command(["missing"], self.base, ["issue"])
+        child = mock.Mock(returncode=1)
+        child.communicate.return_value = (b"private fixture", None)
+        with mock.patch.object(rpc.subprocess, "Popen", return_value=child):
+            with self.assertRaisesRegex(common.UpdateFailure, "t3_auth_failed"):
+                rpc.auth_command(["fake"], self.base, ["issue"])
+
+    def test_issuance_errors_are_sanitized_and_cleaned_up(self):
         for reply in (TOKEN, json.dumps({"sessionId": "known", "token": "\r" + TOKEN})):
-            with self.subTest(reply=type(reply).__name__), mock.patch.object(rpc, "auth_command", side_effect=[reply]) as auth, mock.patch.object(rpc, "revoke_session") as revoke:
+            with self.subTest(reply=type(reply).__name__), mock.patch.object(rpc, "auth_command", side_effect=[reply, "[]"]) as auth, mock.patch.object(rpc, "revoke_session") as revoke:
                 with self.assertRaises(common.UpdateFailure) as raised:
                     with rpc.bearer(["fake"], self.base, time.monotonic() + 900): self.fail("invalid issue")
-                self.assertEqual(raised.exception.code, "t3_auth_failed")
+                self.assertEqual(raised.exception.code, "t3_session_issue_unknown" if reply == TOKEN else "t3_auth_failed")
                 self.assertNotIn(TOKEN, str(raised.exception))
-                self.assertEqual(auth.call_count, 1)
+                self.assertEqual(auth.call_count, 2 if reply == TOKEN else 1)
                 self.assertEqual(revoke.call_count, int(isinstance(reply, str) and reply.startswith("{")))
                 self.assertFalse(list(self.base.rglob("*")))
 

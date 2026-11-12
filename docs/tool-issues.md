@@ -46,3 +46,11 @@ and one Mac GUI race failure (failed/update_failed instead of quit_first).
 No ZCode implementation or fixture changed in R7. These join the existing
 Windows portability batch. Bun update checks have 133 passes, three skips and
 the existing ACL inspection failure; the final contract subset has 37 passes.
+
+R8 issuance recheck on AlexisGamingPC: the same Windows ACL inspection exits 1.
+Three Codex bridge launch fixtures also fail because their executable fixtures
+are Unix shell scripts. All four reproduce with unchanged `92874d7e` sources
+and tests (52 passes, four failures). No real false pass or new product bug was
+demonstrated; retain these in the Windows portability tool batch. Broad Python
+discovery again ends in existing Windows-incompatible T3 fixtures without a
+completed summary. Scoped issuance/RPC/ACP tests pass separately.

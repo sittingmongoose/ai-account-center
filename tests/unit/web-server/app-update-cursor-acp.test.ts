@@ -29,7 +29,11 @@ const rows = Object.keys(UPDATE_APP_LABELS).map((appId) => ({
 
 describe('Cursor CLI and T3 Antigravity ACP update rows', () => {
   it('reports unknown install state and unconfirmed revoke only as failed ACP rows', () => {
-    for (const messageCode of ['t3_install_state_unknown', 't3_session_revoke_failed'] as const) {
+    for (const messageCode of [
+      't3_install_state_unknown',
+      't3_session_revoke_failed',
+      't3_session_issue_unknown',
+    ] as const) {
       const row = { ...rows[0], status: 'failed', messageCode };
       expect(normalizeAppUpdateRow(row, 'antigravity-acp', 'windows').message).toBe(
         MESSAGES[messageCode]

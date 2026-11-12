@@ -17,8 +17,9 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import uuid
 
-from app_update_common import CREATE_NO_WINDOW, UpdateFailure, command, environment
+from app_update_common import CREATE_NO_WINDOW, UpdateFailure, command, environment, _stop_group
 
 
 def remaining(deadline, maximum=30):
@@ -85,9 +86,41 @@ def discover(host):
 
 
 def auth_command(cli, base, args, timeout=30):
-    return command([*cli, "auth", "session", *args, "--base-dir", str(base)],
-                   timeout=timeout, env=environment({"ELECTRON_RUN_AS_NODE": "1"}),
-                   capture=True, kill_tree=True)
+    # Keep spawn failure distinct: command() erases this evidence. Once Popen
+    # succeeds, every failure is potentially after the session-store commit.
+    options = {"creationflags": CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+    try:
+        process = subprocess.Popen(
+            [*cli, "auth", "session", *args, "--base-dir", str(base)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env=environment({"ELECTRON_RUN_AS_NODE": "1"}), **options,
+        )
+    except OSError:
+        raise UpdateFailure("t3_cli_not_started") from None
+    try:
+        output, _ = process.communicate(timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        _stop_group(process, tree=True)
+        raise UpdateFailure("t3_auth_failed") from None
+    except BaseException:
+        _stop_group(process, tree=True)
+        raise
+    if process.returncode or len(output) > 65536:
+        raise UpdateFailure("t3_auth_failed")
+    return output.decode("utf-8", "replace")
+
+
+def find_issued_session(cli, base, label):
+    """Best effort lookup after a lost reply; absence cannot prove no commit."""
+    try:
+        rows = json.loads(auth_command(cli, base, ["list", "--json"], FINAL_REVOKE_TIMEOUT))
+        matches = [row["sessionId"] for row in rows
+                   if row.get("client", {}).get("label") == label]
+        if len(matches) == 1 and isinstance(matches[0], str) and matches[0]:
+            return matches[0]
+    except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
 
 
 # One credential covers the whole run. Hard kills rely on the accepted 15m TTL.
@@ -171,21 +204,27 @@ def session_signals():
 
 @contextlib.contextmanager
 def bearer(cli, base, deadline):
-    """Issue once successfully; retry bounded CLI failures without renewal."""
+    """Retry only a proven spawn failure; never issue again after ambiguity."""
     session_id = None
+    label = "aac-acp-" + uuid.uuid4().hex
+    attempted = False
     try:
         try:
             backoff = 1
             while True:
                 ttl = remaining(deadline, SESSION_TTL)
                 try:
+                    attempted = True
                     reply = auth_command(cli, base, [
                         "issue", "--scope", "providers:manage", "--scope", "orchestration:read",
-                        "--ttl", str(ttl) + "s", "--label", "aac-acp", "--json",
-                    ], remaining(deadline, max(30, backoff * 15)))
+                        "--ttl", str(ttl) + "s", "--label", label, "--json",
+                    ], remaining(deadline, float("inf")))
                     issued = json.loads(reply)
                     break
-                except (UpdateFailure, OSError):
+                except UpdateFailure as error:
+                    if error.code != "t3_cli_not_started":
+                        raise
+                    attempted = False
                     time.sleep(remaining(deadline, backoff))
                     backoff = min(8, backoff * 2)
             session_id = issued["sessionId"]
@@ -197,6 +236,11 @@ def bearer(cli, base, deadline):
             if not isinstance(token, str) or not token or "\r" in token or "\n" in token:
                 raise ValueError()
         except (UpdateFailure, OSError, ValueError, KeyError, TypeError, AttributeError):
+            if attempted and not session_id:
+                session_id = find_issued_session(cli, base, label)
+                if session_id:
+                    _known_sessions[session_id] = (cli, base)
+                raise UpdateFailure("t3_session_issue_unknown") from None
             raise UpdateFailure("t3_auth_failed") from None
         yield token
     finally:

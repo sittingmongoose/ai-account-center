@@ -80,6 +80,8 @@ export const MESSAGES = {
     'Action required: the local T3 server or bundled CLI is unavailable. Start T3 and run Update apps again. AAC did not write its active runtime pointer.',
   t3_auth_failed:
     'Action required: T3 could not issue, authorize, or revoke the temporary update session. Check local T3 access, then run Update apps again.',
+  t3_session_issue_unknown:
+    'No T3 session in time; no install started. One session may stay valid up to 15 minutes. Check T3.',
   t3_install_state_unknown: 'Install state unknown, check T3.',
   t3_session_revoke_failed:
     'T3 session revocation could not be confirmed; the session expires within 15 minutes. Check T3.',

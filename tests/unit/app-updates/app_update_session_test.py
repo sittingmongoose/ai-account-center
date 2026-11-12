@@ -98,12 +98,22 @@ class SingleSessionTests(unittest.TestCase):
         self.assertIn('s', rpc._known_sessions)
 
     def test_issuance_retry_backoff_uses_remaining_deadline(self):
-        self.issue.side_effect = [UpdateFailure('command_timeout'), json.dumps({'sessionId': 's', 'token': 'private-fixture'})]
+        self.issue.side_effect = [UpdateFailure('t3_cli_not_started'), json.dumps({'sessionId': 's', 'token': 'private-fixture'})]
         with rpc.bearer([], None, 150): pass
         self.assertEqual(self.issue.call_count, 2)
-        self.assertEqual(self.issue.call_args_list[0].args[-1], 30)
-        self.assertEqual(self.issue.call_args_list[1].args[-1], 30)
+        self.assertEqual(self.issue.call_args_list[0].args[-1], 50)
+        self.assertEqual(self.issue.call_args_list[1].args[-1], 49)
         self.assertEqual(self.now, 101)
+
+    def test_slow_issue_gets_the_whole_remaining_deadline(self):
+        def issue(cli, base, args, timeout):
+            self.assertEqual(timeout, 900)
+            self.now += 120
+            return json.dumps({'sessionId': 's', 'token': 'private-fixture'})
+        self.issue.side_effect = issue
+        with rpc.bearer([], None, 1000): pass
+        self.issue.assert_called_once()
+        self.revoke.assert_called_once()
 
 
 if __name__ == '__main__': unittest.main()

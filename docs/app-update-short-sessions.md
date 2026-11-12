@@ -26,12 +26,40 @@ Verified against T3 commit `ab8e488e10d883fa880b0ddcf01917b51839ab07`:
 
 Jared, 2026-11-12 21:23Z, relayed by pm7-build: "Yes, accept 15 minutes (Recommended)".
 
+Jared, 2026-11-12 22:01Z, relayed by pm7-build: "Option a for the second thing."
+Option A means no issuance retry after a possibly committed timeout, and an honest row otherwise.
+
 One successful session issuance covers the remaining overall run deadline,
 capped at 900 seconds (15 minutes). Scopes remain `providers:manage` and
 `orchestration:read`. There is no rotation, renewal or overlapping credential.
-Issue timeouts start at 30 seconds and grow on retry, bounded by the remaining
-deadline; exponential backoff caps at eight seconds. A lost issuance reply can
-leave an unknown session valid until its TTL; retries never renew a known token.
+Each issuance attempt gets the entire remaining overall deadline. Only a proven
+failure to start the CLI is retried; exponential backoff caps at eight seconds.
+Timeouts, nonzero exits and malformed replies after spawn are never retried.
+
+### Issuance evidence and cleanup
+
+At the pinned T3 commit, [cli/auth.ts:29-47](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/auth.ts#L29-L47)
+resolves config and constructs services before the handler;
+[lines 169-199](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/auth.ts#L169-L199)
+issue before formatting/printing. Argument/schema validation (TTL lines 50-54)
+and config/service initialization failures before the handler are pre-commit.
+AAC conservatively retries only Popen failure: a generic CLI error does not
+prove which stage failed. [SessionStore.ts:643-748](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/auth/SessionStore.ts#L643-L748)
+generates a fresh ID, persists at lines 700-712, then emits and returns; errors
+from that path can occur after commit.
+
+Each issue has a random per-run nonce in `--label`.
+[EnvironmentAuth.ts:1084-1124](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/auth/EnvironmentAuth.ts#L1084-L1124)
+preserves the label in client metadata and lists active sessions.
+[cli/auth.ts:204-223](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/auth.ts#L204-L223)
+and [cliAuthFormat.ts:146-169](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cliAuthFormat.ts#L146-L169)
+expose `sessionId` and `client.label` through `auth session list --json`.
+After ambiguity AAC spends up to five seconds on that lookup and revokes the
+matching session in finally with the existing confirmed five-second budget.
+A failed/empty lookup cannot prove absence (a commit can race cleanup). The row
+always fails before installation with `t3_session_issue_unknown`: no install
+started; one session may stay valid up to 15 minutes. Even successful cleanup
+never turns ambiguous issuance into a successful update.
 
 One connection is used until a transport failure. Reconnection uses the same
 token and resumes `provider.install.subscribe`. Start is sent at most once.
@@ -72,7 +100,7 @@ Cursor rows and the legacy 40-row view retain their offline checks.
 ## Offline coverage
 
 Fixtures cover one issuance across reconnect, a 29-second issuance, deadline
-TTL caps, issuance retry/backoff, confirmed final revocation on success and
+TTL caps, pre-spawn retry/backoff, committed-timeout nonce cleanup, confirmed final revocation on success and
 exceptions, bounded failed revocation, operation identity on reconnect,
 unrelated-operation rejection, ambiguous-start failure, abrupt process kills
 and bounded signals with blocked workers. No real T3 calls or live updates.
