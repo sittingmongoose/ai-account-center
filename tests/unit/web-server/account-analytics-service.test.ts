@@ -140,7 +140,7 @@ describe('account quota analytics', () => {
     for (let i = 0; i < 80; i++) await service.get({ ...QUERY, account: `codex:fixture-${i}` });
     const cache = (service as unknown as { answers: { size: number; bytes: number } }).answers;
     expect(cache.size).toBeLessThanOrEqual(4);
-    expect(cache.bytes).toBeLessThanOrEqual(32 * 1024 * 1024);
+    expect(cache.bytes).toBeLessThanOrEqual(24 * 1024 * 1024);
     const first = await service.get(QUERY);
     expect((await service.get(QUERY)).accounts).toBe(first.accounts);
   });

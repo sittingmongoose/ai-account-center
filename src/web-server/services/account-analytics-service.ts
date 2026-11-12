@@ -298,7 +298,7 @@ export class AccountAnalyticsService {
     key: string;
     activity: AccountAnalyticsActivityResult;
     answer: AccountAnalytics;
-  }>(4, 32 * 1024 * 1024);
+  }>(4, 24 * 1024 * 1024);
   private readonly histories = new Map<string, HistoryState>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingSample: Promise<void> | null = null;
