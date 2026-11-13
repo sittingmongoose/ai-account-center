@@ -260,6 +260,15 @@ export interface AccountAnalyticsActivityCoverage {
 export interface AccountAnalytics {
   cached?: boolean;
   cacheAgeSeconds?: number;
+  /**
+   * When the numbers in this answer were computed (its `updatedAt`). A read is answered at once with the newest saved
+   * answer while the next one is computed; `stale` then says the answer predates this read and `refreshing` that a
+   * newer one is on its way (the page reads again shortly). A fresh answer has `stale` false; its `refreshing` follows
+   * the log scan (`activity.refreshing`), whose new rows the next answer carries.
+   */
+  asOf?: string;
+  stale?: boolean;
+  refreshing?: boolean;
   schemaVersion: 1;
   updatedAt: string;
   range: {

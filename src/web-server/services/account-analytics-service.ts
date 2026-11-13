@@ -51,6 +51,10 @@ import {
   storeObservationFromAccount,
 } from '../../store/usage-observations';
 import { backfillUsageHistory } from '../../store/usage-backfill';
+import { AnalyticsSavedViews } from './account-analytics-saved-views';
+import { createLogger } from '../../services/logging';
+
+const logger = createLogger('web-server:analytics');
 
 export interface AccountAnalyticsDeps {
   getDashboard?: typeof getAccountDashboard;
@@ -73,7 +77,22 @@ export interface AccountAnalyticsDeps {
    * process's store (docs/store.md) serves the default scope unless a JSON store is injected.
    */
   usageStore?: (scope: string) => Promise<AacStore | null>;
+  /**
+   * Save each selection's last answer under the scope (`account-analytics/analytics-views-v1.json`) and answer the
+   * first read after a restart from it. Default false (tests never touch disk); the live singleton enables it.
+   */
+  persistViews?: boolean;
+  /**
+   * How long a read waits for the answer it started before it is answered with the newest saved one (marked `stale`
+   * and `refreshing`). A first read with nothing saved waits for its answer. Defaults to 250 ms.
+   */
+  freshBudgetMs?: number;
+  /** Monotonic milliseconds for the slow-read timing log; `performance.now` by default. */
+  elapsedMs?: () => number;
 }
+
+/** A computation slower than this is logged with its phases (`analytics.read_timing`). */
+const SLOW_READ_MS = 1_000;
 
 /** Long-period burn of one window: 7 and 30 days across resets, from the store's rollups. */
 export interface AccountAnalyticsLongBurn {
@@ -292,6 +311,16 @@ async function longBurnFor(
   return result;
 }
 
+/** An answer computed for this read: its numbers are as of now; `refreshing` follows the log scan. */
+function fresh(answer: AccountAnalytics): AccountAnalytics {
+  return {
+    ...answer,
+    asOf: answer.updatedAt,
+    stale: false,
+    refreshing: answer.activity.refreshing === true || answer.activity.status === 'loading',
+  };
+}
+
 /** Independent snapshot history keeps quotas separate from billed/token activity. */
 export class AccountAnalyticsService {
   private readonly answers = new BoundedCache<{
@@ -300,6 +329,9 @@ export class AccountAnalyticsService {
     answer: AccountAnalytics;
   }>(4, 24 * 1024 * 1024);
   private readonly histories = new Map<string, HistoryState>();
+  private readonly views = new Map<string, AnalyticsSavedViews>();
+  /** The computation running for each scope and selection; reads arriving meanwhile join it. */
+  private readonly flights = new Map<string, Promise<AccountAnalytics>>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingSample: Promise<void> | null = null;
   private running = false;
@@ -452,6 +484,13 @@ export class AccountAnalyticsService {
     }
   }
 
+  /**
+   * The answer for a selection. A read is answered with the newest numbers there are, at once: it starts (or joins)
+   * the computation of a new answer and waits for it at most `freshBudgetMs`; when that is not enough, it is answered
+   * with the selection's saved answer, marked `stale` and `refreshing`, and the computation finishes behind it (the
+   * page reads again while `refreshing`). Only a selection with nothing saved waits for its first answer. Every
+   * answer carries `asOf`, when its numbers were computed.
+   */
   async get(requested: AccountAnalyticsQuery): Promise<AccountAnalytics> {
     // Malformed ranges and zones fail before any collector or history read.
     validateAccountAnalyticsRangeShape(requested);
@@ -468,7 +507,86 @@ export class AccountAnalyticsService {
     // sample times must not fall after `to`.
     const checkedAt = clock();
     resolveAccountAnalyticsRange(query, checkedAt, checkedAt - ACCOUNT_ANALYTICS_RETAINED_MS);
+    const { refresh: _refresh, ...selection } = query;
+    const key = JSON.stringify([
+      selection.platform,
+      selection.range,
+      selection.provider,
+      selection.account,
+      selection.tz,
+      selection.from ?? null,
+      selection.to ?? null,
+    ]);
+    const views = this.savedViews(scope);
+    const saved = views.get(key);
+    const flightKey = JSON.stringify([scope, key]);
+    let flight = this.flights.get(flightKey);
+    // Every read computes (or joins the computation running): an unchanged selection is answered from the
+    // computation's own memo in milliseconds, and a changed one is never served as current.
+    if (query.refresh === true || !flight) {
+      const started = this.compute(query, scope, tz).then((answer) => {
+        // kept without the per-read memo fields: a kept answer is described by its own `asOf`
+        const { cached: _cached, cacheAgeSeconds: _age, ...kept } = answer;
+        views.set(key, kept);
+        return answer;
+      });
+      flight = started.finally(() => {
+        if (this.flights.get(flightKey) === flight) this.flights.delete(flightKey);
+      });
+      this.flights.set(flightKey, flight);
+      // a computation nobody waits for any more must not raise an unhandled rejection
+      flight.catch(() => undefined);
+    }
+    if (!saved) return fresh(await (flight as Promise<AccountAnalytics>));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answer = await Promise.race([
+      flight.then(fresh, () => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), this.deps.freshBudgetMs ?? 250);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    // the computation is still running (or failed): the newest saved answer, said to be older than this read
+    return answer ?? { ...saved, asOf: saved.updatedAt, stale: true, refreshing: true };
+  }
+
+  private savedViews(scope: string): AnalyticsSavedViews {
+    let views = this.views.get(scope);
+    if (!views) {
+      views = new AnalyticsSavedViews(scope, this.deps.persistViews === true, this.deps.now);
+      this.views.set(scope, views);
+      while (this.views.size > 8) {
+        const oldest = this.views.keys().next();
+        if (oldest.done) break;
+        this.views.get(oldest.value)?.close();
+        this.views.delete(oldest.value);
+      }
+    }
+    return views;
+  }
+
+  /** Writes every saved answer now (the server is stopping). */
+  flushSavedViews(): void {
+    for (const views of this.views.values()) views.close(true);
+  }
+
+  /** One full computation of a selection's answer (validated, zone resolved). Slow ones are logged by phase. */
+  private async compute(
+    query: AccountAnalyticsQuery,
+    scope: string,
+    tz: string
+  ): Promise<AccountAnalytics> {
+    const clock = this.deps.now ?? Date.now;
+    const elapsed = this.deps.elapsedMs ?? (() => performance.now());
+    const begin = elapsed();
+    const phases: Record<string, number> = {};
+    let mark = begin;
+    const lap = (name: string): void => {
+      const at = elapsed();
+      phases[name] = Math.round(at - mark);
+      mark = at;
+    };
     const dashboard = await (this.deps.getDashboard ?? getAccountDashboard)(query.platform, false);
+    lap('dashboardMs');
     const state = this.state(scope);
     // Reads initialise history but never append observations; the sampler owns writes.
     if (!state.loaded) {
@@ -486,6 +604,7 @@ export class AccountAnalyticsService {
       });
       await state.queue;
     }
+    lap('historyOpenMs');
     const now = clock();
     const retainedFrom = now - ACCOUNT_ANALYTICS_RETAINED_MS;
     // Every range except `all` resolves without the data; `all` reads the
@@ -499,6 +618,7 @@ export class AccountAnalyticsService {
     ).catch((): AccountAnalyticsActivityResult =>
       unavailableActivity('Local usage history is temporarily unavailable.', tz)
     );
+    lap('activityMs');
     const answerKey = createHash('sha256')
       .update(
         JSON.stringify([
@@ -523,6 +643,7 @@ export class AccountAnalyticsService {
         cached: true,
         cacheAgeSeconds: Math.max(0, now - Date.parse(retained.answer.updatedAt)) / 1000,
       };
+    lap('keyMs');
     const { coverage, ...activity } = activityResult;
     let oldestQuota = Infinity;
     if (state.usageStore) {
@@ -541,7 +662,9 @@ export class AccountAnalyticsService {
     const range =
       query.range === 'all' ? resolveAccountAnalyticsRange(query, now, availableFrom) : provisional;
     const { from, to } = range;
+    lap('oldestMs');
     const history = await this.historyFor(state, from, to, now, range.bucketMinutes * 60_000);
+    lap('historyMs');
     const stored = state.usageStore !== null;
 
     const registry = dashboardRegistryFacts(
@@ -628,6 +751,18 @@ export class AccountAnalyticsService {
       activity,
     };
     this.answers.set(selectionKey, { key: answerKey, activity: activityResult, answer });
+    lap('seriesMs');
+    const totalMs = Math.round(elapsed() - begin);
+    if (totalMs >= SLOW_READ_MS)
+      logger.info('analytics.read_timing', 'Slow analytics computation', {
+        totalMs,
+        range: query.range,
+        filtered: query.provider !== 'all' || query.account !== 'all',
+        accounts: dashboard.accounts.length,
+        historyRecords: history?.records.length ?? 0,
+        hourRows: activity.byHour.length,
+        ...phases,
+      });
     return answer;
   }
 
@@ -736,7 +871,7 @@ export class AccountAnalyticsService {
 
 let service: AccountAnalyticsService | undefined;
 function singleton(): AccountAnalyticsService {
-  service ??= new AccountAnalyticsService();
+  service ??= new AccountAnalyticsService({ persistViews: true });
   return service;
 }
 export function getAccountAnalytics(query: AccountAnalyticsQuery): Promise<AccountAnalytics> {
@@ -747,6 +882,7 @@ export function startAccountAnalyticsSampling(): void {
 }
 export function stopAccountAnalyticsSampling(): void {
   service?.stop();
+  service?.flushSavedViews();
 }
 export function rescheduleAccountAnalyticsSampling(): void {
   service?.reschedule();
