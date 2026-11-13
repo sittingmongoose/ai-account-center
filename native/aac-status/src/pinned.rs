@@ -753,11 +753,18 @@ fn addition_text(additions: &std::collections::BTreeMap<String, Json>, key: &str
 }
 
 /// Adds one wait unless the same wait is already there, by who it waits on and its words: the
-/// thread and its status repeat the same `--waiting-on-you`. Unexplained blocks count once per
-/// task. A repeat fills what the first copy left out (its short form, task, since or due time).
+/// thread and its status repeat the same `--waiting-on-you`. Two tasks blocked on the same words
+/// are two waits (agents copy blocker words across items), so a repeat merges only when the tasks
+/// agree or one names none; unexplained blocks count once per task. A repeat fills what the first
+/// copy left out (its short form, task, since or due time).
 fn push_wait(waits: &mut Vec<WaitOut>, wait: WaitOut) {
     let same = |held: &WaitOut| {
-        held.on == wait.on && held.text.trim() == wait.text.trim() && (wait.on != "unknown" || held.task == wait.task)
+        let tasks_agree = if wait.on == "unknown" {
+            held.task == wait.task
+        } else {
+            held.task.is_none() || wait.task.is_none() || held.task == wait.task
+        };
+        held.on == wait.on && held.text.trim() == wait.text.trim() && tasks_agree
     };
     if let Some(held) = waits.iter_mut().find(|held| same(held)) {
         held.since = held.since.take().or(wait.since);
@@ -791,6 +798,7 @@ fn compose_update(
     tasks: Option<&TasksIn>,
     status: Option<&StatusIn>,
     standalone_refusal: Option<&StatusProblemIn>,
+    pin_writers: &[&str],
 ) -> PinnedUpdate {
     let mut additions = std::collections::BTreeMap::new();
     for source in [
@@ -1058,6 +1066,8 @@ fn compose_update(
     // ---- Whose board -----------------------------------------------------------------------
     // A board found by project and stream may be another writer's: a stream lead's board that
     // several threads report under. Its tasks and review rounds are the stream's; say whose.
+    // A board is this pin's own when any writer reporting this pin keeps it: a thread may report
+    // under its named writer and its hashed `t3-` writer at once (`pin_writers`).
     let own_writer = thread
         .map(|doc| doc.writer.as_str())
         .or(status.map(|doc| doc.writer.as_str()));
@@ -1067,7 +1077,7 @@ fn compose_update(
         stream: board.stream.clone(),
         project_label: board.project_label.clone().filter(|text| !text.is_empty()),
         stream_label: board.stream_label.clone().filter(|text| !text.is_empty()),
-        shared: own_writer.is_some_and(|writer| writer != board.writer),
+        shared: own_writer.is_some() && !pin_writers.contains(&board.writer.as_str()),
     });
     let shared_board = update.board.as_ref().filter(|board| board.shared);
 
@@ -1456,9 +1466,53 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
             let want = format!("writers/{}/status.json", doc.writer);
             input.status_problems.iter().find(|problem| problem.file == want)
         });
-        updates.push(compose_update(pin, input, thread, tasks, status, standalone_refusal));
+        // Every writer whose report names this pin, by the same normalised id match.
+        let mut pin_writers: Vec<&str> = Vec::new();
+        let named = input
+            .threads
+            .iter()
+            .filter(|doc| doc.t3_thread.as_deref().is_some_and(|id| same_thread_id(id, &pin.id)))
+            .map(|doc| doc.writer.as_str())
+            .chain(
+                input
+                    .statuses
+                    .iter()
+                    .filter(|doc| same_thread_id(&doc.t3_thread, &pin.id))
+                    .map(|doc| doc.writer.as_str()),
+            );
+        for writer in named {
+            if !pin_writers.contains(&writer) {
+                pin_writers.push(writer);
+            }
+        }
+        updates.push(compose_update(
+            pin,
+            input,
+            thread,
+            tasks,
+            status,
+            standalone_refusal,
+            &pin_writers,
+        ));
     }
-    let looping = updates.iter().filter(|update| update.looping.answer == "yes").count();
+    // One loop counts once: a board's looping task is one loop however many pins report its
+    // stream (the board owner's and every worker's), so the head never says "2 looping" for it.
+    let mut loops: Vec<(String, String)> = Vec::new();
+    for (index, update) in updates
+        .iter()
+        .enumerate()
+        .filter(|(_, update)| update.looping.answer == "yes")
+    {
+        let key = match (update.board.as_ref(), update.looping.task.as_ref()) {
+            (Some(board), Some(task)) => (format!("board:{}", board.writer), task.clone()),
+            // Any other "yes" is the pin's own loop: one per pin, whatever its id.
+            _ => ("pin".to_string(), index.to_string()),
+        };
+        if !loops.contains(&key) {
+            loops.push(key);
+        }
+    }
+    let looping = loops.len();
     let waiting = updates
         .iter()
         .filter(|update| update.blocked.as_ref().is_some_and(|blocked| blocked.waiting_on_you))

@@ -267,4 +267,60 @@ describe('Status summary strip', () => {
       '6 pinned threads wait on you: T0, T1, T2, T3 and 2 more.'
     );
   });
+  // Review 1, M1: the shared_stream shape. A stream lead's board has P-BATCH2 failing four reviews; a worker reports
+  // the same stream and its own report says it is not looping.
+  describe('a shared stream board loop', () => {
+    const board = (writer: string, shared: boolean) => ({
+      writer,
+      project: 'puppet-master',
+      stream: 'P',
+      projectLabel: null,
+      streamLabel: 'Projects',
+      shared,
+    });
+    const loop = (text: string) => ({ answer: 'yes' as const, text, task: 'P-BATCH2', rounds: 4 });
+    const lead = pin({
+      title: 'Projects lead',
+      board: board('vm.projects-lead', false),
+      looping: loop('Yes. P-BATCH2 has gone back for fixes 4 times without a passing review.'),
+    });
+    const worker = pin({
+      title: 'Split worker',
+      board: board('vm.projects-lead', true),
+      looping: loop(
+        "Yes. On the shared Projects board kept by vm.projects-lead, P-BATCH2 has gone back for fixes 4 times without a passing review. This thread's own report says it is not looping."
+      ),
+    });
+
+    it('counts the loop once and names the board owner, never the worker', () => {
+      const pins = pinnedProblems(panel([worker, lead]));
+      const strip = buildStrip(inputs({ pins }));
+      const item = strip.items.find((i) => i.key === 'looping');
+      expect(item?.value).toBe('1');
+      expect(item?.detail).toBe('1 pinned thread is looping: Projects lead (task P-BATCH2).');
+      expect(item?.detail).not.toContain('Split worker');
+      expect(strip.worst?.title).toBe('Projects lead');
+      expect(strip.worst?.threadId).toBe(lead.id);
+    });
+
+    it('names the board, not the worker, when only the worker is pinned', () => {
+      const strip = buildStrip(inputs({ pins: pinnedProblems(panel([worker])) }));
+      const item = strip.items.find((i) => i.key === 'looping');
+      expect(item?.value).toBe('1');
+      expect(item?.detail).toBe(
+        '1 pinned thread is looping: the Projects board kept by vm.projects-lead (task P-BATCH2).'
+      );
+      expect(strip.worst?.title).toBe('the Projects board kept by vm.projects-lead');
+    });
+
+    it('still counts two different loops on one board twice', () => {
+      const other = pin({
+        title: 'Other worker',
+        board: board('vm.projects-lead', true),
+        looping: { ...loop('Yes.'), task: 'P-BATCH3' },
+      });
+      const strip = buildStrip(inputs({ pins: pinnedProblems(panel([lead, worker, other])) }));
+      expect(strip.items.find((i) => i.key === 'looping')?.value).toBe('2');
+    });
+  });
 });

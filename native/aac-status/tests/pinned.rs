@@ -1262,6 +1262,9 @@ fn shared_stream() -> ComposeInput {
 #[test]
 fn a_shared_stream_board_is_labelled_with_its_owner_and_stream() {
     let view = compose(&shared_stream());
+    // One loop on one board: counted once, however many pins report its stream (review 1, M1).
+    assert_eq!(view.head, "2 pinned in T3 · 1 looping");
+    assert_eq!(view.counts.looping, 1);
     let lead = as_json(&view.updates[0]);
     let split = as_json(&view.updates[1]);
     assert_eq!(lead["board"]["writer"], "vm.projects-lead");
@@ -1278,4 +1281,52 @@ fn a_shared_stream_board_is_labelled_with_its_owner_and_stream() {
         "Yes. On the shared Projects board kept by vm.projects-lead, P-BATCH2 has gone back for fixes 4 times \
          without a passing review. This thread's own report says it is not looping."
     );
+}
+
+#[test]
+fn two_tasks_blocked_on_the_same_words_are_two_waits() {
+    // Agents copy blocker words across items: each task's wait must still show (review 1, M2).
+    let words = "Browsers on the VM and Nas1 are reserved.";
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "puppet-master", "stream": "S" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 3,
+            "project": "puppet-master", "stream": "S",
+            "items": [
+                { "id": "SWEEP", "title": "Sweep", "state": "blocked", "blockedOn": { "kind": "resource", "what": words } },
+                { "id": "PRESS", "title": "Press test", "state": "blocked", "blockedOn": { "kind": "resource", "what": words } }
+            ]
+        })],
+        "statuses": [json!({
+            "writer": "vm.pm7-build", "writtenAt": "2026-11-08T05:30:00Z", "writtenAtMs": NOW - 200_000,
+            "seq": 2, "t3Thread": "t1", "summary": "Waiting for browsers.",
+            "blockers": [ { "text": words, "waitingOn": "resource" } ]
+        })]
+    }));
+    let waits = as_json(&one_update(&built))["waits"].clone();
+    let tasks: Vec<Option<&str>> = waits.as_array().unwrap().iter().map(|w| w["task"].as_str()).collect();
+    // The status's copy names no task, so it fills the first; the second task keeps its own row.
+    assert_eq!(tasks, [Some("SWEEP"), Some("PRESS")]);
+}
+
+#[test]
+fn a_board_kept_by_the_same_pins_other_writer_is_its_own() {
+    // One thread reporting under its hashed writer (thread.json) and its named writer (status and
+    // board): the board is this pin's own, not a shared one (review 1, L5).
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "writer": "vm.t3-22f204f1", "t3Thread": "t1", "project": "puppet-master", "stream": "PERF" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-perf", "writtenAtMs": NOW - 100_000, "seq": 3,
+            "project": "puppet-master", "stream": "PERF", "items": [ { "id": "P-1", "title": "Idle drift", "state": "working" } ]
+        })],
+        "statuses": [json!({
+            "writer": "vm.pm7-perf", "writtenAt": "2026-11-08T05:30:00Z", "writtenAtMs": NOW - 300_000,
+            "seq": 2, "t3Thread": "t1", "summary": "Measuring idle drift."
+        })]
+    }));
+    let board = as_json(&one_update(&built))["board"].clone();
+    assert_eq!(board["writer"], "vm.pm7-perf");
+    assert_eq!(board["shared"], false);
 }

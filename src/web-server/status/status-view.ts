@@ -31,7 +31,7 @@ import {
 } from './status-view-panels';
 import type { ReadProblem } from './status-collectors';
 import { buildSpend, quotaSource } from './status-view-quota';
-import { buildStrip, pinnedProblems } from './status-view-strip';
+import { buildStrip, loopOwner, pinnedProblems } from './status-view-strip';
 import type {
   BatchView,
   SectionView,
@@ -756,7 +756,7 @@ export function buildStatusView(inputs: StatusInputs): StatusView {
     runs.push(
       { text: ' · ' },
       {
-        text: `${plural(loopingPins.length, 'pinned thread')} ${loopingPins.length === 1 ? 'is' : 'are'} looping (${worstLoop.title}${task})`,
+        text: `${plural(loopingPins.length, 'pinned thread')} ${loopingPins.length === 1 ? 'is' : 'are'} looping (${loopOwner(worstLoop)}${task})`,
         strong: true,
         tone: 'warn',
       }
