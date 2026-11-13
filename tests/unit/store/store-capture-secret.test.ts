@@ -50,7 +50,7 @@ const loaded = loadNativeStore({
           doc,
         };
         const before = await store.captureHistory(query);
-        if (fixture.secret) {
+        if (('rustSecret' in fixture ? fixture.rustSecret : fixture.secret) !== null) {
           const beforeLedger = ledger();
           const beforeCapture = (await store.status()).capture;
           const validDoc = {
@@ -144,7 +144,7 @@ it('exposes the compiled shared detector to callers outside Status', () => {
   const compatibility =
     require('../../../dist/web-server/status/schema-helpers.js') as typeof import('../../../src/web-server/status/schema-helpers');
   expect(shared.SECRET_POLICY_PATH).toBe('src/shared/secret-policy.json');
-  expect(shared.loadSecretPolicy().version).toBe(2);
+  expect(shared.loadSecretPolicy().version).toBe(3);
   expect(shared.findSecret('Basic dTpw')).toBe('an authorization credential');
   expect(shared.findSecret('https://svc:pass@localhost/api')).toBe('URL userinfo');
   expect(shared.findSecret(`sk-${'A'.repeat(20)}`)).toBe('an API key');

@@ -29,7 +29,6 @@ struct Policy {
     authorization: Authorization,
     credential_min: usize,
     embedded_budget: usize,
-    embedded_failures: usize,
     email: Email,
     jwt: Jwt,
     whitespace: String,
@@ -78,7 +77,6 @@ struct Rules {
     auth_upper: Regex,
     auth_lower: Regex,
     auth_base64: Regex,
-    credential_key_text: Regex,
     email_local: Regex,
     email_domain: Regex,
     trim: Regex,
@@ -124,7 +122,6 @@ fn rules() -> &'static Rules {
             auth_lower: regex(&policy.authorization.lower, false, &policy.whitespace),
             auth_base64: regex(&policy.authorization.base64, false, &policy.whitespace),
             credential_key: regex(&format!("^{}$", policy.credential_key), true, &policy.whitespace),
-            credential_key_text: regex(&format!("\"{}\"", policy.credential_key), true, &policy.whitespace),
             email_local: regex(&policy.email.local_char, false, &policy.whitespace),
             email_domain: regex(&policy.email.domain, false, &policy.whitespace),
             trim: regex(
@@ -308,7 +305,6 @@ pub fn find_secret_in(source: &str, value: &Json) -> Option<&'static str> {
     let rules = rules();
     let mut stack = vec![(value.clone(), false)];
     let mut used = 0;
-    let mut failed = 0;
     while let Some((node, credential)) = stack.pop() {
         match node {
             Json::String(text) => {
@@ -324,35 +320,20 @@ pub fn find_secret_in(source: &str, value: &Json) -> Option<&'static str> {
                     return Some(found);
                 }
                 let trimmed = rules.trim.replace_all(&text, "");
-                let shaped = trimmed.len() >= 2
-                    && matches!(
-                        (trimmed.as_bytes().first(), trimmed.as_bytes().last()),
-                        (Some(b'{'), Some(b'}')) | (Some(b'['), Some(b']')) | (Some(b'"'), Some(b'"'))
-                    );
+                let shaped = matches!(trimmed.as_bytes().first(), Some(b'{' | b'['))
+                    || (trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"'));
                 if !shaped {
                     continue;
                 }
-                if failed >= rules.policy.embedded_failures || used + length > rules.policy.embedded_budget {
-                    if used + length > rules.policy.embedded_budget
-                        || rules.credential_key_text.is_match(&regex_text(&unescape_text(&text)))
-                    {
-                        return Some("JSON text that could not be checked");
-                    }
-                    continue;
+                if used + length > rules.policy.embedded_budget {
+                    return Some("JSON text that could not be checked");
                 }
                 match serde_json::from_str(&trimmed) {
                     Ok(inner) => {
                         used += length;
                         stack.push((inner, credential));
                     }
-                    Err(error) => {
-                        // serde's recursion guard is stricter than JSON.parse. Never let that
-                        // implementation limit turn valid embedded JSON into unchecked content.
-                        if error.to_string().contains("recursion limit") {
-                            return Some("JSON text that could not be checked");
-                        }
-                        failed += 1;
-                    }
+                    Err(_) => return Some("unparseable embedded JSON"),
                 }
             }
             Json::Number(number) => {

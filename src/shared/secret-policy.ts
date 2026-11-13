@@ -134,7 +134,7 @@ export function findSecretIn(source: string, value: unknown): string | null {
   // Each entry: a value, and whether it sits under a credential key (anything long enough under one is refused). JSON
   // text inside strings is parsed and walked too, within a size budget.
   const stack: Array<[unknown, boolean]> = [[value, false]];
-  const work: EmbeddedWork = { used: 0, failed: 0 };
+  const work: EmbeddedWork = { used: 0 };
   for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
     const [node, credential] = entry;
     if (typeof node === 'string') {
@@ -144,6 +144,7 @@ export function findSecretIn(source: string, value: unknown): string | null {
       if (found) return found;
       const inner = embeddedJson(node, work);
       if (inner === UNCHECKED) return 'JSON text that could not be checked';
+      if (inner === UNPARSEABLE) return 'unparseable embedded JSON';
       if (inner !== undefined) stack.push([inner, credential]);
     } else if (typeof node === 'number') {
       if (credential && String(Math.abs(Math.trunc(node))).length >= secretPolicy.credentialMin)
@@ -162,44 +163,30 @@ export function findSecretIn(source: string, value: unknown): string | null {
   return null;
 }
 
-/** How many characters of JSON text inside strings are parsed per file, and how many such parses may fail. */
+/** Maximum characters of embedded JSON parsed per file; any parse failure refuses it. */
 const EMBEDDED_BUDGET = secretPolicy.embeddedBudget;
-const EMBEDDED_FAILURES = secretPolicy.embeddedFailures;
 /** JSON text that can't be checked within the budget: the file is refused, not read unchecked. */
 const UNCHECKED = Symbol('unchecked');
-/** A credential key written anywhere in text (quoted, as JSON writes keys). */
-const CREDENTIAL_KEY_TEXT = new RegExp(`"${secretPolicy.credentialKey}"`, 'i');
-
+const UNPARSEABLE = Symbol('unparseable');
 /** Running totals for one file's embedded JSON. */
-type EmbeddedWork = { used: number; failed: number };
+type EmbeddedWork = { used: number };
 
-/**
- * A string that is itself JSON (an object, an array or a string, as double-encoded text is), parsed; `UNCHECKED` when it
- * can't be checked within the budget; undefined for text that isn't JSON. Only text whose last character closes its first is parsed, and
- * after EMBEDDED_FAILURES failed parses no more are tried (each failure throws, which is slow in bulk).
- */
+/** JSON-looking objects/arrays need not be closed to be checked. Every parse failure
+ * refuses the document; no normalization or unchecked fallback is attempted. */
 function embeddedJson(text: string, work: EmbeddedWork): unknown {
   const trimmed = text.trim();
   const open = trimmed[0];
   const close = trimmed[trimmed.length - 1];
   const shaped =
-    trimmed.length >= 2 &&
-    ((open === '{' && close === '}') ||
-      (open === '[' && close === ']') ||
-      (open === '"' && close === '"'));
+    open === '{' || open === '[' || (trimmed.length >= 2 && open === '"' && close === '"');
   if (!shaped) return undefined;
-  // past the failure cap or the size budget, text that names a credential key can't be read unchecked
-  if (work.failed >= EMBEDDED_FAILURES || work.used + text.length > EMBEDDED_BUDGET)
-    return CREDENTIAL_KEY_TEXT.test(unescapeText(text)) || work.used + text.length > EMBEDDED_BUDGET
-      ? UNCHECKED
-      : undefined;
+  if (work.used + text.length > EMBEDDED_BUDGET) return UNCHECKED;
   try {
     const parsed: unknown = JSON.parse(trimmed);
     work.used += text.length;
     return parsed;
   } catch {
-    work.failed += 1;
-    return undefined;
+    return UNPARSEABLE;
   }
 }
 

@@ -69,3 +69,62 @@ it('captures accepted revisions, retains thread identity, retries failures and s
   await service.scanReports();
   expect(seen).toHaveLength(3);
 });
+
+it('isolates native refusals, captures later batches and retries only unacknowledged revisions', async () => {
+  const root = dirs.make();
+  const reports = path.join(root, 'reports');
+  const now = Date.parse('2026-11-13T10:00:00Z');
+  const seen: StoreReportCapture[] = [];
+  const attempted: string[][] = [];
+  let refusedWriter: string | undefined;
+  let refuses = true;
+  const store = {
+    captureReports: async (records: StoreReportCapture[]) => {
+      attempted.push(records.map((row) => row.writer));
+      refusedWriter ??= records[0].writer;
+      if (refuses && records.some((row) => row.writer === refusedWriter)) {
+        throw new Error('invalid: capture report failed validation');
+      }
+      seen.push(...records);
+      return { stored: records.length, duplicates: 0 };
+    },
+  };
+  for (let i = 0; i < 12; i++) {
+    const writer = `vm.batch${i}`;
+    writeReport(
+      reports,
+      writer,
+      'thread.json',
+      threadDoc(writer, { writtenAt: new Date(now).toISOString() })
+    );
+  }
+  const pinned = {
+    docs: { snapshot: () => ({ docs: [] }) },
+    scanStatusDocs: async () => {},
+    compose: async () => {},
+  } as unknown as PinnedThreadsCollector;
+  const service = new StatusService({
+    reader: new AgentReportsReader({ root: () => reports, now: () => now }),
+    historyStore: () => store,
+    pinned,
+    spendNative: null,
+    now: () => now,
+  });
+  await service.scanReports();
+  expect(attempted[0]).toHaveLength(4);
+  expect(seen).toHaveLength(11);
+  expect(new Set(seen.map((row) => row.writer)).size).toBe(11);
+  expect(seen.some((row) => row.writer === refusedWriter)).toBe(false);
+  expect(attempted.slice(-2).map((batch) => batch.length)).toEqual([4, 4]);
+  attempted.length = 0;
+  await service.scanReports();
+  expect(attempted).toEqual([[refusedWriter!]]);
+  expect(seen).toHaveLength(11);
+  refuses = false;
+  await service.scanReports();
+  expect(seen).toHaveLength(12);
+  expect(new Set(seen.map((row) => row.writer)).size).toBe(12);
+  attempted.length = 0;
+  await service.scanReports();
+  expect(attempted).toEqual([]);
+});

@@ -143,7 +143,11 @@ fn report_reader_secret_parity_refuses_before_any_persistence() {
     let mut seq = 1;
     for case in cases {
         let fields = &case["doc"];
-        let expected = case["secret"].as_str();
+        let expected = case.get("rustSecret").unwrap_or(&case["secret"]).as_str();
+        assert!(
+            case["secret"].is_null() || expected.is_some(),
+            "native must never be looser"
+        );
         assert_eq!(report_secret::find_secret_in("", fields), expected, "{}", case["name"]);
         let mut candidate = report(seq, "working");
         for (key, value) in fields.as_object().unwrap() {
@@ -239,7 +243,7 @@ fn shared_loader_exposes_the_packaged_policy_without_a_status_dependency() {
         aac_store::secret_policy::SECRET_POLICY_PATH,
         "src/shared/secret-policy.json"
     );
-    assert_eq!(policy["version"], 2);
+    assert_eq!(policy["version"], 3);
     assert!(policy["patterns"].as_array().unwrap().len() > 10);
     assert_eq!(aac_store::report_secret::load_secret_policy(), policy);
     assert!(aac_store::secret_policy::find_secret(&format!("sk-{}", "A".repeat(20))).is_some());

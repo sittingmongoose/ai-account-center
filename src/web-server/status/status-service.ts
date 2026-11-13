@@ -12,7 +12,12 @@
  * A change reaches `/ws` clients as `{ type: 'status-changed' }`, at most one every 5 seconds.
  */
 import { broadcastDashboardEvent } from '../dashboard-events';
-import { getAacStore, type AacStore, type StoreReportCapture } from '../../store/store-service';
+import {
+  getAacStore,
+  storeErrorCode,
+  type AacStore,
+  type StoreReportCapture,
+} from '../../store/store-service';
 import { buildSnapshotFiles } from '../agent-usage/agent-usage-snapshot';
 import { RecentReadings } from '../agent-usage/agent-usage-history';
 import {
@@ -294,26 +299,48 @@ export class StatusService {
         doc: { ...doc, schema: `agent-reports/${row.kind}@1` },
       };
     });
-    try {
-      for (let i = 0; i < captures.length; i += 4) {
-        const batch = captures.slice(i, i + 4);
-        await store.captureReports(batch);
-        for (const row of batch)
-          this.historyAccepted.set(
-            JSON.stringify([row.kind, row.writer, row.objectId]),
-            row.sourceSha256
-          );
-      }
-      while (this.historyAccepted.size > 5000) {
-        const oldest = this.historyAccepted.keys().next().value;
-        if (oldest === undefined) break;
-        this.historyAccepted.delete(oldest);
-      }
-    } catch {
+    const acknowledge = (rows: StoreReportCapture[]) => {
+      for (const row of rows)
+        this.historyAccepted.set(
+          JSON.stringify([row.kind, row.writer, row.objectId]),
+          row.sourceSha256
+        );
+    };
+    const warn = () =>
       logger.warn(
         'status.history_unavailable',
-        'Accepted report history could not be saved; current revisions will be retried.'
+        'A report revision could not be saved; unacknowledged revisions will be retried.'
       );
+    for (let i = 0; i < captures.length; i += 4) {
+      const batch = captures.slice(i, i + 4);
+      try {
+        await store.captureReports(batch);
+        acknowledge(batch);
+      } catch (error) {
+        if (storeErrorCode(error) !== 'invalid') {
+          warn();
+          break; // A storage outage is different from a per-document policy refusal.
+        }
+        if (batch.length === 1) {
+          warn();
+          continue;
+        }
+        // Native policy can be stricter than the reader. Recover accepted neighbors and
+        // continue later batches; never acknowledge a refused revision.
+        for (const row of batch) {
+          try {
+            await store.captureReports([row]);
+            acknowledge([row]);
+          } catch {
+            warn();
+          }
+        }
+      }
+    }
+    while (this.historyAccepted.size > 5000) {
+      const oldest = this.historyAccepted.keys().next().value;
+      if (oldest === undefined) break;
+      this.historyAccepted.delete(oldest);
     }
   }
 

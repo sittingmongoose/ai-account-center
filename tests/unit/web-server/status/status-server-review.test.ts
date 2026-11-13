@@ -281,18 +281,26 @@ describe('secret search', () => {
     }
   });
 
-  it('legitimate notes with JSON-looking text read', () => {
+  it('legitimate notes with valid embedded JSON and ordinary prose read', () => {
     for (const note of [
       '"done"',
       '""',
       '"',
       '"[1,2]"',
-      '[link](url)',
-      '{not json}',
+      'See [link](url)',
+      'example {not json}',
       JSON.stringify({ result: JSON.stringify({ content: JSON.stringify([{ text: '[]' }]) }) }),
     ]) {
       const parsed = jsonFromBytes(Buffer.from(JSON.stringify({ note })), 64 * 1024);
       expect([note, parsed.ok]).toEqual([note, true]);
+    }
+  });
+
+  it('JSON-looking malformed notes fail closed, including leading Markdown brackets', () => {
+    for (const note of ['[link](url)', '{not json}', '  {', '\n[1,]']) {
+      expect(findSecretIn('', { note })).toBe('unparseable embedded JSON');
+      const parsed = jsonFromBytes(Buffer.from(JSON.stringify({ note })), 64 * 1024);
+      expect(parsed.ok).toBe(false);
     }
   });
 

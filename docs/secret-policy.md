@@ -1,9 +1,10 @@
 # Shared AAC secret policy
 
-The canonical packaged resource is `src/shared/secret-policy.json`. All detectors use this data;
+The canonical packaged resource is `src/shared/secret-policy.json`. Both shared detectors use this data;
 Status has compatibility exports and no private pattern list. The policy retains the reader/native
 union, Basic/Token/Digest forms, URL userinfo (including undotted/internal hosts), and a generic
-`sk-` suffix of **20 or more characters**. More specific legacy prefixes retain their protections.
+`sk-` suffix of **20 or more characters**. Scheme-less `user:password@host[:port]` is also
+refused, as are `x-api-key`, `api-key` and `token` keys. More specific legacy prefixes retain their protections.
 
 ## TypeScript and JavaScript
 
@@ -38,9 +39,17 @@ or `None`. Package/build fingerprints must include the shared Rust file and JSON
 ## Reusable parity corpus
 
 `tests/fixtures/secret-policy-cases.json` holds synthetic `{name, doc, secret}` cases; `secret` is a
-fixed expected kind or `null`. The named TypeScript export is `secretPolicyCases` from
+fixed expected TypeScript kind or `null`. An optional `rustSecret` overrides the native expectation
+when its JSON parser is stricter. A TypeScript refusal must always have a native refusal. The named TypeScript export is `secretPolicyCases` from
 `tests/fixtures/secret-policy-cases.ts`. Rust tests can use `include_str!` with the same JSON.
-Both files are included in source packaging. Keep expected outcomes independent of the detector.
+Both files are included in source packaging.
+
+JSON-looking strings (trimmed text starting with `{` or `[`) fail closed if parsing fails, with
+`unparseable embedded JSON`. Quoted embedded JSON also fails closed on parse failure. Rust
+rejects lone surrogates and overflowing numbers that JavaScript accepts; those native refusals
+are intentional. Work-budget exhaustion also refuses the value. Invalid embedded text never
+falls through to persistence. This also refuses leading Markdown such as `[link](url)`; prose
+that does not start with an object/array opener is still checked as text. Keep expected outcomes independent of the detector.
 
 The corpus covers the reader and legacy native lists, shorter boundaries, authorization families,
 embedded/escaped text and ordinary prose. Persistence tests also verify that a rejected batch with
