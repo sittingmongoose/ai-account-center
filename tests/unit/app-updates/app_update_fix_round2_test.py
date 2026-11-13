@@ -179,7 +179,20 @@ class Round2(Home):
         (modules / 'zcode-acp-server').symlink_to(entry / 'zcode-acp-server')
         self.consumers(script)
         install = zcode.detect_adapters('ubuntu')
-        with mock.patch.object(zcode, 'registry_version') as registry, mock.patch.object(zcode, 'command') as run, scope():
+        def pnpm(argv, **kwargs):
+            # Honor the actual global destination; the configured old store entry stays put.
+            self.assertEqual(pathlib.Path(argv[argv.index('--global-dir') + 1]), modules.parent.parent)
+            version = argv[-1].rsplit('@', 1)[1]
+            fresh = modules / '.pnpm' / ('zcode-acp-server@' + version) / 'node_modules'
+            write_package(fresh, 'zcode-acp-server', version)
+            (modules / 'zcode-acp-server').unlink()
+            (modules / 'zcode-acp-server').symlink_to(fresh / 'zcode-acp-server')
+            return ''
+        with mock.patch.object(zcode, 'registry_version', return_value='0.84.3') as registry, \
+                mock.patch.object(zcode, 'pnpm_argv', return_value=['fixture-pnpm']), \
+                mock.patch.object(zcode, 'acp_unit_present', return_value=False), \
+                mock.patch.object(zcode, 'scan', return_value=[]), \
+                mock.patch.object(zcode, 'command', side_effect=pnpm) as run, scope():
             row = zcode.update_adapters(install, time.monotonic() + 10)
         self.assertEqual((row['status'], row['messageCode']), ('skipped', 'pnpm_store_copy'))
         registry.assert_not_called(); run.assert_not_called()
