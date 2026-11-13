@@ -14,7 +14,14 @@ import {
   ALL_RUNS,
   ScoreboardService,
 } from '../../../../src/web-server/scoreboard/scoreboard-service';
-import { RunsStore } from '../../../../src/web-server/scoreboard/runs-store';
+import {
+  pathHash,
+  RunsStore,
+  SECRET_NAME_REASON,
+  type RefusedRow,
+} from '../../../../src/web-server/scoreboard/runs-store';
+import { RunsReader } from '../../../../src/web-server/scoreboard/runs-reader';
+import zlib from 'zlib';
 import { NOW } from '../status/status-test-helpers';
 import { runDoc, writeRun } from './scoreboard-test-helpers';
 
@@ -123,13 +130,20 @@ describe.skipIf(!haveModule)('Scoreboard with the history store', () => {
     expect(sol.identity).toMatchObject({ harnessSource: 'corrected', modelFamily: 'openai' });
     const qwen = stored.find((run) => run.doc.id === 'vm.lead--qwen')!;
     expect(qwen.doc.model).toMatchObject({ id: 'alibaba/qwen3.8-max', effort: null });
-    const refused = await store!.runs<Array<{ file: string; reason: string }>>('runsRefused');
+    // A refusal is kept by the path's hash and writer, never by its path.
+    const refused = await store!.runs<RefusedRow[]>('runsRefused');
     expect(refused).toEqual([
       expect.objectContaining({
-        file: expect.stringContaining('vm.lead--secret.json'),
+        pathHash: pathHash('writers/vm.lead/runs/' + iso(NOW - DAY).slice(0, 10) + '/vm.lead--secret.json'),
+        writer: 'vm.lead',
         reason: 'refused: it contains what looks like an API key',
       }),
     ]);
+    expect(JSON.stringify(refused)).not.toContain('vm.lead--secret');
+    // The Sources name it by the path this server saw, which the secret filter passes.
+    expect((await runs.state({})).problems.map((problem) => problem.file)).toContain(
+      'writers/vm.lead/runs/' + iso(NOW - DAY).slice(0, 10) + '/vm.lead--secret.json'
+    );
   });
 
   it('serves the view from the store with filters, identity and history', async () => {
@@ -184,5 +198,133 @@ describe.skipIf(!haveModule)('Scoreboard with the history store', () => {
     const view = await service(false).view(ALL_RUNS);
     expect(view.filters?.available).toBe(false);
     expect(view.history).toEqual({ store: 'off', runs: null, importing: false });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Review 1 regressions with the real module: H1 (no credential in the store), M1 and M2 (the
+// store's winner is the TypeScript reader's). Synthetic values only.
+
+/** The reviewer's synthetic witness (never a real credential). */
+const WITNESS = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123';
+
+/** Files under `dir` holding `needle`, compressed segments decoded. */
+function holding(dir: string, needle: string): string[] {
+  const hits: string[] = [];
+  const walk = (at: string) => {
+    for (const entry of fs.readdirSync(at, { withFileTypes: true })) {
+      const file = path.join(at, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else {
+        let bytes = fs.readFileSync(file);
+        if (file.endsWith('.zst')) bytes = zlib.zstdDecompressSync(bytes);
+        if (bytes.includes(Buffer.from(needle))) hits.push(file);
+      }
+    }
+  };
+  walk(dir);
+  return hits;
+}
+
+async function openStore(dir: string): Promise<AacStore> {
+  const handle = new loaded.module!.NativeStore();
+  await handle.call('open', JSON.stringify({ dir }));
+  return new AacStore(handle, dir);
+}
+
+describe.skipIf(!haveModule)('Scoreboard v2 review regressions', () => {
+  it('H1: a credential in a run file name reaches neither the DB nor the ledger', async () => {
+    const box = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-sb-h1-'));
+    try {
+      const shareRoot = path.join(box, 'share');
+      fs.mkdirSync(path.join(shareRoot, 'v1', 'catalog'), { recursive: true });
+      for (const name of fs.readdirSync(CATALOG))
+        fs.copyFileSync(path.join(CATALOG, name), path.join(shareRoot, 'v1', 'catalog', name));
+      const day = iso(NOW - DAY).slice(0, 10);
+      const dir = path.join(shareRoot, 'v1', 'writers', 'vm.lead', 'runs', day);
+      fs.mkdirSync(dir, { recursive: true });
+      // The reviewer's witness: the credential as the file name and the run id.
+      const named = runDoc('vm.lead', WITNESS, { endedAt: iso(NOW - DAY), writtenAt: iso(NOW - DAY) });
+      fs.writeFileSync(path.join(dir, `${WITNESS}.json`), JSON.stringify(named));
+      // A clean document under a credential-shaped name: refused for the name alone.
+      const clean = runDoc('vm.lead', 'clean-1', { endedAt: iso(NOW - DAY), writtenAt: iso(NOW - DAY) });
+      fs.writeFileSync(path.join(dir, `vm.lead--${WITNESS}-copy.json`), JSON.stringify(clean));
+      writeRun(shareRoot, runDoc('vm.lead', 'ok-1', { endedAt: iso(NOW - DAY) }), day);
+      const storeDir = path.join(box, 'store');
+      let opened = await openStore(storeDir);
+      const runsStore = new RunsStore({ store: () => opened, root: () => shareRoot, now: () => NOW });
+      const pass = await runsStore.pass({ full: true });
+      expect([pass.recorded, pass.refused]).toEqual([1, 2]);
+      const refused = await opened.runs<RefusedRow[]>('runsRefused');
+      expect(JSON.stringify(refused)).not.toContain(WITNESS);
+      // Both names carry it, so both are refused for the name before their text is read.
+      expect(refused.map((row) => row.reason)).toEqual([SECRET_NAME_REASON, SECRET_NAME_REASON]);
+      expect(refused.every((row) => row.writer === 'vm.lead' && row.pathHash.length === 32)).toBe(true);
+      // Not in memory for display either: named by writer and hash only.
+      const files = (await runsStore.state({})).problems.map((problem) => problem.file);
+      expect(JSON.stringify(files)).not.toContain(WITNESS);
+      expect(files.filter((file) => file.includes('(name withheld '))).toHaveLength(2);
+      await opened.close();
+      expect(holding(storeDir, WITNESS)).toEqual([]);
+      opened = await openStore(storeDir);
+      expect(JSON.stringify(await opened.runs('runsRefused'))).not.toContain(WITNESS);
+      await opened.close();
+      expect(holding(storeDir, WITNESS)).toEqual([]);
+      // The share copy does hold it, so the byte check is not vacuous.
+      expect(holding(shareRoot, WITNESS).length).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(box, { recursive: true, force: true });
+    }
+  });
+
+  it('M1 and M2: the stored winner is the TypeScript reader winner, over passes and fresh', async () => {
+    const box = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-sb-m12-'));
+    try {
+      const shareRoot = path.join(box, 'share');
+      fs.mkdirSync(path.join(shareRoot, 'v1', 'catalog'), { recursive: true });
+      for (const name of fs.readdirSync(CATALOG))
+        fs.copyFileSync(path.join(CATALOG, name), path.join(shareRoot, 'v1', 'catalog', name));
+      const written = iso(NOW - 3 * DAY);
+      const put = (local: string, day: string, fields: Record<string, unknown>) =>
+        writeRun(
+          shareRoot,
+          runDoc('vm.lead', local, { endedAt: written, writtenAt: written, ...fields }),
+          day
+        );
+      const opened = await openStore(path.join(box, 'store'));
+      const runsStore = new RunsStore({ store: () => opened, root: () => shareRoot, now: () => NOW });
+      // M2: A (done) on Nov 01, the same bytes on Nov 03, then B (failed) on Nov 02; same seq
+      // and writtenAt, so the greatest path decides.
+      const a = put('m2', '2026-11-01', { outcome: 'done' });
+      await runsStore.pass({ full: true });
+      fs.mkdirSync(path.join(shareRoot, 'v1/writers/vm.lead/runs/2026-11-03'), { recursive: true });
+      fs.copyFileSync(a, a.replace('2026-11-01', '2026-11-03'));
+      await runsStore.pass({ full: true });
+      put('m2', '2026-11-02', { outcome: 'failed' });
+      // M1: two corrections above 2^32, the higher first.
+      put('m1', '2026-11-01', { seq: 2 ** 32 + 1, outcome: 'done' });
+      await runsStore.pass({ full: true });
+      put('m1', '2026-11-02', { seq: 2 ** 32, outcome: 'failed' });
+      await runsStore.pass({ full: true });
+      const reader = new RunsReader({ root: () => shareRoot, now: () => NOW });
+      await reader.scan();
+      const expected = Object.fromEntries(
+        reader.snapshot().runs.map((run) => [run.doc.id, [run.file, run.doc.seq, run.doc.outcome]])
+      );
+      const got = (stored: Awaited<ReturnType<RunsStore['query']>>) =>
+        Object.fromEntries(stored.map((run) => [run.doc.id, [run.file, run.doc.seq, run.doc.outcome]]));
+      expect(expected['vm.lead--m2']).toEqual(['writers/vm.lead/runs/2026-11-03/vm.lead--m2.json', 1, 'done']);
+      expect(expected['vm.lead--m1']).toEqual(['writers/vm.lead/runs/2026-11-01/vm.lead--m1.json', 2 ** 32 + 1, 'done']);
+      expect(got(await runsStore.query({}))).toEqual(expected);
+      // A fresh store reading every file at once agrees too.
+      const fresh = await openStore(path.join(box, 'fresh'));
+      const freshRuns = new RunsStore({ store: () => fresh, root: () => shareRoot, now: () => NOW });
+      await freshRuns.pass({ full: true });
+      expect(got(await freshRuns.query({}))).toEqual(expected);
+      await fresh.close();
+      await opened.close();
+    } finally {
+      fs.rmSync(box, { recursive: true, force: true });
+    }
   });
 });

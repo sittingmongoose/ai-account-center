@@ -637,3 +637,231 @@ fn identity_table_orders_families_and_efforts() {
     assert_eq!(table["models"]["openai/gpt-6.1-sol"]["family"], json!("openai"));
     assert_eq!(table["efforts"][5], json!("xhigh"));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Review 1 regressions (H1, M1, M2). Synthetic values only.
+
+/// A synthetic credential shape (never a real one): the reviewer's witness.
+const WITNESS: &str = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123";
+
+/// Whether `needle` occurs in any file of the store folder, compressed segments decoded.
+fn store_holds(dir: &Path, needle: &[u8]) -> Vec<String> {
+    let mut hits = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(at) = stack.pop() {
+        for entry in fs::read_dir(&at).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let mut bytes = fs::read(&path).unwrap();
+            if path.extension().is_some_and(|e| e == "zst") {
+                bytes = zstd::stream::decode_all(bytes.as_slice()).unwrap();
+            }
+            if bytes.windows(needle.len()).any(|w| w == needle) {
+                hits.push(path.display().to_string());
+            }
+        }
+    }
+    hits
+}
+
+#[test]
+fn a_refused_file_keeps_no_name_and_no_credential_reaches_the_db_or_the_ledger() {
+    let share = Share::new("runs-h1");
+    let day = &iso(T0 + DAY)[..10];
+    let dir = share.root.join("v1/writers/vm.lead/runs").join(day);
+    fs::create_dir_all(&dir).unwrap();
+    // The witness as a file name and run id; and as text inside a document with a plain name.
+    let mut doc = json!({
+        "schema": "agent-reports/run@1", "id": format!("vm.lead--{WITNESS}"), "writer": "vm.lead", "seq": 1,
+        "writtenAt": iso(T0 + DAY), "source": "observed",
+        "task": { "id": "t", "type": "build", "title": "plain" },
+        "model": { "id": "gpt-6.1-sol", "provider": "openai", "harness": "codex", "effort": "max" },
+        "endedAt": iso(T0 + DAY), "outcome": "done"
+    });
+    fs::write(dir.join(format!("{WITNESS}.json")), doc.to_string()).unwrap();
+    doc["id"] = json!("vm.lead--plain-1");
+    doc["task"]["title"] = json!(format!("uses {WITNESS}"));
+    fs::write(dir.join("vm.lead--plain-1.json"), doc.to_string()).unwrap();
+    share.run(
+        "vm.lead",
+        "ok-1",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    let store = temp_dir("runs-h1-store");
+    {
+        let engine = open(&store);
+        let (_, record) = pass(&engine, &share, T0 + 10 * DAY, 100, true);
+        assert_eq!(
+            (record["recorded"].as_u64(), record["refused"].as_u64()),
+            (Some(1), Some(2))
+        );
+        let refused = call(&engine, "runsRefused", json!({}));
+        assert!(!refused.to_string().contains(WITNESS), "{refused}");
+        let rows = refused.as_array().unwrap();
+        assert!(
+            rows.iter()
+                .all(|r| r["writer"] == json!("vm.lead") && r["pathHash"].as_str().unwrap().len() == 32)
+        );
+        let reasons: Vec<&str> = rows.iter().map(|r| r["reason"].as_str().unwrap()).collect();
+        assert!(reasons.contains(&"refused: its file name looks like a credential"));
+        assert!(reasons.contains(&"refused: it contains what looks like a credential"));
+        // A second pass reads neither again and adds nothing.
+        let (scan, again) = pass(&engine, &share, T0 + 11 * DAY, 100, true);
+        assert_eq!(scan["files"].as_array().unwrap().len(), 0);
+        assert_eq!(again["refused"], json!(0));
+        engine.close().unwrap();
+    }
+    assert_eq!(
+        store_holds(&store, WITNESS.as_bytes()),
+        Vec::<String>::new(),
+        "after close"
+    );
+    // Reopened, then rebuilt from the ledger: still nowhere.
+    {
+        let engine = open(&store);
+        assert!(!call(&engine, "runsRefused", json!({})).to_string().contains(WITNESS));
+        engine.close().unwrap();
+    }
+    fs::remove_file(store.join("aac.redb")).unwrap();
+    {
+        let engine = open(&store);
+        assert_eq!(call(&engine, "runsRefused", json!({})).as_array().unwrap().len(), 2);
+        engine.close().unwrap();
+    }
+    assert_eq!(
+        store_holds(&store, WITNESS.as_bytes()),
+        Vec::<String>::new(),
+        "after a rebuild"
+    );
+    // The witness file is still in the share copy: the check above is not vacuous.
+    assert!(!store_holds(&share.root, WITNESS.as_bytes()).is_empty());
+}
+
+#[test]
+fn a_sequence_past_u32_keeps_the_highest_correction() {
+    let share = Share::new("runs-m1");
+    let store = temp_dir("runs-m1-store");
+    let big = 1u64 << 32;
+    let engine = open(&store);
+    // The higher sequence first, then a lower one above 2^32, same writtenAt.
+    share.run(
+        "vm.lead",
+        "r1",
+        big + 1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    pass(&engine, &share, T0 + 10 * DAY, 100, false);
+    let path = share.run(
+        "vm.lead",
+        "r1",
+        big,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    let file = share.root.join("v1").join(&path);
+    let text = fs::read_to_string(&file).unwrap().replace("\"done\"", "\"failed\"");
+    fs::write(&file, text).unwrap();
+    pass(&engine, &share, T0 + 11 * DAY, 100, true);
+    let winner = |engine: &Engine| {
+        let all = query(engine, json!({}));
+        assert_eq!(all.len(), 1);
+        (
+            all[0]["doc"]["seq"].as_u64().unwrap(),
+            all[0]["doc"]["outcome"].as_str().unwrap().to_string(),
+        )
+    };
+    assert_eq!(winner(&engine), (big + 1, "done".to_string()));
+    let history = call(&engine, "runHistory", json!({ "runId": "vm.lead--r1" }));
+    let seqs: Vec<u64> = history
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(seqs, vec![big + 1, big]);
+    engine.close().unwrap();
+    drop(engine);
+    let engine = open(&store);
+    assert_eq!(winner(&engine), (big + 1, "done".to_string()), "after reopen");
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_file(store.join("aac.redb")).unwrap();
+    let engine = open(&store);
+    assert_eq!(winner(&engine), (big + 1, "done".to_string()), "after a rebuild");
+}
+
+#[test]
+fn a_copy_at_a_greater_path_keeps_the_typescript_winner() {
+    let share = Share::new("runs-m2");
+    let store = temp_dir("runs-m2-store");
+    let engine = open(&store);
+    let write = |ended: u64, outcome: &str| -> String {
+        // Same run id, seq and writtenAt in every copy: only the path breaks the tie.
+        let path = share.run(
+            "vm.lead",
+            "r1",
+            1,
+            ended,
+            "gpt-6.1-sol",
+            Some("max"),
+            Some("codex"),
+            Some("build"),
+        );
+        let file = share.root.join("v1").join(&path);
+        let doc = fs::read_to_string(&file)
+            .unwrap()
+            .replace(&iso(ended), &iso(T0 + DAY))
+            .replace("\"done\"", &format!("\"{outcome}\""));
+        fs::write(&file, doc).unwrap();
+        path
+    };
+    // Nov 01: A (done). Nov 03: the same A. Nov 02: B (failed).
+    let first = write(T0 + DAY, "done");
+    pass(&engine, &share, T0 + 10 * DAY, 100, false);
+    // The same bytes under Nov 03.
+    let later = first.replace(&iso(T0 + DAY)[..10], &iso(T0 + 3 * DAY)[..10]);
+    let later_file = share.root.join("v1").join(&later);
+    fs::create_dir_all(later_file.parent().unwrap()).unwrap();
+    fs::copy(share.root.join("v1").join(&first), &later_file).unwrap();
+    let (_, copy) = pass(&engine, &share, T0 + 11 * DAY, 100, false);
+    assert_eq!((copy["recorded"].as_u64(), copy["known"].as_u64()), (Some(0), Some(1)));
+    let middle = write(T0 + 2 * DAY, "failed");
+    pass(&engine, &share, T0 + 12 * DAY, 100, false);
+    assert!(first < middle && middle < later);
+    let winner = |engine: &Engine| {
+        let all = query(engine, json!({}));
+        assert_eq!(all.len(), 1);
+        (
+            all[0]["file"].as_str().unwrap().to_string(),
+            all[0]["doc"]["outcome"].as_str().unwrap().to_string(),
+        )
+    };
+    // The highest seq, then writtenAt, then the greatest path: A, seen at Nov 03.
+    assert_eq!(winner(&engine), (later.clone(), "done".to_string()));
+    assert_eq!(call(&engine, "runsStatus", json!({}))["revisions"], json!(2));
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_file(store.join("aac.redb")).unwrap();
+    let engine = open(&store);
+    assert_eq!(winner(&engine), (later.clone(), "done".to_string()), "after a rebuild");
+    // A fresh store reading all three files at once agrees.
+    let fresh = temp_dir("runs-m2-fresh");
+    let other = open(&fresh);
+    pass(&other, &share, T0 + 13 * DAY, 100, true);
+    assert_eq!(winner(&other), (later, "done".to_string()), "fresh ingest");
+}

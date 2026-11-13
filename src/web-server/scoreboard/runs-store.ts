@@ -10,7 +10,7 @@ import type { AacStore } from '../../store/store-service';
 import type { ReportProblem } from '../status/agent-reports-reader';
 import type { RunDoc } from '../status/report-schema';
 import { REPORT_SIZE_CAPS } from '../status/report-schema';
-import { jsonFromBytes } from '../status/schema-helpers';
+import { findSecret, jsonFromBytes } from '../status/schema-helpers';
 import { createHash } from 'crypto';
 import { CATALOG_CAP_BYTES } from './catalog';
 import type { RunsState } from './runs-reader';
@@ -91,6 +91,24 @@ export interface PassState {
 
 const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 
+/** A path's hash, as the store keys files and names refusals (`path_key` in runs.rs). */
+export function pathHash(path: string): string {
+  return createHash('sha256').update(`aac-run-path-v1:${path}`, 'utf8').digest('hex').slice(0, 32);
+}
+
+/** The fixed reason for a file whose name looks like a credential (the store's words too). */
+export const SECRET_NAME_REASON = 'refused: its file name looks like a credential';
+
+/** One refused file as the store keeps it: never its path or name. */
+export interface RefusedRow {
+  pathHash: string;
+  writer: string | null;
+  reason: string | null;
+  size: number;
+  mtimeMs: number;
+  atMs: number;
+}
+
 /** The secret filter over one text: its value when accepted, else the fixed reason. */
 function filtered(text: string, cap: number): { ok: true } | { ok: false; reason: string } {
   const parsed = jsonFromBytes(Buffer.from(text, 'utf8'), cap);
@@ -99,6 +117,11 @@ function filtered(text: string, cap: number): { ok: true } | { ok: false; reason
 
 export class RunsStore {
   private passing: Promise<PassState> | null = null;
+  /**
+   * Paths this server has seen, by their hash, for naming a refused file in the Sources and the
+   * readers check. Memory only, and only paths the secret filter passes: the store keeps none.
+   */
+  private readonly safePaths = new Map<string, string>();
   private lastFullAt = 0;
   last: PassState | null = null;
 
@@ -138,9 +161,25 @@ export class RunsStore {
     if (full) this.lastFullAt = now;
     const files: ScanFile[] = [];
     const refused: Array<Scan['refused'][number] & { sha256?: string }> = [...scan.refused];
+    const remember = (path: string) => {
+      if (findSecret(path) === null) this.safePaths.set(pathHash(path), path);
+    };
+    for (const row of scan.refused) remember(row.path);
     for (const [index, file] of scan.files.entries()) {
       // A backfill hands over thousands of texts: let the server answer between batches.
       if (index > 0 && index % 100 === 0) await new Promise((resolve) => setImmediate(resolve));
+      remember(file.path);
+      // A file's name can hold a credential too: the file is refused and its name kept nowhere.
+      if (findSecret(file.path) !== null) {
+        refused.push({
+          path: file.path,
+          size: file.size,
+          mtimeMs: file.mtimeMs,
+          reason: SECRET_NAME_REASON,
+          sha256: sha256(file.text),
+        });
+        continue;
+      }
       const verdict = filtered(file.text, REPORT_SIZE_CAPS.run);
       if (verdict.ok) files.push(file);
       else
@@ -154,7 +193,8 @@ export class RunsStore {
     }
     const threads: Record<string, string> = {};
     for (const [writer, text] of Object.entries(scan.threads))
-      if (filtered(text, REPORT_SIZE_CAPS.thread).ok) threads[writer] = text;
+      if (findSecret(writer) === null && filtered(text, REPORT_SIZE_CAPS.thread).ok)
+        threads[writer] = text;
     const catalogText = (text: string | null) =>
       text !== null && filtered(text, CATALOG_CAP_BYTES).ok ? text : null;
     const record = await store.runs<RecordResult>('runsRecord', {
@@ -214,15 +254,17 @@ export class RunsStore {
   async state(query: RunsQuery): Promise<RunsState> {
     const store = this.deps.store();
     const runs = await this.query(query);
-    const refused = store
-      ? await store.runs<Array<{ file: string | null; reason: string | null; mtimeMs: number }>>(
-          'runsRefused'
-        )
-      : [];
+    const refused = store ? await store.runs<RefusedRow[]>('runsRefused') : [];
+    // A refused file is named by the path this server saw (when the secret filter passes it),
+    // else by its writer and hash only.
     const problems: ReportProblem[] = [
-      ...refused.flatMap((row) =>
-        row.file && row.reason ? [{ file: row.file, reason: row.reason, since: row.mtimeMs }] : []
-      ),
+      ...refused.map((row) => ({
+        file:
+          this.safePaths.get(row.pathHash) ??
+          `writers/${row.writer ?? 'unknown'}/runs/(name withheld ${row.pathHash.slice(0, 12)})`,
+        reason: row.reason ?? 'refused',
+        since: row.atMs,
+      })),
       ...(this.last?.problems ?? []),
     ];
     return {

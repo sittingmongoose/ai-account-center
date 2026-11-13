@@ -7,12 +7,16 @@
 //! |---|---|---|
 //! | `run_dict`, `run_dict_rev` | kind u8, id u32 / kind u8, text | this projector's own strings |
 //! | `run_meta` | text | current catalog hash, dictionary counters |
-//! | `run_head` | r u32 | the current revision's row (`Head`, binary v1) |
-//! | `run_rev` | r u32, rev u16 | every revision (`Rev`, binary v1): dedupe by run id + content hash |
+//! | `run_head` | r u32 | the winning revision's row (`Head`, binary v2, with the revision count) |
+//! | `run_rev` | r u32, rev u16 | every revision's row (`Head`, binary v2): dedupe by run id + content hash; its path is the greatest path that content was seen at |
 //! | `run_payload` | day u32, block u32 | the original documents, up to 32 per block (raw while open, zstd once full) |
 //! | `run_by_time` | endedAt ms u64, r u32 | current revisions by end time (the page's date range) |
-//! | `run_file` | sha256(path)[0..16] | the file's last stat and content hash (the scan's skip) |
+//! | `run_file` | sha256(path)[0..16] | the file's last stat and content hash (the scan's skip); for a refused file only its writer (when safe), reason and time, never its path or name |
 //! | `run_catalog` | sha256 catalog[0..16] | each catalog version used (zstd) |
+//!
+//! The current revision is the one TypeScript's runs reader would pick: the highest `seq` (the
+//! full accepted range), then the later `writtenAt`, then the greatest path (`run.path` records a
+//! greater path for content already on record).
 //!
 //! Every key is fixed-width big-endian; values carry a leading version byte. Scanning, the
 //! run@1 projection and normalization are here in Rust; the secret check stays the TypeScript
@@ -49,7 +53,7 @@ pub const RUN_FILE: Bytes = TableDefinition::new("run_file");
 pub const RUN_CATALOG: Bytes = TableDefinition::new("run_catalog");
 
 /// Bump when projection rules change: the run tables are then rebuilt from the ledger.
-pub const RUNS_PROJECTOR_VERSION: u32 = 1;
+pub const RUNS_PROJECTOR_VERSION: u32 = 2;
 /// Original documents per payload block.
 pub const BLOCK_DOCS: u16 = 32;
 const ZSTD_LEVEL: i32 = 9;
@@ -124,6 +128,19 @@ fn unhex32(text: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
+fn unhex16(text: &str) -> Option<[u8; 16]> {
+    if text.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, chunk) in text.as_bytes().chunks(2).enumerate() {
+        out[i] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// A path's key in `run_file` and its hash in refusals: the first 16 bytes of
+/// `sha256("aac-run-path-v1:" + path)` (`pathHash` in `src/web-server/scoreboard/runs-store.ts`).
 fn path_key(path: &str) -> [u8; 16] {
     let digest = sha256(format!("aac-run-path-v1:{path}").as_bytes());
     digest[..16].try_into().unwrap()
@@ -260,41 +277,48 @@ pub struct Loc {
     pub slot: u16,
 }
 
-/// The current revision of one run.
+/// One revision's row (binary v2): every revision in `run_rev`, and the winner's copy in
+/// `run_head` with the revision count. `seq` keeps the full accepted range (to 2^53 - 1), and the
+/// path is the greatest path this content was seen at (the winner's tie-break, as TypeScript's).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Head {
     pub flags: u8,
     /// 0 none, 1 pass, 2 fail, 3 cannot-verify.
     pub verdict: u8,
+    /// Revisions of the run (in `run_head`; 0 in `run_rev`).
     pub revisions: u16,
-    pub seq: u32,
+    pub seq: u64,
     pub written_ms: u64,
     pub ingested_ms: u64,
     pub started_ms: u64,
     pub ended_ms: u64,
     pub wall_ms: u64,
+    /// The ledger sequence of the event that recorded this revision.
+    pub event_seq: u64,
     pub sha: [u8; 32],
     pub loc: Loc,
     /// Dictionary ids in `HEAD_IDS` order.
     pub ids: [u32; 26],
 }
 
-const HEAD_LEN: usize = 1 + 1 + 1 + 2 + 4 + 8 * 5 + 32 + 4 + 4 + 2 + 26 * 4;
+const ROW_VERSION: u8 = 2;
+const HEAD_LEN: usize = 1 + 1 + 1 + 2 + 8 * 7 + 32 + 4 + 4 + 2 + 26 * 4;
 
 impl Head {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEAD_LEN);
-        out.push(1);
+        out.push(ROW_VERSION);
         out.push(self.flags);
         out.push(self.verdict);
         out.extend_from_slice(&self.revisions.to_be_bytes());
-        out.extend_from_slice(&self.seq.to_be_bytes());
         for v in [
+            self.seq,
             self.written_ms,
             self.ingested_ms,
             self.started_ms,
             self.ended_ms,
             self.wall_ms,
+            self.event_seq,
         ] {
             out.extend_from_slice(&v.to_be_bytes());
         }
@@ -309,28 +333,29 @@ impl Head {
     }
 
     pub fn decode(b: &[u8]) -> Result<Head> {
-        if b.first() != Some(&1) || b.len() != HEAD_LEN {
-            fail!("unsupported", "run head value version or length");
+        if b.first() != Some(&ROW_VERSION) || b.len() != HEAD_LEN {
+            fail!("unsupported", "run row value version or length");
         }
         let mut ids = [0u32; 26];
         for (i, id) in ids.iter_mut().enumerate() {
-            *id = be_u32(b, 91 + i * 4);
+            *id = be_u32(b, 103 + i * 4);
         }
         Ok(Head {
             flags: b[1],
             verdict: b[2],
             revisions: u16::from_be_bytes([b[3], b[4]]),
-            seq: be_u32(b, 5),
-            written_ms: be_u64(b, 9),
-            ingested_ms: be_u64(b, 17),
-            started_ms: be_u64(b, 25),
-            ended_ms: be_u64(b, 33),
-            wall_ms: be_u64(b, 41),
-            sha: b[49..81].try_into().unwrap(),
+            seq: be_u64(b, 5),
+            written_ms: be_u64(b, 13),
+            ingested_ms: be_u64(b, 21),
+            started_ms: be_u64(b, 29),
+            ended_ms: be_u64(b, 37),
+            wall_ms: be_u64(b, 45),
+            event_seq: be_u64(b, 53),
+            sha: b[61..93].try_into().unwrap(),
             loc: Loc {
-                day: be_u32(b, 81),
-                block: be_u32(b, 85),
-                slot: u16::from_be_bytes([b[89], b[90]]),
+                day: be_u32(b, 93),
+                block: be_u32(b, 97),
+                slot: u16::from_be_bytes([b[101], b[102]]),
             },
             ids,
         })
@@ -371,60 +396,9 @@ mod at {
     pub const T3_THREAD_SOURCE: usize = 25;
 }
 
-/// One revision of a run (every distinct content AAC has seen under the run id).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Rev {
-    pub sha: [u8; 32],
-    pub seq: u32,
-    pub written_ms: u64,
-    pub ingested_ms: u64,
-    pub event_seq: u64,
-    pub loc: Loc,
-    pub catalog: u32,
-    pub path: u32,
-}
-
-const REV_LEN: usize = 1 + 32 + 4 + 8 * 3 + 4 + 4 + 2 + 4 + 4;
-
-impl Rev {
-    fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(REV_LEN);
-        out.push(1);
-        out.extend_from_slice(&self.sha);
-        out.extend_from_slice(&self.seq.to_be_bytes());
-        for v in [self.written_ms, self.ingested_ms, self.event_seq] {
-            out.extend_from_slice(&v.to_be_bytes());
-        }
-        out.extend_from_slice(&self.loc.day.to_be_bytes());
-        out.extend_from_slice(&self.loc.block.to_be_bytes());
-        out.extend_from_slice(&self.loc.slot.to_be_bytes());
-        out.extend_from_slice(&self.catalog.to_be_bytes());
-        out.extend_from_slice(&self.path.to_be_bytes());
-        out
-    }
-
-    fn decode(b: &[u8]) -> Result<Rev> {
-        if b.first() != Some(&1) || b.len() != REV_LEN {
-            fail!("unsupported", "run revision value version or length");
-        }
-        Ok(Rev {
-            sha: b[1..33].try_into().unwrap(),
-            seq: be_u32(b, 33),
-            written_ms: be_u64(b, 37),
-            ingested_ms: be_u64(b, 45),
-            event_seq: be_u64(b, 53),
-            loc: Loc {
-                day: be_u32(b, 61),
-                block: be_u32(b, 65),
-                slot: u16::from_be_bytes([b[69], b[70]]),
-            },
-            catalog: be_u32(b, 71),
-            path: be_u32(b, 75),
-        })
-    }
-}
-
-/// A file's last stat: the scan skips it while size and mtime stay the same.
+/// A file's last stat: the scan skips it while size and mtime stay the same. A refused file's
+/// row holds no path or file name (it is keyed by the path's hash), only the writer when its name
+/// is safe, the reason and when it was refused.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct FileRow {
     /// 1 stored, 2 refused.
@@ -434,25 +408,30 @@ struct FileRow {
     sha: [u8; 32],
     run: u32,
     reason: u32,
+    writer: u32,
+    at_ms: u64,
 }
 
-const FILE_LEN: usize = 1 + 1 + 8 + 8 + 32 + 4 + 4;
+const FILE_VERSION: u8 = 2;
+const FILE_LEN: usize = 1 + 1 + 8 + 8 + 32 + 4 + 4 + 4 + 8;
 
 impl FileRow {
     fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(FILE_LEN);
-        out.push(1);
+        out.push(FILE_VERSION);
         out.push(self.state);
         out.extend_from_slice(&self.size.to_be_bytes());
         out.extend_from_slice(&self.mtime_ms.to_be_bytes());
         out.extend_from_slice(&self.sha);
         out.extend_from_slice(&self.run.to_be_bytes());
         out.extend_from_slice(&self.reason.to_be_bytes());
+        out.extend_from_slice(&self.writer.to_be_bytes());
+        out.extend_from_slice(&self.at_ms.to_be_bytes());
         out
     }
 
     fn decode(b: &[u8]) -> Result<FileRow> {
-        if b.first() != Some(&1) || b.len() != FILE_LEN {
+        if b.first() != Some(&FILE_VERSION) || b.len() != FILE_LEN {
             fail!("unsupported", "run file value version or length");
         }
         Ok(FileRow {
@@ -462,6 +441,8 @@ impl FileRow {
             sha: b[18..50].try_into().unwrap(),
             run: be_u32(b, 50),
             reason: be_u32(b, 54),
+            writer: be_u32(b, 58),
+            at_ms: be_u64(b, 62),
         })
     }
 }
@@ -677,15 +658,35 @@ struct IdentityEventPayload {
     identity: IdentityPayload,
 }
 
+/// A refused file. No path or file name is kept (a file's name may be the very secret it was
+/// refused for): only the path's hash, the writer when its name is safe, the reason and the time.
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RefusedPayload {
-    path: String,
+    #[serde(default)]
+    path_hash: Option<String>,
+    /// Written by builds up to 6baa2f370 only: read to find its hash, never stored again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(default)]
+    writer: Option<String>,
     size: u64,
     mtime_ms: u64,
     sha256: Option<String>,
     reason: String,
     ingested_at_ms: u64,
+}
+
+/// Content already recorded, seen at a greater path: the revision keeps that path as its
+/// tie-break, without a second copy of the document.
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PathPayload {
+    run_id: String,
+    sha256: String,
+    path: String,
+    size: u64,
+    mtime_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
@@ -725,6 +726,7 @@ impl Projector for RunsProjector {
             "run.recorded" => project_recorded(txn, &serde_json::from_value(payload())?, event.sequence_id)?,
             "run.identity" => project_identity(txn, &serde_json::from_value(payload())?)?,
             "run.refused" => project_refused(txn, &serde_json::from_value(payload())?)?,
+            "run.path" => project_path(txn, &serde_json::from_value(payload())?)?,
             _ => {}
         }
         Ok(Vec::new())
@@ -781,20 +783,106 @@ fn identity_ids(txn: &WriteTransaction, ids: &mut [u32; 26], i: &IdentityPayload
     Ok(())
 }
 
-/// Which copy of a run wins: the highest seq, then the later writtenAt, then the later path.
+/// Which copy of a run wins, as TypeScript's runs reader decides (`newer` in runs-reader.ts): the
+/// highest seq, then the later writtenAt, then the later path.
 fn newer(a: (u64, u64, &str), b: (u64, u64, &str)) -> bool {
     a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)) == std::cmp::Ordering::Greater
 }
 
-fn revisions(txn: &WriteTransaction, r: u32) -> Result<Vec<Rev>> {
+fn rev_key(r: u32, index: u16) -> Vec<u8> {
+    Key::new().u32(r).bytes(&index.to_be_bytes()).0
+}
+
+/// Every revision of a run with its index, oldest first.
+fn revisions(txn: &WriteTransaction, r: u32) -> Result<Vec<(u16, Head)>> {
     let table = txn.open_table(RUN_REV)?;
     let lo = Key::new().u32(r).bytes(&[0, 0]);
     let hi = Key::new().u32(r).bytes(&[0xff, 0xff]);
     let mut out = Vec::new();
     for item in table.range(lo.as_slice()..=hi.as_slice())? {
-        out.push(Rev::decode(item?.1.value())?);
+        let (k, v) = item?;
+        let key = k.value();
+        out.push((u16::from_be_bytes([key[4], key[5]]), Head::decode(v.value())?));
     }
     Ok(out)
+}
+
+fn text_of(txn: &WriteTransaction, kind: u8, id: u32) -> Result<Option<String>> {
+    let table = txn.open_table(RUN_DICT)?;
+    let mut dict = Dict::new(&table);
+    dict.text(kind, id)
+}
+
+/// Makes the head the winning revision (by `newer`) and keeps the time index on it.
+fn refresh_head(txn: &WriteTransaction, r: u32) -> Result<()> {
+    let revs = revisions(txn, r)?;
+    if revs.is_empty() {
+        return Ok(());
+    }
+    let mut paths = Vec::with_capacity(revs.len());
+    {
+        let table = txn.open_table(RUN_DICT)?;
+        let mut dict = Dict::new(&table);
+        for (_, row) in &revs {
+            paths.push(dict.field(row, at::PATH)?.unwrap_or_default());
+        }
+    }
+    let mut best = 0;
+    for i in 1..revs.len() {
+        let (a, b) = (&revs[i].1, &revs[best].1);
+        if newer((a.seq, a.written_ms, &paths[i]), (b.seq, b.written_ms, &paths[best])) {
+            best = i;
+        }
+    }
+    let mut head = revs[best].1.clone();
+    head.revisions = revs.len().min(u16::MAX as usize) as u16;
+    let key = Key::new().u32(r).0;
+    if let Some(held) = get(txn, RUN_HEAD, &key)?.map(|b| Head::decode(&b)).transpose()? {
+        txn.open_table(RUN_BY_TIME)?
+            .remove(Key::new().u64(held.ended_ms).u32(r).as_slice())?;
+    }
+    put(txn, RUN_HEAD, &key, &head.encode())?;
+    txn.open_table(RUN_BY_TIME)?
+        .insert(Key::new().u64(head.ended_ms).u32(r).as_slice(), ())?;
+    Ok(())
+}
+
+fn stored_file(
+    txn: &WriteTransaction,
+    path: &str,
+    size: u64,
+    mtime_ms: u64,
+    sha: [u8; 32],
+    r: u32,
+    at_ms: u64,
+) -> Result<()> {
+    put(
+        txn,
+        RUN_FILE,
+        &path_key(path),
+        &FileRow {
+            state: 1,
+            size,
+            mtime_ms,
+            sha,
+            run: r,
+            reason: 0,
+            writer: 0,
+            at_ms,
+        }
+        .encode(),
+    )
+}
+
+/// The same content at another path: a greater path becomes the revision's tie-break.
+fn raise_path(txn: &WriteTransaction, r: u32, index: u16, mut row: Head, path: &str) -> Result<()> {
+    let current = text_of(txn, kind::PATH, row.id(at::PATH))?.unwrap_or_default();
+    if path > current.as_str() {
+        row.ids[at::PATH] = intern(txn, kind::PATH, Some(path))?;
+        put(txn, RUN_REV, &rev_key(r, index), &row.encode())?;
+        refresh_head(txn, r)?;
+    }
+    Ok(())
 }
 
 fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64) -> Result<()> {
@@ -803,76 +891,12 @@ fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64)
     };
     let r = intern(txn, kind::RUN_ID, Some(&p.ids.run_id))?;
     let revs = revisions(txn, r)?;
+    stored_file(txn, &p.path, p.size, p.mtime_ms, sha, r, p.ingested_at_ms)?;
     // Idempotent: a content already recorded under this run id is not a new revision.
-    if revs.iter().any(|rev| rev.sha == sha) {
-        return Ok(());
+    if let Some((index, row)) = revs.iter().find(|(_, row)| row.sha == sha) {
+        return raise_path(txn, r, *index, row.clone(), &p.path);
     }
     let loc = append_doc(txn, (p.ingested_at_ms / DAY_MS) as u32, p.doc.as_bytes())?;
-    let path = intern(txn, kind::PATH, Some(&p.path))?;
-    let catalog = intern(txn, kind::CATALOG, Some(&p.identity.model_catalog_hash))?;
-    let rev = Rev {
-        sha,
-        seq: p.ids.seq.min(u32::MAX as u64) as u32,
-        written_ms: p.ids.observed_at_ms,
-        ingested_ms: p.ingested_at_ms,
-        event_seq,
-        loc: loc.clone(),
-        catalog,
-        path,
-    };
-    put(
-        txn,
-        RUN_REV,
-        Key::new().u32(r).bytes(&(revs.len() as u16).to_be_bytes()).as_slice(),
-        &rev.encode(),
-    )?;
-    put(
-        txn,
-        RUN_FILE,
-        &path_key(&p.path),
-        &FileRow {
-            state: 1,
-            size: p.size,
-            mtime_ms: p.mtime_ms,
-            sha,
-            run: r,
-            reason: 0,
-        }
-        .encode(),
-    )?;
-    let held = get(txn, RUN_HEAD, &Key::new().u32(r).0)?
-        .map(|b| Head::decode(&b))
-        .transpose()?;
-    let mut dict_paths: HashMap<u32, String> = HashMap::new();
-    if let Some(h) = &held {
-        let table = txn.open_table(RUN_DICT)?;
-        let mut dict = Dict::new(&table);
-        if let Some(text) = dict.text(kind::PATH, h.id(at::PATH))? {
-            dict_paths.insert(h.id(at::PATH), text);
-        }
-    }
-    let wins = match &held {
-        None => true,
-        Some(h) => newer(
-            (p.ids.seq, p.ids.observed_at_ms, &p.path),
-            (
-                h.seq as u64,
-                h.written_ms,
-                dict_paths.get(&h.id(at::PATH)).map(String::as_str).unwrap_or(""),
-            ),
-        ),
-    };
-    let revisions = (revs.len() + 1).min(u16::MAX as usize) as u16;
-    if !wins {
-        let mut h = held.expect("a losing revision has a head");
-        h.revisions = revisions;
-        put(txn, RUN_HEAD, &Key::new().u32(r).0, &h.encode())?;
-        return Ok(());
-    }
-    if let Some(h) = &held {
-        txn.open_table(RUN_BY_TIME)?
-            .remove(Key::new().u64(h.ended_ms).u32(r).as_slice())?;
-    }
     let ids = &p.ids;
     let mut flags = 0u8;
     for (on, bit) in [
@@ -888,40 +912,57 @@ fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64)
             flags |= bit;
         }
     }
-    let mut head = Head {
+    let mut row = Head {
         flags,
         verdict: verdict_code(ids.review_verdict.as_deref()),
-        revisions,
-        seq: rev.seq,
+        revisions: 0,
+        seq: ids.seq,
         written_ms: ids.observed_at_ms,
         ingested_ms: p.ingested_at_ms,
         started_ms: ids.started_at_ms.unwrap_or(UNKNOWN),
         ended_ms: ids.event_at_ms,
         wall_ms: ids.wall_ms.unwrap_or(UNKNOWN),
+        event_seq,
         sha,
         loc,
         ids: [0; 26],
     };
-    head.ids[at::WRITER] = intern(txn, kind::WRITER, Some(&ids.writer))?;
-    head.ids[at::MACHINE] = intern(txn, kind::MACHINE, Some(&ids.machine))?;
-    head.ids[at::COMPUTER] = intern(txn, kind::COMPUTER, ids.computer.as_deref())?;
-    head.ids[at::T3_THREAD] = intern(txn, kind::T3_THREAD, ids.t3_thread_id.as_deref())?;
-    head.ids[at::T3_TASK] = intern(txn, kind::T3_TASK, ids.t3_task_id.as_deref())?;
-    head.ids[at::TASK_ID] = intern(txn, kind::TASK_ID, Some(&ids.task_id))?;
-    head.ids[at::TASK_TYPE] = intern(txn, kind::TASK_TYPE, ids.task_type.as_deref())?;
-    head.ids[at::PROJECT] = intern(txn, kind::PROJECT, ids.project_id.as_deref())?;
-    head.ids[at::STREAM] = intern(txn, kind::STREAM, ids.stream_id.as_deref())?;
-    head.ids[at::OUTCOME] = intern(txn, kind::OUTCOME, Some(&ids.outcome))?;
-    head.ids[at::BENCHMARK] = intern(txn, kind::BENCHMARK, ids.benchmark.as_deref())?;
-    head.ids[at::PROVIDER] = intern(txn, kind::PROVIDER, ids.provider.as_deref())?;
-    head.ids[at::ACCOUNT] = intern(txn, kind::ACCOUNT, ids.account_raw.as_deref())?;
-    head.ids[at::PATH] = path;
-    head.ids[at::T3_THREAD_SOURCE] = intern(txn, kind::WORD, ids.t3_thread_source.as_deref())?;
-    identity_ids(txn, &mut head.ids, &p.identity)?;
-    put(txn, RUN_HEAD, &Key::new().u32(r).0, &head.encode())?;
-    txn.open_table(RUN_BY_TIME)?
-        .insert(Key::new().u64(head.ended_ms).u32(r).as_slice(), ())?;
-    Ok(())
+    row.ids[at::WRITER] = intern(txn, kind::WRITER, Some(&ids.writer))?;
+    row.ids[at::MACHINE] = intern(txn, kind::MACHINE, Some(&ids.machine))?;
+    row.ids[at::COMPUTER] = intern(txn, kind::COMPUTER, ids.computer.as_deref())?;
+    row.ids[at::T3_THREAD] = intern(txn, kind::T3_THREAD, ids.t3_thread_id.as_deref())?;
+    row.ids[at::T3_TASK] = intern(txn, kind::T3_TASK, ids.t3_task_id.as_deref())?;
+    row.ids[at::TASK_ID] = intern(txn, kind::TASK_ID, Some(&ids.task_id))?;
+    row.ids[at::TASK_TYPE] = intern(txn, kind::TASK_TYPE, ids.task_type.as_deref())?;
+    row.ids[at::PROJECT] = intern(txn, kind::PROJECT, ids.project_id.as_deref())?;
+    row.ids[at::STREAM] = intern(txn, kind::STREAM, ids.stream_id.as_deref())?;
+    row.ids[at::OUTCOME] = intern(txn, kind::OUTCOME, Some(&ids.outcome))?;
+    row.ids[at::BENCHMARK] = intern(txn, kind::BENCHMARK, ids.benchmark.as_deref())?;
+    row.ids[at::PROVIDER] = intern(txn, kind::PROVIDER, ids.provider.as_deref())?;
+    row.ids[at::ACCOUNT] = intern(txn, kind::ACCOUNT, ids.account_raw.as_deref())?;
+    row.ids[at::PATH] = intern(txn, kind::PATH, Some(&p.path))?;
+    row.ids[at::T3_THREAD_SOURCE] = intern(txn, kind::WORD, ids.t3_thread_source.as_deref())?;
+    identity_ids(txn, &mut row.ids, &p.identity)?;
+    let index = revs.len().min(u16::MAX as usize) as u16;
+    put(txn, RUN_REV, &rev_key(r, index), &row.encode())?;
+    refresh_head(txn, r)
+}
+
+fn project_path(txn: &WriteTransaction, p: &PathPayload) -> Result<()> {
+    let Some(sha) = unhex32(&p.sha256) else {
+        fail!("invalid", "run sha256");
+    };
+    let r = {
+        let rev = txn.open_table(RUN_DICT_REV)?;
+        lookup_id(&rev, kind::RUN_ID, &p.run_id)?
+    };
+    let Some(r) = r else { return Ok(()) };
+    let revs = revisions(txn, r)?;
+    let Some((index, row)) = revs.into_iter().find(|(_, row)| row.sha == sha) else {
+        return Ok(());
+    };
+    stored_file(txn, &p.path, p.size, p.mtime_ms, sha, r, row.ingested_ms)?;
+    raise_path(txn, r, index, row, &p.path)
 }
 
 fn project_identity(txn: &WriteTransaction, p: &IdentityEventPayload) -> Result<()> {
@@ -933,40 +974,51 @@ fn project_identity(txn: &WriteTransaction, p: &IdentityEventPayload) -> Result<
         lookup_id(&rev, kind::RUN_ID, &p.run_id)?
     };
     let Some(r) = r else { return Ok(()) };
-    let Some(bytes) = get(txn, RUN_HEAD, &Key::new().u32(r).0)? else {
-        return Ok(());
-    };
-    let mut head = Head::decode(&bytes)?;
-    // A re-keying names the revision it was computed for; a head that has moved on keeps its own.
-    if head.sha != sha {
-        return Ok(());
+    // A re-keying names the revision it was computed for; the head follows the winner.
+    for (index, mut row) in revisions(txn, r)? {
+        if row.sha != sha {
+            continue;
+        }
+        identity_ids(txn, &mut row.ids, &p.identity)?;
+        if p.identity.effort_conflict {
+            row.flags |= F_EFFORT_CONFLICT;
+        } else {
+            row.flags &= !F_EFFORT_CONFLICT;
+        }
+        put(txn, RUN_REV, &rev_key(r, index), &row.encode())?;
     }
-    identity_ids(txn, &mut head.ids, &p.identity)?;
-    if p.identity.effort_conflict {
-        head.flags |= F_EFFORT_CONFLICT;
-    } else {
-        head.flags &= !F_EFFORT_CONFLICT;
-    }
-    put(txn, RUN_HEAD, &Key::new().u32(r).0, &head.encode())
+    refresh_head(txn, r)
 }
 
+/// The reason words kept when a reason itself looks like a credential (it may quote a folder).
+const WITHHELD_REASON: &str = "refused (the reason named what looks like a credential)";
+
 fn project_refused(txn: &WriteTransaction, p: &RefusedPayload) -> Result<()> {
-    let reason = intern(txn, kind::REASON, Some(&p.reason))?;
-    intern(txn, kind::PATH, Some(&p.path))?;
-    put(
-        txn,
-        RUN_FILE,
-        &path_key(&p.path),
-        &FileRow {
-            state: 2,
-            size: p.size,
-            mtime_ms: p.mtime_ms,
-            sha: p.sha256.as_deref().and_then(unhex32).unwrap_or([0; 32]),
-            run: 0,
-            reason,
-        }
-        .encode(),
-    )
+    let key: [u8; 16] = match (&p.path_hash, &p.path) {
+        (Some(hash), _) => match unhex16(hash) {
+            Some(k) => k,
+            None => fail!("invalid", "refused path hash"),
+        },
+        (None, Some(legacy)) => path_key(legacy),
+        (None, None) => return Ok(()),
+    };
+    let reason = if crate::secret::looks_secret(&p.reason) {
+        WITHHELD_REASON
+    } else {
+        p.reason.as_str()
+    };
+    let writer = p.writer.as_deref().filter(|w| !crate::secret::looks_secret(w));
+    let row = FileRow {
+        state: 2,
+        size: p.size,
+        mtime_ms: p.mtime_ms,
+        sha: p.sha256.as_deref().and_then(unhex32).unwrap_or([0; 32]),
+        run: 0,
+        reason: intern(txn, kind::REASON, Some(reason))?,
+        writer: intern(txn, kind::WRITER, writer)?,
+        at_ms: p.ingested_at_ms,
+    };
+    put(txn, RUN_FILE, &key, &row.encode())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1417,24 +1469,27 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
             },
         )?);
     }
-    // Which (run id, sha) pairs and paths are already stored.
-    let mut seen: HashSet<(String, [u8; 32])> = HashSet::new();
-    let stored = |run_id: &str, sha: &[u8; 32]| -> Result<bool> {
+    // The greatest path each (run id, sha) is known at: on record, or seen earlier in this call.
+    let mut known_paths: HashMap<(String, [u8; 32]), String> = HashMap::new();
+    let stored_path = |run_id: &str, sha: &[u8; 32]| -> Result<Option<String>> {
         engine.with_db(|db| {
             let read = db.begin_read()?;
             let rev = read.open_table(RUN_DICT_REV)?;
             let Some(r) = lookup_id(&rev, kind::RUN_ID, run_id)? else {
-                return Ok(false);
+                return Ok(None);
             };
+            let dict_table = read.open_table(RUN_DICT)?;
+            let mut dict = Dict::new(&dict_table);
             let table = read.open_table(RUN_REV)?;
             let lo = Key::new().u32(r).bytes(&[0, 0]);
             let hi = Key::new().u32(r).bytes(&[0xff, 0xff]);
             for item in table.range(lo.as_slice()..=hi.as_slice())? {
-                if Rev::decode(item?.1.value())?.sha == *sha {
-                    return Ok(true);
+                let row = Head::decode(item?.1.value())?;
+                if row.sha == *sha {
+                    return Ok(Some(dict.field(&row, at::PATH)?.unwrap_or_default()));
                 }
             }
-            Ok(false)
+            Ok(None)
         })
     };
     let file_state = |path: &str| -> Result<Option<FileRow>> {
@@ -1450,18 +1505,37 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
         .iter()
         .map(|(w, text)| (w.clone(), thread_facts(text, w)))
         .collect();
+    let machines_owned = machine_ids();
+    let machines: Vec<&str> = machines_owned.iter().map(String::as_str).collect();
+    // A refusal keeps the writer only when its folder name is a writer name and nothing like a
+    // credential.
+    let safe_writer = |path: &str| -> Option<String> {
+        writer_of_path(path)
+            .filter(|w| run_schema::is_writer_name(w, &machines) && !crate::secret::looks_secret(w))
+            .map(str::to_string)
+    };
     let (mut recorded, mut known, mut refused) = (0usize, 0usize, 0usize);
     // (path, size, mtime, sha, state): a stat refresh of content already on record.
     let mut touch: Vec<(String, u64, u64, [u8; 32], u8)> = Vec::new();
+    // A refused file is recorded by its path's hash: its path or name is never kept, nor put in
+    // the event's idempotency key.
     let refuse =
         |events: &mut Vec<Event>, path: &str, size: u64, mtime: u64, sha: Option<String>, reason: &str| -> Result<()> {
-            let key = format!("run.refused:{path}:{}:{reason}", sha.clone().unwrap_or_default());
+            let path_hash = hex(&path_key(path));
+            let reason = if crate::secret::looks_secret(reason) {
+                WITHHELD_REASON
+            } else {
+                reason
+            };
+            let key = format!("run.refused:{path_hash}:{}", sha.as_deref().unwrap_or("-"));
             events.push(event(
                 "run.refused",
                 args.now_ms,
                 key,
                 &RefusedPayload {
-                    path: path.to_string(),
+                    path_hash: Some(path_hash),
+                    path: None,
+                    writer: safe_writer(path),
                     size,
                     mtime_ms: mtime,
                     sha256: sha,
@@ -1487,6 +1561,24 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
     for f in &args.files {
         let sha = sha256(f.text.as_bytes());
         let sha_hex = hex(&sha);
+        // A file's name can hold a credential too: such a file is refused and its name never kept.
+        if crate::secret::looks_secret(&f.path) {
+            if !file_state(&f.path)?.is_some_and(|row| row.state == 2 && row.sha == sha) {
+                refuse(
+                    &mut events,
+                    &f.path,
+                    f.size,
+                    f.mtime_ms,
+                    Some(sha_hex),
+                    "refused: its file name looks like a credential",
+                )?;
+                refused += 1;
+            } else {
+                touch.push((f.path.clone(), f.size, f.mtime_ms, sha, 2));
+                known += 1;
+            }
+            continue;
+        }
         let Some(writer) = writer_of_path(&f.path) else {
             refuse(
                 &mut events,
@@ -1527,11 +1619,36 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
             continue;
         }
         let run_id = projected["id"].as_str().unwrap_or("").to_string();
-        if !seen.insert((run_id.clone(), sha)) || stored(&run_id, &sha)? {
-            touch.push((f.path.clone(), f.size, f.mtime_ms, sha, 1));
+        let key = (run_id.clone(), sha);
+        let held = match known_paths.get(&key) {
+            Some(path) => Some(path.clone()),
+            None => stored_path(&run_id, &sha)?,
+        };
+        if let Some(greatest) = held {
+            // The same content again. A greater path is the winner's tie-break (as TypeScript's
+            // reader), so it is recorded; any other path only refreshes the scan's skip row.
+            if f.path > greatest {
+                events.push(event(
+                    "run.path",
+                    args.now_ms,
+                    format!("run.path:{run_id}:{sha_hex}:{}", hex(&path_key(&f.path))),
+                    &PathPayload {
+                        run_id: run_id.clone(),
+                        sha256: sha_hex,
+                        path: f.path.clone(),
+                        size: f.size,
+                        mtime_ms: f.mtime_ms,
+                    },
+                )?);
+                known_paths.insert(key, f.path.clone());
+            } else {
+                known_paths.insert(key, greatest);
+                touch.push((f.path.clone(), f.size, f.mtime_ms, sha, 1));
+            }
             known += 1;
             continue;
         }
+        known_paths.insert(key, f.path.clone());
         let ids = run_ids(&projected, threads.get(writer).unwrap_or(&ThreadFacts::default()));
         let identity = run_identity::identify(&catalog, &written_of(&projected));
         events.push(event(
@@ -1571,8 +1688,8 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                         mtime_ms: *mtime,
                         ..FileRow::decode(&bytes)?
                     },
-                    // The same content under a second path: remember the path so it is not read
-                    // on every pass.
+                    // The same content under another path: remember the path's stat so it is not
+                    // read on every pass (keyed by its hash; no path text).
                     None => FileRow {
                         state: *state,
                         size: *size,
@@ -1580,6 +1697,8 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                         sha: *sha,
                         run: 0,
                         reason: 0,
+                        writer: 0,
+                        at_ms: args.now_ms,
                     },
                 };
                 put(&txn, RUN_FILE, &path_key(path), &row.encode())?;
@@ -1619,17 +1738,19 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
     }))
 }
 
-/// Re-normalizes every current revision under a new catalog and records a `run.identity` for
-/// each whose identity changed; earlier identities stay in the ledger.
+/// Re-normalizes every revision under a new catalog and records a `run.identity` for each whose
+/// identity changed; earlier identities stay in the ledger.
 fn rekey(engine: &Engine, catalog: &Catalog, now: u64) -> Result<usize> {
     let mut changed: Vec<(String, [u8; 32], Identity)> = Vec::new();
     engine.with_db(|db| {
         let read = db.begin_read()?;
-        let heads = read.open_table(RUN_HEAD)?;
+        // Every revision, not only the current ones: a later winner change must not bring back
+        // an identity from an older catalog.
+        let rows = read.open_table(RUN_REV)?;
         let dict_table = read.open_table(RUN_DICT)?;
         let mut dict = Dict::new(&dict_table);
         let mut memo: HashMap<(u32, u32, u32), Identity> = HashMap::new();
-        for item in heads.iter()? {
+        for item in rows.iter()? {
             let (k, v) = item?;
             let r = be_u32(k.value(), 0);
             let head = &Head::decode(v.value())?;
@@ -1886,9 +2007,9 @@ pub fn original(engine: &Engine, run_id: &str, sha: Option<&str>) -> Result<Json
                 let hi = Key::new().u32(r).bytes(&[0xff, 0xff]);
                 let mut found = None;
                 for item in table.range(lo.as_slice()..=hi.as_slice())? {
-                    let rev = Rev::decode(item?.1.value())?;
-                    if rev.sha == want {
-                        found = Some(rev.loc);
+                    let row = Head::decode(item?.1.value())?;
+                    if row.sha == want {
+                        found = Some(row.loc);
                     }
                 }
                 found
@@ -1927,32 +2048,25 @@ pub fn history(engine: &Engine, run_id: &str) -> Result<Json> {
         let hi = Key::new().u32(r).bytes(&[0xff, 0xff]);
         let mut out = Vec::new();
         for item in table.range(lo.as_slice()..=hi.as_slice())? {
-            let rev = Rev::decode(item?.1.value())?;
+            let row = Head::decode(item?.1.value())?;
             out.push(json!({
-                "sha256": hex(&rev.sha), "seq": rev.seq, "writtenAtMs": rev.written_ms,
-                "ingestedAtMs": rev.ingested_ms, "eventSeq": rev.event_seq,
-                "path": dict.text(kind::PATH, rev.path)?, "catalogHash": dict.text(kind::CATALOG, rev.catalog)?,
+                "sha256": hex(&row.sha), "seq": row.seq, "writtenAtMs": row.written_ms,
+                "ingestedAtMs": row.ingested_ms, "eventSeq": row.event_seq,
+                "path": dict.field(&row, at::PATH)?, "catalogHash": dict.field(&row, at::CATALOG)?,
             }));
         }
         Ok(Json::Array(out))
     })
 }
 
-/// Refused files on record, newest content first by path.
+/// Refused files on record: the path's hash, the writer when its name is safe, the reason and
+/// when it was refused. No path or file name is kept for a refused file.
 pub fn refused(engine: &Engine) -> Result<Json> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
         let files = read.open_table(RUN_FILE)?;
         let dict_table = read.open_table(RUN_DICT)?;
         let mut dict = Dict::new(&dict_table);
-        let rev = read.open_table(RUN_DICT_REV)?;
-        // Paths are interned; the file table is keyed by their hash, so read them back by id.
-        let mut by_key: HashMap<[u8; 16], String> = HashMap::new();
-        for item in rev.range(Key::new().u8(kind::PATH).as_slice()..Key::new().u8(kind::PATH + 1).as_slice())? {
-            let (k, _) = item?;
-            let text = String::from_utf8_lossy(&k.value()[1..]).into_owned();
-            by_key.insert(path_key(&text), text);
-        }
         let mut out = Vec::new();
         for item in files.iter()? {
             let (k, v) = item?;
@@ -1960,15 +2074,18 @@ pub fn refused(engine: &Engine) -> Result<Json> {
             if row.state != 2 {
                 continue;
             }
-            let key: [u8; 16] = k.value().try_into().unwrap_or([0; 16]);
             out.push(json!({
-                "file": by_key.get(&key),
+                "pathHash": hex(k.value()),
+                "writer": dict.text(kind::WRITER, row.writer)?,
                 "reason": dict.text(kind::REASON, row.reason)?,
                 "size": row.size,
                 "mtimeMs": row.mtime_ms,
+                "atMs": row.at_ms,
             }));
         }
-        out.sort_by(|a, b| a["file"].as_str().cmp(&b["file"].as_str()));
+        out.sort_by(|a, b| {
+            (a["writer"].as_str(), a["pathHash"].as_str()).cmp(&(b["writer"].as_str(), b["pathHash"].as_str()))
+        });
         Ok(Json::Array(out))
     })
 }
