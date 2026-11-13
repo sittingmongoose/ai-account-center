@@ -71,3 +71,5 @@ native/aac-status/prebuilt/
 
 # Rust rewrite foundation workspace
 /target/
+native/aac-usage/target/
+native/aac-usage/prebuilt/

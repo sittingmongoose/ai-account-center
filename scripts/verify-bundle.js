@@ -406,6 +406,20 @@ if (require.main === module) {
     );
     process.exitCode = 1;
   }
+  try {
+    const result = require('./build-usage-scan.js').verifyDist();
+    if (result.targets.length)
+      console.log(`[OK] Usage-log scanner for ${result.targets.join(', ')} matches its manifest.`);
+    else
+      console.warn(
+        '[!] No usage-log scanner in this build: every computer is read by the Python helper. Build it on each target with: bun run usage-scan:build'
+      );
+  } catch (error) {
+    console.error(
+      `[X] ${error instanceof Error ? error.message : 'Usage-log scanner verification failed.'}`
+    );
+    process.exitCode = 1;
+  }
 }
 
 module.exports = {

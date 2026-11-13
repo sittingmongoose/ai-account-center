@@ -1,0 +1,236 @@
+//! Codex rollouts (`rollout-*.jsonl` and `.jsonl.zst` under `sessions` and `archived_sessions`):
+//! cumulative `token_count` events differenced per file. The Python helper's `_parse_codex_line`.
+
+use super::LineBox;
+use crate::collector::Collector;
+use crate::discover::{self, Env, T3Instance};
+use crate::util;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+
+/// The conversation id a rollout's file name ends with (`...-<uuid>.jsonl[.zst]`), lower case.
+pub fn conversation_id(name: &str) -> Option<String> {
+    let stem = name
+        .strip_suffix(".jsonl.zst")
+        .or_else(|| name.strip_suffix(".jsonl"))?;
+    if stem.len() < 36 {
+        return None;
+    }
+    let tail = &stem[stem.len() - 36..];
+    let ok = tail.char_indices().all(|(i, c)| match i {
+        8 | 13 | 18 | 23 => c == '-',
+        _ => c.is_ascii_hexdigit(),
+    });
+    if ok { Some(tail.to_lowercase()) } else { None }
+}
+
+fn number(value: Option<&Value>) -> f64 {
+    match value {
+        Some(Value::Number(n)) => match n.as_f64() {
+            Some(v) if v.is_finite() && v > 0.0 => v,
+            _ => 0.0,
+        },
+        _ => 0.0,
+    }
+}
+
+/// Codex's TokenUsage: cached reads and cache writes are details of input_tokens.
+/// Returns (uncached input, cache write, cache read, output).
+fn snapshot(value: Option<&Value>) -> Option<[f64; 4]> {
+    let value = value?.as_object()?;
+    let cache_read = number(value.get("cached_input_tokens"));
+    let cache_write = number(value.get("cache_write_input_tokens"));
+    Some([
+        (number(value.get("input_tokens")) - cache_read - cache_write).max(0.0),
+        cache_write,
+        cache_read,
+        number(value.get("output_tokens")),
+    ])
+}
+
+pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &str, line_box: &mut LineBox) {
+    // Pre-filter before parsing, so prompts and tool output are never decoded.
+    if !line.contains("\"type\"") {
+        return;
+    }
+    let meta = line.contains("\"session_meta\"");
+    let turn = line.contains("\"turn_context\"");
+    if !meta && !turn && !line.contains("\"event_msg\"") {
+        return;
+    }
+    if !line.contains("\"token_count\"") && !meta && !turn {
+        return;
+    }
+    let Ok(record) = serde_json::from_str::<Value>(line) else {
+        return;
+    };
+    let payload = record.get("payload").filter(|p| p.is_object());
+    let kind_of = record.get("type").and_then(Value::as_str);
+    if kind_of == Some("session_meta")
+        && let Some(payload) = payload
+    {
+        if let Some(session) = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|s| !util::py_strip(s).is_empty())
+        {
+            line_box.session = Some(session.to_string());
+        }
+        if let Some(provider) = payload
+            .get("model_provider")
+            .and_then(Value::as_str)
+            .filter(|s| !util::py_strip(s).is_empty())
+        {
+            line_box.provider = Some(provider.to_string());
+        }
+        if let Some(cwd) = payload.get("cwd").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            line_box.cwd = Some(cwd.to_string());
+        }
+        return;
+    }
+    if kind_of == Some("turn_context")
+        && let Some(payload) = payload
+    {
+        if let Some(model) = payload
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|s| !util::py_strip(s).is_empty())
+        {
+            line_box.model = Some(model.to_string());
+        }
+        if line_box.cwd.is_none()
+            && let Some(cwd) = payload.get("cwd").and_then(Value::as_str).filter(|s| !s.is_empty())
+        {
+            line_box.cwd = Some(cwd.to_string());
+        }
+        return;
+    }
+    let Some(payload) = payload else {
+        return;
+    };
+    if kind_of != Some("event_msg")
+        || payload.get("type").and_then(Value::as_str) != Some("token_count")
+        || line_box.session.is_none()
+        || matches!(line_box.provider.as_deref(), Some("cliproxy") | Some("ccs_runtime"))
+    {
+        return;
+    }
+    let Some(info) = payload.get("info").filter(|i| i.is_object()) else {
+        return;
+    };
+    let Some(total) = snapshot(info.get("total_token_usage")) else {
+        return;
+    };
+    let last = snapshot(info.get("last_token_usage"));
+    if line_box.previous == Some(total) {
+        return;
+    }
+    let delta = match line_box.previous {
+        None => match last {
+            Some(last) if last.iter().any(|v| *v > 0.0) => last,
+            _ => total,
+        },
+        Some(previous) => {
+            let mut delta = [0.0; 4];
+            for i in 0..4 {
+                delta[i] = (total[i] - previous[i]).max(0.0);
+            }
+            delta
+        }
+    };
+    line_box.previous = Some(total);
+    if !delta.iter().any(|v| *v > 0.0) {
+        return;
+    }
+    let Some(timestamp) = record
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .filter(|t| !util::py_strip(t).is_empty())
+    else {
+        return;
+    };
+    let Some(epoch_ms) = util::iso_ms(timestamp) else {
+        return;
+    };
+    if epoch_ms < collector.min_date_ms {
+        return;
+    }
+    let Some(hour) = util::hour_label(epoch_ms, collector.now_ms) else {
+        return;
+    };
+    let raw_model = line_box
+        .model
+        .clone()
+        .unwrap_or_else(|| "unknown-codex-model".to_string());
+    let Some(model) = util::clean_model(Some(&Value::String(raw_model))) else {
+        return;
+    };
+    let tokens = [
+        util::int_of(delta[0]),
+        util::int_of(delta[3]),
+        util::int_of(delta[2]),
+        util::int_of(delta[1]),
+    ];
+    let session = line_box.session.clone().unwrap_or_default();
+    // Python: "c:%s|%s|%s|%s" % (session, timestamp, model, tokens) with tokens a list repr.
+    let record_key = format!(
+        "c:{session}|{timestamp}|{model}|[{}, {}, {}, {}]",
+        tokens[0], tokens[1], tokens[2], tokens[3]
+    );
+    if !collector.keep_record(Some(record_key.clone())) {
+        return;
+    }
+    collector.add(kind, filekey, &model, None, &hour, tokens, 0.0);
+    let session_key = util::session_key(kind, Some(&session));
+    collector.sadd(
+        kind,
+        filekey,
+        session_key.as_deref(),
+        &model,
+        None,
+        epoch_ms,
+        tokens,
+        0.0,
+    );
+    collector.note_session(kind, &session, line_box.cwd.clone());
+    if line_box.offset >= line_box.message_from {
+        let key = util::sha256_hex(format!("aac-msg-v1:{kind}:{record_key}").as_bytes())[..16].to_string();
+        collector.message(
+            kind,
+            filekey,
+            key,
+            epoch_ms,
+            session_key.as_deref(),
+            &model,
+            None,
+            tokens,
+            0.0,
+        );
+    }
+}
+
+/// Python's `_collect_codex`: "not_installed" when no root exists, else "ok".
+pub fn collect(
+    collector: &mut Collector,
+    home: &Path,
+    env: &Env,
+    extra: &[PathBuf],
+    instances: &[T3Instance],
+) -> &'static str {
+    let plan = discover::codex_roots(home, env, extra, instances);
+    for (path, origin) in plan.defaults.iter().chain(plan.others.iter()) {
+        collector.note_root("codex", path, origin);
+    }
+    let dirs = crate::fsx::dedup_dirs(&plan.defaults.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>());
+    let others: Vec<PathBuf> = crate::fsx::dedup_dirs(&plan.others.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>())
+        .into_iter()
+        .filter(|d| crate::fsx::is_dir(d))
+        .collect();
+    if others.is_empty() && !dirs.iter().any(|d| crate::fsx::is_dir(d) && !crate::fsx::is_link(d)) {
+        return "not_installed";
+    }
+    let accept =
+        |name: &str| name.starts_with("rollout-") && (name.ends_with(".jsonl") || name.ends_with(".jsonl.zst"));
+    super::scan_kind_files(collector, "codex", &dirs, &accept, parse_line, None, &others);
+    "ok"
+}

@@ -1,0 +1,40 @@
+[package]
+name = "aac-usage"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+publish = false
+description = "AI Account Center usage-log scanner: discovery and readers, one binary on every computer (DESIGN 11)"
+repository = "https://github.com/sittingmongoose/ai-account-center"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aac-usage-scan"
+path = "src/main.rs"
+
+[dependencies]
+rusqlite = { version = "0.37", features = ["bundled", "hooks"] }
+serde = { version = "1", features = ["derive"] }
+# float_roundtrip: costs parse to the exact double the server reads.
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+sha2 = "0.11"
+zstd = "0.14"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+opt-level = 3
+strip = true
+codegen-units = 1
+panic = "abort"
