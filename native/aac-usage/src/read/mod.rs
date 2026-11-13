@@ -3,8 +3,11 @@
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
+pub mod cursor;
+pub mod devin;
 pub mod muse;
 pub mod omp;
+pub mod sqlite;
 pub mod zcode;
 
 use crate::collector::{self, Collector, MAX_FILES, MAX_LINE_BYTES};

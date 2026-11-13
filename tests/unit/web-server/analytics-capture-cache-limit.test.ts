@@ -36,7 +36,16 @@ import {
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 const NOW = Date.parse('2026-10-02T00:00:00Z');
-const KINDS: AnalyticsRemoteKind[] = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
+const KINDS: AnalyticsRemoteKind[] = [
+  'claude',
+  'codex',
+  'omp',
+  'muse',
+  'zcode',
+  'antigravity',
+  'cursor',
+  'devin',
+];
 const FILE_1 = 'a1'.repeat(32);
 const SESSION = 'c3'.repeat(8);
 const FOLDER = '~/code/private-client-project';

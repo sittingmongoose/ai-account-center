@@ -103,6 +103,9 @@ function answer(overrides: Record<string, unknown> = {}): Record<string, unknown
           : kind === 'claude'
             ? { state: 'not_installed', fingerprints: {} }
             : { state: 'ok', fingerprints: {} },
+      ]).concat([
+        ['cursor', { state: 'not_installed', fingerprints: {} }],
+        ['devin', { state: 'not_installed', fingerprints: {} }],
       ])
     ),
     rows: [
@@ -394,6 +397,19 @@ describe.skipIf(process.platform === 'win32')('the scanner or the labelled Pytho
     now += 60_000;
     const second = await runAnalyticsRemoteScan('nas1-agent', 'nas1', request, deps);
     expect(second.reader).toEqual({ name: 'python-fallback', cause: 'binary_install:copy' });
+  });
+
+  it('never asks Python for Cursor or Devin: they are answered not reached, under the fallback label', async () => {
+    const answer = await runAnalyticsRemoteScan(
+      'nas1-agent',
+      'nas1',
+      { ...request, kinds: ['codex', 'cursor', 'devin'] },
+      { manifest: null, python, now: () => 5_000 }
+    );
+    expect(seen.at(-1)?.kinds).toEqual(['codex']);
+    expect(answer.kinds.cursor).toEqual({ state: 'pending', fingerprints: {} });
+    expect(answer.kinds.devin).toEqual({ state: 'pending', fingerprints: {} });
+    expect(answer.reader?.name).toBe('python-fallback');
   });
 
   it('labels a package without a scanner, and never blames the scanner for an unreachable computer', async () => {

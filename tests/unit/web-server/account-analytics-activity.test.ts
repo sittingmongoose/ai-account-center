@@ -2631,10 +2631,10 @@ describe('native local analytics activity', () => {
     // Every scanned tool on every host says scanning from the first byte, so the
     // loading page can show per-host progress; the fixed entries ride along.
     const scanning = cold.sources.filter((source) => source.state === 'scanning');
-    // Six tools on each of Ubuntu, Mac, Windows and Nas1.
-    expect(scanning).toHaveLength(DASHBOARD_HOSTS.length * 6);
+    // Six tools on Ubuntu; eight on each scanned computer (Cursor and Devin since round 2).
+    expect(scanning).toHaveLength(6 + REMOTE_HOSTS.length * 8);
     expect(scanning.every((source) => source.detail === 'the first scan is running')).toBe(true);
-    // Antigravity is scanned on every host now; Cursor stays a fixed no-local-log entry.
+    // Antigravity is scanned on every host; Cursor is one cell per host (scanned, or the fixed row).
     expect(
       cold.sources.filter((source) => source.tool === 'antigravity' && source.state === 'scanning')
     ).toHaveLength(DASHBOARD_HOSTS.length);
@@ -2706,13 +2706,15 @@ describe('native local analytics activity', () => {
     expect(fixed.every((entry) => entry.state === 'unavailable' && entry.rowCount === 0)).toBe(
       true
     );
-    expect(fixed.every((entry) => entry.detail?.includes('usage is server-side'))).toBe(true);
+    expect(fixed.every((entry) => entry.detail?.includes('not measured on this computer'))).toBe(
+      true
+    );
   });
 
   it('orders the cold grid by tool, then Ubuntu, Mac, Windows and Nas1', () => {
     const cold = coldScanningSourceStates();
-    // Six scanned tools on four computers, plus the four fixed Cursor rows.
-    expect(cold).toHaveLength(DASHBOARD_HOSTS.length * 7);
+    // Six tools and the fixed Cursor row on Ubuntu; eight scanned tools on each other computer.
+    expect(cold).toHaveLength(7 + REMOTE_HOSTS.length * 8);
     const hostsOf = (tool: string) =>
       cold.filter((entry) => entry.tool === tool).map((entry) => entry.host);
     for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity', 'cursor'])
@@ -2750,6 +2752,7 @@ describe('native local analytics activity', () => {
         'antigravity',
         'claude',
         'codex',
+        'devin',
         'muse',
         'omp',
         'zcode',

@@ -51,6 +51,8 @@ type SessionRowKey = (String, String, String, String, String, bool);
 pub struct SessionEvidence {
     pub hash: String,
     pub cwd: Option<String>,
+    /// T3 Code's thread and provider instance for this session, from T3's own record (Cursor).
+    pub t3: Option<(String, String)>,
 }
 
 /// One usage event for `messages[]` (history contract 1.4a).
@@ -110,6 +112,15 @@ pub struct Collector {
     pub unreadable_logs: Vec<(PathBuf, u64)>,
     /// Tests only: log lines left before the scan counts as past its deadline.
     pub lines_left: Option<u64>,
+    /// Records (Cursor runs, Devin replies) whose numbers could not be read, per kind.
+    pub unreadable_records: HashMap<String, usize>,
+    /// Kinds opened immutable while a write-ahead log held data (its rows wait there).
+    pub kind_wal_unread: HashSet<String>,
+    /// Cursor SDK run stores found; with any, presence does not report Cursor apart.
+    pub run_stores: usize,
+    /// Log folders that are links whose target could not be listed or did not answer (DESIGN
+    /// 16.4): (kind, folder) -> "link_unreadable" | "link_unreachable". Never stat'ed again.
+    pub link_states: HashMap<(String, PathBuf), &'static str>,
 }
 
 /// Kinds whose reads resume where the deadline cut them (DESIGN 16.1): Codex, whose largest logs
@@ -158,6 +169,10 @@ impl Collector {
             resume: HashMap::new(),
             unreadable_logs: Vec::new(),
             lines_left: None,
+            unreadable_records: HashMap::new(),
+            kind_wal_unread: HashSet::new(),
+            run_stores: 0,
+            link_states: HashMap::new(),
         }
     }
 
@@ -615,12 +630,47 @@ impl Collector {
         ) else {
             return;
         };
-        let entry = self
-            .sessions
-            .entry(key)
-            .or_insert_with(|| SessionEvidence { hash, cwd: None });
+        let entry = self.sessions.entry(key).or_insert_with(|| SessionEvidence {
+            hash,
+            cwd: None,
+            t3: None,
+        });
         if self.capture_cwd && entry.cwd.is_none() {
             entry.cwd = cwd;
+        }
+    }
+
+    /// A kind's log folders with each probed first (DESIGN 16.4): the real paths of those that
+    /// answer; a link that cannot be listed or does not answer within 2 s is recorded, not read.
+    pub fn reachable_dirs(&mut self, kind: &str, dirs: &[PathBuf]) -> Vec<PathBuf> {
+        let wait = std::time::Duration::from_secs(2).min(
+            self.deadline()
+                .saturating_duration_since(Instant::now())
+                .max(std::time::Duration::from_millis(100)),
+        );
+        let mut found = Vec::new();
+        for (dir, probe) in crate::fsx::probe_dirs(dirs, wait) {
+            match probe {
+                crate::fsx::Probe::Readable(real) => found.push(real),
+                crate::fsx::Probe::Absent => {}
+                crate::fsx::Probe::Unreadable => {
+                    self.link_states.insert((kind.to_string(), dir), "link_unreadable");
+                }
+                crate::fsx::Probe::Unreachable => {
+                    self.link_states.insert((kind.to_string(), dir), "link_unreachable");
+                }
+            }
+        }
+        found
+    }
+
+    /// T3 Code's thread for a session, from T3's own provider-thread record (`t3_native_ref`).
+    pub fn note_t3(&mut self, kind: &str, raw_id: &str, thread: &str, instance: &str) {
+        let Some(key) = util::session_key(kind, Some(raw_id)) else {
+            return;
+        };
+        if let Some(entry) = self.sessions.get_mut(&key) {
+            entry.t3 = Some((thread.to_string(), instance.to_string()));
         }
     }
 

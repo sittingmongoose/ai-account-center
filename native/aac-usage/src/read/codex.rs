@@ -220,16 +220,18 @@ pub fn collect(
 ) -> &'static str {
     let mut plan = discover::codex_roots(home, env, extra, instances);
     // Experiment log folders are read through the copy rule, like other homes' logs (DESIGN 16.5).
-    plan.others.extend(experiments.iter().map(|p| (p.clone(), "experiment")));
+    plan.others
+        .extend(experiments.iter().map(|p| (p.clone(), "experiment")));
     for (path, origin) in plan.defaults.iter().chain(plan.others.iter()) {
         collector.note_root("codex", path, origin);
     }
-    let dirs = crate::fsx::dedup_dirs(&plan.defaults.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>());
-    let others: Vec<PathBuf> = crate::fsx::dedup_dirs(&plan.others.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>())
-        .into_iter()
-        .filter(|d| crate::fsx::is_dir(d))
-        .collect();
-    if others.is_empty() && !dirs.iter().any(|d| crate::fsx::is_dir(d) && !crate::fsx::is_link(d)) {
+    // Every folder is probed first (DESIGN 16.4): a link onto a mount that hangs is reported, never
+    // stat'ed again; one that answers is read through its real path.
+    let defaults: Vec<PathBuf> = plan.defaults.iter().map(|(p, _)| p.clone()).collect();
+    let dirs = crate::fsx::dedup_dirs(&collector.reachable_dirs("codex", &defaults));
+    let candidates: Vec<PathBuf> = plan.others.iter().map(|(p, _)| p.clone()).collect();
+    let others: Vec<PathBuf> = crate::fsx::dedup_dirs(&collector.reachable_dirs("codex", &candidates));
+    if others.is_empty() && dirs.is_empty() {
         return "not_installed";
     }
     let accept =

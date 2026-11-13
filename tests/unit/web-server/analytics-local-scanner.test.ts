@@ -56,6 +56,8 @@ function codexAnswer(complete: boolean, input = 150) {
       version: 2,
       truncated: !complete,
       kinds: {
+        cursor: { state: 'not_installed', fingerprints: {} },
+        devin: { state: 'not_installed', fingerprints: {} },
         codex: complete
           ? { state: 'ok', fingerprints: { [FILE]: PRINT } }
           : {
@@ -140,22 +142,26 @@ describe('the scanner on this computer', () => {
           return codexAnswer(complete);
         },
       });
-    // Catching up: nothing of the scanner's counts yet, and the collector's cell is told why.
+    // Catching up: nothing of the scanner's Codex counts yet, and the collector's cell is told why.
+    // Cursor and Devin have no collector to replace: the scanner owns them from its first answer.
     const first = await load();
+    const ubuntu = (answer: typeof first) =>
+      answer.states.filter((entry) => entry.host === 'ubuntu').map((entry) => entry.tool);
     expect(first.results).toEqual([]);
-    expect(first.states.filter((entry) => entry.host === 'ubuntu')).toEqual([]);
-    expect(first.local.owned).toEqual([]);
+    expect(ubuntu(first)).toEqual(['devin']);
+    expect(first.local.owned.sort()).toEqual(['cursor', 'devin']);
     expect(first.local.catchingUp.codex).toContain('taking over');
     expect(first.local.catchingUp.codex).toContain('rollout-2026-11-03T03-38-31.jsonl.zst');
-    expect(asked[0]).toMatchObject({
-      kinds: ['codex'],
-      experimentRoots: { codex: ['/home/u/t3setup/retained-usage/run/codex'] },
+    // A cold computer gets one call per kind; each carries the experiment folders.
+    expect(asked.flatMap((request) => request.kinds).sort()).toEqual(['codex', 'cursor', 'devin']);
+    expect(asked.find((request) => request.kinds.includes('codex'))?.experimentRoots).toEqual({
+      codex: ['/home/u/t3setup/retained-usage/run/codex'],
     });
-    expect(localScannerOwned(cache).size).toBe(0);
+    expect(localScannerOwned(cache).has('codex')).toBe(false);
     // The first complete read: owned from now on, its rows and cell served.
     complete = true;
     const second = await load();
-    expect(second.local.owned).toEqual(['codex']);
+    expect(second.local.owned.sort()).toEqual(['codex', 'cursor', 'devin']);
     expect(second.results.map((entry) => entry.tool)).toEqual(['codex']);
     expect(
       second.states.find((entry) => entry.host === 'ubuntu' && entry.tool === 'codex')
@@ -163,14 +169,14 @@ describe('the scanner on this computer', () => {
       state: 'ok',
       rowCount: 3,
     });
-    expect([...localScannerOwned(cache)]).toEqual(['codex']);
+    expect([...localScannerOwned(cache)].sort()).toEqual(['codex', 'cursor', 'devin']);
     // After a restart: the saved answer counts while the scanner can run, and not otherwise (the
     // collector reads Codex again then, so serving both would count it twice).
     const ready = loadAnalyticsRemoteCachedSources(MIN_DATE, {
       cacheDir: cache,
       localScanner: () => ({ ok: true }),
     });
-    expect(ready.local.owned).toEqual(['codex']);
+    expect(ready.local.owned.sort()).toEqual(['codex', 'cursor', 'devin']);
     expect(ready.results.map((entry) => entry.tool)).toEqual(['codex']);
     const gone = loadAnalyticsRemoteCachedSources(MIN_DATE, {
       cacheDir: cache,

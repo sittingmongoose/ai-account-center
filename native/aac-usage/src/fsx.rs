@@ -341,3 +341,57 @@ pub fn exists(path: &Path) -> bool {
 pub fn abs(path: &Path) -> PathBuf {
     abspath(path)
 }
+
+/// A log folder's probe (DESIGN 16.4): its real path when it answers and can be listed, or why not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Probe {
+    Readable(PathBuf),
+    /// Not there at all (and not a link): an ordinary absent folder, said nothing about.
+    Absent,
+    /// A link whose target does not exist or cannot be listed.
+    Unreadable,
+    /// It did not answer in time: a link (or a folder under one) onto a mount that hangs.
+    Unreachable,
+}
+
+/// Probe each folder on its own thread, all within `wait` together: a stat of a dead network mount
+/// can block for minutes, and a thread left waiting on one never holds up the scan. Folders are
+/// returned in order, each with its probe.
+pub fn probe_dirs(dirs: &[PathBuf], wait: std::time::Duration) -> Vec<(PathBuf, Probe)> {
+    let deadline = std::time::Instant::now() + wait;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    for (index, dir) in dirs.iter().enumerate() {
+        let sender = sender.clone();
+        let dir = dir.clone();
+        std::thread::spawn(move || {
+            let linked = is_link(&dir);
+            let probe = match fs::canonicalize(&dir) {
+                Ok(real) if fs::read_dir(&real).is_ok() => Probe::Readable(real),
+                _ if linked => Probe::Unreadable,
+                _ => Probe::Absent,
+            };
+            let _ = sender.send((index, probe));
+        });
+    }
+    drop(sender);
+    let mut probes: Vec<Option<Probe>> = vec![None; dirs.len()];
+    let mut left = dirs.len();
+    while left > 0 {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        match receiver.recv_timeout(deadline - now) {
+            Ok((index, probe)) => {
+                probes[index] = Some(probe);
+                left -= 1;
+            }
+            Err(_) => break,
+        }
+    }
+    dirs.iter()
+        .cloned()
+        .zip(probes)
+        .map(|(dir, probe)| (dir, probe.unwrap_or(Probe::Unreachable)))
+        .collect()
+}

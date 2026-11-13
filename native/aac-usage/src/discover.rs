@@ -16,15 +16,10 @@ use std::time::{Duration, Instant};
 pub const SIGNATURE_MAX_CHILDREN: usize = 512;
 const T3_SETTINGS_MAX_BYTES: u64 = 1024 * 1024;
 const CODEX_HOME_MARKERS: [&str; 2] = ["config.toml", "auth.json"];
-const CLAUDE_DIR_MARKERS: [&str; 7] = [
-    ".credentials.json",
-    "settings.json",
-    ".claude.json",
-    "statsig",
-    "todos",
-    "shell-snapshots",
-    "session-env",
-];
+/// Claude Code's own files beside `projects` (DESIGN 16.6). `settings.json`, `session-env`,
+/// `todos` and `statsig` matched Qoder (`~/.qoder`) and Qwen Code (`~/.qwen`) too; each Claude home
+/// on the five computers has one of these four.
+const CLAUDE_DIR_MARKERS: [&str; 4] = [".credentials.json", ".claude.json", "shell-snapshots", "file-history"];
 const PRESENCE_MAX_ENTRIES: usize = 20_000;
 const PRESENCE_MAX_DEPTH: usize = 8;
 pub const AGY_DIRS: [&str; 4] = [
@@ -363,6 +358,15 @@ pub fn installed_signals(home: &Path, env: &Env, kind: &str, instances: &[T3Inst
         "muse" => vec![home.join(".local").join("share").join("muse")],
         "zcode" => vec![home.join(".zcode")],
         "antigravity" => AGY_DIRS.iter().map(|n| home.join(".gemini").join(n)).collect(),
+        "cursor" => vec![home.join(".cursor")],
+        "devin" => vec![
+            home.join(".devin"),
+            home.join(".config").join("devin"),
+            crate::read::devin::database(home, env)
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
+        ],
         _ => Vec::new(),
     };
     if kind == "claude"
@@ -383,6 +387,8 @@ pub fn installed_signals(home: &Path, env: &Env, kind: &str, instances: &[T3Inst
             "omp" => &["omp"],
             "muse" => &["muse"],
             "zcode" => &["zcode"],
+            "cursor" => &["cursor-agent"],
+            "devin" => &["devin"],
             _ => &[],
         },
     };
@@ -393,6 +399,7 @@ pub fn installed_signals(home: &Path, env: &Env, kind: &str, instances: &[T3Inst
         "muse" => (&["muse"], None),
         "zcode" => (&["acpRegistry", "zcode"], Some("zcode")),
         "antigravity" => (&["antigravity"], None),
+        "cursor" => (&["cursor"], None),
         _ => (&[], None),
     };
     let mut signals = Vec::new();
@@ -665,6 +672,18 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
     let mut roots = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (path, origin) in collector.root_origins.get(kind).cloned().unwrap_or_default() {
+        // A link that could not be listed or did not answer is reported as such, never stat'ed again.
+        if let Some(state) = collector.link_states.get(&(kind.to_string(), path.clone())) {
+            if seen.insert(path.clone()) {
+                roots.push(json!({
+                    "root": root_id(kind, &origin, &path, home),
+                    "origin": origin,
+                    "state": state,
+                    "counts": {"filesFound": 0, "newestMtime": Value::Null},
+                }));
+            }
+            continue;
+        }
         let real = realpath(&path);
         if !fsx::exists(&real) || !seen.insert(real.clone()) {
             continue;
@@ -700,4 +719,109 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
             "newestMtime": newest.map(Value::from).unwrap_or(Value::Null),
         },
     })
+}
+
+pub const EXPERIMENT_MAX_DEPTH: usize = 4;
+pub const EXPERIMENT_MAX_ENTRIES: usize = 20_000;
+pub const EXPERIMENT_MAX_ROOTS: usize = 64;
+const EXPERIMENT_KINDS: [&str; 4] = ["codex", "claude", "omp", "muse"];
+
+/// Whether a folder named after a kind holds that kind's logs, within 3 levels and 400 entries:
+/// Codex `rollout-*.jsonl[.zst]`, OMP `<time>_<id>.jsonl`, Muse `<id>/session.jsonl`, Claude any
+/// `.jsonl`.
+fn holds_logs(kind: &str, dir: &Path) -> bool {
+    let mut pending = vec![(dir.to_path_buf(), 0usize)];
+    let mut seen = 0usize;
+    while let Some((folder, depth)) = pending.pop() {
+        let Some(names) = fsx::sorted_names(&folder) else {
+            continue;
+        };
+        for name in names {
+            seen += 1;
+            if seen > 400 {
+                return false;
+            }
+            let path = folder.join(&name);
+            if fsx::is_link(&path) {
+                continue;
+            }
+            if fsx::is_dir(&path) {
+                if depth < 3 && !fsx::skipped(&name) {
+                    pending.push((path, depth + 1));
+                }
+                continue;
+            }
+            let log = match kind {
+                "codex" => name.starts_with("rollout-") && (name.ends_with(".jsonl") || name.ends_with(".jsonl.zst")),
+                "omp" => name.ends_with(".jsonl") && name.contains('_'),
+                "muse" => name == "session.jsonl",
+                _ => name.ends_with(".jsonl"),
+            };
+            if log {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Experiment log folders outside `~/PM-Experiments` (DESIGN 16.5), for example
+/// `~/t3setup-codex-v6/retained-usage/<run>/<kind>/`: a folder named after a kind (codex, claude,
+/// omp, muse) that holds that kind's logs, at most 4 levels below home. Bounded by entries and time;
+/// hidden folders (tool homes and caches), `node_modules`, `PM-Experiments` (its own walk) and git
+/// checkouts (a `.git` inside: fixtures, not logs) are never entered, nor is any link. A Muse
+/// folder's sessions sit one level down, so each of its sub-folders is the root.
+pub fn experiment_roots(home: &Path, budget: Duration) -> (HashMap<&'static str, Vec<PathBuf>>, bool) {
+    let deadline = Instant::now() + budget;
+    let mut found: HashMap<&'static str, Vec<PathBuf>> = HashMap::new();
+    let mut total = 0usize;
+    let mut entries = 0usize;
+    let mut pending: Vec<(PathBuf, usize)> = vec![(home.to_path_buf(), 0)];
+    while let Some((folder, depth)) = pending.pop() {
+        if Instant::now() >= deadline || entries >= EXPERIMENT_MAX_ENTRIES {
+            return (found, true);
+        }
+        if depth > 0 && fsx::exists(&folder.join(".git")) {
+            continue;
+        }
+        let Some(names) = fsx::sorted_names(&folder) else {
+            continue;
+        };
+        for name in names {
+            entries += 1;
+            if entries >= EXPERIMENT_MAX_ENTRIES {
+                return (found, true);
+            }
+            if name.starts_with('.') || fsx::skipped(&name) || name == "node_modules" || name == "PM-Experiments" {
+                continue;
+            }
+            let path = folder.join(&name);
+            if fsx::is_link(&path) || !fsx::is_dir(&path) {
+                continue;
+            }
+            if depth >= 1
+                && let Some(kind) = EXPERIMENT_KINDS.iter().find(|k| **k == name)
+            {
+                if holds_logs(kind, &path) {
+                    let roots = if *kind == "muse" {
+                        fsx::child_dirs(&path)
+                    } else {
+                        vec![path.clone()]
+                    };
+                    for root in roots {
+                        if total >= EXPERIMENT_MAX_ROOTS {
+                            return (found, true);
+                        }
+                        total += 1;
+                        found.entry(kind).or_default().push(root);
+                    }
+                }
+                continue;
+            }
+            if depth + 1 < EXPERIMENT_MAX_DEPTH {
+                pending.push((path, depth + 1));
+            }
+        }
+    }
+    (found, false)
 }

@@ -176,7 +176,13 @@ fn scan_dir(collector: &mut Collector, directory: &Path) -> bool {
 }
 
 /// Python's `_collect_muse`.
-pub fn collect(collector: &mut Collector, home: &Path, env: &Env, extra: &[PathBuf]) -> &'static str {
+pub fn collect(
+    collector: &mut Collector,
+    home: &Path,
+    env: &Env,
+    extra: &[PathBuf],
+    experiments: &[PathBuf],
+) -> &'static str {
     let default = home.join(".local").join("share").join("muse").join("sessions");
     let sessions = crate::discover::env_dir(env, "MUSE_SESSIONS_DIR", home);
     let origin = if sessions.is_some() { "env" } else { "default" };
@@ -185,8 +191,13 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env, extra: &[PathB
     for path in extra {
         collector.note_root("muse", path, "extra");
     }
+    // Experiment session folders (DESIGN 16.5): each holds `<id>/session.jsonl` like the default.
+    for path in experiments {
+        collector.note_root("muse", path, "experiment");
+    }
     let mut candidates = vec![sessions];
     candidates.extend(extra.iter().cloned());
+    candidates.extend(experiments.iter().cloned());
     let mut scanned = false;
     for directory in fsx::dedup_dirs(&candidates) {
         if !fsx::is_dir(&directory) || fsx::is_link(&directory) {

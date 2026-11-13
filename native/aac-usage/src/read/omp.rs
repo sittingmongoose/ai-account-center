@@ -472,9 +472,15 @@ pub fn collect(
     home: &Path,
     env: &Env,
     extra: &[PathBuf],
+    experiments: &[PathBuf],
     instances: &[T3Instance],
 ) -> &'static str {
-    let listed = roots(home, env, collector, extra, instances);
+    let mut listed = roots(home, env, collector, extra, instances);
+    // Experiment log folders (DESIGN 16.5); a copy of a session counts once by its file identity.
+    for path in experiments {
+        collector.note_root("omp", path, "experiment");
+        listed.push(path.clone());
+    }
     let roots: Vec<PathBuf> = fsx::dedup_dirs(&listed)
         .into_iter()
         .filter(|r| fsx::is_dir(r))

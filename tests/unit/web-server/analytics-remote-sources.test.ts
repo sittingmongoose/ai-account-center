@@ -172,7 +172,7 @@ describe('analytics remote transport', () => {
     ).toThrow();
     expect(() =>
       parseAnalyticsRemoteResponse(
-        JSON.stringify(response({ kinds: { cursor: { state: 'ok', fingerprints: {} } } }))
+        JSON.stringify(response({ kinds: { 'gemini-cli': { state: 'ok', fingerprints: {} } } }))
       )
     ).toThrow();
     expect(() =>
@@ -246,7 +246,7 @@ describe('analytics remote transport', () => {
     expect(analyticsHelperCommand('windows')).toStartWith('powershell.exe ');
   });
 
-  it('scans the Mac, Windows and Nas1 for the same six tools', () => {
+  it('scans the Mac, Windows and Nas1 for the same eight tools (Cursor and Devin since round 2)', () => {
     expect([...REMOTE_ANALYTICS_HOSTS]).toEqual(REMOTE_HOSTS);
     for (const host of REMOTE_ANALYTICS_HOSTS)
       expect(analyticsRemoteTargets(host)).toEqual([
@@ -256,6 +256,8 @@ describe('analytics remote transport', () => {
         'muse',
         'zcode',
         'antigravity',
+        'cursor',
+        'devin',
       ]);
   });
 
@@ -638,7 +640,7 @@ describe('analytics remote sources', () => {
           );
         },
       });
-      expect(requested.size).toBe(6);
+      expect(requested.size).toBe(8);
       expect(
         rebuilt.results.find((entry) => entry.tool === 'claude')?.data.hourly[0].inputTokens
       ).toBe(150);
@@ -1143,6 +1145,8 @@ describe('analytics remote sources', () => {
         'antigravity',
         'claude',
         'codex',
+        'cursor',
+        'devin',
         'muse',
         'omp',
         'zcode',
@@ -1223,7 +1227,7 @@ describe('analytics remote sources', () => {
       },
     });
     expect([...new Set(calls)]).toEqual(REMOTE_HOSTS.map((host) => `${host}:${SSH_ALIASES[host]}`));
-    expect(states).toHaveLength(REMOTE_HOSTS.length * 6);
+    expect(states).toHaveLength(REMOTE_HOSTS.length * 8);
     expect(states.every((entry) => entry.detail !== 'remote host is not configured')).toBe(true);
   });
 
@@ -1592,7 +1596,8 @@ describe('analytics remote sources', () => {
     const nas1 = states.find((entry) => entry.tool === 'omp' && entry.host === 'nas1');
     expect(nas1).toMatchObject({ state: 'cached', rowCount: 2 });
     expect(nas1?.detail).toContain('timed out');
-    expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(6);
+    // The six answered kinds and Devin; Cursor without a run store is left to presence.
+    expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(7);
   });
 
   it('says when logs were read but hold no usage in the last 31 days', async () => {
@@ -1653,7 +1658,7 @@ describe('analytics remote scans per kind', () => {
     nas1: 'nas1-alias',
     alexis: 'alexis-alias',
   });
-  const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
+  const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity', 'cursor', 'devin'];
   const FILE_2 = 'a2'.repeat(32);
   /** A clean answer for exactly the kinds asked, with an OMP row when OMP is asked. */
   const answer = (kinds: string[], extra: Record<string, unknown> = {}) =>
@@ -1795,7 +1800,7 @@ describe('analytics remote scans per kind', () => {
     seen.length = 0;
     prints.length = 0;
     await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
-    expect(seen).toHaveLength(6);
+    expect(seen).toHaveLength(8);
     // Each call carries only its own kind's fingerprints.
     seen.forEach((kinds, index) => expect(prints[index]).toEqual(kinds));
   });

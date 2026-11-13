@@ -20,6 +20,7 @@ import {
   parseUnfinished,
   runAnalyticsRemoteScan,
   runLocalUsageScan,
+  PYTHON_KINDS,
   localUsageScanReady,
   MAX_EXPERIMENT_ROOTS,
   fixedAnalyticsRemoteAliases,
@@ -62,7 +63,7 @@ import { localClaudeLogNames, type ClaudeLogNames } from './analytics-claude-log
 import { cellsFromCompact } from '../usage/activity-cells';
 import type { AccountAnalyticsActivityProvider } from './account-analytics-types';
 
-export type AnalyticsSourceTool = AnalyticsTool | AnalyticsNoReaderTool;
+export type AnalyticsSourceTool = AnalyticsTool | 'cursor' | 'devin' | AnalyticsNoReaderTool;
 export type AnalyticsSourceState =
   | 'ok'
   | 'cached'
@@ -200,6 +201,8 @@ const REMOTE_KIND_NAMES: ReadonlySet<string> = new Set([
   'omp',
   'muse',
   'zcode',
+  'cursor',
+  'devin',
   'antigravity',
 ]);
 
@@ -266,9 +269,18 @@ export interface AnalyticsRemoteSourceDeps {
  * not have reports `not_installed`; the states are measured by the scan, never assumed.
  */
 const REMOTE_TARGETS = {
-  ...Object.fromEntries(REMOTE_ANALYTICS_HOSTS.map((host) => [host, ANALYTICS_TOOLS])),
-  ubuntu: ['codex'],
+  ...Object.fromEntries(
+    REMOTE_ANALYTICS_HOSTS.map((host) => [host, [...ANALYTICS_TOOLS, 'cursor', 'devin']])
+  ),
+  ubuntu: ['codex', 'cursor', 'devin'],
 } as Record<AnalyticsScanHost, AnalyticsRemoteKind[]>;
+
+/**
+ * Kinds a TypeScript collector reads on the dashboard's own computer: the scanner takes each over
+ * at its first complete read there (DESIGN 16.0 B). Cursor and Devin have no collector, so the
+ * scanner owns them from its first answer.
+ */
+const TAKEOVER_KINDS: readonly AnalyticsRemoteKind[] = ['codex'];
 
 /**
  * The kinds the scanner reads on the dashboard's own computer (DESIGN 16.0 B). Codex moves from the
@@ -303,7 +315,7 @@ function ownedAfter(
 ): Partial<Record<AnalyticsRemoteKind, string>> {
   const owned = { ...before };
   for (const tool of kinds) {
-    if (owned[tool] || !LOCAL_SCANNER_KINDS.includes(tool)) continue;
+    if (owned[tool] || !TAKEOVER_KINDS.includes(tool)) continue;
     const read = reads[tool];
     if (
       read?.lastScanAt === scannedAt &&
@@ -341,11 +353,12 @@ export function localScannerOwned(
   cacheDir: string = path.join(getCcsDir(), 'cache')
 ): Set<AnalyticsRemoteKind> {
   const cached = loadCache(cacheFile(cacheDir, 'ubuntu'));
-  return new Set(
-    Object.keys(cached.owned ?? {}).filter((kind): kind is AnalyticsRemoteKind =>
-      LOCAL_SCANNER_KINDS.includes(kind as AnalyticsRemoteKind)
-    )
-  );
+  return new Set([
+    ...LOCAL_SCANNER_KINDS.filter((kind) => !TAKEOVER_KINDS.includes(kind)),
+    ...Object.keys(cached.owned ?? {}).filter((kind): kind is AnalyticsRemoteKind =>
+      TAKEOVER_KINDS.includes(kind as AnalyticsRemoteKind)
+    ),
+  ]);
 }
 
 /**
@@ -516,7 +529,7 @@ function loadCache(file: string, at: () => string = () => new Date().toISOString
             exitCode: failure.exitCode ?? null,
             at: failure.at,
             ...(Array.isArray(failure.kinds) &&
-            failure.kinds.length <= 6 &&
+            failure.kinds.length <= REMOTE_KIND_NAMES.size &&
             failure.kinds.every((kind) => REMOTE_KIND_NAMES.has(kind))
               ? { kinds: [...failure.kinds] }
               : {}),
@@ -932,6 +945,14 @@ function cachedHostSources(
       (row) => row.k === tool && sessionInWindow(row, minDateMs)
     );
     const read = cached.kinds?.[tool];
+    // Cursor without a run store is told by presence, one cell only (DESIGN 16.2).
+    if (
+      tool === 'cursor' &&
+      !kept.length &&
+      !keptSessions.length &&
+      (!read || read.state === 'not_installed')
+    )
+      continue;
     const failed = standingFailure(cached, tool, failure);
     const unfinished = read?.unfinished?.length
       ? `; ${unfinishedText(read.unfinished, read.unfinishedCount)}`
@@ -1663,7 +1684,11 @@ export async function loadAnalyticsRemoteSources(
           host === 'ubuntu'
             ? ownedAfter(cached.owned, kinds, kindReads, scannedAt, response, cutKinds, failedKinds)
             : undefined;
-        if (owned) localOwned = new Set(Object.keys(owned) as AnalyticsRemoteKind[]);
+        if (owned)
+          localOwned = new Set([
+            ...LOCAL_SCANNER_KINDS.filter((kind) => !TAKEOVER_KINDS.includes(kind)),
+            ...(Object.keys(owned) as AnalyticsRemoteKind[]),
+          ]);
         try {
           const saved = saveCache(file, {
             ...(owned && Object.keys(owned).length ? { owned } : {}),
@@ -1707,6 +1732,24 @@ export async function loadAnalyticsRemoteSources(
           const kind = response.kinds[tool];
           const kindState = kind?.state ?? 'error';
           const found = { ...sourceCounts(discovery.kinds[tool]), reader };
+          // The older Python reader has no Cursor or Devin reader: no cell of its own (Cursor's
+          // fixed "not measured" row stands in); what the scanner read before still counts.
+          if (!PYTHON_KINDS.has(tool) && response.reader?.name === 'python-fallback') {
+            if (rows.length || srows.length) {
+              results.push({ tool, data: toWorkerResult(rows, srows, tool) });
+              states.push({
+                tool,
+                host,
+                state: 'cached',
+                lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
+                rowCount: rows.reduce((sum, row) => sum + Math.floor(row.n), 0),
+                detail:
+                  'this computer was read by the older Python reader, which has no reader for this tool; showing what the usage scanner read before',
+                reader,
+              });
+            }
+            continue;
+          }
           if (tool === 'claude' && olderClaude) {
             if (rows.length || srows.length)
               results.push({ tool, data: toWorkerResult(rows, srows, tool, host) });
@@ -1723,6 +1766,8 @@ export async function loadAnalyticsRemoteSources(
             });
             continue;
           }
+          // Cursor without a run store is told by presence ("No local usage records"), one cell only.
+          if (tool === 'cursor' && kindState === 'not_installed') continue;
           if (kindState === 'not_installed') {
             const installed = response.discovery?.kinds[tool]?.installed === true;
             states.push({
@@ -1799,15 +1844,17 @@ export async function loadAnalyticsRemoteSources(
                   ? 'some Antigravity conversation databases could not be read (busy or damaged); showing previously read aggregates'
                   : kind?.unfinished?.length
                     ? `${unfinishedText(kind.unfinished, kind.unfinishedCount)}; ${kept ? 'showing what was read so far' : 'nothing counted yet'}`
-                    : tool === 'codex' && kind?.compressedUnread
-                      ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
-                      : kind?.readFailures
-                        ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
-                        : oversized
-                          ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
-                          : kept
-                            ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
-                            : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+                    : kind?.unreadableRecords
+                      ? `${kind.unreadableRecords.toLocaleString('en-US')} ${tool === 'cursor' ? 'Cursor runs' : 'replies'} could not be read (${tool === 'cursor' ? "their token counts fit neither of the SDK's two conventions, or their usage JSON is damaged" : 'their token counts or time are missing'}); they are counted as unreadable, never guessed`
+                      : tool === 'codex' && kind?.compressedUnread
+                        ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
+                        : kind?.readFailures
+                          ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
+                          : oversized
+                            ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
+                            : kept
+                              ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                              : 'the remote scan hit its time bound partway through this tool; the next scan continues',
             });
             continue;
           }
@@ -1820,8 +1867,9 @@ export async function loadAnalyticsRemoteSources(
             detail:
               tool === 'omp' && response.discoveryTruncated === true
                 ? 'the search for custom OMP session folders hit its bounds; folders it did not reach are not read'
-                : tool === 'zcode' && response.kinds.zcode?.walUnread === true
-                  ? "zcode's newest usage waits in its write-ahead log, which a read-only open here cannot read; it appears once zcode checkpoints it"
+                : (tool === 'zcode' || tool === 'cursor' || tool === 'devin') &&
+                    response.kinds[tool]?.walUnread === true
+                  ? `${tool === 'zcode' ? "zcode's" : tool === 'cursor' ? "Cursor's" : "Devin's"} newest usage waits in its write-ahead log, which a read-only open here cannot read; it appears once the tool checkpoints it`
                   : tool === 'antigravity' && response.kinds.antigravity?.unreadable === true
                     ? 'some Antigravity conversation databases could not be read (busy or damaged); the rest are counted and the next scan reads them again'
                     : kept
@@ -1832,11 +1880,17 @@ export async function loadAnalyticsRemoteSources(
           });
         }
         // Every cell of this computer carries what discovery found for its tool, and the reader.
-        for (const entry of states.slice(firstState))
-          if (entry.host === host && !entry.counts)
-            Object.assign(entry, sourceCounts(discovery.kinds[entry.tool as AnalyticsRemoteKind]), {
-              reader,
-            });
+        for (const entry of states.slice(firstState)) {
+          if (entry.host !== host) continue;
+          const found = discovery.kinds[entry.tool as AnalyticsRemoteKind];
+          if (!entry.counts) Object.assign(entry, sourceCounts(found), { reader });
+          // A linked log folder that could not be reached is said, never silently left out (16.4).
+          const links = (found?.roots ?? []).filter((root) => root.state.startsWith('link_'));
+          if (links.length) {
+            const note = `${links.length} linked log folder${links.length === 1 ? '' : 's'} ${links.some((root) => root.state === 'link_unreachable') ? 'did not answer (a network mount, say)' : 'could not be listed'}, so ${links.length === 1 ? 'its' : 'their'} logs are not counted`;
+            entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+          }
+        }
         states.push(...noReaderStates(host, discovery.tools, toolsAt ?? null));
         onHostScan(host, 'done');
       })()

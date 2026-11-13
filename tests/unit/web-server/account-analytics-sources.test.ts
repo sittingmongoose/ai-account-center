@@ -238,13 +238,13 @@ describe('analytics activity across sources', () => {
         (row) => row.tool === 'antigravity' && /no local usage log/.test(row.detail ?? '')
       )
     ).toBe(false);
-    expect(sources.get('cursor:windows')?.detail).toContain('no local usage log');
+    expect(sources.get('cursor:windows')?.detail).toContain('not measured on this computer');
     // Nas1 has its own cells: measured by its scan, with the same fixed Cursor row as the others.
     expect(sources.get('omp:nas1')).toMatchObject({ state: 'no_usage', rowCount: 0 });
     expect(sources.get('zcode:nas1')).toMatchObject({ state: 'not_installed', rowCount: 0 });
     expect(sources.get('zcode:nas1')?.detail).toContain('no usage logs found on this host');
     expect(sources.get('cursor:nas1')).toMatchObject({ state: 'unavailable', rowCount: 0 });
-    expect(sources.get('cursor:nas1')?.detail).toContain('no local usage log');
+    expect(sources.get('cursor:nas1')?.detail).toContain('not measured on this computer');
     // Windows Muse and zcode are measured by that host's own scan, not fixed here.
     expect(sources.get('muse:windows')?.state).toBe('not_installed');
     expect(sources.get('muse:windows')?.detail).toContain('no usage logs found on this host');

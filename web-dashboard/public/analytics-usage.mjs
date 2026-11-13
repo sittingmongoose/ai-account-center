@@ -217,7 +217,7 @@ const ownSeries = p => p === 'claude' || p === 'codex';
 const markOf = p => p === 'other' ? '' : p;
 /** The tools whose logs the server reads. Their names say where a model's usage came from, never a division. */
 export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity'];
-export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', muse: 'Muse Code', zcode: 'zcode', jsonl: 'Generic JSONL', antigravity: 'Antigravity' };
+export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', muse: 'Muse Code', zcode: 'zcode', jsonl: 'Generic JSONL', antigravity: 'Antigravity', cursor: 'Cursor', devin: 'Devin CLI' };
 const toolNames = tools => andList(TOOLS.filter(t => tools.has(t)).map(t => TOOL_LABEL[t]));
 /** Add v to o[k] (per-provider sums over providers that are only known from the data). */
 const bump = (o, k, v) => { o[k] = (o[k] || 0) + v; };
@@ -1319,14 +1319,16 @@ export function calendarView(A, R, now, monthGrid = true) {
 }
 
 // ---------------------------------------------------------------- included usage (activity.sources)
-const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor'], ['gemini-cli', 'Gemini CLI'], ['opencode', 'OpenCode'], ['qwen', 'Qwen Code'], ['kimi', 'Kimi Code'], ['grok', 'Grok CLI'], ['kiro', 'Kiro CLI'], ['pi', 'Pi'], ['fx', 'fx']];
+const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor'], ['devin', 'Devin CLI'], ['gemini-cli', 'Gemini CLI'], ['opencode', 'OpenCode'], ['qwen', 'Qwen Code'], ['kimi', 'Kimi Code'], ['grok', 'Grok CLI'], ['kiro', 'Kiro CLI'], ['pi', 'Pi'], ['fx', 'fx']];
 /** Tools Analytics has no usage reader for: a row only where a computer reports them present. */
 const NO_READER_TOOLS = new Set(['cursor', 'gemini-cli', 'opencode', 'qwen', 'kimi', 'grok', 'kiro', 'pi', 'fx']);
 /** Where discovery found a tool's logs, in plain words (DESIGN 2's origins). */
-const ORIGIN_WORDS = { default: 'default folder', env: 'env var', tool_config: "the tool's config", t3_instance: 'T3 instance', ccs_instance: 'AAC profile', signature: 'other home', extra: 'saved extra' };
+const ORIGIN_WORDS = { default: 'default folder', env: 'env var', tool_config: "the tool's config", t3_instance: 'T3 instance', ccs_instance: 'AAC profile', signature: 'other home', extra: 'saved extra', experiment: 'experiment folder' };
 const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage', 'unreadable', 'scan_failed', 'installed_no_logs', 'no_reader'];
 const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
-const noLocalLog = r => r.state === 'unavailable' && /no local usage log/i.test(text(r.detail));
+const noLocalLog = r => r.state === 'unavailable' && /no local usage log|not measured on this computer/i.test(text(r.detail));
+// Cursor on a computer the usage scanner did not read (round 2): its SDK runs are read where it runs.
+const notMeasured = r => r.state === 'unavailable' && /not measured on this computer/i.test(text(r.detail));
 const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
 /**
  * The "Included usage" disclosure: one sentence naming the tools and computers whose logs were read, a plain note
@@ -1352,7 +1354,10 @@ export function includedView(payload, now = Date.now()) {
   // Cursor (and Antigravity, from a server older than its reader) keep no local log; their quota still shows on Home.
   const quietOnly = nolog.length > 0 && nolog.every(([t]) => t === 'antigravity' || t === 'cursor');
   const nologNames = nolog.map(([, l]) => l);
-  const nologLine = !nolog.length ? '' : quietOnly
+  const unmeasured = nolog.length > 0 && nolog.every(([t]) => list.filter(r => r.tool === t).every(notMeasured));
+  const nologLine = !nolog.length ? '' : unmeasured
+    ? `${andList(nologNames)} ${nolog.length === 1 ? 'is' : 'are'} not measured where the usage scanner did not run; ${nolog.length === 1 ? 'its' : 'their'} quota readings still show on Home.`
+    : quietOnly
     ? nolog.length === 1
       ? `${nologNames[0]} doesn't keep a local usage log; its quota readings still show on Home.`
       : `${andList(nologNames)} don't keep local usage logs; their quota readings still show on Home.`
@@ -1399,6 +1404,7 @@ export function includedView(payload, now = Date.now()) {
       : { id, text: 'No usage reader yet', tone: 'quiet', tip: `${why}${found(r)}` };
     if (r.state === 'scan_failed') return { id, text: 'Scan failed', tone: 'unavailable', tip: `${why}${last}` };
     if (r.state === 'unreadable') return { id, text: "Can't read", tone: 'unavailable', tip: `${why}${last}` };
+    if (notMeasured(r)) return { id, text: 'Not measured', tone: 'quiet', tip: `${capFirst(r.detail)}.` };
     if (noLocalLog(r)) return { id, text: 'No usage log', tone: 'quiet', tip: 'This tool keeps no local usage log to read.' };
     if (r.state === 'not_installed') return { id, text: 'Not installed', tone: 'quiet', tip: why || 'No usage logs for this tool were found on this computer.' };
     return { id, text: 'Unavailable', tone: 'unavailable', tip: `${why}${last}` };

@@ -26,7 +26,16 @@ import {
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 const FILE_1 = 'a1'.repeat(32);
-const KINDS: AnalyticsRemoteKind[] = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
+const KINDS: AnalyticsRemoteKind[] = [
+  'claude',
+  'codex',
+  'omp',
+  'muse',
+  'zcode',
+  'antigravity',
+  'cursor',
+  'devin',
+];
 
 let dir: string;
 let savedPath: string | undefined;

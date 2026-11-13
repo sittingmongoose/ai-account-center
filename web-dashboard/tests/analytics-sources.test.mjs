@@ -320,6 +320,26 @@ test('discovery cells: installed without logs, no reader, what was found where, 
   assert.doesNotMatch(inc.label, /failed|unavailable/);
 });
 
+test('round 2 cells: Cursor runs read where a run store is, Devin CLI read, experiment folders named, Cursor not measured elsewhere', () => {
+  const sources = [
+    { tool: 'cursor', host: 'ubuntu', state: 'ok', lastScanAt: at(1), rowCount: 123, detail: null, counts: { roots: 1, filesFound: 19, filesRead: 19, filesFailed: 0, newestMtime: at(2) }, origins: [{ origin: 'default', files: 19 }], reader: null },
+    { tool: 'cursor', host: 'windows', state: 'no_reader', cause: 'no_local_usage_records', lastScanAt: at(1), rowCount: 0, detail: 'Cursor keeps its chats on this computer without token counts' },
+    { tool: 'cursor', host: 'mac', state: 'unavailable', lastScanAt: null, rowCount: 0, detail: "not measured on this computer: the usage scanner reads Cursor's SDK runs where it runs; chats in the Cursor app keep no local token counts" },
+    { tool: 'devin', host: 'ubuntu', state: 'no_usage', lastScanAt: at(1), rowCount: 0, detail: 'usage logs found but no usage in the last 31 days' },
+    { tool: 'codex', host: 'ubuntu', state: 'cached', lastScanAt: at(1), rowCount: 9, detail: '1 log not read to the end yet: rollout-2026-10-31T08-06-21.jsonl.zst (3.2 GB, partly read: 1,450,000,000 of 4,637,763,647 bytes)', counts: { roots: 3, filesFound: 2457, filesRead: 2456, filesFailed: 0, newestMtime: at(1) }, origins: [{ origin: 'default', files: 2400 }, { origin: 'experiment', files: 57 }] },
+  ];
+  const inc = includedView(payload({ sources }), now);
+  const by = tool => Object.fromEntries(inc.rows.find(r => r.tool === tool).cells.map(c => [c.id, c]));
+  assert.match(by('Cursor').ubuntu.text, /^Read/);
+  assert.equal(by('Cursor').windows.text, 'No local usage records');
+  // a computer the scanner did not read: quietly not measured, never a failure
+  assert.equal(by('Cursor').mac.text, 'Not measured');
+  assert.equal(by('Cursor').mac.tone, 'quiet');
+  assert.equal(by('Devin CLI').ubuntu.text, 'No usage in range');
+  assert.match(by('Codex').ubuntu.tip, /partly read: 1,450,000,000 of 4,637,763,647 bytes/);
+  assert.match(inc.line, /Includes .*Cursor/);
+});
+
 test('hostProgress never calls a host whose every tool failed "read"', () => {
   const failed = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map(tool => ({ tool, host: 'windows', state: 'unavailable', lastScanAt: null, rowCount: 0, detail: 'remote scan failed' }));
   const mac = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map((tool, i) => ({ tool, host: 'mac', state: i < 2 ? 'ok' : 'scanning', lastScanAt: at(1), rowCount: i < 2 ? 5 : 0, detail: i < 2 ? null : 'the first scan is running' }));

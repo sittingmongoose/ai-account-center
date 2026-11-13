@@ -7,13 +7,23 @@ use crate::discover::{self, Env};
 use crate::read;
 use crate::util;
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const VERSION: u64 = 2;
 pub const PROTOCOL: u64 = 3;
 pub const NAME: &str = "aac-usage-scan";
-pub const KINDS: [&str; 6] = ["claude", "codex", "omp", "muse", "zcode", "antigravity"];
+pub const KINDS: [&str; 8] = [
+    "claude",
+    "codex",
+    "omp",
+    "muse",
+    "zcode",
+    "antigravity",
+    "cursor",
+    "devin",
+];
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const EXTRA_ROOTS_MAX: usize = 16;
 const EXTRA_ZCODE_DBS_MAX: usize = 2048;
@@ -133,9 +143,9 @@ pub fn parse_request(raw: &[u8]) -> Result<Request, String> {
     };
     for (kind, paths) in &experiment_roots {
         let ok = ["claude", "codex", "omp", "muse"].contains(&kind.as_str())
-            && paths.as_array().is_some_and(|list| {
-                list.len() <= EXPERIMENT_ROOTS_MAX && list.iter().all(valid_extra_root)
-            });
+            && paths
+                .as_array()
+                .is_some_and(|list| list.len() <= EXPERIMENT_ROOTS_MAX && list.iter().all(valid_extra_root));
         if !ok {
             return Err("request.experimentRoots must map kinds to absolute paths".into());
         }
@@ -163,14 +173,27 @@ pub fn parse_request(raw: &[u8]) -> Result<Request, String> {
     })
 }
 
-
 fn extras(request: &Request, kind: &str) -> Vec<PathBuf> {
     paths_of(&request.extra_roots, kind)
 }
 
-/// The experiment log folders of a kind: the request's (DESIGN 16.0 B) and, later, discovery's.
-fn experiments(request: &Request, kind: &str) -> Vec<PathBuf> {
-    paths_of(&request.experiment_roots, kind)
+/// The experiment log folders of a kind: the request's (DESIGN 16.0 B) and those discovery finds
+/// below home (16.5), each once. Discovery runs at the first kind that asks, within 2 s; true when a
+/// bound cut it.
+fn experiment_dirs(
+    found: &mut Option<(HashMap<&'static str, Vec<PathBuf>>, bool)>,
+    request: &Request,
+    home: &Path,
+    kind: &str,
+) -> (Vec<PathBuf>, bool) {
+    let (discovered, cut) = found.get_or_insert_with(|| discover::experiment_roots(home, Duration::from_secs(2)));
+    let mut list = paths_of(&request.experiment_roots, kind);
+    for path in discovered.get(kind).cloned().unwrap_or_default() {
+        if !list.contains(&path) {
+            list.push(path);
+        }
+    }
+    (list, *cut)
 }
 
 fn paths_of(map: &Map<String, Value>, kind: &str) -> Vec<PathBuf> {
@@ -249,24 +272,51 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     collector.messages_wanted = request.messages;
     collector.lines_left = request.line_budget;
     let instances = discover::t3_instances(home);
+    // Experiment log folders outside PM-Experiments, found once per scan (DESIGN 16.5).
+    let mut found: Option<(HashMap<&'static str, Vec<PathBuf>>, bool)> = None;
     let mut states: Map<String, Value> = Map::new();
     let mut partials: Vec<String> = Vec::new();
     for kind in &request.kinds {
         collector.fresh.entry(kind.clone()).or_default();
         let cut_before = collector.truncated;
+        let experiment_list = if ["claude", "codex", "omp", "muse"].contains(&kind.as_str()) {
+            let (list, cut) = experiment_dirs(&mut found, request, home, kind);
+            if cut {
+                collector.discovery_truncated = true;
+            }
+            list
+        } else {
+            Vec::new()
+        };
         let state = match kind.as_str() {
-            "claude" => read::claude::collect(&mut collector, home, env, &extras(request, "claude"), &instances),
+            "claude" => read::claude::collect(
+                &mut collector,
+                home,
+                env,
+                &extras(request, "claude"),
+                &experiment_list,
+                &instances,
+            ),
             "codex" => read::codex::collect(
                 &mut collector,
                 home,
                 env,
                 &extras(request, "codex"),
-                &experiments(request, "codex"),
+                &experiment_list,
                 &instances,
             ),
-            "omp" => read::omp::collect(&mut collector, home, env, &extras(request, "omp"), &instances),
-            "muse" => read::muse::collect(&mut collector, home, env, &extras(request, "muse")),
+            "omp" => read::omp::collect(
+                &mut collector,
+                home,
+                env,
+                &extras(request, "omp"),
+                &experiment_list,
+                &instances,
+            ),
+            "muse" => read::muse::collect(&mut collector, home, env, &extras(request, "muse"), &experiment_list),
             "zcode" => read::zcode::collect(&mut collector, home, env, request.immutable, &extras(request, "zcode")),
+            "cursor" => read::cursor::collect(&mut collector, home),
+            "devin" => read::devin::collect(&mut collector, home, env),
             _ => read::antigravity::collect(&mut collector, home, env),
         };
         states.insert(kind.clone(), json!(state));
@@ -323,8 +373,12 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                 entry.insert("unfinishedCount".into(), json!(count));
             }
         }
-        if kind == "zcode" && collector.wal_unread {
+        if (kind == "zcode" && collector.wal_unread) || collector.kind_wal_unread.contains(kind) {
             entry.insert("walUnread".into(), json!(true));
+        }
+        if let Some(count) = collector.unreadable_records.get(kind).filter(|n| **n > 0) {
+            entry.insert("partial".into(), json!(true));
+            entry.insert("unreadableRecords".into(), json!(count));
         }
         if kind == "antigravity" && collector.agy_unreadable > 0 {
             entry.insert("unreadable".into(), json!(true));
@@ -355,7 +409,12 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     // Presence runs after the readers and only while the budget lasts, so a slow disk cannot push an
     // answer past ssh's timeout; without it the server keeps the last presence it saw.
     if request.presence && !collector.expired() {
-        discovery["tools"] = Value::Object(discover::presence(home, env, &instances, Duration::from_secs(3)));
+        let mut tools = discover::presence(home, env, &instances, Duration::from_secs(3));
+        // Where the Cursor reader found run stores, its own cell speaks for Cursor (DESIGN 16.2).
+        if request.kinds.iter().any(|k| k == "cursor") && collector.run_stores > 0 {
+            tools.remove("cursor");
+        }
+        discovery["tools"] = Value::Object(tools);
     }
     // Identity evidence of every session this answer names: its full hash and, when the log states
     // one, its working folder with home as ~ (DESIGN 11.1a).
@@ -376,7 +435,20 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                     "confidence": "inferred",
                 })
             });
-            (key.clone(), json!({"hash": evidence.hash, "cwd": cwd}))
+            // T3's thread for the session, from T3's own record: an explicit binding (CURSOR.md 3).
+            let t3 = evidence.t3.as_ref().map(|(thread, instance)| {
+                json!({
+                    "threadId": thread,
+                    "providerInstanceId": instance,
+                    "identitySource": "t3_native_ref",
+                    "confidence": "explicit",
+                })
+            });
+            let mut item = json!({"hash": evidence.hash, "cwd": cwd});
+            if let Some(t3) = t3 {
+                item["t3"] = t3;
+            }
+            (key.clone(), item)
         })
         .collect();
     let mut response = json!({

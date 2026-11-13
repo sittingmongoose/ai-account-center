@@ -32,10 +32,12 @@ export type AnalyticsRemoteHost = (typeof REMOTE_ANALYTICS_HOSTS)[number];
 export type AnalyticsScanHost = AnalyticsRemoteHost | 'ubuntu';
 /** The ssh alias to reach each remote host, or null when none is configured. */
 export type AnalyticsRemoteAliases = Record<AnalyticsRemoteHost, string | null>;
-export type AnalyticsRemoteKind = AnalyticsTool;
+export type AnalyticsRemoteKind = AnalyticsTool | 'cursor' | 'devin';
 
 /** Every kind the packaged helper reads. */
-const REMOTE_KIND_LIST = ANALYTICS_TOOLS;
+const REMOTE_KIND_LIST: readonly AnalyticsRemoteKind[] = [...ANALYTICS_TOOLS, 'cursor', 'devin'];
+/** The kinds the Python helper reads; the Rust scanner adds Cursor and Devin (DESIGN 16.2, 16.3). */
+export const PYTHON_KINDS: ReadonlySet<string> = new Set(ANALYTICS_TOOLS);
 const REMOTE_KINDS: ReadonlySet<string> = new Set(REMOTE_KIND_LIST);
 
 export {
@@ -240,6 +242,8 @@ export interface AnalyticsRemoteKindResult {
   /** Logs not read to their end (at most 20, largest first), and how many there are in all. */
   unfinished?: AnalyticsUnfinishedLog[];
   unfinishedCount?: number;
+  /** Cursor runs or Devin replies whose numbers could not be read; counted, never guessed. */
+  unreadableRecords?: number;
   /** Antigravity: a conversation database or folder could not be read (busy, damaged); the rest count. */
   unreadable?: boolean;
 }
@@ -295,7 +299,8 @@ export interface AnalyticsDiscoveryRoot {
   /** First 16 hex of sha256("aac-root-v1:" + tool + ":" + origin + ":" + path with home as ~). */
   root: string;
   origin: AnalyticsRootOrigin;
-  state: 'ok' | 'installed_no_logs';
+  /** `link_*`: the folder is a link whose target could not be listed, or did not answer (16.4). */
+  state: 'ok' | 'installed_no_logs' | 'link_unreadable' | 'link_unreachable';
   counts: { filesFound: number; newestMtime: number | null };
 }
 
@@ -332,6 +337,13 @@ export interface AnalyticsSessionEvidence {
     identitySource: 'inferred_cwd';
     confidence: 'inferred';
   } | null;
+  /** T3 Code's thread and provider instance, from T3's own provider-thread record. */
+  t3?: {
+    threadId: string;
+    providerInstanceId: string;
+    identitySource: 't3_native_ref';
+    confidence: 'explicit';
+  };
 }
 
 /** Which reader answered: the Rust scanner, or the Python helper standing in (with why). */
@@ -379,7 +391,10 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
       !/^[0-9a-f]{16}$/.test(item.root) ||
       typeof item.origin !== 'string' ||
       !ROOT_ORIGINS.has(item.origin) ||
-      (item.state !== 'ok' && item.state !== 'installed_no_logs') ||
+      (item.state !== 'ok' &&
+        item.state !== 'installed_no_logs' &&
+        item.state !== 'link_unreadable' &&
+        item.state !== 'link_unreachable') ||
       !rootCounts ||
       !count(rootCounts.filesFound) ||
       !epoch(rootCounts.newestMtime)
@@ -471,7 +486,7 @@ export function parseAnalyticsSessions(
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     if (kept >= 50_000) break;
     if (!SESSION_KEY_HEX.test(key) || !entry || typeof entry !== 'object') continue;
-    const { hash, cwd } = entry as { hash?: unknown; cwd?: unknown };
+    const { hash, cwd, t3 } = entry as { hash?: unknown; cwd?: unknown; t3?: unknown };
     if (typeof hash !== 'string' || !SHA256_HEX.test(hash) || !hash.startsWith(key)) continue;
     let evidence: AnalyticsSessionEvidence['cwd'] = null;
     if (cwd !== null && cwd !== undefined) {
@@ -491,7 +506,27 @@ export function parseAnalyticsSessions(
         confidence: 'inferred',
       };
     }
-    result[key] = { hash, cwd: evidence };
+    // T3's own record of the thread that drove the session: an explicit binding (Cursor).
+    let binding: AnalyticsSessionEvidence['t3'] = undefined;
+    if (t3 !== null && t3 !== undefined) {
+      const item = t3 as Record<string, unknown>;
+      const id = (value: unknown) =>
+        typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
+      if (
+        !id(item.threadId) ||
+        !id(item.providerInstanceId) ||
+        item.identitySource !== 't3_native_ref' ||
+        item.confidence !== 'explicit'
+      )
+        continue;
+      binding = {
+        threadId: item.threadId as string,
+        providerInstanceId: item.providerInstanceId as string,
+        identitySource: 't3_native_ref',
+        confidence: 'explicit',
+      };
+    }
+    result[key] = { hash, cwd: evidence, ...(binding ? { t3: binding } : {}) };
     kept++;
   }
   return result;
@@ -815,6 +850,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       unreadable?: unknown;
       unfinished?: unknown;
       unfinishedCount?: unknown;
+      unreadableRecords?: unknown;
     };
     if (
       entry.state !== 'ok' &&
@@ -857,6 +893,14 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       throw new AnalyticsRemoteTransportError();
     if (entry.unreadable !== undefined && typeof entry.unreadable !== 'boolean')
       throw new AnalyticsRemoteTransportError();
+    if (
+      entry.unreadableRecords !== undefined &&
+      (!Number.isSafeInteger(entry.unreadableRecords) ||
+        (entry.unreadableRecords as number) < 1 ||
+        (entry.unreadableRecords as number) > 10_000_000 ||
+        entry.partial !== true)
+    )
+      throw new AnalyticsRemoteTransportError();
     // Naming is a diagnostic: a malformed list is dropped, the usage kept.
     const unfinished = parseUnfinished(entry.unfinished);
     const unfinishedCount =
@@ -896,6 +940,9 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       ...(entry.walUnread === true ? { walUnread: true } : {}),
       ...(entry.unreadable === true ? { unreadable: true } : {}),
       ...(unfinished?.length ? { unfinished, unfinishedCount } : {}),
+      ...(entry.unreadableRecords !== undefined
+        ? { unreadableRecords: entry.unreadableRecords as number }
+        : {}),
     };
   }
   const discovery = parseAnalyticsDiscovery(response.discovery);
@@ -1279,11 +1326,28 @@ export async function runAnalyticsRemoteScan(
   void _cwd;
   void _experiments;
   older.fingerprints = withoutPartialPrints(request.fingerprints);
-  const answer = await python(sshHost, platform, older, {
-    ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
-    ...(deps.helperPath !== undefined ? { helperPath: deps.helperPath } : {}),
-  });
-  return { ...answer, reader: { name: 'python-fallback', cause: cause ?? 'binary_failed' } };
+  // Cursor and Devin have no Python reader: those kinds are answered "not reached", so what was
+  // read before is kept and the cell names the fallback (DESIGN 16.2, 16.3).
+  const pythonKinds = request.kinds.filter((kind) => PYTHON_KINDS.has(kind));
+  const unreached = request.kinds.filter((kind) => !PYTHON_KINDS.has(kind));
+  const answer = pythonKinds.length
+    ? await python(
+        sshHost,
+        platform,
+        { ...older, kinds: pythonKinds },
+        {
+          ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
+          ...(deps.helperPath !== undefined ? { helperPath: deps.helperPath } : {}),
+        }
+      )
+    : { version: 2 as const, truncated: false, kinds: {}, rows: [], srows: [] };
+  const kinds = { ...answer.kinds } as AnalyticsRemoteResponse['kinds'];
+  for (const kind of unreached) kinds[kind] = { state: 'pending', fingerprints: {} };
+  return {
+    ...answer,
+    kinds,
+    reader: { name: 'python-fallback', cause: cause ?? 'binary_failed' },
+  };
 }
 
 /** The local scanner's budget: inside the 60 s collection, above one decode of the largest log. */

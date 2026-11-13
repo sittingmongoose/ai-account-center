@@ -31,6 +31,8 @@ const TOOLS: readonly AccountAnalyticsActivityProvider[] = [
   'zcode',
   'jsonl',
   'antigravity',
+  'cursor',
+  'devin',
 ];
 
 /** The dashboard's provider labels; "other" is usage on a route no provider claims. */

@@ -195,12 +195,11 @@ function newerRemote(left: RemoteAnswer | null, right: RemoteAnswer | null): Rem
 }
 
 /**
- * Fixed entries for tools with no local usage log, on every host. Cursor usage
- * is server-side (the local chat store holds blobs and metadata only, with no
- * token-usage columns). The page uses these to say why it is missing. Every
- * other tool is scanned on every host, so its state is measured, never fixed;
- * Antigravity's usage metadata is read from its conversation databases by the
- * analytics helper (antigravity-native-usage-collector.ts).
+ * Fixed Cursor entries, for computers the usage scanner did not measure (DESIGN 16.2): the scanner
+ * reads Cursor's SDK run stores where it runs; chats in the Cursor app keep no local token counts,
+ * and cloud agents none at all. Every other tool is scanned on every host, so its state is
+ * measured, never fixed; Antigravity's usage metadata is read from its conversation databases by
+ * the analytics helper (antigravity-native-usage-collector.ts).
  */
 export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
@@ -212,7 +211,7 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
       lastScanAt: null,
       rowCount: 0,
       detail:
-        'no local usage log: usage is server-side; the local state database has no token-usage columns',
+        "not measured on this computer: the usage scanner reads Cursor's SDK runs where it runs; chats in the Cursor app keep no local token counts",
     });
   }
   return entries;
@@ -228,6 +227,7 @@ const SOURCE_TOOL_ORDER = [
   'jsonl',
   'antigravity',
   'cursor',
+  'devin',
   'gemini-cli',
   'opencode',
   'qwen',
@@ -265,7 +265,12 @@ export function coldScanningSourceStates(): AccountAnalyticsSource[] {
         detail: 'the first scan is running',
       });
   }
-  entries.push(...fixedAnalyticsSourceEntries());
+  // Where Cursor is a scanned kind its own cell stands in for the fixed row.
+  entries.push(
+    ...fixedAnalyticsSourceEntries().filter(
+      (entry) => !entries.some((cell) => cell.tool === 'cursor' && cell.host === entry.host)
+    )
+  );
   return sortSourceEntries(entries);
 }
 
@@ -453,7 +458,12 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
     Record<string, unknown>
   >) {
     if (!source || typeof source !== 'object') return false;
-    if (!isActivityKind(source.provider as string)) return false;
+    if (
+      !isActivityKind(source.provider as string) &&
+      source.provider !== 'cursor' &&
+      source.provider !== 'devin'
+    )
+      return false;
     if (typeof source.fetchedAt !== 'string') return false;
     if (!Array.isArray(source.data)) return false;
     for (const result of source.data as Array<Record<string, unknown>>) {
@@ -721,6 +731,8 @@ function localSourcePresence(
     zcode: false,
     jsonl: false,
     antigravity: false,
+    cursor: false,
+    devin: false,
   };
   for (const entry of requests) presence[entry.provider] = true;
   return presence;
@@ -1354,6 +1366,8 @@ export class AccountAnalyticsActivityService {
       'zcode',
       'jsonl',
       'antigravity',
+      'cursor',
+      'devin',
     ] as const) {
       const data = merged.get(provider);
       if (data) updated.push({ provider, data, fetchedAt });
@@ -1875,7 +1889,7 @@ export class AccountAnalyticsActivityService {
         }
       }
     }
-    // Cursor's fixed "no local usage log" row stands in only where the scanner has not measured the
+    // Cursor's fixed "not measured" row stands in only where the scanner has not measured the
     // computer; where it has, the computer's own presence answer says whether Cursor is there.
     const measured = new Set(entries.filter((entry) => entry.counts).map((entry) => entry.host));
     entries.push(

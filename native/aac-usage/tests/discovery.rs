@@ -119,8 +119,22 @@ fn signature_homes_are_found_by_what_they_hold_not_their_name() {
         ),
         &codex_rollout("lean-2", 300),
     );
-    // A Claude config dir under another name.
+    // A Claude config dir under another name: `projects` plus one of Claude's own files.
     write(&h.join(".claude-relogin/settings.json"), "{}");
+    write(&h.join(".claude-relogin/shell-snapshots/snapshot.sh"), "");
+    // Not Claude (DESIGN 16.6): Qoder and Qwen Code keep `projects` with generic files beside it.
+    write(&h.join(".qoder/settings.json"), "{}");
+    write(&h.join(".qoder/session-env/x"), "");
+    write(
+        &h.join(".qoder/projects/p/q.jsonl"),
+        &claude_line("q1", "q", "/home/u/p"),
+    );
+    write(&h.join(".qwen/settings.json"), "{}");
+    write(&h.join(".qwen/todos/x.json"), "{}");
+    write(
+        &h.join(".qwen/projects/p/w.jsonl"),
+        &claude_line("w1", "w", "/home/u/p"),
+    );
     write(
         &h.join(".claude-relogin/projects/p/a.jsonl"),
         &claude_line("m1", "c1", "/home/u/p"),
@@ -393,7 +407,7 @@ fn messages_are_sent_once_per_line_across_scans() {
 fn requests_with_unknown_fields_or_records_mode_are_refused() {
     assert!(protocol::parse_request(br#"{"kinds":["codex"],"minDateMs":0,"paths":["/"]}"#).is_err());
     assert!(protocol::parse_request(br#"{"kinds":["codex"],"minDateMs":0,"zcodeRecords":true}"#).is_err());
-    assert!(protocol::parse_request(br#"{"kinds":["cursor"],"minDateMs":0}"#).is_err());
+    assert!(protocol::parse_request(br#"{"kinds":["gemini-cli"],"minDateMs":0}"#).is_err());
     let version = protocol::version_json();
     assert_eq!(version["name"], "aac-usage-scan");
     assert_eq!(version["protocol"], protocol::PROTOCOL);
