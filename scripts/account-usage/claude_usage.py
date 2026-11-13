@@ -1441,6 +1441,63 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
     return result
 
 
+def _reset_unscoped(scope):
+    return scope is None or (isinstance(scope, dict)
+                             and set(scope) <= {"model", "surface"}
+                             and all(value is None for value in scope.values()))
+
+
+def _reset_limit_key(entry):
+    """Prove a refill bucket from raw kind/group/scope, never a display key."""
+    kind, group, scope = entry.get("kind"), entry.get("group"), entry.get("scope")
+    if _reset_unscoped(scope):
+        if kind == "session" and group == "session":
+            return "five_hour"
+        if kind == "weekly_all" and group == "weekly":
+            return "seven_day"
+    if (kind == "weekly_scoped" and group == "weekly" and isinstance(scope, dict)
+            and set(scope) <= {"model", "surface"} and scope.get("surface") is None
+            and isinstance(scope.get("model"), dict)
+            and scope["model"].get("display_name") == "Fable"):
+        return "seven_day_overage_included"
+    return None
+
+
+def reset_windows(usage):
+    """Private refill evidence retains quota provenance until bucket selection.
+
+    Public normalization also describes unknown kinds and surface-only quotas;
+    its presentation keys cannot prove the scope of a reset. Only explicit
+    legacy buckets or recognized raw quotas establish these three refill IDs.
+    Valid legacy readings win; conflicting dynamic readings drop their bucket.
+    """
+    windows = {}
+    for key in ("five_hour", "seven_day", "seven_day_overage_included"):
+        value = usage.get(key)
+        if not isinstance(value, dict) or not _reset_unscoped(value.get("scope")):
+            continue
+        used = number(value.get("utilization"))
+        if used is not None:
+            windows[key] = used
+    limits = usage.get("limits")
+    if not isinstance(limits, list) or len(limits) > MAX_SCOPED_LIMITS:
+        return windows
+    dynamic = {}
+    for entry in limits:
+        if not isinstance(entry, dict):
+            continue
+        key, used = _reset_limit_key(entry), number(entry.get("percent"))
+        if key is None or key in windows or used is None:
+            continue
+        candidate = (used, reset_at(entry.get("resets_at")))
+        if key in dynamic and dynamic[key] != candidate:
+            dynamic[key] = None
+        elif key not in dynamic:
+            dynamic[key] = candidate
+    windows.update({key: value[0] for key, value in dynamic.items() if value is not None})
+    return windows
+
+
 def reset_host(request):
     # Only reaching the actual opener can make a claim ambiguous. Collection,
     # identity, binding and request-construction failures prove no POST occurred.
@@ -1481,13 +1538,7 @@ def _reset_host(request, dispatch):
         identity = {"provider": "claude", "account": private["account"],
                     "organization": private["organization"], "profile": profile_id, "host": request["host"]}
         binding = hashlib.sha256(json.dumps([identity, cedar], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        windows = {window["key"]: window["usedPercent"] for window in normalize_windows(private["usage"])
-                   if window["kind"] == "rate_limit"}
-        # Grants retain the provider's legacy Fable bucket ID, while current
-        # usage names that quota in limits[]. Use only the exact, unscoped
-        # Fable window; an absent or conflicting reading stays unconfirmed.
-        if "seven_day_overage_included" not in windows and "seven_day_fable" in windows:
-            windows["seven_day_overage_included"] = windows["seven_day_fable"]
+        windows = reset_windows(private["usage"])
         expiries = []
         for grant in cedar["grants"]:
             raw = grant.get("ends_at") if isinstance(grant, dict) else None

@@ -47,6 +47,7 @@ class WebClient:
    account='44444444-4444-4444-4444-444444444444' if (root/'web-other-account').exists() else (root/'login').read_text()
    org='44444444-4444-4444-4444-444444444444' if (root/'web-other-org').exists() else ORG
    return {'uuid':account,'email_address':'fixture@example.com','memberships':[{'organization':{'uuid':org}}]}
+  if (root/'refill-usage.json').exists():return json.loads((root/'refill-usage.json').read_text())
   return {'five_hour':{'utilization':100},'seven_day':{'utilization':100},'limits':[{'kind':'weekly_scoped','group':'weekly','percent':37,'scope':{'model':{'display_name':'Fable'},'surface':None}}],'cedar_ember':{'eligible':True,'grants':[{'id':'fixture_grant','resets_left':1,'resets_total':1,'paused':False,'usable_now':True,'clears':['five_hour','seven_day','seven_day_overage_included']}]}}
 scope['WebClient']=WebClient
 class Client:
@@ -281,4 +282,59 @@ fn mismatched_web_identity_is_unconfirmed_even_when_oauth_usage_would_succeed() 
             "/api/account\n"
         );
     }
+}
+
+fn assert_refill_scope(name: &str) {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/reset-source/claude-refill-scopes.json"
+    ))
+    .unwrap();
+    let case = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == name)
+        .unwrap();
+    let expected = case["claimable"].as_bool().unwrap();
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("web-usage"), "").unwrap();
+    let usage = json!({"five_hour":{"utilization":100}, "limits":[case["limit"].clone()],
+        "cedar_ember":{"eligible":true,"grants":[{"id":"fixture_grant","resets_left":1,"resets_total":1,
+            "paused":false,"usable_now":true,"clears":["seven_day_overage_included"],"gives_back_weekly":true}]}});
+    std::fs::write(dir.path().join("refill-usage.json"), usage.to_string()).unwrap();
+    let db = dir.path().join("claims.sqlite");
+    let snapshot = read(&db, &command);
+    let mut store = Store::open(&db).unwrap();
+    let inventory = store.inventory("claude:reused", &snapshot, now(), &nonce(51)).unwrap();
+    let grant = &inventory["grants"][0];
+    let prepared = store.prepare(
+        "claude:reused",
+        grant["grantKey"].as_str().unwrap(),
+        "local",
+        &snapshot,
+        now(),
+        &nonce(52),
+    );
+    assert_eq!(grant["claimable"], expected, "{name}");
+    assert_eq!(prepared.is_ok(), expected, "{name}");
+    if !expected {
+        assert_eq!(grant["claimBlockedReason"], "refill-windows-unconfirmed");
+        assert_eq!(prepared.unwrap_err(), "refill-windows-unconfirmed");
+    }
+}
+#[test]
+fn astra_exact_model_control() {
+    assert_refill_scope("exact-model");
+}
+#[test]
+fn astra_known_surface_control() {
+    assert_refill_scope("known-surface");
+}
+#[test]
+fn astra_surface_only_is_not_fable_model() {
+    assert_refill_scope("surface-only");
+}
+#[test]
+fn astra_unknown_surface_is_not_unscoped() {
+    assert_refill_scope("unknown-surface");
 }

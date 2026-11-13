@@ -565,6 +565,83 @@ class WindowsProfileRelocationTests(unittest.TestCase):
                     self.current.rmdir()
 
 
+class ResetWindowEvidenceTests(unittest.TestCase):
+    def test_only_known_unscoped_core_kinds_prove_global_windows(self):
+        for kind, group, key in (("session", "session", "five_hour"),
+                                 ("weekly_all", "weekly", "seven_day")):
+            for scope in (None, {}, {"model": None, "surface": None}):
+                with self.subTest(kind=kind, scope=scope):
+                    self.assertEqual(usage.reset_windows({"limits": [
+                        {"kind": kind, "group": group, "percent": 29, "scope": scope}]}), {key: 29})
+            for scope in ({"model": {"display_name": "Fable"}}, {"surface": "code"},
+                          {"surface": {}}, {"unknown": "scope"}, [], False):
+                with self.subTest(kind=kind, scope=scope):
+                    self.assertEqual(usage.reset_windows({"limits": [
+                        {"kind": kind, "group": group, "percent": 29, "scope": scope}]}), {})
+            for wrong_group in (None, "unknown", "weekly" if group == "session" else "session"):
+                with self.subTest(kind=kind, group=wrong_group):
+                    self.assertEqual(usage.reset_windows({"limits": [
+                        {"kind": kind, "group": wrong_group, "percent": 29}]}), {})
+
+    def test_display_collisions_cannot_establish_any_refill_id(self):
+        candidates = [{"kind": key, "group": "weekly", "percent": 37}
+                      for key in ("five_hour", "seven_day", "seven_day_overage_included", "seven_day_fable")]
+        candidates += [WindowTests().fable(kind="custom_scoped"),
+                       WindowTests().fable(scope={"model": {"display_name": "Overage Included"}}),
+                       WindowTests().fable(scope={"surface": "overage_included"}),
+                       WindowTests().fable(scope={"model": {"display_name": "Fable!"}})]
+        for candidate in candidates:
+            with self.subTest(candidate=candidate):
+                # These remain useful display rows, but prove no reset bucket.
+                self.assertTrue(usage.normalize_windows({"limits": [candidate]}))
+                self.assertEqual(usage.reset_windows({"limits": [candidate]}), {})
+
+    def test_fable_requires_exact_model_and_explicitly_absent_or_null_surface(self):
+        for scope in ({"model": {"display_name": "Fable"}},
+                      {"model": {"display_name": "Fable"}, "surface": None}):
+            self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable(scope=scope)]}),
+                             {"seven_day_overage_included": 0})
+        for surface in ("code", "Fable", {"unknown": "code"}, {}, [], False, ""):
+            with self.subTest(surface=surface):
+                self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable(scope={
+                    "model": {"display_name": "Fable"}, "surface": surface})]}), {})
+        for scope in ({"surface": "Fable"}, {"model": {"id": "Fable"}},
+                      {"model": "Fable"}, {"model": {"display_name": "Fable"}, "unknown": "code"}):
+            with self.subTest(scope=scope):
+                self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable(scope=scope)]}), {})
+
+    def test_only_explicit_unscoped_legacy_buckets_are_trusted(self):
+        for key in ("five_hour", "seven_day", "seven_day_overage_included"):
+            with self.subTest(key=key):
+                self.assertEqual(usage.reset_windows({key: {"utilization": 51}}), {key: 51})
+                self.assertEqual(usage.reset_windows({key: {
+                    "utilization": 51, "scope": {"surface": "code"}}}), {})
+        for key in ("seven_day_fable", "seven_day_opus", "seven_day_sonnet", "seven_day_oauth_apps",
+                    "seven_day_cowork", "seven_day_unknown", "extra_usage", "nimbus_quill"):
+            with self.subTest(key=key):
+                self.assertEqual(usage.reset_windows({key: {"utilization": 51}}), {})
+
+    def test_dynamic_conflicts_remain_unconfirmed_and_legacy_wins(self):
+        candidate = WindowTests().fable(percent=37)
+        for changed in (WindowTests().fable(percent=38),
+                        WindowTests().fable(percent=37, resets_at="2026-10-09T12:00:00Z")):
+            self.assertEqual(usage.reset_windows({"limits": [candidate, changed, candidate]}), {})
+        self.assertEqual(usage.reset_windows({"limits": [candidate, candidate]}),
+                         {"seven_day_overage_included": 37})
+        self.assertEqual(usage.reset_windows({"seven_day_overage_included": {"utilization": 51},
+                                             "limits": [candidate, WindowTests().fable(percent=38)]}),
+                         {"seven_day_overage_included": 51})
+
+    def test_dynamic_bounds_and_invalid_percent_do_not_invent_usage(self):
+        for value in (None, True, -1, float("nan"), float("inf"), "37"):
+            with self.subTest(value=value):
+                self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable(percent=value)]}), {})
+                self.assertEqual(usage.reset_windows({"seven_day_overage_included": {"utilization": value}}), {})
+        self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable()] * 65}), {})
+        self.assertEqual(usage.reset_windows({"five_hour": {"utilization": 101},
+                                             "limits": [WindowTests().fable()] * 65}), {"five_hour": 101})
+
+
 class WindowTests(unittest.TestCase):
     def fable(self, **overrides):
         return {"kind": "weekly_scoped", "group": "weekly", "percent": 0,
@@ -1899,8 +1976,32 @@ class ResetWebInventoryTests(unittest.TestCase):
         self.payload["cedar_ember"]["grants"][0]["clears"] = ["five_hour", "seven_day_overage_included"]
         result = usage.reset_host(self.request)
         self.assertEqual(result["windows"]["seven_day_overage_included"], 37)
-        self.assertEqual(result["windows"]["seven_day_fable"], 37)
+        self.assertNotIn("seven_day_fable", result["windows"])
         self.assertEqual(result["raw"]["grants"][0]["clears"], ["five_hour", "seven_day_overage_included"])
+
+    def check_astra_refill_scope(self, name):
+        cases = json.loads((HELPERS.parents[1] / "tests/fixtures/reset-source/claude-refill-scopes.json").read_text())
+        case = next(case for case in cases if case["name"] == name)
+        self.payload["limits"] = [case["limit"]]
+        self.payload["cedar_ember"]["grants"][0].update(
+            clears=["seven_day_overage_included"], gives_back_weekly=True)
+        result = usage.reset_host(self.request)
+        self.assertNotIn("unavailable", result)
+        self.assertEqual("seven_day_overage_included" in result["windows"], case["claimable"])
+        if case["claimable"]:
+            self.assertEqual(result["windows"]["seven_day_overage_included"], 37)
+
+    def test_astra_exact_model_control(self):
+        self.check_astra_refill_scope("exact-model")
+
+    def test_astra_known_surface_control(self):
+        self.check_astra_refill_scope("known-surface")
+
+    def test_astra_surface_only_is_not_fable_model(self):
+        self.check_astra_refill_scope("surface-only")
+
+    def test_astra_unknown_surface_is_not_unscoped(self):
+        self.check_astra_refill_scope("unknown-surface")
 
     def test_missing_conflicting_and_surface_scoped_fable_windows_stay_unconfirmed(self):
         shapes = [[], [WindowTests().fable(), WindowTests().fable(percent=37)],
