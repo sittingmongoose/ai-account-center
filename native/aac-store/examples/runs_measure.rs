@@ -1,8 +1,8 @@
 //! Measures run ingest on a copy of an agent-reports share (never the live share):
 //! `cargo run --release --no-default-features --example runs_measure -- <share copy> <empty store dir> [projections.jsonl]`.
 //! Prints pass times, sizes and the audit; optionally writes every stored run's projection for a
-//! parity check against the TypeScript reader. The secret filter is TypeScript's; this tool
-//! accepts every text, so use it only on copies.
+//! parity check against the TypeScript reader. Every text goes straight to `runsRecord`, which
+//! applies the shared secret policy itself; still, use it only on copies.
 
 use aac_store::ops;
 use serde_json::{Value as Json, json};

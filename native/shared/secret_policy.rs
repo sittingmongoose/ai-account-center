@@ -1,6 +1,6 @@
 //! The report reader's refusal policy at the native persistence boundary. Pattern definitions,
-//! credential spellings and work budgets are shared with schema-helpers.ts; usage text retains
-//! its older, separately scoped policy. Nothing here returns matched credential text.
+//! credential spellings and work budgets are shared with schema-helpers.ts; usage text uses it
+//! too, without the email scan (aac-store `secret.rs`). Nothing here returns matched credential text.
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use serde_json::Value as Json;

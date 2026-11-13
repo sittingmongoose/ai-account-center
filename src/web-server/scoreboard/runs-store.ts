@@ -2,15 +2,17 @@
  * Agent-report runs kept forever in aac-store (Scoreboard v2, share 2026-11-13-scoreboard-v2):
  * the TypeScript side only moves text between the native calls. Scanning the share, the run@1
  * projection, normalization, dedupe, storage and queries are Rust (native/aac-store/src/runs.rs).
- * Between scan and record every text passes `jsonFromBytes`, the one secret filter (owner
- * decision 2026-11-09). A pass that stops at its read budget continues on the next one: nothing
+ * Between scan and record every text passes `jsonFromBytes` and every path and writer folder
+ * `findSecret`: both are the shared secret policy (src/shared/secret-policy.json), the one
+ * detector Rust applies again before anything is stored. A pass that stops at its read budget continues on the next one: nothing
  * is capped away.
  */
 import type { AacStore } from '../../store/store-service';
 import type { ReportProblem } from '../status/agent-reports-reader';
 import type { RunDoc } from '../status/report-schema';
 import { REPORT_SIZE_CAPS } from '../status/report-schema';
-import { findSecret, jsonFromBytes } from '../status/schema-helpers';
+import { findSecret } from '../../shared/secret-policy';
+import { jsonFromBytes } from '../status/schema-helpers';
 import { createHash } from 'crypto';
 import { CATALOG_CAP_BYTES } from './catalog';
 import type { RunsState } from './runs-reader';

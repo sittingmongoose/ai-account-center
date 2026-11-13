@@ -19,8 +19,11 @@
 //! greater path for content already on record).
 //!
 //! Every key is fixed-width big-endian; values carry a leading version byte. Scanning, the
-//! run@1 projection and normalization are here in Rust; the secret check stays the TypeScript
-//! `jsonFromBytes` (owner decision 2026-11-09), which every text passes before `record`.
+//! run@1 projection and normalization are here in Rust. Every text passes the shared secret
+//! policy (src/shared/secret-policy.json) twice: TypeScript's `jsonFromBytes` and `findSecret`
+//! before `record`, then `record` itself over run documents, file paths and writer folders,
+//! thread keys, documents and the values taken from them, catalog texts, refusal reasons and
+//! the ids and identity of each run. It is the one detector; this module has no thresholds.
 
 use crate::db::{Key, be_u32, be_u64};
 use crate::engine::{DAY_MS, Engine, LogId, PROJECTOR_BATCH, Projector};
@@ -31,6 +34,7 @@ use crate::log::Finding;
 use crate::msgpack;
 use crate::run_identity::{self, Catalog, Identity, Written};
 use crate::run_schema::{self, RUN_CAP_BYTES};
+use crate::secret_policy::{find_secret, find_secret_in};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition, WriteTransaction};
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
@@ -990,6 +994,20 @@ fn project_identity(txn: &WriteTransaction, p: &IdentityEventPayload) -> Result<
 /// The reason words kept when a reason itself looks like a credential (it may quote a folder).
 const WITHHELD_REASON: &str = "refused (the reason named what looks like a credential)";
 
+/// Whether the shared secret policy refuses a plain text: a path, a folder, a reason, a value.
+fn secret_text(text: &str) -> bool {
+    find_secret(text).is_some()
+}
+
+/// Whether the shared secret policy refuses a JSON text: its source and every decoded key and
+/// string, as TypeScript's `jsonFromBytes`. Text that does not parse is checked as plain text.
+fn secret_json(text: &str) -> bool {
+    match serde_json::from_str::<Json>(text) {
+        Ok(value) => find_secret_in(text, &value).is_some(),
+        Err(_) => secret_text(text),
+    }
+}
+
 fn project_refused(txn: &WriteTransaction, p: &RefusedPayload) -> Result<()> {
     let key: [u8; 16] = match (&p.path_hash, &p.path) {
         (Some(hash), _) => match unhex16(hash) {
@@ -999,7 +1017,7 @@ fn project_refused(txn: &WriteTransaction, p: &RefusedPayload) -> Result<()> {
         (None, Some(legacy)) => path_key(legacy),
         (None, None) => return Ok(()),
     };
-    let reason = if crate::secret::looks_secret(&p.reason) {
+    let reason = if secret_text(&p.reason) {
         WITHHELD_REASON
     } else {
         p.reason.as_str()
@@ -1289,7 +1307,7 @@ pub struct RecordArgs {
     pub files: Vec<FileIn>,
     #[serde(default)]
     pub refused: Vec<RefusedIn>,
-    /// Writer name to the text of its `thread.json` (already through the secret filter).
+    /// Writer name to the text of its `thread.json` (through the secret filter; checked again).
     #[serde(default)]
     pub threads: BTreeMap<String, String>,
     #[serde(default)]
@@ -1326,14 +1344,15 @@ fn current_catalog(engine: &Engine) -> Result<Option<Catalog>> {
 /// version, so a damaged write never re-keys history.
 fn choose_catalog(engine: &Engine, given: &CatalogIn) -> Result<Catalog> {
     let stored = current_catalog(engine)?;
+    // A catalog text is stored with its version, so the secret policy covers it too.
     let models_ok = given
         .models
         .as_deref()
-        .is_some_and(|t| run_identity::parse_models(t).is_some());
+        .is_some_and(|t| !secret_json(t) && run_identity::parse_models(t).is_some());
     let aliases_ok = given
         .aliases
         .as_deref()
-        .is_some_and(|t| run_identity::parse_aliases(t).is_some());
+        .is_some_and(|t| !secret_json(t) && run_identity::parse_aliases(t).is_some());
     let models = if models_ok {
         given.models.clone()
     } else {
@@ -1354,17 +1373,25 @@ struct ThreadFacts {
     machine: Option<String>,
 }
 
+/// The facts of one writer's `thread.json`, under the same secret policy as a run document: a
+/// writer folder, document or value the policy refuses gives no facts at all.
 fn thread_facts(text: &str, writer: &str) -> ThreadFacts {
+    if secret_text(writer) {
+        return ThreadFacts::default();
+    }
     let Ok(doc) = serde_json::from_str::<Json>(text) else {
         return ThreadFacts::default();
     };
+    if find_secret_in(text, &doc).is_some() {
+        return ThreadFacts::default();
+    }
     if doc["schema"].as_str() != Some("agent-reports/thread@1") || doc["writer"].as_str() != Some(writer) {
         return ThreadFacts::default();
     }
     let clean = |v: &Json| {
         v.as_str()
             .map(str::trim)
-            .filter(|s| !s.is_empty() && s.len() <= 1024 && !s.chars().any(char::is_control))
+            .filter(|s| !s.is_empty() && s.len() <= 1024 && !s.chars().any(char::is_control) && !secret_text(s))
             .map(str::to_string)
     };
     ThreadFacts {
@@ -1438,8 +1465,9 @@ fn writer_of_path(path: &str) -> Option<&str> {
     (parts.next() == Some("writers")).then(|| parts.next()).flatten()
 }
 
-/// Records what a scan read (after the TypeScript secret filter): validates, normalizes and
-/// appends `run.*` events; a file already recorded with the same content adds nothing.
+/// Records what a scan read (after the TypeScript secret filter, and through the same shared
+/// policy again here): validates, normalizes and appends `run.*` events; a file already recorded
+/// with the same content adds nothing.
 pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
     let catalog = choose_catalog(engine, &args.catalog)?;
     let current = engine.with_db(|db| {
@@ -1513,7 +1541,7 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                 Some(writer) if !writer.is_empty() => reason.replace(writer, "<writer>"),
                 _ => reason.to_string(),
             };
-            let reason = if crate::secret::looks_secret(&reason) {
+            let reason = if secret_text(&reason) {
                 WITHHELD_REASON.to_string()
             } else {
                 reason
@@ -1552,8 +1580,9 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
     for f in &args.files {
         let sha = sha256(f.text.as_bytes());
         let sha_hex = hex(&sha);
-        // A file's name can hold a credential too: such a file is refused and its name never kept.
-        if crate::secret::looks_secret(&f.path) {
+        // A file's name or its writer folder can hold a credential too: such a file is refused
+        // and its name never kept.
+        if secret_text(&f.path) {
             if !file_state(&f.path)?.is_some_and(|row| row.state == 2 && row.sha == sha) {
                 refuse(
                     &mut events,
@@ -1596,8 +1625,9 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                 continue;
             }
         };
-        // The store's own rule for persisted text (docs/store.md 2.2), on top of the filter.
-        if crate::secret::looks_secret(&f.text) {
+        // The shared policy again over the document as stored (docs/store.md 2.2): its source and
+        // every decoded key and string, as the TypeScript filter checked it.
+        if secret_json(&f.text) {
             refuse(
                 &mut events,
                 &f.path,
@@ -1639,9 +1669,25 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
             known += 1;
             continue;
         }
-        known_paths.insert(key, f.path.clone());
         let ids = run_ids(&projected, threads.get(writer).unwrap_or(&ThreadFacts::default()));
-        let identity = run_identity::identify(&catalog, &written_of(&projected));
+        let identity: IdentityPayload = (&run_identity::identify(&catalog, &written_of(&projected))).into();
+        // A last guard on what the run is indexed by: its ids and identity come from the document,
+        // the thread facts and the catalog, each checked above; nothing reaches an index unchecked.
+        if find_secret_in("", &serde_json::to_value(&ids)?).is_some()
+            || find_secret_in("", &serde_json::to_value(&identity)?).is_some()
+        {
+            refuse(
+                &mut events,
+                &f.path,
+                f.size,
+                f.mtime_ms,
+                Some(sha_hex),
+                "refused: its ids hold what looks like a credential",
+            )?;
+            refused += 1;
+            continue;
+        }
+        known_paths.insert(key, f.path.clone());
         events.push(event(
             "run.recorded",
             args.now_ms,
@@ -1655,7 +1701,7 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                 ingested_at_ms: args.now_ms,
                 doc: f.text.clone(),
                 ids,
-                identity: (&identity).into(),
+                identity,
             },
         )?);
         recorded += 1;

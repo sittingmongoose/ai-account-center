@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/legacy_secret.rs"]
+mod legacy_secret;
 use aac_store::{capture, fsx, ops};
 use common::temp_dir;
 use serde_json::{Value as Json, json};
@@ -223,7 +225,7 @@ fn shared_policy_keeps_the_legacy_native_credential_shapes() {
         for length in 0..=48 {
             for tail in ["A".repeat(length), "a".repeat(length), "Ab9".repeat(length)] {
                 let text = format!("prefix: {prefix}{tail}");
-                if aac_store::secret::looks_secret(&text) {
+                if legacy_secret::looks_secret(&text) {
                     recognized += 1;
                     assert!(
                         aac_store::report_secret::find_secret(&text).is_some(),

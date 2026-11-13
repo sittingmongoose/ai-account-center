@@ -896,3 +896,173 @@ fn a_refusal_reason_never_quotes_the_writer_folder() {
     // Nothing of the refused file's writer or name was kept.
     assert!(store_holds(&store, b"vm.lead").is_empty());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Recheck 1 regressions (H2): every check is the shared secret policy, in Rust as in TypeScript.
+// Here Rust stands alone: the pass hands it every text, as if the TypeScript filter were absent.
+
+/// The reviewer's three witnesses (synthetic values only).
+const WRITER_KEY: &str = "sk-abcdefghijklmnopqrstuvwx";
+const USERINFO: &str = "synthetic-password123";
+const BASIC: &str = "c3ludGhldGljOnBhc3N3b3JkMTIz";
+
+#[test]
+fn the_shared_policy_keeps_the_recheck_witnesses_out_of_the_db_and_the_ledger() {
+    let share = Share::new("runs-h2");
+    let writer_key = format!("vm.{WRITER_KEY}");
+    // 1. A clean run under a writer folder named like a key, and that writer's thread.
+    share.run(
+        &writer_key,
+        "a",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    share.thread(&writer_key, "thread-plain-0");
+    // 2. URL userinfo on a local host in a task title, under a plain writer.
+    let path = share.run(
+        "vm.synthetic",
+        "url",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    let file = share.root.join("v1").join(&path);
+    let mut doc: Json = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    doc["task"]["title"] = json!(format!("https://agent:{USERINFO}@localhost/path"));
+    fs::write(&file, doc.to_string()).unwrap();
+    // 3. A Basic credential as the thread value of that writer, whose other run is clean.
+    share.thread("vm.synthetic", &format!("Basic {BASIC}"));
+    share.run(
+        "vm.synthetic",
+        "clean",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    // Control: a plain thread value is still taken, so the thread check is not vacuous.
+    share.thread("vm.plain", "thread-plain-1");
+    share.run(
+        "vm.plain",
+        "clean",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    let needles = [WRITER_KEY, USERINFO, BASIC];
+    let store = temp_dir("runs-h2-store");
+    {
+        let engine = open(&store);
+        let (scan, record) = pass(&engine, &share, T0 + 10 * DAY, 100, true);
+        // The scan handed every text over: Rust's own check refused them, not the scan.
+        assert_eq!(scan["files"].as_array().unwrap().len(), 4);
+        assert_eq!(scan["threads"].as_object().unwrap().len(), 3);
+        assert_eq!(
+            (record["recorded"].as_u64(), record["refused"].as_u64()),
+            (Some(2), Some(2)),
+            "{record}"
+        );
+        let runs = query(&engine, json!({}));
+        let thread_of = |writer: &str| {
+            runs.iter()
+                .find(|r| r["doc"]["writer"] == json!(writer))
+                .map(|r| r["ids"]["t3ThreadId"].clone())
+                .unwrap()
+        };
+        assert_eq!(thread_of("vm.synthetic"), Json::Null);
+        assert_eq!(thread_of("vm.plain")["value"], json!("thread-plain-1"));
+        let refused = call(&engine, "runsRefused", json!({}));
+        let reasons: Vec<&str> = refused
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["reason"].as_str().unwrap())
+            .collect();
+        assert!(
+            reasons.contains(&"refused: its file name looks like a credential"),
+            "{refused}"
+        );
+        assert!(
+            reasons.contains(&"refused: it contains what looks like a credential"),
+            "{refused}"
+        );
+        for needle in needles {
+            assert!(!json!([runs, refused]).to_string().contains(needle), "{needle}");
+        }
+        // Sealed and compressed before the bytes are read.
+        call(&engine, "maintain", json!({ "nowMs": T0 + 12 * DAY }));
+        engine.close().unwrap();
+    }
+    for needle in needles {
+        assert_eq!(
+            store_holds(&store, needle.as_bytes()),
+            Vec::<String>::new(),
+            "{needle} after sealing"
+        );
+    }
+    {
+        let engine = open(&store);
+        assert_eq!(query(&engine, json!({})).len(), 2, "reopened");
+        engine.close().unwrap();
+    }
+    fs::remove_file(store.join("aac.redb")).unwrap();
+    {
+        let engine = open(&store);
+        let runs = query(&engine, json!({}));
+        assert_eq!(runs.len(), 2, "replayed from the ledger");
+        assert_eq!(call(&engine, "runsRefused", json!({})).as_array().unwrap().len(), 2);
+        engine.close().unwrap();
+    }
+    for needle in needles {
+        assert_eq!(
+            store_holds(&store, needle.as_bytes()),
+            Vec::<String>::new(),
+            "{needle} after a rebuild"
+        );
+        // Each witness is in the share copy: the checks above are not vacuous.
+        assert!(
+            !store_holds(&share.root, needle.as_bytes()).is_empty(),
+            "{needle} in the share"
+        );
+    }
+}
+
+#[test]
+fn a_catalog_text_the_policy_refuses_is_never_stored() {
+    let share = Share::new("runs-h2-catalog");
+    share.run(
+        "vm.lead",
+        "a",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    let store = temp_dir("runs-h2-catalog-store");
+    let engine = open(&store);
+    pass(&engine, &share, T0 + 10 * DAY, 100, true);
+    let before = call(&engine, "runsStatus", json!({}))["catalogHash"].clone();
+    // An alias text naming a credential: the last stored catalog stays current.
+    let alias = format!("https://agent:{USERINFO}@localhost/model");
+    share.set_aliases(&[(alias.as_str(), "openai/gpt-6.1-sol")]);
+    let (_, record) = pass(&engine, &share, T0 + 11 * DAY, 100, true);
+    assert_eq!(record["catalogChanged"], json!(false), "{record}");
+    assert_eq!(call(&engine, "runsStatus", json!({}))["catalogHash"], before);
+    call(&engine, "maintain", json!({ "nowMs": T0 + 12 * DAY }));
+    engine.close().unwrap();
+    assert_eq!(store_holds(&store, USERINFO.as_bytes()), Vec::<String>::new());
+}

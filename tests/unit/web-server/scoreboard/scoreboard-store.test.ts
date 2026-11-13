@@ -342,6 +342,104 @@ describe.skipIf(!haveModule)('Scoreboard v2 review regressions', () => {
     }
   });
 
+  it('H2 recheck: URL userinfo in a title and a Basic thread value are stored nowhere', async () => {
+    // Recheck 1's witnesses, synthetic only: a password in URL userinfo on a local host, and a
+    // short Basic credential as a writer's thread value beside a clean run of that writer.
+    const userinfo = 'synthetic-password123';
+    const basic = 'c3ludGhldGljOnBhc3N3b3JkMTIz';
+    const box = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-sb-h2-'));
+    const thread = (shareRoot: string, writer: string, t3Thread: string) =>
+      fs.writeFileSync(
+        path.join(shareRoot, 'v1', 'writers', writer, 'thread.json'),
+        JSON.stringify({
+          schema: 'agent-reports/thread@1',
+          writer,
+          seq: 1,
+          writtenAt: iso(NOW),
+          agent: { t3Thread },
+        })
+      );
+    try {
+      const shareRoot = path.join(box, 'share');
+      fs.mkdirSync(path.join(shareRoot, 'v1', 'catalog'), { recursive: true });
+      for (const name of fs.readdirSync(CATALOG))
+        fs.copyFileSync(path.join(CATALOG, name), path.join(shareRoot, 'v1', 'catalog', name));
+      writeRun(
+        shareRoot,
+        runDoc('vm.synthetic', 'url', {
+          task: { id: 'url', type: 'build', title: `https://agent:${userinfo}@localhost/path` },
+        })
+      );
+      writeRun(shareRoot, runDoc('vm.synthetic', 'clean'));
+      thread(shareRoot, 'vm.synthetic', `Basic ${basic}`);
+      // Control: a plain thread value is still taken, so the thread check is not vacuous.
+      writeRun(shareRoot, runDoc('vm.plain', 'clean'));
+      thread(shareRoot, 'vm.plain', 'thread-plain-1');
+      const storeDir = path.join(box, 'store');
+      let opened = await openStore(storeDir);
+      const runsStore = new RunsStore({
+        store: () => opened,
+        root: () => shareRoot,
+        now: () => NOW,
+      });
+      const pass = await runsStore.pass({ full: true });
+      expect([pass.recorded, pass.refused]).toEqual([2, 1]);
+      const runs = await runsStore.query({});
+      const threadOf = (writer: string) =>
+        runs.find((run) => run.doc.writer === writer)?.ids.t3ThreadId as
+          { value: string } | null | undefined;
+      expect(threadOf('vm.synthetic')).toBeNull();
+      expect(threadOf('vm.plain')?.value).toBe('thread-plain-1');
+      const refused = await opened.runs<RefusedRow[]>('runsRefused');
+      for (const needle of [userinfo, basic]) {
+        expect(JSON.stringify([runs, refused])).not.toContain(needle);
+        expect(JSON.stringify((await runsStore.state({})).problems)).not.toContain(needle);
+      }
+      // The native module refuses them on its own too: the same texts handed straight to it.
+      const read = (relative: string) =>
+        fs.readFileSync(path.join(shareRoot, 'v1', relative), 'utf8');
+      const urlPath = 'writers/vm.synthetic/runs/2026-11-06/vm.synthetic--url.json';
+      const cleanPath = 'writers/vm.synthetic/runs/2026-11-06/vm.synthetic--clean2.json';
+      const direct = await opened.runs<{ recorded: number; refused: number }>('runsRecord', {
+        files: [
+          { path: urlPath, text: read(urlPath), size: 1, mtimeMs: 2 },
+          {
+            path: cleanPath,
+            text: JSON.stringify(runDoc('vm.synthetic', 'clean2')),
+            size: 1,
+            mtimeMs: 2,
+          },
+        ],
+        refused: [],
+        threads: { 'vm.synthetic': read('writers/vm.synthetic/thread.json') },
+        catalog: { models: null, aliases: null },
+        nowMs: NOW + 1,
+      });
+      expect([direct.recorded, direct.refused]).toEqual([1, 1]);
+      const clean2 = (await runsStore.query({})).find(
+        (run) => run.doc.id === 'vm.synthetic--clean2'
+      );
+      expect(clean2?.ids.t3ThreadId).toBeNull();
+      // Sealed (maintenance seals and compresses the ledger), closed, reopened, replayed.
+      await opened.maintain({ nowMs: NOW + DAY });
+      await opened.close();
+      for (const needle of [userinfo, basic]) expect(holding(storeDir, needle)).toEqual([]);
+      opened = await openStore(storeDir);
+      expect((await opened.runs<{ runs: unknown[] }>('runsQuery', {})).runs).toHaveLength(3);
+      await opened.close();
+      fs.rmSync(path.join(storeDir, 'aac.redb'));
+      opened = await openStore(storeDir);
+      expect((await opened.runs<{ runs: unknown[] }>('runsQuery', {})).runs).toHaveLength(3);
+      await opened.close();
+      for (const needle of [userinfo, basic]) {
+        expect(holding(storeDir, needle)).toEqual([]);
+        expect(holding(shareRoot, needle).length).toBeGreaterThan(0);
+      }
+    } finally {
+      fs.rmSync(box, { recursive: true, force: true });
+    }
+  });
+
   it('M1 and M2: the stored winner is the TypeScript reader winner, over passes and fresh', async () => {
     const box = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-sb-m12-'));
     try {
