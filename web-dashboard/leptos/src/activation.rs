@@ -64,12 +64,30 @@ pub fn ActivationDialog() -> impl IntoView {
     let view_m = Memo::new(move |_| dash.activation.with(|j| parse(j)));
     let open = Memo::new(move |_| view_m.with(|v| v.is_some()));
     let busy = Memo::new(move |_| view_m.with(|v| v.as_ref().is_some_and(|v| v.in_progress)));
+    let can = Memo::new(move |_| {
+        view_m.with(|v| v.as_ref().is_some_and(|v| v.can_confirm && !v.in_progress))
+    });
     let cancel = move || {
         if !busy.get_untracked() {
             dash.act("activation-cancel", "");
         }
     };
     let close = Callback::new(move |_| cancel());
+    // Leaving the approval's page retires this opening (OverlayPortal). A request already running can't be cancelled,
+    // so the retired dialog stays hidden until the request settles and is then cancelled: its late result (a failure,
+    // a fresh review) updates the same hidden opening and can't bring a modal back over another page (Astra/Sol max
+    // 6). The next Activate opens a fresh one.
+    let retired = RwSignal::new(false);
+    let on_retire = Callback::new(move |_| retired.set(true));
+    Effect::new(move |_| {
+        if !open.get() {
+            if retired.get_untracked() {
+                retired.set(false);
+            }
+        } else if retired.get() && !busy.get() {
+            dash.act("activation-cancel", "");
+        }
+    });
     // The dialog takes the focus when it opens, so the keyboard and screen readers land on it.
     Effect::new(move |_| {
         if open.get() {
@@ -86,45 +104,68 @@ pub fn ActivationDialog() -> impl IntoView {
             let _ = window().request_animation_frame(wasm_bindgen::JsCast::unchecked_ref(&focus));
         }
     });
-    move || {
-        view_m.get().map(|v| {
-            let product = v.product_name();
-            let status = if v.in_progress {
-                Some((format!("Stopping the listed processes and restoring {product}…"), false))
+    let read = move |f: fn(&ActivationView) -> String| {
+        move || view_m.with(|v| v.as_ref().map(f).unwrap_or_default())
+    };
+    let status = move || {
+        view_m.with(|v| {
+            let v = v.as_ref()?;
+            if v.in_progress {
+                Some((
+                    format!(
+                        "Stopping the listed processes and restoring {}…",
+                        v.product_name()
+                    ),
+                    false,
+                ))
             } else if !v.error.is_empty() {
                 Some((v.error.clone(), true))
             } else {
                 None
-            };
-            let can = v.can_confirm && !v.in_progress;
-            let keep_hint = format!("Keep every {product} process and account unchanged");
-            let go_hint = format!("Stop the listed processes and switch the {product} account");
+            }
+        })
+    };
+    let processes = move || {
+        let list = view_m.with(|v| v.as_ref().map(|v| v.processes.clone()).unwrap_or_default());
+        if list.is_empty() {
+            view! { <li class="q3">"No running processes were listed."</li> }.into_any()
+        } else {
+            list.into_iter()
+                .map(|p| {
+                    let pid = p.pid.map(|n| n.to_string()).unwrap_or_else(|| "–".into());
+                    let role = if p.role.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" · {}", p.role)
+                    };
+                    view! { <li><b>{p.label}</b><span class="tnum">{format!("PID {pid}{role}")}</span></li> }
+                })
+                .collect_view()
+                .into_any()
+        }
+    };
+    // One portal for one opening: status and error updates change its words in place, never its lifetime, lock or
+    // focus. Only closed -> open makes a new one.
+    move || {
+        open.get().then(|| {
             view! {
-                <OverlayPortal on_close=close>
+                <OverlayPortal on_close=close on_retire=on_retire>
                 <div class="ascrim" on:click=move |_| cancel()>
                     <div class="adialog" role="dialog" aria-modal="true" aria-labelledby="adialog-title"
                         on:click=|ev| ev.stop_propagation()>
-                        <h2 id="adialog-title">{format!("Another {product} process is running")}</h2>
-                        <p class="a-target">{format!("Switch to {}?", v.target_profile)}</p>
-                        <p class="a-warn">{v.warning.clone()}</p>
-                        <ul class="a-procs">
-                            {if v.processes.is_empty() {
-                                view! { <li class="q3">"No running processes were listed."</li> }.into_any()
-                            } else {
-                                v.processes.iter().map(|p| {
-                                    let pid = p.pid.map(|n| n.to_string()).unwrap_or_else(|| "–".into());
-                                    let role = if p.role.is_empty() { String::new() } else { format!(" · {}", p.role) };
-                                    view! { <li><b>{p.label.clone()}</b><span class="tnum">{format!("PID {pid}{role}")}</span></li> }
-                                }).collect_view().into_any()
-                            }}
-                        </ul>
-                        <p class="a-exp tnum">{v.expires_at.clone()}</p>
-                        {status.clone().map(|(text, bad)| view! { <p class="a-status" class:w-crit=bad>{text}</p> })}
+                        <h2 id="adialog-title">{read(|v| format!("Another {} process is running", v.product_name()))}</h2>
+                        <p class="a-target">{read(|v| format!("Switch to {}?", v.target_profile))}</p>
+                        <p class="a-warn">{read(|v| v.warning.clone())}</p>
+                        <ul class="a-procs">{processes}</ul>
+                        <p class="a-exp tnum">{read(|v| v.expires_at.clone())}</p>
+                        {move || status().map(|(text, bad)| view! { <p class="a-status" class:w-crit=bad>{text}</p> })}
                         <div class="a-btns">
-                            <button class="btn" title=keep_hint.clone() aria-disabled=v.in_progress.to_string()
+                            <button class="btn" title=read(|v| format!("Keep every {} process and account unchanged", v.product_name()))
+                                aria-disabled=move || busy.get().to_string()
                                 on:click=move |_| cancel()>"Cancel"</button>
-                            <button class="btn primary" title=go_hint.clone() aria-disabled=(!can).to_string()
-                                on:click=move |_| { if can { dash.act("activation-confirm", ""); } }>"Yes, stop and restart"</button>
+                            <button class="btn primary" title=read(|v| format!("Stop the listed processes and switch the {} account", v.product_name()))
+                                aria-disabled=move || (!can.get()).to_string()
+                                on:click=move |_| { if can.get_untracked() { dash.act("activation-confirm", ""); } }>"Yes, stop and restart"</button>
                         </div>
                     </div>
                 </div>

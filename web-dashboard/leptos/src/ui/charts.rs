@@ -480,7 +480,10 @@ pub fn TipLayer(children: Children) -> impl IntoView {
     // Where the tipped element asks for the card (its centre x), before the card's own width is applied.
     let at = RwSignal::new((0.0f64, 0.0f64, false));
     let card = NodeRef::<leptos::html::Div>::new();
-    let find = |target: Option<web_sys::EventTarget>| -> Option<(String, web_sys::DomRect, bool)> {
+    let scope = NodeRef::<leptos::html::Div>::new();
+    // The element whose explanation is open: a live update to it refreshes or dismisses the card (Sol max 6 L1).
+    let source = StoredValue::new_local(None::<web_sys::Element>);
+    let find = |target: Option<web_sys::EventTarget>| -> Option<(String, web_sys::Element, bool)> {
         let el = target?.dyn_into::<web_sys::Element>().ok()?;
         let tipped = el.closest("[data-tip]").ok().flatten()?;
         let tip = tipped.get_attribute("data-tip").unwrap_or_default();
@@ -488,9 +491,11 @@ pub fn TipLayer(children: Children) -> impl IntoView {
             return None;
         }
         let acts = el.closest("button, a, [data-act]").ok().flatten().is_some();
-        Some((tip, tipped.get_bounding_client_rect(), acts))
+        Some((tip, tipped, acts))
     };
-    let place = move |tip: String, rect: web_sys::DomRect| {
+    let place = move |tip: String, tipped: web_sys::Element| {
+        let rect = tipped.get_bounding_client_rect();
+        source.set_value(Some(tipped));
         let below = rect.top() < 120.0;
         let y = if below {
             rect.bottom() + 8.0
@@ -521,7 +526,7 @@ pub fn TipLayer(children: Children) -> impl IntoView {
             return;
         }
         match find(e.target()) {
-            Some((tip, rect, _)) => place(tip, rect),
+            Some((tip, tipped, _)) => place(tip, tipped),
             None => text.set(String::new()),
         }
     };
@@ -530,7 +535,7 @@ pub fn TipLayer(children: Children) -> impl IntoView {
             return;
         }
         match find(e.target()) {
-            Some((tip, rect, false)) if text.get_untracked() != tip => place(tip, rect),
+            Some((tip, tipped, false)) if text.get_untracked() != tip => place(tip, tipped),
             _ => text.set(String::new()),
         }
     };
@@ -540,6 +545,48 @@ pub fn TipLayer(children: Children) -> impl IntoView {
             text.set(String::new());
         }
     };
+    // A live update rewrites the open explanation's element (its exact count) or replaces it: show the current words,
+    // or close the card when its element is gone, instead of the count read when it was tapped.
+    let refresh = Closure::<dyn Fn(js_sys::Array, web_sys::MutationObserver)>::new(move |_, _| {
+        if text.with_untracked(|t| t.is_empty()) {
+            return;
+        }
+        let current = source.with_value(|s| {
+            s.as_ref()
+                .filter(|el| el.is_connected())
+                .map(|el| (el.clone(), el.get_attribute("data-tip").unwrap_or_default()))
+        });
+        match current {
+            Some((el, tip)) if !tip.is_empty() => {
+                if text.with_untracked(|t| *t != tip) {
+                    place(tip, el);
+                }
+            }
+            _ => {
+                source.set_value(None);
+                text.set(String::new());
+            }
+        }
+    });
+    let observer = StoredValue::new_local(
+        web_sys::MutationObserver::new(refresh.as_ref().unchecked_ref()).ok(),
+    );
+    let refresh = StoredValue::new_local(Some(refresh));
+    Effect::new(move |_| {
+        let Some(root) = scope.get() else {
+            return;
+        };
+        observer.with_value(|o| {
+            if let Some(o) = o {
+                let options = web_sys::MutationObserverInit::new();
+                options.set_child_list(true);
+                options.set_subtree(true);
+                options.set_attributes(true);
+                options.set_attribute_filter(&js_sys::Array::of1(&"data-tip".into()));
+                let _ = o.observe_with_options(root.as_ref(), &options);
+            }
+        });
+    });
     let hide = window_event_listener(leptos::ev::scroll, move |_| text.set(String::new()));
     let layout = Closure::<dyn Fn()>::new(move || text.set(String::new()));
     let _ = window().add_event_listener_with_callback(
@@ -549,6 +596,10 @@ pub fn TipLayer(children: Children) -> impl IntoView {
     let layout = StoredValue::new_local(Some(layout));
     on_cleanup(move || {
         hide.remove();
+        if let Some(Some(o)) = observer.try_update_value(|o| o.take()) {
+            o.disconnect();
+        }
+        let _ = refresh.try_update_value(|r| r.take());
         if let Some(Some(layout)) = layout.try_update_value(|v| v.take()) {
             let _ = window().remove_event_listener_with_callback(
                 super::device::LAYOUT_EVENT,
@@ -557,7 +608,7 @@ pub fn TipLayer(children: Children) -> impl IntoView {
         }
     });
     view! {
-        <div class="tip-scope" on:pointerover=over on:pointerup=up on:pointerleave=leave>
+        <div class="tip-scope" node_ref=scope on:pointerover=over on:pointerup=up on:pointerleave=leave>
             {children()}
             <div class="tip-card" class:below=move || pos.get().2 hidden=move || text.with(|t| t.is_empty())
                 node_ref=card style=move || { let (x, y, _) = pos.get(); format!("left:{x:.0}px;top:{y:.0}px") }>{move || text.get()}</div>
