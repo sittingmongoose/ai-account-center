@@ -8,6 +8,7 @@ import { record, safeVersion } from './app-update-values';
 
 export const APP_UPDATE_CAUSES = [
   'none',
+  'shadowed',
   'auth_required',
   'signin_needed',
   'policy_blocked',
@@ -44,6 +45,7 @@ export interface AppUpdateOwner {
   source?: string;
   executable?: string;
   firstOnPath?: string;
+  firstOnPathVersion?: string;
   onPath?: boolean;
   copies?: number;
   packages?: AppUpdateOwnerPackage[];
@@ -67,6 +69,8 @@ export interface AppUpdateDiagnostics {
 /** Codes that name a cause, each allowed on one app and status (and Windows only for policy refusals). */
 export const CAUSE_CODE_RULES: Record<string, { app: string; status: string; windows?: true }> = {
   cursor_signin_needed: { app: 'cursor-cli', status: 'action_required' },
+  cursor_shadowed: { app: 'cursor-cli', status: 'action_required' },
+  registry_mismatch: { app: 't3-acp-adapters', status: 'failed' },
   policy_blocked: { app: 'cursor-cli', status: 'action_required', windows: true },
   wrong_prefix: { app: 't3-acp-adapters', status: 'failed' },
   prefix_not_writable: { app: 't3-acp-adapters', status: 'action_required' },
@@ -104,33 +108,86 @@ const TAIL_LINES = 12;
 const LINE_CHARS = 200;
 const PATH_CHARS = 160;
 
+// The same rules as the helper's scrub(), in the same order. Every pattern runs on at most
+// SCRUB_LINES lines cut to SCRUB_LINE_CHARS, and every repeat is bounded, so this stays linear.
+const SCRUB_LINES = 48;
+const SCRUB_LINE_CHARS = 600;
+const CREDENTIAL_WORD =
+  '(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential' +
+  '|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)';
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
-  [/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 <redacted>'],
+  // Whole credential-carrying headers and npm config lines: everything after the marker goes.
   [
-    /(["']?(?:[a-z0-9_-]*(?:token|secret|password|passwd|apikey|api[_-]key|authorization|cookie|credential|session[_-]?id|bearer)[a-z0-9_-]*)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}&]+)/gi,
+    /\b((?:set-)?cookie|(?:proxy-)?authorization|x-api-key|x-auth-token|private-token)\s*:.{0,600}$/gim,
+    '$1: <redacted>',
+  ],
+  [/((?:\/\/[^\s=]{0,200}?:)?_(?:auth|authtoken|password)\b)\s*=.{0,600}$/gim, '$1=<redacted>'],
+  [/^.{0,600}PRIVATE KEY.{0,600}$/gim, '<redacted>'],
+  [/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{1,600}/gi, '$1 <redacted>'],
+  [
+    new RegExp(
+      `(["']?\\b[a-z0-9_.-]{0,40}${CREDENTIAL_WORD}[a-z0-9_.-]{0,40}["']?\\s*[:=]\\s*)\\S.{0,600}$`,
+      'gim'
+    ),
     '$1<redacted>',
   ],
-  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?/g, '<redacted>'],
-  [/\b(?:npm_|ghp_|gho_|github_pat_|sk-|xox[abpr]-|aiza)[A-Za-z0-9_-]{8,}/gi, '<redacted>'],
-  [/\b(https?|wss?):\/\/[^/\s@]+@/gi, '$1://'],
-  [/\b((?:https?|wss?):\/\/[^\s?#"']+)[?#][^\s"']*/gi, '$1'],
-  [/[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/g, '<email>'],
-  [/[A-Za-z0-9+_=-]{40,}/g, '<redacted>'],
+  [/(\bpass(?:word|wd|phrase)\b[^:=\n]{0,40}[:=]\s*)\S.{0,600}$/gim, '$1<redacted>'],
+  [
+    /(--?(?:password|passwd|pass|token|api-?key|auth(?:-?token)?|secret|access-?token|otp)\b)(?:\s+|=)(?!-)\S{1,600}/gi,
+    '$1 <redacted>',
+  ],
+  [/\bcode=\S{1,600}/gi, 'code=<redacted>'],
+  [/(one[- ]time (?:code|password)\D{0,20})\d{4,10}/gi, '$1<redacted>'],
+  [/\beyJ[A-Za-z0-9_-]{8,600}\.[A-Za-z0-9_-]{8,600}(?:\.[A-Za-z0-9_-]{1,600})?/g, '<redacted>'],
+  [
+    /\b(?:npm_|ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abpr]-|aiza)[A-Za-z0-9_-]{8,600}/gi,
+    '<redacted>',
+  ],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '<redacted>'],
+  [/\b(https?|wss?):\/\/[^/\s@]{1,200}@/gi, '$1://'],
+  [/\b((?:https?|wss?):\/\/[^\s?#"']{1,600})[?#][^\s"']{0,600}/gi, '$1'],
+  [/[\w.+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b/g, '<email>'],
+  [
+    /(?<![\w/@.-])[A-Za-z][\w.+-]{0,63}@(?!(?:latest|next|beta|alpha|canary|rc|stable|dev|legacy|lts|insiders|nightly)\b)[A-Za-z][\w-]{0,62}\b(?![./@])/g,
+    '<user>@<host>',
+  ],
+  [/\b[0-9a-fA-F]{32,600}\b/g, '<redacted>'],
+  [/[A-Za-z0-9+_=-]{40,600}/g, '<redacted>'],
 ];
+const SLASHED = /(?<![\w/+=-])[A-Za-z0-9+/=_-]{32,600}(?![\w/+=-])/g;
+
+/** A '/'-containing run is a secret only when it looks random, never an ordinary path. */
+function randomLooking(text: string): string {
+  const upper = [...text].filter((char) => char >= 'A' && char <= 'Z').length;
+  return /\d/.test(text) && /[a-z]/.test(text) && upper >= text.length * 0.15 ? '<redacted>' : text;
+}
 
 function scrubPaths(text: string): string {
   return text
-    .replace(/([A-Z]:(?:\\\\|\\|\/)+Users(?:\\\\|\\|\/)+)[^\\/\s"']+/gi, '$1<user>')
-    .replace(/(\/(?:Users|home)\/)[^/\s"']+/g, '$1<user>');
+    .replace(/([A-Z]:(?:\\\\|\\|\/){1,4}Users(?:\\\\|\\|\/){1,4})[^\\/"'\n]{1,128}/gi, '$1<user>')
+    .replace(/(\/Users\/)[^/"'\n]{1,128}/g, '$1<user>')
+    .replace(/(\/home\/)[^/\s"']{1,128}/g, '$1<user>');
 }
 
 /** The dashboard's own pass over helper text: control characters, credentials, people and other users' folders. */
 export function scrubText(value: string, lines = TAIL_LINES): string {
-  let text = value.slice(-65536).replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
-  text = text.replace(/\r\n?/g, '\n');
+  const candidates = value
+    .slice(-65536)
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => line.slice(0, SCRUB_LINE_CHARS));
+  let text = candidates.slice(-SCRUB_LINES).join('\n');
+  // eslint-disable-next-line no-control-regex
+  text = text.replace(
+    /\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g,
+    ''
+  );
+  // eslint-disable-next-line no-control-regex
   text = text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ' ');
   text = scrubPaths(text);
   for (const [pattern, replacement] of SECRET_PATTERNS) text = text.replace(pattern, replacement);
+  text = text.replace(SLASHED, randomLooking);
   return text
     .split('\n')
     .map((line) => line.trimEnd().slice(0, LINE_CHARS))
@@ -174,6 +231,8 @@ function ownerOf(value: unknown): AppUpdateOwner | undefined {
   if (executable) owner.executable = executable;
   const first = displayPath(raw.firstOnPath);
   if (first) owner.firstOnPath = first;
+  const firstVersion = safeVersion(raw.firstOnPathVersion);
+  if (firstVersion) owner.firstOnPathVersion = firstVersion;
   if (typeof raw.onPath === 'boolean') owner.onPath = raw.onPath;
   const copies = count(raw.copies, 32);
   if (copies !== undefined) owner.copies = copies;

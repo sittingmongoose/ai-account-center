@@ -798,13 +798,14 @@ const actionWord = (row) => {
 // The cause a helper named for a row that did not simply finish: its cell says it in a few words
 // instead of "Failed" or "Needs action". Rows from older helpers carry no diagnostics and keep the old words.
 const CAUSE_WORDS = {
-  auth_required: 'Sign-in needed', signin_needed: 'Sign-in needed', policy_blocked: 'Blocked by policy',
+  auth_required: 'Sign-in needed', signin_needed: 'Sign-in needed', policy_blocked: 'Blocked by policy', shadowed: 'Another copy runs',
   wrong_prefix: 'Updated the wrong copy', not_writable: 'Folder not writable', lost_session_reply: 'T3 reply lost',
   t3_absent: 'T3 not installed', t3_not_ready: 'T3 not ready', t3_restart_pending: 'After T3 restarts',
   installer_failed: 'Installer failed',
 };
 const CAUSE_LINES = {
   auth_required: 'the app refused its sign-in', signin_needed: 'a new sign-in is needed', policy_blocked: 'an execution policy refused its launcher',
+  shadowed: 'another copy comes first on PATH and runs instead',
   wrong_prefix: 'the installer changed a copy that is not the one in use', not_writable: 'the copy in use is in a folder this account cannot change',
   lost_session_reply: "T3's session reply never arrived", t3_absent: 'T3 is not installed here', t3_not_ready: "T3's server did not answer in time",
   t3_restart_pending: "T3's new server starts after this run", installer_failed: 'its installer failed', in_use: 'it is in use',
@@ -828,7 +829,7 @@ const diagnosticsWords = (row) => {
     words.push(`${text(item.package)} in ${text(item.prefix)} (${text(item.source) === 't3-config' ? 'what T3 runs' : text(item.source) === 'path' ? 'first on PATH' : text(item.source)})`);
   for (const item of Array.isArray(owner?.elsewhere) ? owner.elsewhere : [])
     words.push(`another ${text(item.package)} in ${text(item.prefix)}${text(item.version) ? ` is ${item.version}` : ''}`);
-  if (owner && text(owner.executable)) words.push(`uses ${owner.executable}${owner.onPath === false ? ' (not on PATH)' : ''}${text(owner.firstOnPath) ? `; ${owner.firstOnPath} comes first on PATH` : ''}`);
+  if (owner && text(owner.executable)) words.push(`uses ${owner.executable}${owner.onPath === false ? ' (not on PATH)' : ''}${text(owner.firstOnPath) ? `; ${owner.firstOnPath}${text(owner.firstOnPathVersion) ? ` (${owner.firstOnPathVersion})` : ''} comes first on PATH` : ''}`);
   if (owner && text(owner.target)) words.push(owner.target === 't3-offer' ? "target from T3's offer" : "target from Google's release channel");
   if (Array.isArray(d.notes) && d.notes.length) words.push(`notes: ${d.notes.join(', ')}`);
   const phases = d.phases && typeof d.phases === 'object' ? Object.entries(d.phases).filter(([, ms]) => Number.isInteger(ms)) : [];

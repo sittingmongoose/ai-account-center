@@ -70,10 +70,14 @@ export const MESSAGES = {
     'Cursor staged its update while an agent is running. Let the agent finish, then run Update apps again.',
   cursor_signin_needed:
     "Sign-in needed: Cursor refused the CLI's sign-in when it checked for updates (HTTP 401), so nothing changed. Run cursor-agent login in a terminal on this computer, then run Update apps again. AAC never stores or asks for credentials.",
+  cursor_shadowed:
+    "Cursor CLI's own install is at the version shown, but another cursor-agent comes first on PATH and runs instead. Remove that copy, or put Cursor's own folder first, then run Update apps again.",
   policy_blocked:
     "A Windows execution policy refused the app's launcher, so nothing changed. AAC runs it the way the app's own .cmd does (a Bypass for that one process); a Group Policy setting overrides that. Ask this computer's administrator to allow it, then run Update apps again.",
   wrong_prefix:
     'npm reported success, but it changed a copy T3 does not run; the copy T3 uses is unchanged. The details name both folders.',
+  registry_mismatch:
+    "npm installed a version other than the newest published one (an older or mirrored registry?), so the update did not complete. The details list each copy's version.",
   prefix_not_writable:
     "The adapters T3 runs are in a folder this account cannot change, so nothing was installed. Update them as that folder's owner, or reinstall them in a folder you own.",
   antigravity_acp_updated:
@@ -99,7 +103,7 @@ export const MESSAGES = {
   t3_session_issue_unknown:
     'T3 may have issued an update session, but its reply never arrived and AAC could not find it to revoke; no install started. That session expires within 15 minutes.',
   t3_session_reply_lost:
-    'T3 issued an update session, but its reply never reached AAC, so no install started. AAC found that session and revoked it.',
+    'T3 issued an update session, but AAC did not get a usable reply, so no install started. AAC found that session and revoked it.',
   t3_absent:
     'T3 Code is not installed, or has never run, on this computer; its Antigravity ACP runtime updates only through T3.',
   t3_not_ready:
