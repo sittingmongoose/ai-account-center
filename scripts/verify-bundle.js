@@ -8,7 +8,10 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 
 const UI_DIR = path.join(__dirname, '../dist/ui');
-const MAX_SIZE = 8 * 1024 * 1024;
+// Whole dist/ui, gzipped. Most of it is the classic Slint app, which the Leptos
+// frame no longer loads (G5), so new frame pages hit this guard without growing
+// what a page downloads. A per-entry guard for the frame is a follow-up.
+const MAX_SIZE = 9 * 1024 * 1024;
 const WASM_NAME = 'ccs_account_dashboard';
 const BUILD_ID = /^[a-f0-9]{12}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
