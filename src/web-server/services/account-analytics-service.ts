@@ -850,6 +850,9 @@ export class AccountAnalyticsService {
         dayBucketTz: tz,
         availableFrom: new Date(availableFrom).toISOString(),
         resolution: activity.resolution ?? 'hour',
+        ...(query.range === 'custom' && query.from && query.to
+          ? { days: { from: query.from, to: query.to } }
+          : {}),
       },
       filters: { platform: query.platform, provider: query.provider, account: query.account },
       history: {

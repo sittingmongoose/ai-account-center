@@ -311,8 +311,9 @@ export function resolveAccountAnalyticsRange(
     case '7d':
     case '30d':
     case '90d':
-      // Without the store a 90-day range shows the retained window; the page says where it starts.
       from = now - FIXED_RANGE_MS[request.range];
+      // Without the store a 90-day range shows the retained window; the page says where it starts.
+      if (request.range === '90d' && !stored) from = Math.max(from, retainedFrom);
       break;
     case 'month':
       from = localMidnight(`${localDate(now, tz).slice(0, 7)}-01`, tz);

@@ -337,6 +337,8 @@ export interface AccountAnalytics {
     availableFrom: string;
     /** `day` when activity comes in local days (ranges over 92 days with the history store). */
     resolution?: 'hour' | 'day';
+    /** A custom range's whole local days as asked for; the page keys its answer by them. */
+    days?: { from: string; to: string };
   };
   filters: Pick<AccountAnalyticsQuery, 'platform' | 'provider' | 'account'>;
   history: {

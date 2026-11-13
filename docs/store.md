@@ -1,7 +1,8 @@
 # AAC store: design
 
 Status: **phases 0 and 1 built** (usage readings; section 11 records what changed from the design and
-what was measured); phases 2 to 5 are design. This document is the contract for the store. Code that
+what was measured), and **Analytics usage history built** (section 12); the rest of phases 2 to 5 is
+design. This document is the contract for the store. Code that
 disagrees with it is a bug in one of the two; fix whichever is wrong and update this document in the same
 change.
 
@@ -870,6 +871,81 @@ dashboard keeps its JSON history.
 
 Not yet run on Linux: the Rust suites, the kill test, folder fsync, and the first backfill of the VM's
 real history and archive.
+
+## 12. Analytics usage history (built)
+
+Analytics' token and cost activity is kept in the store as well, beside the quota readings, by a second
+projector, `activity` (`src/activity.rs`), with its own checkpoints and its own dictionary tables. This
+replaces the phase 2 "activity hours" row of 1.1 and the `activity.hour` sketch of 2.2: the readers'
+finest grain is kept (session-hour cells), not hourly totals per tool. Design, measurements and the
+owner's direction: `share/ai-account-center/2026-11-13-analytics-history/DESIGN.md`.
+
+### 12.1 The usage record contract
+
+`src/contract.rs` (`aac.usage-report.v1`) is the one shape readers hand the store, also for a failed
+read (a state and no cells, never zero rows). A **cell** is the absolute totals of one UTC hour for one
+computer, tool, session, route, model, effort and account; that tuple is its dedupe key. A **session**
+row is keyed by tool and session key; a mirrored log is one session. `loggedCostUsd` (what the tool
+logged) is kept apart from `costUsd` and `fallbackCostUsd` (computed by the server). Per-message
+records (`messages[]`) are reserved and refused with `not_supported` until their table is built.
+Today's TypeScript collectors are adapted on the TypeScript side (`src/store/activity-reports.ts`,
+`src/web-server/usage/activity-cells.ts`).
+
+### 12.2 Tables and events
+
+Tables `act_dict`, `act_dict_rev`, `act_hour` (one packed value per UTC day, computer and tool),
+`act_session`, `act_session_by_last` (a covering index: first and last time and an interned
+signature, so a range's sessions are counted without reading a row), `act_cover`, `act_source`,
+`act_day_closed`, `act_scan`, `act_backfill`, and the volatile `act_live` (minute-precision last read,
+written without a log event). Events `activity.cells` (readings, or ledger for a closed day),
+`activity.read` (ledger, scan history), `activity.day_closed` (ledger, the whole truth of a UTC day,
+74 hours after it ends) and `activity.backfill` (ledger). `registry.json` has every key and value.
+
+### 12.3 Ingest rules
+
+Per computer, tool and UTC hour, decided inside the write transaction:
+
+| Hour | Report | Action |
+|---|---|---|
+| newer than the source's settle line (72 h before its last complete read), inside a complete report's `[coverFrom, readAt]` | live | **replace**: the hour's cells become exactly the report's (cells it no longer has are removed) |
+| unsettled, otherwise | live partial, or any backfill or import | **raise**: the report's hour wins only with more tokens (or as many tied to more sessions); nothing is removed |
+| behind the settle line | live | **leave**: a tool that deletes old logs never erases history |
+| behind the settle line | backfill or import | raise |
+
+Only changed cells are written. The same report twice writes nothing. The TypeScript ingest queue
+leaves out days and sessions it already sent unchanged (`sameDays`). A complete read adds
+`[coverFrom, readAt]` to `act_cover`; hours no complete read covered are gaps, shown as such.
+
+### 12.4 Replay
+
+Before a day closes only readings events touch it; its close replaces the whole day; later changes
+to it are ledger events after the close. Replay (readings, then ledger) therefore rebuilds the same
+tables; session merges are commutative. `retire_segments` also waits for the activity projector's
+readings checkpoint and for the oldest open activity day.
+
+### 12.5 Retention
+
+Kept for good by default (DATA-ARCHITECTURE section 4). `AAC_ANALYTICS_RETENTION_DAYS` (90 to
+36,500) is an explicit, opt-in retention: maintenance then deletes day values, sessions (with their
+index rows), cover spans and scan rows before the cutoff. Readings-log events expire with the readings
+log; the ledger keeps the closed days.
+
+### 12.6 Queries
+
+`activityRange` (cells summed per bucket, tool, route and model: hourly up to 92 days, else in the
+caller's local days; session counts by signature and the newest sessions), `activitySources` (per
+computer and tool: stored span, last read, state, backfill, covered spans; per computer the gaps in
+the range), `activityOldest`, `activityCounts`, `activityIngest`, `activityBackfill`. The page's
+numbers come from the existing projection fed with these rows, so they equal the in-memory answer
+on the same data (`tests/unit/store/store-activity.test.ts`).
+
+### 12.7 Measured (two years of real data shape)
+
+The real 31 days in the copied caches (7,396 session-hour cells, 8,873 sessions across 30 computer
+and tool results) repeated back to 756 days: 87,600 cells, 106,416 sessions. Store: redb 33.7 MB,
+ledger 2.5 MB compressed. Activity part of an Analytics answer (store query plus projection), median
+of 5 on the VM: 24H 11 ms, 7D 25 ms, 30D 49 ms, 90D 107 ms, two years 184 ms (store query 49 ms).
+A minute pass with ten changed cells: 2.4 ms. Reopen: 0.5 s.
 
 ## Notes for the lead
 

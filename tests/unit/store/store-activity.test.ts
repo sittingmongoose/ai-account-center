@@ -305,4 +305,60 @@ maybe('analytics usage history', () => {
     expect(gaps[0]).toEqual(['2026-11-01T13:00:00.000Z', '2026-11-04T12:00:00.000Z']);
     await store.close();
   });
+
+  it('collects in the background with no page open, so history keeps growing', async () => {
+    const store = await openStore('background');
+    const f = fixture();
+    const service = activityService(store, f.local, f.remote);
+    service.startBackground(1, 5);
+    try {
+      for (let i = 0; i < 200 && (await store.activityCounts()).cells === 0; i++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      await service.historyIdle();
+      expect((await store.activityCounts()).cells).toBeGreaterThan(0);
+    } finally {
+      service.stopBackground();
+      await service.historyIdle();
+      await store.close();
+    }
+  });
+
+  it('backfills once: old caches first, then the logs as far back as they go, never lowering', async () => {
+    const store = await openStore('backfill');
+    const scope = path.join(sandbox, 'backfill-scope');
+    fs.mkdirSync(scope, { recursive: true });
+    const ancient = Date.parse('2026-02-03T05:00:00Z');
+    let deepReads = 0;
+    const service = new AccountAnalyticsActivityService({
+      scope: () => scope,
+      now: () => NOW,
+      requests: () => [{ provider: 'codex', request: { kind: 'codex', codexHome: '/fixture', cacheDir: '/fixture' } }],
+      loadWorker: async (request) => {
+        deepReads++;
+        // the backfill reads back to 2000-01-01, so the old month comes back too
+        expect((request as { activity?: { minDate: number } }).activity?.minDate ?? Date.UTC(2000, 0, 1)).toBeLessThan(ancient);
+        return worker('codex', [
+          { at: ancient, session: sessions.c, model: 'gpt-6', input: 321 },
+          { at: NOW - 2 * DAY, session: sessions.c, model: 'gpt-6', input: 5 },
+        ]);
+      },
+      remote: async () => ({
+        results: [{ tool: 'codex' as const, data: { ...worker('codex', [{ at: ancient + DAY, session: sessions.a, model: 'gpt-6', input: 9 }]), host: 'mac' } }],
+        states: [{ tool: 'codex' as const, host: 'mac' as const, state: 'ok' as const, lastScanAt: new Date(NOW).toISOString(), rowCount: 1, detail: null }],
+      }),
+      historyStore: async () => store,
+    });
+    expect(await service.backfillPass(scope)).toBe('done');
+    expect(deepReads).toBe(1);
+    const range = await store.activityRange({ fromMs: ancient - DAY, toMs: NOW });
+    expect(range.rows.reduce((n, r) => n + r[5], 0)).toBe(321 + 5 + 9);
+    expect(await store.activityOldest()).toBe(ancient);
+    const sources = await store.activitySources({ fromMs: ancient, toMs: NOW });
+    expect(sources.sources.find((s) => s.computer === 'ubuntu')?.backfill?.state).toBe('done');
+    // a finished backfill does not run again
+    expect(await service.backfillPass(scope)).toBe('done');
+    expect(deepReads).toBe(1);
+    await store.close();
+  });
 });
+

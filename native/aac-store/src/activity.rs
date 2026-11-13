@@ -46,8 +46,9 @@ pub const ACT_DICT_REV: TableDefinition<'static, &'static [u8], u32> = TableDefi
 pub const ACT_HOUR: Bytes = TableDefinition::new("act_hour");
 /// `tool u32 | session key [u8; 8]` to a MessagePack `SessionRow`.
 pub const ACT_SESSION: Bytes = TableDefinition::new("act_session");
-/// `last hour u32 | tool u32 | session key [u8; 8]`.
-pub const ACT_SESSION_BY_LAST: Index = TableDefinition::new("act_session_by_last");
+/// `last hour u32 | tool u32 | session key [u8; 8]` to `first ms u64 | last ms u64 | signature u32`:
+/// a covering index, so counting the sessions of a range reads no session row.
+pub const ACT_SESSION_BY_LAST: Bytes = TableDefinition::new("act_session_by_last");
 /// `computer u32 | tool u32 | start hour u32` to `end hour u32` (exclusive).
 pub const ACT_COVER: Bytes = TableDefinition::new("act_cover");
 /// `computer u32 | tool u32` to a MessagePack `SourceRow`.
@@ -68,7 +69,9 @@ const K_ROUTE: u8 = 3;
 const K_MODEL: u8 = 4;
 const K_ACCOUNT: u8 = 5;
 const K_EFFORT: u8 = 6;
-const KINDS: [u8; 6] = [K_COMPUTER, K_TOOL, K_ROUTE, K_MODEL, K_ACCOUNT, K_EFFORT];
+/// A session's tool and its distinct (route, model) pairs, as ids: `t|r:m;r:m`.
+const K_SIGNATURE: u8 = 7;
+const KINDS: [u8; 7] = [K_COMPUTER, K_TOOL, K_ROUTE, K_MODEL, K_ACCOUNT, K_EFFORT, K_SIGNATURE];
 
 /// States that mean the computer or its logs could not be read.
 const BAD_STATES: [&str; 2] = ["unreadable", "scan_failed"];
@@ -87,9 +90,8 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
         txn.open_table(def)?;
     }
     txn.open_table(ACT_DICT_REV)?;
-    for def in [ACT_SESSION_BY_LAST, ACT_DAY_CLOSED] {
-        txn.open_table(def)?;
-    }
+    txn.open_table(ACT_SESSION_BY_LAST)?;
+    txn.open_table(ACT_DAY_CLOSED)?;
     Ok(())
 }
 
@@ -672,9 +674,8 @@ impl Projector for ActivityProjector {
             txn.delete_table(def)?;
         }
         txn.delete_table(ACT_DICT_REV)?;
-        for def in [ACT_SESSION_BY_LAST, ACT_DAY_CLOSED] {
-            txn.delete_table(def)?;
-        }
+        txn.delete_table(ACT_SESSION_BY_LAST)?;
+        txn.delete_table(ACT_DAY_CLOSED)?;
         for kind in KINDS {
             txn.open_table(db::META)?
                 .remove(format!("act_dict_next:{kind}").as_str())?;
@@ -837,6 +838,22 @@ fn merge_session(txn: &WriteTransaction, t: u32, s: &SessEv) -> Result<()> {
     if stored.as_ref() == Some(&merged) {
         return Ok(());
     }
+    let mut pairs: Vec<(u32, u32)> = merged.p.iter().map(|p| (p.r, p.m)).collect();
+    pairs.sort();
+    pairs.dedup();
+    let text = format!(
+        "{t}|{}",
+        pairs
+            .iter()
+            .map(|(r, m)| format!("{r}:{m}"))
+            .collect::<Vec<_>>()
+            .join(";")
+    );
+    let sig = intern(txn, K_SIGNATURE, &text)?;
+    let mut entry = Vec::with_capacity(20);
+    entry.extend_from_slice(&merged.f.to_be_bytes());
+    entry.extend_from_slice(&merged.l.to_be_bytes());
+    entry.extend_from_slice(&sig.to_be_bytes());
     let mut index = txn.open_table(ACT_SESSION_BY_LAST)?;
     if let Some(old) = &stored {
         index.remove(Key::new().u32((old.l / HOUR_MS) as u32).u32(t).bytes(&key).as_slice())?;
@@ -847,7 +864,7 @@ fn merge_session(txn: &WriteTransaction, t: u32, s: &SessEv) -> Result<()> {
             .u32(t)
             .bytes(&key)
             .as_slice(),
-        (),
+        entry.as_slice(),
     )?;
     drop(index);
     put_bytes(txn, ACT_SESSION, session_key(t, &key).as_slice(), &db::pack(&merged)?)
@@ -1872,31 +1889,34 @@ pub fn range(engine: &Engine, q: &RangeQuery) -> Result<Json> {
                 Sum::known(s.events, s.events_missing)
             ]));
         }
-        // Sessions active in the range: `last >= from` from the index, `first <= to` from the row.
+        // Sessions active in the range, from the covering index alone: `last >= from` by the key,
+        // `first <= to` and the signature from its value. Only the newest `limit` rows are read.
         let index = read.open_table(ACT_SESSION_BY_LAST)?;
         let sessions_t = read.open_table(ACT_SESSION)?;
         let limit = q.session_sample.unwrap_or(DEFAULT_SAMPLE).min(MAX_SAMPLE);
         let mut total = 0u64;
-        let mut signatures: BTreeMap<(u32, Vec<(u32, u32)>), u64> = BTreeMap::new();
+        let mut by_signature: BTreeMap<u32, u64> = BTreeMap::new();
         let mut sample = Vec::new();
         let from_h = (q.from_ms / HOUR_MS) as u32;
         for item in index.range(Key::new().u32(from_h).as_slice()..)?.rev() {
-            let (k, _) = item?;
-            let t = db::be_u32(k.value(), 4);
-            let key: [u8; 8] = k.value()[8..16].try_into().unwrap();
-            let Some(v) = sessions_t.get(session_key(t, &key).as_slice())? else {
-                continue;
-            };
-            let row: SessionRow = db::unpack(v.value())?;
-            if row.f > q.to_ms || row.l < q.from_ms {
+            let (k, v) = item?;
+            let entry = v.value();
+            if entry.len() != 20 {
+                fail!("corrupt", "activity session index entry");
+            }
+            let (first, last, sig) = (db::be_u64(entry, 0), db::be_u64(entry, 8), db::be_u32(entry, 16));
+            if first > q.to_ms || last < q.from_ms {
                 continue;
             }
             total += 1;
-            let mut pairs: Vec<(u32, u32)> = row.p.iter().map(|p| (p.r, p.m)).collect();
-            pairs.sort();
-            pairs.dedup();
-            *signatures.entry((t, pairs)).or_default() += 1;
+            *by_signature.entry(sig).or_default() += 1;
+            let t = db::be_u32(k.value(), 4);
+            let key: [u8; 8] = k.value()[8..16].try_into().unwrap();
             if sample.len() < limit {
+                let Some(v) = sessions_t.get(session_key(t, &key).as_slice())? else {
+                    continue;
+                };
+                let row: SessionRow = db::unpack(v.value())?;
                 let parts = row
                     .p
                     .iter()
@@ -1915,13 +1935,17 @@ pub fn range(engine: &Engine, q: &RangeQuery) -> Result<Json> {
                 }));
             }
         }
-        let mut sig_out = Vec::with_capacity(signatures.len());
-        for ((t, pairs), count) in signatures {
-            let pairs = pairs
-                .iter()
-                .map(|(r, m)| Ok(json!([names.get(K_ROUTE, *r)?, names.get(K_MODEL, *m)?])))
-                .collect::<Result<Vec<_>>>()?;
-            sig_out.push(json!({ "tool": names.get(K_TOOL, t)?, "pairs": pairs, "count": count }));
+        let mut sig_out = Vec::with_capacity(by_signature.len());
+        for (sig, count) in by_signature {
+            let text = names.get(K_SIGNATURE, sig)?;
+            let (t, rest) = text.split_once('|').unwrap_or(("0", ""));
+            let id = |s: &str| s.parse::<u32>().unwrap_or(0);
+            let mut pairs = Vec::new();
+            for pair in rest.split(';').filter(|p| !p.is_empty()) {
+                let (r, m) = pair.split_once(':').unwrap_or(("0", "0"));
+                pairs.push(json!([names.get(K_ROUTE, id(r))?, names.get(K_MODEL, id(m))?]));
+            }
+            sig_out.push(json!({ "tool": names.get(K_TOOL, id(t))?, "pairs": pairs, "count": count }));
         }
         Ok(json!({
             "columns": ["bucketMs", "computer", "tool", "route", "modelRaw", "inputTokens", "outputTokens",
