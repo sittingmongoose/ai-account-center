@@ -655,9 +655,15 @@ fn a_future_dated_record_never_freezes_live_writes() {
         )],
     );
     assert_eq!(probe["put"], 0, "a record dated after now is not written: {probe}");
+    // Each later read is sent at a fresh clock reading: the store clamped the probe's read time to
+    // its own clock during that ingest, after `now`, and a read sent at `now` would look older.
     let normal = ingest(
         &engine,
-        vec![complete("ubuntu", now, vec![cell(hour, Some(SESSION_A), "gpt-6", 100)])],
+        vec![complete(
+            "ubuntu",
+            wall_now(),
+            vec![cell(hour, Some(SESSION_A), "gpt-6", 100)],
+        )],
     );
     assert_eq!(normal["put"], 1, "{normal}");
     assert_eq!(
@@ -669,7 +675,7 @@ fn a_future_dated_record_never_freezes_live_writes() {
     // left out and counted with the reader's own count, never refused whole
     let mut mixed = complete(
         "ubuntu",
-        now,
+        wall_now(),
         vec![
             cell(hour, Some(SESSION_A), "gpt-6", 120),
             cell(ahead, Some(SESSION_B), "gpt-6", 5),

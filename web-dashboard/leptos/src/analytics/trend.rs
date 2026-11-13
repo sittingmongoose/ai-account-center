@@ -24,6 +24,31 @@ fn label_w(label: &str) -> f64 {
     label.chars().count() as f64 * 6.2
 }
 
+/// A caption's width on the plot's top line: `.ax-t` with the caption's 0.06em letter spacing.
+fn cap_w(text: &str) -> f64 {
+    text.chars().count() as f64 * 6.9
+}
+
+/// Which gap captions ("NOT READ") to draw: one fits inside its band and keeps 8 px from every caption already on
+/// that line ("LOGS READ ...", "LOGS START ...") and from the gap captions kept before it. `gaps` are the bands'
+/// box x spans; `taken` the other captions' spans.
+fn kept_gap_captions(gaps: &[(f64, f64, f64)], mut taken: Vec<(f64, f64)>) -> Vec<bool> {
+    gaps.iter()
+        .map(|&(x0, x1, w)| {
+            let mid = (x0 + x1) / 2.0;
+            let span = (mid - w / 2.0, mid + w / 2.0);
+            let ok = x1 - x0 >= w + 8.0
+                && taken
+                    .iter()
+                    .all(|&(a, b)| span.1 + 8.0 <= a || span.0 >= b + 8.0);
+            if ok {
+                taken.push(span);
+            }
+            ok
+        })
+        .collect()
+}
+
 /// Which x labels to draw at the horizontal scale `sx`. The view lays its labels out so none touch at the width it
 /// last saw; until it lays them out again for this box they are squeezed, so a label that would touch the kept one
 /// before it is left out, never drawn over it.
@@ -315,6 +340,21 @@ fn TrendChart(
                 })}
             }
         }).collect_view();
+        // the captions on the plot's top line, so a gap's caption never lands on them
+        let mut taken = Vec::new();
+        if t.tail_x >= 0.0 {
+            let tx = L + t.tail_x * sx;
+            taken.push((tx - 6.0 - cap_w(&t.tail_label), tx - 6.0));
+        }
+        if !t.clip_note.is_empty() {
+            taken.push((L + 6.0, L + 6.0 + cap_w(&t.clip_note)));
+        }
+        let bands: Vec<(f64, f64, f64)> = t
+            .gaps
+            .iter()
+            .map(|g| (L + g.x0 * sx, L + g.x1 * sx, cap_w(&g.label)))
+            .collect();
+        let captions = kept_gap_captions(&bands, taken);
         let tail = (t.tail_x >= 0.0).then(|| {
             let tx = L + t.tail_x * sx;
             view! {
@@ -332,12 +372,12 @@ fn TrendChart(
                 {t.cost_shown.then(|| view! { <text x=L + pw + 10.0 y=14 class="ax-t ax-cap">"USD"</text> })}
                 <path d=t.minor.clone() transform=format!("translate({L} {T}) scale({sx:.4} {sy:.4})") class="ax-gl" vector-effect="non-scaling-stroke"/>
                 {tail}
-                // spans no computer was read for: marked, never drawn as zero
-                {t.gaps.iter().map(|g| {
+                // spans no computer was read for: marked, never drawn as zero; a caption only where it has room
+                {t.gaps.iter().zip(captions).map(|(g, caption)| {
                     let (x0, x1) = (L + g.x0 * sx, L + g.x1 * sx);
                     view! {
                         <rect x=x0 y=T width=(x1 - x0).max(1.0) height=ph class="ax-gap"/>
-                        {(x1 - x0 > 48.0).then(|| view! { <text x=(x0 + x1) / 2.0 y=T + 14.0 text-anchor="middle" class="ax-t ax-cap">{g.label.clone()}</text> })}
+                        {caption.then(|| view! { <text x=(x0 + x1) / 2.0 y=T + 14.0 text-anchor="middle" class="ax-t ax-cap">{g.label.clone()}</text> })}
                     }
                 }).collect_view()}
                 {(!t.clip_note.is_empty()).then(|| view! { <text x=L + 6.0 y=T + 14.0 class="ax-t ax-cap">{t.clip_note.clone()}</text> })}
@@ -527,6 +567,34 @@ fn ReadoutBar(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gap_caption_is_left_out_where_it_would_touch_the_logs_read_caption() {
+        let read = "LOGS READ 1:50 PM";
+        // a 7D trend on a phone: the gap band right before the "LOGS READ" caption's end
+        let tx = 300.0;
+        let taken = vec![(tx - 6.0 - cap_w(read), tx - 6.0)];
+        let w = cap_w("NOT READ");
+        assert_eq!(
+            kept_gap_captions(&[(200.0, 270.0, w)], taken.clone()),
+            vec![false]
+        );
+        // a wide band clear of it keeps its caption; a narrow one never has one
+        assert_eq!(
+            kept_gap_captions(&[(10.0, 120.0, w)], taken.clone()),
+            vec![true]
+        );
+        assert_eq!(kept_gap_captions(&[(10.0, 40.0, w)], taken), vec![false]);
+        // two gaps side by side never share the line
+        assert_eq!(
+            kept_gap_captions(&[(0.0, 90.0, w), (95.0, 185.0, w)], vec![]),
+            vec![true, true]
+        );
+        assert_eq!(
+            kept_gap_captions(&[(0.0, 80.0, w), (60.0, 140.0, w)], vec![]),
+            vec![true, false]
+        );
+    }
 
     #[test]
     fn squeezed_axis_labels_are_dropped_never_drawn_over_each_other() {

@@ -189,3 +189,32 @@ test('history notes: output that counts reasoning twice, and records dated after
   assert.ok(!clean.scope.some(l => /reasoning twice|dated after/.test(l.text)));
   assert.equal(U.doubleReasoningNote({ history: null }), '');
 });
+
+test('range labels carry the year when the range crosses a year or is not in this one', () => {
+  const { dateLabel } = U;
+  const t = s => Date.parse(s);
+  const R = (a, b, nowAt = b) => ({ a2: t(a), b: t(b), now: t(nowAt) });
+  // this year: no year
+  assert.equal(dateLabel(R('2026-11-06T12:00:00Z', '2026-11-13T12:00:00Z')), 'Nov 6 to Nov 13');
+  // the year edge: Dec 31 to Jan 1, read on Jan 1
+  assert.equal(dateLabel(R('2026-12-31T00:00:00Z', '2027-01-01T12:00:00Z')), 'Dec 31, 2026 to Jan 1, 2027');
+  // a week that ends on Dec 31, read on Dec 31: one year, this one
+  assert.equal(dateLabel(R('2026-12-24T23:00:00Z', '2026-12-31T23:00:00Z')), 'Dec 24 to Dec 31');
+  // the same week read on Jan 1: last year's dates
+  assert.equal(dateLabel(R('2026-12-24T23:00:00Z', '2026-12-31T23:00:00Z', '2027-01-01T01:00:00Z')), 'Dec 24, 2026 to Dec 31, 2026');
+  // one day: the year only when it is not this one
+  assert.match(dateLabel(R('2027-01-01T00:00:00Z', '2027-01-01T10:00:00Z')), /^Jan 1, \d/);
+  assert.match(dateLabel(R('2026-12-31T00:00:00Z', '2026-12-31T10:00:00Z', '2027-01-01T10:00:00Z')), /^Dec 31, 2026, /);
+
+  // All over two years: the date button, Cost by model and the weekly readout say which years
+  const from = Date.parse('2024-11-12T00:00:00Z');
+  const rows = [row('2024-11-12T00:00:00Z', 'codex', 100, 1), row('2025-06-02T00:00:00Z', 'codex', 50, 0.5), row('2026-11-10T00:00:00Z', 'codex', 7, 0.07)];
+  const p = payload({ preset: 'all', from, rows, resolution: 'day', availableFrom: from });
+  const view = usageView(p, state({ range: 'all' }), { now });
+  assert.equal(view.head.date, 'Nov 12, 2024 to Nov 13, 2026');
+  assert.match(view.cbm.sub, /^Nov 12, 2024 to Nov 13, 2026 · /);
+  assert.ok(view.trend.buckets.some(b => /^WEEK OF MON, NOV 11, 2024$/.test(b.time)), view.trend.buckets.slice(0, 2).map(b => b.time).join(' | '));
+  assert.ok(view.daily.bars.some(b => /^WEEK OF MON, JUN 2, 2025/.test(b.time)));
+  // a range inside this year keeps its short labels
+  assert.equal(usageView(payload({ preset: '90d' }), state({ range: '90d' }), { now }).head.date, 'Aug 15 to Nov 13');
+});

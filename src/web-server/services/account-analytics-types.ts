@@ -245,6 +245,11 @@ export interface AccountAnalyticsActivity {
       date: string;
       provider: AccountAnalyticsUsageProvider;
       model: string;
+      /**
+       * Present on usage whose counts have a known flaw, kept apart from the model's clean usage
+       * that day (`outputIncludesReasoningTwice`: the retired Codex cache's output).
+       */
+      quality?: string[];
     }
   >;
   /** Sessions active in range, without paths, ids or project names. Null unless status is ok or cached. */

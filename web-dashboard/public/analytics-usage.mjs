@@ -46,12 +46,24 @@ const F_WD = lazyFormat({ weekday: 'short' });
 const F_TIME = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const F_MY = lazyFormat({ month: 'long', year: 'numeric' });
 const F_MDY = lazyFormat({ month: 'short', day: 'numeric', year: 'numeric' });
+const F_WMDY = lazyFormat({ weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 const F_MON = lazyFormat({ month: 'short' });
 const F_YEAR = lazyFormat({ year: 'numeric' });
 export const hourTxt = t => F_HOUR.format(new Date(t));
 export const clockTxt = t => F_CLOCK.format(new Date(t));
 export const mdTxt = t => F_MD.format(new Date(t));
 export const wmdTxt = t => F_WMD.format(new Date(t));
+export const wmdyTxt = t => F_WMDY.format(new Date(t));
+/** True when dates from `a` to `b` need their year: they fall in two years, or not in the year of `now`. */
+export function needsYear(a, b, now) {
+  const y = zonedParts(a).year;
+  return y !== zonedParts(b).year || y !== zonedParts(finite(now) ? now : b).year;
+}
+/** "Nov 6 to Nov 13", or "Nov 12, 2024 to Nov 13, 2026" when the year is needed. */
+export function dayPair(a, b, now) {
+  const f = needsYear(a, b, now) ? t => F_MDY.format(new Date(t)) : mdTxt;
+  return `${f(a)} to ${f(b)}`;
+}
 export const wdTxt = t => F_WD.format(new Date(t));
 export const timeTxt = t => F_TIME.format(new Date(t));
 export function zoneName(now = Date.now()) {
@@ -543,7 +555,9 @@ export function buckets(A, R, state) {
 const shortClock = t => zonedParts(t).minute ? clockTxt(t) : hourTxt(t);
 export function dateLabel(R) {
   const a = R.a2, b = Math.max(R.a2, R.b - 1);
-  return sameDay(a, b) ? `${mdTxt(a)}, ${shortClock(a)} to ${shortClock(R.b)}` : `${mdTxt(a)} to ${mdTxt(b)}`;
+  // a range can reach back years: the year is shown whenever it is not this one or changes inside the range
+  if (sameDay(a, b)) return `${needsYear(a, a, R.now) ? F_MDY.format(new Date(a)) : mdTxt(a)}, ${shortClock(a)} to ${shortClock(R.b)}`;
+  return dayPair(a, b, R.now);
 }
 
 // ---------------------------------------------------------------- sizes (reported by the Slint layout)
@@ -675,7 +689,10 @@ function hatch(x0, y0, x1, y1) {
 }
 export const TREND_SAMPLES = 360;
 /** The trend chart: paths in plot-local pixels (the plot is the box less TREND_PAD), axes, ticks and readouts. */
+/** A bucket's day in a readout, with the year when the range needs it ("Mon, Nov 11, 2024"). */
+const readoutDay = R => needsYear(R.a2, Math.max(R.a2, R.b - 1), R.now) ? wmdyTxt : wmdTxt;
 export function trendView(A, R, state, size) {
+  const dayTxt = readoutDay(R);
   const W = Math.max(200, size?.w || DEFAULT_SIZES.trend.w), Hc = Math.max(160, size?.h || DEFAULT_SIZES.trend.h);
   const pad = TREND_PAD;
   const pw = Math.max(40, W - pad.l - pad.r), ph = Math.max(40, Hc - pad.t - pad.b);
@@ -730,8 +747,8 @@ export function trendView(A, R, state, size) {
   const partial = costOk && B.some(b => b.unk);
   const bucketsOut = B.map(b => {
     const top = inc.reduce((s, t) => s + b[t.k], 0), all = b.in + b.out + b.cw + b.cr;
-    const when = R.step >= WEEK ? `Week of ${wmdTxt(b.t)}` : R.step >= D ? `${wmdTxt(b.t)}${b.partial ? `, ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`
-      : `${wmdTxt(b.t)} · ${hourTxt(b.lo)} to ${b.hi === b.t1 ? hourTxt(b.hi) : clockTxt(b.hi)}`;
+    const when = R.step >= WEEK ? `Week of ${dayTxt(b.t)}` : R.step >= D ? `${dayTxt(b.t)}${b.partial ? `, ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`
+      : `${dayTxt(b.t)} · ${hourTxt(b.lo)} to ${b.hi === b.t1 ? hourTxt(b.hi) : clockTxt(b.hi)}`;
     // a bucket no computer was read for has no split: never a $0.00 for what was not read
     const split = showSplit && !b.gap ? ['claude', 'codex'].map(p => `${A.label(p)} ${money(b.pc[p] || 0)}`).join(' · ') : '';
     const costFoot = costOk && b.unk ? split ? `${split} · partial` : 'Partial: some cost here is not logged' : split;
@@ -765,12 +782,12 @@ export function trendView(A, R, state, size) {
   return {
     w: W, h: Hc, pw: pt(pw), ph: pt(ph),
     geo: { x0, x1, lv, cost },
-    sub: `${stepWord(R.step)} buckets · ${provName(state, A)}${R.clipped ? ` · logs start ${mdTxt(R.a2)}` : ''}`,
+    sub: `${stepWord(R.step)} buckets · ${provName(state, A)}${R.clipped ? ` · logs start ${needsYear(R.a2, R.a2, R.now) ? F_MDY.format(new Date(R.a2)) : mdTxt(R.a2)}` : ''}`,
     split: !!state.split, cache: !!state.cache, costShown: costOk,
     empty, emptyText: !A.available ? (A.message || 'CLI usage logs are unavailable.') : empty ? `No ${provWords(state, A)}activity was logged in this range.` : '',
     yTicks, xTicks: xt, minor,
     tailX: tail, tailLabel: tail >= 0 ? `LOGS READ ${clockTxt(A.win1).toUpperCase()}` : '', hatch: tail >= 0 ? hatch(tail, 0, pw, ph) : '',
-    clipNote: R.clipped ? `LOGS START ${wmdTxt(R.a2).toUpperCase()}, ${hourTxt(R.a2).toUpperCase()}` : '',
+    clipNote: R.clipped ? `LOGS START ${dayTxt(R.a2).toUpperCase()}, ${hourTxt(R.a2).toUpperCase()}` : '',
     buckets: bucketsOut, lut, legend, gaps,
   };
 }
@@ -1172,6 +1189,7 @@ function heatView(A, R, state, width, height, cellWidth) {
  * left out and the bar says so.
  */
 function dailyView(A, R, state, size) {
+  const dayTxt = readoutDay(R);
   const step = R.step >= WEEK ? WEEK : R.end - R.a2 <= 2 * D + H ? H : D;
   const B = A.available ? buckets(A, { ...R, step }, state) : [];
   const W = Math.max(200, size?.w || DEFAULT_SIZES.daily.w), Hc = Math.max(120, size?.h || DEFAULT_SIZES.daily.h);
@@ -1198,7 +1216,7 @@ function dailyView(A, R, state, size) {
     return {
       h: costOk && sc.top > 0 ? tot / sc.top : 0, cl: tot > 0 ? cl / tot : 0, cx: tot > 0 ? cx / tot : 0,
       label: i % every ? '' : step === H ? (zonedHour(b.t) === 0 ? wdTxt(b.t) : hourTxt(b.t)) : mdTxt(b.t),
-      time: `${step === H ? `${wmdTxt(b.t)} · ${hourTxt(b.t)}` : step === WEEK ? `Week of ${wmdTxt(b.t)}` : wmdTxt(b.t)}${b.partial && step !== WEEK ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
+      time: `${step === H ? `${dayTxt(b.t)} · ${hourTxt(b.t)}` : step === WEEK ? `Week of ${dayTxt(b.t)}` : dayTxt(b.t)}${b.partial && step !== WEEK ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
       gap: !!b.gap,
       rows: costOk ? served.map(p => ({ p: ownSeries(p) ? p : '', label: A.label(p), value: (b.pc[p] || 0) > TINY || !b.punk[p] ? money(b.pc[p] || 0) : NOT_LOGGED })) : [],
       total: b.gap ? 'Not read' : picked ? '' : !costOk ? 'Unavailable' : b.unk && !(tot > TINY) ? NOT_LOGGED : money(tot),
@@ -1508,7 +1526,7 @@ export function usageView(payload, state, opts = {}) {
   const rows = rowsIn(A, R, state), K = sumRows(rows), C = typeCosts(A, rows);
   const costOk = !A.costMissing;
   const zone = zoneName(now);
-  const windowText = `${mdTxt(A.win0)} to ${mdTxt(Math.min(A.win1, now))}`;
+  const windowText = dayPair(A.win0, Math.min(A.win1, now), now);
   // per-model rows and session counts cover the fetched API window; they cannot follow a different range
   const apiMatches = ['24h', '7d', '30d', '90d', 'all'].includes(state.range) ? A.apiPreset === state.range : state.range === 'custom' && A.apiKey.startsWith('custom:') && A.apiKey === apiRangeFor(state, now);
   const rangeName = state.range === 'custom' ? 'custom' : RANGES.find(r => r[0] === state.range)?.[1] || '';

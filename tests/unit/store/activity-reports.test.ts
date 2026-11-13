@@ -212,3 +212,52 @@ describe('output that counts reasoning twice (review M1)', () => {
     expect(projected.models.find((m) => m.model === 'gpt-6')?.outputTokens).toBe(4);
   });
 });
+
+describe('flagged usage in the day-level views (recheck 1 L-c)', () => {
+  it('is marked apart in byDayModel and kept out of the day-level cost spike', () => {
+    const day = (n: number) => Date.parse('2026-09-01T10:00:00Z') + n * DAY;
+    const nano = (usd: number) => Math.round(usd * 1e9);
+    const range: ActivityRange = {
+      columns: [],
+      computers: [],
+      tools: ['codex'],
+      routes: [''],
+      models: ['gpt-5.6-sol'],
+      rows: [
+        // day 0: the old cache, inflated output; days 0 to 3: clean live reads of the same model
+        [day(0), null, 0, 0, 0, 100, 9000, 0, 0, null, nano(50), 0, 3, 1],
+        [day(0), null, 0, 0, 0, 10, 10, 0, 0, null, nano(1), 0, 1, 0],
+        [day(1), null, 0, 0, 0, 10, 10, 0, 0, null, nano(1), 0, 1, 0],
+        [day(2), null, 0, 0, 0, 10, 10, 0, 0, null, nano(1), 0, 1, 0],
+        [day(3), null, 0, 0, 0, 10, 10, 0, 0, null, nano(1), 0, 1, 0],
+      ],
+      sessions: { total: 0, signatures: [], sample: [], truncated: false },
+    };
+    const sources = rangeToSources(range, (b) => b, new Date(day(4)).toISOString());
+    const query: AccountAnalyticsQuery = {
+      platform: 'mac',
+      range: '7d',
+      provider: 'all',
+      account: 'all',
+      tz: 'UTC',
+    };
+    const projected = projectAccountAnalyticsActivity(
+      sources,
+      query,
+      day(0) - DAY,
+      day(4),
+      'ok',
+      '',
+      { tz: 'UTC' }
+    );
+    const first = projected.byDayModel.filter((r) => r.date === '2026-09-01');
+    expect(first.map((r) => [r.outputTokens, r.quality ?? null])).toEqual([
+      [9000, ['outputIncludesReasoningTwice']],
+      [10, null],
+    ]);
+    // the day with the flagged hours is no cost spike (its total keeps the inflated output cost)
+    expect(projected.anomalies?.items.filter((i) => i.type === 'cost_spike')).toEqual([]);
+    // and the totals still hold it
+    expect(projected.totals?.outputTokens).toBe(9000 + 40);
+  });
+});

@@ -372,14 +372,16 @@ export const tests = {
 			await t.step(f.name, async () => {
 				await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, serviceWorkers: 'block' });
 				await t.app.signIn();
-				// two years kept, so "All" has weekly buckets over two years
-				await stubData(t, { keptDays: 730 });
+				// two years kept, so "All" has weekly buckets over two years; and no computer read from five to three
+				// days ago, so the 7D trend carries a gap band whose caption shares a line with "Logs read"
+				await stubData(t, { keptDays: 730, gapAll: true });
 				await openAnalytics(t, f.safe);
 				await t.until('charts laid out in their boxes', () => {
 					const svg = document.querySelector('.trend-card svg.axes');
 					const box = document.querySelector('.trend-box');
 					return !!svg && !!box && Math.abs(svg.getBoundingClientRect().width - box.getBoundingClientRect().width) < 2;
 				}, null, { timeout: 15000 });
+				await t.until('the gap is marked', () => !!document.querySelector('.trend-card rect.ax-gap'), null, { timeout: 15000 });
 				const wide = await t.page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 				await t.equal(`${f.name}: no sideways scroll`, wide, 0);
 				await t.equal(`${f.name}: no chart label overlaps another`, await overlaps(t), []);
@@ -390,6 +392,19 @@ export const tests = {
 					await t.until(`${button} drawn`, (re) => new RegExp(re).test(document.querySelector('.trend-card')?.textContent || ''), sub.source, { timeout: 20000 });
 					await t.until(`${button} axis laid out`, () => document.querySelectorAll('.trend-card svg.axes text').length > 3, null, { timeout: 10000 });
 					await t.equal(`${f.name} ${button}: no chart label overlaps another`, await overlaps(t), []);
+					if (button === 'All') {
+						// two years kept: the range label names both years, whole, inside the window
+						const d = await t.page.evaluate(() => {
+							const b = document.querySelector('.date-btn');
+							return { text: b?.querySelector('.tnum')?.textContent.trim() ?? '', cut: !b || b.scrollWidth > b.clientWidth + 1 || b.getBoundingClientRect().right > innerWidth };
+						});
+						await t.check(`${f.name} All: the range label names both years`, /^\w{3} \d{1,2}, \d{4} to \w{3} \d{1,2}, \d{4}$/.test(d.text), d.text);
+						await t.check(`${f.name} All: the range label is not cut`, !d.cut, JSON.stringify(d));
+						if (f.mobile && ['iphone', 'duo-folded'].includes(f.name)) {
+							await t.page.locator('.date-btn').scrollIntoViewIfNeeded();
+							await t.crop(`analytics-all-years-${f.name}`, await t.page.evaluate(() => { const r = document.querySelector('.date-btn').getBoundingClientRect(); return { x: 0, y: Math.max(0, r.y - 50), width: innerWidth, height: r.height + 100 }; }), `${f.name}: All over two years, the range label with both years`);
+						}
+					}
 					await t.equal(`${f.name} ${button}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 0);
 				}
 			});

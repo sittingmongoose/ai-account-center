@@ -18,6 +18,10 @@ export const FUTURE_SLACK_MS = 5 * 60_000;
 export type UsageQualityFlag = 'outputIncludesReasoningTwice';
 /** Bit of `outputIncludesReasoningTwice` in a range row's quality column. */
 export const Q_OUTPUT_INCLUDES_REASONING_TWICE = 1;
+/** The flag words of quality bits, in the contract's order (`QUALITY_FLAGS`). */
+export function qualityWords(bits: number): UsageQualityFlag[] {
+  return bits & Q_OUTPUT_INCLUDES_REASONING_TWICE ? ['outputIncludesReasoningTwice'] : [];
+}
 
 export type UsageReportState =
   | 'ok'
