@@ -32,7 +32,7 @@ const poses = [
     chrome: 'rail',
     x: 921,
     y: 30,
-    top: 136,
+    top: 216,
   },
   {
     name: 'Duo folded',
@@ -43,7 +43,7 @@ const poses = [
     chrome: 'rail',
     x: 436,
     y: 90,
-    top: 184,
+    top: 252,
   },
   {
     name: 'iPhone 17 Pro',
