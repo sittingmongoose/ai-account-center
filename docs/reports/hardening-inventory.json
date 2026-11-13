@@ -363,8 +363,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 241,
-    "filesAffected": 80,
+    "totalMarkers": 242,
+    "filesAffected": 81,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -553,11 +553,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 754,
-      "typedThrows": 222,
+      "totalThrows": 755,
+      "typedThrows": 223,
       "plainThrows": 69,
       "otherThrows": 463,
-      "adoptionRatio": 0.2944,
+      "adoptionRatio": 0.2954,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -635,8 +635,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 46,
-      "totalSourceFiles": 514,
-      "coverageRatio": 0.0895,
+      "totalSourceFiles": 515,
+      "coverageRatio": 0.0893,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -783,8 +783,8 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 70,
-      "countOver600": 29,
+      "countOver400": 69,
+      "countOver600": 30,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
@@ -828,7 +828,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-service.ts",
-          "loc": 957
+          "loc": 956
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
