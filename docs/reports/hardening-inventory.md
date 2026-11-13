@@ -57,7 +57,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 72 (279 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 18 |
-| files with createLogger | 45/510 |
+| files with createLogger | 45/511 |
 | subdomains with zero createLogger | 22 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, status-native, targets, types) |
 | files > 400 LOC | 69 |
 | files > 600 LOC | 27 |
@@ -99,6 +99,6 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/account-dashboard-service.ts` | 941 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |
-| `src/web-server/status/status-view.ts` | 849 |
+| `src/web-server/status/status-view.ts` | 870 |
 | `src/web-server/usage/native-quota-collector.ts` | 848 |
 

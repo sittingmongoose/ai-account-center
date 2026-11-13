@@ -631,8 +631,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 45,
-      "totalSourceFiles": 510,
-      "coverageRatio": 0.0882,
+      "totalSourceFiles": 511,
+      "coverageRatio": 0.0881,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -660,7 +660,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 227,
+          "count": 228,
           "withLogger": 28
         },
         {
@@ -836,7 +836,7 @@
         },
         {
           "file": "src/web-server/status/status-view.ts",
-          "loc": 849
+          "loc": 870
         },
         {
           "file": "src/web-server/usage/native-quota-collector.ts",
