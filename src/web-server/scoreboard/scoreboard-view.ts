@@ -277,6 +277,20 @@ function unreadableRuns(runs: RunsState): number {
   ).length;
 }
 
+/**
+ * Run files past the reader's scan limit, counted from the `limits/runs` problem (the newest days
+ * are kept, named in the runs Source). A problem without the count does not count.
+ */
+function scanLimitRuns(runs: RunsState): number {
+  let total = 0;
+  for (const problem of runs.problems) {
+    if (problem.file !== 'limits/runs') continue;
+    const match = /^(\d+)\s+run files past the limit/.exec(problem.reason.trim());
+    if (match) total += Number.parseInt(match[1], 10);
+  }
+  return total;
+}
+
 export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
   const { catalog, runs, now } = inputs;
   // The alias table applies to every run read, history included, before scoring: a run keeps its
@@ -339,13 +353,16 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
       });
   }
   const unreadable = unreadableRuns(runs);
+  const scanLimit = scanLimitRuns(runs);
   const unscoredSummary: UnscoredSummary = {
     total:
+      scanLimit +
       unreadable +
       counts.noModel +
       counts.noTaskType +
       counts.unknownModel +
       counts.unknownTaskType,
+    scanLimit,
     unreadable,
     noModel: counts.noModel,
     noTaskType: counts.noTaskType,

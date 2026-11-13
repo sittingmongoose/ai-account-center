@@ -43,6 +43,8 @@ pub struct ScoreboardView {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Unscored {
     pub total: u32,
+    /// Run files past the reader scan limit (the newest days are kept, named in the Sources list).
+    pub scan_limit: u32,
     /// Run files the reader refused (named in the Sources list).
     pub unreadable: u32,
     pub no_model: u32,
@@ -71,6 +73,7 @@ impl Unscored {
         };
         Unscored {
             total: count(v, "total"),
+            scan_limit: count(v, "scanLimit"),
             unreadable: count(v, "unreadable"),
             no_model: count(v, "noModel"),
             no_task_type: count(v, "noTaskType"),
@@ -1064,8 +1067,8 @@ pub fn shown_unscored(view: &ScoreboardView) -> Option<Unscored> {
         .filter(|u| u.total > 0)
 }
 
-/// The reasons that have runs, in one fixed order (unreadable, unknown model, unknown task type, no task type, no
-/// model), so the note keeps its shape from one refresh to the next.
+/// The reasons that have runs, in one fixed order (unreadable, not read (scan limit), unknown model, unknown task
+/// type, no task type, no model), so the note keeps its shape from one refresh to the next.
 pub fn unscored_reasons(u: &Unscored) -> Vec<UnscoredReason> {
     [
         UnscoredReason {
@@ -1073,6 +1076,12 @@ pub fn unscored_reasons(u: &Unscored) -> Vec<UnscoredReason> {
             short: "unreadable",
             label: "Unreadable",
             why: "the reader refused the run file (each is named under Sources)",
+        },
+        UnscoredReason {
+            runs: u.scan_limit,
+            short: "not read (scan limit)",
+            label: "Not read (scan limit)",
+            why: "the reader did not read the file (the newest days are kept)",
         },
         UnscoredReason {
             runs: u.unknown_model,
@@ -1403,6 +1412,65 @@ mod tests {
                 .map(|r| (r.label, r.runs))
                 .collect::<Vec<_>>(),
             vec![("Unknown model", 12), ("No task type", 29)]
+        );
+    }
+
+    #[test]
+    fn the_unscored_note_names_scan_limit_and_stays_nowrap_safe() {
+        let with_limit = Unscored {
+            total: 5,
+            scan_limit: 2,
+            unreadable: 1,
+            ..unscored(0, 0, 2)
+        };
+        // order: unreadable first, scan limit second, then the model and task type reasons
+        assert_eq!(
+            sentence(&with_limit),
+            "5 runs not scored: 1 unreadable, 2 not read (scan limit), 2 unknown model"
+        );
+        // each count and its words stay on one line (no-break spaces): no plain space inside a piece
+        let runs = unscored_note(&with_limit);
+        for (i, r) in runs.iter().enumerate() {
+            assert_eq!(r.strong, i % 2 == 0);
+            let words = r.text.trim_end_matches(' ');
+            assert!(!words.contains(' '), "{:?} breaks inside", r.text);
+        }
+        let reasons = unscored_reasons(&with_limit);
+        assert_eq!(
+            reasons
+                .iter()
+                .map(|r| (r.label, r.runs))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Unreadable", 1),
+                ("Not read (scan limit)", 2),
+                ("Unknown model", 2)
+            ]
+        );
+        let lines = unscored_lines(&with_limit);
+        let flat = lines
+            .iter()
+            .map(|l| {
+                l.1.iter()
+                    .map(|r| r.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            flat.iter()
+                .any(|t| t.starts_with("Not read (scan limit)|: 2 runs"))
+        );
+        // missing field reads as 0; stated 0 shows no reason
+        let missing = Unscored::read(&serde_json::json!({ "total": 1, "noModel": 1 }));
+        assert_eq!(missing.scan_limit, 0);
+        assert_eq!(sentence(&missing), "1 run not scored: 1 no model");
+        let stated =
+            Unscored::read(&serde_json::json!({ "total": 3, "scanLimit": 2, "noModel": 1 }));
+        assert_eq!(stated.scan_limit, 2);
+        assert_eq!(
+            sentence(&stated),
+            "3 runs not scored: 2 not read (scan limit), 1 no model"
         );
     }
 

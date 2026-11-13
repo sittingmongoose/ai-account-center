@@ -42,7 +42,7 @@ export function runFileNameReadable(name: string): boolean {
  * writers than the Status reader's: an old writer's runs are still history. Past a limit the rest
  * is named in the runs Source.
  */
-export const RUN_LIMITS = { writers: 1000, runs: 5000, bytes: 64 * 1024 * 1024 };
+export const RUN_LIMITS = { writers: 1000, runs: 50000, bytes: 256 * 1024 * 1024 };
 
 export interface RunsState {
   /** missing: no `v1/writers` folder; error: the folder could not be listed. */
