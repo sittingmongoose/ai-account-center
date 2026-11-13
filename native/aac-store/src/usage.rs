@@ -111,6 +111,12 @@ fn opt_text_ok(s: &Option<String>, max: usize) -> bool {
     s.as_ref().map(|v| text_ok(v, max)).unwrap_or(true)
 }
 
+/// An account id: as `text_ok`, except that exactly `<provider>:<email address>` is an account
+/// id, not userinfo (`secret::account_id_looks_secret`).
+fn account_id_ok(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 128 && !s.chars().any(|c| c.is_control()) && !crate::secret::account_id_looks_secret(s)
+}
+
 impl Sampled {
     pub fn validate(&self) -> Result<()> {
         let a = &self.account;
@@ -121,7 +127,7 @@ impl Sampled {
         if !hex
             || !text_ok(&a.identity, 64)
             || !text_ok(&a.provider, 64)
-            || !text_ok(&a.account_id, 128)
+            || !account_id_ok(&a.account_id)
             || !opt_text_ok(&a.plan, 80)
             || !PLATFORMS.contains(&a.platform.as_str())
             || !STATUSES.contains(&a.status.as_str())

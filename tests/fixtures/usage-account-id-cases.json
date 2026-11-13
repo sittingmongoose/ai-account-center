@@ -1,0 +1,267 @@
+[
+  {
+    "name": "provider and address",
+    "id": "claude:person@example.com",
+    "accepted": true
+  },
+  {
+    "name": "plus tag and subdomain",
+    "id": "claude:person.name+tag@mail.example.co.uk",
+    "accepted": true
+  },
+  {
+    "name": "hyphen and underscore",
+    "id": "codex:first-last_1@example.org",
+    "accepted": true
+  },
+  {
+    "name": "upper case",
+    "id": "claude:Person@Example.COM",
+    "accepted": true
+  },
+  {
+    "name": "listed provider: antigravity",
+    "id": "antigravity:person@example.com",
+    "accepted": true
+  },
+  {
+    "name": "listed provider: muse",
+    "id": "muse:person@example.com",
+    "accepted": true
+  },
+  {
+    "name": "listed provider: cursor",
+    "id": "cursor:person@example.com",
+    "accepted": true
+  },
+  {
+    "name": "listed provider: kimi-code",
+    "id": "kimi-code:person@example.com",
+    "accepted": true
+  },
+  {
+    "name": "listed provider: qwen",
+    "id": "qwen:person@example.com",
+    "accepted": true
+  },
+  {
+    "name": "listed provider: zai",
+    "id": "zai:person@example.com",
+    "accepted": true
+  },
+  {
+    "name": "listed provider: opencode-go",
+    "id": "opencode-go:person@example.com",
+    "accepted": true
+  },
+  {
+    "name": "profile id",
+    "id": "claude:0f8e2a4c-profile",
+    "accepted": true
+  },
+  {
+    "name": "codex profile name",
+    "id": "codex:work",
+    "accepted": true
+  },
+  {
+    "name": "antigravity profile",
+    "id": "antigravity:profile:work",
+    "accepted": true
+  },
+  {
+    "name": "usage row",
+    "id": "zai:usage",
+    "accepted": true
+  },
+  {
+    "name": "key row",
+    "id": "qwen:acct:0123abcd",
+    "accepted": true
+  },
+  {
+    "name": "reviewer witness: two @ ending at localhost",
+    "id": "claude:synthetic-pass@example.com@localhost",
+    "accepted": false
+  },
+  {
+    "name": "reviewer witness: unknown provider, two @",
+    "id": "svc:synthetic-pass@example.com@localhost",
+    "accepted": false
+  },
+  {
+    "name": "reviewer witness: trailing path",
+    "id": "svc:synthetic-pass@example.com/extra",
+    "accepted": false
+  },
+  {
+    "name": "reviewer witness: fragment",
+    "id": "svc:synthetic-pass@example.com#extra",
+    "accepted": false
+  },
+  {
+    "name": "unknown provider",
+    "id": "svc:synthetic-pass@example.com",
+    "accepted": false
+  },
+  {
+    "name": "provider in another case",
+    "id": "Claude:synthetic-pass@example.com",
+    "accepted": false
+  },
+  {
+    "name": "two @, both dotted",
+    "id": "claude:synthetic-pass@example.com@example.org",
+    "accepted": false
+  },
+  {
+    "name": "port",
+    "id": "claude:synthetic-pass@example.com:5432",
+    "accepted": false
+  },
+  {
+    "name": "port, no domain",
+    "id": "claude:synthetic-pass@db:5432",
+    "accepted": false
+  },
+  {
+    "name": "IPv4",
+    "id": "claude:synthetic-pass@10.0.0.1",
+    "accepted": false
+  },
+  {
+    "name": "IPv6",
+    "id": "claude:synthetic-pass@[::1]",
+    "accepted": false
+  },
+  {
+    "name": "localhost",
+    "id": "claude:synthetic-pass@localhost",
+    "accepted": false
+  },
+  {
+    "name": "localhost label",
+    "id": "claude:synthetic-pass@db.localhost",
+    "accepted": false
+  },
+  {
+    "name": "localhost subdomain",
+    "id": "claude:synthetic-pass@localhost.example.com",
+    "accepted": false
+  },
+  {
+    "name": "internal name",
+    "id": "claude:synthetic-pass@db.internal",
+    "accepted": false
+  },
+  {
+    "name": "local name",
+    "id": "claude:synthetic-pass@printer.local",
+    "accepted": false
+  },
+  {
+    "name": "undotted host",
+    "id": "claude:synthetic-pass@dbhost",
+    "accepted": false
+  },
+  {
+    "name": "numeric top-level name",
+    "id": "claude:synthetic-pass@example.123",
+    "accepted": false
+  },
+  {
+    "name": "one-letter top-level name",
+    "id": "claude:synthetic-pass@example.c",
+    "accepted": false
+  },
+  {
+    "name": "label starting with a hyphen",
+    "id": "claude:synthetic-pass@-example.com",
+    "accepted": false
+  },
+  {
+    "name": "underscore in the domain",
+    "id": "claude:synthetic-pass@ex_ample.com",
+    "accepted": false
+  },
+  {
+    "name": "trailing path",
+    "id": "claude:synthetic-pass@example.com/extra",
+    "accepted": false
+  },
+  {
+    "name": "trailing query",
+    "id": "claude:synthetic-pass@example.com?x=1",
+    "accepted": false
+  },
+  {
+    "name": "trailing fragment",
+    "id": "claude:synthetic-pass@example.com#extra",
+    "accepted": false
+  },
+  {
+    "name": "trailing dot",
+    "id": "claude:synthetic-pass@example.com.",
+    "accepted": false
+  },
+  {
+    "name": "leading space",
+    "id": "  claude:synthetic-pass@example.com",
+    "accepted": false
+  },
+  {
+    "name": "trailing space",
+    "id": "claude:synthetic-pass@example.com ",
+    "accepted": false
+  },
+  {
+    "name": "space and more",
+    "id": "claude:synthetic-pass@example.com extra",
+    "accepted": false
+  },
+  {
+    "name": "encoded @ in the local part",
+    "id": "claude:synthetic-pass%40example.com@example.com",
+    "accepted": false
+  },
+  {
+    "name": "encoded @ in the domain",
+    "id": "claude:synthetic-pass@example.com%40localhost",
+    "accepted": false
+  },
+  {
+    "name": "second colon",
+    "id": "claude:acct:synthetic-pass@example.com",
+    "accepted": false
+  },
+  {
+    "name": "URL",
+    "id": "https://agent:synthetic-pass@example.com/path",
+    "accepted": false
+  },
+  {
+    "name": "scheme-less URL",
+    "id": "//agent:synthetic-pass@example.com",
+    "accepted": false
+  },
+  {
+    "name": "leading dot in the local part",
+    "id": "claude:.synthetic-pass@example.com",
+    "accepted": false
+  },
+  {
+    "name": "doubled dot in the local part",
+    "id": "claude:synthetic-pass..x@example.com",
+    "accepted": false
+  },
+  {
+    "name": "API key as the local part",
+    "id": "claude:sk-synthetic-pass-abcdefghijkl@example.com",
+    "accepted": false
+  },
+  {
+    "name": "credential beside the id",
+    "id": "claude:person@example.com sk-synthetic-pass-abcdefghijkl",
+    "accepted": false
+  }
+]
