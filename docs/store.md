@@ -58,8 +58,10 @@ separate work; `registry.json` describes the implemented families.
 History reconstruction now chooses surviving timestamps before constructing JSON and uses binary
 searches over sorted spans. This leaves queries and ordering unchanged while avoiding discarded
 serialization. Explicit retention drains all expired state batches, even if no reading-day batch is
-full. The legacy quota writer/importer cleans only owned regular UUID temporary files older than
-24 hours; source JSON and archives remain intact for rollback.
+full. Legacy quota writers remove only their own failed temporary files. Orphan removal is an
+offline maintenance operation after every quota-file writer has stopped: writes and backfill never
+reap another temporary file, because age cannot establish that a suspended writer has exited.
+Source JSON and archives remain intact for rollback.
 
 ## 1. Scope
 
