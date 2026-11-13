@@ -95,10 +95,14 @@ describe('test-environment cleanup', () => {
     expect(process.env.npm_config_cache).toBe(path.join(shared, 'npm-cache'));
     // XDG_CACHE_HOME stays per-home for isolation (see ensureSharedCache comment).
     expect(process.env.XDG_CACHE_HOME).not.toBe(path.join(shared, 'xdg-cache'));
-    expect(shared).not.toContain(os.tmpdir());
+    // Outside every test home (a CI run may itself use a temp HOME, so /tmp alone proves nothing).
+    expect(shared).not.toMatch(/ccs-test(?:-home)?-/);
     // Shared root must contain only package caches, not test homes
     expect(fs.existsSync(shared)).toBe(true);
-    expect(shared.endsWith(path.join('.cache', 'aac-test-shared-cache')) || shared === process.env.AAC_TEST_SHARED_CACHE).toBe(true);
+    expect(
+      shared.endsWith(path.join('.cache', 'aac-test-shared-cache')) ||
+        shared === process.env.AAC_TEST_SHARED_CACHE
+    ).toBe(true);
   });
 
   it('double cleanup is harmless', () => {
