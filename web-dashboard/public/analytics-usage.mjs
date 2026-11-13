@@ -216,7 +216,7 @@ const ownSeries = p => p === 'claude' || p === 'codex';
 /** A provider mark exists for every dashboard provider; "other" has none. */
 const markOf = p => p === 'other' ? '' : p;
 /** The tools whose logs the server reads. Their names say where a model's usage came from, never a division. */
-export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity'];
+export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity', 'cursor', 'devin'];
 export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', muse: 'Muse Code', zcode: 'zcode', jsonl: 'Generic JSONL', antigravity: 'Antigravity', cursor: 'Cursor', devin: 'Devin CLI' };
 const toolNames = tools => andList(TOOLS.filter(t => tools.has(t)).map(t => TOOL_LABEL[t]));
 /** Add v to o[k] (per-provider sums over providers that are only known from the data). */
@@ -1395,7 +1395,8 @@ export function includedView(payload, now = Date.now()) {
     const t = when(r), last = finite(t) ? `Last scan ${timeTxt(t)}.` : 'Never scanned.';
     const why = text(r.detail) ? `${capFirst(r.detail)}. ` : '';
     if (r.state === 'scanning') return { id, text: 'Scanning…', tone: 'scanning', tip: `${why}${last}` };
-    if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: 'ok', tip: [events(r), found(r), last].filter(Boolean).join(' · ') };
+    // A read with a note (a folder that did not answer, a write-ahead log, a cache cut) says it and is marked.
+    if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: why ? 'cached' : 'ok', tip: [why.trim(), events(r), found(r), last].filter(Boolean).join(' · ') };
     if (r.state === 'cached') return { id, text: finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Earlier records are shown until a scan finishes. ${last}` };
     if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
     if (r.state === 'installed_no_logs') return { id, text: 'Installed, no logs yet', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };

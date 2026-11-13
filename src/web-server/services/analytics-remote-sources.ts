@@ -27,6 +27,7 @@ import {
   hasClaudeReplacementMetadata,
   resolveAnalyticsRemoteHosts,
   type AnalyticsDiscoveryKind,
+  type AnalyticsDiscoveryRoot,
   type AnalyticsNoReaderTool,
   type AnalyticsPresenceTool,
   type AnalyticsReader,
@@ -353,12 +354,22 @@ export function localScannerOwned(
   cacheDir: string = path.join(getCcsDir(), 'cache')
 ): Set<AnalyticsRemoteKind> {
   const cached = loadCache(cacheFile(cacheDir, 'ubuntu'));
-  return new Set([
-    ...LOCAL_SCANNER_KINDS.filter((kind) => !TAKEOVER_KINDS.includes(kind)),
-    ...Object.keys(cached.owned ?? {}).filter((kind): kind is AnalyticsRemoteKind =>
-      TAKEOVER_KINDS.includes(kind as AnalyticsRemoteKind)
-    ),
-  ]);
+  // A kind with more roots than the scanner takes is not scanned here: the built-in reader keeps
+  // it, even after a take-over, so it is never left without a reader (FIX-ROUND-BIG 6).
+  let overflow: AnalyticsRemoteKind[] = [];
+  try {
+    overflow = localExtraRoots([...LOCAL_SCANNER_KINDS], localExperimentRoots(cacheDir)).overflow;
+  } catch {
+    overflow = [];
+  }
+  return new Set(
+    [
+      ...LOCAL_SCANNER_KINDS.filter((kind) => !TAKEOVER_KINDS.includes(kind)),
+      ...Object.keys(cached.owned ?? {}).filter((kind): kind is AnalyticsRemoteKind =>
+        TAKEOVER_KINDS.includes(kind as AnalyticsRemoteKind)
+      ),
+    ].filter((kind) => !overflow.includes(kind))
+  );
 }
 
 /**
@@ -394,13 +405,15 @@ export function analyticsRemoteTargets(host: AnalyticsScanHost): AnalyticsRemote
 const MAX_CACHED_ROWS = 100_000;
 
 /**
+ * 7: Codex rows are keyed by conversation and Muse rows by session (one owner per conversation
+ * across every folder, FIX-ROUND-BIG 1 and 2); rows keyed by path are read again.
  * 6: Atomically replace Claude copy groups; discard accumulated duplicate owners.
  * 5: Claude copy groups, mirror tags and persistent oversized-line verdicts.
  * 4: Claude counts one API response, not one content block; rows cached by
  * version 3 are read again. (3: per-session aggregates ride with the hourly
  * rows, so remote sessions count like local ones.)
  */
-const CACHE_VERSION = 6;
+const CACHE_VERSION = 7;
 
 /** A kind's last confirmed read, and the logs it has not read to their end (DESIGN 16.1). */
 interface KindRead {
@@ -476,7 +489,7 @@ function loadCache(file: string, at: () => string = () => new Date().toISOString
     // Versions 1/2 predate hashed session aggregates and cannot safely retain
     // their sessions or confirm their files. Unknown future formats also reset.
     if (
-      ![3, 4, 5, CACHE_VERSION].includes(value.version) ||
+      ![3, 4, 5, 6, CACHE_VERSION].includes(value.version) ||
       !value.fingerprints ||
       typeof value.fingerprints !== 'object' ||
       !Array.isArray(value.rows) ||
@@ -536,20 +549,30 @@ function loadCache(file: string, at: () => string = () => new Date().toISOString
           }
         : undefined;
     if (value.version !== CACHE_VERSION) {
-      // Versions 3-5 share the non-Claude row/session/fingerprint formats.
+      // Versions 3-6 share the row/session/fingerprint formats of the other tools.
       // Claude's response semantics and copy ownership changed in 4-6: its
       // aggregates and prints must rebuild together, without losing other tools.
+      // Version 7 keys Codex by conversation and Muse by session: their rows keyed by path are read
+      // again, and a take-over of them waits for that read (FIX-ROUND-BIG 1 and 2).
+      const rebuilt = new Set<string>(
+        value.version < 6 ? ['claude', 'codex', 'muse'] : ['codex', 'muse']
+      );
       const fingerprints = { ...value.fingerprints };
       const kinds = { ...value.kinds };
-      delete fingerprints.claude;
-      delete kinds.claude;
+      const owned = { ...value.owned };
+      for (const kind of rebuilt) {
+        delete fingerprints[kind];
+        delete kinds[kind as AnalyticsRemoteKind];
+        delete owned[kind as AnalyticsRemoteKind];
+      }
       return {
         ...value,
         version: CACHE_VERSION,
         fingerprints,
         kinds,
-        rows: value.rows.filter((row) => row.k !== 'claude'),
-        srows: value.srows.filter((row) => row.k !== 'claude'),
+        ...(value.owned ? { owned } : {}),
+        rows: value.rows.filter((row) => !rebuilt.has(row.k)),
+        srows: value.srows.filter((row) => !rebuilt.has(row.k)),
         settled: false,
       };
     }
@@ -891,6 +914,25 @@ function sizeText(bytes: number): string {
  * read to the end yet: rollout-2026-10-31T08-06-21.jsonl.zst (3.2 GB, partly read: 1,450,000,000
  * of 4,637,763,647 bytes), ...". Names carry no conversation id; at most five are spelled out.
  */
+/** The words for log folders that are there but could not be read, by why (FIX-ROUND-BIG 4). */
+export function rootFailureText(roots: AnalyticsDiscoveryRoot[]): string {
+  const count = roots.length;
+  const causes = new Set(
+    roots.map(
+      (root) => root.cause ?? (root.state === 'link_unreachable' ? 'did_not_answer' : 'io_error')
+    )
+  );
+  const why = causes.has('did_not_answer')
+    ? 'did not answer (a network mount, say)'
+    : causes.has('target_missing')
+      ? 'point at a folder that is gone'
+      : causes.has('permission_denied')
+        ? 'could not be read (permission denied)'
+        : 'could not be read';
+  const linked = roots.every((root) => root.state.startsWith('link_'));
+  return `${count} ${linked ? 'linked ' : ''}log folder${count === 1 ? '' : 's'} ${count === 1 ? why.replace('point at', 'points at') : why}, so ${count === 1 ? 'its' : 'their'} logs are not counted`;
+}
+
 export function unfinishedText(list: AnalyticsUnfinishedLog[], count?: number): string {
   const total = Math.max(count ?? list.length, list.length);
   const bytes = (value: number) => value.toLocaleString('en-US');
@@ -1321,6 +1363,10 @@ async function scanHost(
       // One fallback answer labels the computer: its other kinds are read the older way too.
       if (answer.reader && (!merged.reader || answer.reader.name === 'python-fallback'))
         merged.reader = answer.reader;
+      // What the computer itself said (FIX-ROUND-BIG 9): a mount that did not answer, a stall.
+      if (answer.unansweredMounts)
+        merged.unansweredMounts = Math.max(merged.unansweredMounts ?? 0, answer.unansweredMounts);
+      if (answer.stalled) merged.stalled = true;
       merged.rows.push(...answer.rows.filter((row) => row.k === kind));
       merged.srows.push(...(answer.srows ?? []).filter((row) => row.k === kind));
     }
@@ -1392,7 +1438,12 @@ export async function loadAnalyticsRemoteSources(
       (async (): Promise<void> => {
         const results = host === 'ubuntu' ? localResults : sharedResults;
         const states = host === 'ubuntu' ? localStates : sharedStates;
-        if (host === 'ubuntu') localOwned = localScannerOwned(cacheDir);
+        // A kind over the scanner's root limit is the built-in reader's this collection
+        // (FIX-ROUND-BIG 6), whatever was taken over before.
+        if (host === 'ubuntu')
+          localOwned = new Set(
+            [...localScannerOwned(cacheDir)].filter((kind) => !local.overflow.includes(kind))
+          );
         const allKinds = REMOTE_TARGETS[host].filter(
           (kind) => host !== 'ubuntu' || !local.overflow.includes(kind)
         );
@@ -1505,18 +1556,26 @@ export async function loadAnalyticsRemoteSources(
         const { response, cutKinds, failedKinds, olderClaude } = scan;
         await yieldTurn();
         const errored = new Set(kinds.filter((tool) => response.kinds[tool]?.state === 'error'));
+        // The scanner and the Python fallback key files apart (Codex and Muse by conversation in
+        // the scanner, by path in Python): after a switch, rows of the other reader are never kept
+        // beside the new ones, partial or not (FIX-ROUND-BIG 1).
+        const readerChanged =
+          cached.lastScanAt !== null &&
+          (cached.reader ?? '').startsWith('python-fallback') !==
+            (readerLabel(response.reader) ?? '').startsWith('python-fallback');
         // Files a scan did not reach keep their rows and prints until a scan
         // reaches them: after a kind's scan was cut, a kind that could not be
         // read, or (OMP) a root search that hit its bounds.
         const keepsUnvisited = (tool: AnalyticsRemoteKind): boolean =>
-          (tool === 'claude' && olderClaude) ||
-          cutKinds.has(tool) ||
-          (tool === 'codex' && response.kinds.codex?.partial === true) ||
-          errored.has(tool) ||
-          response.kinds[tool]?.state === 'pending' ||
-          response.kinds[tool]?.partial === true ||
-          (tool === 'antigravity' && response.kinds[tool]?.unreadable === true) ||
-          (tool === 'omp' && response.discoveryTruncated === true);
+          !readerChanged &&
+          ((tool === 'claude' && olderClaude) ||
+            cutKinds.has(tool) ||
+            (tool === 'codex' && response.kinds.codex?.partial === true) ||
+            errored.has(tool) ||
+            response.kinds[tool]?.state === 'pending' ||
+            response.kinds[tool]?.partial === true ||
+            (tool === 'antigravity' && response.kinds[tool]?.unreadable === true) ||
+            (tool === 'omp' && response.discoveryTruncated === true));
         const freshPrints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {};
         const discarded = (tool: AnalyticsRemoteKind) =>
           // Reject the whole Claude kind, even a seemingly complete old scan:
@@ -1680,9 +1739,23 @@ export async function loadAnalyticsRemoteSources(
               !(tool === 'antigravity' && response.kinds[tool]?.unreadable)
           );
         // The local scanner owns a kind from its first complete read (DESIGN 16.0 B).
+        // A kind that overflowed is handed back to the built-in reader, and is taken over again only
+        // after its next complete read (FIX-ROUND-BIG 6).
         const owned =
           host === 'ubuntu'
-            ? ownedAfter(cached.owned, kinds, kindReads, scannedAt, response, cutKinds, failedKinds)
+            ? Object.fromEntries(
+                Object.entries(
+                  ownedAfter(
+                    cached.owned,
+                    kinds,
+                    kindReads,
+                    scannedAt,
+                    response,
+                    cutKinds,
+                    failedKinds
+                  )
+                ).filter(([kind]) => !local.overflow.includes(kind as AnalyticsRemoteKind))
+              )
             : undefined;
         if (owned)
           localOwned = new Set([
@@ -1766,9 +1839,12 @@ export async function loadAnalyticsRemoteSources(
             });
             continue;
           }
+          // A kind whose roots are there but could not be read is partial, never "not installed"
+          // or "no logs" (FIX-ROUND-BIG 4): it takes the partial branch below.
+          const notInstalled = kindState === 'not_installed' && kind?.partial !== true;
           // Cursor without a run store is told by presence ("No local usage records"), one cell only.
-          if (tool === 'cursor' && kindState === 'not_installed') continue;
-          if (kindState === 'not_installed') {
+          if (tool === 'cursor' && notInstalled) continue;
+          if (notInstalled) {
             const installed = response.discovery?.kinds[tool]?.installed === true;
             states.push({
               tool,
@@ -1797,9 +1873,11 @@ export async function loadAnalyticsRemoteSources(
               state: 'scanning',
               lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
               rowCount: events,
-              detail: kept
-                ? 'the scan ran out of time before it reached this tool again; records from earlier scans stay included'
-                : 'the scan ran out of time before it reached this tool; the next scan continues',
+              detail: response.stalled
+                ? `the scan did not answer within its time (a folder that hangs, say), so nothing was read this time; ${kept ? 'records from earlier scans stay included' : 'the next scan tries again'}`
+                : kept
+                  ? 'the scan ran out of time before it reached this tool again; records from earlier scans stay included'
+                  : 'the scan ran out of time before it reached this tool; the next scan continues',
             });
             continue;
           }
@@ -1830,6 +1908,31 @@ export async function loadAnalyticsRemoteSources(
             const oversized = Object.values(freshPrints[tool] ?? {}).some(
               (print) => print.usageSkipped === true
             );
+            // A folder that is there but cannot be read is "unreadable", whatever else the kind
+            // has: never "no usage" or "read" (FIX-ROUND-BIG 4). Its earlier rows stay.
+            const failedRoots = (response.discovery?.kinds[tool]?.roots ?? []).filter(
+              (root) => root.state === 'unreadable' || root.state.startsWith('link_')
+            );
+            const unreadableFolders = kind?.unreadableFolders ?? 0;
+            if (failedRoots.length || unreadableFolders) {
+              const parts: string[] = [];
+              if (failedRoots.length) parts.push(rootFailureText(failedRoots));
+              if (unreadableFolders)
+                parts.push(
+                  `${unreadableFolders.toLocaleString('en-US')} folder${unreadableFolders === 1 ? '' : 's'} inside its log folders could not be listed (permission denied, say), so ${unreadableFolders === 1 ? 'its' : 'their'} logs are not counted`
+                );
+              states.push({
+                tool,
+                host,
+                state: 'unreadable',
+                lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
+                rowCount: events,
+                detail: `${parts.join('; ')}; ${kept ? 'showing previously read usage' : 'nothing is counted from them'}`,
+                cause: 'unreadable_folder',
+              });
+              continue;
+            }
+            const limit = kind?.searchLimit;
             states.push({
               tool,
               host,
@@ -1846,15 +1949,17 @@ export async function loadAnalyticsRemoteSources(
                     ? `${unfinishedText(kind.unfinished, kind.unfinishedCount)}; ${kept ? 'showing what was read so far' : 'nothing counted yet'}`
                     : kind?.unreadableRecords
                       ? `${kind.unreadableRecords.toLocaleString('en-US')} ${tool === 'cursor' ? 'Cursor runs' : 'replies'} could not be read (${tool === 'cursor' ? "their token counts fit neither of the SDK's two conventions, or their usage JSON is damaged" : 'their token counts or time are missing'}); they are counted as unreadable, never guessed`
-                      : tool === 'codex' && kind?.compressedUnread
-                        ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
-                        : kind?.readFailures
-                          ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
-                          : oversized
-                            ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
-                            : kept
-                              ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
-                              : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+                      : limit
+                        ? `search limit reached: ${limit.read.toLocaleString('en-US')} of ${limit.found === null ? 'more' : limit.found.toLocaleString('en-US')} folders looked at, so logs in the others are not counted; ${kept ? 'showing what was read' : 'nothing counted yet'}`
+                        : tool === 'codex' && kind?.compressedUnread
+                          ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
+                          : kind?.readFailures
+                            ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
+                            : oversized
+                              ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
+                              : kept
+                                ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                                : 'the remote scan hit its time bound partway through this tool; the next scan continues',
             });
             continue;
           }
@@ -1884,10 +1989,18 @@ export async function loadAnalyticsRemoteSources(
           if (entry.host !== host) continue;
           const found = discovery.kinds[entry.tool as AnalyticsRemoteKind];
           if (!entry.counts) Object.assign(entry, sourceCounts(found), { reader });
-          // A linked log folder that could not be reached is said, never silently left out (16.4).
-          const links = (found?.roots ?? []).filter((root) => root.state.startsWith('link_'));
-          if (links.length) {
-            const note = `${links.length} linked log folder${links.length === 1 ? '' : 's'} ${links.some((root) => root.state === 'link_unreachable') ? 'did not answer (a network mount, say)' : 'could not be listed'}, so ${links.length === 1 ? 'its' : 'their'} logs are not counted`;
+          // A log folder that could not be reached is said, never silently left out (16.4).
+          const links = (found?.roots ?? []).filter(
+            (root) => root.state === 'unreadable' || root.state.startsWith('link_')
+          );
+          if (links.length && entry.state !== 'unreadable') {
+            const note = rootFailureText(links);
+            entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+          }
+          // A network folder that did not answer may hold logs a walk from home would have found.
+          if (response.unansweredMounts) {
+            const count = response.unansweredMounts;
+            const note = `${count} network folder${count === 1 ? '' : 's'} on this computer did not answer, so logs there are not counted`;
             entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
           }
         }

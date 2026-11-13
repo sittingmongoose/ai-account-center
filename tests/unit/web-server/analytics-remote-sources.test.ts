@@ -18,6 +18,7 @@ import {
 import {
   analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
+  localScannerOwned,
   loadAnalyticsRemoteSources as readRemoteSources,
 } from '../../../src/web-server/services/analytics-remote-sources';
 import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
@@ -554,10 +555,14 @@ describe('analytics remote sources', () => {
     }
   );
 
+  // Version 7 keys Codex by conversation and Muse by session (FIX-ROUND-BIG 1 and 2): their rows
+  // keyed by path are read again with Claude's; the other tools' history migrates as it is.
   it.each([3, 4, 5])(
-    'migrates v%i non-Claude history and dates while offline, then rebuilds Claude',
+    'migrates v%i history of path-keyed tools and dates while offline, then rebuilds the rest',
     async (version) => {
       const tools = ['codex', 'omp', 'muse', 'zcode', 'antigravity'] as const;
+      const kept = tools.filter((tool) => tool !== 'codex' && tool !== 'muse');
+      const rebuiltKinds = new Set<string>(['claude', 'codex', 'muse']);
       const rows = tools.map((k) => row({ k, i: 100 }));
       const srows = tools.map((k) => srow({ k, i: 100 }));
       const fingerprints = Object.fromEntries(
@@ -600,8 +605,8 @@ describe('analytics remote sources', () => {
         },
       });
       for (const answer of [loadAnalyticsRemoteCachedSources(MIN_DATE, deps), offline]) {
-        expect(answer.results.map((entry) => entry.tool).sort()).toEqual([...tools].sort());
-        for (const tool of tools) {
+        expect(answer.results.map((entry) => entry.tool).sort()).toEqual([...kept].sort());
+        for (const tool of kept) {
           const data = answer.results.find((entry) => entry.tool === tool)?.data;
           expect(data?.hourly[0].inputTokens).toBe(100);
           expect(data?.session[0].inputTokens).toBe(100);
@@ -621,7 +626,7 @@ describe('analytics remote sources', () => {
           const kind = request.kinds[0];
           requested.add(kind);
           expect(request.fingerprints[kind] ?? {}).toEqual(
-            kind === 'claude' ? {} : fingerprints[kind]
+            rebuiltKinds.has(kind) ? {} : fingerprints[kind]
           );
           return parseAnalyticsRemoteResponse(
             JSON.stringify(
@@ -648,11 +653,60 @@ describe('analytics remote sources', () => {
         rebuilt.results.find((entry) => entry.tool === 'claude')?.data.session[0].inputTokens
       ).toBe(150);
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-      expect(saved.version).toBe(6);
-      expect(saved.rows.filter((row: { k: string }) => row.k !== 'claude')).toEqual(rows);
-      expect(saved.srows.filter((row: { k: string }) => row.k !== 'claude')).toEqual(srows);
+      expect(saved.version).toBe(7);
+      expect(saved.rows.filter((row: { k: string }) => !rebuiltKinds.has(row.k))).toEqual(
+        rows.filter((row) => !rebuiltKinds.has(row.k))
+      );
+      expect(saved.srows.filter((row: { k: string }) => !rebuiltKinds.has(row.k))).toEqual(
+        srows.filter((row) => !rebuiltKinds.has(row.k))
+      );
     }
   );
+
+  it('migrates v6 with Claude kept, Codex and Muse read again and their take-over undone', () => {
+    const tools = ['claude', 'codex', 'muse', 'omp'] as const;
+    for (const host of ['mac', 'ubuntu']) {
+      const file = path.join(cache, `analytics-remote-v1/${host}.json`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          version: 6,
+          ...(host === 'ubuntu' ? { owned: { codex: '2026-11-01T00:00:00.000Z' } } : {}),
+          fingerprints: Object.fromEntries(
+            tools.map((k) => [
+              k,
+              {
+                [FILE_1]: {
+                  size: 10,
+                  mtimeMs: 20,
+                  ...(k === 'claude' ? { claudeGroup: FILE_1 } : {}),
+                },
+              },
+            ])
+          ),
+          rows: tools.map((k) => row({ k, i: 100 })),
+          srows: tools.map((k) => srow({ k, i: 100 })),
+          kinds: Object.fromEntries(
+            tools.map((k) => [k, { state: 'ok', lastScanAt: '2026-10-02T16:00:00.000Z' }])
+          ),
+          lastScanAt: '2026-10-02T16:00:00.000Z',
+          settled: true,
+        })
+      );
+    }
+    expect(localScannerOwned(cache).has('codex')).toBe(false);
+    const { results } = loadAnalyticsRemoteCachedSources(MIN_DATE, {
+      cacheDir: cache,
+      hosts: async () => ({ mac: 'fixture', windows: null, nas1: null }),
+    });
+    expect(
+      results
+        .filter((entry) => entry.data.hourly.length)
+        .map((entry) => entry.tool)
+        .sort()
+    ).toEqual(['claude', 'omp']);
+  });
 
   it('replaces every Claude copy owner atomically on repeated partial reads and recovery', async () => {
     const other = 'b2'.repeat(32);
@@ -699,7 +753,7 @@ describe('analytics remote sources', () => {
     // Version 5 could contain accumulated Claude owners; its rows/prints must rebuild.
     const file = path.join(cache, 'analytics-remote-v1/mac.json');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-    expect(saved.version).toBe(6);
+    expect(saved.version).toBe(7);
     fs.writeFileSync(
       file,
       JSON.stringify({ ...saved, version: 5, rows: [...saved.rows, ...saved.rows] })
@@ -1269,7 +1323,7 @@ describe('analytics remote sources', () => {
         version: number;
         srows: unknown[];
       };
-      expect(saved.version).toBe(6);
+      expect(saved.version).toBe(7);
       expect(saved.srows).toHaveLength(1);
       fs.writeFileSync(file, JSON.stringify({ ...saved, version: 2, srows: [] }));
     }

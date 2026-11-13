@@ -1895,9 +1895,9 @@ export class AccountAnalyticsActivityService {
     entries.push(
       ...fixedAnalyticsSourceEntries().filter(
         (fixed) =>
-          fixed.host === 'ubuntu' ||
-          (!measured.has(fixed.host) &&
-            !entries.some((entry) => entry.tool === fixed.tool && entry.host === fixed.host))
+          // One cell per tool and computer: the dashboard's own computer too (Astra L3, Sol L4).
+          !entries.some((entry) => entry.tool === fixed.tool && entry.host === fixed.host) &&
+          (fixed.host === 'ubuntu' || !measured.has(fixed.host))
       )
     );
     return sortSourceEntries(entries);

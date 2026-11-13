@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 process.env.TZ = 'UTC';
 const { setDisplayTimeZone } = await import('../public/time-format.mjs');
 setDisplayTimeZone('UTC');
-const { usageView, activityData, includedView, notLoggedPart, modelShades, tokC, hostProgress } = await import('../public/analytics-usage.mjs');
+const { usageView, activityData, includedView, notLoggedPart, modelShades, tokC, hostProgress, TOOLS } = await import('../public/analytics-usage.mjs');
 const { modelRates } = await import('../public/model-rates.mjs');
 
 const now = Date.parse('2026-10-01T12:00:00Z');
@@ -384,6 +384,23 @@ test('Included usage lists generic JSONL sources with the other tools', () => {
   assert.match(inc.line, /Includes Claude Code, Codex, OMP, Muse Code, zcode and Generic JSONL on Ubuntu/);
   const cell = inc.rows.find(r => r.tool === 'Generic JSONL').cells[0];
   assert.deepEqual([cell.text, cell.tone], ['Read 1h 0m ago', 'ok']);
+});
+
+// FIX-ROUND-BIG 7 (Fable M8): a cell that says "Read" shows its note too, and is marked.
+test('a Read cell shows its note in its tip and is marked', () => {
+  const note = '1 linked log folder did not answer (a network mount, say), so its logs are not counted';
+  const sources = SOURCES.map(s => s.tool === 'codex' && s.host === 'ubuntu' ? { ...s, state: 'ok', detail: note } : s);
+  const inc = includedView(payload({ sources }), now);
+  const cell = inc.rows.find(r => r.tool === 'Codex').cells[0];
+  assert.match(cell.text, /^Read/);
+  assert.equal(cell.tone, 'cached');
+  assert.match(cell.tip, /did not answer/);
+});
+
+// FIX-ROUND-BIG 19 (Argon M4): Cursor and Devin are tools the page lists, so their logs are named.
+test('the page knows Cursor and Devin as tools', () => {
+  assert.ok(TOOLS.includes('cursor'));
+  assert.ok(TOOLS.includes('devin'));
 });
 
 test('cost that is not logged reads "Not logged", never $0.00, and partial cost says so', () => {

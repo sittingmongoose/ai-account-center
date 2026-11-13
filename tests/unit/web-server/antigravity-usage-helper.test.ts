@@ -631,7 +631,8 @@ describe.skipIf(!HAVE_PYTHON)('Antigravity usage in the analytics helper', () =>
     // Either the query is interrupted, or the parse loop stops at its next check.
     expect(['OperationalError', '_AgyDeadline']).toContain(aborted.trim());
     expect(fs.existsSync(`${file}-wal`)).toBe(false);
-  });
+    // Two readers in parity mode on NTFS take ~6 s (Argon L6).
+  }, 15_000);
 
   it('says not installed without any store, and the transport accepts the kind', () => {
     const response = runHelper();

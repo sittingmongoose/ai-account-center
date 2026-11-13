@@ -413,7 +413,7 @@ describe('a standing scan failure (the Alexis PC case)', () => {
     fs.writeFileSync(
       path.join(cache, 'analytics-remote-v1', 'alexis.json'),
       JSON.stringify({
-        version: 6,
+        version: 7,
         fingerprints: {},
         rows: [],
         srows: [],

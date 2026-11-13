@@ -10,6 +10,10 @@ import { execFileSync } from 'child_process';
 
 export const SCAN_BIN = process.env.AAC_USAGE_SCAN_BIN;
 
+const BY_VALUE = new Set(['codex', 'muse']);
+const byValue = (row: Record<string, unknown>) =>
+  BY_VALUE.has(String(row.k)) ? { ...row, f: 'by-value' } : row;
+
 export function parityView(answer: Record<string, unknown>): unknown {
   const kinds = (answer.kinds ?? {}) as Record<string, Record<string, unknown>>;
   const rowKey = (row: Record<string, unknown>) => {
@@ -39,19 +43,29 @@ export function parityView(answer: Record<string, unknown>): unknown {
           walUnread: entry.walUnread ?? false,
           unreadable: entry.unreadable ?? false,
           replacedFiles: [...((entry.replacedFiles as string[]) ?? [])].sort(),
-          fingerprints: Object.fromEntries(
-            Object.entries(
-              (entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>
-            ).map(([key, print]) => {
-              const { msgThrough: _sent, ...rest } = print;
-              return [key, rest];
-            })
-          ),
+          // The scanner keys Codex logs by conversation and Muse logs by session (one owner per
+          // conversation across every folder, FIX-ROUND-BIG 1 and 2); Python keys them by path.
+          // Those prints are compared by value.
+          fingerprints: BY_VALUE.has(kind)
+            ? Object.values((entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>)
+                .map((print) => {
+                  const { msgThrough: _sent, ...rest } = print;
+                  return rowKey(rest);
+                })
+                .sort()
+            : Object.fromEntries(
+                Object.entries(
+                  (entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>
+                ).map(([key, print]) => {
+                  const { msgThrough: _sent, ...rest } = print;
+                  return [key, rest];
+                })
+              ),
         },
       ])
     ),
-    rows: ((answer.rows ?? []) as Array<Record<string, unknown>>).map(rowKey).sort(),
-    srows: ((answer.srows ?? []) as Array<Record<string, unknown>>).map(rowKey).sort(),
+    rows: ((answer.rows ?? []) as Array<Record<string, unknown>>).map(byValue).map(rowKey).sort(),
+    srows: ((answer.srows ?? []) as Array<Record<string, unknown>>).map(byValue).map(rowKey).sort(),
   };
 }
 

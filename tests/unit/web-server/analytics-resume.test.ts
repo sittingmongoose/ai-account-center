@@ -23,7 +23,7 @@ const MIN_DATE = Date.parse('2026-10-15T00:00:00Z');
 const KINDS: AnalyticsRemoteKind[] = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
 const FILE = 'a1'.repeat(32);
 const SESSION = 'c3'.repeat(8);
-const NAME = 'rollout-2026-10-31T08-06-21.jsonl.zst';
+const NAME = 'rollout-2026-10-31T08-06-21-0123456789abcdef.jsonl.zst';
 const PRINT = {
   size: 3_397_722_778,
   mtimeMs: 1_793_000_000_000,
@@ -229,7 +229,7 @@ describe('a log read across calls', () => {
 describe('naming and the fallback', () => {
   it('names at most five logs and counts the rest', () => {
     const list = Array.from({ length: 6 }, (_, index) => ({
-      name: `rollout-2026-11-0${index + 1}T00-00-00.jsonl.zst`,
+      name: `rollout-2026-11-0${index + 1}T00-00-00-0123456789abcdef.jsonl.zst`,
       sizeBytes: 700 * 1024 ** 2,
       readThroughBytes: index === 5 ? null : 100 * 1024 ** 2,
       decodedBytes: index === 0 ? 1000 * 1024 ** 2 : null,
@@ -238,10 +238,10 @@ describe('naming and the fallback', () => {
     const text = unfinishedText(list, 9);
     expect(text).toStartWith('9 logs not read to the end yet: ');
     expect(text).toContain(
-      'rollout-2026-11-01T00-00-00.jsonl.zst (700 MB, partly read: 104,857,600 of 1,048,576,000 bytes)'
+      'rollout-2026-11-01T00-00-00-0123456789abcdef.jsonl.zst (700 MB, partly read: 104,857,600 of 1,048,576,000 bytes)'
     );
     expect(text).toContain(
-      'rollout-2026-11-02T00-00-00.jsonl.zst (700 MB, partly read: 104,857,600 bytes, full size not stated in the file)'
+      'rollout-2026-11-02T00-00-00-0123456789abcdef.jsonl.zst (700 MB, partly read: 104,857,600 bytes, full size not stated in the file)'
     );
     expect(text).toContain('and 4 more');
   });
@@ -263,6 +263,13 @@ describe('naming and the fallback', () => {
     const withPrint = (print: Record<string, unknown>) => () =>
       answer({ state: 'ok', fingerprints: { [FILE]: { ...PRINT, ...print } } }, [], []);
     expect(withPrint({ readName: 'rollout-01a19f7c-b191-7a42-9bd9-c0b3dd7f3f33.jsonl' })).toThrow();
+    // FIX-ROUND-BIG 18 (Astra M11): only `rollout-<time>-<session key>` or `log-<digest>` names pass;
+    // a renamed log's own suffix (an opaque session handle) never does.
+    expect(
+      withPrint({ readName: 'rollout-2026-11-11T12-00-00-private-session-handle.jsonl' })
+    ).toThrow();
+    expect(withPrint({ readName: 'notes-of-a-private-project.jsonl' })).toThrow();
+    expect(withPrint({ readName: 'log-0123456789ab.jsonl' })).not.toThrow();
     expect(withPrint({ readState: { ...STATE, session: 'raw-id' } })).toThrow();
     expect(withPrint({ readState: { ...STATE, sessionDigest: 'not-a-digest' } })).toThrow();
     const parsed = answer(

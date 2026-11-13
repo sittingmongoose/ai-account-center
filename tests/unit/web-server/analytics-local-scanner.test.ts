@@ -20,6 +20,7 @@ import {
   localScannerOwned,
 } from '../../../src/web-server/services/analytics-remote-sources';
 import {
+  MAX_EXPERIMENT_ROOTS,
   parseAnalyticsRemoteResponse,
   type AnalyticsRemoteRequest,
 } from '../../../src/web-server/services/analytics-remote-transport';
@@ -67,12 +68,12 @@ function codexAnswer(complete: boolean, input = 150) {
                 [FILE]: {
                   ...PRINT,
                   readThrough: 500,
-                  readName: 'rollout-2026-11-03T03-38-31.jsonl.zst',
+                  readName: 'rollout-2026-11-03T03-38-31-0123456789abcdef.jsonl.zst',
                 },
               },
               unfinished: [
                 {
-                  name: 'rollout-2026-11-03T03-38-31.jsonl.zst',
+                  name: 'rollout-2026-11-03T03-38-31-0123456789abcdef.jsonl.zst',
                   sizeBytes: 1000,
                   readThroughBytes: 500,
                   decodedBytes: 2000,
@@ -125,6 +126,35 @@ function codexAnswer(complete: boolean, input = 150) {
 const noRemote = async () => ({ mac: null, windows: null, nas1: null, alexis: null });
 
 describe('the scanner on this computer', () => {
+  // Sol M7 (FIX-ROUND-BIG 6): more experiment folders than the scanner takes, after it took Codex
+  // over, hands Codex back to the built-in reader, which then reads it; never neither reader.
+  it('hands a kind back to the built-in reader when its roots overflow after a take-over', async () => {
+    const cache = path.join(dir, 'cache');
+    let roots: string[] = ['/home/u/lab/run/codex'];
+    const load = () =>
+      loadAnalyticsRemoteSources(MIN_DATE, {
+        cacheDir: cache,
+        hosts: noRemote,
+        now: () => NOW,
+        force: true,
+        localScanner: () => ({ ok: true }),
+        localExperimentRoots: () => ({ codex: roots }),
+        runLocal: async () => codexAnswer(true),
+      });
+    expect((await load()).local.owned).toContain('codex');
+    roots = Array.from(
+      { length: MAX_EXPERIMENT_ROOTS + 1 },
+      (_, n) => `/home/u/lab/run-${n}/codex`
+    );
+    const over = await load();
+    expect(over.local.owned).not.toContain('codex');
+    expect(over.local.tooManyRoots).toContain('codex');
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(cache, 'analytics-remote-v1', 'ubuntu.json'), 'utf8')
+    ) as { owned?: Record<string, string> };
+    expect(saved.owned?.codex).toBeUndefined();
+  });
+
   it('catches up apart, takes the kind over at its first complete read, and serves it after a restart only while it can run', async () => {
     const cache = path.join(dir, 'cache');
     const asked: AnalyticsRemoteRequest[] = [];
@@ -151,7 +181,9 @@ describe('the scanner on this computer', () => {
     expect(ubuntu(first)).toEqual(['devin']);
     expect(first.local.owned.sort()).toEqual(['cursor', 'devin']);
     expect(first.local.catchingUp.codex).toContain('taking over');
-    expect(first.local.catchingUp.codex).toContain('rollout-2026-11-03T03-38-31.jsonl.zst');
+    expect(first.local.catchingUp.codex).toContain(
+      'rollout-2026-11-03T03-38-31-0123456789abcdef.jsonl.zst'
+    );
     // A cold computer gets one call per kind; each carries the experiment folders.
     expect(asked.flatMap((request) => request.kinds).sort()).toEqual(['codex', 'cursor', 'devin']);
     expect(asked.find((request) => request.kinds.includes('codex'))?.experimentRoots).toEqual({

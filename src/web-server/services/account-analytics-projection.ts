@@ -94,6 +94,8 @@ const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set([
   'muse',
   'zcode',
   'antigravity',
+  'cursor',
+  'devin',
 ]);
 const MAX_SESSION_SAMPLE = 50;
 const MAX_NAMED_DAY_MODELS = 12;

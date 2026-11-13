@@ -169,6 +169,11 @@ export interface AnalyticsRemoteFingerprint {
   readName?: string;
   /** The decoded size when the file states it. */
   decodedSize?: number;
+  /** Cursor or Devin: records this database's last read could not count, said again while it is
+   * unchanged (FIX-ROUND-BIG 5). */
+  unreadableRecords?: number;
+  /** The last read was immutable while the write-ahead log held rows. */
+  walUnread?: boolean;
 }
 
 /** Codex's carry-over for a resumed read; no identifier (the session travels as a digest). */
@@ -246,6 +251,11 @@ export interface AnalyticsRemoteKindResult {
   unreadableRecords?: number;
   /** Antigravity: a conversation database or folder could not be read (busy, damaged); the rest count. */
   unreadable?: boolean;
+  /** Folders inside a root that exist but could not be listed (FIX-ROUND-BIG 4). */
+  unreadableFolders?: number;
+  /** A discovery bound left roots unlooked-at: how many were kept, of how many seen (null: the
+   * search stopped before it could count them all). FIX-ROUND-BIG 6. */
+  searchLimit?: { read: number; found: number | null };
 }
 
 /** Where a root came from (the usage-report contract's `origin`). */
@@ -295,12 +305,27 @@ export interface AnalyticsDiscoveryCounts {
   newestMtime: number | null;
 }
 
+/** Why a root that is there could not be read (FIX-ROUND-BIG 4 and 9). */
+export type AnalyticsRootCause =
+  'permission_denied' | 'io_error' | 'target_missing' | 'did_not_answer';
+const ROOT_CAUSES: ReadonlySet<string> = new Set([
+  'permission_denied',
+  'io_error',
+  'target_missing',
+  'did_not_answer',
+]);
+
 export interface AnalyticsDiscoveryRoot {
   /** First 16 hex of sha256("aac-root-v1:" + tool + ":" + origin + ":" + path with home as ~). */
   root: string;
   origin: AnalyticsRootOrigin;
-  /** `link_*`: the folder is a link whose target could not be listed, or did not answer (16.4). */
-  state: 'ok' | 'installed_no_logs' | 'link_unreadable' | 'link_unreachable';
+  /**
+   * `unreadable`: a folder (or database) that is there but could not be read; `link_unreadable`: a
+   * link whose target cannot be read; `link_unreachable`: a link whose target is gone or did not
+   * answer (DESIGN 16.4, FIX-ROUND-BIG 4). `cause` says which.
+   */
+  state: 'ok' | 'installed_no_logs' | 'unreadable' | 'link_unreadable' | 'link_unreachable';
+  cause?: AnalyticsRootCause;
   counts: { filesFound: number; newestMtime: number | null };
 }
 
@@ -393,8 +418,11 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
       !ROOT_ORIGINS.has(item.origin) ||
       (item.state !== 'ok' &&
         item.state !== 'installed_no_logs' &&
+        item.state !== 'unreadable' &&
         item.state !== 'link_unreadable' &&
         item.state !== 'link_unreachable') ||
+      (item.cause !== undefined &&
+        (typeof item.cause !== 'string' || !ROOT_CAUSES.has(item.cause))) ||
       !rootCounts ||
       !count(rootCounts.filesFound) ||
       !epoch(rootCounts.newestMtime)
@@ -404,6 +432,7 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
       root: item.root,
       origin: item.origin as AnalyticsRootOrigin,
       state: item.state,
+      ...(item.cause !== undefined ? { cause: item.cause as AnalyticsRootCause } : {}),
       counts: {
         filesFound: rootCounts.filesFound as number,
         newestMtime: rootCounts.newestMtime as number | null,
@@ -562,6 +591,10 @@ export interface AnalyticsRemoteResponse {
   sessions?: Record<string, AnalyticsSessionEvidence>;
   /** Which reader answered. */
   reader?: AnalyticsReader;
+  /** Network or FUSE mounts on the computer that did not answer their probe (FIX-ROUND-BIG 9). */
+  unansweredMounts?: number;
+  /** The scan did not finish in its time: every kind is pending, nothing was confirmed. */
+  stalled?: boolean;
 }
 
 /**
@@ -739,21 +772,21 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
     (print.readFrom === undefined || nonNegative(print.readFrom)) &&
     (print.readState === undefined || validReadState(print.readState)) &&
     (print.readName === undefined || validLogName(print.readName)) &&
-    (print.decodedSize === undefined || nonNegative(print.decodedSize))
+    (print.decodedSize === undefined || nonNegative(print.decodedSize)) &&
+    (print.unreadableRecords === undefined || nonNegative(print.unreadableRecords)) &&
+    (print.walUnread === undefined || typeof print.walUnread === 'boolean')
   );
 }
 
-const UUID_IN_TEXT = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+/**
+ * A log's display name (FIX-ROUND-BIG 18): a Codex rollout as `rollout-<time>-<session key>`, any
+ * other log as `log-<12 hex>`, with its extension. Nothing else from a file name is accepted.
+ */
+const LOG_NAME =
+  /^(?:rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-f]{16}|log-[0-9a-f]{12})(?:\.jsonl\.zst|\.jsonl|\.json|\.db|\.sqlite)?$/;
 
-/** A log's display name: printable ASCII, at most 120 characters, never a conversation id. */
 function validLogName(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.length > 0 &&
-    value.length <= 120 &&
-    /^[\x21-\x7e]+$/.test(value) &&
-    !UUID_IN_TEXT.test(value)
-  );
+  return typeof value === 'string' && LOG_NAME.test(value);
 }
 
 function validReadState(value: unknown): value is AnalyticsReadState {
@@ -851,6 +884,8 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       unfinished?: unknown;
       unfinishedCount?: unknown;
       unreadableRecords?: unknown;
+      unreadableFolders?: unknown;
+      searchLimit?: unknown;
     };
     if (
       entry.state !== 'ok' &&
@@ -901,6 +936,27 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
         entry.partial !== true)
     )
       throw new AnalyticsRemoteTransportError();
+    if (
+      entry.unreadableFolders !== undefined &&
+      (!Number.isSafeInteger(entry.unreadableFolders) ||
+        (entry.unreadableFolders as number) < 1 ||
+        (entry.unreadableFolders as number) > 100_000 ||
+        entry.partial !== true)
+    )
+      throw new AnalyticsRemoteTransportError();
+    const limit = entry.searchLimit as { read?: unknown; found?: unknown } | undefined;
+    if (
+      limit !== undefined &&
+      (!limit ||
+        typeof limit !== 'object' ||
+        !Number.isSafeInteger(limit.read) ||
+        (limit.read as number) < 0 ||
+        (limit.found !== null &&
+          (!Number.isSafeInteger(limit.found) ||
+            (limit.found as number) < (limit.read as number))) ||
+        entry.partial !== true)
+    )
+      throw new AnalyticsRemoteTransportError();
     // Naming is a diagnostic: a malformed list is dropped, the usage kept.
     const unfinished = parseUnfinished(entry.unfinished);
     const unfinishedCount =
@@ -943,6 +999,17 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       ...(entry.unreadableRecords !== undefined
         ? { unreadableRecords: entry.unreadableRecords as number }
         : {}),
+      ...(entry.unreadableFolders !== undefined
+        ? { unreadableFolders: entry.unreadableFolders as number }
+        : {}),
+      ...(limit !== undefined
+        ? {
+            searchLimit: {
+              read: limit.read as number,
+              found: (limit.found as number | null) ?? null,
+            },
+          }
+        : {}),
     };
   }
   const discovery = parseAnalyticsDiscovery(response.discovery);
@@ -958,6 +1025,10 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     ...(discovery ? { discovery } : {}),
     ...(sessions ? { sessions } : {}),
     ...(reader ? { reader } : {}),
+    ...(Number.isSafeInteger(response.unansweredMounts) && (response.unansweredMounts as number) > 0
+      ? { unansweredMounts: Math.min(response.unansweredMounts as number, 1000) }
+      : {}),
+    ...(response.stalled === true ? { stalled: true } : {}),
   };
 }
 
