@@ -12,7 +12,7 @@ import re
 import time
 import uuid
 
-from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command, private_temporary
+from app_update_common import NO_AUTO_UPDATE, UpdateFailure, command, diagnostics, private_temporary
 
 
 MUSE_WARM_PROMPT = "Reply with the word: ok"
@@ -30,10 +30,13 @@ def gui_command(action, timeout):
     deadline = time.monotonic() + timeout
 
     def run(argv, maximum=5, capture=False, errors=False):
+        # launchctl calls are plumbing: the row records the app's own command instead.
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise UpdateFailure("timeout")
-        return command(argv, timeout=min(maximum, remaining), capture=capture, errors=errors)
+        return command(argv, timeout=min(maximum, remaining), capture=capture, errors=errors, quiet=True)
+
+    shown = {"muse-warm": "muse exec (GUI session)", "cursor-update": "cursor-agent update (GUI session)"}[action]
 
     domain = "gui/" + str(os.getuid())
     try:
@@ -44,13 +47,14 @@ def gui_command(action, timeout):
     service = domain + "/" + label
     with private_temporary() as temporary:
         error_path = temporary / "stderr"
+        output_path = temporary / "stdout"
         plist = temporary / "agent.plist"
         plist.write_bytes(plistlib.dumps({
             "Label": label, "ProgramArguments": actions[action],
             "WorkingDirectory": str(temporary), "RunAtLoad": True,
             "ProcessType": "Interactive", "KeepAlive": False,
             "AbandonProcessGroup": False, "ExitTimeOut": 1,
-            "StandardOutPath": "/dev/null", "StandardErrorPath": str(error_path),
+            "StandardOutPath": str(output_path), "StandardErrorPath": str(error_path),
             "EnvironmentVariables": dict(NO_AUTO_UPDATE),
         }))
         plist.chmod(0o600)
@@ -79,29 +83,42 @@ def gui_command(action, timeout):
                 state = re.search(r"^\s*state = (.+)$", output, re.M)
                 exited = re.search(r"^\s*last exit code = (\d+)", output, re.M)
                 if state and state[1].strip() in ("not running", "exited") and exited:
-                    if int(exited[1]) == 0:
+                    code = int(exited[1])
+                    if code == 0:
+                        diagnostics().ran(actions[action], 0, label=shown)
                         return
-                    try:
-                        with error_path.open("rb") as stream:
-                            diagnostic = stream.read(65536).decode("utf-8", "replace").lower()
-                    except OSError:
-                        diagnostic = ""
-                    if "keychain" in diagnostic or "errsecinteractionnotallowed" in diagnostic:
-                        raise UpdateFailure("mac_keychain_locked")
-                    raise UpdateFailure()
+                    # The app's own words and exit code, so a refusal (Cursor's 401, a locked
+                    # Keychain) is classified on the Mac as it is on the other computers.
+                    text = "\n".join(part for part in (_tail(output_path), _tail(error_path)) if part)
+                    diagnostics().ran(actions[action], code, text, label=shown)
+                    lowered = text.lower()
+                    if "keychain" in lowered or "errsecinteractionnotallowed" in lowered:
+                        raise UpdateFailure("mac_keychain_locked", text, code)
+                    raise UpdateFailure("update_failed", text, code)
                 time.sleep(min(.2, max(0, deadline - time.monotonic())))
         finally:
             # launchd owns the process group. Bootout stops it and its children,
             # including a timed-out Muse warm, before its private cwd is removed.
             # Also attempt cleanup when bootstrap returned an ambiguous failure.
             try:
-                command(["/bin/launchctl", "bootout", service], timeout=10)
+                command(["/bin/launchctl", "bootout", service], timeout=10, quiet=True)
             except UpdateFailure:
                 # An exited/removed service has nothing left to stop. If it is
                 # still registered, cleanup failed and the row must say so.
                 try:
-                    command(["/bin/launchctl", "print", service], timeout=5)
+                    command(["/bin/launchctl", "print", service], timeout=5, quiet=True)
                 except UpdateFailure:
                     pass
                 else:
                     raise UpdateFailure("mac_gui_cleanup_failed") from None
+
+
+def _tail(path, limit=65536):
+    """The last bytes one of the agent's private output files holds, as text."""
+    try:
+        with pathlib.Path(path).open("rb") as stream:
+            size = stream.seek(0, 2)
+            stream.seek(max(0, size - limit))
+            return stream.read(limit).decode("utf-8", "replace")
+    except OSError:
+        return ""
