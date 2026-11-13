@@ -947,6 +947,19 @@ ledger 2.5 MB compressed. Activity part of an Analytics answer (store query plus
 of 5 on the VM: 24H 11 ms, 7D 25 ms, 30D 49 ms, 90D 107 ms, two years 184 ms (store query 49 ms).
 A minute pass with ten changed cells: 2.4 ms. Reopen: 0.5 s.
 
+### 12.8 The retired Codex cache
+
+`cache/codex-native-usage-v1.json` (version 1, last written 2026-10-01, no longer read by the code)
+holds every Codex usage record the old collector read: on the dashboard VM 491,361 records from
+2026-01-29 to 2026-10-01, and 5,150 of its 5,153 rollout files are gone, so it is the only copy. The
+backfill's first step imports it once (`activityImportCodexV1`, `src/legacy.rs`): read as a stream one
+rollout file at a time, folded into session-hour cells and sessions, raw ids hashed, paths dropped.
+Its `inputTokens` include the cached input (in every one of the 490,042 records with cache reads,
+input is at least the cache reads; the parser stopped counting them twice on 2026-10-01), so uncached
+input is `inputTokens - cacheReadTokens - cacheCreationTokens`. It carries no cost: the cells hold
+none and the page prices them at today's rates. Measured on a copy: 4.6 s, 95 MB process memory,
+9,056 cells over 159 days, 4,891 sessions; a second run imports nothing. The file is left in place.
+
 ## Notes for the lead
 
 - **L1. CRC32 rather than CRC32C.** The brief named CRC32C; Puppet Master's `SeglogFrameV2` uses

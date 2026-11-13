@@ -1462,6 +1462,10 @@ export class AccountAnalyticsActivityService {
               })
             );
         await write(reports);
+        // The retired Codex cache: the only copy of Codex usage whose rollout files are gone.
+        const legacy = path.join(scope, 'cache', 'codex-native-usage-v1.json');
+        if (path.isAbsolute(scope) && fs.existsSync(legacy))
+          await store.activityImportCodexV1(legacy, 'ubuntu').catch(() => undefined);
         await store.setMeta('activity_import', 'done');
       }
       const passes = Number((await store.getMeta('ts:activity_backfill_passes')) ?? 0) + 1;

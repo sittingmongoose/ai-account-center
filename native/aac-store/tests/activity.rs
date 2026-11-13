@@ -543,3 +543,63 @@ fn a_failed_read_is_a_state_and_never_a_zero() {
     let counts = call(&engine, "activityCounts", json!({}));
     assert_eq!(counts["scans"], 2);
 }
+
+#[test]
+fn the_retired_codex_cache_is_imported_once_with_cached_input_taken_out() {
+    let dir = temp_dir("act-legacy");
+    let engine = open(&dir);
+    let file = dir.join("codex-native-usage-v1.json");
+    let at = |h: u64| iso(T0 + h * H);
+    let body = json!({
+        "version": 1, "includeCliproxySessions": false, "generatedAt": 1,
+        "files": {
+            "/gone/rollout-a.jsonl": { "path": "/gone/rollout-a.jsonl", "size": 1, "mtimeMs": 1, "entries": [
+                { "inputTokens": 1000, "outputTokens": 50, "cacheCreationTokens": 0, "cacheReadTokens": 900, "model": "gpt-5.6-sol",
+                  "sessionId": "019a-raw-session-a", "timestamp": at(3), "projectPath": "/private/project", "version": "0.1", "target": "codex" },
+                { "inputTokens": 400, "outputTokens": 10, "cacheCreationTokens": 0, "cacheReadTokens": 300, "model": "gpt-5.6-sol",
+                  "sessionId": "019a-raw-session-a", "timestamp": at(3), "projectPath": "/private/project", "version": "0.1", "target": "codex" }
+            ]},
+            "/gone/rollout-b.jsonl": { "path": "/gone/rollout-b.jsonl", "size": 1, "mtimeMs": 1, "entries": [
+                { "inputTokens": 70, "outputTokens": 7, "cacheCreationTokens": 0, "cacheReadTokens": 0, "model": "gpt-6-astra",
+                  "sessionId": "019a-raw-session-b", "timestamp": at(30), "projectPath": "/private/other", "version": "0.1", "target": "codex" }
+            ]}
+        }
+    });
+    std::fs::write(&file, body.to_string()).unwrap();
+    let args = json!({ "path": file.to_str().unwrap(), "computer": "ubuntu" });
+    let first = call(&engine, "activityImportCodexV1", args.clone());
+    assert_eq!(first["imported"], true, "{first}");
+    assert_eq!(first["records"], 3);
+    // uncached input: 1000 - 900 + 400 - 300 = 200 in hour 3; 70 in hour 30
+    let range = call(&engine, "activityRange", json!({ "fromMs": T0, "toMs": T0 + 2 * D }));
+    let rows: Vec<(u64, u64, u64)> = range["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r[0].as_u64().unwrap(), r[5].as_u64().unwrap(), r[8].as_u64().unwrap()))
+        .collect();
+    assert_eq!(rows, vec![(T0 + 3 * H, 200, 1200), (T0 + 30 * H, 70, 0)]);
+    assert!(
+        range["rows"][0][10].is_null(),
+        "no cost is invented; the server prices it"
+    );
+    assert_eq!(range["sessions"]["total"], 2);
+    // no raw session id or path is stored
+    let dump = format!("{:?}", activity::dump_cells(&engine).unwrap());
+    assert!(!dump.contains("raw-session") && !dump.contains("/private"));
+    let again = call(&engine, "activityImportCodexV1", args);
+    assert_eq!(again["imported"], false);
+    // another version is refused
+    let mut v2 = body.clone();
+    v2["version"] = json!(2);
+    let other = dir.join("v2.json");
+    std::fs::write(&other, v2.to_string()).unwrap();
+    assert!(
+        ops::call(
+            &engine,
+            "activityImportCodexV1",
+            &json!({ "path": other.to_str().unwrap(), "computer": "ubuntu" }).to_string()
+        )
+        .is_err()
+    );
+}

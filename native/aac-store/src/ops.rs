@@ -215,6 +215,15 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
             result
         }
         "activityRange" => activity::range(engine, &parse(args)?)?,
+        "activityImportCodexV1" => {
+            #[derive(Deserialize)]
+            struct ImportArgs {
+                path: String,
+                computer: String,
+            }
+            let a: ImportArgs = parse(args)?;
+            crate::legacy::import_codex_v1(engine, std::path::Path::new(&a.path), &a.computer)?
+        }
         "activitySources" => activity::sources(engine, &parse(args)?)?,
         "activityOldest" => activity::oldest(engine)?,
         "activityCounts" => activity::counts(engine)?,

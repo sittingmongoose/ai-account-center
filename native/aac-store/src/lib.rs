@@ -14,6 +14,7 @@ pub mod error;
 pub mod event;
 pub mod frame;
 pub mod fsx;
+pub mod legacy;
 pub mod log;
 pub mod msgpack;
 pub mod ops;

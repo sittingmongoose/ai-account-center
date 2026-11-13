@@ -109,6 +109,17 @@ function reportState(
   cause: string | null;
 } {
   const detail = source.detail ?? '';
+  // A reader that names a fixed cause word (the discovery rebuild) passes it through.
+  const named = (source as { cause?: unknown }).cause;
+  const fixed = typeof named === 'string' && /^[a-z0-9_:.-]{1,64}$/.test(named) ? named : null;
+  const state = source.state as string;
+  if (
+    state === 'scan_failed' ||
+    state === 'unreadable' ||
+    state === 'installed_no_logs' ||
+    state === 'no_reader'
+  )
+    return { state: hasCells ? 'partial' : (state as UsageReportState), cause: fixed };
   switch (source.state) {
     case 'ok':
       return { state: hasCells ? 'ok' : 'no_usage', cause: null };
@@ -126,10 +137,10 @@ function reportState(
       if (hasCells) return { state: 'partial', cause: null };
       return {
         state: source.host === 'ubuntu' ? 'scan_failed' : 'unreadable',
-        cause: /timed out/i.test(detail) ? 'timeout' : null,
+        cause: fixed ?? (/timed out/i.test(detail) ? 'timeout' : null),
       };
     default:
-      return { state: 'scan_failed', cause: null };
+      return { state: 'scan_failed', cause: fixed };
   }
 }
 

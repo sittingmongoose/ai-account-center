@@ -210,6 +210,13 @@ export class AacStore {
   activitySources(query: { fromMs: number; toMs: number }): Promise<ActivitySources> {
     return this.call('activitySources', query);
   }
+  /**
+   * Imports the retired `cache/codex-native-usage-v1.json` once (Codex usage whose rollout files are
+   * gone): Rust reads it as a stream, takes the cached input out of input, adds or raises only.
+   */
+  activityImportCodexV1(file: string, computer: string): Promise<Record<string, unknown>> {
+    return this.call('activityImportCodexV1', { path: file, computer });
+  }
   activityOldest(): Promise<number | null> {
     return this.call<number | null>('activityOldest');
   }
