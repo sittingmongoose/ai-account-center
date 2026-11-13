@@ -105,8 +105,11 @@ installer, whose initialization can delete the installation root.
 
 On Windows the version is read without running anything: the launcher
 (`cursor-agent.ps1`) runs `versions\<YYYY.MM.DD-commit>\node.exe index.js` for the
-newest-dated folder, so detection picks that folder the same way (two folders
-from the same day fall back to the launcher's `--version`). The update runs the
+newest-dated folder (by date alone; read on both Windows PCs, 2026-11-13), so
+detection picks that folder the same way (two folders from the same day fall back
+to the launcher's `--version`, and when a Group Policy refuses the launcher, to the
+most recently written of them). The launcher ends with `exit $LASTEXITCODE`, so a
+failed update is a failed run. The update runs the
 launcher exactly as Cursor's own `cursor-agent.cmd` does:
 `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File cursor-agent.ps1 update`.
 `-ExecutionPolicy Bypass` sets the policy for that one process only and never
@@ -115,17 +118,27 @@ scope Undefined, so Restricted) refused the old `& cursor-agent.ps1 --version`
 call and the row read "Unknown: the readiness check could not run". A Group
 Policy setting still overrides the process scope; then AAC runs the launcher's
 last step directly (the chosen folder's `node.exe index.js update`, with the
-`CURSOR_INVOKED_AS` variable the launcher sets) and, if that cannot run either,
-reports `action_required` / `policy_blocked`. An older `.cmd`-only install keeps
+`CURSOR_INVOKED_AS` variable the launcher sets). A direct run that works is what
+the row shows as "what ran"; one that fails is `action_required` /
+`policy_blocked` too (reason `direct_failed`), with its own output, unless that
+output is a sign-in refusal. Only PowerShell's policy words count
+(`PSSecurityException`, `FullyQualifiedErrorId : UnauthorizedAccess`, "running
+scripts is disabled", "is not digitally signed"), never an
+`UnauthorizedAccessException`. An older `.cmd`-only install keeps
 PowerShell's call operator, which runs no script file.
 
 Cursor's updater authenticates. When it refuses the CLI's sign-in (HTTP 401,
 `[unauthenticated]`, `ERROR_NOT_LOGGED_IN`, as on the owner's Windows PC on 2026-11-13) the
 row is `action_required` / `cursor_signin_needed` with cause `auth_required`:
 sign in with `cursor-agent login` on that computer. The words come from the
-updater's own output, or from its newest session log under the temp folder
-(`cursor-agent-logs-*/session-*.log`, read in memory only). AAC never stores,
-reads or asks for credentials.
+updater's own output (stdout and stderr on every computer; on the Mac the GUI
+agent's own output files and the exit code launchd reports). Its output always
+decides: Cursor's session log is read only when the run printed nothing, only in
+this user's own folder (`cursor-agent-logs-<user>`, owned by this account), only a
+log whose name says it started during this run, and only when it records the
+update's own failure (`Update failed:`) with the sign-in words. Without such a log
+the row keeps its real failure and notes `signin_undetermined`. Logs are read in
+memory only. AAC never stores, reads or asks for credentials.
 
 Its native updater owns in-use staging. A remaining `.new` tree or
 pending launcher reports `action_required` / `cursor_update_staged`, with the
@@ -134,7 +147,11 @@ Mac runs the native updater through the GUI LaunchAgent below because older
 Cursor launchers need the login Keychain even for read-only CLI commands. Mac
 detection can read the official symlink's release directory without credentials.
 Detection also records which copy it chose: whether it is on PATH, how many
-copies PATH has and which comes first. A `cursor-agent` only elsewhere on PATH
+copies PATH has and which comes first (on the Mac's effective PATH). When another
+copy comes first, a bare `cursor-agent` runs that one: AAC still updates Cursor's
+own install, but the row is `action_required` / `cursor_shadowed` (cause
+`shadowed`), never `updated`, and names the copy that runs (and its version, read
+on Linux and the Mac). A `cursor-agent` only elsewhere on PATH
 (another installer's copy) is `unsupported` with reason `unmanaged_location`,
 not "not installed". All versions are bounded and every row reports
 `previousVersion` and `version`. AAC never reads or writes `~/.cursor` and never
@@ -152,12 +169,18 @@ installs Google's newest native CLI (T3 `AntigravityInstallation.ts`
 [315b06c5ec](https://github.com/pingdotgg/t3code/commit/315b06c5ec)). AAC learns the
 target from T3's own offer, the `version` of a `provider.install.subscribe`
 state: subscribing starts T3's background release check, so the first state can
-say `null`, and AAC waits up to 15 seconds for a version. Without one it reads
-Google's CLI channel (`.../manifests/<linux_amd64|darwin_arm64|windows_amd64>.json`,
-the manifest T3's `antigravityCliRelease.ts` reads). An installed version at or
-above the target is `current` and start is never called (T3 4616 would
-reinstall the same CLI). Neither source answering is `unknown` /
-`antigravity_acp_offer_unknown`.
+say `null`, and AAC waits up to 15 seconds for a version. Only without one, or for
+the sign-in guard below, it reads Google's CLI channel
+(`.../manifests/<linux_amd64|darwin_arm64|windows_amd64>.json`, the manifest T3's
+`antigravityCliRelease.ts` reads), through the same killable child as the ZCode
+release page: at most 10 seconds or the row's deadline, whatever the server does.
+An installed version at or above the target is `current` and start is never called
+(T3 4616 would reinstall the same CLI). Neither source answering is `unknown` /
+`antigravity_acp_offer_unknown`. After start, `updated` needs the active runtime to
+be newer than before and at least the version the operation named: when T3 only
+re-checked the installed runtime (a withdrawn release, its own manifest read
+failed, a rollback) the row is `current` with the note `reverified`, and models are
+not refreshed.
 
 AAC installs on an **enabled** Antigravity instance. T3 lists its disabled
 default `antigravity` instance first and refreshes models after an install only
@@ -165,9 +188,11 @@ for the instance the install ran on, and only when it is enabled; installing on
 the disabled one left the Mac and VM model lists stale on 2026-11-13. After a
 successful install AAC calls `server.refreshProviders {instanceId, refreshModels:
 true}` for every enabled Antigravity instance, one request each, so another
-provider's refresh failure cannot hide this one's. (The same call without
-`instanceId` would also refresh every other provider and stop at the first
-failure.) A refresh refused for sign-in, or an instance that reads
+provider's refresh failure cannot hide this one's, and every instance is asked
+even after one needs a sign-in. (The same call without `instanceId` would also
+refresh every other provider and stop at the first failure.) Only the refusal's
+error tag and detail are read, never an instance or operation name. A refresh
+refused for sign-in, or an instance that reads
 `unauthenticated`, makes the row `action_required` /
 `antigravity_acp_signin_needed` with the new version; any other refresh failure
 keeps `updated` / `antigravity_acp_models_stale`.
@@ -179,13 +204,17 @@ its sign-in through Credential Manager. So on Linux and the Mac (owner decision
 B, 2026-11-13: keep Nas1 and the Mac on 1.4.5 until T3 carries the sign-in over)
 a move from the runtime pair to the native CLI is not installed: the row is
 `action_required` / `antigravity_acp_signin_hold`, cause `signin_needed`, with the
-offered version as `heldVersion`. Install it from T3's Antigravity settings when
+native version as `heldVersion`. The hold checks the migration itself, not only
+T3's offer: T3's start re-reads Google's channel, so a stale harness offer (1.4.6)
+with a native channel (1.5.8) is held too, and so is any start when the channel
+cannot be read (reason `migration_unchecked`). Install it from T3's Antigravity settings when
 you can sign in again there. Windows makes the move. The hosts that keep a
 sign-in are listed in `app_update_antigravity_release.py`.
 
 **Order.** Antigravity ACP runs after T3's own row. When T3 replaced its desktop
 in this run (Mac, Windows), AAC waits, bounded, for the new server to publish its
-endpoint with the new version and answer. On Ubuntu and Nas1 the new server only
+endpoint with the new version and answer; a record without a version is not
+ready. On Ubuntu and Nas1 the new server only
 starts after the job, so the row is `action_required` / `t3_restart_pending` and
 nothing uses the previous server's offer; the next Update apps reconciles it.
 
@@ -898,7 +927,7 @@ replace anything.
   with its code); a failed reopen after a good install is `restart_failed` with the
   new version. The adapters live in the global npm prefix `%APPDATA%\npm`. Each
   package behind its latest installs in its own run, `node npm-cli.js install
-  --global --prefix %APPDATA%\npm <package>@latest` without a shell (5 minutes at
+  --global --prefix %APPDATA%\npm <package>@<version>` without a shell (5 minutes at
   most), so one never blocks or rolls back the other, and a current package is never
   reinstalled. Windows cannot replace files a running adapter holds, so a package
   is `in_use` and not installed while any process runs from its package folder: a
@@ -920,20 +949,34 @@ replace anything.
 
 **Which copy.** Each adapter's owner is the copy T3 actually runs: the package
 named by an enabled T3 provider instance's `config.commandPath` or
-`config.commandArgs` (symlinks resolved; environment values, which can be
-secrets, are never read), else the adapter command first on PATH (the Mac adds
+`config.commandArgs` (environment values, which can be secrets, are never read),
+every distinct one when several instances run several copies, else the adapter
+command first on PATH (the Mac adds
 `/etc/paths`, `/opt/homebrew/bin` and `/usr/local/bin`), else the usual folder
 (`~/.local`, `/opt/homebrew`, `%APPDATA%\npm`), else the first other copy found.
-The owner's layout names its installer: npm (`<prefix>/lib/node_modules`, or
+A path is read as written first: pnpm's global `node_modules/<package>` is a link
+into its `.pnpm` store, and following it would name the store as the install
+(links are followed only when the written path names no package, as for a bin
+link). The owner's layout names its installer: npm (`<prefix>/lib/node_modules`, or
 `<prefix>\node_modules` on Windows), pnpm (`.../pnpm/global/<n>/node_modules`) or
-bun (`~/.bun/install/global/node_modules`). npm runs as
-`node npm-cli.js install --global --prefix <owner prefix> <package>@latest`, with
-T3's own `node` when its config names one; pnpm as `pnpm add --global
---global-dir <dir>`; bun with `BUN_INSTALL_GLOBAL_DIR`. A yarn owner, or a
-missing pnpm/bun, is `unsupported`. An owner folder this account cannot write
-(a system install) is `action_required` / `prefix_not_writable`, and nothing is
-run as another user. Verification reads the owner's copy. When it did not move
-but another copy changed or appeared, the row is `failed` / `wrong_prefix`
+bun (`~/.bun/install/global/node_modules`); a plain folder elsewhere is `other`.
+Every behind copy installs the exact version the public registry named, so a
+mirror that cannot serve it fails instead of installing another one. npm runs as
+`node npm-cli.js install --global --prefix <owner prefix> <package>@<version>`, with
+T3's own `node` when its config names one (on Windows too; the prefix's own Node
+comes before PATH's); pnpm as `pnpm add --global --global-dir <dir>` with
+`PNPM_HOME` (its bin folder) on PATH, and on Windows through node and pnpm's own
+`pnpm.cjs`, never `pnpm.cmd` through cmd.exe; bun with `BUN_INSTALL_GLOBAL_DIR`. A
+yarn or `other` owner, or a missing pnpm/bun, is `unsupported`. Whether this
+account can write an owner folder is tested by creating and removing a file there
+(`os.access` cannot see a Windows ACL): one it cannot is `action_required` /
+`prefix_not_writable`, nothing runs, and nothing runs as another user. npm's EPERM
+or EACCES on creating something in a package nothing uses is the same; removing or
+renaming a file a program holds (rmdir, unlink, rename) or EBUSY is `in_use`.
+Verification reads every owner's copy: a package is updated only when each copy T3
+runs reached the registry's version. A copy that moved to a lower or other version
+is `failed` / `registry_mismatch`. When none moved but another copy changed or
+appeared, the row is `failed` / `wrong_prefix`
 (cause `wrong_prefix`), and its diagnostics name both folders and versions:
 "npm updated the package in an unused prefix; the active one is unchanged."
 On Ubuntu and Nas1 the owner's `t3-acp-update.service` runs only when every
@@ -971,21 +1014,30 @@ row ended as it did instead of "The app update failed":
 
 | Field | What it holds |
 | --- | --- |
-| `cause` | One fixed class: `none`, `auth_required`, `signin_needed`, `policy_blocked`, `wrong_prefix`, `not_writable`, `lost_session_reply`, `t3_absent`, `t3_not_ready`, `t3_restart_pending`, `installer_failed`, `in_use`, `timeout` or `unknown` |
+| `cause` | One fixed class: `none`, `shadowed`, `auth_required`, `signin_needed`, `policy_blocked`, `wrong_prefix`, `not_writable`, `lost_session_reply`, `t3_absent`, `t3_not_ready`, `t3_restart_pending`, `installer_failed`, `in_use`, `timeout` or `unknown` |
 | `reason` | One fixed word naming the step or refusal (`http_401`, `execution_policy`, `owner_unchanged`, `reply_empty`, `previous_server`, `token_storage_change`, `no_enabled_instance`; for `unknown`, the message code or probe failure) |
-| `command`, `exitCode` | What ran last: the program's own name and fixed arguments with home folders as `~`, never a script body or an encoded command; its exit code |
+| `command`, `exitCode` | The command that decided the row: for a clean row the last one that succeeded (a fallback that worked, not the attempt it replaced), otherwise the last one that failed. Read-only probes (versions, service states, launchctl plumbing) are never it. The program's own name and fixed arguments with home folders as `~`, never a script body or an encoded command; its exit code |
 | `phases` | Milliseconds per step (`checking`, `updating`, `t3_ready`, `offer`, `install`, `verify`, `refresh_models`, ...) |
 | `owner` | The copy used and how it was chosen: manager, prefix or executable (home-relative), source (`t3-config`, `path`, `default`, `found`, `versions-folder`), whether it is on PATH and which copy comes first, the Antigravity runtime kind and where its target came from, and other copies with their versions |
 | `notes` | Up to six fixed words (`policy_fallback_direct`, `direct_install`, `refresh_failed`, ...) |
 | `tail` | For a row that did not finish cleanly: the last 12 lines (at most 1200 characters) of the failing command's stderr |
 
 The tail passes the same scrubber twice, in the helper and at the dashboard
-boundary: control characters and ANSI codes, `Bearer`/`Basic` values, any
-`token`/`secret`/`password`/`authorization`/`cookie`/`session id` key's value,
-JWTs, npm/GitHub/API key shapes, URL credentials and query strings, email
-addresses, runs of 40 or more token characters, the home folder (`~`) and other
-users' folders (`/home/<user>`, `/Users/<user>`, `C:\Users\<user>`). T3 session
-commands never record output. Stderr is captured into an unnamed temporary file,
+boundary. It drops whole credential lines after their marker (`Cookie:`,
+`Set-Cookie:`, `Authorization:`, npm's `_auth`/`_authToken`/`_password` including
+`//host/:` forms, any `token`/`secret`/`password`/`passphrase`/`credential`/`session
+id` key, `PRIVATE KEY` lines), `Bearer`/`Basic` values, `--password`/`--token`
+flag values, `code=`, one-time codes, JWTs, npm/GitHub/API/AWS key shapes, URL
+credentials and query strings, email addresses and `user@host`, 32+ hex and 40+
+token-character runs and random-looking runs with `/`, ANSI codes, control
+characters, the home folder (`~`, any letter case) and other users' folders up to
+the next separator (`/home/<user>`, `/Users/<user>`, `C:\Users\<user>`, names
+with spaces included). Every pattern runs on at most 48 lines cut to 600
+characters with bounded repeats, so it stays linear (a 64 KiB line takes about a
+millisecond). T3 session commands never record output. Every PowerShell script
+first sets `[Console]::OutputEncoding` to UTF-8: Windows PowerShell 5.1 otherwise
+writes in the OEM code page and a `C:\Users\René` path or a localized error came
+back mangled. Stderr is captured into an unnamed temporary file,
 never a pipe, so a detached grandchild cannot hold a run open.
 
 The dashboard keeps only these fields with bounded shapes. Rows from older
@@ -993,7 +1045,8 @@ helpers have no `diagnostics`. The digest-bound rollback view
 (`dashboard-job.json`) drops them, and `wrong_prefix` and `prefix_not_writable`
 show there with words older packages know; the expanded job keeps them, within
 its own 512 KiB limit. The page's cell names the cause ("Sign-in needed",
-"Blocked by policy", "Updated the wrong copy", "T3 reply lost", "T3 not ready")
+"Blocked by policy", "Another copy runs", "Updated the wrong copy", "T3 reply
+lost" (only for an empty or unreadable reply), "T3 not ready")
 and its details add the cause, what ran, which copy, the step times and the
 output.
 
