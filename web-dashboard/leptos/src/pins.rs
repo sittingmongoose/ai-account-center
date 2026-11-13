@@ -707,17 +707,12 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     } else {
         waits.into_iter().collect_view().into_any()
     };
-    // A heartbeat carries the last doing line forward: when the human update is older, the line says its own age.
+    // A heartbeat carries the last doing line forward: when the human update is older, the Now line says the human
+    // update's age, whether it is the summary, a reported `now` or a carried doing line (review 1, L4). A heartbeat
+    // never dates the words it carries.
     let ages = two_ages(&p.u);
     let now_line = now_text(p);
-    let now_is_old = ages.is_some()
-        && now_line.as_ref().is_some_and(|n| {
-            p.r.now.is_some()
-                || p.u
-                    .summary
-                    .as_deref()
-                    .is_some_and(|s| first_sentence(s, 140) == *n || s.trim() == n.trim())
-        });
+    let now_is_old = ages.is_some() && now_line.is_some();
     let now_view = match now_line {
         Some(n) => view! { <span>{n}</span> }.into_any(),
         None => view! { <span class="q3">"Not reported"</span> }.into_any(),

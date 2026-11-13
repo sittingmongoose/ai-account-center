@@ -68,8 +68,8 @@ function pins() {
   const iso = (ago) => new Date(now - ago * 1000).toISOString();
   return {
     asOfMs: now,
-    head: '3 pinned in T3 · 1 looping · 1 waiting on you',
-    counts: { pinned: 3, looping: 1, waitingOnYou: 1 },
+    head: '4 pinned in T3 · 1 looping · 1 waiting on you',
+    counts: { pinned: 4, looping: 1, waitingOnYou: 1 },
     machineProblems: [],
     statusProblems: [],
     updates: [
@@ -101,6 +101,19 @@ function pins() {
           { on: 'agent', text: "The fix worker's rebuild.", short: 'Rebuild after the GLM fixes', task: 'GLM-FIXES', from: 'tasks' },
         ],
         reported: { state: 'blocked', writer: 'vm.settings-lead' },
+      }),
+      update({
+        id: 'pin-carried',
+        title: 'Carried doing line',
+        who: 'Puppet Master · rebase-worker · Opus 5.5 high',
+        // The hook carries thread.json's doing line; it differs from the 20-hour-old summary.
+        now: 'Rebasing the lane branch onto main.',
+        summary: 'Batch 3 is in review.',
+        blocked: { text: 'None.', waitingOnYou: false },
+        updated: { text: 'Updated 1 min ago', at: iso(60), ageSeconds: 60 },
+        statusUpdated: { text: 'Updated 20 hours ago', at: iso(20 * 3600), ageSeconds: 20 * 3600 },
+        heartbeat: { text: 'Active 1 min ago', at: iso(60), ageSeconds: 60 },
+        reported: { state: 'working', writer: 'vm.rebase-worker' },
       }),
       update({
         id: 'pin-scout',
@@ -303,6 +316,14 @@ export const tests = {
       const n = facts.indexOf('Now');
       await t.check(`${format.name}: the carried Now line says its age`, /^as of 35 h ago$/.test(facts[n + 2]), facts[n + 2]);
       if (format.mobile) await t.shot('waits-and-ages-phone', 'phone: the waits and the two ages in the sheet');
+      // A carried doing line that differs from the summary is dated the same way (review 1, L4).
+      if (format.mobile) await t.page.keyboard.press('Escape');
+      await t.page.locator('.c2-row', { hasText: 'Carried doing line' }).click();
+      await t.page.waitForFunction((s) => document.querySelector(`${s} .c2-name`)?.textContent === 'Carried doing line', sheet);
+      const carried = await t.page.$$eval(`${sheet} .fx > *`, (els) => els.map((e) => e.textContent.trim()));
+      const c = carried.indexOf('Now');
+      await t.check(`${format.name}: a carried doing line says the summary's age`, carried[c + 1] === 'Rebasing the lane branch onto main.' && carried[c + 2] === 'as of 20 h ago', JSON.stringify(carried.slice(c, c + 3)));
+      if (format.mobile) await t.page.keyboard.press('Escape');
       // The roster row's corner says the summary's age, never the heartbeat's 2 min.
       if (format.mobile) await t.page.keyboard.press('Escape');
       const corner = (await t.page.locator('.c2-row', { hasText: 'Settings managers' }).locator('.c2-age').textContent()).trim();
