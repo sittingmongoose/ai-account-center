@@ -38,21 +38,29 @@ export function parityView(answer: Record<string, unknown>): unknown {
         kind,
         {
           state: entry.state,
-          partial: entry.partial ?? false,
-          readFailures: entry.readFailures ?? 0,
+          // The scanner names zcode's failed open as a read failure (FIX-ROUND-BIG 3); Python
+          // reports the error state alone.
+          partial: kind === 'zcode' && entry.state === 'error' ? false : (entry.partial ?? false),
+          readFailures: kind === 'zcode' && entry.state === 'error' ? 0 : (entry.readFailures ?? 0),
           walUnread: entry.walUnread ?? false,
           unreadable: entry.unreadable ?? false,
           replacedFiles: [...((entry.replacedFiles as string[]) ?? [])].sort(),
           // The scanner keys Codex logs by conversation and Muse logs by session (one owner per
           // conversation across every folder, FIX-ROUND-BIG 1 and 2); Python keys them by path.
           // Those prints are compared by value.
+          // Of identical copies the scanner reads one (the newest), Python each: their content,
+          // not their times or count, is compared.
           fingerprints: BY_VALUE.has(kind)
-            ? Object.values((entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>)
-                .map((print) => {
-                  const { msgThrough: _sent, ...rest } = print;
-                  return rowKey(rest);
-                })
-                .sort()
+            ? [
+                ...new Set(
+                  Object.values(
+                    (entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>
+                  ).map((print) => {
+                    const { msgThrough: _sent, mtimeMs: _time, ...rest } = print;
+                    return rowKey(rest);
+                  })
+                ),
+              ].sort()
             : Object.fromEntries(
                 Object.entries(
                   (entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>
@@ -76,12 +84,45 @@ export function rustParity(
   env: Record<string, string | undefined>
 ): void {
   if (!SCAN_BIN || request.zcodeRecords) return;
-  const output = execFileSync(SCAN_BIN, [], {
-    input: JSON.stringify(request),
-    encoding: 'utf8',
-    timeout: 30_000,
-    maxBuffer: 8 * 1024 * 1024,
-    env: { ...process.env, HOMEDRIVE: undefined, HOMEPATH: undefined, ...env },
-  });
-  expect(parityView(JSON.parse(output) as Record<string, unknown>)).toEqual(parityView(python));
+  const run = (input: Record<string, unknown>) =>
+    JSON.parse(
+      execFileSync(SCAN_BIN, [], {
+        input: JSON.stringify(input),
+        encoding: 'utf8',
+        timeout: 30_000,
+        maxBuffer: 8 * 1024 * 1024,
+        env: { ...process.env, HOMEDRIVE: undefined, HOMEPATH: undefined, ...env },
+      })
+    ) as Record<string, unknown>;
+  // Prints the server saved from Python carry Python's path keys; the scanner keys Codex and Muse
+  // by conversation. They reach the scanner as the server would key them: the print with the same
+  // content, under the scanner's own key for that file.
+  const prior = (request.fingerprints ?? {}) as Record<
+    string,
+    Record<string, Record<string, unknown>>
+  >;
+  const keyed = [...BY_VALUE].filter((kind) => Object.keys(prior[kind] ?? {}).length);
+  let translated = request;
+  if (keyed.length) {
+    const own = run({ ...request, fingerprints: {} });
+    const kinds = (own.kinds ?? {}) as Record<
+      string,
+      { fingerprints?: Record<string, Record<string, unknown>> }
+    >;
+    const content = (print: Record<string, unknown>) => `${print.size}:${print.head}:${print.tail}`;
+    const fingerprints = { ...prior };
+    for (const kind of keyed) {
+      const byContent = new Map(
+        Object.entries(kinds[kind]?.fingerprints ?? {}).map(([key, print]) => [content(print), key])
+      );
+      fingerprints[kind] = Object.fromEntries(
+        Object.values(prior[kind]).flatMap((print) => {
+          const key = byContent.get(content(print));
+          return key ? [[key, print]] : [];
+        })
+      );
+    }
+    translated = { ...request, fingerprints };
+  }
+  expect(parityView(run(translated))).toEqual(parityView(python));
 }
