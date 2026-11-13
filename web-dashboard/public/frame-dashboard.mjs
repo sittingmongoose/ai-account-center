@@ -66,6 +66,8 @@ export function createFrameDashboard({
 }) {
   let started = false;
   let stopped = false;
+  // The session this controller served is over (signed out, or ended under it); stop() follows when the page goes.
+  let ended = false;
   let authenticated = false;
   let busy = false;
   // `serverData` is the dashboard response as received; `data` is the copy the pages draw from (bridge.js).
@@ -99,7 +101,17 @@ export function createFrameDashboard({
   // Each new person-only step of the Claude sign-in renewal (a CAPTCHA, a missing mail) is raised once.
   const seenSignInNeeds = new Set();
 
-  const view = (key, json) => { if (!stopped) emit(key, json); };
+  // The controller's lifetime (Astra max M1). The old iframe took its pending work with it when it was removed; this
+  // controller stays in the window after its page has gone, so its work ends here instead: once the session is over or
+  // the controller stopped, nothing it queued, awaited or scheduled reaches the network (the browser would send it with
+  // the next session's cookie), draws a view, raises a toast or starts a timer. Requests in flight are aborted.
+  const lifetime = typeof AbortController === 'function' ? new AbortController() : null;
+  const gone = () => stopped || ended;
+  const dropped = () => Object.assign(new Error('This page has signed out.'), { dropped: true, status: 0, payload: null });
+  /** A timer that never fires for a controller that has gone, and is never set by one. */
+  const schedule = (fn, ms) => (gone() ? 0 : later(() => { if (!gone()) fn(); }, ms));
+
+  const view = (key, json) => { if (!gone()) emit(key, json); };
   /** Home and Accounts drew this JSON already: identical pushes change nothing (bridge.js pushModel). */
   const pushModel = (key, json) => {
     if (pushed.get(key) === json) return;
@@ -110,7 +122,7 @@ export function createFrameDashboard({
   // ---------------------------------------------------------------- feedback (bridge.js setBusy, toast, failure)
   function setBusy(value) { busy = value; view('busy', value ? 'true' : 'false'); }
   function toast(kind, title, body = '', ms = 4800) {
-    if (stopped) return;
+    if (gone()) return;
     if (onToast) onToast({ kind, title, body });
     emit('toast', JSON.stringify({ kind, title, body, ms }));
   }
@@ -124,6 +136,8 @@ export function createFrameDashboard({
   async function send(path, options = {}) {
     const rotates = String(options.method || 'GET').toUpperCase() === 'POST' && ROTATES_SESSION.has(path);
     while (rotation) await rotation;
+    // made, or still waiting, when the session ended: dropped before it reaches the network
+    if (gone()) throw dropped();
     let release = null;
     if (rotates) {
       rotation = new Promise((resolve) => { release = resolve; });
@@ -131,6 +145,7 @@ export function createFrameDashboard({
     }
     inFlight++;
     try {
+      if (gone()) throw dropped();
       return await sendNow(path, options);
     } finally {
       inFlight--;
@@ -141,13 +156,17 @@ export function createFrameDashboard({
   async function sendNow(path, options) {
     let response;
     try {
-      response = await fetchImpl(path, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
-      setOnline(true);
+      response = await fetchImpl(path, { credentials: 'same-origin', ...options, ...(lifetime ? { signal: lifetime.signal } : {}), headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
     } catch (cause) {
+      if (gone()) throw dropped();
       setOnline(false);
       throw Object.assign(new Error('The dashboard did not answer.'), { network: true, status: 0, payload: null, cause });
     }
+    // an answer that lands after the session ended belongs to no one: nothing acts on it
+    if (gone()) throw dropped();
+    setOnline(true);
     const payload = response.status === 204 ? null : await response.json().catch(() => null);
+    if (gone()) throw dropped();
     if (!response.ok) {
       // signed out from another browser (sign out other browsers, a password change, sign out all devices). A 401 that
       // is about the session ends it here; a refused password (wrong_password) is only an answer.
@@ -192,7 +211,7 @@ export function createFrameDashboard({
     copy: (value) => copy(value),
     open: (url) => { try { open(url); } catch {} },
     storage,
-    schedule: later,
+    schedule,
     cancel: cancelLater,
     now,
     // Turn off (or on): the saved check follows at once, then is read again (secureTransport moves with it)
@@ -217,7 +236,7 @@ export function createFrameDashboard({
       if (Array.isArray(payload?.profiles)) profiles = payload.profiles;
       return payload;
     },
-    schedule: later,
+    schedule,
     cancel: cancelLater,
     clock: now,
     changed: () => { if (authenticated) render(); },
@@ -401,7 +420,7 @@ export function createFrameDashboard({
     pushRefreshInterval(seconds, confirmed);
     renderAccounts();
     if (usageTimer) cancelEvery(usageTimer);
-    usageTimer = stopped ? 0 : every(() => { if (authenticated && !busy && !pendingActivation()) void refresh(); }, seconds * 1000);
+    usageTimer = gone() ? 0 : every(() => { if (authenticated && !busy && !pendingActivation()) void refresh(); }, seconds * 1000);
   }
   function pushRefreshInterval(seconds, confirmed) { view('refresh-interval', JSON.stringify({ seconds, confirmed })); }
   async function loadSettings() {
@@ -411,7 +430,8 @@ export function createFrameDashboard({
       request('/api/accounts/settings').catch(() => null),
       request('/api/accounts/preferences').catch(() => null),
     ]);
-    if (stopped) return;
+    // the display time zone is shared with Analytics: a page that has gone sets nothing
+    if (gone()) return;
     try { applyRefreshInterval(settings?.refreshIntervalSeconds); } catch {}
     try { if (prefs && typeof prefs.timeZone === 'string') setDisplayTimeZone(prefs.timeZone); } catch {}
   }
@@ -441,7 +461,7 @@ export function createFrameDashboard({
         toast(incomplete ? 'err' : 'ok', title, `${count('updated')} updated${catalogN ? `, ${catalogN} model${catalogN === 1 ? '' : 's'} not yet registered` : ''}, ${failed} failed, ${unknownN} unknown, ${heldN} held, ${count('current')} already current, ${count('not_installed')} not installed${actionN ? `, ${actionN} need action` : ''}${skippedN ? `, ${skippedN} skipped` : ''}. Details under Accounts & Settings.`, 7000);
         renderUpdate(true);
         cancelLater(updateDoneTimer);
-        updateDoneTimer = later(() => renderUpdate(false), 2000);
+        updateDoneTimer = schedule(() => renderUpdate(false), 2000);
         return;
       }
       renderUpdate(false);
@@ -458,8 +478,10 @@ export function createFrameDashboard({
   async function refreshAuthCheck() {
     try { const status = await request('/api/auth/check'); if (status && typeof status === 'object') authCheck = status; } catch {}
   }
-  /** Drop everything this session read (bridge.js signOut and sessionEnded). */
+  /** Drop everything this session read (bridge.js signOut and sessionEnded); its work ends with it. */
   function forgetSession() {
+    ended = true;
+    lifetime?.abort();
     authenticated = false;
     refreshGeneration++; openDetailsId = ''; pushed.clear();
     data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null;
@@ -637,16 +659,16 @@ export function createFrameDashboard({
       sessionHours = rememberedSessionHours(storage) || sessionHours;
       if (!authCheck) await refreshAuthCheck();
       else void refreshAuthCheck().then(() => renderAccounts());
-      if (stopped) return;
+      if (gone()) return;
       // Behind the LAN proxy the session length is only told to a signed-in browser (bridge.js checkSession).
       if (authCheck?.authenticated === true) void loadAuthSetup();
       const open = authCheck?.accessMode === 'open';
       const settings = loadSettings();
       await Promise.all([refresh(false, false, settings), ...(open ? [] : [updateStatus()])]);
-      if (stopped) return;
+      if (gone()) return;
       if (!open) { try { await accounts.migrateLocalHidden(); } catch {} }
       if (currentPage === 'accounts' && !open) await accounts.loadAll();
-      if (stopped) return;
+      if (gone()) return;
       applyRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
       intervals.push(every(() => { activationConfirmation.expire(); antigravityConfirmation.expire(); }, 1_000));
       intervals.push(every(() => { if (authenticated && updateJob?.state === 'running') void updateStatus(); }, 3_000));
@@ -686,6 +708,7 @@ export function createFrameDashboard({
     stop() {
       if (stopped) return;
       stopped = true;
+      lifetime?.abort();
       authenticated = false;
       refreshGeneration++;
       claudeOpen.reset();

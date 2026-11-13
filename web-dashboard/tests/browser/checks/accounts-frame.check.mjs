@@ -3,7 +3,7 @@
 // real is touched). Each flow checks what the page draws by DOM selector and exactly which requests it sends: the
 // same ones the Slint page sent through bridge.js and accounts-controller.mjs (now run by public/frame-dashboard.mjs).
 
-import { fakeServer, serve, changes } from '../accounts-fixture.mjs';
+import { fakeServer, serve, changes, dashboard } from '../accounts-fixture.mjs';
 
 async function open(t, server, { width = 1440, height = 900, phone = false, duo = false, safe = '' } = {}) {
 	await t.newContext(phone
@@ -18,6 +18,107 @@ async function open(t, server, { width = 1440, height = 900, phone = false, duo 
 const row = (id) => `.acc-item[data-row="${id}"]`;
 
 export const tests = {
+	// Astra max M1 (post-landing fix): the frame's dashboard controller stays in the window after sign-out, unlike the
+	// old iframe, so a save queued behind a held reply must die with its session. Ordinary clicks; synthetic answers.
+	async 'accounts: a save queued before sign-out is never sent with the next session'(t) {
+		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+		await t.app.signIn();
+		await serve(t, fakeServer());
+		let signedIn = true;
+		let epoch = 1;
+		let release;
+		const gate = new Promise((resolve) => { release = resolve; });
+		const patches = [];
+		const hidden = new Set();
+		const json = (body, extra = {}) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body), ...extra });
+		await t.page.route('**/api/auth/check', (r) => r.fulfill(json({ authenticated: signedIn, authRequired: true, configured: true, accessMode: 'login', username: 'reviewer', secureTransport: true, trustedLocalNetwork: true })));
+		await t.page.route('**/api/auth/logout', (r) => { signedIn = false; return r.fulfill(json({ success: true })); });
+		await t.page.route('**/api/auth/login', (r) => { signedIn = true; epoch = 2; return r.fulfill(json({ success: true, username: 'reviewer' }, { headers: { 'set-cookie': 'fixture_epoch=two; Path=/; SameSite=Lax' } })); });
+		await t.page.route('**/api/accounts/dashboard?*', (r) => {
+			const d = dashboard();
+			d.settings.hiddenProviders = [...hidden];
+			d.providers.forEach((p) => { p.visible = !hidden.has(p.id); });
+			d.accounts.forEach((a) => { a.hidden = hidden.has(a.provider); });
+			return r.fulfill(json(d));
+		});
+		await t.page.route('**/api/accounts/visibility', async (r) => {
+			const body = r.request().postDataJSON();
+			const cookie = await r.request().headerValue('cookie');
+			patches.push({ epoch, body, nextSession: /fixture_epoch=two/.test(cookie || '') });
+			for (const p of body.hiddenProviders?.hide || []) hidden.add(p);
+			for (const p of body.hiddenProviders?.show || []) hidden.delete(p);
+			const answer = { hiddenProviders: [...hidden], hiddenAccountIds: [], trayHiddenProviders: [], trayHiddenAccountIds: [] };
+			if (patches.length === 1) await gate;
+			await r.fulfill(json(answer)).catch(() => {});
+		});
+		try {
+			await t.goto('/app/accounts?e2e', { settleMs: 300 });
+			await t.page.waitForSelector('[data-probe="show:codex"]');
+			await t.page.evaluate(() => { window.__oldController = window.aacFrameDashboard; });
+			// Claude's Show in tray off (its reply is held), then Codex's Show on dashboard off: queued behind it
+			await t.page.click('[data-probe="tray:claude"]');
+			await t.page.click('[data-probe="show:codex"]');
+			await t.equal('only the first save has reached the server', patches.length, 1);
+			await t.page.click('.chrome .select-btn[aria-label="Account"]');
+			await t.page.locator('.acct-menu .menu-item', { hasText: 'Sign out' }).click();
+			await t.page.waitForSelector('.signin-card');
+			await t.page.fill('input[name="username"]', 'reviewer');
+			await t.page.fill('input[name="password"]', 'Fixture-password-2026!');
+			await t.page.click('.signin-card button[type="submit"]');
+			await t.page.waitForSelector('[data-probe="show:codex"]');
+			await t.check('the old controller stopped; a new one owns the page', await t.page.evaluate(() => window.__oldController.state().stopped && window.__oldController.id !== window.aacFrameDashboard.id));
+			// the new session hides Codex, then shows it again, before the old reply arrives
+			await t.page.click('[data-probe="show:codex"]');
+			await t.until('the new session hides Codex', () => document.querySelector('[data-probe="show:codex"]')?.getAttribute('aria-checked') === 'false', null, { timeout: 5000, hard: true });
+			await t.page.click('[data-probe="show:codex"]');
+			await t.until('and shows it again', () => document.querySelector('[data-probe="show:codex"]')?.getAttribute('aria-checked') === 'true', null, { timeout: 5000, hard: true });
+			const before = patches.length;
+			release();
+			await t.page.waitForTimeout(400);
+			await t.page.click('.chrome button[aria-label="Refresh"]');
+			await t.page.waitForTimeout(500);
+			const shown = await t.page.evaluate(() => document.querySelector('[data-probe="show:codex"]')?.getAttribute('aria-checked'));
+			await t.equal('the old queue sends no save after the new session has saved', patches.length, before, { note: JSON.stringify(patches.map((p) => ({ epoch: p.epoch, nextSession: p.nextSession, body: p.body }))) });
+			await t.equal('the latest explicit Show choice stands', shown, 'true');
+		} finally {
+			release();
+		}
+	},
+
+	// Sol max L1 (post-landing fix): a layout callback the Accounts page queued for its next frame must do nothing when the
+	// page has gone by then (a quick sign-out disposes it first). Before the fix it read the disposed NodeRef and the
+	// runtime trapped ("already been disposed", then "RuntimeError: unreachable").
+	async 'accounts: a sign-out just after Accounts lays out leaves no uncaught error'(t) {
+		const server = fakeServer();
+		await open(t, server);
+		const errors = [];
+		t.page.on('pageerror', (e) => errors.push(`pageerror: ${String(e?.message || e).slice(0, 200)}`));
+		t.page.on('console', (m) => { if (m.type() === 'error' && /disposed|unreachable|panicked/i.test(m.text())) errors.push(`console: ${m.text().slice(0, 200)}`); });
+		for (let round = 1; round <= 3; round++) {
+			await t.page.click('.chrome .nav a[href="/app/home"]');
+			await t.page.waitForTimeout(250);
+			// back to Accounts, then signed out before its next frame: its layout callbacks are already queued. The next
+			// frames come late here (as on a busy phone), so the page is gone when they run, every time.
+			await t.page.evaluate(async () => {
+				window.__kitFrame ||= window.requestAnimationFrame;
+				const frame = window.__kitFrame.bind(window);
+				window.requestAnimationFrame = (cb) => setTimeout(() => frame(cb), 400);
+				document.querySelector('.chrome .nav a[href="/app/accounts"]').click();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				window.dispatchEvent(new CustomEvent('aac-dash', { detail: { key: 'signed-out', json: JSON.stringify({ state: 'default', reason: '' }) } }));
+			});
+			await t.page.waitForSelector('.signin-card', { timeout: 10000 });
+			// the late frames run now, on the page that went
+			await t.page.waitForTimeout(900);
+			await t.page.evaluate(() => { window.requestAnimationFrame = window.__kitFrame; });
+			// the server session is still valid: the frame's sign-in finds it again
+			await t.page.evaluate(() => window.aacFrameSession.recheck());
+			await t.until(`round ${round}: Accounts is drawn again`, () => document.querySelectorAll('.prov[data-provider]').length >= 9, null, { timeout: 30000, hard: true });
+		}
+		await t.page.waitForTimeout(500);
+		await t.equal('no uncaught error from a callback of the page that went', errors, []);
+	},
+
 	async 'accounts: every card is drawn natively, no Slint dashboard is loaded'(t) {
 		const server = fakeServer();
 		await open(t, server);

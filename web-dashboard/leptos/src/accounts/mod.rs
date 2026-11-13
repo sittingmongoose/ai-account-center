@@ -85,12 +85,19 @@ pub fn AccountsPage(ctx: FrameCtx) -> impl IntoView {
     // The columns follow the page's own width.
     let root = NodeRef::<leptos::html::Div>::new();
     let width = RwSignal::new(0.0_f64);
+    // Also run from a frame callback: one queued just before a quick sign-out finds the page gone (its NodeRef and
+    // signals disposed) and does nothing (Sol max L1).
     let remeasure = move || {
-        if let Some(el) = root.get_untracked() {
-            let w = measure(el.unchecked_ref());
-            if w > 0.0 && (w - width.get_untracked()).abs() >= 1.0 {
-                width.set(w);
-            }
+        let Some(Some(el)) = root.try_get_untracked() else {
+            return;
+        };
+        let w = measure(el.unchecked_ref());
+        if w > 0.0
+            && width
+                .try_get_untracked()
+                .is_some_and(|old| (w - old).abs() >= 1.0)
+        {
+            let _ = width.try_set(w);
         }
     };
     let on_resize = window_event_listener(leptos::ev::resize, move |_| remeasure());
@@ -121,19 +128,20 @@ pub fn AccountsPage(ctx: FrameCtx) -> impl IntoView {
         plan.track();
         view.track();
         let again = wasm_bindgen::closure::Closure::once_into_js(move || {
-            let Some(el) = root.get_untracked() else {
+            // the page may be gone by the next frame (a quick sign-out): then there is nothing to measure
+            let Some(Some(el)) = root.try_get_untracked() else {
                 return;
             };
             let found = lasting_heights(el.unchecked_ref());
             if found.is_empty() {
                 return;
             }
-            let changed = measured.with_untracked(|m| {
+            let changed = measured.try_with_untracked(|m| {
                 found
                     .iter()
                     .any(|(k, h)| m.get(k).is_none_or(|old| (old - h).abs() > 4.0))
             });
-            if changed {
+            if changed == Some(true) {
                 let _ = measured.try_set(found);
             }
         });
