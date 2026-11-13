@@ -7,6 +7,7 @@
 use crate::api::{FetchError, Link, Refresh, Run, nullable, send};
 use crate::fmt;
 use crate::status::{SheetGrab, sheet_drag_style};
+use crate::ui::charts::Popover;
 use crate::ui::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -34,6 +35,46 @@ pub struct ScoreboardView {
     /// Models by effort with verdicts per job (CONTRACT-spend-bymodel.md). Absent until the server sends it: the page
     /// says so and invents nothing.
     pub by_model: Option<ByModel>,
+    /// Runs read but never scored, by reason. Absent from an older server: the page shows no note.
+    pub unscored: Option<Unscored>,
+}
+
+/// Runs the server read but could not score (`unscored` in the view), so none is hidden without a word.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Unscored {
+    pub total: u32,
+    pub no_model: u32,
+    pub no_task_type: u32,
+    pub unknown_model: u32,
+    /// The written ids of the unknown models, most runs first (the top 20).
+    #[serde(deserialize_with = "nullable")]
+    pub unknown_models: Vec<UnknownModel>,
+    /// The newest runs across every reason (at most 10).
+    #[serde(deserialize_with = "nullable")]
+    pub examples: Vec<UnscoredExample>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UnknownModel {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    pub runs: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UnscoredExample {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    pub model: Option<String>,
+    pub task_type: Option<String>,
+    /// "no-model", "no-task-type" or "unknown-model".
+    #[serde(deserialize_with = "nullable")]
+    pub reason: String,
+    #[serde(deserialize_with = "nullable")]
+    pub ended_at: String,
 }
 
 /// The by-model view: one row per model at one effort. Every word and number is decided on the server.
@@ -649,6 +690,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                         })}
                     </div>
                     <p class="page-sub">{move || by_model.with(|b| b.as_ref().map(|b| b.intro.clone())).unwrap_or_default()}</p>
+                    <UnscoredNote board=board/>
                 </div>
                 {banner}
                 <Show
@@ -986,6 +1028,217 @@ fn ModelSheet(
     }
 }
 
+// ---- Runs not scored ----------------------------------------------------------------------------------------------
+
+/// One reason a run was read but not scored: its runs, the note's words and the popover's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnscoredReason {
+    pub runs: u32,
+    /// The note's words after the count ("unknown model").
+    pub short: &'static str,
+    /// The popover's term and its meaning.
+    pub label: &'static str,
+    pub why: &'static str,
+}
+
+/// The summary worth a note: none when the server sent none or nothing went unscored.
+pub fn shown_unscored(view: &ScoreboardView) -> Option<Unscored> {
+    view.unscored.clone().filter(|u| u.total > 0)
+}
+
+/// The reasons that have runs, in one fixed order (unknown model, no task type, no model), so the note keeps its
+/// shape from one refresh to the next.
+pub fn unscored_reasons(u: &Unscored) -> Vec<UnscoredReason> {
+    [
+        UnscoredReason {
+            runs: u.unknown_model,
+            short: "unknown model",
+            label: "Unknown model",
+            why: "its model is not in the catalog or its alias table",
+        },
+        UnscoredReason {
+            runs: u.no_task_type,
+            short: "no task type",
+            label: "No task type",
+            why: "the report names no task type, so no job can score it",
+        },
+        UnscoredReason {
+            runs: u.no_model,
+            short: "no model",
+            label: "No model",
+            why: "the report names no model",
+        },
+    ]
+    .into_iter()
+    .filter(|r| r.runs > 0)
+    .collect()
+}
+
+fn runs_word(n: u32) -> &'static str {
+    if n == 1 { "run" } else { "runs" }
+}
+
+/// "41 runs not scored".
+pub fn unscored_head(u: &Unscored) -> String {
+    format!("{} {} not scored", u.total, runs_word(u.total))
+}
+
+/// The note in pieces that each stay whole on a line, a count and its words: "41 runs not scored:", "12 unknown
+/// model,", "29 no task type". A narrow screen breaks only between pieces, so no word is left alone.
+pub fn unscored_chunks(u: &Unscored) -> Vec<(u32, String)> {
+    let reasons = unscored_reasons(u);
+    let last = reasons.len();
+    let mut chunks = vec![(
+        u.total,
+        format!(
+            " {} not scored{}",
+            runs_word(u.total),
+            if last > 0 { ":" } else { "" }
+        ),
+    )];
+    chunks.extend(reasons.into_iter().enumerate().map(|(i, r)| {
+        (
+            r.runs,
+            format!(" {}{}", r.short, if i + 1 < last { "," } else { "" }),
+        )
+    }));
+    chunks
+}
+
+/// Runs with an unknown model whose ids are past the listed top ones.
+pub fn unlisted_unknown_runs(u: &Unscored) -> u32 {
+    let listed: u32 = u.unknown_models.iter().map(|m| m.runs).sum();
+    u.unknown_model.saturating_sub(listed)
+}
+
+fn example_reason(reason: &str) -> &'static str {
+    match reason {
+        "unknown-model" => "unknown model",
+        "no-task-type" => "no task type",
+        "no-model" => "no model",
+        _ => "not scored",
+    }
+}
+
+/// How long the hover waits before it opens the list, and before it closes it once the pointer has left.
+const HOVER_OPEN_MS: u64 = 150;
+const HOVER_CLOSE_MS: u64 = 300;
+
+/// The quiet line under the head that names the runs left out of every verdict, hidden at none. A tap, a click or
+/// (with a mouse) a hover opens the reasons and the unknown model ids with their runs; a hover-opened list stays
+/// while the pointer is on it, and a click keeps it open.
+#[component]
+fn UnscoredNote(board: Board) -> impl IntoView {
+    let summary = Memo::new(move |_| board.view.with(|v| v.as_ref().and_then(shown_unscored)));
+    let open = RwSignal::new(false);
+    // Opened by a click or a tap (it stays), not only by a hover (it goes when the pointer leaves).
+    let pinned = RwSignal::new(false);
+    let hover = StoredValue::new(0u32);
+    let anchor = NodeRef::<leptos::html::Button>::new();
+    let examples_open = RwSignal::new(false);
+    Effect::new(move |_| {
+        if !open.get() {
+            pinned.set(false);
+        }
+    });
+    Effect::new(move |_| {
+        if summary.with(|s| s.is_none()) {
+            open.set(false);
+        }
+    });
+    let later = move |ms: u64, show: bool| {
+        hover.update_value(|g| *g = g.wrapping_add(1));
+        let at = hover.get_value();
+        let _ = set_timeout(
+            move || {
+                if hover.try_get_value() != Some(at) || pinned.try_get_untracked() != Some(false) {
+                    return;
+                }
+                let _ = open.try_set(show);
+            },
+            Duration::from_millis(ms),
+        );
+    };
+    let enter = move |e: web_sys::PointerEvent| {
+        if e.pointer_type() == "mouse" {
+            later(HOVER_OPEN_MS, true);
+        }
+    };
+    let leave = move |e: web_sys::PointerEvent| {
+        if e.pointer_type() == "mouse" && !pinned.get_untracked() {
+            later(HOVER_CLOSE_MS, false);
+        }
+    };
+    let click = move |_: web_sys::MouseEvent| {
+        hover.update_value(|g| *g = g.wrapping_add(1));
+        if open.get_untracked() && pinned.get_untracked() {
+            open.set(false);
+        } else {
+            open.set(true);
+            pinned.set(true);
+        }
+    };
+    view! {
+        <Show when=move || summary.with(|s| s.is_some())>
+            <p class="sb-unscored">
+                <button class="sb-unscored-btn" node_ref=anchor class:open=move || open.get()
+                    aria-haspopup="dialog" aria-expanded=move || open.get().to_string()
+                    on:click=click on:pointerenter=enter on:pointerleave=leave>
+                    {move || summary.get().map(|u| unscored_chunks(&u).into_iter().map(|(n, words)| view! {
+                        <span class="nw"><b class="tnum">{n}</b>{words}</span>
+                    }).collect_view())}
+                    <Icon name="chev-down" class="chev"/>
+                </button>
+            </p>
+        </Show>
+        <Popover open=open anchor=anchor width=380 label="Runs not scored">
+            <div class="sb-unscored-pop" on:pointerenter=enter on:pointerleave=leave>
+                {move || summary.get().map(|u| {
+                    let more = unlisted_unknown_runs(&u);
+                    let unknown = u.unknown_models.clone();
+                    let examples = u.examples.clone();
+                    view! {
+                        <h3>{unscored_head(&u)}</h3>
+                        <p class="q3 sbu-lead">"Read from the agent reports, left out of every verdict:"</p>
+                        <dl class="facts sbu-why">
+                            {unscored_reasons(&u).into_iter().map(|r| view! {
+                                <dt>{r.label}</dt>
+                                <dd><b class="tnum">{r.runs}</b>{format!(" {} · {}", runs_word(r.runs), r.why)}</dd>
+                            }).collect_view()}
+                        </dl>
+                        {(!unknown.is_empty()).then(|| view! {
+                            <p class="cap sbu-cap">"Unknown model ids"</p>
+                            <ul class="sbu-ids">
+                                {unknown.into_iter().map(|m| view! {
+                                    <li><code>{m.id}</code><span class="tnum q3">{format!("{} {}", m.runs, runs_word(m.runs))}</span></li>
+                                }).collect_view()}
+                            </ul>
+                        })}
+                        {(more > 0).then(|| view! { <p class="q3 sbu-more">{format!("{more} more {} under other ids.", runs_word(more))}</p> })}
+                        {(!examples.is_empty()).then(|| view! {
+                            <div class="sbu-newest"><Disclosure open=examples_open label="Newest runs not scored".to_string()/></div>
+                            <Show when=move || examples_open.get()>
+                                <ul class="sbu-ids sbu-runs">
+                                    {examples.clone().into_iter().map(|x| {
+                                        let what = match (x.reason.as_str(), x.model.clone()) {
+                                            ("unknown-model", Some(m)) => format!("unknown model {m}"),
+                                            (reason, _) => example_reason(reason).to_string(),
+                                        };
+                                        let when = fmt::clock(&x.ended_at);
+                                        view! {
+                                            <li><code>{x.id.clone()}</code><span class="q3">{if when.is_empty() { what } else { format!("{what} · {when}") }}</span></li>
+                                        }
+                                    }).collect_view()}
+                                </ul>
+                            </Show>
+                        })}
+                    }
+                })}
+            </div>
+        </Popover>
+    }
+}
+
 #[component]
 fn SourcesList(board: Board, open: RwSignal<bool>) -> impl IntoView {
     view! {
@@ -1084,6 +1337,87 @@ mod tests {
                 "passed review 6 of 6, 5 on the first try".to_string()
             ]
         );
+    }
+
+    fn unscored(no_model: u32, no_task_type: u32, unknown_model: u32) -> Unscored {
+        Unscored {
+            total: no_model + no_task_type + unknown_model,
+            no_model,
+            no_task_type,
+            unknown_model,
+            ..Default::default()
+        }
+    }
+
+    fn sentence(u: &Unscored) -> String {
+        unscored_chunks(u)
+            .into_iter()
+            .map(|(n, words)| format!("{n}{words}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn the_unscored_note_names_each_reason_with_its_runs() {
+        assert_eq!(
+            sentence(&unscored(0, 29, 12)),
+            "41 runs not scored: 12 unknown model, 29 no task type"
+        );
+        // the order is fixed and a reason without runs is left out
+        assert_eq!(
+            sentence(&unscored(6, 23, 12)),
+            "41 runs not scored: 12 unknown model, 23 no task type, 6 no model"
+        );
+        assert_eq!(sentence(&unscored(1, 0, 0)), "1 run not scored: 1 no model");
+        // each piece stays whole: a count is never parted from its words
+        let chunks = unscored_chunks(&unscored(6, 23, 12));
+        assert_eq!(chunks[0], (41, " runs not scored:".to_string()));
+        assert_eq!(chunks[3], (6, " no model".to_string()));
+        let reasons = unscored_reasons(&unscored(0, 29, 12));
+        assert_eq!(
+            reasons
+                .iter()
+                .map(|r| (r.label, r.runs))
+                .collect::<Vec<_>>(),
+            vec![("Unknown model", 12), ("No task type", 29)]
+        );
+    }
+
+    #[test]
+    fn the_unscored_note_is_hidden_at_none_and_without_the_field() {
+        let mut view = ScoreboardView::default();
+        assert_eq!(shown_unscored(&view), None);
+        view.unscored = Some(unscored(0, 0, 0));
+        assert_eq!(shown_unscored(&view), None);
+        view.unscored = Some(unscored(0, 1, 0));
+        assert_eq!(shown_unscored(&view).map(|u| u.total), Some(1));
+        // an older server's view without the field, or with null, reads and shows nothing
+        let old: ScoreboardView = serde_json::from_str(r#"{"version":1,"unscored":null}"#).unwrap();
+        assert_eq!(shown_unscored(&old), None);
+    }
+
+    #[test]
+    fn unknown_ids_past_the_listed_ones_are_counted_not_dropped() {
+        let text = include_str!("../fixtures/scoreboard-view.json");
+        let view: ScoreboardView = serde_json::from_str(text).expect("example parses");
+        let u = shown_unscored(&view).expect("the fixture has runs not scored");
+        assert_eq!(
+            sentence(&u),
+            "41 runs not scored: 12 unknown model, 23 no task type, 6 no model"
+        );
+        assert_eq!(u.unknown_models.len(), 2);
+        assert_eq!(
+            u.unknown_models[1].id,
+            "builtin:example-coding-plan\\Example-4.2"
+        );
+        assert_eq!(unlisted_unknown_runs(&u), 2);
+        assert_eq!(u.examples[2].model, None);
+        assert_eq!(u.examples[1].task_type, None);
+        assert_eq!(example_reason(&u.examples[0].reason), "unknown model");
+        // a list that already covers every run leaves nothing over (and never underflows)
+        let mut all = u.clone();
+        all.unknown_models[0].runs = 40;
+        assert_eq!(unlisted_unknown_runs(&all), 0);
     }
 
     #[test]

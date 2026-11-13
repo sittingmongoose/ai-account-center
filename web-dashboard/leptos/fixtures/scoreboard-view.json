@@ -12086,5 +12086,44 @@
       "flags": 0,
       "evidence": []
     }
-  ]
+  ],
+  "unscored": {
+    "total": 41,
+    "noModel": 6,
+    "noTaskType": 23,
+    "unknownModel": 12,
+    "unknownModels": [
+      {
+        "id": "example-vendor/example-model-9-preview",
+        "runs": 7
+      },
+      {
+        "id": "builtin:example-coding-plan\\Example-4.2",
+        "runs": 3
+      }
+    ],
+    "examples": [
+      {
+        "id": "vm.example-lead--unlisted-model",
+        "model": "example-vendor/example-model-9-preview",
+        "taskType": "build",
+        "reason": "unknown-model",
+        "endedAt": "2026-11-06T13:40:00Z"
+      },
+      {
+        "id": "vm.example-lead--no-type",
+        "model": "glm-5.3",
+        "taskType": null,
+        "reason": "no-task-type",
+        "endedAt": "2026-11-06T13:30:00Z"
+      },
+      {
+        "id": "mac.example-worker--no-model",
+        "model": null,
+        "taskType": "review",
+        "reason": "no-model",
+        "endedAt": "2026-11-06T12:10:00Z"
+      }
+    ]
+  }
 }

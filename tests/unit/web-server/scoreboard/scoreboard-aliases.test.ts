@@ -113,7 +113,7 @@ describe('alias table', () => {
     ).toEqual({ ok: false, reason: 'effortSuffixes[0] is missing or not valid' });
   });
 
-  it('publishes model-aliases.json the same way as models.json (seed, never over the share)', async () => {
+  it('publishes model-aliases.json like models.json (seeded where missing, a share copy that is not valid left alone)', async () => {
     expect(CATALOG_FILES).toContain('model-aliases.json');
     const root = dirs.make();
     const catalog = path.join(root, 'v1', 'catalog');

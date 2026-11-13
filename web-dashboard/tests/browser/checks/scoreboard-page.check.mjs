@@ -19,17 +19,21 @@ const FORMATS = [
 	{ name: 'duo-landscape', w: 951, h: 669, safe: '0,84,34,0', mobile: true },
 ];
 
-async function stubBoard(t) {
-	const view = { ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') };
+async function stubBoard(t, change = (view) => view) {
+	const view = change({ ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') });
 	await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', (r) => r.fulfill({ json: view }));
 }
 
-async function openBoard(t, query = '') {
+async function openBoard(t, query = '', change) {
 	await t.app.signIn();
-	await stubBoard(t);
+	await stubBoard(t, change);
 	await t.goto(`/app/scoreboard${query}`, { settleMs: 300 });
 	await t.page.waitForSelector('.picks');
 }
+
+// The fixture's runs not scored (leptos/fixtures/scoreboard-view.json `unscored`): 12 + 23 + 6.
+const UNSCORED_LINE = '41 runs not scored: 12 unknown model, 23 no task type, 6 no model';
+const lineText = (t) => t.page.evaluate(() => document.querySelector('.sb-unscored')?.textContent.replace(/\s+/g, ' ').trim() ?? null);
 
 export const tests = {
 	// Against the real server's view, which has no byModel yet: an honest line, nothing guessed.
@@ -101,6 +105,111 @@ export const tests = {
 			await t.check(`${f.name}: verdict notes break only between their parts`, await t.page.evaluate(() =>
 				[...document.querySelectorAll('.vsub .nw')].every((n) => n.getBoundingClientRect().height < 24)
 			));
+		}
+	},
+
+	// Owner 2026-11-13: runs the server read but could not score are named under the head, never hidden.
+	async 'scoreboard runs not scored'(t) {
+		await t.viewport(1440, 900);
+		await openBoard(t);
+		await t.equal('the note names every reason with its runs', await lineText(t), UNSCORED_LINE);
+		await t.check('the note sits under the head', await t.page.evaluate(() => {
+			const head = document.querySelector('.sb-head');
+			const note = document.querySelector('.sb-unscored');
+			const sub = document.querySelector('.sb-head .page-sub').getBoundingClientRect();
+			return head.contains(note) && note.getBoundingClientRect().top >= sub.bottom - 1;
+		}));
+		await t.check('the note is one line on a desktop', await t.page.evaluate(() => document.querySelector('.sb-unscored-btn').getBoundingClientRect().height < 30));
+		await t.check('the note carries no state colour', await t.page.evaluate(() => {
+			const ink = (sel) => getComputedStyle(document.querySelector(sel)).color;
+			const probe = document.createElement('span');
+			probe.style.color = 'var(--ink-3)';
+			document.body.append(probe);
+			const ink3 = getComputedStyle(probe).color;
+			probe.style.color = 'var(--ink-2)';
+			const ink2 = getComputedStyle(probe).color;
+			probe.remove();
+			return ink('.sb-unscored') === ink3 && ink('.sb-unscored-btn b') === ink2;
+		}));
+		// Closed: an open list (not modal on a desktop) covers controls by design, so the audit runs before it opens.
+		await t.audit('scoreboard runs not scored');
+		// A mouse hover opens the list under the line; it goes when the pointer leaves.
+		const box = await t.page.locator('.sb-unscored-btn').boundingBox();
+		await t.page.mouse.move(box.x + 20, box.y + box.height / 2);
+		await t.page.waitForSelector('.pop .sb-unscored-pop', { timeout: 3000 });
+		await t.text('.pop h3', '41 runs not scored');
+		await t.count('.pop .sbu-why dt', 3);
+		await t.text('.pop .sbu-why', /Unknown model\s*12 runs/);
+		await t.text('.pop .sbu-why', /No task type\s*23 runs/);
+		await t.text('.pop .sbu-why', /No model\s*6 runs/);
+		await t.count('.pop .sbu-ids:not(.sbu-runs) li', 2);
+		await t.text('.pop .sbu-ids li:first-child', /example-vendor\/example-model-9-preview\s*7 runs/);
+		await t.text('.pop .sbu-ids li:nth-child(2)', /builtin:example-coding-plan\\Example-4\.2\s*3 runs/);
+		await t.text('.pop .sbu-more', '2 more runs under other ids.');
+		await t.check('the list hangs under the line', await t.page.evaluate(() => {
+			const btn = document.querySelector('.sb-unscored-btn').getBoundingClientRect();
+			const pop = document.querySelector('.pop').getBoundingClientRect();
+			return pop.top >= btn.bottom && pop.top - btn.bottom < 16 && pop.right <= innerWidth;
+		}));
+		await t.page.click('.pop .sbu-newest .disclosure');
+		await t.count('.pop .sbu-runs li', 3);
+		await t.text('.pop .sbu-runs', /mac\.example-worker--no-model\s*no model/);
+		await t.text('.pop .sbu-runs', /unknown model example-vendor\/example-model-9-preview/);
+		await t.shot('scoreboard-unscored-desktop', 'runs not scored at 1440 px: the line under the head and its open list');
+		await t.page.mouse.move(box.x + box.width / 2, 860);
+		await t.page.waitForSelector('.pop', { state: 'detached', timeout: 3000 });
+		// A click keeps it open after the pointer leaves; Escape closes it.
+		await t.page.click('.sb-unscored-btn');
+		await t.page.waitForSelector('.pop .sb-unscored-pop', { timeout: 3000 });
+		await t.page.mouse.move(box.x + box.width / 2, 860);
+		await t.page.waitForTimeout(600);
+		await t.count('.pop', 1);
+		await t.equal('the line says it is open', await t.page.getAttribute('.sb-unscored-btn', 'aria-expanded'), 'true');
+		await t.page.keyboard.press('Escape');
+		await t.page.waitForSelector('.pop', { state: 'detached', timeout: 3000 });
+
+		// None not scored, or an older server without the field: no line at all.
+		for (const [name, change] of [
+			['none not scored', (v) => ({ ...v, unscored: { total: 0, noModel: 0, noTaskType: 0, unknownModel: 0, unknownModels: [], examples: [] } })],
+			['no unscored field', (v) => { const { unscored, ...rest } = v; return rest; }],
+		]) {
+			await t.newContext({ viewport: { width: 1440, height: 900 } });
+			await openBoard(t, '', change);
+			await t.count('.sb-unscored', 0);
+			await t.check(`${name}: no line under the head`, (await lineText(t)) === null);
+		}
+	},
+
+	async 'scoreboard runs not scored in each format'(t) {
+		for (const f of FORMATS) {
+			await t.newContext({ viewport: { width: f.w, height: f.h }, isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1 });
+			await openBoard(t, `?safe=${f.safe}`);
+			await t.equal(`${f.name}: the line`, await lineText(t), UNSCORED_LINE);
+			const shape = await t.page.evaluate(() => {
+				const btn = document.querySelector('.sb-unscored-btn');
+				const lh = parseFloat(getComputedStyle(btn).lineHeight);
+				const pieces = [...btn.querySelectorAll('.nw')].map((n) => n.getBoundingClientRect());
+				const head = document.querySelector('.sb-head').getBoundingClientRect();
+				const b = btn.getBoundingClientRect();
+				return { lines: Math.round((b.height - 4) / lh), whole: pieces.every((r) => r.height <= lh + 1), inside: b.left >= head.left - 1 && b.right <= head.right + 1, h: b.height };
+			});
+			await t.check(`${f.name}: each piece stays on one line`, shape.whole);
+			await t.check(`${f.name}: two lines at most`, shape.lines <= 2, `${shape.lines} lines (${shape.h} px)`);
+			await t.check(`${f.name}: inside the head`, shape.inside);
+			await t.check(`${f.name}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+			await t.audit(`${f.name} runs not scored`);
+			await t.page.click('.sb-unscored-btn');
+			await t.page.waitForSelector('.pop .sb-unscored-pop', { timeout: 3000 });
+			await t.page.waitForTimeout(300);
+			await t.check(`${f.name}: the open list stays inside the window`, await t.page.evaluate(() => {
+				const r = document.querySelector('.pop').getBoundingClientRect();
+				return r.left >= -0.5 && r.right <= innerWidth + 0.5 && r.top >= -0.5;
+			}));
+			await t.count('.pop .sbu-ids li', 2);
+			await t.text('.pop .sbu-why', /Unknown model\s*12 runs/);
+			if (f.name === 'iphone' || f.name === 'duo-landscape') await t.shot(`scoreboard-unscored-${f.name}`, `runs not scored on ${f.name} (${f.w}x${f.h}): the list open`);
+			await t.page.keyboard.press('Escape');
+			await t.page.waitForSelector('.pop', { state: 'detached', timeout: 3000 });
 		}
 	},
 

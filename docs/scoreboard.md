@@ -25,9 +25,16 @@ Accounts are not part of the identity (they change cost, not the model); they st
    different models) imported once as observed runs with `imported: { from: "<path>", at }`, so the scoreboard does
    not start empty. Imports are reviewed like any other data change.
 4. **Catalog** (`<reports>/v1/catalog/`, owned by AAC, edited as data). The seeds are in
-   `docs/agent-reports/catalog/` (packaged with the server); at server start AAC writes a seed only where the share
+   `docs/agent-reports/catalog/` (packaged with the server); at server start AAC writes a seed where the share
    lists no such file (temporary dot file, then a hard link, which fails on a file that appeared meanwhile), never over one, so edits on the share stay. A seed that cannot be
-   written reads "Could not seed `<file>`: `<code>`" in the catalog Source. A catalog file
+   written reads "Could not seed `<file>`: `<code>`" in the catalog Source. An existing `models.json` or
+   `model-aliases.json` gains only the packaged entries it lacks, by id (`model`, or an `aliases` key), appended
+   after its own in its own layout; no entry already there is changed or removed, so share edits win (a model removed
+   on the share comes back while the package still ships it). It is written as a temporary dot file renamed over the
+   share file, only while the share file still holds what was read (else read again, three tries). A share file
+   that does not read, names its list twice, or keeps changing is left alone and named in the catalog Source:
+   "Could not add new packaged entries to `<file>`: `invalid` | `unmergeable` | `busy` | `<code>`". The other
+   catalog files are only seeded whole. A catalog file
    keeps its last good copy when it later fails; with no good copy it shows as a Source problem and its kind stays
    empty (`minRuns` falls back to 5). Refusals are fixed words naming the field, never the file's text.
    Each file is `{ "schema": "catalog-<kind>@1", "<kind>": [...] }`:
@@ -57,7 +64,9 @@ dropped silently; a FIFO or a link in a run folder, or anything but a folder dir
 Status reader: an old writer's runs are still history. A review with no boolean `review.overturned`, or a negative
 `wallSeconds`, `cost.credits` or `cost.usd`, makes the file unreadable, by name. A run with no `model.id` or no `task.type` is not scored and is counted there too; a task type the
 catalog does not list is not scored and is named in the catalog Source (a model it does not list is scored, labelled by
-its id, `inCatalog: false`, and named there).
+its id, `inCatalog: false`, and named there). The view's `unscored` counts these runs by reason; the page names them
+in one line under its head ("41 runs not scored: 12 unknown model, 23 no task type, 6 no model", hidden at none),
+which a tap, a click or a hover opens to the reasons and the unknown model ids with their runs.
 
 ## Measures (v1)
 Computed per column (see the view) within one task type, from that column's runs only. `outcome` stays free text in the

@@ -5,8 +5,9 @@
  * aliases: { <written id>: <canonical id> }, effortSuffixes: ["-high", ...] }` (see model-identity.ts).
  * A file that later fails keeps its last good copy; a catalog with no good copy shows as a Source
  * problem and the kinds it holds stay empty, never a crash. Unknown fields never reach the view;
- * reasons are fixed sentences. At server start AAC writes a packaged seed only where the share
- * has no file (the dashboard publishing step for the catalog).
+ * reasons are fixed sentences. At server start AAC writes a packaged seed where the share has no
+ * file, and adds to an existing `models.json` or `model-aliases.json` only the packaged entries it
+ * lacks by id (the dashboard publishing step for the catalog; `seedCatalog`).
  */
 import fs from 'fs';
 import path from 'path';
@@ -447,8 +448,212 @@ export function packagedCatalogDir(): string {
 }
 
 /**
- * Writes each packaged seed into an existing `v1/catalog` folder where the folder lists no such file
- * (temporary dot file, then a hard link). Never overwrites: the owner edits these as data. Resolves the
+ * The share files the seeder extends by id when they already exist: the member holding the entries.
+ * `models.json` gains the packaged models whose `model` it lacks, `model-aliases.json` the packaged
+ * `aliases` keys it lacks. The other catalog files are only ever seeded whole.
+ */
+const APPEND_BY_ID: Partial<Record<CatalogFileName, 'models' | 'aliases'>> = {
+  'models.json': 'models',
+  'model-aliases.json': 'aliases',
+};
+
+/** Attempts at an append while another writer keeps changing the share file. */
+const APPEND_ATTEMPTS = 3;
+
+/** The ids a parsed file holds, for the files extended by id. */
+function entryIds(file: CatalogFile): string[] {
+  if (file.kind === 'models') return file.models.map((row) => row.model);
+  if (file.kind === 'aliases') return Object.keys(file.aliases);
+  return [];
+}
+
+/** Offsets of a top-level member's opening and closing bracket in a JSON object's text. */
+interface MemberSpan {
+  open: number;
+  close: number;
+}
+
+/**
+ * Where the top-level member `key` holds its array or object in `text` (text that parses as a JSON object).
+ * Null when the member is missing, named more than once, or holds no array or object.
+ */
+export function memberSpan(text: string, key: string): MemberSpan | null {
+  let depth = 0;
+  let afterColon = false;
+  let lastKey: string | null = null;
+  let named = 0;
+  let span: MemberSpan | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      if (depth === 1 && afterColon) afterColon = false;
+      else if (depth === 1) {
+        lastKey = JSON.parse(text.slice(i, j + 1)) as string;
+        if (lastKey === key) named++;
+      }
+      i = j;
+    } else if (depth === 1 && c === ':') {
+      afterColon = true;
+    } else if (depth === 1 && c === ',') {
+      afterColon = false;
+    } else if (c === '{' || c === '[') {
+      if (depth === 1 && afterColon && lastKey === key) span = { open: i, close: -1 };
+      if (depth === 1) afterColon = false;
+      depth++;
+    } else if (c === '}' || c === ']') {
+      depth--;
+      if (depth === 1 && span && span.close < 0) span.close = i;
+    }
+  }
+  return named === 1 && span && span.close > span.open ? span : null;
+}
+
+/**
+ * `text` with `entries` added at the end of the member at `span`, in the member's own layout (its
+ * indentation and line ending, or one line when the member is written on one). Every byte already in
+ * `text` stays as it was; only the new entries (and the comma after the last old one) are inserted.
+ */
+function appendToMember(
+  text: string,
+  span: MemberSpan,
+  entries: Array<{ wide: string; narrow: string }>
+): string {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const indented = (entry: string, indent: string) =>
+    indent + entry.split('\n').join(`${eol}${indent}`);
+  const inner = text.slice(span.open + 1, span.close);
+  if (inner.trim() === '') {
+    const lineStart = text.lastIndexOf('\n', span.open) + 1;
+    const outer = /^[ \t]*/.exec(text.slice(lineStart))?.[0] ?? '';
+    const body = entries.map((entry) => indented(entry.wide, `${outer}  `)).join(`,${eol}`);
+    return `${text.slice(0, span.open + 1)}${eol}${body}${eol}${outer}${text.slice(span.close)}`;
+  }
+  const first = span.open + 1 + (inner.length - inner.trimStart().length);
+  const newline = text.lastIndexOf('\n', first);
+  let last = span.close - 1;
+  while (/\s/.test(text[last])) last--;
+  const insert =
+    newline > span.open
+      ? entries
+          .map((entry) => `,${eol}${indented(entry.wide, text.slice(newline + 1, first))}`)
+          .join('')
+      : entries.map((entry) => `, ${entry.narrow}`).join('');
+  return `${text.slice(0, last + 1)}${insert}${text.slice(last + 1)}`;
+}
+
+/** The packaged entries a share file lacks, by id, in the packaged order, rendered for appending. */
+function missingEntries(
+  member: 'models' | 'aliases',
+  seed: Record<string, unknown>,
+  have: ReadonlySet<string>
+): Array<{ id: string; wide: string; narrow: string }> {
+  if (member === 'models') {
+    const rows = Array.isArray(seed.models) ? (seed.models as Array<Record<string, unknown>>) : [];
+    return rows
+      .filter((row) => typeof row.model === 'string' && !have.has(row.model))
+      .map((row) => ({
+        id: row.model as string,
+        wide: JSON.stringify(row, null, 2),
+        narrow: JSON.stringify(row),
+      }));
+  }
+  const aliases = (seed.aliases ?? {}) as Record<string, unknown>;
+  return Object.entries(aliases)
+    .filter(([written]) => !have.has(written))
+    .map(([written, canonical]) => {
+      const entry = `${JSON.stringify(written)}: ${JSON.stringify(canonical)}`;
+      return { id: written, wide: entry, narrow: entry };
+    });
+}
+
+/** The share file after the append, or a reason it cannot be made: never a file that reads differently. */
+function appendedText(
+  name: CatalogFileName,
+  member: 'models' | 'aliases',
+  shareText: string,
+  shareIds: string[],
+  entries: Array<{ id: string; wide: string; narrow: string }>
+): string | null {
+  const span = memberSpan(shareText, member);
+  if (!span) return null;
+  const next = appendToMember(shareText, span, entries);
+  const parsed = parseCatalogFile(name, Buffer.from(next, 'utf8'));
+  if (!parsed.ok) return null;
+  const nextIds = entryIds(parsed.value);
+  const expected = new Set([...shareIds, ...entries.map((entry) => entry.id)]);
+  if (nextIds.length !== expected.size || nextIds.some((entryId) => !expected.has(entryId)))
+    return null;
+  return next;
+}
+
+/**
+ * Adds to an existing share file the packaged entries it lacks, by id; never changes or removes an entry
+ * already there. Writes a temporary dot file, then renames it over the share file, only if the share file
+ * still holds what was read (else it reads again, up to three times). A share file that is not valid is
+ * left alone and named (`invalid`), as is one the entries cannot be added to (`unmergeable`).
+ */
+async function appendMissing(
+  target: string,
+  name: CatalogFileName,
+  member: 'models' | 'aliases',
+  found: fs.Stats,
+  sourceDir: string,
+  onFailure: (failure: SeedFailure) => void
+): Promise<boolean> {
+  const destination = path.join(target, name);
+  if (!found.isFile()) {
+    onFailure({ file: name, code: 'not-a-file' });
+    return false;
+  }
+  const seedBytes = await fs.promises.readFile(path.join(sourceDir, name)).catch(() => null);
+  if (!seedBytes || !parseCatalogFile(name, seedBytes).ok) {
+    onFailure({ file: name, code: 'invalid-seed' });
+    return false;
+  }
+  // It parsed above, so it is a JSON object.
+  const seed = JSON.parse(seedBytes.toString('utf8')) as Record<string, unknown>;
+  for (let attempt = 0; attempt < APPEND_ATTEMPTS; attempt++) {
+    const temp = path.join(target, `.${name}.tmp-${process.pid}-${Date.now()}-${attempt}`);
+    try {
+      const before = await fs.promises.readFile(destination);
+      const share = parseCatalogFile(name, before);
+      if (!share.ok) {
+        onFailure({ file: name, code: 'invalid' });
+        return false;
+      }
+      const shareIds = entryIds(share.value);
+      const entries = missingEntries(member, seed, new Set(shareIds));
+      if (entries.length === 0) return false;
+      const next = appendedText(name, member, before.toString('utf8'), shareIds, entries);
+      if (next === null) {
+        onFailure({ file: name, code: 'unmergeable' });
+        return false;
+      }
+      await fs.promises.writeFile(temp, next, { encoding: 'utf8', flag: 'wx' });
+      await fs.promises.chmod(temp, found.mode & 0o777).catch(() => undefined);
+      // Another writer (an owner's edit, another machine's start) since the read: read again.
+      const now = await fs.promises.readFile(destination);
+      if (!now.equals(before)) continue;
+      await fs.promises.rename(temp, destination);
+      return true;
+    } catch (error) {
+      onFailure({ file: name, code: seedErrorCode(error) });
+      return false;
+    } finally {
+      await fs.promises.rm(temp, { force: true }).catch(() => undefined);
+    }
+  }
+  onFailure({ file: name, code: 'busy' });
+  return false;
+}
+
+/**
+ * Publishes the packaged catalog into an existing `v1/catalog` folder. A file the folder lacks is
+ * written whole (temporary dot file, then a hard link, which fails on a file that appeared meanwhile).
+ * `models.json` and `model-aliases.json` that exist gain only the packaged entries they lack, by id
+ * (`appendMissing`): share edits win, and nothing on the share is changed or removed. Resolves the
  * names it wrote; never throws.
  */
 export async function seedCatalog(
@@ -460,19 +665,21 @@ export async function seedCatalog(
   const written: string[] = [];
   try {
     // List, then look (a listing refreshes the NFS view of a file another machine just wrote).
-    const listed = new Set(await fs.promises.readdir(target));
+    await fs.promises.readdir(target);
     for (const name of CATALOG_FILES) {
-      if (listed.has(name)) continue;
       const destination = path.join(target, name);
-      const absent = await fs.promises
-        .lstat(destination)
-        .then(() => false)
-        .catch((error: NodeJS.ErrnoException) => {
-          if (error.code === 'ENOENT') return true;
-          onFailure({ file: name, code: seedErrorCode(error) });
-          return false;
-        });
-      if (!absent) continue;
+      const found = await fs.promises.lstat(destination).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null;
+        onFailure({ file: name, code: seedErrorCode(error) });
+        return undefined;
+      });
+      if (found === undefined) continue;
+      if (found !== null) {
+        const member = APPEND_BY_ID[name];
+        if (member && (await appendMissing(target, name, member, found, sourceDir, onFailure)))
+          written.push(name);
+        continue;
+      }
       const temp = path.join(target, `.${name}.tmp-${process.pid}-${Date.now()}`);
       try {
         await fs.promises.copyFile(path.join(sourceDir, name), temp);
