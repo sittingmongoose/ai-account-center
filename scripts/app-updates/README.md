@@ -132,15 +132,13 @@ Cursor's updater authenticates. When it refuses the CLI's sign-in (HTTP 401,
 row is `action_required` / `cursor_signin_needed` with cause `auth_required`:
 sign in with `cursor-agent login` on that computer. The words come from the
 updater's own output (stdout and stderr on every computer; on the Mac the GUI
-agent's own output files and the exit code launchd reports). Output that names a
-cause decides (the sign-in or policy words, or an errno such as ENOSPC, EPERM,
-EACCES, ENOTFOUND): Cursor's session log is read only when the run printed
-nothing or only a generic line, only in
-this user's own folder (`cursor-agent-logs-<user>`, owned by this account), only a
-log whose name says it started during this run, and only when it records the
-update's own failure (`Update failed:`) with the sign-in words. Without such a log
-the row keeps its real failure and notes `signin_undetermined`. Logs are read in
-memory only. AAC never stores, reads or asks for credentials.
+agent's own output files and the exit code launchd reports). Named errors include
+TLS and certificate failures. Session logs have no reliable process binding across
+all launchers, so AAC ignores them. An indeterminate sign-in keeps the updater's
+failure and notes `signin_undetermined`. AAC never stores or asks for credentials.
+A Cursor version must strictly increase to report `updated`: a decrease is
+`failed / version_went_down`, an identical version is `current`, and a changed
+commit hash on the same date is `version_unknown` because it supplies no ordering.
 
 Its native updater owns in-use staging. A remaining `.new` tree or
 pending launcher reports `action_required` / `cursor_update_staged`, with the
@@ -218,7 +216,12 @@ sign-in are listed in `app_update_antigravity_release.py`.
 **Order.** Antigravity ACP runs after T3's own row. When T3 replaced its desktop
 in this run (Mac, Windows), AAC waits, bounded, for the new server to publish its
 endpoint with the new version and answer; a record without a version is not
-ready. On Ubuntu and Nas1 the new server only
+ready. A runtime-only update with no desktop restart target uses the ordinary
+15-second readiness window and requires only an answer, without a version match.
+RPC frame chunks and handshake lines check the absolute operation deadline before
+every receive; the offer-settle deadline can only shorten it. T3 release, ordinary
+Antigravity manifest and Claude channel lookups also use the killable metadata child.
+On Ubuntu and Nas1 the new server only
 starts after the job, so the row is `action_required` / `t3_restart_pending` and
 nothing uses the previous server's offer; the next Update apps reconciles it.
 
@@ -893,11 +896,15 @@ replace anything.
   session uses ZCode; the adapters row runs it when an adapter is behind, unless
   the zcode row already did or an adapter process (`muse-acp`,
   `zcode-acp-server/dist/cli.js`, anything from either package folder) runs. Each
-  row then re-reads its own versions: newer is `updated`; unchanged while
+  row then checks every package the unit can touch for decreases or disappearance,
+  before accepting its own progress. A decrease is `failed / version_went_down`.
+  An adapter newer than its registry offer prevents the shared run: ZCode skips
+  with `shared_updater_unsafe`, and adapters use exact-version direct installs.
+  For its own versions, newer is `updated`; unchanged while
   something still runs from the app folder (ZCode) or an adapter runs is `in_use`,
   because the unit defers then; otherwise the unit's failure code or
-  `update_failed`. Without `~/.config/systemd/user/t3-acp-update.service` both
-  rows are `failed` / `unsupported`.
+  `update_failed`. Without `~/.config/systemd/user/t3-acp-update.service`, ZCode
+  is `failed / unsupported`; adapters still use bound direct installs.
 - **Mac.** A running ZCode (any process of the bundle that is not a CLI session)
   reports `quit_first` before any download: like Codex and Claude, ZCode on the
   Mac is never quit. A T3 session alone is `in_use`. Otherwise the ZIP is checked
@@ -940,8 +947,9 @@ replace anything.
   or a zcode-acp-server `dist/cli.js` or a `muse-acp` name in its arguments. The
   process scan lists anything running from the npm global tree whatever its name,
   and nothing is ever stopped. npm's error lines (not its warnings) that name EPERM or
-  EBUSY on a package's folder make that package `in_use`; the output is read in memory
-  and never shown.
+  EACCES on a package's folder with no matching running adapter give
+  `prefix_not_writable`, including rename and removal failures. EBUSY remains
+  `in_use`; the output is read in memory and never shown.
   zcode-acp-server's postinstall is the POSIX command `node dist/remote/hub-upgrade-notify.js
   2>/dev/null || true`, which cmd.exe (npm's default shell) cannot run: it failed the
   whole combined install and rolled muse-acp back. When Git for Windows is installed
@@ -954,14 +962,19 @@ replace anything.
 **Which copy.** Each adapter's owner is the copy T3 actually runs: the package
 named by an enabled T3 provider instance's `config.commandPath` or
 `config.commandArgs` (environment values, which can be secrets, are never read),
-every distinct one when several instances run several copies, else the adapter
+every distinct one when several instances run several copies. Bare commands in
+those instances resolve through PATH too; an explicit owner never suppresses
+another instance's bare command. Unresolved ownership skips the row with
+`mixed_ownership`. Otherwise discovery uses the adapter
 command first on PATH (the Mac adds
 `/etc/paths`, `/opt/homebrew/bin` and `/usr/local/bin`), else the usual folder
 (`~/.local`, `/opt/homebrew`, `%APPDATA%\npm`), else the first other copy found.
 A path is read as written first: pnpm's global `node_modules/<package>` is a link
 into its `.pnpm` store, and following it would name the store as the install
 (links are followed only when the written path names no package, as for a bin
-link). The owner's layout names its installer: npm (`<prefix>/lib/node_modules`, or
+link). A configured command pinned to a `.pnpm` store entry skips the row as
+`pnpm_store_copy`: update it with pnpm and select its global command in T3.
+The owner's layout names its installer: npm (`<prefix>/lib/node_modules`, or
 `<prefix>\node_modules` on Windows), pnpm (`.../pnpm/global/<n>/node_modules`) or
 bun (`~/.bun/install/global/node_modules`); a plain folder elsewhere is `other`.
 Every behind copy installs the exact version the public registry named, so a
@@ -975,18 +988,24 @@ yarn or `other` owner, or a missing pnpm/bun, is `unsupported`. Whether this
 account can write an owner folder is tested by creating and removing a file there
 (`os.access` cannot see a Windows ACL): one it cannot is `action_required` /
 `prefix_not_writable`, nothing runs, and nothing runs as another user. npm's EPERM
-or EACCES on creating something in a package nothing uses is the same; removing or
-renaming a file a program holds (rmdir, unlink, rename) or EBUSY is `in_use`.
+or EACCES in a package with no matching running adapter is the same, including
+rename, unlink and directory access. A syscall name alone cannot prove a lock;
+a matching running adapter or EBUSY gives `in_use`.
 Verification reads every owner's copy: a package is updated only when each copy T3
-runs reached the registry's version. A copy that moved to a lower or other version
-is `failed` / `registry_mismatch`. When none moved but another copy changed or
-appeared, the row is `failed` / `wrong_prefix`
+runs reached the registry's version. Before accepting success, every snapshotted
+owner is checked, including siblings outside the plan. A decrease is
+`failed / version_went_down`, a disappearing copy is `version_unknown`, and
+another changed version below the target is `registry_mismatch`. When none moved
+but another copy changed or appeared, the row is `failed` / `wrong_prefix`
 (cause `wrong_prefix`), and its diagnostics name both folders and versions:
 "npm updated the package in an unused prefix; the active one is unchanged."
 On Ubuntu and Nas1 the owner's `t3-acp-update.service` runs only when every
-owner is npm in `~/.local`, the folder it installs into; otherwise AAC installs
-directly, holding a package while an adapter process uses it (`in_use`), as the
-unit does.
+owner is npm in `~/.local`, both adapters are known, and neither registry offer
+would lower a sibling. Otherwise AAC installs behind copies directly at exact
+versions and leaves newer siblings alone. A ZCode row skips the shared unit as
+`shared_updater_unsafe` if its adapter siblings cannot be preserved. Both unit
+callers verify the desktop and adapter versions the unit can touch afterward.
+Direct installs hold a package while an adapter process uses it (`in_use`).
 
 **Adapter rows.** The top-level versions stay null; `parts` lists `muse-acp` and
 `zcode-acp-server` once each with their previous and current versions (null for a
@@ -1027,18 +1046,21 @@ row ended as it did instead of "The app update failed":
 | `tail` | For a row that did not finish cleanly: the last 12 lines (at most 1200 characters) of the failing command's stderr |
 
 The tail passes the same scrubber twice, in the helper and at the dashboard
-boundary. It drops whole credential lines after their marker (`Cookie:`,
-`Set-Cookie:`, `Authorization:`, npm's `_auth`/`_authToken`/`_password` including
-`//host/:` forms, any `token`/`secret`/`password`/`passphrase`/`credential`/`session
-id` key, `PRIVATE KEY` lines), `Bearer`/`Basic` values, `--password`/`--token`
-flag values, `code=`, one-time codes, JWTs, npm/GitHub/API/AWS key shapes, URL
+boundary. Before any truncation it replaces each whole line naming `auth`,
+`token`, `password`, `passwd`, `pwd`, `secret`, `cookie`, `authorization`, `bearer`,
+`api_key`, `apikey`, `api-key`, `credential`, `session` or `private key` with
+`<line removed: may contain a credential>`. Indented and separator-continued
+lines go with it, so JSON credentials, folded headers and quoted flags cannot
+leave a tail. Oversized private stderr files are omitted rather than cut through
+a possible credential block. The existing patterns still remove unmarked secret
+shapes, `code=`, one-time codes, JWTs, npm/GitHub/API/AWS key shapes, URL
 credentials and query strings, email addresses and `user@host`, 32+ hex and 40+
 token-character runs and random-looking runs with `/`, ANSI codes, control
 characters, the home folder (`~`, any letter case) and other users' folders up to
 the next separator (`/home/<user>`, `/Users/<user>`, `C:\Users\<user>`, names
-with spaces included). Every pattern runs on at most 48 lines cut to 600
-characters with bounded repeats, so it stays linear (a 64 KiB line takes about a
-millisecond). T3 session commands never record output. Every PowerShell script
+with spaces included). After the complete-line credential scan, other patterns
+run on at most 48 lines cut to 600 characters with bounded repeats, so it stays
+linear (a 64 KiB line takes about a millisecond). T3 session commands never record output. Every PowerShell script
 first sets `[Console]::OutputEncoding` to `New-Object System.Text.UTF8Encoding $false`
 (UTF-8 without a byte-order mark): Windows PowerShell 5.1 otherwise writes in the OEM
 code page and a `C:\Users\René` path or a localized error came back mangled. A
