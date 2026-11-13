@@ -144,6 +144,36 @@ export interface AnalyticsRemoteFingerprint {
   /** zcode only: the write-ahead log, where new rows wait for a checkpoint. */
   walSize?: number;
   walMtimeMs?: number;
+  /**
+   * A read the deadline cut (DESIGN 16.1): the decoded byte offset after its last complete line.
+   * The next call reads on from there while the file is unchanged.
+   */
+  readThrough?: number;
+  /** This answer's rows for the file continue an earlier read from this offset: add, not replace. */
+  readFrom?: number;
+  /** The reader's carry-over between lines: model, provider, running totals, a session digest. */
+  readState?: AnalyticsReadState;
+  /** The file name without its conversation id, to name a log not read to its end. */
+  readName?: string;
+  /** The decoded size when the file states it. */
+  decodedSize?: number;
+}
+
+/** Codex's carry-over for a resumed read; no identifier (the session travels as a digest). */
+export interface AnalyticsReadState {
+  model?: string | null;
+  provider?: string | null;
+  previous?: number[] | null;
+  sessionDigest?: string | null;
+}
+
+/** A log not read to its end, named for the page (no conversation id). */
+export interface AnalyticsUnfinishedLog {
+  name: string;
+  sizeBytes: number;
+  readThroughBytes: number | null;
+  decodedBytes: number | null;
+  reason: 'deadline' | 'unreadable';
 }
 
 export interface AnalyticsRemoteRow {
@@ -197,6 +227,9 @@ export interface AnalyticsRemoteKindResult {
   fingerprints: Record<string, AnalyticsRemoteFingerprint>;
   /** zcode: an immutable open cannot read rows still in the write-ahead log. */
   walUnread?: boolean;
+  /** Logs not read to their end (at most 20, largest first), and how many there are in all. */
+  unfinished?: AnalyticsUnfinishedLog[];
+  unfinishedCount?: number;
   /** Antigravity: a conversation database or folder could not be read (busy, damaged); the rest count. */
   unreadable?: boolean;
 }
@@ -626,8 +659,75 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
       (typeof print.claudeGroup === 'string' && SHA256_HEX.test(print.claudeGroup))) &&
     (print.usageSkipped === undefined || typeof print.usageSkipped === 'boolean') &&
     (print.walSize === undefined || nonNegative(print.walSize)) &&
-    (print.walMtimeMs === undefined || nonNegative(print.walMtimeMs))
+    (print.walMtimeMs === undefined || nonNegative(print.walMtimeMs)) &&
+    (print.readThrough === undefined || nonNegative(print.readThrough)) &&
+    (print.readFrom === undefined || nonNegative(print.readFrom)) &&
+    (print.readState === undefined || validReadState(print.readState)) &&
+    (print.readName === undefined || validLogName(print.readName)) &&
+    (print.decodedSize === undefined || nonNegative(print.decodedSize))
   );
+}
+
+const UUID_IN_TEXT = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/** A log's display name: printable ASCII, at most 120 characters, never a conversation id. */
+function validLogName(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 120 &&
+    /^[\x21-\x7e]+$/.test(value) &&
+    !UUID_IN_TEXT.test(value)
+  );
+}
+
+function validReadState(value: unknown): value is AnalyticsReadState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Record<string, unknown>;
+  const text = (item: unknown, limit: number) =>
+    item === undefined || item === null || cleanText(item, limit);
+  return (
+    Object.keys(state).every((key) =>
+      ['model', 'provider', 'previous', 'sessionDigest'].includes(key)
+    ) &&
+    text(state.model, 200) &&
+    text(state.provider, 64) &&
+    (state.previous === undefined ||
+      state.previous === null ||
+      (Array.isArray(state.previous) &&
+        state.previous.length === 4 &&
+        state.previous.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0))) &&
+    (state.sessionDigest === undefined ||
+      state.sessionDigest === null ||
+      (typeof state.sessionDigest === 'string' && /^[0-9a-f]{16}$/.test(state.sessionDigest)))
+  );
+}
+
+/** A list of logs not read to their end, or undefined when absent or malformed. */
+export function parseUnfinished(value: unknown): AnalyticsUnfinishedLog[] | undefined {
+  if (!Array.isArray(value) || value.length > 20) return undefined;
+  const list: AnalyticsUnfinishedLog[] = [];
+  for (const item of value) {
+    const entry = item as Record<string, unknown> | null;
+    if (
+      !entry ||
+      typeof entry !== 'object' ||
+      !validLogName(entry.name) ||
+      !nonNegative(entry.sizeBytes) ||
+      (entry.readThroughBytes !== null && !nonNegative(entry.readThroughBytes)) ||
+      (entry.decodedBytes !== null && !nonNegative(entry.decodedBytes)) ||
+      (entry.reason !== 'deadline' && entry.reason !== 'unreadable')
+    )
+      return undefined;
+    list.push({
+      name: entry.name,
+      sizeBytes: entry.sizeBytes as number,
+      readThroughBytes: (entry.readThroughBytes as number | null) ?? null,
+      decodedBytes: (entry.decodedBytes as number | null) ?? null,
+      reason: entry.reason,
+    });
+  }
+  return list;
 }
 
 /** Strict shape check: aggregates only, bounded, never trusted blindly. */
@@ -673,6 +773,8 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       fingerprints?: unknown;
       walUnread?: unknown;
       unreadable?: unknown;
+      unfinished?: unknown;
+      unfinishedCount?: unknown;
     };
     if (
       entry.state !== 'ok' &&
@@ -715,6 +817,15 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       throw new AnalyticsRemoteTransportError();
     if (entry.unreadable !== undefined && typeof entry.unreadable !== 'boolean')
       throw new AnalyticsRemoteTransportError();
+    // Naming is a diagnostic: a malformed list is dropped, the usage kept.
+    const unfinished = parseUnfinished(entry.unfinished);
+    const unfinishedCount =
+      unfinished &&
+      Number.isSafeInteger(entry.unfinishedCount) &&
+      (entry.unfinishedCount as number) >= unfinished.length &&
+      (entry.unfinishedCount as number) <= 20_000
+        ? (entry.unfinishedCount as number)
+        : unfinished?.length;
     const prints = entry.fingerprints as Record<string, unknown> | undefined;
     if (!prints || typeof prints !== 'object' || Array.isArray(prints))
       throw new AnalyticsRemoteTransportError();
@@ -744,6 +855,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
         : {}),
       ...(entry.walUnread === true ? { walUnread: true } : {}),
       ...(entry.unreadable === true ? { unreadable: true } : {}),
+      ...(unfinished?.length ? { unfinished, unfinishedCount } : {}),
     };
   }
   const discovery = parseAnalyticsDiscovery(response.discovery);
@@ -1117,14 +1229,43 @@ export async function runAnalyticsRemoteScan(
     if (cause) scannerDown.set(platform, { cause, until: now() + SCANNER_RETRY_MS });
   }
   // The Python helper refuses fields it does not know; it reads the defaults and T3 homes only.
+  // It cannot resume a part-read log: given that print it would take the file as read to its end,
+  // so such prints are left out and Python reads the file whole (DESIGN 16.1).
   const { presence: _presence, cwd: _cwd, ...older } = request;
   void _presence;
   void _cwd;
+  older.fingerprints = withoutPartialPrints(request.fingerprints);
   const answer = await python(sshHost, platform, older, {
     ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
     ...(deps.helperPath !== undefined ? { helperPath: deps.helperPath } : {}),
   });
   return { ...answer, reader: { name: 'python-fallback', cause: cause ?? 'binary_failed' } };
+}
+
+/** Prints of logs read to their end only, without the resume fields the Python helper lacks. */
+export function withoutPartialPrints(
+  fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>>
+): Record<string, Record<string, AnalyticsRemoteFingerprint>> {
+  const out: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {};
+  for (const [kind, prints] of Object.entries(fingerprints)) {
+    out[kind] = {};
+    for (const [key, print] of Object.entries(prints)) {
+      if (print.readThrough !== undefined) continue;
+      const {
+        readFrom: _from,
+        readState: _state,
+        readName: _name,
+        decodedSize: _decoded,
+        ...plain
+      } = print;
+      void _from;
+      void _state;
+      void _name;
+      void _decoded;
+      out[kind][key] = plain;
+    }
+  }
+  return out;
 }
 
 /** All remote scans use only aliases in the packaged computer registry. */

@@ -160,6 +160,66 @@ pub struct Print {
     /// Digest of the file's first min(msgThrough, 256) bytes when they were sent: a file that only
     /// grew keeps them, a rewritten one does not.
     pub msg_head: Option<String>,
+    /// How far a read that the deadline cut got, and where this answer's rows for the file start
+    /// (DESIGN 16.1). None for a file read whole in one call.
+    pub progress: Option<ReadProgress>,
+}
+
+/// A resumable read's place in one file (DESIGN 16.1). `through` is the decoded byte offset after
+/// the last complete line parsed: None once the file was read to its end. `from` is where this
+/// answer's rows for the file start, when they continue an earlier read (the server adds them to
+/// the rows it kept). `state` is the reader's carry-over between lines. `name` is the file name
+/// without its conversation id, and `decoded` the decoded size when the file says it.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ReadProgress {
+    pub through: Option<u64>,
+    pub from: Option<u64>,
+    pub state: Option<Value>,
+    pub name: Option<String>,
+    pub decoded: Option<u64>,
+}
+
+/// A log's file name without any conversation id (8-4-4-4-12 hex), so it can be shown: raw ids
+/// never leave the computer. ASCII only, at most 120 characters.
+pub fn display_name(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let bytes = name.as_bytes();
+    let shape = [8usize, 4, 4, 4, 12];
+    let is_id_at = |start: usize| -> Option<usize> {
+        let mut at = start;
+        for (index, length) in shape.iter().enumerate() {
+            if at + length > bytes.len() || !bytes[at..at + length].iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            at += length;
+            if index < 4 {
+                if bytes.get(at) != Some(&b'-') {
+                    return None;
+                }
+                at += 1;
+            }
+        }
+        Some(at)
+    };
+    let mut out = String::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(end) = is_id_at(index) {
+            // Drop the id and the separator before it.
+            while out.ends_with('-') || out.ends_with('_') {
+                out.pop();
+            }
+            index = end;
+            continue;
+        }
+        let c = bytes[index] as char;
+        out.push(if c.is_ascii_graphic() { c } else { '_' });
+        index += 1;
+    }
+    out.chars().take(120).collect()
 }
 
 impl Print {
@@ -177,6 +237,7 @@ impl Print {
             wal_mtime_ms: None,
             msg_through: None,
             msg_head: None,
+            progress: None,
         }
     }
 
@@ -211,6 +272,23 @@ impl Print {
         }
         if let Some(head) = &self.msg_head {
             map.insert("msgHead".into(), Value::from(head.clone()));
+        }
+        if let Some(progress) = &self.progress {
+            if let Some(through) = progress.through {
+                map.insert("readThrough".into(), Value::from(through));
+            }
+            if let Some(from) = progress.from {
+                map.insert("readFrom".into(), Value::from(from));
+            }
+            if let Some(state) = &progress.state {
+                map.insert("readState".into(), state.clone());
+            }
+            if let Some(name) = &progress.name {
+                map.insert("readName".into(), Value::from(name.clone()));
+            }
+            if let Some(decoded) = progress.decoded {
+                map.insert("decodedSize".into(), Value::from(decoded));
+            }
         }
         Value::Object(map)
     }

@@ -28,6 +28,9 @@ pub struct Request {
     pub presence: bool,
     pub messages: bool,
     pub cwd: bool,
+    /// Tests only, never read from a request: cut the scan after this many log lines, so a resumed
+    /// read is tested at fixed points instead of wall-clock ones.
+    pub line_budget: Option<u64>,
 }
 
 fn valid_extra_root(value: &Value) -> bool {
@@ -136,6 +139,7 @@ pub fn parse_request(raw: &[u8]) -> Result<Request, String> {
         presence: flag("presence", false)?,
         messages: flag("messages", false)?,
         cwd: flag("cwd", true)?,
+        line_budget: None,
     })
 }
 
@@ -215,6 +219,7 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     let mut collector = Collector::new(request.min_date_ms, request.budget, request.fingerprints.clone());
     collector.capture_cwd = request.cwd;
     collector.messages_wanted = request.messages;
+    collector.lines_left = request.line_budget;
     let instances = discover::t3_instances(home);
     let mut states: Map<String, Value> = Map::new();
     let mut partials: Vec<String> = Vec::new();
@@ -274,6 +279,14 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                 "compressedUnread".into(),
                 json!(collector.codex_compressed_unread.len()),
             );
+        }
+        if crate::collector::resumable(kind) {
+            let (unfinished, count) = unfinished_logs(&collector, kind);
+            if count > 0 {
+                entry.insert("partial".into(), json!(true));
+                entry.insert("unfinished".into(), Value::Array(unfinished));
+                entry.insert("unfinishedCount".into(), json!(count));
+            }
         }
         if kind == "zcode" && collector.wal_unread {
             entry.insert("walUnread".into(), json!(true));
@@ -361,4 +374,64 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
         }
     }
     response
+}
+
+/// The logs of a resumable kind not read to their end, named so the page can say which (DESIGN
+/// 16.1): those this call left part-read, those an earlier call did that this one did not reach
+/// (only while the kind was cut, else a file the scan did not find is gone), and those the decoder
+/// could not read. At most 20, largest first; the count is of all of them.
+pub fn unfinished_logs(collector: &Collector, kind: &str) -> (Vec<Value>, usize) {
+    let mut found: Vec<(u8, u64, Value)> = Vec::new();
+    let fresh = collector.fresh.get(kind);
+    if let Some(prints) = fresh {
+        for print in prints.values() {
+            if let Some(progress) = &print.progress
+                && let Some(through) = progress.through
+            {
+                found.push((
+                    0,
+                    print.size,
+                    json!({"name": progress.name, "sizeBytes": print.size, "readThroughBytes": through,
+                           "decodedBytes": progress.decoded, "reason": "deadline"}),
+                ));
+            }
+        }
+    }
+    if collector.truncated
+        && let Some(prior) = collector.prior_kind(kind)
+    {
+        for (key, print) in prior {
+            if fresh.is_some_and(|m| m.contains_key(key)) {
+                continue;
+            }
+            let Some(through) = print.get("readThrough").and_then(Value::as_u64) else {
+                continue;
+            };
+            let size = print.get("size").and_then(Value::as_u64).unwrap_or(0);
+            let name = print
+                .get("readName")
+                .and_then(Value::as_str)
+                .map(|n| util::prefix_chars(n, 120));
+            found.push((
+                0,
+                size,
+                json!({"name": name, "sizeBytes": size, "readThroughBytes": through,
+                       "decodedBytes": print.get("decodedSize").and_then(Value::as_u64), "reason": "deadline"}),
+            ));
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (path, size) in &collector.unreadable_logs {
+        if seen.insert(path.clone()) {
+            found.push((
+                1,
+                *size,
+                json!({"name": util::display_name(path), "sizeBytes": size, "readThroughBytes": null,
+                       "decodedBytes": null, "reason": "unreadable"}),
+            ));
+        }
+    }
+    let count = found.len();
+    found.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    (found.into_iter().take(20).map(|(_, _, v)| v).collect(), count)
 }

@@ -137,7 +137,45 @@ export type AccountActivityScanResult = UsageWorkerResult & {
   scan?: NonNullable<UsageWorkerResult['scan']> & { detail?: string };
 };
 
-function compressedReplayDetail(stalled: number, terminal = 0): { detail?: string } {
+/** A compressed log not read to its end, named without its conversation id (DESIGN 16.1). */
+interface StalledLog {
+  name: string;
+  sizeBytes: number;
+  readThroughBytes: number;
+  terminal: boolean;
+}
+
+const CONVERSATION_ID = /[-_]?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+function stalledLogOf(
+  file: string,
+  stats: fs.Stats | undefined,
+  value: Checkpoint
+): { stalledLog?: StalledLog } {
+  const terminal = (value.compressedReplay?.terminalUntil ?? 0) > 0;
+  if (!file.endsWith('.zst') || value.complete || !(value.compressedReplayStalled || terminal))
+    return {};
+  return {
+    stalledLog: {
+      name: path.basename(file).replace(CONVERSATION_ID, '').slice(0, 120),
+      sizeBytes: stats?.size ?? value.size,
+      readThroughBytes: checkpointProgress(value),
+      terminal,
+    },
+  };
+}
+
+function sizeText(bytes: number): string {
+  return bytes >= 1024 ** 3
+    ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
+    : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+}
+
+function compressedReplayDetail(
+  stalled: number,
+  terminal = 0,
+  logs: StalledLog[] = []
+): { detail?: string } {
   const parts: string[] = [];
   if (terminal)
     parts.push(
@@ -147,6 +185,18 @@ function compressedReplayDetail(stalled: number, terminal = 0): { detail?: strin
     parts.push(
       `${stalled - terminal} compressed Codex log${stalled - terminal === 1 ? ' is' : 's are'} too large to finish within one analytics pass; replaying the decoded prefix exhausted the read budget. Retries rotate with bounded pass back-off.`
     );
+  if (parts.length && logs.length) {
+    const named = [...logs]
+      .sort((a, b) => b.sizeBytes - a.sizeBytes)
+      .slice(0, 5)
+      .map(
+        (log) =>
+          `${log.name} (${sizeText(log.sizeBytes)}, ${sizeText(log.readThroughBytes)} decoded so far${log.terminal ? ', paused' : ''})`
+      );
+    parts.push(
+      `Not finished: ${named.join(', ')}${logs.length > named.length ? ` and ${logs.length - named.length} more` : ''}.`
+    );
+  }
   return parts.length ? { detail: parts.join(' ') } : {};
 }
 
@@ -2683,6 +2733,7 @@ export async function collectCodexPartition(
         compressedReplayStalled: value.compressedReplayStalled,
         compressedReplayTerminal: (value.compressedReplay?.terminalUntil ?? 0) > 0,
         largeCodexRead: largeCodexReadSpec(file, cache, stats, value),
+        ...stalledLogOf(file, stats, value),
       });
     } catch {
       outcomes.push({
@@ -2728,6 +2779,7 @@ interface CodexFileTallies {
   compressedReplayStalled?: boolean;
   compressedReplayTerminal?: boolean;
   largeCodexRead?: LargeCodexReadSpec;
+  stalledLog?: StalledLog;
 }
 
 interface CodexCounters {
@@ -2739,6 +2791,7 @@ interface CodexCounters {
   stalledCompressedFiles: number;
   terminalCompressedFiles: number;
   largeCodexReads: LargeCodexReadSpec[];
+  stalledLogs: StalledLog[];
 }
 
 /**
@@ -2756,6 +2809,8 @@ function tallyCodexFile(
   if (tallies.unfinishedTail) counters.unfinishedFiles++;
   if (tallies.compressedReplayStalled) counters.stalledCompressedFiles++;
   if (tallies.compressedReplayTerminal) counters.terminalCompressedFiles++;
+  if (tallies.stalledLog && counters.stalledLogs.length < 64)
+    counters.stalledLogs.push(tallies.stalledLog);
   if (tallies.largeCodexRead && counters.largeCodexReads.length < 64)
     counters.largeCodexReads.push(tallies.largeCodexRead);
   counters.skippedLines += tallies.skippedLines;
@@ -2797,6 +2852,7 @@ async function readCodexFiles(
     stalledCompressedFiles: 0,
     terminalCompressedFiles: 0,
     largeCodexReads: [],
+    stalledLogs: [],
   };
   const rows: CompactEntry[] = [];
   const loaded = scanned.map(({ file, stats, unresolved }) => {
@@ -2870,6 +2926,7 @@ async function readCodexFiles(
           compressedReplayStalled: item.value.compressedReplayStalled,
           compressedReplayTerminal: (item.value.compressedReplay?.terminalUntil ?? 0) > 0,
           largeCodexRead: largeCodexReadSpec(item.file, item.cache, item.stats, item.value),
+          ...stalledLogOf(item.file, item.stats, item.value),
         });
       } catch {
         counters.failed++;
@@ -2956,6 +3013,7 @@ async function readCodexFiles(
     compressedReplayStalled: item.value.compressedReplayStalled,
     compressedReplayTerminal: (item.value.compressedReplay?.terminalUntil ?? 0) > 0,
     largeCodexRead: largeCodexReadSpec(item.file, item.cache, item.stats, item.value),
+    ...stalledLogOf(item.file, item.stats, item.value),
   });
   for (const item of loaded) {
     const error = errors.get(item.file);
@@ -3201,6 +3259,7 @@ async function collectExperimentActivity(
   let unfinishedFiles = 0;
   let stalledCompressedFiles = 0;
   let terminalCompressedFiles = 0;
+  const stalledLogs: StalledLog[] = [];
   const largeCodexReads: LargeCodexReadSpec[] = [];
   const referenceKeys = new Set<string>();
   const keyedByFile: Array<{ file: string; entries: KeyedEntry[] }> = [];
@@ -3254,6 +3313,8 @@ async function collectExperimentActivity(
       if (value.unfinishedTail) unfinishedFiles++;
       if (value.compressedReplayStalled) stalledCompressedFiles++;
       if (value.compressedReplay?.terminalUntil) terminalCompressedFiles++;
+      const stalled = stalledLogOf(item.file, item.stats, value).stalledLog;
+      if (stalled && stalledLogs.length < 64) stalledLogs.push(stalled);
       const largeRead = largeCodexReadSpec(item.file, cache, item.stats, value);
       if (largeRead && largeCodexReads.length < 64) largeCodexReads.push(largeRead);
       return { value, read };
@@ -3314,7 +3375,7 @@ async function collectExperimentActivity(
     failedFiles: failed,
     readBytes,
     unfinishedFiles,
-    ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles),
+    ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles, stalledLogs),
     ...(largeCodexReads.length ? { largeCodexReads } : {}),
   });
   const source =
@@ -3687,6 +3748,7 @@ export async function collectAccountActivity(
   let unfinishedFiles = 0;
   let stalledCompressedFiles = 0;
   let terminalCompressedFiles = 0;
+  let stalledLogs: StalledLog[] = [];
   let largeCodexReads: LargeCodexReadSpec[] = [];
   if (request.kind === 'codex') {
     // Codex alone fans out across partition readers above the unread threshold
@@ -3702,6 +3764,7 @@ export async function collectAccountActivity(
     unfinishedFiles = codex.unfinishedFiles;
     stalledCompressedFiles = codex.stalledCompressedFiles;
     terminalCompressedFiles = codex.terminalCompressedFiles;
+    stalledLogs = codex.stalledLogs;
     largeCodexReads = codex.largeCodexReads;
   } else {
     for (const { file, stats, unresolved, frozen, mode, prepared } of scanned) {
@@ -3888,7 +3951,7 @@ export async function collectAccountActivity(
       failedFiles: failed,
       readBytes,
       unfinishedFiles,
-      ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles),
+      ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles, stalledLogs),
       ...(largeCodexReads.length ? { largeCodexReads } : {}),
     },
   };

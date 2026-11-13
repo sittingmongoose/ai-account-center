@@ -7,12 +7,13 @@ pub mod muse;
 pub mod omp;
 pub mod zcode;
 
-use crate::collector::{Collector, MAX_FILES, MAX_LINE_BYTES};
+use crate::collector::{self, Collector, MAX_FILES, MAX_LINE_BYTES};
 use crate::fsx;
 use crate::util::{self, path_text};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -31,6 +32,46 @@ pub struct LineBox {
     pub offset: u64,
     /// Lines before this offset were sent as messages by an earlier scan.
     pub message_from: u64,
+    /// Decoded byte offset after the last complete line: where a read starts (a resumed one past
+    /// 0) and, after a cut, where the next one resumes (DESIGN 16.1).
+    pub through: u64,
+    /// Set when a resumed read could not trust its saved place and read the file from 0 instead.
+    pub restarted: bool,
+}
+
+impl LineBox {
+    /// Codex's carry-over between lines, for a read the deadline cut. No identifier: the session
+    /// travels as a digest only, checked against the log's own first line on resume.
+    pub fn codex_state(&self) -> Value {
+        json!({
+            "model": self.model,
+            "provider": self.provider,
+            "previous": self.previous.map(|p| p.to_vec()),
+            "sessionDigest": self.session.as_deref().map(session_digest),
+        })
+    }
+
+    /// Restore the model, provider and running totals saved by `codex_state`.
+    pub fn restore_codex(&mut self, state: &Value) {
+        let text = |key: &str, limit: usize| {
+            state
+                .get(key)
+                .and_then(Value::as_str)
+                .map(|t| util::prefix_chars(t, limit))
+        };
+        self.model = text("model", 200);
+        self.provider = text("provider", 64);
+        self.previous = state.get("previous").and_then(Value::as_array).and_then(|values| {
+            let numbers: Vec<f64> = values.iter().filter_map(Value::as_f64).collect();
+            (numbers.len() == 4 && numbers.iter().all(|n| n.is_finite() && *n >= 0.0))
+                .then(|| [numbers[0], numbers[1], numbers[2], numbers[3]])
+        });
+    }
+}
+
+/// The session as a resume check: 16 hex of sha256("aac-resume-v1:" + id), never the id.
+pub fn session_digest(session: &str) -> String {
+    util::sha256_hex(format!("aac-resume-v1:{session}").as_bytes())[..16].to_string()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -167,10 +208,10 @@ pub fn read_lines<R: Read>(
     filekey: &str,
     parse: Parse,
     flush: Option<Flush>,
-    mut line_box: LineBox,
+    line_box: &mut LineBox,
 ) -> Outcome {
     let mut reader = BufReader::with_capacity(1 << 16, reader);
-    let mut offset: u64 = 0;
+    let mut offset: u64 = line_box.through;
     let mut chunk = Vec::with_capacity(4096);
     loop {
         if collector.expired() {
@@ -213,25 +254,23 @@ pub fn read_lines<R: Read>(
                     Err(_) => return Outcome::Unreadable,
                 }
             }
+            line_box.through = offset;
             continue;
         }
         let Ok(line) = std::str::from_utf8(&chunk) else {
+            line_box.through = offset;
             continue;
         };
         line_box.offset = start;
-        parse(
-            line.trim_start_matches('\u{feff}'),
-            collector,
-            kind,
-            filekey,
-            &mut line_box,
-        );
+        parse(line.trim_start_matches('\u{feff}'), collector, kind, filekey, line_box);
+        line_box.through = offset;
+        collector.count_line();
         if collector.row_cap {
             return Outcome::Cut;
         }
     }
     if let Some(flush) = flush {
-        flush(collector, kind, filekey, &mut line_box);
+        flush(collector, kind, filekey, line_box);
     }
     Outcome::Ok
 }
@@ -258,29 +297,168 @@ pub fn read_file_with(
     flush: Option<Flush>,
     mut line_box: LineBox,
 ) -> Outcome {
+    read_into(collector, kind, path, filekey, parse, flush, &mut line_box)
+}
+
+/// Read one file from `line_box.through` (0, or where an earlier call stopped), leaving in
+/// `line_box.through` the offset after the last complete line. A compressed log is decoded from
+/// its start and the bytes before `through` discarded without parsing (a single zstd frame cannot
+/// be entered in the middle); a plain file is entered by seeking. A resumed Codex read first takes
+/// the session and cwd from the log's own first line and checks them against the saved digest; a
+/// mismatch or a place past the end reads the file from 0 instead (`restarted`). DESIGN 16.1.
+pub fn read_into(
+    collector: &mut Collector,
+    kind: &str,
+    path: &Path,
+    filekey: &str,
+    parse: Parse,
+    flush: Option<Flush>,
+    line_box: &mut LineBox,
+) -> Outcome {
     let message_from = collector
         .pending
         .get(kind)
         .and_then(|m| m.get(filekey))
         .and_then(|p| p.msg_through)
         .unwrap_or(0);
+    line_box.message_from = message_from;
     let Ok(file) = File::open(path) else {
         return Outcome::Unreadable;
     };
-    if kind == "codex" && path_text(path).ends_with(".jsonl.zst") {
+    let compressed = kind == "codex" && path_text(path).ends_with(".jsonl.zst");
+    let skip = line_box.through;
+    if skip == 0 {
+        if compressed {
+            let Ok(decoder) = zstd::stream::read::Decoder::new(file) else {
+                note_unreadable_log(collector, path);
+                return Outcome::Unreadable;
+            };
+            let outcome = read_lines(collector, kind, decoder, filekey, parse, flush, line_box);
+            if outcome == Outcome::Unreadable {
+                note_unreadable_log(collector, path);
+            }
+            return outcome;
+        }
+        return read_lines(collector, kind, file, filekey, parse, flush, line_box);
+    }
+    let expected = collector
+        .resume
+        .get(&(kind.to_string(), filekey.to_string()))
+        .and_then(|(_, state)| state.get("sessionDigest").and_then(Value::as_str).map(str::to_string));
+    let restart = |collector: &mut Collector, line_box: &mut LineBox| {
+        *line_box = LineBox {
+            message_from,
+            restarted: true,
+            ..LineBox::default()
+        };
+        read_into(collector, kind, path, filekey, parse, flush, line_box)
+    };
+    if compressed {
         let Ok(decoder) = zstd::stream::read::Decoder::new(file) else {
-            collector.codex_compressed_unread.insert(path_text(path));
+            note_unreadable_log(collector, path);
             return Outcome::Unreadable;
         };
-        line_box.message_from = message_from;
-        let outcome = read_lines(collector, kind, decoder, filekey, parse, flush, line_box);
+        let mut reader = BufReader::with_capacity(1 << 16, decoder);
+        let Some(head) = head_line(collector, kind, filekey, &mut reader, line_box, skip) else {
+            return restart(collector, line_box);
+        };
+        if expected.as_deref() != line_box.session.as_deref().map(session_digest).as_deref() {
+            return restart(collector, line_box);
+        }
+        match discard(collector, &mut reader, skip - head) {
+            Discarded::Done => {}
+            Discarded::Cut => {
+                collector.truncated = true;
+                line_box.through = skip;
+                return Outcome::Cut;
+            }
+            Discarded::Short => return restart(collector, line_box),
+            Discarded::Failed => {
+                note_unreadable_log(collector, path);
+                return Outcome::Unreadable;
+            }
+        }
+        line_box.through = skip;
+        let outcome = read_lines(collector, kind, reader, filekey, parse, flush, line_box);
         if outcome == Outcome::Unreadable {
-            collector.codex_compressed_unread.insert(path_text(path));
+            note_unreadable_log(collector, path);
         }
         return outcome;
     }
-    line_box.message_from = message_from;
-    read_lines(collector, kind, file, filekey, parse, flush, line_box)
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let mut reader = BufReader::with_capacity(1 << 16, file);
+    let Some(_) = head_line(collector, kind, filekey, &mut reader, line_box, skip) else {
+        return restart(collector, line_box);
+    };
+    if skip > size
+        || expected.as_deref() != line_box.session.as_deref().map(session_digest).as_deref()
+        || reader.seek(SeekFrom::Start(skip)).is_err()
+    {
+        return restart(collector, line_box);
+    }
+    line_box.through = skip;
+    read_lines(collector, kind, reader, filekey, parse, flush, line_box)
+}
+
+/// A resumed read's first line: the session and cwd come from the log's own `session_meta`, never
+/// from saved state. Returns its length, or None when it is not a whole line before `skip`.
+fn head_line<R: BufRead>(
+    collector: &mut Collector,
+    kind: &str,
+    filekey: &str,
+    reader: &mut R,
+    line_box: &mut LineBox,
+    skip: u64,
+) -> Option<u64> {
+    let mut line = Vec::new();
+    let read = reader
+        .by_ref()
+        .take(MAX_LINE_BYTES as u64 + 2)
+        .read_until(b'\n', &mut line)
+        .ok()? as u64;
+    if read == 0 || read > skip || !line.ends_with(b"\n") {
+        return None;
+    }
+    let text = std::str::from_utf8(&line).ok()?;
+    if text.contains("\"session_meta\"") {
+        let (model, provider, previous) = (line_box.model.take(), line_box.provider.take(), line_box.previous);
+        codex::parse_line(text.trim_start_matches('\u{feff}'), collector, kind, filekey, line_box);
+        // The saved model and totals stand; the head line only names the session and its folder.
+        line_box.model = model.or(line_box.model.take());
+        line_box.provider = provider.or(line_box.provider.take());
+        line_box.previous = previous;
+    }
+    Some(read)
+}
+
+fn note_unreadable_log(collector: &mut Collector, path: &Path) {
+    collector.codex_compressed_unread.insert(path_text(path));
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    collector.unreadable_logs.push((path.to_path_buf(), size));
+}
+
+enum Discarded {
+    Done,
+    Cut,
+    Short,
+    Failed,
+}
+
+/// Decode and drop `count` bytes, 8 MiB at a time, stopping at the deadline.
+fn discard<R: Read>(collector: &Collector, reader: &mut R, count: u64) -> Discarded {
+    let mut left = count;
+    while left > 0 {
+        if collector.expired() {
+            return Discarded::Cut;
+        }
+        let step = left.min(8 << 20);
+        match std::io::copy(&mut reader.by_ref().take(step), &mut std::io::sink()) {
+            Ok(0) => return Discarded::Short,
+            Ok(read) => left -= read,
+            Err(_) => return Discarded::Failed,
+        }
+    }
+    Discarded::Done
 }
 
 /// Where copies of a log's records can be: a log of the same name, or (Codex) the same conversation id.
@@ -508,13 +686,34 @@ pub fn scan_kind_files(
             };
             collector.skip = Some(known);
         }
-        let outcome = read_file(collector, kind, &path, &filekey, parse, flush);
+        // A resumable kind reads on from where an earlier call stopped (DESIGN 16.1).
+        let (from, state) = if collector::resumable(kind) {
+            collector.resume_point(kind, &filekey)
+        } else {
+            (0, Value::Null)
+        };
+        let mut line_box = LineBox {
+            through: from,
+            ..LineBox::default()
+        };
+        if from > 0 {
+            line_box.restore_codex(&state);
+        }
+        let outcome = read_into(collector, kind, &path, &filekey, parse, flush, &mut line_box);
+        // A saved place that could not be trusted was read from 0: its rows replace, not add.
+        let from = if line_box.restarted { 0 } else { from };
         collector.skip = None;
         match outcome {
-            Outcome::Cut => return true,
+            Outcome::Cut => {
+                if collector::resumable(kind) && !collector.row_cap {
+                    collector.cut_file(kind, &filekey, from, line_box.through, line_box.codex_state(), &path);
+                }
+                return true;
+            }
             Outcome::Ok => {
                 collector.sent_through(kind, &filekey, &path);
                 collector.confirm_file(kind, &filekey);
+                collector.finish_resumed(kind, &filekey, from);
             }
             Outcome::Unreadable => {
                 collector.read_failure(kind, filekey.clone());

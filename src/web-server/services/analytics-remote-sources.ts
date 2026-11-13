@@ -17,6 +17,7 @@ import {
   REMOTE_ANALYTICS_HOSTS,
   parseAnalyticsDiscovery,
   parseAnalyticsSessions,
+  parseUnfinished,
   runAnalyticsRemoteScan,
   fixedAnalyticsRemoteAliases,
   hasClaudeReplacementMetadata,
@@ -35,6 +36,7 @@ import {
   type AnalyticsRemoteResponse,
   type AnalyticsRemoteRow,
   type AnalyticsRemoteSessionRow,
+  type AnalyticsUnfinishedLog,
   type AnalyticsScanFailureCause,
   type AnalyticsSessionEvidence,
 } from './analytics-remote-transport';
@@ -272,11 +274,17 @@ const MAX_CACHED_ROWS = 100_000;
  */
 const CACHE_VERSION = 6;
 
+/** A kind's last confirmed read, and the logs it has not read to their end (DESIGN 16.1). */
+interface KindRead {
+  lastScanAt: string | null;
+  state: AnalyticsSourceState;
+  unfinished?: AnalyticsUnfinishedLog[];
+  unfinishedCount?: number;
+}
+
 interface RemoteCache {
   /** Per-tool last confirmed read, including measured empty/absent answers. */
-  kinds?: Partial<
-    Record<AnalyticsRemoteKind, { lastScanAt: string | null; state: AnalyticsSourceState }>
-  >;
+  kinds?: Partial<Record<AnalyticsRemoteKind, KindRead>>;
   version: typeof CACHE_VERSION;
   fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>>;
   rows: AnalyticsRemoteRow[];
@@ -353,6 +361,21 @@ function loadCache(file: string, at: () => string = () => new Date().toISOString
     value.trimmed = parseRemoteCacheTrim(value.trimmed);
     // Discovery, evidence and the reader label are diagnostics: damaged entries are dropped.
     value.discovery = parseAnalyticsDiscovery(value.discovery);
+    // A kind's unfinished list is a diagnostic: a malformed one is dropped.
+    for (const read of Object.values(value.kinds ?? {})) {
+      if (!read || read.unfinished === undefined) continue;
+      const list = parseUnfinished(read.unfinished);
+      if (list?.length) {
+        read.unfinished = list;
+        read.unfinishedCount =
+          Number.isSafeInteger(read.unfinishedCount) && (read.unfinishedCount ?? 0) >= list.length
+            ? read.unfinishedCount
+            : list.length;
+      } else {
+        delete read.unfinished;
+        delete read.unfinishedCount;
+      }
+    }
     value.sessions = parseAnalyticsSessions(value.sessions);
     if (value.toolsAt !== undefined && !Number.isFinite(Date.parse(String(value.toolsAt))))
       value.toolsAt = undefined;
@@ -502,6 +525,75 @@ export function clearAnalyticsRemoteCwds(cacheDir: string = path.join(getCcsDir(
 
 function hourEpoch(hour: string): number {
   return Date.parse(`${hour.replace(' ', 'T')}:00Z`);
+}
+
+/**
+ * Files whose answer continues an earlier read (`readFrom`): `appended` when it starts where the
+ * cached print stopped on the same file, `unmatched` when it does not (the rows lack the file's
+ * start). DESIGN 16.1.
+ */
+function resumedFiles(
+  kinds: AnalyticsRemoteKind[],
+  freshPrints: Record<string, Record<string, AnalyticsRemoteFingerprint>>,
+  cachedPrints: Record<string, Record<string, AnalyticsRemoteFingerprint>>
+): {
+  appended: Map<AnalyticsRemoteKind, Set<string>>;
+  unmatched: Map<AnalyticsRemoteKind, Set<string>>;
+} {
+  const appended = new Map<AnalyticsRemoteKind, Set<string>>();
+  const unmatched = new Map<AnalyticsRemoteKind, Set<string>>();
+  for (const tool of kinds)
+    for (const [key, print] of Object.entries(freshPrints[tool] ?? {})) {
+      if (print.readFrom === undefined) continue;
+      const before = cachedPrints[tool]?.[key];
+      const target =
+        before?.readThrough === print.readFrom && samePrint(print, before) ? appended : unmatched;
+      if (!target.has(tool)) target.set(tool, new Set());
+      target.get(tool)?.add(key);
+    }
+  return { appended, unmatched };
+}
+
+/** Hourly rows with the same file, model, route and hour summed into one (a resumed file's). */
+function foldRows(rows: AnalyticsRemoteRow[]): AnalyticsRemoteRow[] {
+  const byKey = new Map<string, AnalyticsRemoteRow>();
+  for (const row of rows) {
+    const key = JSON.stringify([row.k, row.f, row.m, row.p ?? '', row.h, row.c > 0]);
+    const seen = byKey.get(key);
+    if (!seen) {
+      byKey.set(key, { ...row });
+      continue;
+    }
+    seen.i += row.i;
+    seen.o += row.o;
+    seen.cr += row.cr;
+    seen.cw += row.cw;
+    seen.c += row.c;
+    seen.n += row.n;
+  }
+  return [...byKey.values()];
+}
+
+/** Session rows of the same file, session, model and route summed, their span widened. */
+function foldSessionRows(rows: AnalyticsRemoteSessionRow[]): AnalyticsRemoteSessionRow[] {
+  const byKey = new Map<string, AnalyticsRemoteSessionRow>();
+  for (const row of rows) {
+    const key = JSON.stringify([row.k, row.f, row.s, row.m, row.p ?? '', row.c > 0]);
+    const seen = byKey.get(key);
+    if (!seen) {
+      byKey.set(key, { ...row });
+      continue;
+    }
+    seen.a = Math.min(seen.a, row.a);
+    seen.z = Math.max(seen.z, row.z);
+    seen.i += row.i;
+    seen.o += row.o;
+    seen.cr += row.cr;
+    seen.cw += row.cw;
+    seen.c += row.c;
+    seen.n += row.n;
+  }
+  return [...byKey.values()];
 }
 
 function samePrint(
@@ -658,6 +750,34 @@ function standingFailure(
     : undefined;
 }
 
+function sizeText(bytes: number): string {
+  return bytes >= 1024 ** 3
+    ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
+    : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+}
+
+/**
+ * Names the logs a kind has not read to their end (DESIGN 16.1): "2 logs not read to their end
+ * yet: rollout-2026-10-31T08-06-21.jsonl.zst (3.2 GB, 31% read), ...". Names carry no
+ * conversation id; at most five are spelled out.
+ */
+export function unfinishedText(list: AnalyticsUnfinishedLog[], count?: number): string {
+  const total = Math.max(count ?? list.length, list.length);
+  const named = list.slice(0, 5).map((log) => {
+    if (log.reason === 'unreadable')
+      return `${log.name} (${sizeText(log.sizeBytes)}, could not be decoded)`;
+    const done =
+      log.decodedBytes && log.readThroughBytes !== null
+        ? `, ${Math.min(99, Math.floor((log.readThroughBytes / log.decodedBytes) * 100))}% read`
+        : log.readThroughBytes !== null
+          ? `, ${sizeText(log.readThroughBytes)} read`
+          : '';
+    return `${log.name} (${sizeText(log.sizeBytes)}${done})`;
+  });
+  const more = total > named.length ? ` and ${total - named.length} more` : '';
+  return `${total} log${total === 1 ? '' : 's'} not read to the end yet: ${named.join(', ')}${more}; each scan reads on from where the last one stopped`;
+}
+
 /** A host's cells with what its cache says about itself (discarded at load, or trimmed to fit). */
 function withCacheNote(
   states: AnalyticsRemoteSourceState[],
@@ -697,7 +817,10 @@ function cachedHostSources(
     );
     const read = cached.kinds?.[tool];
     const failed = standingFailure(cached, tool, failure);
-    const why = failed ? `${scanFailureText(failed.cause)} (${failed.at})` : detail;
+    const unfinished = read?.unfinished?.length
+      ? `; ${unfinishedText(read.unfinished, read.unfinishedCount)}`
+      : '';
+    const why = `${failed ? `${scanFailureText(failed.cause)} (${failed.at})` : detail}${unfinished}`;
     const found = { ...sourceCounts(cached.discovery?.kinds[tool]), reader: cached.reader ?? null };
     if (kept.length || keptSessions.length) {
       results.push({ tool, data: toWorkerResult(kept, keptSessions, tool, host) });
@@ -1201,6 +1324,12 @@ export async function loadAnalyticsRemoteSources(
         // Rows and prints are adopted together. A failed kind retries every changed database.
         for (const tool of kinds)
           freshPrints[tool] = discarded(tool) ? {} : (response.kinds[tool]?.fingerprints ?? {});
+        // A resumed read (DESIGN 16.1) adds to the rows kept for its file when it starts where the
+        // cached read stopped on the same file. Otherwise its rows lack the file's start: they and
+        // the print are dropped, and the next call reads the file from 0.
+        const { appended, unmatched } = resumedFiles(kinds, freshPrints, cached.fingerprints);
+        for (const [tool, keys] of unmatched)
+          for (const key of keys) delete freshPrints[tool]?.[key];
         // Fully read groups explicitly replace all current and previous owners.
         // Emitted rows also replace their own file even if its print is unchanged.
         const replaced = new Map(kinds.map((tool) => [tool, new Set<string>()]));
@@ -1208,7 +1337,10 @@ export async function loadAnalyticsRemoteSources(
           for (const key of response.kinds.claude?.replacedFiles ?? [])
             replaced.get('claude')?.add(key);
         for (const row of [...response.rows, ...(response.srows ?? [])])
-          if (!discarded(row.k)) replaced.get(row.k)?.add(row.f);
+          if (!discarded(row.k) && !appended.get(row.k)?.has(row.f))
+            replaced.get(row.k)?.add(row.f);
+        const unmatchedRow = (row: { k: AnalyticsRemoteKind; f: string }) =>
+          unmatched.get(row.k)?.has(row.f) === true;
         const kept = cached.rows.filter((row) => {
           if (!inWindow(row, minDateMs)) return false;
           if (!kinds.includes(row.k)) return true;
@@ -1218,9 +1350,13 @@ export async function loadAnalyticsRemoteSources(
           return samePrint(print, cached.fingerprints[row.k]?.[row.f]);
         });
         const fresh = response.rows.filter(
-          (row) => kinds.includes(row.k) && !discarded(row.k) && inWindow(row, minDateMs)
+          (row) =>
+            kinds.includes(row.k) &&
+            !discarded(row.k) &&
+            !unmatchedRow(row) &&
+            inWindow(row, minDateMs)
         );
-        const merged = [...kept, ...fresh].slice(0, MAX_CACHED_ROWS);
+        const merged = foldRows([...kept, ...fresh]).slice(0, MAX_CACHED_ROWS);
         // Session aggregates merge under the same file fingerprints as the
         // hourly rows: a re-read file replaces both, an unvisited one keeps both.
         const keptSessions = cached.srows.filter((row) => {
@@ -1232,9 +1368,16 @@ export async function loadAnalyticsRemoteSources(
           return samePrint(print, cached.fingerprints[row.k]?.[row.f]);
         });
         const freshSessions = (response.srows ?? []).filter(
-          (row) => kinds.includes(row.k) && !discarded(row.k) && sessionInWindow(row, minDateMs)
+          (row) =>
+            kinds.includes(row.k) &&
+            !discarded(row.k) &&
+            !unmatchedRow(row) &&
+            sessionInWindow(row, minDateMs)
         );
-        const mergedSessions = [...keptSessions, ...freshSessions].slice(0, MAX_CACHED_ROWS);
+        const mergedSessions = foldSessionRows([...keptSessions, ...freshSessions]).slice(
+          0,
+          MAX_CACHED_ROWS
+        );
         const scannedAt = new Date(now()).toISOString();
         const kindReads = { ...cached.kinds };
         for (const tool of kinds) {
@@ -1256,6 +1399,24 @@ export async function loadAnalyticsRemoteSources(
                   : 'no_usage',
           };
         }
+        // The logs a kind has not read to its end, as its last answer named them (DESIGN 16.1).
+        for (const tool of kinds) {
+          const kind = response.kinds[tool];
+          if (!kind || discarded(tool)) continue;
+          const read = kindReads[tool];
+          if (kind.unfinished?.length)
+            kindReads[tool] = {
+              ...(read ?? { lastScanAt: null, state: 'cached' }),
+              unfinished: kind.unfinished,
+              unfinishedCount: kind.unfinishedCount ?? kind.unfinished.length,
+            };
+          else if (read) {
+            const { unfinished: _list, unfinishedCount: _count, ...rest } = read;
+            void _list;
+            void _count;
+            kindReads[tool] = rest;
+          }
+        }
         // Discovery of the kinds this scan visited replaces theirs; the rest keep their last.
         const discovery: AnalyticsRemoteDiscovery = {
           kinds: { ...cached.discovery?.kinds },
@@ -1271,9 +1432,16 @@ export async function loadAnalyticsRemoteSources(
           toolsAt = scannedAt;
         }
         const reader = readerLabel(response.reader);
-        const prints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {
-          ...freshPrints,
-        };
+        // `readFrom` describes one answer; the saved print keeps only how far the file was read.
+        const prints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {};
+        for (const [tool, entries] of Object.entries(freshPrints)) {
+          prints[tool] = {};
+          for (const [key, print] of Object.entries(entries)) {
+            const { readFrom: _from, ...kept } = print;
+            void _from;
+            prints[tool][key] = kept;
+          }
+        }
         for (const [kind, entries] of Object.entries(cached.fingerprints)) {
           if (!kinds.includes(kind as AnalyticsRemoteKind)) {
             prints[kind] = entries;
@@ -1438,15 +1606,17 @@ export async function loadAnalyticsRemoteSources(
               detail:
                 tool === 'antigravity' && kind?.unreadable
                   ? 'some Antigravity conversation databases could not be read (busy or damaged); showing previously read aggregates'
-                  : tool === 'codex' && kind?.compressedUnread
-                    ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
-                    : kind?.readFailures
-                      ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
-                      : oversized
-                        ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
-                        : kept
-                          ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
-                          : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+                  : kind?.unfinished?.length
+                    ? `${unfinishedText(kind.unfinished, kind.unfinishedCount)}; ${kept ? 'showing what was read so far' : 'nothing counted yet'}`
+                    : tool === 'codex' && kind?.compressedUnread
+                      ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
+                      : kind?.readFailures
+                        ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
+                        : oversized
+                          ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
+                          : kept
+                            ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                            : 'the remote scan hit its time bound partway through this tool; the next scan continues',
             });
             continue;
           }

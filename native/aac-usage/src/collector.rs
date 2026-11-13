@@ -1,7 +1,7 @@
 //! One scan's state: fingerprints read and confirmed, hourly rows, session rows, caps and the
 //! deadline. The Python helper's `Collector`, field for field.
 
-use crate::util::{self, Print};
+use crate::util::{self, Print, ReadProgress};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -103,6 +103,19 @@ pub struct Collector {
     pub messages_wanted: bool,
     pub messages: Vec<Message>,
     pub messages_cut: bool,
+    /// Files an earlier call left part-read, unchanged since: (kind, filekey) -> (decoded offset to
+    /// resume at, the reader's carry-over state). DESIGN 16.1.
+    pub resume: HashMap<(String, String), (u64, Value)>,
+    /// Compressed logs the decoder could not read this call: path and size, for naming.
+    pub unreadable_logs: Vec<(PathBuf, u64)>,
+    /// Tests only: log lines left before the scan counts as past its deadline.
+    pub lines_left: Option<u64>,
+}
+
+/// Kinds whose reads resume where the deadline cut them (DESIGN 16.1): Codex, whose largest logs
+/// are single-frame zstd streams of several GB.
+pub fn resumable(kind: &str) -> bool {
+    kind == "codex"
 }
 
 impl Collector {
@@ -142,11 +155,21 @@ impl Collector {
             messages_wanted: false,
             messages: Vec::new(),
             messages_cut: false,
+            resume: HashMap::new(),
+            unreadable_logs: Vec::new(),
+            lines_left: None,
         }
     }
 
     pub fn expired(&self) -> bool {
-        Instant::now() >= self.deadline
+        self.lines_left == Some(0) || Instant::now() >= self.deadline
+    }
+
+    /// Tests only: one more log line read (see `lines_left`).
+    pub fn count_line(&mut self) {
+        if let Some(left) = self.lines_left.as_mut() {
+            *left = left.saturating_sub(1);
+        }
     }
 
     pub fn deadline(&self) -> Instant {
@@ -213,6 +236,20 @@ impl Collector {
         }
         let key = util::filekey(kind, path);
         let same = util::same_print(self.prior_print(kind, &key), &current);
+        // An unchanged file an earlier call left part-read is read on from where it stopped.
+        let resume = if same && resumable(kind) {
+            self.prior_print(kind, &key).and_then(|prior| {
+                let through = prior.get("readThrough").and_then(Value::as_u64)?;
+                let state = prior.get("readState").cloned().unwrap_or(Value::Null);
+                Some((through, state))
+            })
+        } else {
+            None
+        };
+        let resuming = resume.is_some();
+        if let Some(point) = resume {
+            self.resume.insert((kind.to_string(), key.clone()), point);
+        }
         // Messages already sent stay sent while the file only grew: its first sent bytes unchanged.
         if let Some(prior) = self.prior_print(kind, &key)
             && let Some(through) = prior.get("msgThrough").and_then(Value::as_u64)
@@ -230,7 +267,52 @@ impl Collector {
             .entry(kind.to_string())
             .or_default()
             .insert(key.clone(), current);
-        if same && !unsent { None } else { Some(key) }
+        if same && !unsent && !resuming { None } else { Some(key) }
+    }
+
+    /// Where a resumed read of this file starts (0 for a whole read), and the state to restore.
+    pub fn resume_point(&self, kind: &str, key: &str) -> (u64, Value) {
+        self.resume
+            .get(&(kind.to_string(), key.to_string()))
+            .cloned()
+            .unwrap_or((0, Value::Null))
+    }
+
+    /// The deadline cut a resumable read at `through` (after the last complete line), having
+    /// started at `from`. With progress, the file's print records how far it got and its rows
+    /// stay in the answer, so the next call reads on from there; without, the file stays unvisited
+    /// and the server keeps what it had.
+    pub fn cut_file(&mut self, kind: &str, key: &str, from: u64, through: u64, state: Value, path: &Path) {
+        if through <= from {
+            return;
+        }
+        let Some(mut print) = self.pending.get(kind).and_then(|m| m.get(key)).cloned() else {
+            return;
+        };
+        print.progress = Some(ReadProgress {
+            through: Some(through),
+            from: (from > 0).then_some(from),
+            state: Some(state),
+            name: Some(util::display_name(path)),
+            decoded: decoded_size(path),
+        });
+        self.fresh
+            .entry(kind.to_string())
+            .or_default()
+            .insert(key.to_string(), print);
+    }
+
+    /// A resumed read reached the end: its rows continue the earlier ones from `from`.
+    pub fn finish_resumed(&mut self, kind: &str, key: &str, from: u64) {
+        if from == 0 {
+            return;
+        }
+        if let Some(print) = self.fresh.get_mut(kind).and_then(|m| m.get_mut(key)) {
+            print.progress = Some(ReadProgress {
+                from: Some(from),
+                ..ReadProgress::default()
+            });
+        }
     }
 
     /// After a whole read: this file's messages are sent through its current size.
@@ -575,4 +657,23 @@ impl Collector {
             cost,
         });
     }
+}
+
+/// A compressed log's decoded size when its first frame header states it (Codex's do); for a plain
+/// file, its size.
+pub fn decoded_size(path: &Path) -> Option<u64> {
+    if !util::path_text(path).ends_with(".zst") {
+        return std::fs::metadata(path).ok().map(|m| m.len());
+    }
+    let mut header = [0u8; 18];
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut read = 0;
+    while read < header.len() {
+        match std::io::Read::read(&mut file, &mut header[read..]) {
+            Ok(0) => break,
+            Ok(n) => read += n,
+            Err(_) => return None,
+        }
+    }
+    zstd::zstd_safe::get_frame_content_size(&header[..read]).ok().flatten()
 }

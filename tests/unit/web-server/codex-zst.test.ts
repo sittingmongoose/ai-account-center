@@ -506,6 +506,11 @@ describe('Codex compressed rollouts', () => {
       expect(terminal.scan?.detail).toContain('1 compressed Codex log is too large to read here');
       expect(terminal.scan?.detail).toContain('earlier usage is kept');
       expect(terminal.scan?.detail).toContain('measurement remains partial');
+      // The log is named (DESIGN 16.1), never with its conversation id.
+      expect(terminal.scan?.detail).toMatch(
+        /Not finished: rollout-[^ ]*\.jsonl\.zst \(\d+ MB, \d+ MB decoded so far, paused\)/
+      );
+      expect(terminal.scan?.detail).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i);
       expect(terminal.hourly).toEqual(earlier.hourly);
       expect(terminal.eventCount).toBe(earlier.eventCount);
       expect(checkpoint().decodedOffset).toBe(initial.decodedOffset);
