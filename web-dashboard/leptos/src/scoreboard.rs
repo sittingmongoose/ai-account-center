@@ -6,6 +6,7 @@
 
 use crate::api::{FetchError, Link, Refresh, Run, nullable, send};
 use crate::fmt;
+use crate::scoreboard_arrange::{self as arr, Line, RowFilter, RowKeys, RowRef, SortKey};
 use crate::status::{SheetGrab, sheet_drag_style};
 use crate::ui::*;
 use leptos::prelude::*;
@@ -37,6 +38,40 @@ pub struct ScoreboardView {
     /// Runs read but never scored, by reason (`Unscored::read`). Absent from an older server: the page shows no note.
     /// Kept as JSON and read by hand: a derived reader is more WebAssembly than the page's size limit leaves.
     pub unscored: Option<serde_json::Value>,
+    /// Scoreboard v2: grouping and sort keys per by-model row (absent from an older server: no grouping).
+    pub groups: Option<arr::Groups>,
+    /// The server filters applied, and whether the server can filter at all.
+    pub filters: Option<FiltersView>,
+    pub history: Option<History>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FiltersView {
+    pub available: bool,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub source: Option<String>,
+    pub task_type: Option<String>,
+    #[serde(deserialize_with = "nullable")]
+    pub task_types: Vec<TaskRef>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TaskRef {
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct History {
+    pub store: Option<String>,
+    pub runs: Option<u64>,
+    pub importing: bool,
 }
 
 /// Runs the server read but could not score (`unscored` in the view), so none is hidden without a word.
@@ -464,8 +499,13 @@ pub struct RunReview {
     pub disputed: bool,
 }
 
-pub async fn fetch_scoreboard() -> Result<ScoreboardView, FetchError> {
-    let (status, text) = send("GET", "/api/scoreboard", None).await?;
+pub async fn fetch_scoreboard(query: String) -> Result<ScoreboardView, FetchError> {
+    let path = if query.is_empty() {
+        "/api/scoreboard".to_string()
+    } else {
+        format!("/api/scoreboard?{query}")
+    };
+    let (status, text) = send("GET", &path, None).await?;
     if status == 401 {
         return Err(FetchError::SignedOut);
     }
@@ -490,9 +530,37 @@ fn stored_view() -> Option<String> {
 }
 
 fn store_view(id: &str) {
+    store_item(VIEW_KEY, id);
+}
+
+const SORT_KEY: &str = "aac.scoreboard.sort.v1";
+const GROUP_KEY: &str = "aac.scoreboard.group.v1";
+
+fn stored_item(key: &str) -> Option<String> {
+    window()
+        .local_storage()
+        .ok()
+        .flatten()
+        .and_then(|s| s.get_item(key).ok().flatten())
+}
+
+fn store_item(key: &str, value: &str) {
     if let Some(s) = window().local_storage().ok().flatten() {
-        let _ = s.set_item(VIEW_KEY, id);
+        let _ = s.set_item(key, value);
     }
+}
+
+/// The browser's local date `days` before today, `YYYY-MM-DD`.
+fn local_day(days_ago: i64) -> String {
+    let at = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(
+        js_sys::Date::now() - days_ago as f64 * 86_400_000.0,
+    ));
+    format!(
+        "{:04}-{:02}-{:02}",
+        at.get_full_year(),
+        at.get_month() + 1,
+        at.get_date()
+    )
 }
 
 fn verdict_class(verdict: &str) -> &'static str {
@@ -511,6 +579,8 @@ struct Board {
     fetched_at_ms: RwSignal<f64>,
     now_ms: RwSignal<f64>,
     loading: RwSignal<bool>,
+    /// The server filters as a query string (Scoreboard v2); empty reads every run.
+    query: RwSignal<String>,
 }
 
 impl Board {
@@ -520,8 +590,9 @@ impl Board {
             return;
         }
         self.loading.set(true);
+        let asked = self.query.get_untracked();
         spawn_local(async move {
-            let result = fetch_scoreboard().await;
+            let result = fetch_scoreboard(asked.clone()).await;
             if self.loading.try_get_untracked().is_none() {
                 return;
             }
@@ -538,6 +609,10 @@ impl Board {
                 }
                 self.loading.set(false);
             });
+            // The filters changed while this read ran: read again for the new ones.
+            if self.query.try_get_untracked().is_some_and(|q| q != asked) {
+                self.reload();
+            }
         });
     }
 
@@ -554,6 +629,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
         fetched_at_ms: RwSignal::new(js_sys::Date::now()),
         now_ms: RwSignal::new(js_sys::Date::now()),
         loading: RwSignal::new(false),
+        query: RwSignal::new(String::new()),
     };
     board.reload();
     // In the app frame a read the server refused (the session ended) brings the frame's sign-in, as Status does.
@@ -694,6 +770,50 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
     });
     let selected = RwSignal::new(None::<String>);
     let on_row = Callback::new(move |key: String| selected.set(Some(key)));
+    // Scoreboard v2: sort, grouping and filters. Sort and grouping are remembered on this device.
+    let sort = RwSignal::new(SortKey::from_id(&stored_item(SORT_KEY).unwrap_or_default()));
+    let grouped = RwSignal::new(stored_item(GROUP_KEY).as_deref() != Some("off"));
+    let pick = RwSignal::new(RowFilter::default());
+    let server = RwSignal::new(arr::ServerFilter::default());
+    let filters_open = RwSignal::new(false);
+    // A change of the server's filters reads the view again with them.
+    Effect::new(move |before: Option<String>| {
+        let query = server.with(|f| f.query(local_day));
+        if before.as_ref().is_some_and(|b| *b != query) {
+            board.query.set(query.clone());
+            board.reload();
+        }
+        query
+    });
+    let rows = Memo::new(move |_| {
+        current.with(|c| {
+            c.as_ref()
+                .map(|v| {
+                    let refs: Vec<RowRef> = v
+                        .models
+                        .iter()
+                        .map(|m| RowRef {
+                            key: m.key.clone(),
+                            label: m.label.clone(),
+                        })
+                        .collect();
+                    (v.id.clone(), refs)
+                })
+                .unwrap_or_default()
+        })
+    });
+    let groups = Memo::new(move |_| {
+        board
+            .view
+            .with(|v| v.as_ref().and_then(|v| v.groups.clone()))
+    });
+    let facets = Memo::new(move |_| {
+        rows.with(|(id, refs)| groups.with(|g| pick.with(|p| arr::facets(refs, g.as_ref(), id, p))))
+    });
+    let on_clear = Callback::new(move |_: ()| {
+        pick.set(RowFilter::default());
+        server.set(arr::ServerFilter::default());
+    });
     view! {
         <PageShell page=crate::Page::Scoreboard embedded=embedded info=info>
             <div class="page" data-stale=move || board.error.with(|e| e.is_some()).then_some("1")>
@@ -718,9 +838,16 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                     }
                 >
                     <div class="sb-stack">
+                        <SbTools board=board sort=sort grouped=grouped pick=pick server=server open=filters_open facets=facets/>
                         {move || match current.get() {
                             None => view! { <section class="plate"><p class="sb-unavail">"The by-model scoreboard isn't available from this server yet. Every model's runs are still recorded."</p></section> }.into_any(),
-                            Some(v) => view! { <ModelsSections view=v selected=selected on_row=on_row on_sheet=open_sheet board=board/> }.into_any(),
+                            Some(v) => {
+                                let lines = rows.with(|(id, refs)| {
+                                    groups.with(|g| arr::arrange(refs, g.as_ref(), id, sort.get(), grouped.get(), &pick.get()))
+                                });
+                                let keys = groups.with(|g| g.as_ref().and_then(|g| g.views.get(&v.id).cloned()).unwrap_or_default());
+                                view! { <ModelsSections view=v lines=lines keys=keys selected=selected on_row=on_row on_sheet=open_sheet on_clear=on_clear board=board/> }.into_any()
+                            }
                         }}
                         <p class="sb-read">
                             {move || by_model.get().map(|b| {
@@ -816,12 +943,58 @@ fn sub_chunks(sub: &[String]) -> impl IntoView + use<> {
         .collect_view()
 }
 
+/// A row's name: "Opus 5.5 · xhigh", or only the effort under its model's own line.
+fn row_name(m: &ModelRow, sub: bool, chevron: bool) -> AnyView {
+    if !sub {
+        return model_name(m, true, chevron).into_any();
+    }
+    let eff = m.effort_text.clone();
+    let runtime = m.runtime.clone();
+    view! {
+        <div class="mname sub">
+            <div>
+                <div class="t"><span class="eff-w">{eff}</span></div>
+                <div class="r">{runtime}</div>
+            </div>
+            {chevron.then(|| view! { <Icon name="chev-right" class="chev"/> })}
+        </div>
+    }
+    .into_any()
+}
+
+/// "4h ago" from an ISO time, or "–".
+fn ago(iso: Option<&str>) -> String {
+    let Some(iso) = iso else { return "–".into() };
+    let at = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(iso)).get_time();
+    if at.is_nan() {
+        return "–".into();
+    }
+    fmt::age(((js_sys::Date::now() - at) / 1000.0).floor() as i64)
+}
+
+/// A whole number with thousands separators ("1,838").
+fn count(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    if n < 0 { format!("-{out}") } else { out }
+}
+
 #[component]
 fn ModelsSections(
     view: ModelsView,
+    /// The rows filtered, grouped and sorted (scoreboard_arrange).
+    lines: Vec<Line>,
+    keys: BTreeMap<String, RowKeys>,
     selected: RwSignal<Option<String>>,
     on_row: Callback<String>,
     on_sheet: Callback<ModelRow>,
+    on_clear: Callback<()>,
     board: Board,
 ) -> impl IntoView {
     let how_open = RwSignal::new(false);
@@ -839,14 +1012,26 @@ fn ModelsSections(
             .with(|v| v.as_ref().map(|v| v.recent.clone()).unwrap_or_default())
     };
     let jobs = view.jobs.clone();
-    let first_key = view.models.first().map(|m| m.key.clone());
+    let first_key = lines.iter().find_map(|line| match line {
+        Line::Row { index, .. } => view.models.get(*index).map(|m| m.key.clone()),
+        _ => None,
+    });
+    let shown: Vec<String> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Row { index, .. } => view.models.get(*index).map(|m| m.key.clone()),
+            _ => None,
+        })
+        .collect();
+    let empty = shown.is_empty();
     let models = StoredValue::new(view.models.clone());
+    let shown = StoredValue::new(shown);
     let selected_key = Signal::derive({
         let first = first_key.clone();
         move || {
             selected
                 .get()
-                .filter(|k| models.with_value(|list| list.iter().any(|m| &m.key == k)))
+                .filter(|k| shown.with_value(|list| list.contains(k)))
                 .or_else(|| first.clone())
         }
     });
@@ -856,6 +1041,88 @@ fn ModelsSections(
         let key = selected_key.get()?;
         models.with_value(|list| list.iter().find(|m| m.key == key).cloned())
     };
+    let cols = jobs.len() + 4;
+    let table_rows = lines
+        .iter()
+        .map(|line| match line {
+            Line::Family { label, short, runs, .. } => view! {
+                <tr class="sb-fam"><td colspan=cols>
+                    <span class="lbl-long">{label.clone()}</span><span class="lbl-short">{short.clone()}</span>
+                    <span class="fam-n">{format!("{} runs", count(*runs))}</span>
+                </td></tr>
+            }
+            .into_any(),
+            Line::Model { label, first, .. } => {
+                let mark = view.models.get(*first).and_then(|m| m.mark.clone());
+                view! { <tr class="sb-mod"><td colspan=cols><div class="mname"><Mark name=mark/><div class="t">{label.clone()}</div></div></td></tr> }.into_any()
+            }
+            Line::Row { index, sub } => {
+                let Some(m) = view.models.get(*index).cloned() else { return ().into_any() };
+                let key = m.key.clone();
+                let k2 = m.key.clone();
+                let k = keys.get(&m.key).cloned();
+                let cells = jobs
+                    .iter()
+                    .map(|j| match m.cells.get(&j.id).cloned().flatten() {
+                        Some(c) => view! { <td><span class=format!("verdict {}", verdict_class(&c.verdict))>{c.word.clone()}</span><span class="vsub">{sub_chunks(&c.sub)}</span></td> }.into_any(),
+                        None => view! { <td><span class="verdict v-none">"–"</span></td> }.into_any(),
+                    })
+                    .collect_view();
+                let pass = arr::pass_text(k.as_ref());
+                let last = ago(k.as_ref().and_then(|k| k.last_run_at.as_deref()));
+                view! {
+                    <tr data-row="1" class:sub=*sub class:sel=move || selected_key.get().as_ref() == Some(&k2) on:click=move |_| on_row.run(key.clone())>
+                        <td>{row_name(&m, *sub, false)}</td>
+                        {cells}
+                        <td class="num-col">{pass}</td>
+                        <td class="num-col">{last}</td>
+                        <td class="runs-col">{m.runs.map(|r| count(r as i64)).unwrap_or_else(|| "–".into())}</td>
+                    </tr>
+                }
+                .into_any()
+            }
+        })
+        .collect_view();
+    let list_rows = lines
+        .iter()
+        .map(|line| match line {
+            Line::Family { label, short, runs, .. } => view! {
+                <div class="sbm-fam"><span class="lbl-long">{label.clone()}</span><span class="lbl-short">{short.clone()}</span><span class="fam-n">{count(*runs)}</span></div>
+            }
+            .into_any(),
+            Line::Model { label, first, .. } => {
+                let mark = view.models.get(*first).and_then(|m| m.mark.clone());
+                view! { <div class="sbm-mod"><Mark name=mark size=16/>{label.clone()}</div> }.into_any()
+            }
+            Line::Row { index, sub } => {
+                let Some(m) = view.models.get(*index).cloned() else { return ().into_any() };
+                let open = m.clone();
+                let k = keys.get(&m.key).cloned();
+                let job_rows = jobs
+                    .iter()
+                    .filter_map(|j| {
+                        let c = m.cells.get(&j.id).cloned().flatten()?;
+                        Some(view! { <div class="sbm-job"><span class="k">{j.label.clone()}</span><span><span class=verdict_class(&c.verdict)>{c.word.clone()}</span></span></div> })
+                    })
+                    .collect_view();
+                let stats = [
+                    m.runs.map(|r| format!("{} runs", count(r as i64))),
+                    k.as_ref().and_then(|k| k.pass_rate()).map(|_| format!("{} pass", arr::pass_text(k.as_ref()))),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+                view! {
+                    <button class="sbm" class:sub=*sub class:sel={let k = m.key.clone(); move || selected_key.get().as_ref() == Some(&k)} on:click=move |_| { on_row.run(open.key.clone()); on_sheet.run(open.clone()); }>
+                        <div class="sbm-head">{row_name(&m, *sub, true)}<span class="sbm-n">{stats}</span></div>
+                        <div class="sbm-jobs">{job_rows}</div>
+                    </button>
+                }
+                .into_any()
+            }
+        })
+        .collect_view();
     view! {
         <section class="plate">
             <div class="plate-head"><h2>"Best pick for each job"</h2><span class="plate-meta">"From real work unless it says benchmark"</span></div>
@@ -876,51 +1143,24 @@ fn ModelsSections(
                     }).collect_view()}
                 </ul>
             </Show>
-            <div class="sb-matrix">
+            {empty.then(|| view! {
+                <p class="sb-empty">"No model matches these filters. "<button class="link" on:click=move |_| on_clear.run(())>"Clear filters"</button></p>
+            })}
+            <div class="sb-matrix" class:hidden=empty>
                 <table>
                     <thead>
                         <tr>
                             <th><span class="cap">"Model · effort"</span></th>
                             {jobs.iter().map(|j| view! { <th><span class="cap">{j.label.clone()}</span></th> }).collect_view()}
+                            <th class="num-col"><span class="cap">"Pass"</span></th>
+                            <th class="num-col"><span class="cap">"Last run"</span></th>
                             <th style="text-align:right"><span class="cap">"Runs"</span></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {view.models.clone().into_iter().map(|m| {
-                            let key = m.key.clone();
-                            let k2 = m.key.clone();
-                            let cells = jobs.iter().map(|j| {
-                                match m.cells.get(&j.id).cloned().flatten() {
-                                    Some(c) => view! { <td><span class=format!("verdict {}", verdict_class(&c.verdict))>{c.word.clone()}</span><span class="vsub">{sub_chunks(&c.sub)}</span></td> }.into_any(),
-                                    None => view! { <td><span class="verdict v-none">"–"</span></td> }.into_any(),
-                                }
-                            }).collect_view();
-                            view! {
-                                <tr data-row="1" class:sel=move || selected_key.get().as_ref() == Some(&k2) on:click=move |_| on_row.run(key.clone())>
-                                    <td>{model_name(&m, true, false)}</td>
-                                    {cells}
-                                    <td class="runs-col">{m.runs.map(|r| r.to_string()).unwrap_or_else(|| "–".into())}</td>
-                                </tr>
-                            }
-                        }).collect_view()}
-                    </tbody>
+                    <tbody>{table_rows}</tbody>
                 </table>
             </div>
-            <div class="sb-models">
-                {view.models.clone().into_iter().map(|m| {
-                    let open = m.clone();
-                    let job_rows = jobs.iter().filter_map(|j| {
-                        let c = m.cells.get(&j.id).cloned().flatten()?;
-                        Some(view! { <div class="sbm-job"><span class="k">{j.label.clone()}</span><span><span class=verdict_class(&c.verdict)>{c.word.clone()}</span></span></div> })
-                    }).collect_view();
-                    view! {
-                        <button class="sbm" class:sel={let k = m.key.clone(); move || selected_key.get().as_ref() == Some(&k)} on:click=move |_| { on_row.run(open.key.clone()); on_sheet.run(open.clone()); }>
-                            {model_name(&m, true, true)}
-                            <div class="sbm-jobs">{job_rows}</div>
-                        </button>
-                    }
-                }).collect_view()}
-            </div>
+            <div class="sb-models">{list_rows}</div>
             <div class="plate-foot note"><Icon name="info"/><span>{runs_view(foot)}</span></div>
         </section>
         <section class="plate only-wide">
@@ -937,6 +1177,115 @@ fn ModelsSections(
                 <DetailGrid report=m.report.clone()/>
             })}
         </section>
+    }
+}
+
+/// The sort, the date range, the filters and grouping (Scoreboard v2). Family, model, effort and
+/// sort act on the loaded view; dates, real or benchmark and task type read it again.
+#[component]
+fn SbTools(
+    board: Board,
+    sort: RwSignal<SortKey>,
+    grouped: RwSignal<bool>,
+    pick: RwSignal<RowFilter>,
+    server: RwSignal<arr::ServerFilter>,
+    open: RwSignal<bool>,
+    facets: Memo<arr::Facets>,
+) -> impl IntoView {
+    let filters = move || {
+        board
+            .view
+            .with(|v| v.as_ref().and_then(|v| v.filters.clone()))
+    };
+    let available = move || filters().is_some_and(|f| f.available);
+    let task_types = move || filters().map(|f| f.task_types).unwrap_or_default();
+    let kept = move || {
+        board
+            .view
+            .with(|v| v.as_ref().and_then(|v| v.history.clone()))
+            .and_then(|h| {
+                h.runs.map(|n| {
+                    if h.importing {
+                        format!("{} runs kept · importing", count(n as i64))
+                    } else {
+                        format!("{} runs kept", count(n as i64))
+                    }
+                })
+            })
+    };
+    let active = move || pick.with(RowFilter::active) + server.with(arr::ServerFilter::active);
+    let set_pick = move |f: fn(&mut RowFilter, Option<String>), value: String| {
+        pick.update(|p| f(p, (value != "*").then_some(value)));
+    };
+    view! {
+        <div class="sb-tools">
+            <label class="sbt"><span class="cap">"Sort"</span>
+                <select class="sb-sel" aria-label="Sort models by" prop:value=move || sort.get().id()
+                    on:change=move |e| { let v = event_target_value(&e); store_item(SORT_KEY, &v); sort.set(SortKey::from_id(&v)); }>
+                    {arr::SORTS.iter().map(|(_, id, label)| view! { <option value=*id>{*label}</option> }).collect_view()}
+                </select>
+            </label>
+            <label class="sbt"><span class="cap">"Dates"</span>
+                <select class="sb-sel" aria-label="Runs ended" disabled=move || !available() prop:value=move || server.with(|f| f.dates.clone())
+                    on:change=move |e| { let v = event_target_value(&e); server.update(|f| f.dates = v); }>
+                    {arr::DATES.iter().map(|(id, label)| view! { <option value=*id>{*label}</option> }).collect_view()}
+                </select>
+            </label>
+            <button class="sbt-more" aria-expanded=move || open.get().to_string() on:click=move |_| open.update(|o| *o = !*o)>
+                <Icon name="filter"/>"Filters"{move || (active() > 0).then(|| view! { <span class="sbt-n">{active()}</span> })}
+            </button>
+            <label class="sbt-check"><input type="checkbox" prop:checked=move || grouped.get()
+                on:change=move |e| { let on = event_target_checked(&e); store_item(GROUP_KEY, if on { "on" } else { "off" }); grouped.set(on); }/>"Group"</label>
+            <span class="sbt-kept">{kept}</span>
+        </div>
+        <Show when=move || server.with(|f| f.dates == "custom")>
+            <div class="sb-range">
+                <label class="sbt"><span class="cap">"From"</span><input class="sb-sel" type="date" prop:value=move || server.with(|f| f.from.clone())
+                    on:change=move |e| { let v = event_target_value(&e); server.update(|f| f.from = v); }/></label>
+                <label class="sbt"><span class="cap">"To"</span><input class="sb-sel" type="date" prop:value=move || server.with(|f| f.to.clone())
+                    on:change=move |e| { let v = event_target_value(&e); server.update(|f| f.to = v); }/></label>
+            </div>
+        </Show>
+        <Show when=move || open.get()>
+            <div class="sb-filters">
+                <label class="sbt"><span class="cap">"Family"</span>
+                    <select class="sb-sel" prop:value=move || pick.with(|p| p.family.clone().unwrap_or_else(|| "*".into()))
+                        on:change=move |e| { let v = event_target_value(&e); pick.update(|p| { p.model = None; p.effort = None; }); set_pick(|p, v| p.family = v, v); }>
+                        <option value="*">"All"</option>
+                        {move || facets.with(|f| f.families.clone()).into_iter().map(|(id, label)| view! { <option value=id>{label}</option> }).collect_view()}
+                    </select>
+                </label>
+                <label class="sbt"><span class="cap">"Model"</span>
+                    <select class="sb-sel" prop:value=move || pick.with(|p| p.model.clone().unwrap_or_else(|| "*".into()))
+                        on:change=move |e| { let v = event_target_value(&e); pick.update(|p| p.effort = None); set_pick(|p, v| p.model = v, v); }>
+                        <option value="*">"All"</option>
+                        {move || facets.with(|f| f.models.clone()).into_iter().map(|(id, label)| view! { <option value=id>{label}</option> }).collect_view()}
+                    </select>
+                </label>
+                <label class="sbt"><span class="cap">"Effort"</span>
+                    <select class="sb-sel" prop:value=move || pick.with(|p| p.effort.clone().unwrap_or_else(|| "*".into()))
+                        on:change=move |e| set_pick(|p, v| p.effort = v, event_target_value(&e))>
+                        <option value="*">"All"</option>
+                        {move || facets.with(|f| f.efforts.clone()).into_iter().map(|(id, label)| view! { <option value=id>{label}</option> }).collect_view()}
+                    </select>
+                </label>
+                <label class="sbt"><span class="cap">"Task"</span>
+                    <select class="sb-sel" disabled=move || !available() prop:value=move || server.with(|f| if f.task.is_empty() { "*".to_string() } else { f.task.clone() })
+                        on:change=move |e| { let v = event_target_value(&e); server.update(|f| f.task = if v == "*" { String::new() } else { v }); }>
+                        <option value="*">"All"</option>
+                        {move || task_types().into_iter().map(|t| view! { <option value=t.id.clone()>{t.label.clone()}</option> }).collect_view()}
+                    </select>
+                </label>
+                <label class="sbt"><span class="cap">"Runs"</span>
+                    <select class="sb-sel" disabled=move || !available() prop:value=move || server.with(|f| f.source.clone())
+                        on:change=move |e| { let v = event_target_value(&e); server.update(|f| f.source = v); }>
+                        {arr::SOURCES.iter().map(|(id, label)| view! { <option value=*id>{*label}</option> }).collect_view()}
+                    </select>
+                </label>
+                <button class="link sbt-clear" on:click=move |_| { pick.set(RowFilter::default()); server.set(arr::ServerFilter::default()); }>"Clear"</button>
+                {move || (!available() && filters().is_some()).then(|| view! { <p class="sbt-note">"Dates, task and runs filters need the history store."</p> })}
+            </div>
+        </Show>
     }
 }
 

@@ -26,6 +26,7 @@ mod question_index;
 mod resets;
 mod roster;
 mod scoreboard;
+pub mod scoreboard_arrange;
 mod session;
 mod status;
 mod summary;

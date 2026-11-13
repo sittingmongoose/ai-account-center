@@ -114,6 +114,7 @@ fn path(name: &str) -> &'static str {
             r#"<rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>"#
         }
         "timer" => r#"<path d="M10 2h4"/><path d="m12 14 3-3"/><circle cx="12" cy="14" r="8"/>"#,
+        "filter" => r#"<path d="M22 3H2l8 9.46V19l4 2v-8.54Z"/>"#,
         "search" => r#"<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>"#,
         // Home: the meter legend, the amounts' icons and the cards' date notes
         "help" => {
