@@ -1,6 +1,6 @@
-// Home drawn natively in the app frame (PLAN step 5): the dashboard (bridge.js, in the frame's hidden iframe) builds
-// view model v2 and sends it through the seam (frame-seam.mjs, dash.rs); the page draws it and sends the dashboard's
-// own action kinds back. Real test server and sign-in (the kit's temporary home); the dashboard's readings and every
+// Home drawn natively in the app frame (PLAN step 5, G5): the frame's dashboard controller (public/frame-dashboard.mjs)
+// reads the dashboard and builds view model v2 with view-model.mjs, as bridge.js did; the page draws it and sends the
+// dashboard's own action kinds back (dash.rs). No Slint dashboard is loaded. Real test server and sign-in (the kit's temporary home); the dashboard's readings and every
 // switch, auto-switch and Open request are answered in the page (made-up data, home-fixture.mjs), so nothing real
 // is switched or opened.
 import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
@@ -79,10 +79,7 @@ export const tests = {
 		await t.count('.hsec', 3);
 		await t.text('.hsec[data-sec="claude"] .plate-meta', /4\s*accounts/);
 		await t.text('.hsec[data-sec="codex"] .plate-meta', /codex\.primary\.workspace/);
-		await t.check('the dashboard\'s iframe stays loaded but hidden on Home', async () => t.page.evaluate(() => {
-			const host = document.querySelector('.slint-host');
-			return !!document.querySelector('iframe.slint-frame') && host.hidden && !document.querySelector('.shell').classList.contains('slint-route');
-		}));
+		await t.check('Home loads no Slint dashboard: no iframe, no bridge.js, no dashboard wasm', async () => t.page.evaluate(() => !document.querySelector('iframe.slint-frame') && !performance.getEntriesByType('resource').some((e) => /\/bridge\.js|ccs_account_dashboard/.test(e.name))));
 		const meters = await t.page.evaluate(() => [...document.querySelectorAll(`.hrow .um`)].map((m) => ({ sev: m.dataset.sev, num: m.querySelector('.um-num')?.textContent || '', na: m.querySelector('.um-na')?.textContent || '' })));
 		await t.check('every reading shows its number, settled (no count-up left over)', meters.filter((m) => m.sev !== 'na').every((m) => /^\d+(\.\d+)?%$/.test(m.num)), JSON.stringify(meters.slice(0, 6)));
 		await t.check('a window with no reading says so, never 0%', meters.some((m) => m.na === 'Not reported yet'));
@@ -205,8 +202,7 @@ export const tests = {
 		const back = homeAccounts();
 		for (const a of back.accounts) if (a.provider === 'codex') a.isActive = a.capabilities.codexProfile === 'second';
 		await t.app.stub('/api/accounts/dashboard', back);
-		const dash = await (await t.page.$('iframe.slint-frame')).contentFrame();
-		await dash.evaluate(() => window.ccsDashboardAction('refresh', ''));
+		await t.page.evaluate(() => window.aacFrameDashboard.command('refresh'));
 		await t.until('the hidden Home has the new active row', () => !!document.querySelector('.hrow[data-row="codex:second"] .hmark.on'), null, { timeout: 15000 });
 		await t.page.click('.chrome .nav a[href="/app/home"]');
 		await t.page.waitForTimeout(400);

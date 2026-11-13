@@ -173,7 +173,7 @@ pub fn FrameShell(ctx: FrameCtx, children: Children) -> impl IntoView {
         ctx.set_theme(next);
     };
     view! {
-        <div class="shell" class:slint-route=move || ctx.route.get().slint()>
+        <div class="shell">
             <header class="chrome">
                 <div class="chrome-in">
                     <a class="brand" href=Page::Home.path() on:click=move |e: web_sys::MouseEvent| { e.prevent_default(); ctx.go(Page::Home); }>

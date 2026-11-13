@@ -53,7 +53,7 @@ async function open(t, view, folded = false, bridge = false) {
   await t.page.waitForSelector('.c2-row');
   if (bridge) {
     await t.page.locator('a[href="/app/home"]:visible').click();
-    await t.page.waitForSelector('iframe.slint-frame', { state: 'attached' });
+    await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().started === true);
     await t.page.locator('a[href="/app/status"]:visible').click();
     await t.page.waitForSelector('.c2-row');
   }
@@ -62,17 +62,12 @@ async function open(t, view, folded = false, bridge = false) {
 }
 
 async function bridge(t, key, view) {
-  await t.page.locator('iframe.slint-frame').evaluate(
-    (el, { key, view }) => {
-      el.contentWindow.eval(
-        `parent.postMessage(${JSON.stringify({
-          type: 'aac-content',
-          kind: 'view',
-          key,
-          json: view ? JSON.stringify(view) : '',
-        })}, location.origin)`
-      );
-    },
+  // the view as the frame's dashboard controller sends it (public/frame-dashboard.mjs, an `aac-dash` event)
+  await t.page.evaluate(
+    ({ key, view }) =>
+      window.dispatchEvent(
+        new CustomEvent('aac-dash', { detail: { key, json: view ? JSON.stringify(view) : '' } })
+      ),
     { key, view }
   );
 }
@@ -330,7 +325,7 @@ for (const kind of ['details', 'activation']) {
       })
     );
     await t.page.keyboard.press('Escape');
-    // Approval close is acknowledged by the bridge, just as in the other isolated frame checks.
+    // Approval close is acknowledged by the controller's view, just as in the other isolated frame checks.
     if (kind === 'activation') await bridge(t, kind, null);
     const closed = await t.page
       .waitForSelector(selector, { state: 'detached', timeout: 1000 })

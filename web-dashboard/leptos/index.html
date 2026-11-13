@@ -24,7 +24,8 @@
     <script type="module">
       // The runtime starts first: its wasm (preloaded above) compiles while the sign-in module loads. The app frame signs
       // in with a real form (public/frame-session.mjs); a page inside today's shell (?embed=1) doesn't load it.
-      // Analytics reads its own data (public/frame-analytics.mjs): its module loads on first use, at once on its address.
+      // Analytics reads its own data (public/frame-analytics.mjs), Home and Accounts the dashboard's
+      // (public/frame-dashboard.mjs): each module loads on first use, at once on its own address.
       try {
         const wasm = '{{PKG}}/aac_web_bg.wasm';
         const runtime = import('{{PKG}}/aac_web.js');
@@ -36,6 +37,9 @@
           analytics?.catch(() => {});
           // the module; the page that asked installs its controller only if it is still there (analytics/feed.rs)
           window.aacLoadAnalytics = () => (analytics ??= import('/frame-analytics.mjs'));
+          let dashboard = /\/app\/(home|accounts)\/?$/.test(location.pathname) ? import('/frame-dashboard.mjs') : null;
+          dashboard?.catch(() => {});
+          window.aacLoadDashboard = () => (dashboard ??= import('/frame-dashboard.mjs')).then((m) => m.installFrameDashboard(window));
           const { installFrameSession } = await import('/frame-session.mjs');
           installFrameSession(window);
         }

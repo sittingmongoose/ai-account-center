@@ -93,9 +93,9 @@ pub fn start() -> RwSignal<SessionView> {
     view
 }
 
-/// The dashboard (or a page's read) found the session gone: "expired" says why; "default" is a sign-out. `reason` is
-/// the dashboard's own finding (ended, expired, revoked): it has already forgotten the time the session was last
-/// seen, so the frame cannot work the reason out again.
+/// The dashboard controller (or a page's read) found the session gone: "expired" says why; "default" is its Sign out.
+/// `reason` is the controller's own finding (ended, expired, revoked): it has already forgotten the time the session
+/// was last seen, so the frame cannot work the reason out again.
 pub fn dashboard_signed_out(state: &str, reason: Option<&str>) {
     let signed_in = call("view", None)
         .and_then(|v| js_sys::Reflect::get(&v, &"signedIn".into()).ok())
@@ -116,15 +116,9 @@ pub fn dashboard_signed_out(state: &str, reason: Option<&str>) {
     }
 }
 
-/// Sign out from the frame (no dashboard loaded): a failure is a toast, and this browser stays signed in.
+/// Sign out from the frame (no dashboard controller started): a failure is a toast, and this browser stays signed in.
 pub fn sign_out(ctx: FrameCtx) {
     sign_out_with("signOut", ctx);
-}
-
-/// Sign out after the dashboard's own Sign out never answered: the server's check decides, and only a session still
-/// signed in gets the frame's one logout (frame-session.mjs `finishSignOut`).
-pub fn finish_sign_out(ctx: FrameCtx) {
-    sign_out_with("finishSignOut", ctx);
 }
 
 fn sign_out_with(method: &str, ctx: FrameCtx) {

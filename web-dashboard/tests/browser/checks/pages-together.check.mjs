@@ -29,11 +29,9 @@ async function answer(t, path, answerWith) {
 	return calls;
 }
 
-/** The dashboard iframe is loaded, hidden, and not raised over the page. */
-const slintHidden = () => {
-	const host = document.querySelector('.slint-host');
-	return !!document.querySelector('iframe.slint-frame') && !!host && host.hidden && !host.classList.contains('raised');
-};
+/** No Slint dashboard is loaded or drawn: no iframe, no bridge.js, no dashboard wasm (G5). */
+const slintHidden = () =>
+	!document.querySelector('iframe.slint-frame') && !performance.getEntriesByType('resource').some((e) => /\/bridge\.js|ccs_account_dashboard/.test(e.name));
 
 export const tests = {
 	async 'pages: a Home row opens Details; Activate anyway there shows the native approval'(t) {
@@ -46,7 +44,7 @@ export const tests = {
 		await t.until('Home is drawn natively', () => document.querySelectorAll('.home .hrow').length >= 8, null, { timeout: 60000, hard: true });
 		await t.page.click('.hrow[data-row="codex:second"] .hemail');
 		await t.until('the frame\'s Details opens for that row', () => document.querySelector('.details .dt-title')?.textContent === 'codex.second@example.invalid', null, { timeout: 10000 });
-		await t.check('the Slint dashboard stays hidden', await t.page.evaluate(slintHidden));
+		await t.check('no Slint dashboard is loaded', await t.page.evaluate(slintHidden));
 		await t.page.click('.hrow[data-row="claude:pro-a"] .hemail');
 		await t.until('another row swaps it in place', () => (document.querySelector('.details .dt-title')?.textContent || '').length > 0 && document.querySelector('.details .dt-title')?.textContent !== 'codex.second@example.invalid', null, { timeout: 10000 });
 		await t.page.click('.hrow[data-row="codex:second"] .hemail');
@@ -74,7 +72,7 @@ export const tests = {
 		await t.until('Accounts is drawn natively', () => document.querySelectorAll('.prov[data-provider]').length >= 9, null, { timeout: 60000, hard: true });
 		await t.page.click('.acc-item[data-row="codex:two"] [data-probe="activate:codex:two"]');
 		await t.until('the frame\'s approval dialog opens', () => !!document.querySelector('.adialog'), null, { timeout: 10000 });
-		await t.check('the dashboard is not raised over the tab', await t.page.evaluate(slintHidden));
+		await t.check('no Slint dashboard is raised over the tab', await t.page.evaluate(slintHidden));
 		await t.text('.adialog .a-target', /Switch to two\?/);
 		await t.page.locator('.adialog .a-btns .btn', { hasText: 'Cancel' }).click();
 		await t.until('Cancel closes it', () => !document.querySelector('.adialog'), null, { timeout: 8000 });

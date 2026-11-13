@@ -1,15 +1,13 @@
 // The app frame (PLAN step 4, web-dashboard/leptos/src/frame.rs): one chrome around all five tabs at /app/<page>.
-// The frame draws all five tabs itself. The Slint dashboard is loaded, content-only and hidden, in one same-origin
-// iframe (/?content=1) for its bridge: it feeds Home and Accounts their views (home-page.check.mjs,
-// accounts-frame.check.mjs). Analytics reads its own data (analytics-page.check.mjs, page-load.check.mjs). These check the navigation, the chrome in each format (the Duo's strip and
+// The frame draws all five tabs itself and never loads the Slint dashboard: its dashboard controller
+// (public/frame-dashboard.mjs) feeds Home and Accounts their views (home-page.check.mjs, accounts-frame.check.mjs).
+// Analytics reads its own data (analytics-page.check.mjs, page-load.check.mjs). These check the navigation, the chrome in each format (the Duo's strip and
 // band rules, with `?safe=t,r,b,l` giving the measured insets), the setting and the way back, and the offline copy.
 // Sign-in has its own folder (../frame-signin): its limiter step closes this server's sign-in for 15 minutes.
 // Status and Scoreboard read the kit's fixture home (scripts/status-fixture.mjs, scoreboard-fixture.mjs).
 
-const SLINT = new Set();
-/** Tabs drawn here from the dashboard's views: the dashboard is on that page, signed in, but hidden. */
+/** Tabs drawn here from the dashboard controller's views (dash.rs, public/frame-dashboard.mjs). */
 const BRIDGED = new Set(['home', 'accounts']);
-const DASH_PATH = { home: '/', accounts: '/accounts' };
 /** What each native tab shows once it has its data. */
 const NATIVE = { status: '.status-grid, .q-card', home: '.home .hsec', scoreboard: '.page-title', accounts: '.ac-page .prov', analytics: '.ax-page' };
 /** The dashboard's own header and tab bar probes: none may report inside the frame. */
@@ -28,34 +26,14 @@ const FORMATS = [
 	{ name: 'band (not reached on iOS today)', width: 669, height: 951, safe: '82,0,34,0', mobile: true, chrome: 'band' },
 ];
 
-async function slintFrame(t) {
-	const el = await t.page.$('iframe.slint-frame');
-	return el ? el.contentFrame() : null;
-}
-
-/** The tab is on screen: one route shown, and for the dashboard's tabs the iframe signed in on that page. */
+/** The tab is on screen: one route shown with its data, and for the dashboard's tabs the controller started. */
 async function routeShown(t, page) {
-	await t.until(`${page} shown`, ({ slint, bridged, dash, native }) => {
+	await t.until(`${page} shown`, ({ bridged, native }) => {
 		const shown = [...document.querySelectorAll('.route')].filter((r) => !r.hidden);
-		if (shown.length !== 1) return false;
-		if (bridged) {
-			const f = document.querySelector('iframe.slint-frame');
-			if (!f || shown[0].contains(f) || !shown[0].querySelector(native)) return false;
-			try {
-				const w = f.contentWindow;
-				return !!(w.__aacLastAuth && w.__aacLastAuth.signedIn) && w.location.pathname === dash;
-			} catch { return false; }
-		}
-		if (slint) {
-			const f = document.querySelector('iframe.slint-frame');
-			if (!f || !shown[0].contains(f)) return false;
-			try {
-				const w = f.contentWindow;
-				return !!(w.__aacLastAuth && w.__aacLastAuth.signedIn) && w.location.pathname === dash;
-			} catch { return false; }
-		}
-		return !!shown[0].querySelector(native);
-	}, { page, slint: SLINT.has(page), bridged: BRIDGED.has(page), dash: DASH_PATH[page], native: NATIVE[page] }, { timeout: 60000, hard: true });
+		if (shown.length !== 1 || !shown[0].querySelector(native)) return false;
+		if (bridged) return window.aacFrameDashboard?.state?.().authenticated === true && !document.querySelector('iframe.slint-frame');
+		return true;
+	}, { page, bridged: BRIDGED.has(page), native: NATIVE[page] }, { timeout: 60000, hard: true });
 }
 
 async function openFrame(t, page, safe = '') {
@@ -108,17 +86,16 @@ export const tests = {
 				await t.check(`${page}: the address and the marked tab follow`, s.path === `/app/${page}` && s.current.every((h) => h === `/app/${page}`) && s.current.length >= 1, JSON.stringify(s));
 			});
 		}
-		await t.equal('one dashboard iframe for its two tabs', await t.page.locator('iframe.slint-frame').count(), 1);
+		await t.equal('no dashboard iframe for its two tabs', await t.page.locator('iframe.slint-frame').count(), 0);
 
-		const dash = await slintFrame(t);
-		await dash.evaluate(() => { window.__kitKept = 1; });
+		await t.page.evaluate(() => { window.aacFrameDashboard.__kitKept = 1; });
 		await t.page.click(`${NAV.desk}[href="/app/status"]`);
 		await routeShown(t, 'status');
 		await t.page.click(`${NAV.desk}[href="/app/home"]`);
 		await routeShown(t, 'home');
-		await t.equal('the dashboard stays loaded across tab changes', await (await slintFrame(t)).evaluate(() => window.__kitKept || 0), 1);
-		await t.check('on Home the dashboard is loaded but hidden: Home is drawn by the frame', await t.page.evaluate(() =>
-			!!document.querySelector('iframe.slint-frame') && document.querySelector('.slint-host').hidden && document.querySelectorAll('.home .hsec').length > 0));
+		await t.equal('the dashboard controller stays across tab changes', await t.page.evaluate(() => window.aacFrameDashboard.__kitKept || 0), 1);
+		await t.check('Home is drawn by the frame from its own reads, with no Slint dashboard', await t.page.evaluate(() =>
+			!document.querySelector('iframe.slint-frame') && !performance.getEntriesByType('resource').some((e) => /\/bridge\.js|ccs_account_dashboard/.test(e.name)) && document.querySelectorAll('.home .hsec').length > 0));
 
 		await t.step('Back and Forward', async () => {
 			await t.page.goBack();
@@ -132,38 +109,21 @@ export const tests = {
 			await t.equal('Back and Forward end on Home', (await where(t)).path, '/app/home');
 		});
 
-		await t.step('the dashboard draws its page only', async () => {
+		await t.step('no dashboard page is loaded behind the tabs', async () => {
 			await t.page.click(`${NAV.desk}[href="/app/home"]`);
 			await routeShown(t, 'home');
-			const f = await slintFrame(t);
-			const ids = await f.evaluate(async () => {
-				window.__aacProbeNow && __aacProbeNow();
-				await new Promise((r) => setTimeout(r, 900));
-				return [...(window.__aacProbe || new Map()).keys()];
-			});
-			const header = ids.filter((id) => HEADER_PROBES.test(id));
-			// (The sign-in panel's probes report even while it is hidden, as on the classic page: not a sign of it here.)
-			await t.check('no dashboard header or tab bar inside the frame', ids.length > 0 && header.length === 0, `${ids.length} probes; header ones: ${header.join(', ') || 'none'}`);
-			// every tab is drawn here now: the dashboard only feeds them, hidden
-			await t.check('the dashboard is never on screen', await t.page.evaluate(() => document.querySelector('.slint-host')?.hidden === true));
+			await t.check('no dashboard iframe, no Slint probes, the controller started', await t.page.evaluate(() =>
+				!document.querySelector('iframe.slint-frame') && !document.querySelector('.slint-host') && !window.__aacProbe && window.aacFrameDashboard?.state?.().started === true));
 		});
 
-		await t.step("the dashboard's own links move the frame", async () => {
-			const f = await slintFrame(t);
-			await f.evaluate(() => window.ccsDashboardAction('navigate', 'accounts'));
-			await routeShown(t, 'accounts');
-			await t.equal('a dashboard link to Accounts: the address follows', (await where(t)).path, '/app/accounts');
-			await f.evaluate(() => window.ccsDashboardAction('navigate', 'scoreboard'));
+		await t.step('toasts come from the dashboard controller', async () => {
+			await t.page.click(`${NAV.desk}[href="/app/scoreboard"]`);
 			await routeShown(t, 'scoreboard');
-			await t.equal('a dashboard link to the Scoreboard: the frame shows it', (await where(t)).path, '/app/scoreboard');
-		});
-
-		await t.step('toasts come from the dashboard only', async () => {
-			await t.page.evaluate(() => window.postMessage({ type: 'aac-content', kind: 'toast', toastKind: 'ok', title: 'Kit toast from the top', body: '', ms: 5000 }, location.origin));
-			const f = await slintFrame(t);
-			await f.evaluate(() => parent.postMessage({ type: 'aac-content', kind: 'toast', toastKind: 'ok', title: 'Kit toast from the dashboard', body: '', ms: 5000 }, location.origin));
+			// the old seam's message is not listened to any more; the controller's note is
+			await t.page.evaluate(() => window.postMessage({ type: 'aac-content', kind: 'toast', toastKind: 'ok', title: 'Kit toast from a message', body: '', ms: 5000 }, location.origin));
+			await t.page.evaluate(() => window.dispatchEvent(new CustomEvent('aac-dash', { detail: { key: 'toast', json: JSON.stringify({ kind: 'ok', title: 'Kit toast from the dashboard', body: '', ms: 5000 }) } })));
 			await t.until('the dashboard toast shows over the Scoreboard', () => /Kit toast from the dashboard/.test(document.querySelector('.toasts')?.textContent || ''), null, { timeout: 5000 });
-			await t.check('a message from any other window is ignored', !(await t.page.evaluate(() => /Kit toast from the top/.test(document.querySelector('.toasts')?.textContent || ''))));
+			await t.check('a posted message is ignored', !(await t.page.evaluate(() => /Kit toast from a message/.test(document.querySelector('.toasts')?.textContent || ''))));
 		});
 
 		await t.step('an address opens its tab', async () => {

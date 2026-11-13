@@ -1,8 +1,9 @@
-// Page loads in the app frame: Analytics and the Scoreboard fetch their own data and never wait on the Slint
-// dashboard (the hidden `/?content=1` iframe and its 36 MB wasm), and how long each takes to show.
+// Page loads in the app frame: every tab fetches its own data and none loads or waits on the Slint dashboard (the hidden
+// `/?content=1` iframe, bridge.js and its 36 MB wasm), and how long each takes to show.
 //
 //   browser-check run web-dashboard/tests/browser/checks --grep 'page load'
 //   browser-check run web-dashboard/tests/browser/checks --grep 'load timing' --set home=<fixture home> --set samples=3
+//   (--set pages=home,accounts picks the timed tabs; the default is home, accounts, analytics and scoreboard)
 //
 // Real server, no stubs: route() turns the HTTP cache off, so a stubbed run can't time a warm load. For numbers worth
 // comparing, give it a prepared home with real-sized synthetic data (usage logs, a full runs folder). The timings are
@@ -23,6 +24,11 @@ const MARKS = `(() => {
 		frame: () => window.__aacFrame === true,
 		signin: () => !!q('.signin-page'),
 		shell: () => !!q('.shell'),
+		'home-first': () => shown('.page.home'),
+		// Home's data drawn: its sections and cards, or its words for none; never its "Reading your accounts" state
+		'home-full': () => { const p = q('.route:not([hidden]) .page.home'); return !!p && (!!p.querySelector('.hsec, .hcards, .hcard') || (!!p.querySelector('.hstate') && !/Reading your accounts/.test(p.querySelector('.hstate').textContent))); },
+		'accounts-first': () => shown('.ac-page'),
+		'accounts-full': () => !!q('.route:not([hidden]) .ac-page .ac-slot'),
 		'analytics-first': () => shown('.ax-page'),
 		'analytics-data': () => { const p = q('.ax-page'); return !!p && p.querySelectorAll('.kpi').length >= 5; },
 		'analytics-full': () => { const p = q('.ax-page'); return !!p && p.querySelectorAll('.kpi').length >= 5 && !!p.querySelector('.trend-svg path[d^="M"]') && p.querySelectorAll('.heat-grid .hc').length === 168; },
@@ -136,8 +142,10 @@ export const tests = {
 		});
 	},
 
-	async 'page load: analytics and the scoreboard never wait on the dashboard bridge'(t) {
-		for (const page of ['analytics', 'scoreboard']) {
+	async 'page load: no tab loads or waits on the dashboard bridge, each asks for its own data'(t) {
+		// what each tab reads itself, from the top window
+		const WANT = { home: '/api/accounts/dashboard', accounts: '/api/accounts/registry', analytics: '/api/accounts/analytics', scoreboard: '/api/scoreboard', status: '/api/status' };
+		for (const page of Object.keys(WANT)) {
 			await t.newContext({ viewport: VIEWPORT, serviceWorkers: 'block' });
 			await signInBare(t);
 			const slint = [];
@@ -145,27 +153,41 @@ export const tests = {
 			t.page.on('request', (req) => {
 				const u = new URL(req.url());
 				if (SLINT.test(u.pathname)) slint.push(u.pathname);
-				if (u.pathname === '/api/accounts/analytics' || u.pathname === '/api/scoreboard') api.push({ path: u.pathname, top: req.frame() === t.page.mainFrame() });
+				if (Object.values(WANT).includes(u.pathname)) api.push({ path: u.pathname, top: req.frame() === t.page.mainFrame() });
 			});
 			await t.page.goto(new URL(`/app/${page}`, t.page.url()).href);
-			const want = page === 'analytics' ? '/api/accounts/analytics' : '/api/scoreboard';
+			const want = WANT[page];
 			await t.until(`${page}: its data is asked for`, (p) => !!document.querySelector('.shell') && performance.getEntriesByType('resource').some((e) => new URL(e.name).pathname === p), want, { timeout: 30000 });
 			// the frame keeps going: a bridge started late would still show up here
 			await t.page.waitForTimeout(2500);
 			await t.check(`${page}: the page itself asks for ${want}`, api.some((r) => r.path === want && r.top), JSON.stringify(api));
 			await t.equal(`${page}: no Slint dashboard is loaded (no bridge.js, no dashboard wasm)`, slint, []);
-			await t.check(`${page}: no dashboard iframe`, await t.page.evaluate(() => !document.querySelector('iframe.slint-frame')));
+			await t.check(`${page}: no dashboard iframe`, await t.page.evaluate(() => !document.querySelector('iframe.slint-frame') && !document.querySelector('iframe[src*="content=1"]')));
 		}
+		// a visit to every tab in one session: still no bridge, and Home and Accounts drawn from the frame's own reads
+		await t.newContext({ viewport: VIEWPORT, serviceWorkers: 'block' });
+		await signInBare(t);
+		const slint = [];
+		t.page.on('request', (req) => { const u = new URL(req.url()); if (SLINT.test(u.pathname)) slint.push(u.pathname); });
+		await t.page.goto(new URL('/app/home', t.page.url()).href);
+		for (const tab of ['accounts', 'analytics', 'status', 'scoreboard', 'home']) {
+			await t.page.locator(`a[href="/app/${tab}"]:visible`).first().click();
+			await t.until(`${tab} shown`, (p) => location.pathname === `/app/${p}`, tab, { timeout: 15000 });
+		}
+		await t.until('Home drawn from its own read', () => { const p = document.querySelector('.route:not([hidden]) .page.home'); return !!p && !/Reading your accounts/.test(p.textContent); }, null, { timeout: 30000 });
+		await t.page.waitForTimeout(1500);
+		await t.equal('every tab in one session: no Slint dashboard is loaded', slint, []);
 	},
 
-	async 'load timing: analytics and scoreboard, cold and warm'(t) {
+	async 'load timing: home, accounts, analytics and scoreboard, cold and warm'(t) {
 		const samples = Math.max(1, +t.args.samples || 1);
+		const pages = String(t.args.pages || 'home,accounts,analytics,scoreboard').split(',').filter(Boolean);
 		await t.newContext({ viewport: VIEWPORT, serviceWorkers: 'block' });
 		await signInBare(t);
 		const server = await warmServer(t);
 		const out = { at: new Date().toISOString(), viewport: VIEWPORT, serviceWorkers: 'blocked', server, runs: [] };
 		for (let i = 0; i < samples; i++) {
-			for (const page of ['analytics', 'scoreboard']) {
+			for (const page of pages) {
 				// cold: a new browser context (empty HTTP and code cache), signed in from a JSON page
 				await t.newContext({ viewport: VIEWPORT, serviceWorkers: 'block' });
 				await t.context.addInitScript(MARKS);

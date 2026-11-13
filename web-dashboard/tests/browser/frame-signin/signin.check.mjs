@@ -6,7 +6,7 @@
 const USER = 'labadmin';
 const PASSWORD = 'Lab-Correct-Horse-Battery-9';
 
-/** A frame address; `?e2e` reaches the dashboard's iframe too, so its sign-in state can be read. */
+/** A frame address; `?e2e` gives the kit's hooks (the dashboard controller's state is read from `aacFrameDashboard`). */
 async function page(t, path = '/app/home') {
 	await t.goto(`${path}?e2e`, { settleMs: 300 });
 }
@@ -38,9 +38,10 @@ async function framed(t, label) {
 	await t.until(`${label}: the frame is drawn`, () => !!document.querySelector('.shell') && !document.querySelector('.signin-card'), null, { timeout: 30000, hard: true });
 	await t.until(`${label}: the dashboard on screen has started`, () => {
 		const route = [...document.querySelectorAll('.route')].find((r) => !r.hidden);
-		const iframe = route && route.querySelector('iframe.slint-frame');
-		if (!iframe) return true;
-		try { return iframe.contentWindow?.__aacLastAuth?.signedIn === true; } catch { return false; }
+		// Home and Accounts take the dashboard controller's views (public/frame-dashboard.mjs): it has read once
+		if (!route || !route.querySelector('.page.home, .ac-page')) return true;
+		const s = window.aacFrameDashboard?.state?.();
+		return !!s && s.authenticated === true && s.hasData === true;
 	}, null, { timeout: 60000, hard: true });
 	return true;
 }
@@ -106,8 +107,8 @@ export const tests = {
 			await t.check('the server has a signed-in session', (await serverSays(t)).authenticated === true);
 		});
 
-		await t.step('sign out (with the dashboard loaded)', async () => {
-			await t.until('Home loaded', () => { try { return !!document.querySelector('iframe.slint-frame')?.contentWindow?.__aacLastAuth?.signedIn; } catch { return false; } }, null, { timeout: 60000 });
+		await t.step('sign out (with the dashboard controller started)', async () => {
+			await t.until('Home loaded', () => window.aacFrameDashboard?.state?.().hasData === true, null, { timeout: 60000 });
 			await signOutFromMenu(t);
 			const w = await signInPage(t, 'signed out', (x) => !!x.message);
 			await t.check('the signed-out page says so', w.title === 'Sign in' && /Signed out\./.test(w.message), JSON.stringify(w));
@@ -138,7 +139,7 @@ export const tests = {
 		await t.step('sign out from Status (the dashboard never loaded)', async () => {
 			await page(t, '/app/status');
 			await framed(t, 'status');
-			await t.check('no dashboard iframe yet', (await t.page.locator('iframe.slint-frame').count()) === 0);
+			await t.check('no dashboard controller running yet', await t.page.evaluate(() => { const s = window.aacFrameDashboard?.state?.(); return !s || !s.started || s.stopped; }));
 			await signOutFromMenu(t);
 			const w = await signInPage(t, 'signed out from Status', (x) => !!x.message);
 			await t.check('signed out with the frame\'s own call', /Signed out\./.test(w.message) && (await serverSays(t)).authenticated !== true, JSON.stringify(w));

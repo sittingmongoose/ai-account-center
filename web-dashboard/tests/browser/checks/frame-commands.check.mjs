@@ -1,6 +1,7 @@
-// The app frame and the dashboard in its iframe (fix round 1 of the frame review, 54113ba2): the frame's commands
-// reach the dashboard however early they are given, Sign out ends the session even while the dashboard is still
-// loading, and a session the server ended brings the frame's sign-in with the right reason, whichever page noticed.
+// The app frame and its dashboard controller (public/frame-dashboard.mjs, G5; before it, the dashboard in a hidden
+// iframe, fix round 1 of the frame review, 54113ba2): the frame's commands reach the controller however early they are
+// given, Sign out ends the session even while the controller is still loading, and a session the server ended brings
+// the frame's sign-in with the right reason, whichever page noticed.
 // Real test server and sign-in (the kit's temporary home); the update endpoint is answered in the page, so no app
 // update ever runs.
 
@@ -28,7 +29,7 @@ async function eventually(t, read, ok, ms = 8000) {
 }
 
 const dashboardSignedIn = () => {
-	try { return document.querySelector('iframe.slint-frame')?.contentWindow?.__aacLastAuth?.signedIn === true; } catch { return false; }
+	try { return window.aacFrameDashboard?.state?.().authenticated === true; } catch { return false; }
 };
 
 /** The server ends the session behind the frame's back (the same call Sign out makes, from the test). */
@@ -60,22 +61,24 @@ export const tests = {
 	async 'frame: Sign out while the dashboard is still loading ends the session'(t) {
 		await open(t, 'status');
 		await t.page.waitForSelector('.status-grid, .q-card');
-		// Hold the dashboard's script: its page exists but cannot answer yet.
+		// Hold the dashboard controller's module: Home asks for it but it cannot answer yet.
 		let release;
+		let asked = false;
 		const gate = new Promise((resolve) => { release = resolve; });
-		await t.page.route((u) => new URL(u).pathname === '/bridge.js', async (route) => { await gate; await route.continue(); });
+		await t.page.route((u) => new URL(u).pathname === '/frame-dashboard.mjs', async (route) => { asked = true; await gate; await route.continue(); });
 		await t.page.click('.chrome .nav a[href="/app/home"]');
-		// Home loads the dashboard too (it draws its view), hidden behind the native page.
-		await t.page.waitForSelector('iframe.slint-frame', { state: 'attached' });
+		await eventually(t, async () => asked, (a) => a === true, 5000);
+		await t.check('Home asked for the controller (held here)', asked);
 		await t.page.click(MENU);
 		await t.page.locator('.acct-menu .menu-item', { hasText: 'Sign out' }).click();
 		const ended = await eventually(t, () => serverSignedIn(t), (signedIn) => signedIn === false);
 		const state = await eventually(t, () => frameState(t), (s) => s.form, 3000);
 		release();
-		await t.check('Sign out ends the server session while the dashboard loads', ended === false, `server signed in: ${ended}`);
+		await t.check('Sign out ends the server session while the controller loads', ended === false, `server signed in: ${ended}`);
 		await t.check('and the frame shows its sign-in, saying so', state.form && state.signedIn === false, JSON.stringify(state));
 		await t.page.waitForTimeout(1500);
-		await t.check('the session stays ended once the dashboard script arrives', !(await serverSignedIn(t)));
+		await t.check('the session stays ended once the controller arrives', !(await serverSignedIn(t)));
+		await t.check('and the controller it brought is stopped, never started', await t.page.evaluate(() => { const s = window.aacFrameDashboard?.state?.(); return !s || (s.stopped || !s.started); }));
 	},
 
 	async 'frame: the first Update apps click reaches the dashboard'(t) {
@@ -85,7 +88,7 @@ export const tests = {
 			starts++;
 			await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ job: { state: 'done', results: [] } }) });
 		});
-		// The dashboard is not created yet: this click creates it and must still count.
+		// The controller is not loaded yet: this click loads it and must still count.
 		await t.page.click('.chrome .upd-btn');
 		await t.until('the dashboard signed in', dashboardSignedIn, null, { timeout: 60000, hard: true });
 		const first = await eventually(t, async () => starts, (n) => n >= 1, 5000);
@@ -96,6 +99,7 @@ export const tests = {
 		const second = await eventually(t, async () => starts, (n) => n >= 2, 5000);
 		await t.page.waitForTimeout(800);
 		await t.check('a second click starts one more, never a repeat', second === 2 && starts === 2, `starts after the second click: ${starts}`);
+		await t.check('no dashboard page exists that could restart and send it again', await t.page.evaluate(() => !document.querySelector('iframe')));
 	},
 
 	async 'frame: when the dashboard finds the session ended, the frame says why'(t) {
@@ -113,32 +117,9 @@ export const tests = {
 		await t.noConsoleErrors('console: only the refused reads', { allow: [/status of 401/] });
 	},
 
-	// Fix round 2 (recheck of 36a0b2cf): a mutation is never sent twice, and Sign out's fallback asks the server first.
-	async 'frame: a completed update is not sent again to a dashboard that restarted'(t) {
-		await open(t, 'home');
-		await t.until('the dashboard signed in', dashboardSignedIn, null, { timeout: 60000, hard: true });
-		await t.until('the dashboard has read once', () => !!document.querySelector('.chrome .status-line b')?.textContent, null, { timeout: 30000, hard: true });
-		let starts = 0;
-		let release;
-		const gate = new Promise((resolve) => { release = resolve; });
-		await t.page.route((u) => new URL(u).pathname === '/api/app-updates/start', async (route) => {
-			starts++;
-			if (starts === 1) await gate;
-			await route.fulfill({ json: { job: { id: '00000000-0000-4000-8000-000000000001', state: 'done', results: [] } } }).catch(() => {});
-		});
-		await t.page.click('.chrome .upd-btn');
-		await t.equal('the click reached the update endpoint once', await eventually(t, async () => starts, (n) => n >= 1, 4000), 1);
-		// The job has finished on the server, but its answer has not reached the page: the dashboard's page restarts first.
-		await t.page.evaluate(() => document.querySelector('iframe.slint-frame').contentWindow.location.reload());
-		release();
-		await t.until('the restarted dashboard signed in', dashboardSignedIn, null, { timeout: 60000, hard: true });
-		await t.page.waitForTimeout(2000);
-		await t.equal('one click, one start request across the restart', starts, 1);
-		const toast = await t.page.evaluate(() => document.querySelector('.toasts')?.innerText.replace(/\s+/g, ' ') || '');
-		await t.check('and the frame says to check the results', /Update apps may not have started/.test(toast) && /Check the Update apps results/.test(toast), toast);
-	},
-
-	async 'frame: a repeated command id runs once'(t) {
+	// Fix round 2 (recheck of 36a0b2cf): a mutation is never sent twice. With no dashboard page there is no restart to
+	// send it again; what a page may run is still the seam's allowlist (frame-seam.mjs PAGE_ACTIONS).
+	async 'frame: only page action kinds run; the header commands and sign-out never go that way'(t) {
 		await open(t, 'home');
 		await t.until('the dashboard signed in', dashboardSignedIn, null, { timeout: 60000, hard: true });
 		let starts = 0;
@@ -146,12 +127,11 @@ export const tests = {
 			starts++;
 			await route.fulfill({ json: { job: { state: 'done', results: [] } } });
 		});
-		const post = () => t.page.evaluate(() => document.querySelector('iframe.slint-frame').contentWindow.postMessage({ type: 'aac-frame', id: 900001, action: 'update-apps', value: '' }, location.origin));
-		await post();
-		await t.page.waitForTimeout(600);
-		await post();
+		const ran = await t.page.evaluate(() => ['update-apps', 'logout', 'navigate', 'login', 'theme'].map((k) => window.aacFrameDashboard.act(k, '')));
 		await t.page.waitForTimeout(1000);
-		await t.equal('the same command id starts one job', starts, 1);
+		await t.equal('none of them is a page action', ran, [false, false, false, false, false]);
+		await t.equal('no update started', starts, 0);
+		await t.check('still signed in', await serverSignedIn(t));
 	},
 
 	async 'frame: a slow logout makes one server request'(t) {
@@ -161,7 +141,7 @@ export const tests = {
 		let calls = 0;
 		let release;
 		const gate = new Promise((resolve) => { release = resolve; });
-		// The logout reaches the server (the session ends), and only its answer is held past the frame's 10 s.
+		// The logout reaches the server (the session ends), and only its answer is held for 11 s.
 		await t.page.route((u) => new URL(u).pathname === '/api/auth/logout', async (route) => {
 			calls++;
 			const response = await route.fetch();
@@ -171,9 +151,10 @@ export const tests = {
 		await t.page.click(MENU);
 		await t.page.locator('.acct-menu .menu-item', { hasText: 'Sign out' }).click();
 		await t.page.waitForTimeout(11500);
-		const state = await frameState(t);
+		await t.equal('one Sign out, one logout request while its answer is held', calls, 1);
 		release();
-		await t.equal('one Sign out, one logout request', calls, 1);
+		const state = await eventually(t, () => frameState(t), (s) => s.form, 5000);
+		await t.equal('still one logout request', calls, 1);
 		await t.check('the frame followed the server: signed out, with its sign-in', state.signedIn === false && state.form, JSON.stringify(state));
 		await t.check('and the session is ended', !(await serverSignedIn(t)));
 	},

@@ -1,8 +1,9 @@
 //! AI Account Center pages drawn with Leptos (client-side rendered, served by the TypeScript server).
 //!
 //! Opened on its own, `/app/<page>` is the app frame (PLAN step 4): the header, tab bar, Duo strip and band, sign-in,
-//! and all five tabs, every one drawn here. Status, Scoreboard and Analytics read their own data; Home and Accounts take
-//! theirs from the Slint dashboard, loaded content-only and hidden for its bridge. With `?embed=1` today's Slint shell shows the Status or Scoreboard content in its iframe
+//! and all five tabs, every one drawn here and reading its own data: Home and Accounts the dashboard's (dash.rs,
+//! `public/frame-dashboard.mjs`), so the frame never loads the Slint dashboard. With `?embed=1` today's Slint shell shows
+//! the Status or Scoreboard content in its iframe
 //! and sends the theme (`{type: "aac-theme", mode}`).
 
 mod accounts;
@@ -79,8 +80,8 @@ pub fn set_active(page: Page) {
 pub const SHOWN_EVENT: &str = "aac-shown";
 use wasm_bindgen::prelude::*;
 
-/// The five tabs, all drawn here. Home and Accounts take their data from the dashboard (`bridged`, dash.rs), which stays
-/// loaded in a hidden iframe for its bridge; no tab shows the Slint canvas any more.
+/// The five tabs, all drawn here. Home and Accounts take the dashboard's data (`reads_dashboard`, dash.rs), read by the
+/// frame itself; no tab loads or shows the Slint dashboard any more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Page {
     Home = 0,
@@ -154,17 +155,9 @@ impl Page {
         }
     }
 
-    /// Drawn by the Slint dashboard, inside the frame: none any more. Every tab is drawn here; the dashboard's iframe stays
-    /// loaded, hidden, for its bridge (`bridged`).
-    pub fn slint(self) -> bool {
-        let _ = self;
-        false
-    }
-
-    /// Its data, actions and header line come from the dashboard (bridge.js in the frame's hidden iframe, dash.rs): the
-    /// frame loads the dashboard for it and moves it to this page. Analytics reads its own (analytics/feed.rs), so a
-    /// visit to it never loads the 36 MB dashboard.
-    pub fn bridged(self) -> bool {
+    /// Its data, actions and header line come from the dashboard controller (dash.rs, `public/frame-dashboard.mjs`),
+    /// which the frame starts the first time such a tab is shown. Analytics reads its own (analytics/feed.rs).
+    pub fn reads_dashboard(self) -> bool {
         matches!(self, Page::Home | Page::Accounts)
     }
 }
@@ -312,12 +305,12 @@ mod tests {
             assert_eq!(page_from_path(page.path()), page);
             assert_eq!(Page::from_id(page.id()), Some(page));
         }
-        // no tab is drawn by Slint: the dashboard stays loaded for its bridge only
-        assert!(Page::ALL.iter().all(|p| !p.slint()));
-        assert!(Page::Home.bridged() && Page::Accounts.bridged());
-        // Status, the Scoreboard and Analytics read their own data: they never load the dashboard
+        // Home and Accounts take the dashboard controller's views; the other three read their own
+        assert!(Page::Home.reads_dashboard() && Page::Accounts.reads_dashboard());
         assert!(
-            !Page::Status.bridged() && !Page::Scoreboard.bridged() && !Page::Analytics.bridged()
+            !Page::Status.reads_dashboard()
+                && !Page::Scoreboard.reads_dashboard()
+                && !Page::Analytics.reads_dashboard()
         );
     }
 }

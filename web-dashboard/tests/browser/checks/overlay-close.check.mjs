@@ -203,7 +203,7 @@ export const tests = {
 				await t.page.click('.acc-item[data-row="codex:two"] [data-probe="activate:codex:two"]');
 				await t.until('the approval shows', () => !!document.querySelector('.adialog'), null, { timeout: 15000 });
 				// Measure the last (rightmost) button, but close with Escape (the approval's cancel): in this fixture
-				// "Yes" gets a fresh 409 confirmation and the bridge shows the dialog again (pkg F recheck #2 R1).
+				// "Yes" gets a fresh 409 confirmation and the controller shows the dialog again (pkg F recheck #2 R1).
 				await assertClose(t, `${p.name} approval`, '.adialog .a-btns .btn:last-of-type', '.adialog', p.safe, 'escape');
 				const btn = await accountButton(t);
 				await t.page.click(btn);

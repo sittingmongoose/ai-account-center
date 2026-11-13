@@ -1,7 +1,7 @@
 // Accounts & Settings as a native page in the app frame (PLAN step 6, leptos/src/accounts): the real test server and
 // sign-in, with the account routes answered in the page (a fake server: made-up accounts, keys and codes, nothing
 // real is touched). Each flow checks what the page draws by DOM selector and exactly which requests it sends: the
-// same ones the Slint page sent through bridge.js and accounts-controller.mjs.
+// same ones the Slint page sent through bridge.js and accounts-controller.mjs (now run by public/frame-dashboard.mjs).
 
 import { fakeServer, serve, changes } from '../accounts-fixture.mjs';
 
@@ -18,15 +18,12 @@ async function open(t, server, { width = 1440, height = 900, phone = false, duo 
 const row = (id) => `.acc-item[data-row="${id}"]`;
 
 export const tests = {
-	async 'accounts: every card is drawn natively, the Slint dashboard stays hidden'(t) {
+	async 'accounts: every card is drawn natively, no Slint dashboard is loaded'(t) {
 		const server = fakeServer();
 		await open(t, server);
 		await t.check('nine provider cards and the settings cards', await t.page.evaluate(() =>
 			document.querySelectorAll('.prov').length === 9 && !!document.querySelector('[data-probe="signin-card"]') && !!document.querySelector('[data-probe="update-card"]')));
-		await t.check('the dashboard iframe is loaded but hidden', await t.page.evaluate(() => {
-			const host = document.querySelector('.slint-host');
-			return !!document.querySelector('iframe.slint-frame') && !!host && host.hidden;
-		}));
+		await t.check('no dashboard iframe, no bridge.js, no dashboard wasm', await t.page.evaluate(() => !document.querySelector('iframe.slint-frame') && !performance.getEntriesByType('resource').some((e) => /\/bridge\.js|ccs_account_dashboard/.test(e.name))));
 		await t.check('Update apps spans the page above the columns', await t.page.evaluate(() => document.querySelector('.ac-page .ac-card')?.dataset.probe === 'update-card' && !!document.querySelector('.ac-top [data-probe="update-card"]')));
 		await t.check('three columns at 1440', await t.page.evaluate(() => document.querySelectorAll('.ac-col').length === 3));
 		await t.text(`${row('codex:one')} .acc-email`, 'codex.active@example.invalid');
@@ -130,22 +127,16 @@ export const tests = {
 		const server = fakeServer();
 		await open(t, server);
 		await t.page.click(`${row('codex:two')} [data-probe="activate:codex:two"]`);
-		await t.until('the frame shows its switch approval (activation.rs), the dashboard stays hidden', () => {
-			const host = document.querySelector('.slint-host');
-			return !!document.querySelector('.adialog') && !!host && host.hidden && !host.classList.contains('raised');
-		}, null, { timeout: 15000 });
+		await t.until('the frame shows its switch approval (activation.rs)', () => !!document.querySelector('.adialog') && !document.querySelector('iframe.slint-frame'), null, { timeout: 15000 });
 		const before = changes(server).length;
 		const toasts = await t.page.evaluate(() => document.querySelectorAll('.toast').length);
-		// a change from the page while the switch waits: the dashboard holds it with a toast
-		await t.page.evaluate(() => {
-			const frame = document.querySelector('iframe.slint-frame');
-			frame.contentWindow.postMessage({ type: 'aac-page', kind: 'remove', value: 'codex:two' }, location.origin);
-		});
+		// a change from the page while the switch waits: the controller holds it with a toast
+		await t.page.evaluate(() => window.aacFrameDashboard.act('remove', 'codex:two'));
 		await t.until('a toast says to finish the switch first', () => [...document.querySelectorAll('.toast')].some((el) => /Finish the account switch first/.test(el.textContent)), null, { timeout: 10000 });
 		await t.equal('the remove was not sent', changes(server).length, before);
 		await t.check('one toast more', (await t.page.evaluate(() => document.querySelectorAll('.toast').length)) > toasts);
 		await t.page.locator('.adialog .a-btns .btn', { hasText: 'Cancel' }).click();
-		await t.until('Cancel closes the approval', () => !document.querySelector('.adialog') && document.querySelector('.slint-host')?.hidden === true, null, { timeout: 10000 });
+		await t.until('Cancel closes the approval', () => !document.querySelector('.adialog'), null, { timeout: 10000 });
 		const activations = changes(server).filter((r) => r.path.startsWith('/api/codex/profiles/'));
 		await t.equal('one activation ask, no confirmation sent', JSON.stringify(activations.map((r) => r.body)), JSON.stringify([{}]));
 		await t.noConsoleErrors('console: only the switch that asked for a confirmation', { allow: [/status of 409/] });

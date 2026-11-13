@@ -1,35 +1,24 @@
-//! The dashboard seam for the frame's native pages that take its data (Home, Accounts & Settings, Details). Analytics
-//! reads its own (analytics/feed.rs) and never loads the dashboard.
+//! The dashboard's data for the frame's pages that take it (Home, Accounts & Settings, Details and the switch approval).
+//! The frame reads it itself (G5): `public/frame-dashboard.mjs` runs in this window the same server calls, timers,
+//! guards and pure modules bridge.js runs in the classic app (the accounts controller, the target-bound switch
+//! approvals, the one-use remove and restore tokens), and hands the same versioned views. No tab loads the Slint
+//! dashboard or its bridge any more; Analytics reads its own (analytics/feed.rs).
 //!
-//! `bridge.js` keeps the network, the session, the timers, the accounts controller, switch approvals and every server
-//! call. It runs in the frame's hidden dashboard iframe (`/?content=1`) and, once the frame subscribes, sends each view
-//! it hands Slint as `{type: "aac-content", kind: "view", key, json}` (`public/frame-seam.mjs`). The pages here draw
-//! that JSON (same versions and fields) and send its action kinds back with [`DashCtx::act`], which bridge.js runs as
-//! its own (`{type: "aac-page", kind, value}`, an allowlist on its side). An action is never sent twice.
-//!
-//! The contract for both builders is `page-accounts/SEAM.md` in the share folder.
+//! `index.html` installs `window.aacLoadDashboard()` (a dynamic import, started early on `/app/home` and
+//! `/app/accounts`); it resolves once `window.aacFrameDashboard` holds the controller. Its views arrive as `aac-dash`
+//! events (`{key, json}`) and the pages' actions go back through `aacFrameDashboard.act(kind, value)`, which runs only
+//! the seam's page action kinds (`frame-seam.mjs PAGE_ACTIONS`). An action is never sent twice.
 
+use crate::Page;
 use leptos::prelude::*;
-
-/// The overlays the frame draws itself; bridge.js stops drawing them in Slint once the frame says so: "details" (the
-/// Details panel and sheet, details.rs) and "activation" (the switch approval dialog, activation.rs).
-pub const OVERLAYS: &[&str] = &["details", "activation"];
-
-/// Whether the frame draws this overlay itself.
-pub fn owns(overlay: &str) -> bool {
-    OVERLAYS.contains(&overlay)
-}
+use wasm_bindgen::{JsCast, JsValue};
 
 /// How many times a page asked for Details: a click outside the open panel that asked for another account swaps it
 /// instead of closing it (details.rs, as bridge.js `detailsOpens` does for the canvas).
 pub static DETAILS_ASKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The pages the frame draws itself (`FRAME_PAGES` in frame-seam.mjs), named in the same subscription: bridge.js
-/// then never draws them in Slint. Analytics reads its own data now (analytics/feed.rs): if the dashboard ever builds
-/// its view (its own link to Analytics), `receive` drops it.
-pub const PAGES: &[&str] = &["analytics"];
-
-/// The latest view of each key, as raw JSON (each page parses its own types). Empty until the first push.
+/// The latest view of each key, as raw JSON (each page parses its own types). Empty until the first answer: the pages
+/// show their loading state, never zeros.
 #[derive(Clone, Copy)]
 pub struct DashCtx {
     /// View model v2 (`set_dashboard`).
@@ -48,8 +37,13 @@ pub struct DashCtx {
     pub busy: RwSignal<bool>,
     /// `{"seconds": 60, "confirmed": true}` (`set_refresh_interval`).
     pub refresh_interval: RwSignal<String>,
-    /// The dashboard has started and signed in: only then do actions go to it.
+    /// The frame header's line for Home and Accounts (`{statusLead, statusStrong, statusMore}`, view-model.mjs
+    /// chromeView).
+    pub chrome: RwSignal<String>,
+    /// The controller has loaded and started: only then do actions go to it.
     pub(crate) live: RwSignal<bool>,
+    /// The header's Refresh and Update apps, held while the controller loads (the first click counts).
+    waiting: RwSignal<Vec<String>>,
 }
 
 impl DashCtx {
@@ -63,34 +57,47 @@ impl DashCtx {
             update: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
             refresh_interval: RwSignal::new(String::new()),
+            chrome: RwSignal::new(String::new()),
             live: RwSignal::new(false),
+            waiting: RwSignal::new(Vec::new()),
         }
     }
 
-    /// One view from the dashboard. Unknown keys are ignored, and so are Analytics' (it reads its own).
+    /// One view from the controller. Unknown keys are ignored (Analytics' among them: it reads its own).
     pub(crate) fn receive(&self, key: &str, json: String) {
         crate::ui::reconcile_overlay_focus(|| match key {
-            "dashboard" => self.dashboard.set(json),
-            "accounts" => self.accounts.set(json),
-            "accounts-strength" => self.strength.set(json),
-            "details" => self.details.set(json),
-            "activation" => self.activation.set(json),
-            "update" => self.update.set(json),
-            "busy" => self.busy.set(json == "true"),
-            "refresh-interval" => self.refresh_interval.set(json),
+            "dashboard" => {
+                let _ = self.dashboard.try_set(json);
+            }
+            "accounts" => {
+                let _ = self.accounts.try_set(json);
+            }
+            "accounts-strength" => {
+                let _ = self.strength.try_set(json);
+            }
+            "details" => {
+                let _ = self.details.try_set(json);
+            }
+            "activation" => {
+                let _ = self.activation.try_set(json);
+            }
+            "update" => {
+                let _ = self.update.try_set(json);
+            }
+            "busy" => {
+                let _ = self.busy.try_set(json == "true");
+            }
+            "refresh-interval" => {
+                let _ = self.refresh_interval.try_set(json);
+            }
+            "chrome" => {
+                let _ = self.chrome.try_set(json);
+            }
             _ => {}
         });
     }
 
-    /// The dashboard's page started again: what its overlays showed belongs to the page that is gone.
-    pub(crate) fn restarted(&self) {
-        self.live.set(false);
-        self.details.set(String::new());
-        self.activation.set(String::new());
-        self.busy.set(false);
-    }
-
-    /// The dashboard's page is gone (sign-out): nothing of that session stays on screen.
+    /// The session is gone (sign-out): nothing of it stays on screen.
     pub(crate) fn clear(&self) {
         for signal in [
             self.dashboard,
@@ -100,15 +107,23 @@ impl DashCtx {
             self.activation,
             self.update,
             self.refresh_interval,
+            self.chrome,
         ] {
             let _ = signal.try_set(String::new());
         }
         let _ = self.busy.try_set(false);
         let _ = self.live.try_set(false);
+        let _ = self.waiting.try_set(Vec::new());
     }
 
-    /// Runs one of the dashboard's page actions. False, and nothing sent, while the dashboard is not started and
-    /// signed in (the page has no data to act on then either).
+    /// The controller could not be loaded: the pages say so instead of waiting.
+    fn failed(&self) {
+        let _ = self.dashboard.try_set(NO_START.into());
+        let _ = self.accounts.try_set(NO_START.into());
+    }
+
+    /// Runs one of the dashboard's page actions. False, and nothing run, while the controller has not started (the page
+    /// has no data to act on then either) or for a kind that isn't a page action.
     pub fn act(&self, kind: &str, value: &str) -> bool {
         if !self.live.get_untracked() {
             return false;
@@ -116,30 +131,162 @@ impl DashCtx {
         if kind == "details" {
             DETAILS_ASKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        let Some(target) = crate::frame::slint_window() else {
-            return false;
-        };
-        let message = js_sys::Object::new();
-        let _ = js_sys::Reflect::set(&message, &"type".into(), &"aac-page".into());
-        let _ = js_sys::Reflect::set(&message, &"kind".into(), &kind.into());
-        let _ = js_sys::Reflect::set(&message, &"value".into(), &value.into());
-        target
-            .post_message(&message, &window().location().origin().unwrap_or_default())
-            .is_ok()
+        call("act", &[kind.into(), value.into()])
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// The header's Refresh or Update apps. Held until the controller has started, then run once.
+    pub fn command(&self, action: &str) {
+        if self.live.get_untracked() {
+            call("command", &[action.into()]);
+            return;
+        }
+        self.waiting.update(|all| {
+            if !all.iter().any(|a| a == action) {
+                all.push(action.to_string());
+            }
+        });
+    }
+
+    /// Sign out through the controller (it waits while a switch confirmation is on screen and words a failure). None
+    /// while it has not started: the frame's session signs out itself then.
+    pub(crate) fn sign_out(&self) -> Option<()> {
+        if !self.live.get_untracked() {
+            return None;
+        }
+        call("signOut", &[]).map(|_| ())
     }
 }
 
-/// Asks the dashboard for its views (and says which overlays the frame draws). Sent when its page says it is ready.
-pub(crate) fn subscribe(target: &web_sys::Window) {
-    let message = js_sys::Object::new();
-    let overlays = js_sys::Array::new();
-    for name in OVERLAYS.iter().chain(PAGES) {
-        overlays.push(&(*name).into());
-    }
-    let _ = js_sys::Reflect::set(&message, &"type".into(), &"aac-views".into());
-    let _ = js_sys::Reflect::set(&message, &"overlays".into(), &overlays);
-    let _ = target.post_message(&message, &window().location().origin().unwrap_or_default());
+fn controller() -> Option<JsValue> {
+    js_sys::Reflect::get(&window(), &"aacFrameDashboard".into())
+        .ok()
+        .filter(|v| v.is_object())
 }
+
+/// Calls one of the controller's methods.
+fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
+    let target = controller()?;
+    let f = js_sys::Reflect::get(&target, &method.into()).ok()?;
+    let f = f.dyn_ref::<js_sys::Function>()?;
+    let list = js_sys::Array::new();
+    for a in args {
+        list.push(a);
+    }
+    f.apply(&target, &list).ok()
+}
+
+fn read_str(data: &JsValue, key: &str) -> String {
+    js_sys::Reflect::get(data, &key.into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
+}
+
+/// What the controller says beside the views.
+pub(crate) enum Note {
+    /// A result or a failure: `(kind, title, body, ms)`.
+    Toast(String, String, String, i32),
+    /// The session ended under the page (`expired`, with the reason) or Sign out finished (`default`).
+    SignedOut(String, Option<String>),
+}
+
+/// The `toast` and `signed-out` details (JSON), read as the frame acts on them.
+pub(crate) fn note(key: &str, json: &str) -> Option<Note> {
+    let v = serde_json::from_str::<serde_json::Value>(json).ok()?;
+    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    match key {
+        "toast" => Some(Note::Toast(
+            s("kind"),
+            s("title"),
+            s("body"),
+            v.get("ms").and_then(|x| x.as_f64()).unwrap_or(4800.0) as i32,
+        )),
+        "signed-out" => {
+            let state = s("state");
+            if !matches!(state.as_str(), "expired" | "default") {
+                return None;
+            }
+            let reason = s("reason");
+            Some(Note::SignedOut(
+                state,
+                (!reason.is_empty()).then_some(reason),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Loads the controller and follows its views. `route` is the tab on screen (Accounts & Settings reads its own blocks
+/// when it comes on screen); `noted` gets each toast and the end of the session. Everything stops with the owner
+/// (sign-out).
+pub(crate) fn start(dash: DashCtx, route: Signal<Page>, noted: impl Fn(Note) + 'static) {
+    let ready = RwSignal::new(false);
+    let listener = window_event_listener_untyped("aac-dash", move |event| {
+        let Some(event) = event.dyn_ref::<web_sys::CustomEvent>() else {
+            return;
+        };
+        let detail = event.detail();
+        let key = read_str(&detail, "key");
+        let json = read_str(&detail, "json");
+        match note(&key, &json) {
+            Some(n) => {
+                if matches!(n, Note::SignedOut(..)) {
+                    let _ = dash.live.try_set(false);
+                }
+                noted(n);
+            }
+            None => {
+                if key == "dashboard" {
+                    // an account hidden, shown or removed: Analytics follows while its tab is away
+                    crate::analytics::feed::dashboard_view(&json);
+                }
+                dash.receive(&key, json);
+            }
+        }
+    });
+    let load = js_sys::Reflect::get(&window(), &"aacLoadDashboard".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .and_then(|f| f.call0(&JsValue::NULL).ok())
+        .and_then(|p| p.dyn_into::<js_sys::Promise>().ok());
+    match load {
+        Some(promise) => leptos::task::spawn_local(async move {
+            let loaded = wasm_bindgen_futures::JsFuture::from(promise).await.is_ok();
+            if !loaded {
+                dash.failed();
+            } else if ready.try_set(true).is_some() {
+                // signed out while it loaded: the page is gone, so is its controller
+                call("stop", &[]);
+            }
+        }),
+        None => dash.failed(),
+    }
+    Effect::new(move |started: Option<bool>| {
+        if !ready.get() {
+            return false;
+        }
+        call("page", &[route.get().id().into()]);
+        if started != Some(true) {
+            call("start", &[]);
+            dash.live.set(true);
+            for action in dash.waiting.try_update(std::mem::take).unwrap_or_default() {
+                call("command", &[action.as_str().into()]);
+            }
+        }
+        true
+    });
+    on_cleanup(move || {
+        listener.remove();
+        call("stop", &[]);
+        dash.clear();
+    });
+}
+
+/// Handed to Home and Accounts when the controller could not be loaded at all: each page refuses a view it can't
+/// read with its own sentence ("... could not be read. Reload the app."), never zeros.
+const NO_START: &str = "unavailable";
 
 /// Text that may arrive as `null` (NOTES.md: `default` is not enough for null).
 pub fn nullable<'de, D, T>(d: D) -> Result<T, D::Error>
@@ -156,7 +303,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn views_land_in_their_signal_and_a_restart_closes_the_overlays() {
+    fn views_land_in_their_signal_and_a_sign_out_clears_them() {
         let owner = Owner::new();
         owner.set();
         let dash = DashCtx::new();
@@ -164,21 +311,21 @@ mod tests {
         dash.receive("details", "{\"id\":\"a\"}".into());
         dash.receive("busy", "true".into());
         dash.receive("refresh-interval", "{\"seconds\":60}".into());
+        dash.receive("chrome", "{\"statusLead\":\"Updated\"}".into());
         dash.receive("unknown", "x".into());
         assert_eq!(dash.accounts.get_untracked(), "{\"version\":3}");
         assert!(dash.busy.get_untracked());
-        dash.restarted();
-        assert!(dash.details.get_untracked().is_empty());
-        assert!(!dash.busy.get_untracked());
-        assert_eq!(dash.accounts.get_untracked(), "{\"version\":3}");
+        assert_eq!(dash.chrome.get_untracked(), "{\"statusLead\":\"Updated\"}");
         dash.clear();
         assert!(dash.accounts.get_untracked().is_empty());
+        assert!(dash.details.get_untracked().is_empty());
         assert!(dash.refresh_interval.get_untracked().is_empty());
+        assert!(!dash.busy.get_untracked());
     }
 
     #[test]
-    fn analytics_views_from_the_dashboard_are_dropped() {
-        // Analytics reads its own data (analytics/feed.rs): a view the dashboard builds for it must not land anywhere
+    fn analytics_views_are_dropped() {
+        // Analytics reads its own data (analytics/feed.rs): a view with its keys must not land anywhere
         let owner = Owner::new();
         owner.set();
         let dash = DashCtx::new();
@@ -196,10 +343,68 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_sent_before_the_dashboard_is_live() {
+    fn nothing_is_run_before_the_controller_has_started_and_commands_wait() {
         let owner = Owner::new();
         owner.set();
         let dash = DashCtx::new();
         assert!(!dash.act("remove", "claude:a"));
+        assert!(dash.sign_out().is_none());
+        dash.command("update-apps");
+        dash.command("refresh");
+        dash.command("update-apps");
+        // the first click counts, once
+        assert_eq!(
+            dash.waiting.get_untracked(),
+            vec!["update-apps".to_string(), "refresh".to_string()]
+        );
+        dash.clear();
+        assert!(dash.waiting.get_untracked().is_empty());
+    }
+
+    #[test]
+    fn a_controller_that_never_loads_is_refused_in_words() {
+        let owner = Owner::new();
+        owner.set();
+        let dash = DashCtx::new();
+        dash.failed();
+        assert!(matches!(
+            crate::home::parse(&dash.dashboard.get_untracked()),
+            crate::home::HomeState::Refused(_)
+        ));
+        assert!(crate::accounts::model::parse(&dash.accounts.get_untracked()).is_err());
+    }
+
+    #[test]
+    fn toasts_and_the_end_of_a_session_are_read_from_their_json() {
+        match note(
+            "toast",
+            r#"{"kind":"ok","title":"Codex account switched","body":"b","ms":7000}"#,
+        ) {
+            Some(Note::Toast(kind, title, body, ms)) => {
+                assert_eq!(
+                    (kind.as_str(), title.as_str(), body.as_str(), ms),
+                    ("ok", "Codex account switched", "b", 7000)
+                );
+            }
+            _ => panic!("a toast"),
+        }
+        match note("signed-out", r#"{"state":"expired","reason":"revoked"}"#) {
+            Some(Note::SignedOut(state, reason)) => {
+                assert_eq!(state, "expired");
+                assert_eq!(reason.as_deref(), Some("revoked"));
+            }
+            _ => panic!("an ended session"),
+        }
+        match note("signed-out", r#"{"state":"default","reason":""}"#) {
+            Some(Note::SignedOut(state, reason)) => {
+                assert_eq!(state, "default");
+                assert!(reason.is_none());
+            }
+            _ => panic!("a sign-out"),
+        }
+        // anything else is a view (or nothing): never a sign-out
+        assert!(note("signed-out", r#"{"state":"loading"}"#).is_none());
+        assert!(note("signed-out", "not json").is_none());
+        assert!(note("dashboard", r#"{"version":2}"#).is_none());
     }
 }

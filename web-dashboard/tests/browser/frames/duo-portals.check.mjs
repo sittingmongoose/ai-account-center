@@ -5,12 +5,12 @@ import { fixture, open as pin } from './duo-poll.check.mjs';
 const read = (name) =>
   JSON.parse(readFileSync(new URL(`../../../leptos/fixtures/${name}`, import.meta.url)));
 async function bridge(t, key, view) {
-  await t.page.locator('iframe.slint-frame').evaluate(
-    (el, { key, view }) => {
-      el.contentWindow.eval(
-        `parent.postMessage(${JSON.stringify({ type: 'aac-content', kind: 'view', key, json: view ? JSON.stringify(view) : '' })}, location.origin)`
-      );
-    },
+  // the view as the frame's dashboard controller sends it (public/frame-dashboard.mjs, an `aac-dash` event)
+  await t.page.evaluate(
+    ({ key, view }) =>
+      window.dispatchEvent(
+        new CustomEvent('aac-dash', { detail: { key, json: view ? JSON.stringify(view) : '' } })
+      ),
     { key, view }
   );
 }
@@ -390,19 +390,20 @@ tests['duo portals: embedded shell hides retire pin and global viewer owners'] =
   );
 };
 
-// Use the dashboard's authenticated source/origin seam to exercise actual signed-in-owner teardown.
+// Use the dashboard controller's own end-of-session note to exercise actual signed-in-owner teardown.
 tests['duo portals: expired-session owner unmount retires the viewer and clears its selection'] =
   async (t) => {
     await pin(t, fixture(true), true, true);
     await t.page.locator('.c2-sheet-host [data-focus-role="media-enlarge"]').first().click();
     await t.page.waitForSelector('.viewer');
-    await t.page
-      .locator('iframe.slint-frame')
-      .evaluate((el) =>
-        el.contentWindow.eval(
-          `parent.postMessage({type:'aac-content',kind:'auth',signedIn:false,state:'expired',reason:'revoked'},location.origin)`
-        )
-      );
+    // the controller found the session revoked (its `signed-out` note): the frame's sign-in takes over
+    await t.page.evaluate(() =>
+      window.dispatchEvent(
+        new CustomEvent('aac-dash', {
+          detail: { key: 'signed-out', json: JSON.stringify({ state: 'expired', reason: 'revoked' }) },
+        })
+      )
+    );
     await t.page.waitForSelector('.shell', { state: 'detached' });
     await frames(t);
     await t.check(

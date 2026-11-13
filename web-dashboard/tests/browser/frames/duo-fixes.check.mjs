@@ -409,20 +409,20 @@ tests['duo interactions: pin Escape scrim fling and reopen'] = async (t) => {
   );
 };
 async function bridge(t, key, view) {
-  await t.page.locator('iframe.slint-frame').evaluate(
-    (el, { key, view }) => {
-      el.contentWindow.eval(
-        `parent.postMessage(${JSON.stringify({ type: 'aac-content', kind: 'view', key, json: view ? JSON.stringify(view) : '' })}, location.origin)`
-      );
-    },
+  // the view as the frame's dashboard controller sends it (public/frame-dashboard.mjs, an `aac-dash` event)
+  await t.page.evaluate(
+    ({ key, view }) =>
+      window.dispatchEvent(
+        new CustomEvent('aac-dash', { detail: { key, json: view ? JSON.stringify(view) : '' } })
+      ),
     { key, view }
   );
 }
 tests['duo interactions: Details and approval use body with nested locks'] = async (t) => {
   await open(t, 951, 669, '0,84,34,0');
-  // The frame loads its bridge on the first account-backed tab, then retains it when returning to Status.
+  // The frame starts its dashboard controller on the first account-backed tab, then keeps it when returning to Status.
   await t.page.locator('.rail a[href="/app/home"]').click();
-  await t.page.waitForSelector('iframe.slint-frame', { state: 'attached' });
+  await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().started === true);
   await t.page.locator('.rail a[href="/app/status"]').click();
   await t.page.waitForSelector('.c2-row');
   await t.page.evaluate(() => {

@@ -335,6 +335,8 @@ export function createFrameSession({
     ended,
     limitOver,
     view: () => view,
+    /** GET /api/auth/check as last read (access mode, trusted local network): the dashboard controller starts from it. */
+    authCheck: () => authCheck,
     onChange(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

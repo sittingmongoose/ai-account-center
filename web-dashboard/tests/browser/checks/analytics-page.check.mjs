@@ -125,7 +125,7 @@ export const tests = {
 		await t.app.signIn();
 		await stubData(t);
 		await openAnalytics(t);
-		await t.check('no Slint dashboard is loaded for the tab', await t.page.evaluate(() => document.querySelector('.slint-host').hidden && !document.querySelector('iframe.slint-frame')));
+		await t.check('no Slint dashboard is loaded for the tab', await t.page.evaluate(() => !document.querySelector('iframe.slint-frame')));
 		const counts = await t.page.evaluate(() => ({
 			cbm: document.querySelectorAll('.cbm-row').length,
 			arcs: document.querySelectorAll('.donut-svg .arcs path').length,
