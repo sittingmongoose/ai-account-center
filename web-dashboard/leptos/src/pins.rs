@@ -71,15 +71,8 @@ impl Pin {
             let full = format!("{note} Showing its cached copy.");
             out.push((full.clone(), full));
         }
-        if self.u.looping.answer == "yes" {
-            let text = self.u.looping.text.trim();
-            let text = text.strip_prefix("Yes.").unwrap_or(text).trim();
-            let full = if text.is_empty() {
-                "Looping.".to_string()
-            } else {
-                format!("Looping: {text}")
-            };
-            out.push((cut(&full, 72), full));
+        if let Some(lines) = loop_lines(&self.u) {
+            out.push(lines);
         }
         if self.r.readme_questions && self.cards.is_empty() {
             out.push((
@@ -660,23 +653,26 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
 
     // Waiting on: every wait that is not the owner's, shown beside an owner wait, never behind it.
     let now = js_sys::Date::now();
-    let mut waits: Vec<AnyView> = Vec::new();
-    let mut wait_when: Vec<AnyView> = Vec::new();
+    // Each wait's head, words and time ("for 20 h", or "was due 1:20 AM" in amber once past due).
+    let mut rows: Vec<(String, String, Option<(String, bool)>)> = Vec::new();
     let when = |since: Option<&str>, until: Option<&str>| {
         let late = until.and_then(iso_ms).filter(|u| *u < now);
         match (late, since.and_then(iso_ms)) {
-            (Some(_), _) => view! { <span data-tone="warn">{format!("was due {}", fmt::clock(until.unwrap_or_default()))}</span> }.into_any(),
-            (None, Some(s)) => view! { <span>{format!("for {}", since_ms(s))}</span> }.into_any(),
-            _ => view! { <span></span> }.into_any(),
+            (Some(_), _) => Some((
+                format!("was due {}", fmt::clock(until.unwrap_or_default())),
+                true,
+            )),
+            (None, Some(s)) => Some((format!("for {}", since_ms(s)), false)),
+            _ => None,
         }
     };
     if !p.u.waits.is_empty() {
         for w in other_waits(&p.u) {
-            waits.push(
-                view! { <p><b>{other_wait_head(w)}</b>{format!(" {}", wait_words(w))}</p> }
-                    .into_any(),
-            );
-            wait_when.push(when(w.since.as_deref(), w.until.as_deref()));
+            rows.push((
+                other_wait_head(w),
+                wait_words(w),
+                when(w.since.as_deref(), w.until.as_deref()),
+            ));
         }
     } else {
         // A server without structured waits: the report's own non-owner blockers.
@@ -686,10 +682,27 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
                 .chain(p.r.blocked_on.iter())
                 .filter(|b| b.who() != "owner")
         {
-            waits.push(
-                view! { <p><b>{who_words(b.who())}</b>{format!(" {}", b.words())}</p> }.into_any(),
-            );
-            wait_when.push(when(b.since.as_deref(), b.until.as_deref()));
+            rows.push((
+                who_words(b.who()).to_string(),
+                b.words(),
+                when(b.since.as_deref(), b.until.as_deref()),
+            ));
+        }
+    }
+    // One wait keeps its time in the right column. Several keep each time under its own wait: stacked in the right
+    // column, three times sat apart from the waits they date (a phone put them all under the last one).
+    let several = rows.len() > 1;
+    let mut waits: Vec<AnyView> = Vec::new();
+    let mut wait_when: Vec<AnyView> = Vec::new();
+    for (head, words, time) in rows {
+        let tone = |late: bool| late.then_some("warn");
+        if several {
+            waits.push(view! { <p><b>{head}</b>{format!(" {words}")}{time.map(|(t, late)| view! { <small class="fx-when" data-tone=tone(late)>{t}</small> })}</p> }.into_any());
+        } else {
+            waits.push(view! { <p><b>{head}</b>{format!(" {words}")}</p> }.into_any());
+            if let Some((t, late)) = time {
+                wait_when.push(view! { <span data-tone=tone(late)>{t}</span> }.into_any());
+            }
         }
     }
     if waits.is_empty() && p.u.waits.is_empty() && !p.u.blocked.waiting_on_you {
@@ -936,19 +949,14 @@ fn tasks_section(p: &Pin) -> AnyView {
 }
 
 fn tasks_as_of(p: &Pin) -> Option<AnyView> {
-    // Another writer's board: say whose, so its rounds never read as this thread's own.
-    if let Some(words) = shared_board_words(&p.u) {
-        return Some(
-            view! { <span class="c2-sec-end" data-board="shared">{words}</span> }.into_any(),
-        );
-    }
     // Lists from the status document, not a board: as old as the human update, whatever the heartbeat says.
     if p.u.board.is_none()
         && let (Some((human, _)), Some(s)) = (two_ages(&p.u), p.u.status_updated.as_ref())
     {
         return Some(view! { <span class="c2-sec-end" data-tone={(human > 6 * 3_600).then_some("warn")}>{format!("as of {}, {} old", fmt::clock(&s.at), update_age(human))}</span> }.into_any());
     }
-    p.board.as_ref().and_then(|b| b.as_of.clone()).map(|at| {
+    // The list's own time, amber when it is 6 h older than the thread's report or its board is stale.
+    let list_time = p.board.as_ref().and_then(|b| b.as_of.clone()).map(|at| {
         let list_ms = iso_ms(&at);
         let report_ms = p.u.updated.as_ref().and_then(|u| iso_ms(&u.at));
         let old = matches!((list_ms, report_ms), (Some(l), Some(r)) if r - l > 6.0 * 3_600_000.0)
@@ -957,8 +965,15 @@ fn tasks_as_of(p: &Pin) -> Option<AnyView> {
             (true, Some(l)) => format!("as of {}, {} old", fmt::clock(&at), since_ms(l)),
             _ => format!("as of {}", fmt::clock(&at)),
         };
-        view! { <span class="c2-sec-end" data-tone=old.then_some("warn")>{words}</span> }.into_any()
-    })
+        (words, old)
+    });
+    match (shared_board_words(&p.u), list_time) {
+        // Another writer's board: say whose, so its rounds never read as this thread's own, and keep the list's time
+        // beside it (wave 8 showed only whose, so a worker lost how old its tasks are).
+        (Some(whose), time) => Some(view! { <span class="c2-sec-end" data-board="shared">{whose}{time.map(|(words, old)| view! { <span class="nw">{" · "}</span><span class="nw" data-tone=old.then_some("warn")>{words}</span> })}</span> }.into_any()),
+        (None, Some((words, old))) => Some(view! { <span class="c2-sec-end" data-tone=old.then_some("warn")>{words}</span> }.into_any()),
+        (None, None) => None,
+    }
 }
 
 #[component]
@@ -1037,9 +1052,32 @@ fn quiet_body(p: &Pin) -> impl IntoView + use<> {
     view! { <p class="c2-quiet"><span class="w-ink">{note}</span>{last}</p> }
 }
 
+/// Whether a quiet thread reported anything beyond its words: stages, a task list or progress, or things to open.
+fn quiet_has_lists(p: &Pin) -> bool {
+    !p.r.deliverables.is_empty()
+        || !p.r.stages.is_empty()
+        || !p.u.left.is_empty()
+        || !p.u.done.is_empty()
+        || p.u.percent.is_some()
+        || p.r.progress.is_some()
+}
+
 fn sheet_body(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
-    let body = if matches!(p.word, Word::Quiet | Word::NotReporting) {
+    let body = if matches!(p.word, Word::NotReporting)
+        || (matches!(p.word, Word::Quiet) && !quiet_has_lists(p))
+    {
         quiet_body(p).into_any()
+    } else if matches!(p.word, Word::Quiet) {
+        // Quiet still shows what it reported, each list with its own time: the note says how old it is, and a thread that
+        // went past a day no longer drops its stages and tasks (2026-11-13 regression).
+        view! {
+            {quiet_body(p)}
+            <div class="c2-cols">
+                <div class="c2-col">{to_open_section(p)}</div>
+                <div class="c2-col">{stages_section(p)}{tasks_section(p)}</div>
+            </div>
+        }
+        .into_any()
     } else {
         view! {
             <div class="c2-cols" class:dim={p.u.report_state == "unreadable"}>
@@ -1055,10 +1093,21 @@ fn sheet_body(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
 #[component]
 fn LivePinBody(pin: Memo<Option<Pin>>) -> impl IntoView {
     let live = expect_context::<Live>();
+    // Not reporting, or quiet with nothing but words: the note alone. Quiet with lists: the note, then what it reported
+    // (stages, tasks, things to open), each with its own time; only the five facts, which would repeat the note's last
+    // words, are left out.
+    let silent = Memo::new(move |_| {
+        pin.with(|p| {
+            p.as_ref().is_none_or(|p| {
+                matches!(p.word, Word::NotReporting)
+                    || (matches!(p.word, Word::Quiet) && !quiet_has_lists(p))
+            })
+        })
+    });
     let quiet = Memo::new(move |_| {
         pin.with(|p| {
             p.as_ref()
-                .is_none_or(|p| matches!(p.word, Word::Quiet | Word::NotReporting))
+                .is_some_and(|p| matches!(p.word, Word::Quiet) && quiet_has_lists(p))
         })
     });
     // A new Now/age/status must not recreate media controls, disclosure state or the focused action.
@@ -1072,10 +1121,11 @@ fn LivePinBody(pin: Memo<Option<Pin>>) -> impl IntoView {
     });
     view! {
         {move || pin.with(|p| p.as_ref().map(sheet_heading))}
-        <Show when=move || !quiet.get() fallback=move || pin.with(|p| p.as_ref().map(quiet_body))>
+        <Show when=move || quiet.get()>{move || pin.with(|p| p.as_ref().map(quiet_body))}</Show>
+        <Show when=move || !silent.get() fallback=move || pin.with(|p| p.as_ref().map(quiet_body))>
             <div class="c2-cols" class:dim=move || pin.with(|p| p.as_ref().is_some_and(|p| p.u.report_state == "unreadable"))>
                 <div class="c2-col">
-                    {move || pin.with(|p| p.as_ref().map(|p| facts(p, live.elapsed_seconds())))}
+                    {move || pin.with(|p| p.as_ref().filter(|_| !quiet.get()).map(|p| facts(p, live.elapsed_seconds())))}
                     <LiveToOpenSection pin=pin_id.clone() list=deliverables/>
                 </div>
                 <div class="c2-col">
@@ -1145,6 +1195,8 @@ fn RosterRow(
     let age = roster_age(&p.u);
     let age_tone = age.as_ref().is_some_and(|(_, old)| *old).then_some("warn");
     let age_title = two_ages(&p.u).map(|(human, beat)| two_ages_words(human, beat));
+    // And when a heartbeat is newer, how long ago it was last active, under the words' age: the old corner's news.
+    let active = roster_active(&p.u);
     let model = model_of(p.u.who.as_deref());
     let problem = p.problems().into_iter().next().map(|(short, _)| short);
     let mute = matches!(p.word, Word::Quiet);
@@ -1152,7 +1204,7 @@ fn RosterRow(
         <li class="c2-item">
             <button class="c2-row" class:sel=move || selected.get() class:open=move || open.get() class:quiet=mute aria-current=move || selected.get().then_some("true")
                 on:click=move |_| on_pick.run(id.clone())>
-                <span class="c2-l1"><span class="c2-title">{p.title()}</span><span class="c2-age" data-tone=age_tone title=age_title>{age.map(|(a, _)| a)}</span></span>
+                <span class="c2-l1"><span class="c2-title">{p.title()}</span><span class="c2-ages" title=age_title><span class="c2-age" data-tone=age_tone>{age.map(|(a, _)| a)}</span>{active.map(|a| view! { <span class="c2-active">{a}</span> })}</span></span>
                 <span class="c2-l2"><b data-tone=p.word.tone()>{p.word.text()}</b>{format!(" {}", lead(&p))}</span>
                 <span class="c2-l3">{mini_track(&p.r.stages)}<span class="c2-stage">{foot_words(&p)}</span><span class="c2-model">{model}</span></span>
                 {problem.map(|t| view! { <span class="c2-prob" data-tone="warn">{t}</span> })}

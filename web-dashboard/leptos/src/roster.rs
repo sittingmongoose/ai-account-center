@@ -848,6 +848,56 @@ pub fn roster_age(u: &PinnedUpdate) -> Option<(String, bool)> {
     }
 }
 
+/// "active 24 min", "active 45 h", "active just now": how long ago the thread last reported anything, the heartbeat
+/// included. In the words' own units (`update_age`), so "46 h" never sits over "active 1 d" or "1 h" over
+/// "active 1 h 4 min" and reads as the older of the two.
+pub fn active_words(seconds: i64) -> String {
+    format!("active {}", update_age(seconds))
+}
+
+/// The roster row's activity age, shown under the words' age when a heartbeat is newer than the words. Before wave 8
+/// the corner gave the newest report's age ("24 min"), so a working thread read as alive; wave 8 put the summary's
+/// age there ("2 h") and dropped that. Both show now, each named, so neither stands for the other (2026-11-13
+/// regression).
+pub fn roster_active(u: &PinnedUpdate) -> Option<String> {
+    // Only when it reads differently: "46 h" over "active 46 h" would add a line and say nothing.
+    two_ages(u)
+        .filter(|(human, beat)| update_age(*human) != update_age(*beat))
+        .map(|(_, beat)| active_words(beat))
+}
+
+/// A loop's lines, short (roster) and full (sheet). On another writer's board the short line names the board as
+/// shared and still carries the task and its rounds: the board's owner and stream are in the full line, and a 72-
+/// character cut of "On the shared P board kept by vm.x, ..." used to stop before the task (2026-11-13 regression).
+pub fn loop_lines(u: &PinnedUpdate) -> Option<(String, String)> {
+    if u.looping.answer != "yes" {
+        return None;
+    }
+    let text = u.looping.text.trim();
+    let text = text.strip_prefix("Yes.").unwrap_or(text).trim();
+    let full = if text.is_empty() {
+        "Looping.".to_string()
+    } else {
+        format!("Looping: {text}")
+    };
+    let shared = u.board.as_ref().is_some_and(|b| b.shared);
+    let task = u
+        .looping
+        .task
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty());
+    let short = match (shared, task, u.looping.rounds) {
+        (true, Some(task), Some(rounds)) => format!(
+            "Looping (shared board): {task} has gone back for fixes {} without a passing review.",
+            plural(rounds as usize, "time", "times")
+        ),
+        (true, Some(task), None) => format!("Looping (shared board): {task}."),
+        _ => full.clone(),
+    };
+    Some((cut(&short, 72), full))
+}
+
 /// The quiet sheet's last words: the summary when there is one, else the last doing line with its age.
 pub fn quiet_last(u: &PinnedUpdate, elapsed: i64) -> Option<String> {
     if let Some(s) = u.summary.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -1331,5 +1381,74 @@ mod tests {
         );
         u.board.as_mut().unwrap().shared = false;
         assert_eq!(shared_board_words(&u), None);
+    }
+
+    // ---- 2026-11-13 regression: what wave 8 stopped showing on the owner's real pins ----
+
+    /// pm7-build's real shape: the hook rewrote thread.json 20 min ago, the status (and its words) is 2 h old.
+    #[test]
+    fn the_roster_corner_keeps_the_active_age_beside_an_older_summary() {
+        let u: PinnedUpdate = serde_json::from_value(json!({
+            "id": "pm7", "title": "Build PMConcept7", "machine": "vm", "reportState": "fresh",
+            "updated": { "text": "Updated 20 min ago", "at": "2026-11-13T13:32:25Z", "ageSeconds": 1200 },
+            "statusUpdated": { "text": "Updated 2 hours ago", "at": "2026-11-13T11:45:55Z", "ageSeconds": 7620 },
+            "heartbeat": { "text": "Active 20 min ago", "at": "2026-11-13T13:32:25Z", "ageSeconds": 1200 }
+        }))
+        .unwrap();
+        // The words' age stays (a summary never reads as current), and the activity the old corner gave is back.
+        assert_eq!(roster_age(&u), Some(("2 h".to_string(), false)));
+        assert_eq!(roster_active(&u).as_deref(), Some("active 20 min"));
+        assert_eq!(active_words(30), "active just now");
+        // The same units as the words' age: never "46 h" over "active 1 d", or "1 h" over "active 1 h 4 min".
+        assert_eq!(active_words(45 * 3600 + 120), "active 45 h");
+        assert_eq!(active_words(3840), "active 1 h");
+        assert_eq!(update_age(83 * 60), "1 h");
+        // Both ages in the same hour (onboarding's real 45.8 h and 45.1 h): no second line that repeats the first.
+        let mut close = u.clone();
+        close.status_updated.as_mut().unwrap().age_seconds = Some(165_000);
+        close.heartbeat.as_mut().unwrap().age_seconds = Some(162_400);
+        assert_eq!(roster_age(&close), Some(("45 h".to_string(), true)));
+        assert_eq!(roster_active(&close), None);
+        // One update writes both files: one age, as before wave 8, and no second line.
+        let mut same = u.clone();
+        same.status_updated.as_mut().unwrap().age_seconds = Some(1260);
+        assert_eq!(roster_active(&same), None);
+        assert_eq!(roster_age(&same), Some(("20 min".to_string(), false)));
+    }
+
+    /// claude-split-v3's real shape: a worker on claude-projects-refresh's shared P board, task P-BATCH2 four rounds.
+    #[test]
+    fn a_shared_board_loop_keeps_its_task_and_rounds_in_the_roster_line() {
+        let mut u: PinnedUpdate = serde_json::from_value(json!({
+            "id": "split", "title": "Improve Project Management Page Readability", "machine": "vm", "reportState": "fresh",
+            "looping": { "answer": "yes", "task": "P-BATCH2", "rounds": 4,
+                "text": "Yes. On the shared P board kept by vm.claude-projects-refresh, P-BATCH2 has gone back for fixes 4 times without a passing review." },
+            "board": { "writer": "vm.claude-projects-refresh", "project": "puppet-master", "stream": "P", "shared": true }
+        }))
+        .unwrap();
+        let (short, full) = loop_lines(&u).unwrap();
+        assert_eq!(
+            short,
+            "Looping (shared board): P-BATCH2 has gone back for fixes 4 times…"
+        );
+        assert!(short.chars().count() <= 73, "{short}");
+        assert_eq!(
+            full,
+            "Looping: On the shared P board kept by vm.claude-projects-refresh, P-BATCH2 has gone back for fixes 4 times without a passing review."
+        );
+        // The thread's own board: the line is cut from the composer's words, as before.
+        u.board.as_mut().unwrap().shared = false;
+        u.looping.text =
+            "Yes. P-BATCH2 has gone back for fixes 4 times without a passing review.".into();
+        assert_eq!(
+            loop_lines(&u).unwrap().0,
+            "Looping: P-BATCH2 has gone back for fixes 4 times without a passing…"
+        );
+        // An older server sends no task: the full words, cut.
+        u.board.as_mut().unwrap().shared = true;
+        u.looping.task = None;
+        assert!(loop_lines(&u).unwrap().0.starts_with("Looping: P-BATCH2"));
+        u.looping.answer = "no".into();
+        assert_eq!(loop_lines(&u), None);
     }
 }

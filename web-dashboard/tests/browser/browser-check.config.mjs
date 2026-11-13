@@ -39,6 +39,16 @@ export default (ctx) => {
 			// (scripts/status-fixture.mjs: 9 open cards, 2 answered, threads, streams and option media), its answers go to
 			// that home's store, and the doorbell is off, so a test answer never reaches a real thread.
 			const reports = path.join(home, 'agent-reports');
+			// Opt-in real data for Status comparisons: `--set reports=<copy of the reports share>` (and `registry=<copy of
+			// the pm-mail registry>`) are copied into this run's temporary home, so the server reads and writes only the
+			// copy (it writes reader receipts beside the reports). `--set realPins=1` below adds the real T3 pins.
+			if (ctx.args.reports) {
+				fs.cpSync(path.resolve(String(ctx.args.reports)), reports, { recursive: true });
+				if (ctx.args.registry) fs.cpSync(path.resolve(String(ctx.args.registry)), path.join(reports, 'pm-mail-registry'), { recursive: true });
+			}
+			// The other machines' pins come over ssh. Its config's `Include ~/...` lines resolve against HOME, so the real
+			// ~/.ssh is linked into the temporary home; nothing else of the real home is.
+			if (ctx.args.realPins && !fs.existsSync(path.join(home, '.ssh'))) fs.symlinkSync(path.join(os.homedir(), '.ssh'), path.join(home, '.ssh'));
 			if (!fs.existsSync(path.join(reports, 'v1', 'writers'))) {
 				const { writeStatusFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'status-fixture.mjs')).href);
 				writeStatusFixture(reports, { ccsDir: path.join(home, '.ccs'), withKinds: true });
@@ -52,9 +62,18 @@ export default (ctx) => {
 		// for other machines). Every home-like variable points at the temporary folder, so no real account shows up.
 		server: (_, s) => ({
 			command: [process.execPath, cli, 'dashboard', '--no-open', '--host', '127.0.0.1', '--port', String(s.port)], cwd: root, url: `http://127.0.0.1:${s.port}/`, timeoutMs: +ctx.args.serverTimeout || 240000, // node_modules on the share can take 90 s to load
-			env: { CCS_HOME: s.home, HOME: s.home, USERPROFILE: s.home, APPDATA: path.join(s.home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(s.home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(s.home, '.config'), XDG_DATA_HOME: path.join(s.home, '.local', 'share'), XDG_STATE_HOME: path.join(s.home, '.local', 'state'), XDG_CACHE_HOME: path.join(s.home, '.cache'), CODEX_HOME: path.join(s.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(s.home, '.claude'), AAC_AGENT_REPORTS_DIR: s.reports, AAC_PM_MAIL_REGISTRY_DIR: path.join(s.reports, 'pm-mail-registry'), AAC_STATUS_DOORBELL: 'off' }
+			env: { CCS_HOME: s.home, HOME: s.home, USERPROFILE: s.home, APPDATA: path.join(s.home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(s.home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(s.home, '.config'), XDG_DATA_HOME: path.join(s.home, '.local', 'share'), XDG_STATE_HOME: path.join(s.home, '.local', 'state'), XDG_CACHE_HOME: path.join(s.home, '.cache'), CODEX_HOME: path.join(s.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(s.home, '.claude'), AAC_AGENT_REPORTS_DIR: s.reports, AAC_PM_MAIL_REGISTRY_DIR: path.join(s.reports, 'pm-mail-registry'), AAC_STATUS_DOORBELL: 'off',
+				// `--set realPins=1`: this machine's real T3 pins, opened read-only by the status module (the other machines'
+				// pins come over ssh, set up above).
+				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}) }
 		}),
-		async teardown(_, s) { if (s && s.home && !ctx.args.keep) fs.rmSync(s.home, { recursive: true, force: true }); },
+		async teardown(_, s) {
+			if (!s || !s.home) return;
+			// The realPins link to ~/.ssh goes first, by itself, so removing the home can never reach the real folder.
+			const ssh = path.join(s.home, '.ssh');
+			if (fs.lstatSync(ssh, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(ssh);
+			if (!ctx.args.keep) fs.rmSync(s.home, { recursive: true, force: true });
+		},
 		viewport: { width: 1920, height: 1080 },
 		// Signed out on an empty CCS_HOME, the update status call answers 401 by design
 		consoleErrors: { fail: true, allow: [/status of 401 .*\/api\/app-updates\/status/, /status of 409 .*\/activate\b/] }, // 409: a Codex switch asks for its approval first (overlay-close drives it)

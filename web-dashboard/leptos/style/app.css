@@ -2768,6 +2768,9 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .c2-l1 { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
 .c2-title { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 640; font-variation-settings: 'wght' 640; line-height: 1.3; }
 .c2-age { color: var(--ink-3); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* The words' age, and under it how long ago the thread was last active when a heartbeat is newer (2026-11-13). */
+.c2-ages { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
+.c2-active { color: var(--ink-3); font-size: 11.5px; line-height: 1.3; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .c2-l2 { font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
 .c2-l2 b, .c2-state b { font-weight: 640; font-variation-settings: 'wght' 640; color: var(--ink); }
 .c2-l3 { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--ink-3); min-width: 0; }
@@ -2808,6 +2811,8 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .fx dd.t .fx-when { display: block; }
 .fx dd p + p { margin-top: 6px; }
 .fx small { display: block; color: var(--ink-3); font-size: 12px; margin-top: 2px; }
+/* A wait's own time under its words when several waits are listed; amber once it is past due. */
+.fx small[data-tone='warn'] { color: var(--warn-text); }
 .fx dd b { font-weight: 640; font-variation-settings: 'wght' 640; }
 /* The phone sheet is drawn outside the content container, so the narrow rule further down never reaches it: on a
    narrow screen its times go under their fact instead of squeezing the fact to a word a line (folded Duo). */

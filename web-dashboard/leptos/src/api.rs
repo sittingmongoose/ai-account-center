@@ -214,6 +214,10 @@ pub struct PinnedLooping {
     pub answer: String,
     #[serde(deserialize_with = "nullable")]
     pub text: String,
+    /// The board item that loops, when the board rule found it.
+    pub task: Option<String>,
+    /// How many times it went back for fixes without a passing review.
+    pub rounds: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
