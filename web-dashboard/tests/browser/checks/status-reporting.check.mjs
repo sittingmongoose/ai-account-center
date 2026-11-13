@@ -15,6 +15,8 @@ const FORMATS = [
   { name: 'phone', w: 402, h: 812, safe: '0,0,34,0', mobile: true },
   { name: 'duo-open', w: 669, h: 869, safe: '0,0,34,0', mobile: true },
   { name: 'desktop', w: 1440, h: 900, safe: '0,0,0,0', mobile: false },
+  // The Duo folded with its rail: the narrowest sheet, where a long time once squeezed a fact to a word a line.
+  { name: 'duo-folded', w: 466, h: 678, safe: '0,84,34,0', mobile: true },
 ];
 
 const OWNER_WAIT = 'Open the preview and answer card SM-0 and the design questions SM-1 to SM-8';
@@ -93,7 +95,7 @@ function pins() {
         board: { writer: 'vm.settings-lead', project: 'puppet-master', stream: 'SETTINGS-MANAGERS', projectLabel: 'Puppet Master', streamLabel: 'Settings managers', shared: false },
         waits: [
           { on: 'owner', text: OWNER_WAIT, from: 'thread', since: iso(37 * 3600) },
-          { on: 'resource', text: 'Browsers on the VM and Nas1 are reserved for stream F.', task: 'SWEEP', from: 'tasks', since: iso(36 * 3600) },
+          { on: 'resource', text: 'Browsers on the VM and Nas1 are reserved for stream F.', task: 'SWEEP', from: 'tasks', since: iso(36 * 3600), until: iso(30 * 3600) },
           { on: 'owner', text: 'Answers to the work-lanes cards WL1 to WL5.', task: 'WORK-LANES', from: 'tasks' },
           { on: 'review', text: 'Second reviewer pass on the page frame.', task: 'PAGE-FRAME', from: 'tasks' },
           { on: 'agent', text: "The fix worker's rebuild.", short: 'Rebuild after the GLM fixes', task: 'GLM-FIXES', from: 'tasks' },
@@ -261,7 +263,7 @@ export const tests = {
   },
 
   async 'status waits on others show beside an owner wait'(t) {
-    for (const format of [FORMATS[2], FORMATS[0]]) {
+    for (const format of [FORMATS[2], FORMATS[0], FORMATS[3]]) {
       await openStatus(t, format, view());
       const sheet = format.mobile ? '.c2-sheet-host .c2-sheet' : '.c2-pane .c2-sheet';
       await t.page.locator('.c2-row', { hasText: 'Settings managers' }).click();
@@ -274,6 +276,15 @@ export const tests = {
       for (const [head, words] of [['A machine (SWEEP)', 'Browsers on the VM and Nas1'], ['A review (PAGE-FRAME)', 'Second reviewer pass'], ['An agent (GLM-FIXES)', 'Rebuild after the GLM fixes']])
         await t.check(`${format.name}: Waiting on shows ${head}`, waiting.includes(head) && waiting.includes(words), waiting);
       await t.check(`${format.name}: not "Nothing else" while others are waited on`, !/Nothing else/.test(waiting), waiting);
+      if (format.mobile) {
+        // A long time ("was due Nov 12, 1:20 AM") goes under its fact; the fact keeps most of the sheet's width.
+        const fit = await t.page.evaluate((s) => {
+          const fx = document.querySelector(`${s} .fx`).getBoundingClientRect();
+          const dds = [...document.querySelectorAll(`${s} .fx dd:not(.t)`)].map((d) => d.getBoundingClientRect().width);
+          return { share: Math.min(...dds) / fx.width, fx: fx.width };
+        }, sheet);
+        await t.check(`${format.name}: every fact keeps at least half the sheet's width`, fit.share >= 0.5, JSON.stringify(fit));
+      }
       const sheetText = await t.page.locator(`${sheet} .fx`).textContent();
       await t.equal(`${format.name}: the owner wait shows once`, sheetText.split(OWNER_WAIT).length - 1, 1);
       if (!format.mobile) await t.shot('waits-and-ages-desktop', 'desktop: the owner wait once, the other waits beside it, and the two ages');
