@@ -204,6 +204,9 @@ fn follow_history(ctx: FrameCtx) {
     handler.forget();
 }
 
+/// index.html's page-module loaders, warmed for the offline copy (`warm_offline_copies`).
+const WARMED_MODULES: &[&str] = &["aacLoadDashboard", "aacLoadAnalytics"];
+
 /// The installed app opens offline too: the service worker serves each tab's address once it has stored it, so the
 /// frame asks for every one while online (sw-route.js keeps an /app page's own copy only).
 fn warm_offline_copies() {
@@ -235,6 +238,18 @@ fn warm_offline_copies() {
         let _ = window().fetch_with_str("/");
         for page in Page::ALL {
             let _ = window().fetch_with_str(page.path());
+        }
+        // The page modules that tabs load on first use (Home and Accounts, Analytics) with everything they import:
+        // the worker stores them as they arrive, so an offline start on any tab finds its module. Loading one only
+        // evaluates it; nothing is installed or read until its tab is shown (index.html's loader keeps the one load).
+        // A failure only costs the offline copy: the loader handles it and the tab asks again when it is shown.
+        for loader in WARMED_MODULES {
+            if let Some(f) = js_sys::Reflect::get(&window(), &(*loader).into())
+                .ok()
+                .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            {
+                let _ = f.call0(&wasm_bindgen::JsValue::NULL);
+            }
         }
     });
     let _ =
