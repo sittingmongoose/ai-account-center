@@ -67,7 +67,10 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
     for def in [SERIES_BY_PROVIDER, DAY_CLOSED] {
         txn.open_table(def)?;
     }
-    crate::activity::create_tables(txn)
+    crate::activity::create_tables(txn)?;
+    // Agent-report runs (Scoreboard v2): the runs projector's own tables.
+    crate::runs::create_tables(txn)?;
+    Ok(())
 }
 
 /// Big-endian key builder.

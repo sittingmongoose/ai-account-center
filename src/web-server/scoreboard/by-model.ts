@@ -6,7 +6,7 @@
  * says nothing rather than guessing, and nothing here throws.
  */
 import type { NativeStatusHandle } from '../../status-native/native-loader';
-import type { ByModelView } from './scoreboard-view-types';
+import type { ByModelView, ScoreboardGroups } from './scoreboard-view-types';
 
 function isByModelView(value: unknown): value is ByModelView {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -32,4 +32,29 @@ export async function composeByModel(
     return null;
   }
   return isByModelView(answer) ? answer : null;
+}
+
+function isGroups(value: unknown): value is ScoreboardGroups {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const groups = value as Record<string, unknown>;
+  return Array.isArray(groups.families) && !!groups.views && typeof groups.views === 'object';
+}
+
+/**
+ * The Family > Model > Effort grouping and sort keys of the by-model rows (Scoreboard v2),
+ * composed in the same native module over the same rows; null when it cannot be had.
+ */
+export async function composeGroups(
+  view: unknown,
+  options: { handle: NativeStatusHandle }
+): Promise<ScoreboardGroups | null> {
+  let answer: unknown;
+  try {
+    answer = JSON.parse(
+      await options.handle.call('composeGroups', JSON.stringify(view))
+    ) as unknown;
+  } catch {
+    return null;
+  }
+  return isGroups(answer) ? answer : null;
 }

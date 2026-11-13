@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/legacy_secret.rs"]
+mod legacy_secret;
 use aac_store::{capture, fsx, ops};
 use common::temp_dir;
 use serde_json::{Value as Json, json};
@@ -143,11 +145,11 @@ fn report_reader_secret_parity_refuses_before_any_persistence() {
     let mut seq = 1;
     for case in cases {
         let fields = &case["doc"];
-        let expected = case.get("rustSecret").unwrap_or(&case["secret"]).as_str();
-        assert!(
-            case["secret"].is_null() || expected.is_some(),
-            "native must never be looser"
-        );
+        // One verdict and one reason for both languages: no per-language exception.
+        let mut keys: Vec<&String> = case.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["doc", "name", "secret"], "{}", case["name"]);
+        let expected = case["secret"].as_str();
         assert_eq!(report_secret::find_secret_in("", fields), expected, "{}", case["name"]);
         let mut candidate = report(seq, "working");
         for (key, value) in fields.as_object().unwrap() {
@@ -223,7 +225,7 @@ fn shared_policy_keeps_the_legacy_native_credential_shapes() {
         for length in 0..=48 {
             for tail in ["A".repeat(length), "a".repeat(length), "Ab9".repeat(length)] {
                 let text = format!("prefix: {prefix}{tail}");
-                if aac_store::secret::looks_secret(&text) {
+                if legacy_secret::looks_secret(&text) {
                     recognized += 1;
                     assert!(
                         aac_store::report_secret::find_secret(&text).is_some(),

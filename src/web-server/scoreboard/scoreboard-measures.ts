@@ -72,11 +72,20 @@ export interface ReviewIndex {
   ignored: number;
 }
 
-export function buildReviewIndex(runs: readonly RunDoc[]): ReviewIndex {
+/**
+ * Reviews by the run they review. `joinOnly` are review runs outside a filtered view (a later
+ * date, another task type) that still review its runs: they join, but are never rows and never
+ * counted as ignored.
+ */
+export function buildReviewIndex(
+  runs: readonly RunDoc[],
+  joinOnly: readonly RunDoc[] = []
+): ReviewIndex {
   const known = new Map(runs.map((run) => [run.id, run]));
   const byTarget = new Map<string, RunDoc[]>();
   let ignored = 0;
-  for (const run of runs) {
+  const reviewers = [...runs, ...joinOnly.filter((run) => !known.has(run.id))];
+  for (const run of reviewers) {
     if (!run.review) continue;
     const target = known.get(run.review.of);
     if (
@@ -85,7 +94,7 @@ export function buildReviewIndex(runs: readonly RunDoc[]): ReviewIndex {
       target.id === run.id ||
       Date.parse(run.endedAt) < Date.parse(target.endedAt)
     ) {
-      ignored += 1;
+      if (known.has(run.id)) ignored += 1;
       continue;
     }
     const held = byTarget.get(target.id);

@@ -770,3 +770,73 @@ fn default_retention_keeps_raw_readings_and_logs_forever() {
     engine.close().unwrap();
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// Files under `dir` holding `needle`, compressed segments decoded.
+fn holding(dir: &Path, needle: &[u8]) -> Vec<String> {
+    walk(dir)
+        .into_iter()
+        .filter_map(|(name, mut bytes)| {
+            if name.ends_with(".zst") {
+                bytes = zstd::stream::decode_all(bytes.as_slice()).unwrap();
+            }
+            bytes.windows(needle.len()).any(|w| w == needle).then_some(name)
+        })
+        .collect()
+}
+
+/// Scoreboard v2 recheck 2, H1: a usage account id may be exactly `<provider>:<email address>`
+/// and nothing near it. The shared table (also run by TypeScript through the module) through the
+/// real `record`, with every file's bytes checked after sealing, reopening and a rebuild from the
+/// logs. Synthetic values only; every refused id holds `synthetic-pass`, no accepted one does.
+#[test]
+fn usage_account_ids_are_exactly_a_provider_and_an_address_or_refused() {
+    let cases: Vec<Json> =
+        serde_json::from_str(include_str!("../../../tests/fixtures/usage-account-id-cases.json")).unwrap();
+    let start = 1_793_000_000_000 - 1_793_000_000_000 % HOUR;
+    let observation = |n: usize, id: &str| {
+        let mut o = obs(
+            1000 + n as u32,
+            start + n as i64 * 1000,
+            vec![window("five_hour", Some(10.0), Some(start + 5 * HOUR))],
+        );
+        o["account"]["account_id"] = json!(id);
+        o
+    };
+    let dir = temp_dir("usage-account-ids");
+    {
+        let engine = open(&dir);
+        for (n, case) in cases.iter().enumerate() {
+            let result = record(&engine, vec![observation(n, case["id"].as_str().unwrap())]);
+            let accepted = case["accepted"].as_bool().unwrap();
+            assert_eq!(
+                (result["sampled"].as_u64(), result["rejected"].as_u64()),
+                (Some(accepted as u64), Some(!accepted as u64)),
+                "{}: {result}",
+                case["name"]
+            );
+        }
+        call(&engine, "maintain", json!({ "nowMs": start + 2 * DAY }));
+        engine.close().unwrap();
+    }
+    assert_eq!(holding(&dir, b"synthetic-pass"), Vec::<String>::new(), "after sealing");
+    // Not vacuous: the accepted addresses are kept.
+    assert!(!holding(&dir, b"person.name+tag@mail.example.co.uk").is_empty());
+    let kept = {
+        let engine = open(&dir);
+        let d = dump(&engine, ALL);
+        engine.close().unwrap();
+        d
+    };
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    {
+        let engine = open(&dir);
+        assert_eq!(dump(&engine, ALL), kept, "rebuilt from the logs");
+        engine.close().unwrap();
+    }
+    assert_eq!(
+        holding(&dir, b"synthetic-pass"),
+        Vec::<String>::new(),
+        "after a rebuild"
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}

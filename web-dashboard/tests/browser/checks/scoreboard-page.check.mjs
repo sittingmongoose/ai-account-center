@@ -43,6 +43,42 @@ const listState = (t) => t.page.evaluate(() => {
 });
 const stackTop = (t) => t.page.evaluate(() => document.querySelector('.sb-stack').getBoundingClientRect().top);
 
+// Scoreboard v2 (owner 2026-11-13): the by-model rows grouped Family > Model > Effort, sorted and filtered. Synthetic
+// keys for the golden fixture's seven rows, shaped like native/aac-status `group_keys`.
+const KEYS = (family, modelOrder, effortOrder, verdicts, runs, extra = {}) => ({
+	family, modelOrder, effortOrder, verdicts, rank: null, runs, passed: null, decided: null, cost: null, costUnit: null, costJob: null, lastRunAt: null, ...extra,
+});
+const ROW_KEYS = {
+	'anthropic/claude-opus-5-5|claude-code|xhigh': KEYS('anthropic', 0, 5, [2, 0, 0], 28, { rank: 1, passed: 18, decided: 20, lastRunAt: '2026-11-13T10:00:00Z' }),
+	'anthropic/claude-opus-5-5|claude-code|high': KEYS('anthropic', 0, 4, [0, 1, 0], 8, { passed: 5, decided: 8 }),
+	'openai/gpt-6.1-sol|codex|high': KEYS('openai', 4, 4, [1, 1, 0], 29, { rank: 2, passed: 20, decided: 25, lastRunAt: '2026-11-13T12:00:00Z' }),
+	'zai/glm-5.3|zcode|max': KEYS('zai', 8, 6, [0, 1, 0], 6, { cost: 0.4, costUnit: 'credits per task', costJob: 'Build' }),
+	'openai/gpt-6.1-sol|codex|medium': KEYS('openai', 4, 3, [0, 0, 0], 5),
+	'anthropic/claude-haiku-5-5|claude-code|': KEYS('anthropic', 2, 100, [0, 0, 0], 5),
+	'anthropic/claude-sonnet-5-5|claude-code|': KEYS('anthropic', 1, 100, [0, 0, 0], 4),
+};
+const withGroups = (view) => ({
+	...view,
+	groups: {
+		families: [
+			{ id: 'anthropic', label: 'Anthropic · Claude', short: 'Claude', order: 1 },
+			{ id: 'openai', label: 'OpenAI · GPT, Codex', short: 'GPT', order: 2 },
+			{ id: 'zai', label: 'Z.ai · GLM', short: 'GLM', order: 5 },
+			{ id: 'none', label: 'Not in the catalog', short: 'Other', order: 1000 },
+		],
+		efforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultrathink'],
+		views: { pipeline: ROW_KEYS, 'pm-users': ROW_KEYS },
+	},
+	filters: { available: true, from: null, to: null, source: 'all', taskType: null, taskTypes: [{ id: 'build', label: 'Build' }, { id: 'review', label: 'Review' }] },
+	history: { store: 'on', runs: 3236, importing: false },
+});
+/** The matrix's body rows as short words: "# family", "= model", or the first cell's text. */
+const matrixLines = (t) => t.page.evaluate(() => [...document.querySelectorAll('.sb-matrix tbody tr')].map((tr) => {
+	if (tr.classList.contains('sb-fam')) return `# ${tr.querySelector('.lbl-long').textContent.trim()}`;
+	if (tr.classList.contains('sb-mod')) return `= ${tr.textContent.trim()}`;
+	return `${tr.classList.contains('sub') ? '  ' : ''}${tr.querySelector('td .t').textContent.replace(/\s+/g, ' ').trim()}`;
+}));
+
 export const tests = {
 	// Against the real server's view, which has no byModel yet: an honest line, nothing guessed.
 	async 'scoreboard without the by-model view'(t) {
@@ -113,6 +149,86 @@ export const tests = {
 			await t.check(`${f.name}: verdict notes break only between their parts`, await t.page.evaluate(() =>
 				[...document.querySelectorAll('.vsub .nw')].every((n) => n.getBoundingClientRect().height < 24)
 			));
+		}
+	},
+
+	async 'scoreboard v2: grouped by family, sorted and filtered'(t) {
+		await t.viewport(1440, 900);
+		const asked = [];
+		await t.app.signIn();
+		const view = withGroups({ ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') });
+		await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', (r) => {
+			asked.push(new URL(r.request().url()).search);
+			return r.fulfill({ json: view });
+		});
+		await t.page.evaluate(() => { try { localStorage.removeItem('aac.scoreboard.sort.v1'); localStorage.removeItem('aac.scoreboard.group.v1'); } catch {} });
+		await t.goto('/app/scoreboard', { settleMs: 300 });
+		await t.page.waitForSelector('.sb-matrix tr.sb-fam');
+		await t.page.click('.seg button >> text=Our pipeline');
+		await t.equal('families in order, each model once, its efforts together in order', await matrixLines(t), [
+			// Sonnet and Haiku tie on verdicts; the one with more runs (Haiku, 5) comes first.
+			'# Anthropic · Claude', '= Opus 5.5', '  high', '  xhigh', 'Haiku 5.5 · effort unknown', 'Sonnet 5.5 · effort unknown',
+			'# OpenAI · GPT, Codex', '= Sol 6.1', '  medium', '  high',
+			'# Z.ai · GLM', 'GLM 5.3 · max',
+		]);
+		await t.text('.sbt-kept', '3,236 runs kept');
+		await t.text('.sb-matrix tbody', /90%/);
+		await t.audit('scoreboard v2 grouped 1440');
+		await t.shot('scoreboard-v2-grouped', 'Scoreboard v2 at 1440 px: families, models and their efforts');
+		// Ungrouped, by runs: every row, most runs first.
+		await t.page.uncheck('.sbt-check input');
+		await t.count('.sb-matrix tbody tr.sb-fam', 0);
+		await t.count('.sb-matrix tbody tr[data-row]', 7);
+		await t.page.selectOption('.sbt select[aria-label="Sort models by"]', 'runs');
+		await t.equal('by runs', (await matrixLines(t)).slice(0, 2), ['Sol 6.1 · high', 'Opus 5.5 · xhigh']);
+		await t.page.selectOption('.sbt select[aria-label="Sort models by"]', 'cost');
+		await t.equal('cost: the only known one first', (await matrixLines(t))[0], 'GLM 5.3 · max');
+		await t.page.selectOption('.sbt select[aria-label="Sort models by"]', 'recent');
+		await t.equal('recent: newest run first', (await matrixLines(t))[0], 'Sol 6.1 · high');
+		// Filters on the page: family, then effort.
+		await t.page.check('.sbt-check input');
+		await t.page.click('.sbt-more');
+		await t.page.selectOption('.sb-filters .sbt:has-text("Family") select', 'openai');
+		await t.equal('only the family', await matrixLines(t), ['# OpenAI · GPT, Codex', '= Sol 6.1', '  medium', '  high']);
+		await t.text('.sbt-more .sbt-n', '1');
+		await t.page.selectOption('.sb-filters .sbt:has-text("Effort") select', 'high');
+		await t.equal('family and effort', await matrixLines(t), ['# OpenAI · GPT, Codex', 'Sol 6.1 · high']);
+		// Filters on the server: each change reads again with its query string.
+		await t.page.selectOption('.sbt select[aria-label="Runs ended"]', '7');
+		await t.page.selectOption('.sb-filters .sbt:has-text("Task") select', 'build');
+		await t.page.selectOption('.sb-filters .sbt:has-text("Runs") select', 'real');
+		await t.page.waitForTimeout(600);
+		await t.check('the last read carries the dates, task and source', /from=\d{4}-\d{2}-\d{2}/.test(asked.at(-1)) && /taskType=build/.test(asked.at(-1)) && /source=real/.test(asked.at(-1)));
+		await t.page.click('.sbt-clear');
+		await t.page.waitForTimeout(600);
+		await t.equal('cleared: every run again', asked.at(-1), '');
+		await t.count('.sb-matrix tbody tr[data-row]', 7);
+	},
+
+	async 'scoreboard v2: phone and Duo keep the controls compact'(t) {
+		for (const f of FORMATS.filter((x) => x.mobile)) {
+			await t.newContext({ viewport: { width: f.w, height: f.h }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+			await openBoard(t, `?safe=${f.safe}`, withGroups);
+			await t.page.click('.sbt-more');
+			await t.audit(`v2 ${f.name} ${f.w}x${f.h}`);
+			await t.check(`${f.name}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+			await t.check(`${f.name}: each control and its label stay on one line`, await t.page.evaluate(() =>
+				[...document.querySelectorAll('.sb-tools > *, .sb-filters .sbt')].every((n) => n.getBoundingClientRect().height <= 34)
+			));
+			const list = await t.page.evaluate(() => getComputedStyle(document.querySelector('.sb-models')).display !== 'none');
+			if (list) {
+				await t.check(`${f.name}: a family line is one line`, await t.page.evaluate(() =>
+					// The visible label (long or short) holds one line of 12.5 px text.
+					[...document.querySelectorAll('.sbm-fam')].every((n) => {
+						const label = [...n.querySelectorAll('span')].find((s) => getComputedStyle(s).display !== 'none');
+						return label && label.getBoundingClientRect().height < 24;
+					})
+				));
+				await t.check(`${f.name}: a model card's name and its runs share a line`, await t.page.evaluate(() =>
+					[...document.querySelectorAll('.sbm-head')].every((n) => n.getBoundingClientRect().height < 44)
+				));
+			}
+			await t.shot(`scoreboard-v2-${f.name}`, `Scoreboard v2 ${f.name}: grouped list, compact controls`);
 		}
 	},
 

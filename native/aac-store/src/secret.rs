@@ -1,140 +1,146 @@
-//! Credential shapes the store refuses to persist (docs/store.md 2.2). The dashboard's log
-//! redaction patterns (`src/services/logging/log-redaction.ts`), plus private keys, AWS keys and
-//! fine-grained GitHub tokens, narrowed for stored text: a prefix counts only at the start of a
-//! token, and an authorization scheme only before a credential-shaped value. Matched by hand so
-//! the crate takes no regex dependency.
+//! Credential refusal for usage and capture text (docs/store.md 2.2). There is one detector in
+//! AAC: the shared secret policy (`src/shared/secret-policy.json`, `crate::secret_policy`), read
+//! by TypeScript and Rust alike. This module keeps no patterns or thresholds of its own.
+//!
+//! Usage text is held to the whole policy except its email scan: an address is personal data
+//! that usage rows have always kept, not a credential. One field has one exception more: a usage
+//! account id may be exactly `<provider>:<email address>` (a Claude account without a profile id
+//! is `claude:<email>`), which the policy's scheme-less userinfo rule reads as
+//! `user:password@host`. Exactly that shape is allowed, nothing near it (`account_id_looks_secret`).
+//! Agent-report text (runs, threads, captures) uses the policy in full.
 
-fn word(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
-}
+use crate::secret_policy::find_secret;
 
-/// At least `min` bytes from `at` satisfy `class`.
-fn run(bytes: &[u8], at: usize, min: usize, class: impl Fn(u8) -> bool) -> bool {
-    bytes.len() >= at + min && bytes[at..at + min].iter().all(|&b| class(b))
-}
+/// The shared policy's name for its email scan.
+const EMAIL: &str = "an email address";
+/// The shared policy's name for its userinfo rules.
+const USERINFO: &str = "URL userinfo";
 
-/// Length of the run of `class` bytes from `at`.
-fn span(bytes: &[u8], at: usize, class: impl Fn(u8) -> bool) -> usize {
-    bytes[at.min(bytes.len())..].iter().take_while(|&&b| class(b)).count()
-}
+/// The providers a usage account id may start with: `DashboardProvider` in
+/// `src/web-server/services/account-dashboard-types.ts`.
+pub const ACCOUNT_PROVIDERS: [&str; 9] = [
+    "codex",
+    "claude",
+    "antigravity",
+    "muse",
+    "cursor",
+    "kimi-code",
+    "qwen",
+    "zai",
+    "opencode-go",
+];
 
-/// Whether `text` holds something shaped like a credential.
+/// Top-level names of hosts inside a network, never an email domain.
+const INTERNAL_TLDS: [&str; 10] = [
+    "localhost",
+    "localdomain",
+    "local",
+    "internal",
+    "intranet",
+    "lan",
+    "home",
+    "corp",
+    "private",
+    "arpa",
+];
+
+/// Whether usage text holds something the shared policy refuses as a credential.
 pub fn looks_secret(text: &str) -> bool {
-    let b = text.as_bytes();
-    (0..b.len()).any(|i| secret_at(b, i))
+    // `find_secret` answers with the first rule that matches, in policy order, and the email
+    // scan is the last rule (a test pins that), so an email answer means no credential rule did.
+    find_secret(text).is_some_and(|kind| kind != EMAIL)
 }
 
-/// Characters of a credential value after an authorization scheme.
-fn credential(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || b"._~+/=-".contains(&c) || c == b'_'
+/// Whether a usage account id holds something the shared policy refuses as a credential. As
+/// `looks_secret`, except that an id that is exactly `<provider>:<local>@<domain>` is not read as
+/// userinfo; see `provider_and_address` for "exactly".
+pub fn account_id_looks_secret(id: &str) -> bool {
+    match find_secret(id) {
+        None | Some(EMAIL) => false,
+        // The userinfo rules come after every other credential rule, so this answer means no
+        // other rule found anything in the whole id.
+        Some(USERINFO) => !provider_and_address(id),
+        Some(_) => true,
+    }
 }
 
-/// An authorization credential: 16 or more credential characters with a digit or both cases,
-/// so a scheme word followed by ordinary words ("Token requests") is not one.
-fn credential_at(b: &[u8], at: usize) -> bool {
-    let len = span(b, at, credential);
-    let value = &b[at..at + len];
-    len >= 16
-        && (value.iter().any(|c| c.is_ascii_digit())
-            || (value.iter().any(|c| c.is_ascii_uppercase()) && value.iter().any(|c| c.is_ascii_lowercase())))
-}
-
-fn secret_at(b: &[u8], i: usize) -> bool {
-    // Credential prefixes count only at the start of a token: `sk-` inside `task-` is a word.
-    if i > 0 && word(b[i - 1]) {
+/// `<provider>:<local>@<domain>` and nothing else: the whole text, exactly one `:` and one `@`,
+/// a provider from `ACCOUNT_PROVIDERS`, a local part of ordinary email characters, and a dotted
+/// DNS name for the domain (no localhost or internal name, no IP address, no port, no path). The
+/// address alone is checked again by the policy, and must be found as an email and nothing else.
+fn provider_and_address(id: &str) -> bool {
+    if id.len() > 128 || id.matches(':').count() != 1 || id.matches('@').count() != 1 {
         return false;
     }
-    let rest = &b[i..];
-    let after = |prefix: &str| rest.starts_with(prefix.as_bytes()).then(|| i + prefix.len());
-    // An authorization scheme followed by a credential.
-    for scheme in ["Bearer", "Basic", "Token"] {
-        if let Some(at) = after(scheme) {
-            let gap = span(b, at, |c| c.is_ascii_whitespace());
-            if gap > 0 && credential_at(b, at + gap) {
-                return true;
-            }
-        }
-    }
-    let prefixed: [(&str, usize, fn(u8) -> bool); 9] = [
-        ("aacd_", 16, word),
-        ("sk-ant-", 16, word),
-        ("sk-", 32, word),
-        ("glpat-", 18, word),
-        ("github_pat_", 20, |c| c.is_ascii_alphanumeric() || c == b'_'),
-        ("AIza", 35, word),
-        ("AKIA", 16, |c| c.is_ascii_uppercase() || c.is_ascii_digit()),
-        ("-----BEGIN", 1, |c| c == b' '),
-        ("PRIVATE KEY-----", 0, |_| true),
-    ];
-    for (prefix, min, class) in prefixed {
-        if let Some(at) = after(prefix)
-            && run(b, at, min, class)
-        {
-            return true;
-        }
-    }
-    // Slack tokens: xox[bpoa]-, then 10 or more of [A-Za-z0-9-].
-    if rest.len() > 4
-        && rest.starts_with(b"xox")
-        && b"bpoa".contains(&rest[3])
-        && rest[4] == b'-'
-        && run(b, i + 5, 10, |c| c.is_ascii_alphanumeric() || c == b'-')
-    {
-        return true;
-    }
-    // GitHub tokens: gh[opsu]_, then 36 or more alphanumerics.
-    if rest.len() > 3
-        && rest.starts_with(b"gh")
-        && b"opsu".contains(&rest[2])
-        && rest[3] == b'_'
-        && run(b, i + 4, 36, |c| c.is_ascii_alphanumeric())
-    {
-        return true;
-    }
-    // A JSON web token: eyJ... . eyJ... .
-    if let Some(at) = after("eyJ") {
-        let first = span(b, at, word);
-        let second = at + first + 1;
-        if first >= 8
-            && b.get(at + first) == Some(&b'.')
-            && b[second.min(b.len())..].starts_with(b"eyJ")
-            && span(b, second + 3, word) >= 8
-            && b.get(second + 3 + span(b, second + 3, word)) == Some(&b'.')
-        {
-            return true;
-        }
-    }
-    // key=value credentials, plain or URL-encoded.
-    for key in [
-        "api_key",
-        "api-key",
-        "apikey",
-        "access_token",
-        "access-token",
-        "refresh_token",
-        "refresh-token",
-        "secret",
-    ] {
-        if let Some(at) = after(key) {
-            let value = if b[at..].starts_with(b"=") {
-                at + 1
-            } else if b[at..].starts_with(b"%3D") {
-                at + 3
-            } else {
-                continue;
-            };
-            let allowed = |c: u8| c.is_ascii_alphanumeric() || b"._~+/=-".contains(&c);
-            if run(b, value, 8, allowed) {
-                return true;
-            }
-        }
-    }
-    false
+    let Some((provider, address)) = id.split_once(':') else {
+        return false;
+    };
+    let Some((local, domain)) = address.split_once('@') else {
+        return false;
+    };
+    ACCOUNT_PROVIDERS.contains(&provider)
+        && local_part(local)
+        && dns_name(domain)
+        && find_secret(address) == Some(EMAIL)
+}
+
+/// Letters, digits and `._+-`; at most 64; no leading, trailing or doubled dot. No `%`: an
+/// encoded character is not an ordinary address.
+fn local_part(local: &str) -> bool {
+    !local.is_empty()
+        && local.len() <= 64
+        && local.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains("..")
+}
+
+/// Two or more labels of letters, digits and inner hyphens; a top-level name of two or more
+/// letters (so no IP address) that names no internal network; no label `localhost`.
+fn dns_name(domain: &str) -> bool {
+    let labels: Vec<&str> = domain.split('.').collect();
+    let Some(top) = labels.last() else {
+        return false;
+    };
+    domain.len() <= 253
+        && labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && !label.eq_ignore_ascii_case("localhost")
+        })
+        && top.len() >= 2
+        && top.bytes().all(|b| b.is_ascii_alphabetic())
+        && !INTERNAL_TLDS.iter().any(|t| top.eq_ignore_ascii_case(t))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::looks_secret;
+    use super::{EMAIL, USERINFO, account_id_looks_secret, looks_secret};
+    use serde_json::Value as Json;
+
+    #[test]
+    fn the_email_scan_is_the_policys_last_rule_and_userinfo_comes_just_before_it() {
+        let policy = crate::secret_policy::load_secret_policy();
+        let kinds: Vec<&str> = policy["patterns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds.last(), Some(&EMAIL));
+        assert_eq!(policy["patterns"].as_array().unwrap().last().unwrap()["scan"], "email");
+        // Every userinfo rule follows every other credential rule, so a userinfo answer for a
+        // whole id means nothing else matched in it.
+        let first_userinfo = kinds.iter().position(|k| *k == USERINFO).unwrap();
+        assert!(
+            kinds[first_userinfo..].iter().all(|k| *k == USERINFO || *k == EMAIL),
+            "{kinds:?}"
+        );
+    }
 
     #[test]
     fn credential_shapes_are_found_and_ordinary_text_is_not() {
@@ -155,6 +161,13 @@ mod tests {
             "secret%3Dabcdefgh",
             "aacd_abcdefghijklmnop",
             "-----BEGIN RSA PRIVATE KEY-----",
+            // The shapes the old thresholds let through (recheck 1, H2).
+            "vm.sk-abcdefghijklmnopqrstuvwx",
+            "https://agent:synthetic-password123@localhost/path",
+            "Basic c3ludGhldGljOnBhc3N3b3JkMTIz",
+            "person@example.com sk-abcdefghijklmnopqrstuvwx",
+            // Outside the account id field, a provider and an address is read as userinfo too.
+            "claude:person@example.com",
         ] {
             assert!(looks_secret(secret), "{secret}");
         }
@@ -177,8 +190,29 @@ mod tests {
             "Bearer of the weekly quota",
             "secret=short",
             "eyJabc.eyJabc.",
+            // An address alone is personal data usage rows keep, not a credential.
+            "person@example.com",
         ] {
             assert!(!looks_secret(ordinary), "{ordinary}");
+        }
+    }
+
+    /// The shared table (also run by TypeScript through the module, and end to end in
+    /// `tests/store_usage.rs`): the reviewer's witness and every near miss.
+    #[test]
+    fn account_ids_follow_the_shared_table() {
+        let cases: Vec<Json> =
+            serde_json::from_str(include_str!("../../../tests/fixtures/usage-account-id-cases.json")).unwrap();
+        assert!(cases.len() >= 40, "{}", cases.len());
+        for case in &cases {
+            let id = case["id"].as_str().unwrap();
+            let accepted = case["accepted"].as_bool().unwrap();
+            assert_eq!(!account_id_looks_secret(id), accepted, "{}: {id:?}", case["name"]);
+            // The exception only ever narrows the policy's userinfo reading: an id the general
+            // rule accepts is accepted here too.
+            if !looks_secret(id) {
+                assert!(accepted, "{}: {id:?}", case["name"]);
+            }
         }
     }
 }

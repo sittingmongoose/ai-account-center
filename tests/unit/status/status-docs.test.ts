@@ -304,11 +304,13 @@ describe('StatusDocsReader', () => {
       { note: `\uFEFF{\"password\":123456}\uFEFF` },
       'a credential field',
     ],
-    // An embedded array deeper than serde's limit still parses in JavaScript (round-3 M3).
+    // An embedded array deeper than serde's limit (round-3 M3) is still refused, now for the
+    // reason Rust gives too: JSON text Rust cannot parse is unparseable in both languages
+    // (Scoreboard v2 recheck 2 M1).
     [
       'a deeply embedded credential',
       { note: `${'['.repeat(130)}{"password":123456}${']'.repeat(130)}` },
-      'a credential field',
+      'unparseable embedded JSON',
     ],
     // An escaped `?token=` and a lone surrogate escape decode to an 8-unit URL value (M4).
     [

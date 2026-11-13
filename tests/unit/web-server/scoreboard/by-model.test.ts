@@ -87,3 +87,41 @@ describe('byModel pass-through', () => {
     expect((await noModule.view()).byModel).toBeUndefined();
   });
 });
+
+describe('grouping keys pass-through (Scoreboard v2)', () => {
+  const groups = {
+    families: [{ id: 'openai', label: 'OpenAI · GPT, Codex', short: 'GPT', order: 1 }],
+    efforts: ['high', 'max'],
+    views: { pipeline: {} },
+  };
+
+  it('attaches the composed groups, or none when the module cannot answer them', async () => {
+    const base = dirs.make();
+    const root = () => path.join(base, 'none');
+    const handle: NativeStatusHandle = {
+      call: async (method) => JSON.stringify(method === 'composeGroups' ? groups : byModel),
+    };
+    const withGroups = new ScoreboardService({
+      root,
+      now: () => NOW,
+      timeZone: () => 'UTC',
+      native: handle,
+    });
+    expect((await withGroups.view()).groups).toEqual(groups);
+    const oldModule: NativeStatusHandle = {
+      call: async (method) => {
+        if (method === 'composeGroups') throw new Error('invalid: unknown method composeGroups');
+        return JSON.stringify(byModel);
+      },
+    };
+    const without = new ScoreboardService({
+      root,
+      now: () => NOW,
+      timeZone: () => 'UTC',
+      native: oldModule,
+    });
+    const view = await without.view();
+    expect(view.byModel).toEqual(byModel);
+    expect(view.groups).toBeUndefined();
+  });
+});

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 /// Bumped when the binding's methods change; the TypeScript loader refuses a mismatch.
 #[allow(dead_code)]
-pub const BINDING_VERSION: u32 = 1;
+pub const BINDING_VERSION: u32 = 2;
 
 #[napi]
 #[allow(dead_code)]

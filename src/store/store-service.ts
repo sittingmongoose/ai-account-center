@@ -110,6 +110,18 @@ export interface StoreReportCapture {
   doc: Record<string, unknown>;
 }
 
+/** The runs methods of the native store (native/aac-store/src/runs.rs). */
+export type RunsMethod =
+  | 'runsScan'
+  | 'runsRecord'
+  | 'runsQuery'
+  | 'runsIdentity'
+  | 'runsAudit'
+  | 'runsStatus'
+  | 'runsRefused'
+  | 'runOriginal'
+  | 'runHistory';
+
 export class AacStore {
   constructor(
     private readonly handle: NativeStoreHandle,
@@ -235,6 +247,14 @@ export class AacStore {
     cause?: string;
   }): Promise<{ ok: boolean }> {
     return this.call('activityBackfill', mark);
+  }
+  /**
+   * Agent-report runs kept forever (Scoreboard v2): the native module's scan, record and query
+   * methods. Every value and rule is decided there; `src/web-server/scoreboard/runs-store.ts`
+   * passes the texts through the one secret filter between scan and record.
+   */
+  runs<T>(method: RunsMethod, args: unknown = {}): Promise<T> {
+    return this.call(method, args);
   }
   getMeta(key: string): Promise<string | null> {
     return this.call('getMeta', { key });

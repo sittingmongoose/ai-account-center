@@ -116,6 +116,11 @@ fn compose_spend(args: &str) -> Result<Json> {
     serde_json::to_value(spend::compose(&input)).map_err(|e| crate::error::Error::new("io", e.to_string()))
 }
 
+fn compose_groups(args: &str) -> Result<Json> {
+    let input: scoreboard::ViewIn = parse(args)?;
+    serde_json::to_value(scoreboard::group_keys(&input)?).map_err(|e| crate::error::Error::new("io", e.to_string()))
+}
+
 fn compose_by_model(args: &str) -> Result<Json> {
     let input: scoreboard::ViewIn = parse(args)?;
     serde_json::to_value(scoreboard::by_model(&input)?).map_err(|e| crate::error::Error::new("io", e.to_string()))
@@ -156,6 +161,7 @@ pub fn dispatch(method: &str, args: &str) -> Result<String> {
         "compose" => compose(args)?,
         "composeSpend" => compose_spend(args)?,
         "composeByModel" => compose_by_model(args)?,
+        "composeGroups" => compose_groups(args)?,
         "parseStatus" => parse_status(args)?,
         _ => fail!("unknown_method", "unknown method"),
     };

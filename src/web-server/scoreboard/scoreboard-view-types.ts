@@ -220,6 +220,62 @@ export interface UnscoredSummary {
   examples: UnscoredExample[];
 }
 
+/** The server-side filters of `GET /api/scoreboard` (Scoreboard v2). */
+export interface ScoreboardFilters {
+  /** Local calendar days (`YYYY-MM-DD`) in the dashboard's zone, inclusive; null is open. */
+  from: string | null;
+  to: string | null;
+  /** real = observed work only, benchmark = benchmarks only. */
+  source: 'all' | 'real' | 'benchmark';
+  taskType: string | null;
+}
+
+export interface ScoreboardFiltersView extends ScoreboardFilters {
+  /** False without the history store: every run read is shown and nothing can be filtered. */
+  available: boolean;
+  /** The catalog's task types, for the page's filter. */
+  taskTypes: Array<{ id: string; label: string }>;
+}
+
+/** Families in order, each catalog model's family and order, and the effort order (Rust). */
+export interface ScoreboardIdentity {
+  catalogHash: string;
+  families: Array<{ id: string; label: string; short: string; order: number }>;
+  models: Record<string, { family: string | null; order: number; label: string }>;
+  efforts: string[];
+}
+
+/** One by-model row's grouping and sort keys (native/aac-status `group_keys`). */
+export interface ScoreboardRowKeys {
+  family: string;
+  modelOrder: number;
+  effortOrder: number;
+  verdicts: [number, number, number];
+  rank: number | null;
+  runs: number;
+  passed: number | null;
+  decided: number | null;
+  cost: number | null;
+  costUnit: string | null;
+  costJob: string | null;
+  lastRunAt: string | null;
+}
+
+export interface ScoreboardGroups {
+  families: Array<{ id: string; label: string; short: string; order: number }>;
+  efforts: string[];
+  /** View id to by-model row key to its keys. */
+  views: Record<string, Record<string, ScoreboardRowKeys>>;
+}
+
+/** Where the runs come from: the history store (kept forever) or the share alone. */
+export interface ScoreboardHistory {
+  store: 'on' | 'off';
+  /** Every run kept, whatever the filters. */
+  runs: number | null;
+  importing: boolean;
+}
+
 export interface ScoreboardView {
   cached?: boolean;
   cacheAgeSeconds?: number;
@@ -240,6 +296,12 @@ export interface ScoreboardView {
   recent: RunSummary[];
   /** Runs read but never scored, by reason (the page shows these instead of hiding them). */
   unscored: UnscoredSummary;
+  /** Scoreboard v2: the filters applied, the identity facts for grouping, and the history. */
+  filters?: ScoreboardFiltersView;
+  identity?: ScoreboardIdentity | null;
+  history?: ScoreboardHistory;
+  /** The by-model rows' grouping and sort keys (aac-status `composeGroups`); absent when unavailable. */
+  groups?: ScoreboardGroups;
   /** The by-model matrix (CONTRACT-spend-bymodel.md section 2), composed in the
    * aac-status native module and passed through; absent when it cannot be had. */
   byModel?: ByModelView;

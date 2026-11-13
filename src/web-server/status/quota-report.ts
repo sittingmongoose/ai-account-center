@@ -26,6 +26,7 @@ import {
   isWriterName,
   iso,
   list,
+  nativeUnreadable,
   obj,
   oneOf,
   optIso,
@@ -240,6 +241,8 @@ export function parseQuotaReport(bytes: Buffer): QuotaParse {
   } catch {
     return { ok: false, reason: 'not valid JSON' };
   }
+  // As jsonFromBytes: text Rust cannot parse is not valid JSON here either.
+  if (nativeUnreadable(raw)) return { ok: false, reason: 'not valid JSON' };
   let secret: string | null;
   try {
     secret = findSecretIn(source, raw);

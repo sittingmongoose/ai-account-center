@@ -90,6 +90,9 @@ http.createServer((req, res) => {
     const html = vm.runInNewContext(source.match(/var OFFLINE_PAGE =([\s\S]*?);\r?\n/)[1]);
     res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(html);
   } else if (p === '/status-bar.css') file(res, path.join(dashboard, 'public/status-bar.css'));
+  // The frame registers the product's service worker (frame.rs): serve it as the dashboard does, so a
+  // fixture run has no 404 in its console (browser-check gap f8992b).
+  else if (p === '/sw.js') file(res, path.join(dashboard, 'public/sw.js'));
   else if (/^\/[a-z-]+\.mjs$/.test(p)) file(res, path.join(dashboard, 'public', path.basename(p)));
   else if (p === '/computers.json') file(res, path.join(dashboard, 'public/computers.json'));
   else if (p === '/manifest.webmanifest') file(res, path.join(dashboard, 'public', 'manifest.webmanifest'));

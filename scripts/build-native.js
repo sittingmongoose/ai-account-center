@@ -25,7 +25,7 @@ const ROOT = path.resolve(__dirname, '..');
 const CRATE = path.join(ROOT, 'native', 'aac-store');
 const PREBUILT = path.join(CRATE, 'prebuilt');
 const DIST = path.join(ROOT, 'dist', 'native');
-const BINDING_VERSION = 1;
+const BINDING_VERSION = 2;
 
 function moduleName(platform = process.platform, arch = process.arch) {
   return `aac-store.${platform}-${arch}.node`;
