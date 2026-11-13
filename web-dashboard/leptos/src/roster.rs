@@ -717,6 +717,161 @@ pub fn task_groups(u: &PinnedUpdate, board: Option<&Stream>) -> Vec<TaskGroup> {
     groups
 }
 
+// ---- Waits, ages and boards (2026-11-13) ----------------------------------------------------------------------------
+
+/// A wait in its report's own words: the short form when it gave one.
+pub fn wait_words(w: &PinnedWait) -> String {
+    w.short
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| w.text.clone())
+}
+
+/// What the owner is waited on for, each once: from the composer's structured waits, or, from a server that does
+/// not send them, the words after the head of its waiting sentence (only the waiting-on-you part of it).
+pub fn owner_waits(u: &PinnedUpdate) -> Vec<String> {
+    if u.waits.is_empty() {
+        if !u.blocked.waiting_on_you {
+            return Vec::new();
+        }
+        let text = u.blocked.text.trim();
+        let rest = text.split_once(": ").map(|(_, r)| r).unwrap_or(text);
+        // An older sentence goes on with "Blocked: ..." for everyone else's waits; those are not the owner's.
+        let mine = rest.split(" Blocked: ").next().unwrap_or(rest);
+        return vec![mine.trim().to_string()];
+    }
+    let mut out: Vec<String> = Vec::new();
+    for w in u.waits.iter().filter(|w| w.on == "owner") {
+        let words = wait_words(w);
+        if !words.trim().is_empty() && !out.iter().any(|held| held.trim() == words.trim()) {
+            out.push(words);
+        }
+    }
+    out
+}
+
+/// Everyone else the thread waits on (an agent, a review, a machine, the landing lock, quota), whether or not it also
+/// waits on the owner. Empty from a server that does not send structured waits.
+pub fn other_waits(u: &PinnedUpdate) -> Vec<&PinnedWait> {
+    u.waits.iter().filter(|w| w.on != "owner").collect()
+}
+
+/// A wait's head word for the Waiting-on list: who it waits on, with the board item when it is a task's.
+pub fn other_wait_head(w: &PinnedWait) -> String {
+    let who = if w.on == "unknown" {
+        "Blocked"
+    } else {
+        who_words(&w.on)
+    };
+    match w.task.as_deref().filter(|t| !t.is_empty()) {
+        Some(task) => format!("{who} ({task})"),
+        None => who.to_string(),
+    }
+}
+
+/// "just now", "4 min", "1 h 3 min", "2 d".
+pub fn short_age(seconds: i64) -> String {
+    let s = seconds.max(0);
+    if s < 45 {
+        "just now".into()
+    } else if s < 3_600 {
+        format!("{} min", ((s + 30) / 60).max(1))
+    } else if s < 86_400 {
+        let (h, m) = (s / 3_600, (s % 3_600) / 60);
+        if m == 0 || h >= 6 {
+            format!("{h} h")
+        } else {
+            format!("{h} h {m} min")
+        }
+    } else {
+        format!("{} d", s / 86_400)
+    }
+}
+
+/// "4 min ago", or "just now".
+pub fn ago(seconds: i64) -> String {
+    match short_age(seconds) {
+        n if n == "just now" => n,
+        n => format!("{n} ago"),
+    }
+}
+
+/// How much older the human update may be than the heartbeat before the page says both: two writes of one
+/// `agent-report update` land seconds apart.
+pub const TWO_AGES_AFTER_SECONDS: i64 = 600;
+
+/// The human update's age and the heartbeat's, when they differ enough to say both: a hook keeps rewriting
+/// thread.json (and its carried doing line) while the summary, done and left lists stay as old as status.json.
+pub fn two_ages(u: &PinnedUpdate) -> Option<(i64, i64)> {
+    let human = u.status_updated.as_ref()?.age_seconds?;
+    let beat = u.heartbeat.as_ref()?.age_seconds?;
+    (human - beat > TWO_AGES_AFTER_SECONDS).then_some((human, beat))
+}
+
+/// A human update's age: hours up to two days ("35 h" says more than "1 d" about a summary that old), else as
+/// `short_age`.
+pub fn update_age(seconds: i64) -> String {
+    if (3_600..172_800).contains(&seconds) {
+        format!("{} h", seconds / 3_600)
+    } else {
+        short_age(seconds)
+    }
+}
+
+/// "35 h ago", or "just now".
+pub fn update_ago(seconds: i64) -> String {
+    match update_age(seconds) {
+        n if n == "just now" => n,
+        n => format!("{n} ago"),
+    }
+}
+
+/// "updated 35 h ago · active 2 min ago": the human update first, so a fresh heartbeat never reads as fresh words.
+pub fn two_ages_words(human: i64, beat: i64) -> String {
+    format!("updated {} · active {}", update_ago(human), ago(beat))
+}
+
+/// The roster row's age: the human update's when a heartbeat is newer (so the row never reads fresher than its
+/// words), else the newest report's. The flag says the words are older than six hours behind a live heartbeat.
+pub fn roster_age(u: &PinnedUpdate) -> Option<(String, bool)> {
+    match two_ages(u) {
+        Some((human, _)) => Some((update_age(human), human > 6 * 3_600)),
+        None => u
+            .updated
+            .as_ref()
+            .and_then(|x| x.age_seconds)
+            .map(|a| (short_age(a), false)),
+    }
+}
+
+/// The quiet sheet's last words: the summary when there is one, else the last doing line with its age.
+pub fn quiet_last(u: &PinnedUpdate, elapsed: i64) -> Option<String> {
+    if let Some(s) = u.summary.as_ref().filter(|s| !s.trim().is_empty()) {
+        return Some(format!("The last one said: {}", s.trim()));
+    }
+    let now = u.now.as_ref().map(|n| n.trim()).filter(|n| !n.is_empty())?;
+    let age = u
+        .heartbeat
+        .as_ref()
+        .and_then(|h| h.age_seconds)
+        .or_else(|| u.updated.as_ref().and_then(|x| x.age_seconds));
+    Some(match age {
+        Some(a) => format!("Its last doing line, {}: {now}", ago(a + elapsed)),
+        None => format!("Its last doing line: {now}"),
+    })
+}
+
+/// "Shared Projects board, kept by vm.projects-lead": said where a pin's tasks and loop are another writer's.
+pub fn shared_board_words(u: &PinnedUpdate) -> Option<String> {
+    let b = u.board.as_ref().filter(|b| b.shared)?;
+    let stream = b
+        .stream_label
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| b.stream.clone());
+    Some(format!("Shared {stream} board, kept by {}", b.writer))
+}
+
 /// "1 thing to open", "4 things to open".
 pub fn things(n: usize) -> String {
     plural(n, "thing to open", "things to open")
@@ -1029,5 +1184,143 @@ mod tests {
             ["c", "b", "a"]
         );
         assert_eq!(o.iter().filter(|d| d.main == Some(true)).count(), 1);
+    }
+
+    // ---- 2026-11-13: waits beside an owner wait, two ages, the quiet doing line, shared boards ----
+
+    /// The settings-managers shape, as the composer now sends it: one owner wait (from the thread and its status,
+    /// already once), a second owner wait on a task, and waits on a machine, a review and an agent.
+    fn mixed_waits() -> PinnedUpdate {
+        serde_json::from_value(json!({
+            "id": "t1", "title": "Settings managers", "machine": "vm", "reportState": "fresh",
+            "blocked": { "text": "Waiting on you: Open the preview and answer card SM-0; Answers to WL1 to WL5. Blocked: Browsers reserved (waiting on resource).", "waitingOnYou": true },
+            "looping": { "answer": "no", "text": "No." },
+            "waits": [
+                { "on": "owner", "text": "Open the preview and answer card SM-0", "from": "thread", "since": "2026-11-11T16:54:51Z" },
+                { "on": "resource", "text": "Browsers on the VM and Nas1 are reserved.", "task": "SWEEP", "from": "tasks", "since": "2026-11-11T18:21:07Z" },
+                { "on": "owner", "text": "Answers to WL1 to WL5.", "task": "WORK-LANES", "from": "tasks" },
+                { "on": "review", "text": "Second reviewer pass.", "task": "PAGE-FRAME", "from": "tasks" },
+                { "on": "agent", "text": "The fix worker's rebuild.", "short": "Rebuild", "task": "GLM-FIXES", "from": "tasks" },
+                { "on": "unknown", "text": "Blocked; the report does not say on what.", "task": "LAND", "from": "tasks" },
+                "a row this page cannot read"
+            ],
+            "statusUpdated": { "text": "Updated 1 day ago", "at": "2026-11-11T18:21:12Z", "ageSeconds": 126000 },
+            "heartbeat": { "text": "Active 2 min ago", "at": "2026-11-13T05:30:00Z", "ageSeconds": 120 },
+            "now": "The review said READY; the press test waits for the browsers.",
+            "summary": "The review said READY; the press test waits for the browsers."
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn waits_on_others_show_beside_an_owner_wait() {
+        let u = mixed_waits();
+        // the unreadable row is left out, the rest kept
+        assert_eq!(u.waits.len(), 6);
+        assert_eq!(
+            owner_waits(&u),
+            [
+                "Open the preview and answer card SM-0",
+                "Answers to WL1 to WL5."
+            ]
+        );
+        let others: Vec<(String, String)> = other_waits(&u)
+            .into_iter()
+            .map(|w| (other_wait_head(w), wait_words(w)))
+            .collect();
+        assert_eq!(
+            others,
+            [
+                (
+                    "A machine (SWEEP)".to_string(),
+                    "Browsers on the VM and Nas1 are reserved.".to_string()
+                ),
+                (
+                    "A review (PAGE-FRAME)".into(),
+                    "Second reviewer pass.".into()
+                ),
+                ("An agent (GLM-FIXES)".into(), "Rebuild".into()),
+                (
+                    "Blocked (LAND)".into(),
+                    "Blocked; the report does not say on what.".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_older_server_sentence_keeps_only_the_owner_part_for_you() {
+        let mut u = mixed_waits();
+        u.waits.clear();
+        assert_eq!(
+            owner_waits(&u),
+            ["Open the preview and answer card SM-0; Answers to WL1 to WL5."]
+        );
+        assert!(other_waits(&u).is_empty());
+    }
+
+    #[test]
+    fn an_old_summary_keeps_its_own_age_beside_a_fresh_heartbeat() {
+        let u = mixed_waits();
+        assert_eq!(two_ages(&u), Some((126_000, 120)));
+        assert_eq!(
+            two_ages_words(126_000, 120),
+            "updated 35 h ago · active 2 min ago"
+        );
+        assert_eq!(
+            two_ages_words(35 * 3600, 30),
+            "updated 35 h ago · active just now"
+        );
+        // one update writes both files: no second age
+        let mut same = u.clone();
+        same.heartbeat.as_mut().unwrap().age_seconds = Some(126_000 - 30);
+        assert_eq!(two_ages(&same), None);
+        // The roster corner says the summary's age, not the heartbeat's, and the Now line says it the same way.
+        assert_eq!(roster_age(&u), Some(("35 h".to_string(), true)));
+        assert_eq!(format!("as of {}", update_ago(126_000)), "as of 35 h ago");
+        assert_eq!(update_age(3 * 86_400), "3 d");
+        let mut thread_only = u;
+        thread_only.status_updated = None;
+        assert_eq!(two_ages(&thread_only), None);
+        assert_eq!(roster_age(&thread_only), None);
+    }
+
+    #[test]
+    fn a_quiet_thread_without_a_summary_shows_its_last_doing_line_with_its_age() {
+        let mut u: PinnedUpdate = serde_json::from_value(json!({
+            "id": "scout", "title": "Scout", "machine": "vm", "reportState": "stale",
+            "staleNote": "No status update for 2 days. If it is finished, unpin it in T3.",
+            "now": "Reading the wonderer's notes for batch 3.",
+            "heartbeat": { "text": "Active 2 days ago", "at": "2026-11-11T05:00:00Z", "ageSeconds": 172800 },
+            "updated": { "text": "Updated 2 days ago", "at": "2026-11-11T05:00:00Z", "ageSeconds": 172800 }
+        }))
+        .unwrap();
+        assert_eq!(
+            quiet_last(&u, 0).as_deref(),
+            Some("Its last doing line, 2 d ago: Reading the wonderer's notes for batch 3.")
+        );
+        u.summary = Some("Batch 2 done.".into());
+        assert_eq!(
+            quiet_last(&u, 0).as_deref(),
+            Some("The last one said: Batch 2 done.")
+        );
+        u.summary = None;
+        u.now = None;
+        assert_eq!(quiet_last(&u, 0), None);
+    }
+
+    #[test]
+    fn a_shared_stream_board_names_its_owner() {
+        let mut u: PinnedUpdate = serde_json::from_value(json!({
+            "id": "split", "title": "Split v3", "machine": "vm", "reportState": "fresh",
+            "board": { "writer": "vm.projects-lead", "project": "puppet-master", "stream": "P", "streamLabel": "Projects", "shared": true }
+        }))
+        .unwrap();
+        assert_eq!(
+            shared_board_words(&u).as_deref(),
+            Some("Shared Projects board, kept by vm.projects-lead")
+        );
+        u.board.as_mut().unwrap().shared = false;
+        assert_eq!(shared_board_words(&u), None);
     }
 }

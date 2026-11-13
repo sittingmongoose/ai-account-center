@@ -272,13 +272,14 @@ export const tests = {
     }
   },
   // The owner, 2026-11-11: "The cards arent labeled so idk which are the ones you are referring to." Every open card
-  // shows its label where he looks, the index groups by batch, and a missing label is never made up.
+  // shows its label where he looks and the index groups by batch. A card that stored no label shows the id after
+  // `--`, which is what chats quote (2026-11-13; the server already fills it so).
   async 'status every open card shows its label'(t) {
     // Videos left out: on the Mac's Chrome a card video's request is not caught by the page route (TOOL-ISSUES 39).
     const noVideo = (x) => (Array.isArray(x) ? x.filter((v) => v?.kind !== 'video').map(noVideo) : x && typeof x === 'object' ? Object.fromEntries(Object.entries(x).map(([k, v]) => [k, noVideo(v)])) : x);
     const view = noVideo(fixture('server-view.json'));
     view.cards.open = view.cards.open.map((c, i) => (i === 1 ? { ...c, label: '' } : c));
-    const labelled = view.cards.open.map((c) => c.label).filter(Boolean);
+    const labelled = view.cards.open.map((c) => c.label || c.id.split('--').pop());
     for (const [w, h] of [[1760, 1000], [390, 844]]) {
       await t.viewport(w, h);
       await openStatus(t, view);
@@ -296,8 +297,8 @@ export const tests = {
         if (!got) unlabelled++;
         if (i < view.cards.open.length - 1) await t.page.click(NEXT);
       }
-      await t.check(`${w}: every labelled open card shows its label in its head`, labelled.every((l) => seen.includes(l)), seen.join(', '));
-      await t.equal(`${w}: the card without a label shows none`, unlabelled, 1);
+      await t.check(`${w}: every open card shows its label in its head`, labelled.every((l) => seen.includes(l)), seen.join(', '));
+      await t.equal(`${w}: a card that stored no label shows its id suffix`, unlabelled, 0);
       if (w === 1760) {
         // Fresh, on the first card: the index's first page holds the F batch.
         await openStatus(t, view);

@@ -128,6 +128,65 @@ pub struct PinnedUpdate {
     /// What the reports said in the optional v2 fields (stages, deliverables, now, next...), as the server validated
     /// them. Read field by field in roster.rs, so one field this page can't read never fails the view.
     pub reported: Option<serde_json::Value>,
+    /// Every wait the reports name, once each, the owner's and everyone else's (absent from older servers). Read row by
+    /// row: a row this page can't read is left out.
+    #[serde(deserialize_with = "nullable_rows")]
+    pub waits: Vec<PinnedWait>,
+    /// When the thread last wrote its status (the human update); a heartbeat never moves it.
+    pub status_updated: Option<PinnedUpdated>,
+    /// When the thread last wrote thread.json: a hook's heartbeat, which carries the last words without renewing them.
+    pub heartbeat: Option<PinnedUpdated>,
+    /// The task board behind the tasks, percent and loop, and whether it is another writer's (a shared stream board).
+    pub board: Option<PinnedBoard>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedWait {
+    /// owner, agent, review, lock, resource, quota, or unknown (blocked, the report does not say on what).
+    #[serde(deserialize_with = "nullable")]
+    pub on: String,
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
+    pub short: Option<String>,
+    /// The board item that waits.
+    pub task: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    /// thread, tasks or status.
+    #[serde(deserialize_with = "nullable")]
+    pub from: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PinnedBoard {
+    #[serde(deserialize_with = "nullable")]
+    pub writer: String,
+    #[serde(deserialize_with = "nullable")]
+    pub project: String,
+    #[serde(deserialize_with = "nullable")]
+    pub stream: String,
+    pub project_label: Option<String>,
+    pub stream_label: Option<String>,
+    pub shared: bool,
+}
+
+/// A list read row by row: null or a non-list reads as empty, and a row this page can't read is left out.
+fn nullable_rows<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| serde_json::from_value(row.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
