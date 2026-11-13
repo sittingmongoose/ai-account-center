@@ -1,6 +1,7 @@
 //! Bounded navigation for a large question deck; filtering never changes drafts or the review set. Cards are
-//! grouped by their batch (or, outside a batch, by the thread that asked), and each shows its own label, the short
-//! name agents use for it ("WL2"). A card without a label shows none: nothing is made up from its id.
+//! grouped by their batch (or, outside a batch, by the thread that asked), and each leads with its label, the short
+//! name agents use for it ("WL2"): the stored label verbatim, or for a card that stored none the id after `--`,
+//! which is what chats quote. Search finds a card by its label, that suffix or its full id.
 use crate::api::{Batch, Card};
 use leptos::prelude::*;
 
@@ -123,15 +124,22 @@ pub fn group_heading(card: &Card, cards: &[Card], batches: &[Batch]) -> String {
     }
 }
 
-/// The card whose label is exactly what was typed (any case): typing "WL2" goes straight to WL2.
+/// The card a chat named, exactly (any case): its label ("WL2", "PM7-Q1"), the id after `--` ("Q1"), or the full
+/// writer-prefixed id ("vm.pm7-build--Q1"). A label wins over another card's id suffix.
 pub fn label_match(cards: &[Card], query: &str) -> Option<usize> {
     let q = query.trim();
     if q.is_empty() {
         return None;
     }
+    let is = |text: &str| !text.trim().is_empty() && text.trim().eq_ignore_ascii_case(q);
     cards
         .iter()
-        .position(|c| !c.label.trim().is_empty() && c.label.trim().eq_ignore_ascii_case(q))
+        .position(|c| is(&c.label) || is(&c.id))
+        .or_else(|| {
+            cards.iter().position(|c| {
+                c.id.contains("--") && is(c.id.rsplit("--").next().unwrap_or_default())
+            })
+        })
 }
 
 fn matching(cards: &[Card], query: &str, writer: &str) -> Vec<usize> {
@@ -141,9 +149,10 @@ fn matching(cards: &[Card], query: &str, writer: &str) -> Vec<usize> {
         .enumerate()
         .filter_map(|(i, c)| {
             let text = format!(
-                "{} {} {} {} {} {}",
+                "{} {} {} {} {} {} {}",
                 c.title,
                 c.label,
+                c.id,
                 c.project,
                 c.asked_by,
                 c.stream.as_deref().unwrap_or_default(),
@@ -242,17 +251,13 @@ pub fn QuestionIndex(
                     last = Some(key);
                     let detail = meta(&card);
                     let answered = ready(&card);
-                    let label = card.label.trim().to_string();
                     view! {
                         {head.map(|h| view! { <li class="q-group" role="presentation">{h}</li> })}
                         <li><button class="q-item" class:sel=move || selected.get() == i
                             class:done=answered data-state=answered.then_some("ready")
                             data-label=card.short() on:click=move |_| on_select.run(i)>
                             <span class="q-n">{(i + 1).to_string()}</span>
-                            <span class="q-t">
-                                {(!label.is_empty()).then(|| view! { <span class="q-label">{label.clone()}</span>" · " })}
-                                {card.title.clone()}
-                            </span>
+                            <span class="q-t">{crate::cards::labelled_title(&card)}</span>
                             <span class="q-m">{detail}</span>
                         </button></li>
                     }
@@ -347,17 +352,45 @@ mod tests {
     }
 
     #[test]
-    fn typing_a_label_finds_that_card_and_a_missing_label_is_never_made_up() {
+    fn typing_the_name_a_chat_quoted_finds_that_card() {
         let cards = vec![
             card("vm.lanes--WL1", "WL1", None, "vm.lanes", "Lanes lead"),
             card("vm.lanes--WL2", "WL2", None, "vm.lanes", "Lanes lead"),
             card("vm.lanes--Q9", "", None, "vm.lanes", "Lanes lead"),
+            card(
+                "vm.pm7-build--Q1",
+                "PM7-Q1",
+                None,
+                "vm.pm7-build",
+                "PM7 build",
+            ),
         ];
         assert_eq!(label_match(&cards, "wl2"), Some(1));
         assert_eq!(label_match(&cards, " WL2 "), Some(1));
         assert_eq!(label_match(&cards, "WL"), None);
-        // the id's last part is not a label: "Q9" finds nothing by label
-        assert_eq!(label_match(&cards, "Q9"), None);
+        // A card that stored no label goes by the id after `--`, as chats quote it (2026-11-13).
+        assert_eq!(label_match(&cards, "Q9"), Some(2));
+        assert_eq!(cards[2].short(), "Q9");
+        // The stored label, or the full writer-prefixed id a chat or a tool printed.
+        assert_eq!(label_match(&cards, "PM7-Q1"), Some(3));
+        assert_eq!(label_match(&cards, "vm.pm7-build--Q1"), Some(3));
+        assert_eq!(label_match(&cards, "Q1"), Some(3));
         assert_eq!(matching(&cards, "WL2", "").first(), Some(&1));
+        assert_eq!(matching(&cards, "vm.pm7-build--q1", ""), vec![3]);
+    }
+
+    #[test]
+    fn a_label_wins_over_another_cards_id_suffix() {
+        let cards = vec![
+            card(
+                "vm.pm7-build--Q1",
+                "PM7-Q1",
+                None,
+                "vm.pm7-build",
+                "PM7 build",
+            ),
+            card("vm.other--X1", "Q1", None, "vm.other", "Other"),
+        ];
+        assert_eq!(label_match(&cards, "Q1"), Some(1));
     }
 }

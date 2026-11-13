@@ -423,6 +423,63 @@ pub struct PinnedUpdate {
     /// reason, so the refusal says why. Never the refused content.
     #[serde(default)]
     pub refusal: Option<RefusalView>,
+    /// Every wait the reports name, once each: the owner's and everyone else's, in report order
+    /// (thread, then its task board, then its status). The page shows the waits on an agent, a
+    /// review or a machine beside an owner wait, instead of behind it. Empty when nothing waits.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub waits: Vec<WaitOut>,
+    /// The human update: when `status.json` was last written by its thread. A heartbeat never
+    /// moves it, so an old summary and its done and left lists keep their own age.
+    #[serde(default)]
+    pub status_updated: Option<UpdatedView>,
+    /// The heartbeat: when `thread.json` was last written. A hook rewrites it every few minutes,
+    /// carrying the last `doing` line, so it says the thread is alive, not that its words are new.
+    #[serde(default)]
+    pub heartbeat: Option<UpdatedView>,
+    /// The task board behind the tasks, percent and loop, when there is one: whose it is and
+    /// which stream. `shared` when it is another writer's board for the same project and stream.
+    #[serde(default)]
+    pub board: Option<BoardOut>,
+}
+
+/// One wait, as a report gave it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitOut {
+    /// Who or what it waits on: owner, agent, review, lock, resource, quota (the report's own
+    /// word), or `unknown` for a blocked item that does not say on what.
+    pub on: String,
+    /// The report's words.
+    pub text: String,
+    /// The report's short form of the same wait (v2 `short`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short: Option<String>,
+    /// The board item that waits, when the wait is a task's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    /// Where it was read: `thread`, `tasks` or `status`.
+    pub from: &'static str,
+}
+
+/// The board a pin's tasks come from.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardOut {
+    /// The writer that keeps the board.
+    pub writer: String,
+    pub project: String,
+    pub stream: String,
+    #[serde(default)]
+    pub project_label: Option<String>,
+    #[serde(default)]
+    pub stream_label: Option<String>,
+    /// Another writer's board: this thread reports the same project and stream, so the tasks,
+    /// percent and review rounds shown are the stream's, not this thread's own.
+    pub shared: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -685,6 +742,52 @@ fn lite_out(item: &ItemLiteIn) -> ItemOut {
     }
 }
 
+/// A text field of a blocker's additive (v2) fields, when it is non-empty text.
+fn addition_text(additions: &std::collections::BTreeMap<String, Json>, key: &str) -> Option<String> {
+    additions
+        .get(key)
+        .and_then(Json::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+/// Adds one wait unless the same wait is already there, by who it waits on and its words: the
+/// thread and its status repeat the same `--waiting-on-you`. Two tasks blocked on the same words
+/// are two waits (agents copy blocker words across items), so a repeat merges only when the tasks
+/// agree or one names none; unexplained blocks count once per task. A repeat fills what the first
+/// copy left out (its short form, task, since or due time).
+fn push_wait(waits: &mut Vec<WaitOut>, wait: WaitOut) {
+    let same = |held: &WaitOut| {
+        let tasks_agree = if wait.on == "unknown" {
+            held.task == wait.task
+        } else {
+            held.task.is_none() || wait.task.is_none() || held.task == wait.task
+        };
+        held.on == wait.on && held.text.trim() == wait.text.trim() && tasks_agree
+    };
+    if let Some(held) = waits.iter_mut().find(|held| same(held)) {
+        held.since = held.since.take().or(wait.since);
+        held.short = held.short.take().or(wait.short);
+        held.task = held.task.take().or(wait.task);
+        held.until = held.until.take().or(wait.until);
+        return;
+    }
+    waits.push(wait);
+}
+
+/// Words in report order, each once: `Vec::dedup` drops only neighbours, and the same owner wait
+/// comes from the thread and again from its status with board waits between.
+fn unique_words(words: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(words.len());
+    for word in words {
+        if !out.iter().any(|held| held.trim() == word.trim()) {
+            out.push(word);
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------------------------
 // The composer
 
@@ -695,6 +798,7 @@ fn compose_update(
     tasks: Option<&TasksIn>,
     status: Option<&StatusIn>,
     standalone_refusal: Option<&StatusProblemIn>,
+    pin_writers: &[&str],
 ) -> PinnedUpdate {
     let mut additions = std::collections::BTreeMap::new();
     for source in [
@@ -769,6 +873,10 @@ fn compose_update(
         unreadable_note: None,
         summary: status.map(|doc| doc.summary.clone()),
         refusal: None,
+        waits: Vec::new(),
+        status_updated: None,
+        heartbeat: None,
+        board: None,
     };
 
     // ---- Who and Now --------------------------------------------------------------------
@@ -835,6 +943,24 @@ fn compose_update(
             age_seconds: age / 1000,
         });
     }
+    // The two clocks apart: a heartbeat rewrites thread.json and carries the last words, so the
+    // newest of the two alone made a day-old summary read as current.
+    update.status_updated = status.map(|doc| {
+        let age = input.now_ms - doc.written_at_ms;
+        UpdatedView {
+            text: format!("Updated {}", age_words(age)),
+            at: doc.written_at.clone(),
+            age_seconds: age / 1000,
+        }
+    });
+    update.heartbeat = thread.map(|doc| {
+        let age = input.now_ms - doc.written_at_ms;
+        UpdatedView {
+            text: format!("Active {}", age_words(age)),
+            at: doc.written_at.clone(),
+            age_seconds: age / 1000,
+        }
+    });
 
     // The status@1 refusal behind this update, when the held copy carries one: the writer file
     // and the fixed reason, so a refusal says why. Never the refused content. A standalone
@@ -937,6 +1063,24 @@ fn compose_update(
         update.report_state = "fresh";
     }
 
+    // ---- Whose board -----------------------------------------------------------------------
+    // A board found by project and stream may be another writer's: a stream lead's board that
+    // several threads report under. Its tasks and review rounds are the stream's; say whose.
+    // A board is this pin's own when any writer reporting this pin keeps it: a thread may report
+    // under its named writer and its hashed `t3-` writer at once (`pin_writers`).
+    let own_writer = thread
+        .map(|doc| doc.writer.as_str())
+        .or(status.map(|doc| doc.writer.as_str()));
+    update.board = tasks.map(|board| BoardOut {
+        writer: board.writer.clone(),
+        project: board.project.clone(),
+        stream: board.stream.clone(),
+        project_label: board.project_label.clone().filter(|text| !text.is_empty()),
+        stream_label: board.stream_label.clone().filter(|text| !text.is_empty()),
+        shared: own_writer.is_some() && !pin_writers.contains(&board.writer.as_str()),
+    });
+    let shared_board = update.board.as_ref().filter(|board| board.shared);
+
     // ---- Percent: the task list first, the thread's own estimate beside it ----------------
     let board_counts = tasks.map(|board| {
         let of = board.items.iter().filter(|item| item.state != "dropped").count() as u64;
@@ -1034,14 +1178,26 @@ fn compose_update(
     let own = status.and_then(|doc| doc.looping.as_ref());
     let rule = tasks.and_then(|board| worst_loop(&board.items, input.now_ms));
     if let Some(counts) = &rule {
-        let mut text = format!(
-            "Yes. {} has gone back for fixes {} without a passing review.",
-            counts.id,
-            plural(counts.rounds as i64, "time")
-        );
+        let mut text = match shared_board {
+            // The stream's loop, named as the stream's: this thread did not fail those reviews.
+            Some(board) => format!(
+                "Yes. On the shared {} board kept by {}, {} has gone back for fixes {} without a passing review.",
+                board.stream_label.as_deref().unwrap_or(&board.stream),
+                board.writer,
+                counts.id,
+                plural(counts.rounds as i64, "time")
+            ),
+            None => format!(
+                "Yes. {} has gone back for fixes {} without a passing review.",
+                counts.id,
+                plural(counts.rounds as i64, "time")
+            ),
+        };
         if let Some(finding) = own.and_then(|answer| answer.text.as_ref()) {
             text.push(' ');
             text.push_str(finding);
+        } else if shared_board.is_some() && own.is_some_and(|answer| answer.state == "no") {
+            text.push_str(" This thread's own report says it is not looping.");
         }
         update.looping = LoopingView {
             answer: "yes",
@@ -1129,7 +1285,19 @@ fn compose_update(
     // is not, and neither may be dropped — the update says blocked and that the report does
     // not say on what, never "None.".
     let mut unexplained: Vec<String> = Vec::new();
+    // The same waits, structured, for the page (`waits`).
+    let mut waits: Vec<WaitOut> = Vec::new();
+    let blocked_wait = |kind: &BlockedIn, task: Option<&str>, from: &'static str| WaitOut {
+        on: kind.kind.clone(),
+        text: kind.what.clone(),
+        short: addition_text(&kind.additions, "short"),
+        task: task.map(str::to_string),
+        since: kind.since.clone().filter(|since| !since.is_empty()),
+        until: addition_text(&kind.additions, "until"),
+        from,
+    };
     if let Some(kind) = thread.and_then(|doc| doc.blocked_on.as_ref()) {
+        push_wait(&mut waits, blocked_wait(kind, None, "thread"));
         if kind.kind == "owner" {
             note_waiting_since(kind);
             waiting.push(kind.what.clone());
@@ -1137,7 +1305,20 @@ fn compose_update(
             blocked.push(format!("{} (waiting on {})", kind.what, kind.kind));
         }
     } else if thread.is_some_and(|doc| doc.state == "blocked") {
-        unexplained.push("Blocked; the report does not say on what.".to_string());
+        let words = "Blocked; the report does not say on what.".to_string();
+        push_wait(
+            &mut waits,
+            WaitOut {
+                on: "unknown".into(),
+                text: words.clone(),
+                short: None,
+                task: None,
+                since: None,
+                until: None,
+                from: "thread",
+            },
+        );
+        unexplained.push(words);
     }
     if let Some(board) = tasks {
         for item in &board.items {
@@ -1146,6 +1327,7 @@ fn compose_update(
             }
             // An item that names a blocker is a blocked item, whatever its state column says.
             if let Some(kind) = &item.blocked_on {
+                push_wait(&mut waits, blocked_wait(kind, Some(&item.id), "tasks"));
                 if kind.kind == "owner" {
                     note_waiting_since(kind);
                     waiting.push(kind.what.clone());
@@ -1154,12 +1336,36 @@ fn compose_update(
                 }
             } else if item.state == "blocked" {
                 // Name the item; the reason was not reported to name.
+                push_wait(
+                    &mut waits,
+                    WaitOut {
+                        on: "unknown".into(),
+                        text: "Blocked; the report does not say on what.".into(),
+                        short: None,
+                        task: Some(item.id.clone()),
+                        since: None,
+                        until: None,
+                        from: "tasks",
+                    },
+                );
                 unexplained.push(format!("Blocked on {}; the report does not say on what.", item.id));
             }
         }
     }
     if let Some(doc) = status {
         for blocker in &doc.blockers {
+            push_wait(
+                &mut waits,
+                WaitOut {
+                    on: blocker.waiting_on.clone(),
+                    text: blocker.text.clone(),
+                    short: addition_text(&blocker.additions, "short"),
+                    task: None,
+                    since: addition_text(&blocker.additions, "since"),
+                    until: addition_text(&blocker.additions, "until"),
+                    from: "status",
+                },
+            );
             if blocker.waiting_on == "owner" {
                 waiting.push(blocker.text.clone());
             } else {
@@ -1167,6 +1373,7 @@ fn compose_update(
             }
         }
     }
+    update.waits = waits;
     // An open card this thread asked is a question of the owner's, whatever else it waits
     // on — but only question, judgement and action cards count (D10): silence is fine on
     // an objection, and a sample wants no answer.
@@ -1177,8 +1384,10 @@ fn compose_update(
             }
         }
     }
-    waiting.dedup();
-    blocked.dedup();
+    // Each wait once, wherever it repeats: a `--waiting-on-you` is written to the thread and to
+    // its status, with the board's waits read between the two.
+    let waiting = unique_words(waiting);
+    let blocked = unique_words(blocked);
     let mut parts: Vec<String> = Vec::new();
     if !waiting.is_empty() {
         // "Waiting on you since 6:55 PM: pick the reviewers." — the since is the earliest moment
@@ -1257,9 +1466,53 @@ pub fn compose(input: &ComposeInput) -> ComposeOutput {
             let want = format!("writers/{}/status.json", doc.writer);
             input.status_problems.iter().find(|problem| problem.file == want)
         });
-        updates.push(compose_update(pin, input, thread, tasks, status, standalone_refusal));
+        // Every writer whose report names this pin, by the same normalised id match.
+        let mut pin_writers: Vec<&str> = Vec::new();
+        let named = input
+            .threads
+            .iter()
+            .filter(|doc| doc.t3_thread.as_deref().is_some_and(|id| same_thread_id(id, &pin.id)))
+            .map(|doc| doc.writer.as_str())
+            .chain(
+                input
+                    .statuses
+                    .iter()
+                    .filter(|doc| same_thread_id(&doc.t3_thread, &pin.id))
+                    .map(|doc| doc.writer.as_str()),
+            );
+        for writer in named {
+            if !pin_writers.contains(&writer) {
+                pin_writers.push(writer);
+            }
+        }
+        updates.push(compose_update(
+            pin,
+            input,
+            thread,
+            tasks,
+            status,
+            standalone_refusal,
+            &pin_writers,
+        ));
     }
-    let looping = updates.iter().filter(|update| update.looping.answer == "yes").count();
+    // One loop counts once: a board's looping task is one loop however many pins report its
+    // stream (the board owner's and every worker's), so the head never says "2 looping" for it.
+    let mut loops: Vec<(String, String)> = Vec::new();
+    for (index, update) in updates
+        .iter()
+        .enumerate()
+        .filter(|(_, update)| update.looping.answer == "yes")
+    {
+        let key = match (update.board.as_ref(), update.looping.task.as_ref()) {
+            (Some(board), Some(task)) => (format!("board:{}", board.writer), task.clone()),
+            // Any other "yes" is the pin's own loop: one per pin, whatever its id.
+            _ => ("pin".to_string(), index.to_string()),
+        };
+        if !loops.contains(&key) {
+            loops.push(key);
+        }
+    }
+    let looping = loops.len();
     let waiting = updates
         .iter()
         .filter(|update| update.blocked.as_ref().is_some_and(|blocked| blocked.waiting_on_you))

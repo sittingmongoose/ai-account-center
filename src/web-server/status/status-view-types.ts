@@ -1,4 +1,5 @@
 /** The Status tab view's types (docs/status-tab.md, GET /api/status v1) and the collected inputs. */
+import type { PinnedBoardView, PinnedClockView, PinnedWaitView } from './status-view-pinned';
 import type { QuotaReportState } from './quota-report';
 import type { SpendView } from './status-view-quota';
 import type { SnapshotAccount } from '../agent-usage/agent-usage-markdown';
@@ -428,6 +429,14 @@ export interface PinnedUpdateView {
   summary: string | null;
   /** The status@1 refusal behind this update: the writer file and the fixed reason. */
   refusal?: { file: string; reason: string; sinceMs: number | null } | null;
+  /** Every wait the reports name, once each: the owner's and everyone else's (absent when nothing waits). */
+  waits?: PinnedWaitView[];
+  /** The human update: when status.json was written. A heartbeat never moves it. */
+  statusUpdated?: PinnedClockView | null;
+  /** The heartbeat: when thread.json was last written (a hook carries the last words forward). */
+  heartbeat?: PinnedClockView | null;
+  /** The board behind tasks, percent and loop; `shared` when it is another writer's stream board. */
+  board?: PinnedBoardView | null;
 }
 
 export interface MachineView {

@@ -33,3 +33,11 @@ Scoreboard does not draw those severity counts.
 The schema files are publication templates. AAC fills machine enums and writer ID
 patterns from `web-dashboard/public/computers.json` before publishing them; the
 live TypeScript and Rust readers enforce that same fixed computer allowlist.
+
+Run bounds (2026-11-13). A run's `task.id` is an opaque handle of at most 512
+characters (T3 delegated-task handles run to about 272), an evidence label is at
+most 300, and a run's local id (after `<writer>--`) is at most 128, so the whole
+id is at most 194 and fits `review.of`. The reader keeps each exactly as written,
+never cut to fit, and `run.json` publishes the same numbers as `maxLength`. A
+refused id says which rule it broke: the writer prefix, the length or the grammar.
+Card local ids keep their 64-character bound.

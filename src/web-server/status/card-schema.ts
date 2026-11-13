@@ -13,6 +13,8 @@ import {
   type DocHead,
   fail,
   Invalid,
+  CARD_LOCAL_ID_MAX,
+  idProblem,
   isCardId,
   isPmMailName,
   iso,
@@ -128,8 +130,11 @@ export interface CardDoc extends DocHead {
 
 export function card(doc: Record<string, unknown>, writer: string, fileId: string): CardDoc {
   const base = head(doc, CARD_SCHEMA, writer);
-  if (doc.id !== fileId || !isCardId(doc.id) || !fileId.startsWith(`${writer}--`))
-    throw new Invalid('id does not match its file name and writer');
+  if (doc.id !== fileId) throw new Invalid('id does not match its file name and writer');
+  // Which id rule it breaks, when one does: the writer prefix, the length or the grammar.
+  const idRefusal = idProblem(doc.id, writer, CARD_LOCAL_ID_MAX);
+  if (idRefusal || !isCardId(doc.id))
+    throw new Invalid(idRefusal ?? 'id does not match its file name and writer');
   const replyTo =
     doc.replyTo === undefined || doc.replyTo === null ? {} : obj(doc.replyTo, 'replyTo');
   const pmMail = replyTo.pmMail === undefined || replyTo.pmMail === null ? null : replyTo.pmMail;

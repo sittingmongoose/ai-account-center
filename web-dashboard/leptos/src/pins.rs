@@ -103,25 +103,6 @@ fn iso_ms(iso: &str) -> Option<f64> {
     (!ms.is_nan()).then_some(ms)
 }
 
-/// "just now", "4 min", "1 h 3 min", "2 d".
-fn short_age(seconds: i64) -> String {
-    let s = seconds.max(0);
-    if s < 45 {
-        "just now".into()
-    } else if s < 3_600 {
-        format!("{} min", ((s + 30) / 60).max(1))
-    } else if s < 86_400 {
-        let (h, m) = (s / 3_600, (s % 3_600) / 60);
-        if m == 0 || h >= 6 {
-            format!("{h} h")
-        } else {
-            format!("{h} h {m} min")
-        }
-    } else {
-        format!("{} d", s / 86_400)
-    }
-}
-
 fn since_ms(ms: f64) -> String {
     short_age(((js_sys::Date::now() - ms) / 1000.0) as i64)
 }
@@ -175,8 +156,18 @@ fn lead(p: &Pin) -> String {
     cut(&text, 60)
 }
 
-/// What it waits on, in one line: the report's own blocker, else the composer's words after their head.
+/// What it waits on, in one line: the owner's wait first when it waits on the owner, else anyone else's; from a
+/// server without structured waits, the report's own blocker, else the composer's words after their head.
 fn waiting_words(p: &Pin) -> Option<String> {
+    if !p.u.waits.is_empty() {
+        let mine = owner_waits(&p.u);
+        let first_other = other_waits(&p.u).first().map(|w| wait_words(w));
+        return if p.word == Word::WaitingOnYou {
+            mine.first().cloned().or(first_other)
+        } else {
+            first_other.or_else(|| mine.first().cloned())
+        };
+    }
     let reported =
         p.r.blockers
             .iter()
@@ -644,8 +635,22 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
             for_you_when = cards_since(p).map(|t| format!("since {t}"));
         }
     } else if p.u.blocked.waiting_on_you {
-        let text = p.u.blocked.text.clone();
-        for_you.push(view! { <p><b data-tone="warn">"Waiting"</b>{format!(" {}", text.split_once(": ").map(|(_, r)| r.to_string()).unwrap_or(text.clone()))}</p> }.into_any());
+        // Each owner wait once: the thread and its status repeat the same one.
+        let mine = owner_waits(&p.u);
+        let shown = mine.len().min(3);
+        for (at, words) in mine.iter().take(shown).enumerate() {
+            for_you.push(if at == 0 {
+                view! { <p><b data-tone="warn">"Waiting"</b>{format!(" {words}")}</p> }.into_any()
+            } else {
+                view! { <p>{words.clone()}</p> }.into_any()
+            });
+        }
+        if mine.len() > shown {
+            for_you.push(
+                view! { <p class="q3">{format!("and {} more in Tasks", mine.len() - shown)}</p> }
+                    .into_any(),
+            );
+        }
     }
     let for_you_view = if for_you.is_empty() {
         view! { <span class="q3">"Nothing"</span> }.into_any()
@@ -653,27 +658,41 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
         for_you.into_iter().collect_view().into_any()
     };
 
-    // Waiting on: every blocker that is not the owner's.
+    // Waiting on: every wait that is not the owner's, shown beside an owner wait, never behind it.
     let now = js_sys::Date::now();
     let mut waits: Vec<AnyView> = Vec::new();
     let mut wait_when: Vec<AnyView> = Vec::new();
-    for b in
-        p.r.blockers
-            .iter()
-            .chain(p.r.blocked_on.iter())
-            .filter(|b| b.who() != "owner")
-    {
-        waits.push(
-            view! { <p><b>{who_words(b.who())}</b>{format!(" {}", b.words())}</p> }.into_any(),
-        );
-        let late = b.until.as_deref().and_then(iso_ms).filter(|u| *u < now);
-        wait_when.push(match (late, b.since.as_deref().and_then(iso_ms)) {
-            (Some(_), _) => view! { <span data-tone="warn">{format!("was due {}", fmt::clock(b.until.as_deref().unwrap_or_default()))}</span> }.into_any(),
+    let when = |since: Option<&str>, until: Option<&str>| {
+        let late = until.and_then(iso_ms).filter(|u| *u < now);
+        match (late, since.and_then(iso_ms)) {
+            (Some(_), _) => view! { <span data-tone="warn">{format!("was due {}", fmt::clock(until.unwrap_or_default()))}</span> }.into_any(),
             (None, Some(s)) => view! { <span>{format!("for {}", since_ms(s))}</span> }.into_any(),
             _ => view! { <span></span> }.into_any(),
-        });
+        }
+    };
+    if !p.u.waits.is_empty() {
+        for w in other_waits(&p.u) {
+            waits.push(
+                view! { <p><b>{other_wait_head(w)}</b>{format!(" {}", wait_words(w))}</p> }
+                    .into_any(),
+            );
+            wait_when.push(when(w.since.as_deref(), w.until.as_deref()));
+        }
+    } else {
+        // A server without structured waits: the report's own non-owner blockers.
+        for b in
+            p.r.blockers
+                .iter()
+                .chain(p.r.blocked_on.iter())
+                .filter(|b| b.who() != "owner")
+        {
+            waits.push(
+                view! { <p><b>{who_words(b.who())}</b>{format!(" {}", b.words())}</p> }.into_any(),
+            );
+            wait_when.push(when(b.since.as_deref(), b.until.as_deref()));
+        }
     }
-    if waits.is_empty() && !p.u.blocked.waiting_on_you {
+    if waits.is_empty() && p.u.waits.is_empty() && !p.u.blocked.waiting_on_you {
         let t = p.u.blocked.text.trim().to_string();
         if !t.is_empty() && t != "None." && t != "None" {
             waits.push(view! { <p>{t}</p> }.into_any());
@@ -688,21 +707,35 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     } else {
         waits.into_iter().collect_view().into_any()
     };
-    let now_view = match now_text(p) {
+    // A heartbeat carries the last doing line forward: when the human update is older, the Now line says the human
+    // update's age, whether it is the summary, a reported `now` or a carried doing line (review 1, L4). A heartbeat
+    // never dates the words it carries.
+    let ages = two_ages(&p.u);
+    let now_line = now_text(p);
+    let now_is_old = ages.is_some() && now_line.is_some();
+    let now_view = match now_line {
         Some(n) => view! { <span>{n}</span> }.into_any(),
         None => view! { <span class="q3">"Not reported"</span> }.into_any(),
     };
+    let now_when = ages
+        .filter(|_| now_is_old)
+        .map(|(human, _)| view! { <span data-tone={(human > 6 * 3_600).then_some("warn")}>{format!("as of {}", update_ago(human + elapsed))}</span> }.into_any());
     let next_view = match p.r.next.clone() {
         Some(n) => view! { <span>{n}</span> }.into_any(),
         None => view! { <span class="q3">"Not reported"</span> }.into_any(),
     };
-    let (upd, upd_age) = match p.u.updated.as_ref() {
-        Some(u) => (
+    let (upd, upd_age) = match (ages, p.u.status_updated.as_ref(), p.u.updated.as_ref()) {
+        // The human update and the heartbeat apart: "updated 35 h ago · active 2 min ago", its clock beside.
+        (Some((human, beat)), Some(s), _) => (
+            view! { <span class="fx-ages" data-tone={(human > 6 * 3_600).then_some("warn")}><span class="nw">{format!("updated {}", update_ago(human + elapsed))}</span>" · "<span class="nw">{format!("active {}", update_ago(beat + elapsed))}</span></span> }.into_any(),
+            Some(view! { <span>{fmt::clock(&s.at)}</span> }.into_any()),
+        ),
+        (_, _, Some(u)) => (
             view! { <span>{fmt::clock(&u.at)}</span> }.into_any(),
             u.age_seconds
                 .map(|a| view! { <span>{fmt::long_age(a + elapsed)}</span> }.into_any()),
         ),
-        None => (
+        _ => (
             view! { <span class="q3">"Not reported"</span> }.into_any(),
             None,
         ),
@@ -711,7 +744,7 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
         <dl class="fx">
             {fact("For you", for_you_view, for_you_when.map(|w| view! { <span>{w}</span> }.into_any()))}
             {fact("Waiting on", waiting_view, (!wait_when.is_empty()).then(|| wait_when.into_iter().map(|w| view! { <span class="fx-when">{w}</span> }).collect_view().into_any()))}
-            {fact("Now", now_view, None)}
+            {fact("Now", now_view, now_when)}
             {fact("Next", next_view, None)}
             {fact("Updated", upd, upd_age)}
         </dl>
@@ -903,6 +936,18 @@ fn tasks_section(p: &Pin) -> AnyView {
 }
 
 fn tasks_as_of(p: &Pin) -> Option<AnyView> {
+    // Another writer's board: say whose, so its rounds never read as this thread's own.
+    if let Some(words) = shared_board_words(&p.u) {
+        return Some(
+            view! { <span class="c2-sec-end" data-board="shared">{words}</span> }.into_any(),
+        );
+    }
+    // Lists from the status document, not a board: as old as the human update, whatever the heartbeat says.
+    if p.u.board.is_none()
+        && let (Some((human, _)), Some(s)) = (two_ages(&p.u), p.u.status_updated.as_ref())
+    {
+        return Some(view! { <span class="c2-sec-end" data-tone={(human > 6 * 3_600).then_some("warn")}>{format!("as of {}, {} old", fmt::clock(&s.at), update_age(human))}</span> }.into_any());
+    }
     p.board.as_ref().and_then(|b| b.as_of.clone()).map(|at| {
         let list_ms = iso_ms(&at);
         let report_ms = p.u.updated.as_ref().and_then(|u| iso_ms(&u.at));
@@ -987,10 +1032,8 @@ fn quiet_body(p: &Pin) -> impl IntoView + use<> {
             .clone()
             .or_else(|| p.u.report_note.clone())
             .unwrap_or_default();
-    let last =
-        p.u.summary
-            .clone()
-            .map(|s| format!(" The last one said: {s}"));
+    // The summary, else the last doing line with its age: a thread with no status file still said what it did.
+    let last = quiet_last(&p.u, 0).map(|s| format!(" {s}"));
     view! { <p class="c2-quiet"><span class="w-ink">{note}</span>{last}</p> }
 }
 
@@ -1098,11 +1141,10 @@ fn RosterRow(
     on_pick: Callback<String>,
 ) -> impl IntoView {
     let id = p.u.id.clone();
-    let age =
-        p.u.updated
-            .as_ref()
-            .and_then(|u| u.age_seconds)
-            .map(short_age);
+    // The words' age, not a heartbeat's: a hook keeps thread.json fresh while the summary stays as old as it is.
+    let age = roster_age(&p.u);
+    let age_tone = age.as_ref().is_some_and(|(_, old)| *old).then_some("warn");
+    let age_title = two_ages(&p.u).map(|(human, beat)| two_ages_words(human, beat));
     let model = model_of(p.u.who.as_deref());
     let problem = p.problems().into_iter().next().map(|(short, _)| short);
     let mute = matches!(p.word, Word::Quiet);
@@ -1110,7 +1152,7 @@ fn RosterRow(
         <li class="c2-item">
             <button class="c2-row" class:sel=move || selected.get() class:open=move || open.get() class:quiet=mute aria-current=move || selected.get().then_some("true")
                 on:click=move |_| on_pick.run(id.clone())>
-                <span class="c2-l1"><span class="c2-title">{p.title()}</span><span class="c2-age">{age}</span></span>
+                <span class="c2-l1"><span class="c2-title">{p.title()}</span><span class="c2-age" data-tone=age_tone title=age_title>{age.map(|(a, _)| a)}</span></span>
                 <span class="c2-l2"><b data-tone=p.word.tone()>{p.word.text()}</b>{format!(" {}", lead(&p))}</span>
                 <span class="c2-l3">{mini_track(&p.r.stages)}<span class="c2-stage">{foot_words(&p)}</span><span class="c2-model">{model}</span></span>
                 {problem.map(|t| view! { <span class="c2-prob" data-tone="warn">{t}</span> })}

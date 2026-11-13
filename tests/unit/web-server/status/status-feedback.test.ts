@@ -461,7 +461,7 @@ describe('runs', () => {
     ).toEqual({ ok: false, reason: 'flags[0].kind is missing or not valid' });
     expect(parseReportFile('run', json(run({ id: 'vm.other--R1' })), 'vm.lead')).toEqual({
       ok: false,
-      reason: 'id does not name its writer',
+      reason: 'id does not name its writer: it must start with "vm.lead--"',
     });
   });
 });

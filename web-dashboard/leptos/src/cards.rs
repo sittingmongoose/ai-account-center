@@ -717,7 +717,7 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                     " "<span class="nw">{format!("from {asker}")}</span>
                 </span>
             </div>
-            <h3 class="q-title">{label_lead(&c)}{c.title.clone()}</h3>
+            <h3 class="q-title">{labelled_title(&c)}</h3>
             <div class="q-why">
                 {(c.kind == "sample").then(|| view! {
                     <p class="sample-banner">"Format sample · no answer wanted. Nothing on this card is sent."</p>
@@ -871,13 +871,18 @@ fn CardBody(card: Card, drafts: RwSignal<Drafts>, open: Memo<Vec<Card>>) -> impl
                     </ul>
                 })}
                 <div class="q-more">
-                    {(!c.evidence.is_empty()).then(|| {
+                    {(!c.evidence.is_empty() || !c.id.is_empty()).then(|| {
                         let tech = RwSignal::new(false);
                         let items = c.evidence.clone();
+                        // The full id first: a chat may quote it ("vm.pm7-build--Q1") where the label reads PM7-Q1.
+                        let id = c.id.clone();
                         view! {
                             <Disclosure open=tech label="Technical detail for agents".to_string()/>
                             <Show when=move || tech.get()>
-                                <ul class="q-tech">{items.iter().map(|e| view! { <li><span class="q3">{format!("{}: ", e.label)}</span><code>{e.path.clone()}</code></li> }).collect_view()}</ul>
+                                <ul class="q-tech">
+                                    {(!id.is_empty()).then(|| view! { <li class="q-id"><span class="q3">"Card id: "</span><code>{id.clone()}</code></li> })}
+                                    {items.iter().map(|e| view! { <li><span class="q3">{format!("{}: ", e.label)}</span><code>{e.path.clone()}</code></li> }).collect_view()}
+                                </ul>
                             </Show>
                         }
                     })}
@@ -1016,7 +1021,7 @@ fn Review(
                     view! {
                         <li>
                             <button class="review-row" on:click=move |_| go_card(i)>
-                                <span class="review-title">{label_lead(&c)}{c.title.clone()}</span>
+                                <span class="review-title">{labelled_title(&c)}</span>
                                 <span class="review-what" data-tone=(!tone.is_empty()).then_some(tone)>{what}</span>
                                 {(!note.is_empty()).then(|| view! { <span class="review-note">{format!("\u{201c}{note}\u{201d}")}</span> })}
                             </button>
@@ -1188,10 +1193,25 @@ fn copy_words(text: String, done: RwSignal<Option<bool>>) {
     }
 }
 
-/// "WL2 · " before a card's title: the short name agents use for it. A card without a label gets nothing.
-fn label_lead(c: &Card) -> Option<AnyView> {
-    let label = c.label.trim().to_string();
-    (!label.is_empty()).then(|| view! { <span class="q-label">{label}</span>" · " }.into_any())
+/// The title led by the card's label, the name agents quote for it ("R8", "PM7-Q1"): the stored label verbatim, or,
+/// for a card that stored none, the id after `--`, which is what chats quote. The label and the title's first word
+/// share one unbreakable run, so on a phone the label never stands alone on its line. The full writer-prefixed id
+/// rides on the label for hover and screen readers; the card's technical detail shows it too.
+pub fn labelled_title(c: &Card) -> AnyView {
+    let label = c.short().trim().to_string();
+    let title = c.title.trim().to_string();
+    if label.is_empty() {
+        return view! { <span>{title}</span> }.into_any();
+    }
+    let (first, rest) = match title.split_once(char::is_whitespace) {
+        Some((first, rest)) => (first.to_string(), format!(" {}", rest.trim_start())),
+        None => (title, String::new()),
+    };
+    let named = format!("Card {label}, id {}", c.id);
+    view! {
+        <span class="q-lead"><span class="q-label" title=c.id.clone() aria-label=named data-card-id=c.id.clone()>{label}</span>{first}</span>{rest}
+    }
+    .into_any()
 }
 
 #[component]
@@ -1215,7 +1235,7 @@ fn AnsweredView(answered: AnsweredCard) -> impl IntoView {
     let delivery = a.delivery.told();
     view! {
         <li data-delivery=a.delivery.state.clone()>
-            <div><b>{label_lead(&c)}{c.title.clone()}</b></div>
+            <div><b>{labelled_title(&c)}</b></div>
             <div>{a.label(&labels)}{(a.via == "recommended").then_some(" (recommended)")}</div>
             {a.note.clone().filter(|n| !n.is_empty()).map(|n| view! { <blockquote>{n}</blockquote> })}
             <div class="q3">{format!("{} · {} · {delivery}", c.asked_by, fmt::clock(&a.answered_at))}</div>

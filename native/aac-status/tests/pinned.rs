@@ -1132,3 +1132,201 @@ fn thread_only_progress_reaches_reported() {
     let update = serde_json::to_value(one_update(&built)).unwrap();
     assert_eq!(update["reported"]["progress"], progress);
 }
+
+// ---- 2026-11-13: what the Status page lost (status-reporting FINDINGS.md) ----------------------
+// These read the serialized update, as the page does, so they also run against a composer that
+// lacks the fields (and fail there by assertion, not by a compile error).
+
+fn as_json(update: &PinnedUpdate) -> Value {
+    serde_json::to_value(update).unwrap()
+}
+
+/// The shape of a real settings-managers report (2026-11-11): one owner wait written by
+/// `--waiting-on-you` to both the thread and its status, and a board whose items wait on the
+/// owner, on a machine, on a review and on an agent.
+fn settings_shaped() -> ComposeInput {
+    let wait = "Open the preview and answer card SM-0 and the design questions SM-1 to SM-8";
+    input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({
+            "writer": "vm.settings-lead", "t3Thread": "t1", "name": "settings-lead",
+            "project": "puppet-master", "stream": "SETTINGS-MANAGERS",
+            "state": "blocked", "ttlSeconds": null, "writtenAtMs": NOW - 120_000,
+            "doing": "The review said READY; the press test is paused until the browsers are free.",
+            "blockedOn": { "kind": "owner", "what": wait, "since": "2026-11-07T16:54:51Z", "sinceMs": NOW - 45_000_000 }
+        }))],
+        "tasks": [json!({
+            "writer": "vm.settings-lead", "writtenAtMs": NOW - 130_000, "seq": 9,
+            "project": "puppet-master", "projectLabel": "Puppet Master",
+            "stream": "SETTINGS-MANAGERS", "streamLabel": "Settings managers",
+            "items": [
+                { "id": "SWEEP", "title": "Press test", "state": "blocked",
+                  "blockedOn": { "kind": "resource", "what": "Browsers on the VM and Nas1 are reserved for stream F's landing.",
+                                 "since": "2026-11-07T18:21:07Z", "sinceMs": NOW - 40_000_000 } },
+                { "id": "WORK-LANES", "title": "Work lanes", "state": "blocked",
+                  "blockedOn": { "kind": "owner", "what": "Answers to the work-lanes cards WL1 to WL5." } },
+                { "id": "PAGE-FRAME", "title": "Page frame", "state": "review",
+                  "blockedOn": { "kind": "review", "what": "Second reviewer pass on the page frame." } },
+                { "id": "GLM-FIXES", "title": "GLM fixes", "state": "working",
+                  "blockedOn": { "kind": "agent", "what": "The fix worker's rebuild.", "short": "Rebuild" } },
+                { "id": "SHARE", "title": "Share", "state": "done" }
+            ]
+        })],
+        "statuses": [json!({
+            "writer": "vm.settings-lead", "writtenAt": "2026-11-06T18:33:20Z",
+            "writtenAtMs": NOW - 35 * 3_600_000, "seq": 93, "t3Thread": "t1",
+            "summary": "The review said READY; the press test is paused until the browsers are free.",
+            "percent": 95, "done": [], "left": [],
+            "blockers": [ { "text": wait, "waitingOn": "owner" } ],
+            "looping": { "state": "no", "text": null }
+        })]
+    }))
+}
+
+#[test]
+fn waits_on_others_are_kept_beside_an_owner_wait_and_the_owner_wait_shows_once() {
+    let update = one_update(&settings_shaped());
+    let blocked = update.blocked.as_ref().unwrap();
+    assert!(blocked.waiting_on_you);
+    // The owner wait the thread and its status both carry is said once, in the sentence too.
+    assert_eq!(blocked.text.matches("answer card SM-0").count(), 1, "{}", blocked.text);
+    assert!(
+        blocked.text.contains("Blocked: Browsers on the VM and Nas1"),
+        "{}",
+        blocked.text
+    );
+    let waits = as_json(&update)["waits"].clone();
+    let rows: Vec<(String, String, Option<String>)> = waits
+        .as_array()
+        .expect("structured waits")
+        .iter()
+        .map(|w| {
+            (
+                w["on"].as_str().unwrap().to_string(),
+                w["from"].as_str().unwrap().to_string(),
+                w["task"].as_str().map(str::to_string),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("owner".to_string(), "thread".to_string(), None),
+            ("resource".into(), "tasks".into(), Some("SWEEP".into())),
+            ("owner".into(), "tasks".into(), Some("WORK-LANES".into())),
+            ("review".into(), "tasks".into(), Some("PAGE-FRAME".into())),
+            ("agent".into(), "tasks".into(), Some("GLM-FIXES".into())),
+        ]
+    );
+    assert_eq!(waits[1]["since"], "2026-11-07T18:21:07Z");
+    assert_eq!(waits[4]["short"], "Rebuild");
+}
+
+#[test]
+fn an_old_human_update_keeps_its_own_age_beside_a_recent_heartbeat() {
+    let update = one_update(&settings_shaped());
+    let out = as_json(&update);
+    // The newest clock alone says 2 minutes: that is the heartbeat, not the summary.
+    assert_eq!(update.updated.as_ref().unwrap().age_seconds, 120);
+    assert_eq!(out["statusUpdated"]["ageSeconds"], 35 * 3600);
+    assert_eq!(out["statusUpdated"]["at"], "2026-11-06T18:33:20Z");
+    assert_eq!(out["heartbeat"]["ageSeconds"], 120);
+    assert_eq!(out["heartbeat"]["text"], "Active 2 min ago");
+}
+
+/// Two threads under one stream: the stream lead keeps the board, the other reports the same
+/// project and stream, and the board's item has failed four reviews in a row.
+fn shared_stream() -> ComposeInput {
+    let fails: Vec<Value> = (1..=4)
+        .map(|n| json!({ "atMs": NOW - n * 3_600_000, "verdict": "fail" }))
+        .collect();
+    input(json!({
+        "pins": [pin("lead", json!("a")), pin("split", json!("b"))],
+        "threads": [
+            thread(json!({ "writer": "vm.projects-lead", "t3Thread": "lead", "project": "puppet-master", "stream": "P" })),
+            thread(json!({ "writer": "vm.split-worker", "t3Thread": "split", "project": "puppet-master", "stream": "P" }))
+        ],
+        "tasks": [json!({
+            "writer": "vm.projects-lead", "writtenAtMs": NOW - 100_000, "seq": 4,
+            "project": "puppet-master", "stream": "P", "streamLabel": "Projects",
+            "items": [ { "id": "P-BATCH2", "title": "Batch 2", "state": "fixing", "reviews": fails } ]
+        })],
+        "statuses": [json!({
+            "writer": "vm.split-worker", "writtenAt": "2026-11-08T05:30:00Z", "writtenAtMs": NOW - 200_000,
+            "seq": 2, "t3Thread": "split", "summary": "Splitting the v3 files.", "percent": 40,
+            "looping": { "state": "no", "text": null }
+        })]
+    }))
+}
+
+#[test]
+fn a_shared_stream_board_is_labelled_with_its_owner_and_stream() {
+    let view = compose(&shared_stream());
+    // One loop on one board: counted once, however many pins report its stream (review 1, M1).
+    assert_eq!(view.head, "2 pinned in T3 · 1 looping");
+    assert_eq!(view.counts.looping, 1);
+    let lead = as_json(&view.updates[0]);
+    let split = as_json(&view.updates[1]);
+    assert_eq!(lead["board"]["writer"], "vm.projects-lead");
+    assert_eq!(lead["board"]["shared"], false);
+    assert_eq!(
+        view.updates[0].looping.text,
+        "Yes. P-BATCH2 has gone back for fixes 4 times without a passing review."
+    );
+    assert_eq!(split["board"]["writer"], "vm.projects-lead");
+    assert_eq!(split["board"]["stream"], "P");
+    assert_eq!(split["board"]["shared"], true);
+    assert_eq!(
+        view.updates[1].looping.text,
+        "Yes. On the shared Projects board kept by vm.projects-lead, P-BATCH2 has gone back for fixes 4 times \
+         without a passing review. This thread's own report says it is not looping."
+    );
+}
+
+#[test]
+fn two_tasks_blocked_on_the_same_words_are_two_waits() {
+    // Agents copy blocker words across items: each task's wait must still show (review 1, M2).
+    let words = "Browsers on the VM and Nas1 are reserved.";
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "t3Thread": "t1", "project": "puppet-master", "stream": "S" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-build", "writtenAtMs": NOW - 100_000, "seq": 3,
+            "project": "puppet-master", "stream": "S",
+            "items": [
+                { "id": "SWEEP", "title": "Sweep", "state": "blocked", "blockedOn": { "kind": "resource", "what": words } },
+                { "id": "PRESS", "title": "Press test", "state": "blocked", "blockedOn": { "kind": "resource", "what": words } }
+            ]
+        })],
+        "statuses": [json!({
+            "writer": "vm.pm7-build", "writtenAt": "2026-11-08T05:30:00Z", "writtenAtMs": NOW - 200_000,
+            "seq": 2, "t3Thread": "t1", "summary": "Waiting for browsers.",
+            "blockers": [ { "text": words, "waitingOn": "resource" } ]
+        })]
+    }));
+    let waits = as_json(&one_update(&built))["waits"].clone();
+    let tasks: Vec<Option<&str>> = waits.as_array().unwrap().iter().map(|w| w["task"].as_str()).collect();
+    // The status's copy names no task, so it fills the first; the second task keeps its own row.
+    assert_eq!(tasks, [Some("SWEEP"), Some("PRESS")]);
+}
+
+#[test]
+fn a_board_kept_by_the_same_pins_other_writer_is_its_own() {
+    // One thread reporting under its hashed writer (thread.json) and its named writer (status and
+    // board): the board is this pin's own, not a shared one (review 1, L5).
+    let built = input(json!({
+        "pins": [pin("t1", json!("a"))],
+        "threads": [thread(json!({ "writer": "vm.t3-22f204f1", "t3Thread": "t1", "project": "puppet-master", "stream": "PERF" }))],
+        "tasks": [json!({
+            "writer": "vm.pm7-perf", "writtenAtMs": NOW - 100_000, "seq": 3,
+            "project": "puppet-master", "stream": "PERF", "items": [ { "id": "P-1", "title": "Idle drift", "state": "working" } ]
+        })],
+        "statuses": [json!({
+            "writer": "vm.pm7-perf", "writtenAt": "2026-11-08T05:30:00Z", "writtenAtMs": NOW - 300_000,
+            "seq": 2, "t3Thread": "t1", "summary": "Measuring idle drift."
+        })]
+    }));
+    let board = as_json(&one_update(&built))["board"].clone();
+    assert_eq!(board["writer"], "vm.pm7-perf");
+    assert_eq!(board["shared"], false);
+}

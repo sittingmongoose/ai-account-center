@@ -6,11 +6,12 @@
  */
 import {
   bool,
+  boundedText,
   count,
   fail,
   head,
+  idProblem,
   Invalid,
-  isCardId,
   iso,
   link,
   list,
@@ -107,6 +108,12 @@ export interface RunDoc extends DocHead {
   /** Task-specific numbers read by catalog measures; unknown stays null. */
   metrics: Record<string, number | null>;
   imported: { from: string; at: string } | null;
+  /**
+   * The writer marked the model id as one the catalog does not know (agent-report 1.6). Absent reads
+   * as false. Informational: the run is read and counted like any other, and the Scoreboard names a
+   * model the catalog lacks in its catalog Source whether or not the writer marked it.
+   */
+  unknownModel: boolean;
 }
 
 function num(value: unknown, field: string): number | null {
@@ -148,10 +155,29 @@ function quota(value: unknown, field: string): RunQuota | null {
 
 const METRIC_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
+/**
+ * Bounds a run keeps, published as `maxLength` in docs/agent-reports/schemas/run.json. Each is kept
+ * exactly as written: an id or a label is never cut to fit.
+ *
+ * - `task.id` is an opaque handle. T3's delegated-task handles (`node:delegated-task:command...`) run
+ *   from 121 to 272 characters in the reports share (2026-11-13); 512 leaves room for longer command
+ *   handles while keeping one run file far under its 32 KB cap.
+ * - An evidence label is one line naming a file, as long as a task title (300): the longest written
+ *   so far is 224 characters.
+ * - A run's local id (after `<writer>--`) may run to 128 characters, so the whole id (at most
+ *   64 + 2 + 128 = 194) stays within `review.of` (200), which names it, and its file name
+ *   (`<id>.json`) within the runs reader's 200-character file names. The longest local id written
+ *   so far is 73 characters. Card ids keep their 64.
+ */
+export const RUN_TASK_ID_MAX = 512;
+export const RUN_EVIDENCE_LABEL_MAX = 300;
+export const RUN_LOCAL_ID_MAX = 128;
+export const RUN_ID_MAX = 64 + 2 + RUN_LOCAL_ID_MAX;
+
 export function run(doc: Record<string, unknown>, writer: string): RunDoc {
   const base = head(doc, RUN_SCHEMA, writer);
-  if (!isCardId(doc.id) || !(doc.id as string).startsWith(`${writer}--`))
-    throw new Invalid('id does not name its writer');
+  const idRefusal = idProblem(doc.id, writer, RUN_LOCAL_ID_MAX);
+  if (idRefusal) throw new Invalid(idRefusal);
   const task = obj(doc.task, 'task');
   const model = obj(doc.model, 'model');
   const metricsRaw =
@@ -171,7 +197,7 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
     project: optSlug(doc.project, 'project'),
     stream: optSlug(doc.stream, 'stream'),
     task: {
-      id: text(task.id, 'task.id', 120),
+      id: boundedText(task.id, 'task.id', RUN_TASK_ID_MAX),
       type: optText(task.type, 'task.type', 64),
       title: text(task.title, 'task.title', 300),
       size: optObj(task.size, 'task.size', (s) => ({
@@ -239,7 +265,9 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
         reportedBy: optText(flag.reportedBy, `${at}.reportedBy`, 64),
       };
     }),
-    evidence: list(doc.evidence, 'evidence', 20, link),
+    evidence: list(doc.evidence, 'evidence', 20, (value, at) =>
+      link(value, at, RUN_EVIDENCE_LABEL_MAX)
+    ),
     process: optObj(doc.process, 'process', (p) => ({
       id: text(p.id, 'process.id', 120),
       version: optText(p.version, 'process.version', 60),
@@ -250,5 +278,6 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
       from: text(i.from, 'imported.from', 300),
       at: iso(i.at, 'imported.at'),
     })),
+    unknownModel: bool(doc.unknownModel, 'unknownModel', false),
   };
 }

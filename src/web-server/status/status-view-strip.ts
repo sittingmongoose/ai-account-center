@@ -40,7 +40,17 @@ export function pinnedProblems(pinned: PinnedPanel | undefined): PinnedProblems 
       worstLoop: null,
     };
   }
-  const looping = pinned.updates.filter((update) => update.looping?.answer === 'yes');
+  // One entry per loop: a board's looping task is one loop however many pins report its stream.
+  // The board owner's own pin stands for it when pinned; otherwise the board is named, never the
+  // worker that only shares it (review 1, M1).
+  const byLoop = new Map<string, PinnedUpdateView>();
+  for (const [index, update] of pinned.updates.entries()) {
+    if (update.looping?.answer !== 'yes') continue;
+    const key = loopKey(update, index);
+    const held = byLoop.get(key);
+    if (!held || (held.board?.shared && !update.board?.shared)) byLoop.set(key, update);
+  }
+  const looping = [...byLoop.values()];
   const waiting = pinned.updates.filter((update) => update.blocked?.waitingOnYou);
   const rounds = (update: PinnedUpdateView) => update.looping?.rounds ?? 0;
   const worstLoop = looping.reduce<PinnedUpdateView | null>(
@@ -48,6 +58,23 @@ export function pinnedProblems(pinned: PinnedPanel | undefined): PinnedProblems 
     null
   );
   return { view: pinned, unavailable: null, looping, waiting, worstLoop };
+}
+
+/** A loop's identity: the board keeping the looping task; any other "yes" is its pin's own loop. */
+function loopKey(update: PinnedUpdateView, index: number): string {
+  const task = update.looping?.task;
+  return update.board && task ? `board\n${update.board.writer}\n${task}` : `pin\n${index}`;
+}
+
+/**
+ * Who a loop belongs to: the pin, or for another writer's stream board the board and its keeper.
+ * A worker reporting a stream is never named as the one looping on its lead's board.
+ */
+export function loopOwner(update: PinnedUpdateView): string {
+  const board = update.board?.shared ? update.board : null;
+  return board
+    ? `the ${board.streamLabel || board.stream} board kept by ${board.writer}`
+    : update.title;
 }
 
 export interface StripInputs {
@@ -87,7 +114,7 @@ function listed(names: string[]): string {
 
 function pinName(update: PinnedUpdateView): string {
   const task = update.looping?.answer === 'yes' ? update.looping.task : null;
-  return task ? `${update.title} (task ${task})` : update.title;
+  return task ? `${loopOwner(update)} (task ${task})` : loopOwner(update);
 }
 
 function blockedItems(projects: ProjectView[]): string[] {
@@ -187,7 +214,7 @@ function worstOf(pins: PinnedProblems): StripWorst | null {
       word: 'Looping',
       tone: 'bad',
       threadId: loop.id,
-      title: loop.title,
+      title: loopOwner(loop),
       task: loop.looping.task ?? null,
       detail: sentence(loop.looping.text || 'Looping.'),
     };
