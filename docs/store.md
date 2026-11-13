@@ -925,10 +925,12 @@ readings checkpoint and for the oldest open activity day.
 
 ### 12.5 Retention
 
-Kept for good by default (DATA-ARCHITECTURE section 4). `AAC_ANALYTICS_RETENTION_DAYS` (90 to
-36,500) is an explicit, opt-in retention: maintenance then deletes day values, sessions (with their
-index rows), cover spans and scan rows before the cutoff. Readings-log events expire with the readings
-log; the ledger keeps the closed days.
+Kept for good by default (DATA-ARCHITECTURE section 4, and the store's raw policy above: with
+`retentionDays: 0` readings segments never retire, so the raw `activity.cells` changes stay too).
+`AAC_ANALYTICS_RETENTION_DAYS` (90 to 36,500) is an explicit, opt-in retention: maintenance then deletes
+day values, sessions (with their index rows), cover spans and scan rows before the cutoff. The ledger
+keeps the closed days either way. The `activity` projector owns only `act_*` tables and its own
+dictionaries; it shares nothing with `usage` or `capture`.
 
 ### 12.6 Queries
 
@@ -956,8 +958,12 @@ backfill's first step imports it once (`activityImportCodexV1`, `src/legacy.rs`)
 rollout file at a time, folded into session-hour cells and sessions, raw ids hashed, paths dropped.
 Its `inputTokens` include the cached input (in every one of the 490,042 records with cache reads,
 input is at least the cache reads; the parser stopped counting them twice on 2026-10-01), so uncached
-input is `inputTokens - cacheReadTokens - cacheCreationTokens`. It carries no cost: the cells hold
-none and the page prices them at today's rates. Measured on a copy: 4.6 s, 95 MB process memory,
+input is `inputTokens - cacheReadTokens - cacheCreationTokens`. Every record has `target: codex` and no
+route, and the cache excluded proxy sessions, so all of it is Codex-subscription usage (route empty,
+provider Codex). It carries no cost: the cells hold none and the page prices them at today's rates. The
+import is recorded in the scan history as an `import` read with cause `retired_cache` and the cache's
+file count, and the store marks the file's SHA-256 (`ts:activity_import_codex_v1:<first 32 hex>` holds
+the record count) so a cleanup can retire the file once that marker exists. Measured on a copy: 4.6 s, 95 MB process memory,
 9,056 cells over 159 days, 4,891 sessions; a second run imports nothing. The file is left in place.
 
 ## Notes for the lead

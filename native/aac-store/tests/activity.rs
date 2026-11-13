@@ -587,6 +587,15 @@ fn the_retired_codex_cache_is_imported_once_with_cached_input_taken_out() {
     // no raw session id or path is stored
     let dump = format!("{:?}", activity::dump_cells(&engine).unwrap());
     assert!(!dump.contains("raw-session") && !dump.contains("/private"));
+    // the scan history says where it came from: an import of a retired cache, two rollout files
+    let sources = call(&engine, "activitySources", json!({ "fromMs": T0, "toMs": T0 + 2 * D }));
+    assert_eq!(first["files"], 2);
+    let counts = call(&engine, "activityCounts", json!({}));
+    assert_eq!(counts["scans"], 1);
+    assert!(
+        sources["sources"][0]["oldestMs"].as_u64() == Some(T0 + 3 * H),
+        "{sources}"
+    );
     let again = call(&engine, "activityImportCodexV1", args);
     assert_eq!(again["imported"], false);
     // another version is refused

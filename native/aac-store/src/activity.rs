@@ -1373,8 +1373,9 @@ pub fn ingest(engine: &Engine, reports: &[Report]) -> Result<IngestResult> {
             let t = intern(batch.txn, K_TOOL, &entry.t)?;
             let src = read_source(batch.txn, c, t)?;
             let log_it = match &src.read {
-                // backfill and import reads are history only when they cover something
-                _ if entry.read.kind.is_some() => entry.read.complete,
+                // a backfill read is history when it covers something; an import always is, so the
+                // scan history says where imported usage came from
+                _ if entry.read.kind.is_some() => entry.read.complete || entry.read.kind.as_deref() == Some("import"),
                 None => true,
                 Some(old) => {
                     entry.read.at > old.at

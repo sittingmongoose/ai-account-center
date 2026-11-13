@@ -69,6 +69,8 @@ struct Fold {
     records: u64,
     skipped: u64,
     version: Option<u64>,
+    /// Rollout files the cache lists.
+    files: u64,
 }
 
 fn count(v: f64) -> u64 {
@@ -146,6 +148,7 @@ impl<'de> Visitor<'de> for FilesSeed<'_> {
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<(), A::Error> {
         while map.next_key::<IgnoredAny>()?.is_some() {
             let file: FileRecords = map.next_value()?;
+            self.0.files += 1;
             for record in file.entries {
                 if self.0.records >= MAX_RECORDS {
                     return Err(serde::de::Error::custom("too many records"));
@@ -275,7 +278,13 @@ pub fn import_codex_v1(engine: &Engine, file: &Path, computer: &str) -> Result<J
             tool: "codex".to_string(),
             read_at: read_at.clone(),
             state: "partial".to_string(),
+            // the source label: a retired cache, its file count, never a live read
             cause: Some("retired_cache".to_string()),
+            counts: Some(contract::Counts {
+                files_found: Some(fold.files),
+                files_read: Some(fold.files),
+                ..Default::default()
+            }),
             cells: chunk,
             sessions: session_chunks.get(i).cloned().unwrap_or_default(),
             kind: Some("import".to_string()),
@@ -293,7 +302,7 @@ pub fn import_codex_v1(engine: &Engine, file: &Path, computer: &str) -> Result<J
         engine.set_meta(&marker, &fold.records.to_string())?;
     }
     Ok(json!({
-        "imported": refused.is_empty(), "records": fold.records, "skipped": fold.skipped,
+        "imported": refused.is_empty(), "records": fold.records, "skipped": fold.skipped, "files": fold.files,
         "cells": cells.len(), "sessions": sessions.len(), "put": put, "refused": refused,
         "oldestMs": fold.cells.keys().map(|k| k.0 * HOUR_MS).min(), "newestMs": fold.cells.keys().map(|k| k.0 * HOUR_MS).max(),
     }))
