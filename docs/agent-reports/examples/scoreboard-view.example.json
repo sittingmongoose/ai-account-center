@@ -21,7 +21,7 @@
       "ageSeconds": 0,
       "staleAfterSeconds": 180,
       "state": "ok",
-      "detail": "Catalog read 4:30 PM. Models in runs but not in the catalog: example-1 (1 run)."
+      "detail": "Catalog read 4:30 PM. Models in runs but not in the catalog, not scored: example-1 (1 run)."
     }
   ],
   "catalog": {
@@ -223,6 +223,37 @@
         "efforts": [
           "high"
         ],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "deepseek/deepseek-v4.1-flash",
+        "label": "DeepSeek V4.1 Flash",
+        "family": "DeepSeek",
+        "runtimes": [
+          "opencode-go"
+        ],
+        "efforts": [],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "alibaba/qwen3.8-max",
+        "label": "Qwen 3.8 Max",
+        "family": "Qwen",
+        "runtimes": [],
+        "efforts": [],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "alibaba/qwen4-max-preview",
+        "label": "Qwen 4 Max Preview",
+        "family": "Qwen",
+        "runtimes": [
+          "omp"
+        ],
+        "efforts": [],
         "prices": null,
         "notes": null
       }
@@ -4505,191 +4536,6 @@
                       "from": "/mnt/Cursor/archive/example/closure-reaudit.md",
                       "at": "2026-11-06T11:30:00Z"
                     },
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  }
-                ]
-              },
-              "benchmarks": []
-            },
-            {
-              "key": "example-1|omp|",
-              "model": "example-1",
-              "label": "example-1",
-              "inCatalog": false,
-              "runtime": "omp",
-              "effort": null,
-              "process": null,
-              "n": {
-                "observed": 1,
-                "benchmark": 0
-              },
-              "basis": null,
-              "benchmark": null,
-              "ranked": false,
-              "rank": null,
-              "verdict": "not-enough-data",
-              "verdictLabel": "Not enough data yet",
-              "why": "too little data (n = 1)",
-              "observed": {
-                "source": "observed",
-                "benchmark": null,
-                "benchmarkLabel": null,
-                "n": 1,
-                "imported": 0,
-                "reviews": 0,
-                "ranked": false,
-                "rank": null,
-                "score": null,
-                "verdict": "not-enough-data",
-                "verdictLabel": "Not enough data yet",
-                "why": "too little data (n = 1)",
-                "preliminary": false,
-                "measures": {
-                  "speed": {
-                    "value": 600,
-                    "unit": "s/task",
-                    "n": 1,
-                    "low": 600,
-                    "high": 600,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "perTask": {
-                      "value": 600,
-                      "n": 1,
-                      "low": 600,
-                      "high": 600
-                    }
-                  },
-                  "quality": {
-                    "value": null,
-                    "unit": "share",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "disputed": 0,
-                    "cannotVerify": 0,
-                    "rounds": {
-                      "value": null,
-                      "n": 0,
-                      "low": null,
-                      "high": null
-                    },
-                    "firstTry": 0,
-                    "overturns": []
-                  },
-                  "thoroughness": {
-                    "value": null,
-                    "unit": "share",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "files": {
-                      "value": null,
-                      "n": 0,
-                      "low": null,
-                      "high": null
-                    },
-                    "records": {
-                      "value": null,
-                      "n": 0,
-                      "low": null,
-                      "high": null
-                    }
-                  },
-                  "laziness": {
-                    "value": null,
-                    "unit": "share",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false
-                  },
-                  "cheating": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 1,
-                    "low": 0,
-                    "high": 0.7301,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 1,
-                    "preliminary": false
-                  },
-                  "cost": {
-                    "value": null,
-                    "unit": "credits/task",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "quota": [],
-                    "usd": null,
-                    "estimate": null
-                  },
-                  "reliability": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 1,
-                    "low": 0.2699,
-                    "high": 1,
-                    "interval": "wilson90",
-                    "of": 1,
-                    "per": 1,
-                    "preliminary": false
-                  },
-                  "overclaim": {
-                    "value": null,
-                    "unit": "share",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false
-                  }
-                },
-                "flags": [],
-                "runs": [
-                  {
-                    "id": "vm.scoreboard-lead--unlisted-model",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "unlisted",
-                      "type": "build",
-                      "title": "build unlisted"
-                    },
-                    "model": "example-1",
-                    "label": "example-1",
-                    "runtime": "omp",
-                    "effort": null,
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-06T11:30:00Z",
-                    "wallSeconds": 600,
-                    "imported": null,
                     "review": null,
                     "flags": 0,
                     "evidence": []
@@ -9868,191 +9714,6 @@
                 ]
               },
               "benchmarks": []
-            },
-            {
-              "key": "example-1|omp|",
-              "model": "example-1",
-              "label": "example-1",
-              "inCatalog": false,
-              "runtime": "omp",
-              "effort": null,
-              "process": null,
-              "n": {
-                "observed": 1,
-                "benchmark": 0
-              },
-              "basis": null,
-              "benchmark": null,
-              "ranked": false,
-              "rank": null,
-              "verdict": "not-enough-data",
-              "verdictLabel": "Not enough data yet",
-              "why": "too little data (n = 1)",
-              "observed": {
-                "source": "observed",
-                "benchmark": null,
-                "benchmarkLabel": null,
-                "n": 1,
-                "imported": 0,
-                "reviews": 0,
-                "ranked": false,
-                "rank": null,
-                "score": null,
-                "verdict": "not-enough-data",
-                "verdictLabel": "Not enough data yet",
-                "why": "too little data (n = 1)",
-                "preliminary": false,
-                "measures": {
-                  "speed": {
-                    "value": 600,
-                    "unit": "s/task",
-                    "n": 1,
-                    "low": 600,
-                    "high": 600,
-                    "interval": "range",
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "perTask": {
-                      "value": 600,
-                      "n": 1,
-                      "low": 600,
-                      "high": 600
-                    }
-                  },
-                  "quality": {
-                    "value": null,
-                    "unit": "share",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "disputed": 0,
-                    "cannotVerify": 0,
-                    "rounds": {
-                      "value": null,
-                      "n": 0,
-                      "low": null,
-                      "high": null
-                    },
-                    "firstTry": 0,
-                    "overturns": []
-                  },
-                  "thoroughness": {
-                    "value": null,
-                    "unit": "share",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "files": {
-                      "value": null,
-                      "n": 0,
-                      "low": null,
-                      "high": null
-                    },
-                    "records": {
-                      "value": null,
-                      "n": 0,
-                      "low": null,
-                      "high": null
-                    }
-                  },
-                  "laziness": {
-                    "value": null,
-                    "unit": "share",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false
-                  },
-                  "cheating": {
-                    "value": 0,
-                    "unit": "share",
-                    "n": 1,
-                    "low": 0,
-                    "high": 0.7301,
-                    "interval": "wilson90",
-                    "of": 0,
-                    "per": 1,
-                    "preliminary": false
-                  },
-                  "cost": {
-                    "value": null,
-                    "unit": "credits/task",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false,
-                    "quota": [],
-                    "usd": null,
-                    "estimate": null
-                  },
-                  "reliability": {
-                    "value": 1,
-                    "unit": "share",
-                    "n": 1,
-                    "low": 0.2699,
-                    "high": 1,
-                    "interval": "wilson90",
-                    "of": 1,
-                    "per": 1,
-                    "preliminary": false
-                  },
-                  "overclaim": {
-                    "value": null,
-                    "unit": "share",
-                    "n": 0,
-                    "low": null,
-                    "high": null,
-                    "interval": null,
-                    "of": null,
-                    "per": null,
-                    "preliminary": false
-                  }
-                },
-                "flags": [],
-                "runs": [
-                  {
-                    "id": "vm.scoreboard-lead--unlisted-model",
-                    "writer": "vm.scoreboard-lead",
-                    "source": "observed",
-                    "benchmark": null,
-                    "project": "example-project",
-                    "stream": "S",
-                    "task": {
-                      "id": "unlisted",
-                      "type": "build",
-                      "title": "build unlisted"
-                    },
-                    "model": "example-1",
-                    "label": "example-1",
-                    "runtime": "omp",
-                    "effort": null,
-                    "process": null,
-                    "outcome": "done",
-                    "endedAt": "2026-11-06T11:30:00Z",
-                    "wallSeconds": 600,
-                    "imported": null,
-                    "review": null,
-                    "flags": 0,
-                    "evidence": []
-                  }
-                ]
-              },
-              "benchmarks": []
             }
           ]
         },
@@ -12139,5 +11800,35 @@
       "flags": 0,
       "evidence": []
     }
-  ]
+  ],
+  "unscored": {
+    "total": 3,
+    "unreadable": 1,
+    "noModel": 0,
+    "noTaskType": 1,
+    "unknownModel": 1,
+    "unknownTaskType": 0,
+    "unknownModels": [
+      {
+        "id": "example-1",
+        "runs": 1
+      }
+    ],
+    "examples": [
+      {
+        "id": "vm.scoreboard-lead--no-type",
+        "model": "glm-5.3",
+        "taskType": null,
+        "reason": "no-task-type",
+        "endedAt": "2026-11-06T13:30:00Z"
+      },
+      {
+        "id": "vm.scoreboard-lead--unlisted-model",
+        "model": "example-1",
+        "taskType": "build",
+        "reason": "unknown-model",
+        "endedAt": "2026-11-06T11:30:00Z"
+      }
+    ]
+  }
 }

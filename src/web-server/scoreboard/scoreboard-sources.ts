@@ -135,12 +135,17 @@ export function catalogSource(
       state: 'stale',
       detail: `The catalog folder has not answered since ${clockText(catalog.scannedAt, timeZone)}.`,
     } as const;
+  // A file on the share that could not take the new packaged entries (catalog.ts, appendMissing).
+  const notAdded = (inputs.seedFailures ?? [])
+    .filter((failure) => !catalog.missingFiles.includes(failure.file))
+    .map((failure) => ` Could not add new packaged entries to ${failure.file}: ${failure.code}.`)
+    .join('');
   if (catalog.problems.length > 0) {
     const since = Math.min(...catalog.problems.map((problem) => problem.since));
     return {
       ...base,
       state: 'unreadable',
-      detail: `${plural(catalog.problems.length, 'catalog file')} unreadable since ${clockText(since, timeZone)}: ${problemList(catalog.problems)}.`,
+      detail: `${plural(catalog.problems.length, 'catalog file')} unreadable since ${clockText(since, timeZone)}: ${problemList(catalog.problems)}.${notAdded}`,
     } as const;
   }
   if (catalog.missingFiles.length > 0) {
@@ -151,13 +156,13 @@ export function catalogSource(
     return {
       ...base,
       state: 'missing',
-      detail: `Catalog files missing: ${catalog.missingFiles.join(', ')}.${seeds}`,
+      detail: `Catalog files missing: ${catalog.missingFiles.join(', ')}.${seeds}${notAdded}`,
     } as const;
   }
   const parts = [`Catalog read ${clockText(catalog.scannedAt, timeZone)}.`];
   if (missingTypes.size > 0)
     parts.push(`Task types in runs but not in the catalog, not scored: ${counted(missingTypes)}.`);
   if (missingModels.size > 0)
-    parts.push(`Models in runs but not in the catalog: ${counted(missingModels)}.`);
-  return { ...base, state: 'ok', detail: parts.join(' ') } as const;
+    parts.push(`Models in runs but not in the catalog, not scored: ${counted(missingModels)}.`);
+  return { ...base, state: 'ok', detail: `${parts.join(' ')}${notAdded}` } as const;
 }

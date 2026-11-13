@@ -1337,7 +1337,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
     .opt-gc dt { display: inline; margin-right: 5px; }
     .opt-gc dd { display: inline; }
     .opt-gc dd::after { content: ''; display: block; height: 5px; }
-    .page-head > div { display: flex; align-items: baseline; gap: 4px 14px; flex-wrap: wrap; }
+    .page-head > div:not(.sb-unscored) { display: flex; align-items: baseline; gap: 4px 14px; flex-wrap: wrap; }
     .page-head .headline { margin-top: 0; }
     .status-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       grid-template-areas: "q q" "pin pin" "phones phones" "mach mach" "spend spend"; }
@@ -1352,6 +1352,38 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 .page-head.sb-head { display: block; }
 .sb-title { display: flex; align-items: center; justify-content: space-between; gap: 6px 16px; flex-wrap: wrap; }
 .sb-head .page-sub { margin-top: 6px; }
+/* Runs read but not scored: one quiet line under the head (a meta line: ink-3, bold counts, no colour), a native
+   disclosure (scoreboard.rs). Each count and its words are joined by no-break spaces, so a narrow line breaks only after
+   a comma or the colon. Open (a tap, a click, the keyboard), the reasons and the unknown ids sit under the line; with a
+   mouse, a hover shows them floating until the pointer leaves. The list follows the disclosure rather than sitting in
+   it: a closed disclosure's content is never painted. */
+.sb-unscored { position: relative; width: fit-content; max-width: 100%; margin-top: 2px; font-size: var(--fs-small); color: var(--ink-3);
+  line-height: 1.4; }
+.sb-unscored summary { display: inline; padding: 6px 0; list-style: none; cursor: pointer; }
+.sb-unscored summary::-webkit-details-marker { display: none; }
+.sb-unscored summary b { color: var(--ink-2); font-weight: 600; font-variation-settings: 'wght' 600; }
+.sb-unscored summary:hover, .sb-unscored details[open] summary { color: var(--ink-2); }
+.sb-unscored summary:hover b, .sb-unscored details[open] summary b { color: var(--ink); }
+.sb-unscored .chev { display: inline-block; width: 12px; height: 12px; margin-left: 3px; vertical-align: -1px; transition: transform 260ms cubic-bezier(.2, .8, .2, 1); }
+.sb-unscored details[open] .chev { transform: rotate(180deg); }
+.sbu-list { display: none; max-width: 380px; margin-top: 6px; padding: 10px 14px 12px; border: 1px solid var(--rule); border-radius: 12px;
+  background: var(--paper); font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }
+.sb-unscored > details[open] + .sbu-list { display: grid; }
+@media (hover: hover) {
+  .sb-unscored:hover > details:not([open]) + .sbu-list { display: grid; position: absolute; z-index: 20; top: 100%; left: 0;
+    width: min(380px, calc(100cqw - 2 * var(--gut, 0px))); margin-top: 0; box-shadow: var(--shadow-pop); }
+}
+.sbu-head { font-size: 14px; color: var(--ink); margin-bottom: 2px; }
+.sbu-head b { font-weight: 640; font-variation-settings: 'wght' 640; }
+.sbu-lead { margin-bottom: 6px; }
+.sbu-why + .sbu-why { margin-top: 4px; }
+.sbu-why b { color: var(--ink); font-weight: 600; font-variation-settings: 'wght' 600; }
+.sbu-cap { margin: 12px 0 4px; }
+.sbu-id { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 12px; padding: 5px 0; border-top: 1px solid var(--rule-2); }
+.sbu-id span:first-child { min-width: 0; font-family: var(--mono); font-stretch: 87.5%; font-size: 11.5px; color: var(--ink); overflow-wrap: anywhere; }
+.sbu-id span:last-child { flex: none; white-space: nowrap; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.sbu-more { margin-top: 4px; }
+@media (max-width: 599.98px) { .sbu-list { max-width: none; font-size: 13px; } .sbu-head { font-size: 14.5px; } .sbu-id span:first-child { font-size: 12px; } }
 @container content (max-width: 1279.98px) {
   .sb-title .seg { padding: 2px; border-radius: 8px; }
   .sb-title .seg button { height: 24px; padding: 0 9px; font-size: var(--fs-small); border-radius: 6px; }
@@ -1367,7 +1399,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 /* Beside the rail, which shows the page, the page's name goes, as on the phone: the summary starts at the top. */
 :root[data-chrome='rail'] .page-title { display: none; }
 /* Beside the rail the page's name and its one-line summary share a line, as wider screens do: no line for a word. */
-:root[data-chrome='rail'] .page-head > div { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+:root[data-chrome='rail'] .page-head > div:not(.sb-unscored) { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
 :root[data-chrome='rail'] .page-head .headline { margin-top: 0; }
 
 /* ==========================================================================

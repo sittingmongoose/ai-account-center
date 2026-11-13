@@ -19,17 +19,29 @@ const FORMATS = [
 	{ name: 'duo-landscape', w: 951, h: 669, safe: '0,84,34,0', mobile: true },
 ];
 
-async function stubBoard(t) {
-	const view = { ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') };
+async function stubBoard(t, change = (view) => view) {
+	const view = change({ ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') });
 	await t.page.route((u) => new URL(u).pathname === '/api/scoreboard', (r) => r.fulfill({ json: view }));
 }
 
-async function openBoard(t, query = '') {
+async function openBoard(t, query = '', change) {
 	await t.app.signIn();
-	await stubBoard(t);
+	await stubBoard(t, change);
 	await t.goto(`/app/scoreboard${query}`, { settleMs: 300 });
 	await t.page.waitForSelector('.picks');
 }
+
+// The fixture's runs not scored (leptos/fixtures/scoreboard-view.json `unscored`): 4 + 12 + 3 + 23 + 6.
+const UNSCORED_LINE = '48 runs not scored: 4 unreadable, 12 unknown model, 3 unknown task type, 23 no task type, 6 no model';
+const lineText = (t) => t.page.evaluate(() => document.querySelector('.sb-unscored summary')?.textContent.replace(/\s+/g, ' ').trim() ?? null);
+/** The list under the line: whether it shows, floats (a hover) or sits in the flow (open), and its box. */
+const listState = (t) => t.page.evaluate(() => {
+	const list = document.querySelector('.sb-unscored .sbu-list');
+	const cs = getComputedStyle(list);
+	const r = list.getBoundingClientRect();
+	return { shown: cs.display !== 'none' && list.innerText.trim() !== '', floating: cs.position === 'absolute', open: document.querySelector('.sb-unscored > details').open, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+});
+const stackTop = (t) => t.page.evaluate(() => document.querySelector('.sb-stack').getBoundingClientRect().top);
 
 export const tests = {
 	// Against the real server's view, which has no byModel yet: an honest line, nothing guessed.
@@ -101,6 +113,179 @@ export const tests = {
 			await t.check(`${f.name}: verdict notes break only between their parts`, await t.page.evaluate(() =>
 				[...document.querySelectorAll('.vsub .nw')].every((n) => n.getBoundingClientRect().height < 24)
 			));
+		}
+	},
+
+	// Owner 2026-11-13: runs the server read but could not score are named under the head, never hidden.
+	async 'scoreboard runs not scored'(t) {
+		await t.viewport(1440, 900);
+		await openBoard(t);
+		await t.equal('the note names every reason with its runs', await lineText(t), UNSCORED_LINE);
+		await t.check('the note sits under the head', await t.page.evaluate(() => {
+			const note = document.querySelector('.sb-unscored');
+			const sub = document.querySelector('.sb-head .page-sub').getBoundingClientRect();
+			return document.querySelector('.sb-head').contains(note) && note.getBoundingClientRect().top >= sub.bottom - 1;
+		}));
+		await t.check('the note is one line on a desktop', await t.page.evaluate(() => {
+			const note = document.querySelector('.sb-unscored');
+			return note.getBoundingClientRect().height < parseFloat(getComputedStyle(note).lineHeight) * 1.5;
+		}));
+		await t.check('the line is a control at least 24 px tall', await t.page.evaluate(() => document.querySelector('.sb-unscored summary').getBoundingClientRect().height >= 24));
+		await t.check('the note carries no state colour', await t.page.evaluate(() => {
+			const probe = document.createElement('span');
+			document.body.append(probe);
+			const tone = (v) => { probe.style.color = `var(${v})`; return getComputedStyle(probe).color; };
+			const [ink3, ink2] = [tone('--ink-3'), tone('--ink-2')];
+			probe.remove();
+			return getComputedStyle(document.querySelector('.sb-unscored summary')).color === ink3 && getComputedStyle(document.querySelector('.sb-unscored summary b')).color === ink2;
+		}));
+		await t.equal('the list is closed at first', (await listState(t)).shown, false);
+		await t.audit('scoreboard runs not scored');
+		const before = await stackTop(t);
+		// The hover preview is for devices that hover (a phone's tap would leave a sticky :hover behind). Headless
+		// Chrome answers (hover: none), so the check takes the shipped rule out of its media block, as it is, to
+		// exercise it; it first asserts the rule is there and gated.
+		const gate = await t.page.evaluate(() => {
+			for (const sheet of document.styleSheets) {
+				let rules;
+				try { rules = sheet.cssRules; } catch { continue; }
+				for (const rule of rules) {
+					if (!(rule instanceof CSSMediaRule) || rule.conditionText.replace(/\s/g, '') !== '(hover:hover)') continue;
+					for (const inner of rule.cssRules) {
+						if (inner.selectorText !== '.sb-unscored:hover > details:not([open]) + .sbu-list') continue;
+						const headless = !matchMedia('(hover: hover)').matches;
+						if (headless) sheet.insertRule(inner.cssText, sheet.cssRules.length);
+						return { headless };
+					}
+				}
+			}
+			return null;
+		});
+		await t.check('the hover preview is gated to devices that hover', gate !== null);
+		// A mouse hover shows the list floating under the line, over the page; it goes when the pointer leaves.
+		const box = await t.page.locator('.sb-unscored summary').boundingBox();
+		await t.page.mouse.move(box.x + 20, box.y + box.height / 2);
+		await t.until('a hover shows the list', () => document.querySelector('.sbu-list').innerText.includes('48 runs not scored'), null, { timeout: 3000 });
+		let list = await listState(t);
+		await t.check('the hovered list floats and moves nothing', list.floating && (await stackTop(t)) === before);
+		await t.check('the hovered list hangs under the line, inside the window', list.top >= box.y + box.height - 8 && list.top - (box.y + box.height) < 16 && list.right <= 1440);
+		await t.text('.sbu-list .sbu-head', '48 runs not scored');
+		const lines = (sel) => t.page.$$eval(sel, (l) => l.map((e) => e.textContent.trim()));
+		const why = await lines('.sbu-list .sbu-why');
+		await t.equal('five reasons, each with its runs', why.map((w) => w.split(' · ')[0]), ['Unreadable: 4 runs', 'Unknown model: 12 runs', 'Unknown task type: 3 runs', 'No task type: 23 runs', 'No model: 6 runs']);
+		await t.equal('the unknown ids with their runs', await lines('.sbu-list .sbu-id'), [
+			'example-vendor/example-model-9-preview7 runs',
+			'builtin:example-coding-plan\\Example-4.23 runs',
+		]);
+		await t.text('.sbu-list .sbu-more', '2 more runs under other ids.');
+		// The pointer may move onto the list without it going.
+		const hovered = await t.page.locator('.sbu-list').boundingBox();
+		await t.page.mouse.move(hovered.x + 10, hovered.y + hovered.height - 10, { steps: 4 });
+		await t.equal('the list stays under the pointer', (await listState(t)).shown, true);
+		await t.shot('scoreboard-unscored-desktop', 'runs not scored at 1440 px: the line under the head and its list on a hover');
+		await t.page.mouse.move(box.x + box.width / 2, 880);
+		await t.until('the list goes when the pointer leaves', () => getComputedStyle(document.querySelector('.sbu-list')).display === 'none', null, { timeout: 3000 });
+		// A click keeps it open, in the flow under the line, after the pointer leaves; another click closes it.
+		await t.page.click('.sb-unscored summary');
+		await t.page.mouse.move(box.x + box.width / 2, 880);
+		list = await listState(t);
+		await t.check('a click keeps the list open in the flow', list.open && list.shown && !list.floating && (await stackTop(t)) > before);
+		await t.page.click('.sb-unscored summary');
+		await t.equal('another click closes it', (await listState(t)).open, false);
+		await t.page.mouse.move(box.x + box.width / 2, 880);
+		await t.until('closed, it goes when the pointer leaves', () => getComputedStyle(document.querySelector('.sbu-list')).display === 'none', null, { timeout: 3000 });
+		// The keyboard opens it too.
+		await t.page.focus('.sb-unscored summary');
+		await t.page.keyboard.press('Enter');
+		await t.equal('Enter opens it', (await listState(t)).open, true);
+		await t.page.keyboard.press('Enter');
+
+		// None not scored, or an older server without the field: no line at all.
+		for (const [name, change] of [
+			['none not scored', (v) => ({ ...v, unscored: { total: 0, noModel: 0, noTaskType: 0, unknownModel: 0, unknownModels: [], examples: [] } })],
+			['no unscored field', (v) => { const { unscored, ...rest } = v; return rest; }],
+		]) {
+			await t.newContext({ viewport: { width: 1440, height: 900 } });
+			await openBoard(t, '', change);
+			await t.check(`${name}: no line under the head`, (await lineText(t)) === null);
+			await t.count('.sb-unscored', 0);
+		}
+	},
+
+	// Review 1, M3: the chevron never stands alone on a line. The reviewer's sweep: the note's box from 120 to 520 px,
+	// at the page's own size and at 13 px, with the fixture's words and with the live share's words of that day.
+	async 'scoreboard runs not scored: the chevron never stands alone'(t) {
+		const texts = [
+			['fixture', (v) => v],
+			['share 2026-11-13', (v) => ({ ...v, unscored: { total: 46, unreadable: 0, noModel: 11, noTaskType: 35, unknownModel: 0, unknownTaskType: 0, unknownModels: [], examples: [] } })],
+			['share with refusals', (v) => ({ ...v, unscored: { total: 752, unreadable: 706, noModel: 11, noTaskType: 35, unknownModel: 0, unknownTaskType: 0, unknownModels: [], examples: [] } })],
+		];
+		for (const [name, change] of texts) {
+			await t.newContext({ viewport: { width: 1440, height: 900 } });
+			await openBoard(t, '', change);
+			const sweep = await t.page.evaluate(() => {
+				const note = document.querySelector('.sb-unscored');
+				const chev = note.querySelector('.chev');
+				const tail = note.querySelector('summary .nw');
+				const bad = [];
+				for (const size of ['', '13px']) {
+					note.style.fontSize = size;
+					for (let w = 120; w <= 520; w++) {
+						note.style.width = `${w}px`;
+						const words = tail.getClientRects();
+						const c = chev.getBoundingClientRect();
+						const w0 = words[words.length - 1];
+						const alone = words.length !== 1 || Math.abs(c.top + c.height / 2 - (w0.top + w0.height / 2)) > w0.height / 2;
+						if (alone) bad.push(`${size || 'own'}@${w}`);
+					}
+				}
+				note.style.fontSize = '';
+				note.style.width = '';
+				return { bad: bad.slice(0, 12), count: bad.length };
+			});
+			await t.check(`${name}: the chevron stays with the last words at every width from 120 to 520 px`, sweep.count === 0, `alone at ${sweep.bad.join(', ')}${sweep.count > 12 ? ' ...' : ''}`);
+		}
+	},
+
+	async 'scoreboard runs not scored in each format'(t) {
+		for (const f of FORMATS) {
+			await t.newContext({ viewport: { width: f.w, height: f.h }, isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1 });
+			await openBoard(t, `?safe=${f.safe}`);
+			await t.equal(`${f.name}: the line`, await lineText(t), UNSCORED_LINE);
+			const shape = await t.page.evaluate(() => {
+				const summary = document.querySelector('.sb-unscored summary');
+				const note = document.querySelector('.sb-unscored');
+				const lh = parseFloat(getComputedStyle(note).lineHeight);
+				// Each count (b) and its words (the span after it) sit on one line: one box each, at one height.
+				const whole = [...summary.querySelectorAll('b')].every((b) => {
+					const words = b.nextElementSibling.getClientRects();
+					return b.getClientRects().length === 1 && words.length === 1 && Math.abs(words[0].top - b.getClientRects()[0].top) < 2;
+				});
+				const head = document.querySelector('.sb-head').getBoundingClientRect();
+				const n = note.getBoundingClientRect();
+				return { lines: Math.round(n.height / lh), whole, inside: n.left >= head.left - 1 && n.right <= head.right + 1, h: n.height };
+			});
+			await t.check(`${f.name}: each count stays with its words`, shape.whole);
+			await t.check(`${f.name}: two lines at most`, shape.lines <= 2, `${shape.lines} lines (${shape.h} px)`);
+			await t.check(`${f.name}: inside the head`, shape.inside);
+			await t.audit(`${f.name} runs not scored`);
+			// A tap opens the list in the flow under the line, inside the content; another tap closes it.
+			await t.page.click('.sb-unscored summary');
+			const list = await listState(t);
+			const content = await t.page.evaluate(() => {
+				const r = document.querySelector('.sb-head').getBoundingClientRect();
+				return { left: r.left, right: r.right };
+			});
+			await t.check(`${f.name}: a tap opens the list in the flow`, list.open && list.shown && !list.floating);
+			const lineBottom = await t.page.evaluate(() => document.querySelector('.sb-unscored > details').getBoundingClientRect().bottom);
+			await t.check(`${f.name}: the open list sits under the line, not beside it`, list.top >= lineBottom - 1, `list top ${Math.round(list.top)}, line bottom ${Math.round(lineBottom)}`);
+			await t.check(`${f.name}: the open list stays inside the content`, list.left >= content.left - 1 && list.right <= content.right + 1, `${Math.round(list.left)}-${Math.round(list.right)} in ${Math.round(content.left)}-${Math.round(content.right)}`);
+			await t.check(`${f.name}: no sideways scroll with it open`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+			await t.count('.sbu-list .sbu-id', 2);
+			await t.text('.sbu-list .sbu-why', /^Unreadable: 4 runs · /);
+			if (f.name === 'iphone' || f.name === 'duo-landscape') await t.shot(`scoreboard-unscored-${f.name}`, `runs not scored on ${f.name} (${f.w}x${f.h}): the list open under the line`);
+			await t.page.click('.sb-unscored summary');
+			await t.equal(`${f.name}: another tap closes it`, (await listState(t)).shown, false);
 		}
 	},
 

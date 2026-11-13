@@ -1,9 +1,14 @@
 /**
  * The Model Scoreboard catalog (docs/scoreboard.md): `<reports>/v1/catalog/*.json`, owned by AAC and
- * edited on the share as data. Each file is `{ schema: "catalog-<kind>@1", <kind>: [...] }`. A file
- * that later fails keeps its last good copy; a catalog with no good copy shows as a Source problem
- * and the kinds it holds stay empty, never a crash. Unknown fields never reach the view; reasons are
- * fixed sentences. At server start AAC writes a packaged seed only where the share has no file.
+ * edited on the share as data. Each file is `{ schema: "catalog-<kind>@1", <kind>: [...] }`, except
+ * `model-aliases.json`, which is `{ schema: "agent-reports/model-aliases@1",
+ * aliases: { <written id>: <canonical id> }, effortSuffixes: ["-high", ...] }` (see model-identity.ts).
+ * A file that later fails keeps its last good copy; a catalog with no good copy shows as a Source
+ * problem and the kinds it holds stay empty, never a crash. Unknown fields never reach the view;
+ * reasons are fixed sentences. At server start AAC writes a packaged seed where the share has no
+ * file, and adds to an existing `models.json` or `model-aliases.json` only the packaged entries it
+ * lacks by id: models, alias keys and effort suffixes (the dashboard publishing step for the
+ * catalog; `seedCatalog`).
  */
 import fs from 'fs';
 import path from 'path';
@@ -84,6 +89,12 @@ export interface CatalogBenchmark {
   description: string | null;
   items: number | null;
   scoring: string | null;
+}
+
+/** The shared alias table: written model ids to canonical `models.json` ids, plus effort suffixes. */
+export interface ModelAliases {
+  aliases: Record<string, string>;
+  effortSuffixes: string[];
 }
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/;
@@ -232,8 +243,37 @@ function benchmarks(value: unknown): CatalogBenchmark[] {
   );
 }
 
+/**
+ * An effort suffix: one leading dash, then a lowercase word (`-high`, `-xhigh`, ...). The dash is
+ * part of the stored form so stripping is exact; the effort value is the suffix without the dash.
+ */
+const SUFFIX = /^-[a-z][a-z0-9-]{0,15}$/;
+
+function modelAliases(doc: Record<string, unknown>): ModelAliases {
+  const raw = obj(doc.aliases, 'aliases');
+  const entries = Object.entries(raw);
+  if (entries.length > 500) fail('aliases');
+  const aliases: Record<string, string> = {};
+  for (const [written, canonical] of entries) {
+    if (typeof written !== 'string' || written.length === 0 || written.length > 120)
+      fail('aliases');
+    if (typeof canonical !== 'string' || canonical.length === 0 || canonical.length > 120)
+      fail('aliases');
+    text(written, 'aliases', 120);
+    text(canonical, 'aliases', 120);
+    aliases[written] = canonical;
+  }
+  const suffixes = list(doc.effortSuffixes, 'effortSuffixes', 32, (item, at) => {
+    const suffix = text(item, at, 16);
+    if (!SUFFIX.test(suffix)) fail(at);
+    return suffix;
+  });
+  return { aliases, effortSuffixes: [...new Set(suffixes)] };
+}
+
 const FILES = {
   'models.json': { schema: 'catalog-models@1', key: 'models' },
+  'model-aliases.json': { schema: 'agent-reports/model-aliases@1', key: 'aliases' },
   'task-types.json': { schema: 'catalog-task-types@1', key: 'taskTypes' },
   'measures.json': { schema: 'catalog-measures@1', key: 'measures' },
   'uses.json': { schema: 'catalog-uses@1', key: 'uses' },
@@ -245,6 +285,7 @@ export const CATALOG_FILES = Object.keys(FILES) as CatalogFileName[];
 
 export type CatalogFile =
   | { kind: 'models'; models: CatalogModel[] }
+  | { kind: 'aliases'; aliases: Record<string, string>; effortSuffixes: string[] }
   | { kind: 'taskTypes'; taskTypes: CatalogTaskType[] }
   | { kind: 'measures'; minRuns: number; measures: CatalogMeasure[] }
   | { kind: 'uses'; uses: CatalogUse[] }
@@ -258,6 +299,13 @@ export function parseCatalogFile(name: CatalogFileName, bytes: Buffer): Parsed<C
   try {
     const doc = obj(raw.value, 'document');
     if (doc.schema !== schema) fail('schema');
+    if (key === 'aliases') {
+      const parsed = modelAliases(doc);
+      return {
+        ok: true,
+        value: { kind: 'aliases', aliases: parsed.aliases, effortSuffixes: parsed.effortSuffixes },
+      };
+    }
     const rows = doc[key];
     if (!Array.isArray(rows)) fail(key);
     switch (key) {
@@ -291,6 +339,9 @@ export interface CatalogState {
   problems: ReportProblem[];
   minRuns: number;
   models: CatalogModel[];
+  /** The alias table (`model-aliases.json`), empty when the file has no good copy. */
+  aliases: Record<string, string>;
+  effortSuffixes: string[];
   taskTypes: CatalogTaskType[];
   measures: CatalogMeasure[];
   uses: CatalogUse[];
@@ -361,6 +412,7 @@ export class CatalogReader {
     const problems = byFile(this.files.problems());
     const named = new Set(problems.map((problem) => problem.file));
     const measuresFile = read('measures.json', 'measures');
+    const aliasesFile = read('model-aliases.json', 'aliases');
     return {
       state: this.state,
       scannedAt: this.scannedAt,
@@ -370,6 +422,8 @@ export class CatalogReader {
       problems,
       minRuns: measuresFile?.minRuns ?? DEFAULT_MIN_RUNS,
       models: read('models.json', 'models')?.models ?? [],
+      aliases: aliasesFile?.aliases ?? {},
+      effortSuffixes: aliasesFile?.effortSuffixes ?? [],
       taskTypes: read('task-types.json', 'taskTypes')?.taskTypes ?? [],
       measures: measuresFile?.measures ?? [],
       uses: read('uses.json', 'uses')?.uses ?? [],
@@ -394,9 +448,246 @@ export function packagedCatalogDir(): string {
   return path.resolve(__dirname, '../../../docs/agent-reports/catalog');
 }
 
+/** A top-level member of a share file that the seeder extends by id. */
+type AppendMember = 'models' | 'aliases' | 'effortSuffixes';
+
 /**
- * Writes each packaged seed into an existing `v1/catalog` folder where the folder lists no such file
- * (temporary dot file, then a hard link). Never overwrites: the owner edits these as data. Resolves the
+ * The share files the seeder extends by id when they already exist, and the members it extends:
+ * `models.json` gains the packaged models whose `model` it lacks, `model-aliases.json` the packaged
+ * `aliases` keys and `effortSuffixes` it lacks. The other catalog files are only ever seeded whole.
+ */
+const APPEND_BY_ID: Partial<Record<CatalogFileName, readonly AppendMember[]>> = {
+  'models.json': ['models'],
+  'model-aliases.json': ['aliases', 'effortSuffixes'],
+};
+
+/** Attempts at an append while another writer keeps changing the share file. */
+const APPEND_ATTEMPTS = 3;
+
+/** The ids one member of a parsed file holds: model ids, alias keys or effort suffixes. */
+function entryIds(file: CatalogFile, member: AppendMember): string[] {
+  if (file.kind === 'models' && member === 'models') return file.models.map((row) => row.model);
+  if (file.kind === 'aliases' && member === 'aliases') return Object.keys(file.aliases);
+  if (file.kind === 'aliases' && member === 'effortSuffixes') return file.effortSuffixes;
+  return [];
+}
+
+interface NewEntry {
+  id: string;
+  wide: string;
+  narrow: string;
+}
+
+/** Offsets of a top-level member's opening and closing bracket in a JSON object's text. */
+interface MemberSpan {
+  open: number;
+  close: number;
+}
+
+/**
+ * Where the top-level member `key` holds its array or object in `text` (text that parses as a JSON object).
+ * Null when the member is missing, named more than once, or holds no array or object.
+ */
+export function memberSpan(text: string, key: string): MemberSpan | null {
+  let depth = 0;
+  let afterColon = false;
+  let lastKey: string | null = null;
+  let named = 0;
+  let span: MemberSpan | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      if (depth === 1 && afterColon) afterColon = false;
+      else if (depth === 1) {
+        lastKey = JSON.parse(text.slice(i, j + 1)) as string;
+        if (lastKey === key) named++;
+      }
+      i = j;
+    } else if (depth === 1 && c === ':') {
+      afterColon = true;
+    } else if (depth === 1 && c === ',') {
+      afterColon = false;
+    } else if (c === '{' || c === '[') {
+      if (depth === 1 && afterColon && lastKey === key) span = { open: i, close: -1 };
+      if (depth === 1) afterColon = false;
+      depth++;
+    } else if (c === '}' || c === ']') {
+      depth--;
+      if (depth === 1 && span && span.close < 0) span.close = i;
+    }
+  }
+  return named === 1 && span && span.close > span.open ? span : null;
+}
+
+/**
+ * `text` with `entries` added at the end of the member at `span`, in the member's own layout (its
+ * indentation and line ending, or one line when the member is written on one). Every byte already in
+ * `text` stays as it was; only the new entries (and the comma after the last old one) are inserted.
+ */
+function appendToMember(text: string, span: MemberSpan, entries: readonly NewEntry[]): string {
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const indented = (entry: string, indent: string) =>
+    indent + entry.split('\n').join(`${eol}${indent}`);
+  const inner = text.slice(span.open + 1, span.close);
+  if (inner.trim() === '') {
+    const lineStart = text.lastIndexOf('\n', span.open) + 1;
+    const outer = /^[ \t]*/.exec(text.slice(lineStart))?.[0] ?? '';
+    const body = entries.map((entry) => indented(entry.wide, `${outer}  `)).join(`,${eol}`);
+    return `${text.slice(0, span.open + 1)}${eol}${body}${eol}${outer}${text.slice(span.close)}`;
+  }
+  const first = span.open + 1 + (inner.length - inner.trimStart().length);
+  const newline = text.lastIndexOf('\n', first);
+  let last = span.close - 1;
+  while (/\s/.test(text[last])) last--;
+  const insert =
+    newline > span.open
+      ? entries
+          .map((entry) => `,${eol}${indented(entry.wide, text.slice(newline + 1, first))}`)
+          .join('')
+      : entries.map((entry) => `, ${entry.narrow}`).join('');
+  return `${text.slice(0, last + 1)}${insert}${text.slice(last + 1)}`;
+}
+
+/** The packaged entries a share file lacks, by id, in the packaged order, rendered for appending. */
+function missingEntries(
+  member: AppendMember,
+  seed: Record<string, unknown>,
+  have: ReadonlySet<string>
+): NewEntry[] {
+  if (member === 'effortSuffixes') {
+    const suffixes = Array.isArray(seed.effortSuffixes) ? (seed.effortSuffixes as unknown[]) : [];
+    return suffixes
+      .filter((suffix): suffix is string => typeof suffix === 'string' && !have.has(suffix))
+      .map((suffix) => ({
+        id: suffix,
+        wide: JSON.stringify(suffix),
+        narrow: JSON.stringify(suffix),
+      }));
+  }
+  if (member === 'models') {
+    const rows = Array.isArray(seed.models) ? (seed.models as Array<Record<string, unknown>>) : [];
+    return rows
+      .filter((row) => typeof row.model === 'string' && !have.has(row.model))
+      .map((row) => ({
+        id: row.model as string,
+        wide: JSON.stringify(row, null, 2),
+        narrow: JSON.stringify(row),
+      }));
+  }
+  const aliases = (seed.aliases ?? {}) as Record<string, unknown>;
+  return Object.entries(aliases)
+    .filter(([written]) => !have.has(written))
+    .map(([written, canonical]) => {
+      const entry = `${JSON.stringify(written)}: ${JSON.stringify(canonical)}`;
+      return { id: written, wide: entry, narrow: entry };
+    });
+}
+
+/** One member's additions: the ids the share holds and the packaged entries it lacks. */
+interface MemberAppend {
+  member: AppendMember;
+  have: string[];
+  entries: NewEntry[];
+}
+
+/**
+ * The share file after the appends, or null when they cannot be made: never a file that reads
+ * differently. Each member must end up holding exactly its old ids and the new ones.
+ */
+function appendedText(
+  name: CatalogFileName,
+  shareText: string,
+  appends: readonly MemberAppend[]
+): string | null {
+  let next = shareText;
+  for (const { member, entries } of appends) {
+    if (entries.length === 0) continue;
+    const span = memberSpan(next, member);
+    if (!span) return null;
+    next = appendToMember(next, span, entries);
+  }
+  const parsed = parseCatalogFile(name, Buffer.from(next, 'utf8'));
+  if (!parsed.ok) return null;
+  for (const { member, have, entries } of appends) {
+    const nextIds = entryIds(parsed.value, member);
+    const expected = new Set([...have, ...entries.map((entry) => entry.id)]);
+    if (nextIds.length !== expected.size || nextIds.some((entryId) => !expected.has(entryId)))
+      return null;
+  }
+  return next;
+}
+
+/**
+ * Adds to an existing share file the packaged entries it lacks, by id; never changes or removes an entry
+ * already there. Writes a temporary dot file, then renames it over the share file, only if the share file
+ * still holds what was read (else it reads again, up to three times). A share file that is not valid is
+ * left alone and named (`invalid`), as is one the entries cannot be added to (`unmergeable`).
+ */
+async function appendMissing(
+  target: string,
+  name: CatalogFileName,
+  members: readonly AppendMember[],
+  found: fs.Stats,
+  sourceDir: string,
+  onFailure: (failure: SeedFailure) => void
+): Promise<boolean> {
+  const destination = path.join(target, name);
+  if (!found.isFile()) {
+    onFailure({ file: name, code: 'not-a-file' });
+    return false;
+  }
+  const seedBytes = await fs.promises.readFile(path.join(sourceDir, name)).catch(() => null);
+  if (!seedBytes || !parseCatalogFile(name, seedBytes).ok) {
+    onFailure({ file: name, code: 'invalid-seed' });
+    return false;
+  }
+  // It parsed above, so it is a JSON object.
+  const seed = JSON.parse(seedBytes.toString('utf8')) as Record<string, unknown>;
+  for (let attempt = 0; attempt < APPEND_ATTEMPTS; attempt++) {
+    const temp = path.join(target, `.${name}.tmp-${process.pid}-${Date.now()}-${attempt}`);
+    try {
+      const before = await fs.promises.readFile(destination);
+      const share = parseCatalogFile(name, before);
+      if (!share.ok) {
+        onFailure({ file: name, code: 'invalid' });
+        return false;
+      }
+      const appends = members.map((member) => {
+        const have = entryIds(share.value, member);
+        return { member, have, entries: missingEntries(member, seed, new Set(have)) };
+      });
+      if (appends.every((append) => append.entries.length === 0)) return false;
+      const next = appendedText(name, before.toString('utf8'), appends);
+      if (next === null) {
+        onFailure({ file: name, code: 'unmergeable' });
+        return false;
+      }
+      await fs.promises.writeFile(temp, next, { encoding: 'utf8', flag: 'wx' });
+      await fs.promises.chmod(temp, found.mode & 0o777).catch(() => undefined);
+      // Another writer (an owner's edit, another machine's start) since the read: read again.
+      const now = await fs.promises.readFile(destination);
+      if (!now.equals(before)) continue;
+      await fs.promises.rename(temp, destination);
+      return true;
+    } catch (error) {
+      onFailure({ file: name, code: seedErrorCode(error) });
+      return false;
+    } finally {
+      await fs.promises.rm(temp, { force: true }).catch(() => undefined);
+    }
+  }
+  onFailure({ file: name, code: 'busy' });
+  return false;
+}
+
+/**
+ * Publishes the packaged catalog into an existing `v1/catalog` folder. A file the folder lacks is
+ * written whole (temporary dot file, then a hard link, which fails on a file that appeared meanwhile).
+ * `models.json` and `model-aliases.json` that exist gain only the packaged entries they lack, by id
+ * (models, alias keys, effort suffixes; `appendMissing`): share edits win, and nothing on the share
+ * is changed or removed. Resolves the
  * names it wrote; never throws.
  */
 export async function seedCatalog(
@@ -408,19 +699,21 @@ export async function seedCatalog(
   const written: string[] = [];
   try {
     // List, then look (a listing refreshes the NFS view of a file another machine just wrote).
-    const listed = new Set(await fs.promises.readdir(target));
+    await fs.promises.readdir(target);
     for (const name of CATALOG_FILES) {
-      if (listed.has(name)) continue;
       const destination = path.join(target, name);
-      const absent = await fs.promises
-        .lstat(destination)
-        .then(() => false)
-        .catch((error: NodeJS.ErrnoException) => {
-          if (error.code === 'ENOENT') return true;
-          onFailure({ file: name, code: seedErrorCode(error) });
-          return false;
-        });
-      if (!absent) continue;
+      const found = await fs.promises.lstat(destination).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null;
+        onFailure({ file: name, code: seedErrorCode(error) });
+        return undefined;
+      });
+      if (found === undefined) continue;
+      if (found !== null) {
+        const members = APPEND_BY_ID[name];
+        if (members && (await appendMissing(target, name, members, found, sourceDir, onFailure)))
+          written.push(name);
+        continue;
+      }
       const temp = path.join(target, `.${name}.tmp-${process.pid}-${Date.now()}`);
       try {
         await fs.promises.copyFile(path.join(sourceDir, name), temp);

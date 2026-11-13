@@ -34,6 +34,62 @@ pub struct ScoreboardView {
     /// Models by effort with verdicts per job (CONTRACT-spend-bymodel.md). Absent until the server sends it: the page
     /// says so and invents nothing.
     pub by_model: Option<ByModel>,
+    /// Runs read but never scored, by reason (`Unscored::read`). Absent from an older server: the page shows no note.
+    /// Kept as JSON and read by hand: a derived reader is more WebAssembly than the page's size limit leaves.
+    pub unscored: Option<serde_json::Value>,
+}
+
+/// Runs the server read but could not score (`unscored` in the view), so none is hidden without a word.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Unscored {
+    pub total: u32,
+    /// Run files the reader refused (named in the Sources list).
+    pub unreadable: u32,
+    pub no_model: u32,
+    pub no_task_type: u32,
+    pub unknown_model: u32,
+    pub unknown_task_type: u32,
+    /// The written ids of the unknown models, most runs first (the top 20). The view's `examples` are not read: the
+    /// note names reasons and ids, and the bundle has no room to spare.
+    pub unknown_models: Vec<UnknownModel>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UnknownModel {
+    pub id: String,
+    pub runs: u32,
+}
+
+impl Unscored {
+    /// From the view's `unscored` JSON. A count that is missing or not a whole number reads as 0 (a total of 0 shows
+    /// no note); an unknown model without a text id is left out.
+    pub fn read(v: &serde_json::Value) -> Unscored {
+        let count = |v: &serde_json::Value, key: &str| {
+            v.get(key)
+                .and_then(serde_json::Value::as_u64)
+                .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX))
+        };
+        Unscored {
+            total: count(v, "total"),
+            unreadable: count(v, "unreadable"),
+            no_model: count(v, "noModel"),
+            no_task_type: count(v, "noTaskType"),
+            unknown_model: count(v, "unknownModel"),
+            unknown_task_type: count(v, "unknownTaskType"),
+            unknown_models: v
+                .get("unknownModels")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|m| {
+                    Some(UnknownModel {
+                        id: m.get("id")?.as_str()?.to_string(),
+                        runs: count(m, "runs"),
+                    })
+                })
+                .collect(),
+        }
+    }
 }
 
 /// The by-model view: one row per model at one effort. Every word and number is decided on the server.
@@ -649,6 +705,7 @@ pub fn ScoreboardPage(embedded: bool) -> impl IntoView {
                         })}
                     </div>
                     <p class="page-sub">{move || by_model.with(|b| b.as_ref().map(|b| b.intro.clone())).unwrap_or_default()}</p>
+                    <UnscoredNote board=board/>
                 </div>
                 {banner}
                 <Show
@@ -986,6 +1043,196 @@ fn ModelSheet(
     }
 }
 
+// ---- Runs not scored ----------------------------------------------------------------------------------------------
+
+/// One reason a run was read but not scored: its runs, the note's words and the popover's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnscoredReason {
+    pub runs: u32,
+    /// The note's words after the count ("unknown model").
+    pub short: &'static str,
+    /// The popover's term and its meaning.
+    pub label: &'static str,
+    pub why: &'static str,
+}
+
+/// The summary worth a note: none when the server sent none or nothing went unscored.
+pub fn shown_unscored(view: &ScoreboardView) -> Option<Unscored> {
+    view.unscored
+        .as_ref()
+        .map(Unscored::read)
+        .filter(|u| u.total > 0)
+}
+
+/// The reasons that have runs, in one fixed order (unreadable, unknown model, unknown task type, no task type, no
+/// model), so the note keeps its shape from one refresh to the next.
+pub fn unscored_reasons(u: &Unscored) -> Vec<UnscoredReason> {
+    [
+        UnscoredReason {
+            runs: u.unreadable,
+            short: "unreadable",
+            label: "Unreadable",
+            why: "the reader refused the run file (each is named under Sources)",
+        },
+        UnscoredReason {
+            runs: u.unknown_model,
+            short: "unknown model",
+            label: "Unknown model",
+            why: "its model is not in the catalog or its alias table",
+        },
+        UnscoredReason {
+            runs: u.unknown_task_type,
+            short: "unknown task type",
+            label: "Unknown task type",
+            why: "its task type is not in the catalog",
+        },
+        UnscoredReason {
+            runs: u.no_task_type,
+            short: "no task type",
+            label: "No task type",
+            why: "the report names no task type, so no job can score it",
+        },
+        UnscoredReason {
+            runs: u.no_model,
+            short: "no model",
+            label: "No model",
+            why: "the report names no model",
+        },
+    ]
+    .into_iter()
+    .filter(|r| r.runs > 0)
+    .collect()
+}
+
+fn runs_word(n: u32) -> &'static str {
+    if n == 1 { "run" } else { "runs" }
+}
+
+/// "41 runs not scored".
+pub fn unscored_head(u: &Unscored) -> String {
+    format!("{} {} not scored", u.total, runs_word(u.total))
+}
+
+fn plain(text: String) -> Run {
+    Run {
+        text,
+        ..Default::default()
+    }
+}
+
+fn bold(text: String) -> Run {
+    Run {
+        text,
+        strong: true,
+        ..Default::default()
+    }
+}
+
+/// The note as runs for `runs_view`: each count in bold, then its words, joined by no-break spaces so a count and its
+/// words stay on one line; a narrow screen breaks only after a comma or the colon, never leaving a word alone.
+/// "41 runs not scored: 12 unknown model, 29 no task type".
+pub fn unscored_note(u: &Unscored) -> Vec<Run> {
+    let reasons = unscored_reasons(u);
+    let last = reasons.len();
+    let nb = |words: &str| words.replace(' ', "\u{a0}");
+    let mut runs = vec![
+        bold(u.total.to_string()),
+        plain(format!(
+            "\u{a0}{}{}",
+            nb(&format!("{} not scored", runs_word(u.total))),
+            if last > 0 { ": " } else { "" }
+        )),
+    ];
+    for (i, r) in reasons.into_iter().enumerate() {
+        runs.push(bold(r.runs.to_string()));
+        runs.push(plain(format!(
+            "\u{a0}{}{}",
+            nb(r.short),
+            if i + 1 < last { ", " } else { "" }
+        )));
+    }
+    runs
+}
+
+/// The open list, line by line (a class and its runs): the total, what the reasons mean with their runs, and the
+/// unknown model ids with theirs, then the runs under ids past the listed ones.
+pub fn unscored_lines(u: &Unscored) -> Vec<(&'static str, Vec<Run>)> {
+    let mut lines = vec![
+        ("sbu-head", vec![bold(unscored_head(u))]),
+        (
+            "q3 sbu-lead",
+            vec![plain(
+                "In the agent reports, left out of every verdict:".into(),
+            )],
+        ),
+    ];
+    for r in unscored_reasons(u) {
+        lines.push((
+            "sbu-why",
+            vec![
+                bold(r.label.into()),
+                plain(format!(": {} {} · {}", r.runs, runs_word(r.runs), r.why)),
+            ],
+        ));
+    }
+    if !u.unknown_models.is_empty() {
+        lines.push(("cap sbu-cap", vec![plain("Unknown model ids".into())]));
+    }
+    for m in &u.unknown_models {
+        lines.push((
+            "sbu-id",
+            vec![
+                plain(m.id.clone()),
+                plain(format!("{} {}", m.runs, runs_word(m.runs))),
+            ],
+        ));
+    }
+    let more = unlisted_unknown_runs(u);
+    if more > 0 {
+        lines.push((
+            "q3 sbu-more",
+            vec![plain(format!(
+                "{more} more {} under other ids.",
+                runs_word(more)
+            ))],
+        ));
+    }
+    lines
+}
+
+/// Runs with an unknown model whose ids are past the listed top ones.
+pub fn unlisted_unknown_runs(u: &Unscored) -> u32 {
+    let listed: u32 = u.unknown_models.iter().map(|m| m.runs).sum();
+    u.unknown_model.saturating_sub(listed)
+}
+
+/// The quiet line under the head that names the runs left out of every verdict, hidden at none. The line is a native
+/// disclosure: a tap, a click or the keyboard opens the reasons and the unknown model ids with their runs under it, and
+/// with a mouse a hover shows them floating until the pointer leaves (CSS). The list is the disclosure's next sibling,
+/// not its content: browsers keep a closed disclosure's content unpainted, whatever its CSS says. No signals, timers or
+/// overlay: each is code in the page's WebAssembly, which is at its size limit.
+#[component]
+fn UnscoredNote(board: Board) -> impl IntoView {
+    move || {
+        board.view.with(|v| v.as_ref().and_then(shown_unscored)).map(|u| {
+            // The last count, its words and the chevron share one unbreakable piece: a break is allowed before an
+            // inline icon even after a no-break space, which left the chevron alone on a line (review 1, M3).
+            let mut note = unscored_note(&u);
+            let last = note.split_off(note.len().saturating_sub(2));
+            view! {
+                <div class="sb-unscored">
+                    <details>
+                        <summary>{runs_view(note)}<span class="nw">{runs_view(last)}<Icon name="chev-down" class="chev"/></span></summary>
+                    </details>
+                    <div class="sbu-list">
+                        {unscored_lines(&u).into_iter().map(|(class, runs)| view! { <p class=class>{runs_view(runs)}</p> }).collect_view()}
+                    </div>
+                </div>
+            }
+        })
+    }
+}
+
 #[component]
 fn SourcesList(board: Board, open: RwSignal<bool>) -> impl IntoView {
     view! {
@@ -1084,6 +1331,173 @@ mod tests {
                 "passed review 6 of 6, 5 on the first try".to_string()
             ]
         );
+    }
+
+    fn unscored(no_model: u32, no_task_type: u32, unknown_model: u32) -> Unscored {
+        Unscored {
+            total: no_model + no_task_type + unknown_model,
+            no_model,
+            no_task_type,
+            unknown_model,
+            ..Default::default()
+        }
+    }
+
+    fn sentence(u: &Unscored) -> String {
+        unscored_note(u)
+            .into_iter()
+            .map(|r| r.text)
+            .collect::<String>()
+            .replace('\u{a0}', " ")
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn the_unscored_note_names_each_reason_with_its_runs() {
+        assert_eq!(
+            sentence(&unscored(0, 29, 12)),
+            "41 runs not scored: 12 unknown model, 29 no task type"
+        );
+        // the order is fixed and a reason without runs is left out
+        assert_eq!(
+            sentence(&unscored(6, 23, 12)),
+            "41 runs not scored: 12 unknown model, 23 no task type, 6 no model"
+        );
+        assert_eq!(sentence(&unscored(1, 0, 0)), "1 run not scored: 1 no model");
+        // unreadable files and unknown task types are reasons of their own, first and third
+        let all = Unscored {
+            total: 10,
+            unreadable: 4,
+            unknown_task_type: 1,
+            ..unscored(2, 2, 1)
+        };
+        assert_eq!(
+            sentence(&all),
+            "10 runs not scored: 4 unreadable, 1 unknown model, 1 unknown task type, 2 no task type, 2 no model"
+        );
+        assert_eq!(
+            sentence(&Unscored {
+                total: 4,
+                unreadable: 4,
+                ..Default::default()
+            }),
+            "4 runs not scored: 4 unreadable"
+        );
+        // each piece stays whole: a bold count, then its words joined by no-break spaces; the only break
+        // opportunity is the plain space after a comma or the colon
+        let runs = unscored_note(&unscored(6, 23, 12));
+        assert_eq!(runs.len(), 8);
+        for (i, r) in runs.iter().enumerate() {
+            assert_eq!(r.strong, i % 2 == 0);
+            let words = r.text.trim_end_matches(' ');
+            assert!(!words.contains(' '), "{:?} breaks inside", r.text);
+        }
+        assert_eq!(runs[0].text, "41");
+        assert_eq!(runs[1].text, "\u{a0}runs\u{a0}not\u{a0}scored: ");
+        assert_eq!(runs[7].text, "\u{a0}no\u{a0}model");
+        let reasons = unscored_reasons(&unscored(0, 29, 12));
+        assert_eq!(
+            reasons
+                .iter()
+                .map(|r| (r.label, r.runs))
+                .collect::<Vec<_>>(),
+            vec![("Unknown model", 12), ("No task type", 29)]
+        );
+    }
+
+    #[test]
+    fn the_unscored_note_is_hidden_at_none_and_without_the_field() {
+        let mut view = ScoreboardView::default();
+        assert_eq!(shown_unscored(&view), None);
+        view.unscored = Some(
+            serde_json::json!({ "total": 0, "noModel": 0, "noTaskType": 0, "unknownModel": 0 }),
+        );
+        assert_eq!(shown_unscored(&view), None);
+        view.unscored = Some(serde_json::json!({ "total": 1, "noTaskType": 1 }));
+        assert_eq!(shown_unscored(&view), Some(unscored(0, 1, 0)));
+        // a count that is not a whole number reads as 0; an unknown model without a text id is left out
+        let odd = Unscored::read(&serde_json::json!({
+            "total": 3, "noModel": -1, "unknownModel": 3,
+            "unknownModels": [{ "id": 7, "runs": 1 }, { "id": "a/b", "runs": "2" }, { "id": "c/d", "runs": 2 }]
+        }));
+        assert_eq!(odd.no_model, 0);
+        assert_eq!(
+            odd.unknown_models,
+            vec![
+                UnknownModel {
+                    id: "a/b".into(),
+                    runs: 0
+                },
+                UnknownModel {
+                    id: "c/d".into(),
+                    runs: 2
+                }
+            ]
+        );
+        // an older server's view without the field, or with null, reads and shows nothing
+        let old: ScoreboardView = serde_json::from_str(r#"{"version":1,"unscored":null}"#).unwrap();
+        assert_eq!(shown_unscored(&old), None);
+    }
+
+    #[test]
+    fn unknown_ids_past_the_listed_ones_are_counted_not_dropped() {
+        let text = include_str!("../fixtures/scoreboard-view.json");
+        let view: ScoreboardView = serde_json::from_str(text).expect("example parses");
+        let u = shown_unscored(&view).expect("the fixture has runs not scored");
+        assert_eq!(
+            sentence(&u),
+            "48 runs not scored: 4 unreadable, 12 unknown model, 3 unknown task type, 23 no task type, 6 no model"
+        );
+        assert_eq!((u.unreadable, u.unknown_task_type), (4, 3));
+        assert_eq!(u.unknown_models.len(), 2);
+        assert_eq!(
+            u.unknown_models[1].id,
+            "builtin:example-coding-plan\\Example-4.2"
+        );
+        assert_eq!(unlisted_unknown_runs(&u), 2);
+        let lines = unscored_lines(&u);
+        let text = |l: &(&str, Vec<Run>)| {
+            l.1.iter()
+                .map(|r| r.text.as_str())
+                .collect::<Vec<_>>()
+                .join("|")
+        };
+        assert_eq!(lines[0].0, "sbu-head");
+        assert_eq!(text(&lines[0]), "48 runs not scored");
+        assert_eq!(
+            text(&lines[2]),
+            "Unreadable|: 4 runs · the reader refused the run file (each is named under Sources)"
+        );
+        assert_eq!(
+            text(&lines[3]),
+            "Unknown model|: 12 runs · its model is not in the catalog or its alias table"
+        );
+        assert_eq!(
+            text(&lines[4]),
+            "Unknown task type|: 3 runs · its task type is not in the catalog"
+        );
+        assert_eq!(lines[7].0, "cap sbu-cap");
+        assert_eq!(
+            text(&lines[8]),
+            "example-vendor/example-model-9-preview|7 runs"
+        );
+        assert_eq!(
+            lines.last().map(text).as_deref(),
+            Some("2 more runs under other ids.")
+        );
+        assert_eq!(lines.len(), 11);
+        // no unknown ids: no heading for them and nothing over
+        let bare = unscored(0, 4, 0);
+        assert!(
+            unscored_lines(&bare)
+                .iter()
+                .all(|l| !l.0.contains("sbu-cap") && !l.0.contains("sbu-more"))
+        );
+        // a list that already covers every run leaves nothing over (and never underflows)
+        let mut all = u.clone();
+        all.unknown_models[0].runs = 40;
+        assert_eq!(unlisted_unknown_runs(&all), 0);
     }
 
     #[test]
