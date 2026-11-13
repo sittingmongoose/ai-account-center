@@ -27,6 +27,7 @@ import {
   loadAnalyticsRemoteSources,
 } from '../../../src/web-server/services/analytics-remote-sources';
 import {
+  AnalyticsRemoteTransportError,
   parseAnalyticsRemoteResponse,
   type AnalyticsRemoteKind,
   type AnalyticsRemoteRow,
@@ -243,6 +244,25 @@ describe('one cache size limit for save and load', () => {
     expect(fs.statSync(file).size).toBeLessThan(MAX_REMOTE_CACHE_BYTES);
     // Read completely: the discard has been named and is not carried on.
     expect(JSON.parse(cacheText()).discarded).toBeUndefined();
+  });
+
+  it('never replaces a cache it could not load with a blank while scans fail', async () => {
+    const file = path.join(cache, 'analytics-remote-v1', 'nas1.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // A newer format written before a rollback: this version cannot read it, nor may it erase it.
+    const newer = JSON.stringify({ version: 99, fingerprints: {}, rows: [], srows: [] });
+    fs.writeFileSync(file, newer);
+    const { states } = await loadAnalyticsRemoteSources(MIN_DATE, {
+      cacheDir: cache,
+      hosts,
+      now: () => NOW,
+      force: true,
+      runHelper: async () => {
+        throw new AnalyticsRemoteTransportError(false, 'ssh_unreachable', 255);
+      },
+    });
+    expect(fs.readFileSync(file, 'utf8')).toBe(newer);
+    expect(codexCell(states)?.detail).toContain('cache_format');
   });
 
   it('names an unreadable cache', () => {

@@ -1149,8 +1149,9 @@ export async function loadAnalyticsRemoteSources(
           };
           // Saved with the host, rows and prints untouched, so the failure is named until a scan
           // answers again, also after a restart. A damaged package fails every host alike and is
-          // named by the page without touching any host's cache.
-          if (!failure.damaged)
+          // named by the page without touching any host's cache. A file the load discarded (a
+          // newer format after a rollback, say) is not replaced by a blank while scans fail.
+          if (!failure.damaged && !cached.discarded)
             try {
               saveCache(file, { ...cached, lastFailure });
             } catch {
