@@ -19,6 +19,9 @@ import {
   parseAnalyticsSessions,
   parseUnfinished,
   runAnalyticsRemoteScan,
+  runLocalUsageScan,
+  localUsageScanReady,
+  MAX_EXPERIMENT_ROOTS,
   fixedAnalyticsRemoteAliases,
   hasClaudeReplacementMetadata,
   resolveAnalyticsRemoteHosts,
@@ -30,6 +33,7 @@ import {
   type AnalyticsRemoteDiscovery,
   type AnalyticsRemoteFingerprint,
   type AnalyticsRemoteHost,
+  type AnalyticsScanHost,
   type AnalyticsRemoteKind,
   type AnalyticsRemoteKindResult,
   type AnalyticsRemoteRequest,
@@ -53,6 +57,7 @@ import {
 } from './analytics-remote-cache-limit';
 import { readDashboardPreferences } from './dashboard-preferences';
 import { runBounded } from '../usage/collector-concurrency';
+import { readExperimentRoots } from '../usage/experiment-usage-roots';
 import { localClaudeLogNames, type ClaudeLogNames } from './analytics-claude-log-names';
 import { cellsFromCompact } from '../usage/activity-cells';
 import type { AccountAnalyticsActivityProvider } from './account-analytics-types';
@@ -88,7 +93,7 @@ export interface AnalyticsSourceCounts {
 
 export interface AnalyticsRemoteSourceState {
   tool: AnalyticsSourceTool;
-  host: AnalyticsRemoteHost;
+  host: AnalyticsScanHost;
   state: AnalyticsSourceState;
   lastScanAt: string | null;
   rowCount: number;
@@ -134,7 +139,7 @@ const NO_READER_LABELS: Record<AnalyticsNoReaderTool, string> = {
 
 /** The tools without a usage reader that the computer's last presence read found, as `no_reader`. */
 export function noReaderStates(
-  host: AnalyticsRemoteHost,
+  host: AnalyticsScanHost,
   tools: AnalyticsRemoteDiscovery['tools'],
   at: string | null
 ): AnalyticsRemoteSourceState[] {
@@ -238,6 +243,12 @@ export interface AnalyticsRemoteSourceDeps {
     platform: AnalyticsRemoteHost,
     request: AnalyticsRemoteRequest
   ) => Promise<AnalyticsRemoteResponse>;
+  /** The scanner on the dashboard's own computer (DESIGN 16.0 B); tests pass their own. */
+  runLocal?: (request: AnalyticsRemoteRequest) => Promise<AnalyticsRemoteResponse>;
+  /** Whether the local scanner can run (built, in place, digest matching), else why not. */
+  localScanner?: () => { ok: true } | { ok: false; cause: string };
+  /** Codex experiment roots the background walk found on this computer (PM-Experiments). */
+  localExperimentRoots?: () => Partial<Record<AnalyticsRemoteKind, string[]>>;
   now?: () => number;
   cacheDir?: string;
   /** Metadata-only, independent of when the local usage workers finish. */
@@ -254,12 +265,116 @@ export interface AnalyticsRemoteSourceDeps {
  * Antigravity instances included) on the Mac, Windows and Nas1. A tool a host does
  * not have reports `not_installed`; the states are measured by the scan, never assumed.
  */
-const REMOTE_TARGETS = Object.fromEntries(
-  REMOTE_ANALYTICS_HOSTS.map((host) => [host, ANALYTICS_TOOLS])
-) as Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]>;
+const REMOTE_TARGETS = {
+  ...Object.fromEntries(REMOTE_ANALYTICS_HOSTS.map((host) => [host, ANALYTICS_TOOLS])),
+  ubuntu: ['codex'],
+} as Record<AnalyticsScanHost, AnalyticsRemoteKind[]>;
+
+/**
+ * The kinds the scanner reads on the dashboard's own computer (DESIGN 16.0 B). Codex moves from the
+ * TypeScript collector; each kind is owned by the scanner from its first complete read there,
+ * which replaces the collector's rows in one step.
+ */
+export const LOCAL_SCANNER_KINDS: readonly AnalyticsRemoteKind[] = REMOTE_TARGETS.ubuntu;
+const LOCAL_ALIAS = '@local';
+const EXTRA_ROOTS_MAX = 16;
+
+/** What the local scanner did this collection (DESIGN 16.0 B), for the activity service. */
+export interface LocalScannerAnswer {
+  /** Kinds the scanner owns on this computer: the collector's rows for them are dropped. */
+  owned: AnalyticsRemoteKind[];
+  /** Kinds still catching up, with what the collector's cell should add. */
+  catchingUp: Partial<Record<AnalyticsRemoteKind, string>>;
+  /** Why the scanner did not run here (the collector reads everything, labelled). */
+  unavailable?: string;
+  /** Kinds with more extra roots than the scanner takes: the collector keeps them. */
+  tooManyRoots?: AnalyticsRemoteKind[];
+}
+
+/** Ownership after an answer: kept once taken; taken on a kind's first complete read. */
+function ownedAfter(
+  before: Partial<Record<AnalyticsRemoteKind, string>> | undefined,
+  kinds: AnalyticsRemoteKind[],
+  reads: Partial<Record<AnalyticsRemoteKind, KindRead>>,
+  scannedAt: string,
+  response: AnalyticsRemoteResponse,
+  cut: Set<AnalyticsRemoteKind>,
+  failed: Set<AnalyticsRemoteKind>
+): Partial<Record<AnalyticsRemoteKind, string>> {
+  const owned = { ...before };
+  for (const tool of kinds) {
+    if (owned[tool] || !LOCAL_SCANNER_KINDS.includes(tool)) continue;
+    const read = reads[tool];
+    if (
+      read?.lastScanAt === scannedAt &&
+      ['ok', 'no_usage', 'not_installed', 'installed_no_logs'].includes(read.state) &&
+      !read.unfinished?.length &&
+      !cut.has(tool) &&
+      !failed.has(tool) &&
+      response.kinds[tool]?.partial !== true
+    )
+      owned[tool] = scannedAt;
+  }
+  return owned;
+}
+
+/** The collector's cell while the scanner catches up on its kind. */
+function catchUpText(entry: AnalyticsRemoteSourceState): string {
+  const found = entry.counts;
+  const progress = found
+    ? `${found.filesRead.toLocaleString('en-US')} of ${found.filesFound.toLocaleString('en-US')} logs read so far`
+    : 'reading';
+  const unfinished = entry.detail?.includes('not read to the end') ? `; ${entry.detail}` : '';
+  return `the usage scanner is taking over this tool's logs on this computer (${progress}${unfinished}); these numbers are the built-in reader's until its first complete read`;
+}
+
+/** The experiment roots the background walk found here, per kind the scanner may own. */
+function localExperimentRoots(cacheDir: string): Partial<Record<AnalyticsRemoteKind, string[]>> {
+  const roots = readExperimentRoots(cacheDir).roots as Partial<Record<string, string[]>>;
+  return Object.fromEntries(
+    LOCAL_SCANNER_KINDS.map((kind) => [kind, Array.isArray(roots[kind]) ? roots[kind] : []])
+  ) as Partial<Record<AnalyticsRemoteKind, string[]>>;
+}
+
+/** The kinds the local scanner owns, from its saved cache; empty when it never finished one. */
+export function localScannerOwned(
+  cacheDir: string = path.join(getCcsDir(), 'cache')
+): Set<AnalyticsRemoteKind> {
+  const cached = loadCache(cacheFile(cacheDir, 'ubuntu'));
+  return new Set(
+    Object.keys(cached.owned ?? {}).filter((kind): kind is AnalyticsRemoteKind =>
+      LOCAL_SCANNER_KINDS.includes(kind as AnalyticsRemoteKind)
+    )
+  );
+}
+
+/**
+ * The local scanner's extra roots: the saved sources for this computer and the experiment roots
+ * the background walk found, per kind. A kind with more than the scanner accepts is not scanned
+ * here (`overflow`), so the collector keeps it and nothing is read twice.
+ */
+function localExtraRoots(
+  kinds: AnalyticsRemoteKind[],
+  found: Partial<Record<AnalyticsRemoteKind, string[]>>
+): {
+  extra: Partial<Record<AnalyticsRemoteKind, string[]>>;
+  experiments: Partial<Record<AnalyticsRemoteKind, string[]>>;
+  overflow: AnalyticsRemoteKind[];
+} {
+  const extra = remoteExtraRoots('ubuntu', kinds);
+  const experiments: Partial<Record<AnalyticsRemoteKind, string[]>> = {};
+  const overflow: AnalyticsRemoteKind[] = [];
+  for (const kind of kinds) {
+    const paths = [...new Set(found[kind] ?? [])];
+    if ((extra[kind]?.length ?? 0) > EXTRA_ROOTS_MAX || paths.length > MAX_EXPERIMENT_ROOTS)
+      overflow.push(kind);
+    else if (paths.length) experiments[kind] = paths;
+  }
+  return { extra, experiments, overflow };
+}
 
 /** The kinds scanned on one remote host, for states when no scan answered. */
-export function analyticsRemoteTargets(host: AnalyticsRemoteHost): AnalyticsRemoteKind[] {
+export function analyticsRemoteTargets(host: AnalyticsScanHost): AnalyticsRemoteKind[] {
   return [...REMOTE_TARGETS[host]];
 }
 
@@ -313,9 +428,11 @@ interface RemoteCache {
   discarded?: RemoteCacheDiscard;
   /** Usage dropped to keep this cache under its limit; named while the cut is in range. */
   trimmed?: RemoteCacheTrim;
+  /** The local scanner only: when it took over each kind from the TypeScript collector. */
+  owned?: Partial<Record<AnalyticsRemoteKind, string>>;
 }
 
-function cacheFile(cacheDir: string, host: AnalyticsRemoteHost): string {
+function cacheFile(cacheDir: string, host: AnalyticsScanHost): string {
   return path.join(cacheDir, 'analytics-remote-v1', `${host}.json`);
 }
 
@@ -483,7 +600,7 @@ export function clearAnalyticsRemoteCwds(cacheDir: string = path.join(getCcsDir(
 } {
   let cleared = 0;
   let removed = 0;
-  for (const host of REMOTE_ANALYTICS_HOSTS) {
+  for (const host of [...REMOTE_ANALYTICS_HOSTS, 'ubuntu' as const]) {
     const file = cacheFile(cacheDir, host);
     let size: number;
     try {
@@ -757,22 +874,21 @@ function sizeText(bytes: number): string {
 }
 
 /**
- * Names the logs a kind has not read to their end (DESIGN 16.1): "2 logs not read to their end
- * yet: rollout-2026-10-31T08-06-21.jsonl.zst (3.2 GB, 31% read), ...". Names carry no
- * conversation id; at most five are spelled out.
+ * Names the logs a kind has not read to their end (DESIGN 16.1), never a silent total: "2 logs not
+ * read to the end yet: rollout-2026-10-31T08-06-21.jsonl.zst (3.2 GB, partly read: 1,450,000,000
+ * of 4,637,763,647 bytes), ...". Names carry no conversation id; at most five are spelled out.
  */
 export function unfinishedText(list: AnalyticsUnfinishedLog[], count?: number): string {
   const total = Math.max(count ?? list.length, list.length);
+  const bytes = (value: number) => value.toLocaleString('en-US');
   const named = list.slice(0, 5).map((log) => {
     if (log.reason === 'unreadable')
       return `${log.name} (${sizeText(log.sizeBytes)}, could not be decoded)`;
-    const done =
-      log.decodedBytes && log.readThroughBytes !== null
-        ? `, ${Math.min(99, Math.floor((log.readThroughBytes / log.decodedBytes) * 100))}% read`
-        : log.readThroughBytes !== null
-          ? `, ${sizeText(log.readThroughBytes)} read`
-          : '';
-    return `${log.name} (${sizeText(log.sizeBytes)}${done})`;
+    const read = log.readThroughBytes ?? 0;
+    const part = log.decodedBytes
+      ? `partly read: ${bytes(read)} of ${bytes(log.decodedBytes)} bytes`
+      : `partly read: ${bytes(read)} bytes, full size not stated in the file`;
+    return `${log.name} (${sizeText(log.sizeBytes)}, ${part})`;
   });
   const more = total > named.length ? ` and ${total - named.length} more` : '';
   return `${total} log${total === 1 ? '' : 's'} not read to the end yet: ${named.join(', ')}${more}; each scan reads on from where the last one stopped`;
@@ -799,7 +915,7 @@ function withCacheNote(
  * read's "no usage" or "not installed" as if it were current; without a failure, its last state.
  */
 function cachedHostSources(
-  host: AnalyticsRemoteHost,
+  host: AnalyticsScanHost,
   cached: RemoteCache,
   minDateMs: number,
   detail: string,
@@ -873,7 +989,7 @@ type HostRows = Pick<RemoteCache, 'rows' | 'srows' | 'fingerprints'>;
 
 /** Local workers may finish after the remote scan; re-elect before publishing. */
 function mirrorReconciler(
-  parts: Map<AnalyticsRemoteHost, HostRows>,
+  parts: Map<AnalyticsScanHost, HostRows>,
   results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>,
   states: AnalyticsRemoteSourceState[],
   inventory: () => ClaudeLogNames
@@ -894,7 +1010,7 @@ function mirrorReconciler(
  * immediately, even when the helper's mirror fingerprint has not changed.
  */
 function selectClaudeMirrors(
-  parts: Map<AnalyticsRemoteHost, HostRows>,
+  parts: Map<AnalyticsScanHost, HostRows>,
   results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>,
   states: AnalyticsRemoteSourceState[],
   local: ClaudeLogNames
@@ -903,7 +1019,7 @@ function selectClaudeMirrors(
   for (const part of parts.values())
     for (const print of Object.values(part.fingerprints.claude ?? {}))
       if (print.claudeName && print.claudeMirror === false) originals.add(print.claudeName);
-  const owners = new Map<string, AnalyticsRemoteHost>();
+  const owners = new Map<string, AnalyticsScanHost>();
   // Fixed host order elects one orphan mirror; network completion order never wins.
   for (const host of REMOTE_ANALYTICS_HOSTS) {
     const part = parts.get(host);
@@ -955,19 +1071,30 @@ function selectClaudeMirrors(
  */
 export function loadAnalyticsRemoteCachedSources(
   minDateMs: number,
-  deps: Pick<AnalyticsRemoteSourceDeps, 'cacheDir' | 'claudeLogNames'> = {}
+  deps: Pick<AnalyticsRemoteSourceDeps, 'cacheDir' | 'claudeLogNames' | 'localScanner'> = {}
 ): {
   fetchedAt: string | undefined;
   reconcileClaudeMirrors: () => void;
   results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
+  local: LocalScannerAnswer;
 } {
   const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
   const results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
   let fetchedAt: string | undefined;
-  const parts = new Map<AnalyticsRemoteHost, HostRows>();
-  for (const host of REMOTE_ANALYTICS_HOSTS) {
+  const parts = new Map<AnalyticsScanHost, HostRows>();
+  // The local scanner's cache counts only for the kinds it owns, and only while it can run: else
+  // the collectors read those kinds again and its rows would count twice (DESIGN 16.0 B).
+  let ready: { ok: boolean };
+  try {
+    ready = (deps.localScanner ?? localUsageScanReady)();
+  } catch {
+    ready = { ok: false };
+  }
+  const owned = ready.ok ? localScannerOwned(cacheDir) : new Set<AnalyticsRemoteKind>();
+  for (const host of [...REMOTE_ANALYTICS_HOSTS, 'ubuntu' as const]) {
+    if (host === 'ubuntu' && owned.size === 0) continue;
     const cached = loadCache(cacheFile(cacheDir, host));
     if (cached.lastScanAt && (!fetchedAt || cached.lastScanAt > fetchedAt))
       fetchedAt = cached.lastScanAt;
@@ -977,8 +1104,15 @@ export function loadAnalyticsRemoteCachedSources(
       srows: cached.srows.filter((row) => sessionInWindow(row, minDateMs)),
     });
     const part = cachedHostSources(host, cached, minDateMs, 'remote scan timed out');
-    results.push(...part.results);
-    states.push(...withCacheNote(part.states, cached, minDateMs));
+    const counted = (tool: string) => host !== 'ubuntu' || owned.has(tool as AnalyticsRemoteKind);
+    results.push(...part.results.filter((entry) => counted(entry.tool)));
+    states.push(
+      ...withCacheNote(
+        part.states.filter((entry) => counted(entry.tool)),
+        cached,
+        minDateMs
+      )
+    );
     states.push(...noReaderStates(host, cached.discovery?.tools, cached.toolsAt ?? null));
   }
   const reconcileClaudeMirrors = mirrorReconciler(
@@ -988,7 +1122,13 @@ export function loadAnalyticsRemoteCachedSources(
     () => deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
   );
   reconcileClaudeMirrors();
-  return { results, states, fetchedAt, reconcileClaudeMirrors };
+  return {
+    results,
+    states,
+    fetchedAt,
+    reconcileClaudeMirrors,
+    local: { owned: [...owned], catchingUp: {} },
+  };
 }
 
 /**
@@ -1002,7 +1142,7 @@ export function loadAnalyticsRemoteCachedSources(
  * `claude-code`); a prefs read failure scans the built-in roots alone.
  */
 export function remoteExtraRoots(
-  host: AnalyticsRemoteHost,
+  host: AnalyticsScanHost,
   kinds: AnalyticsRemoteKind[]
 ): Partial<Record<AnalyticsRemoteKind, string[]>> {
   const extra: Partial<Record<AnalyticsRemoteKind, string[]>> = {};
@@ -1042,7 +1182,11 @@ const yieldTurn = (): Promise<void> => new Promise((resolve) => setImmediate(res
 /** Helper calls one host runs at once: one per kind, so every kind at once. */
 const REMOTE_KIND_CONCURRENCY = 6;
 
-type RemoteHelper = NonNullable<AnalyticsRemoteSourceDeps['runHelper']>;
+type RemoteHelper = (
+  alias: string,
+  host: AnalyticsScanHost,
+  request: AnalyticsRemoteRequest
+) => Promise<AnalyticsRemoteResponse>;
 
 /** What one host's helper calls said when they failed: the first cause, and each failed kind's. */
 interface ScanFailure {
@@ -1074,13 +1218,14 @@ const HELPER_DAMAGED =
 async function scanHost(
   runHelper: RemoteHelper,
   alias: string,
-  host: AnalyticsRemoteHost,
+  host: AnalyticsScanHost,
   kinds: AnalyticsRemoteKind[],
   cached: RemoteCache,
   extraRoots: Partial<Record<AnalyticsRemoteKind, string[]>>,
   minDateMs: number,
   failure: ScanFailure,
-  captureCwd = true
+  captureCwd = true,
+  experimentRoots: Partial<Record<AnalyticsRemoteKind, string[]>> = {}
 ): Promise<{
   response: AnalyticsRemoteResponse;
   cutKinds: Set<AnalyticsRemoteKind>;
@@ -1101,6 +1246,7 @@ async function scanHost(
           minDateMs,
           fingerprints,
           extraRoots,
+          ...(Object.keys(experimentRoots).length ? { experimentRoots } : {}),
           // One call per scan also says which tools without a reader the computer has.
           ...(group === groups[0] ? { presence: true } : {}),
           ...(captureCwd ? {} : { cwd: false }),
@@ -1171,29 +1317,64 @@ export async function loadAnalyticsRemoteSources(
   reconcileClaudeMirrors: () => void;
   results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
+  local: LocalScannerAnswer;
 }> {
   const now = deps.now ?? Date.now;
   const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
   const hosts = await (deps.hosts ?? resolveAnalyticsRemoteHosts)().catch(() =>
     fixedAnalyticsRemoteAliases()
   );
-  const runHelper = deps.runHelper ?? runAnalyticsRemoteScan;
+  const remoteRun = deps.runHelper ?? runAnalyticsRemoteScan;
+  const localRun = deps.runLocal ?? runLocalUsageScan;
+  const runHelper: RemoteHelper = (alias, host, request) =>
+    host === 'ubuntu' ? localRun(request) : remoteRun(alias, host, request);
+  // The dashboard's own computer joins while its scanner can run (DESIGN 16.0 B).
+  let localReady: { ok: true } | { ok: false; cause: string };
+  try {
+    localReady = (deps.localScanner ?? localUsageScanReady)();
+  } catch {
+    localReady = { ok: false, cause: 'binary_missing' };
+  }
+  let experiments: Partial<Record<AnalyticsRemoteKind, string[]>> = {};
+  try {
+    experiments = (deps.localExperimentRoots ?? (() => localExperimentRoots(cacheDir)))();
+  } catch {
+    experiments = {};
+  }
+  const local = localExtraRoots([...LOCAL_SCANNER_KINDS], experiments);
+  const scanHosts: AnalyticsScanHost[] = [
+    ...REMOTE_ANALYTICS_HOSTS,
+    ...(localReady.ok && local.overflow.length < LOCAL_SCANNER_KINDS.length
+      ? (['ubuntu'] as const)
+      : []),
+  ];
+  // The local scanner's answer is held apart: a kind joins the totals only once the scanner owns it.
+  const sharedResults: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }> = [];
+  const sharedStates: AnalyticsRemoteSourceState[] = [];
+  const localResults: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }> = [];
+  const localStates: AnalyticsRemoteSourceState[] = [];
+  let localOwned = new Set<AnalyticsRemoteKind>();
   let captureCwd = true;
   try {
     captureCwd = readAnalyticsCaptureSettings().cwd;
   } catch {
     /* Unreadable settings keep the default. */
   }
-  const results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }> = [];
-  const states: AnalyticsRemoteSourceState[] = [];
+  const results = sharedResults;
+  const states = sharedStates;
   const jobs: Array<Promise<void>> = [];
-  const parts = new Map<AnalyticsRemoteHost, HostRows>();
+  const parts = new Map<AnalyticsScanHost, HostRows>();
   // What each host's cache says about itself, named on its cells once every host is done.
-  const cacheMarks = new Map<AnalyticsRemoteHost, Pick<RemoteCache, 'discarded' | 'trimmed'>>();
-  for (const host of REMOTE_ANALYTICS_HOSTS) {
+  const cacheMarks = new Map<AnalyticsScanHost, Pick<RemoteCache, 'discarded' | 'trimmed'>>();
+  for (const host of scanHosts) {
     jobs.push(
       (async (): Promise<void> => {
-        const allKinds = REMOTE_TARGETS[host];
+        const results = host === 'ubuntu' ? localResults : sharedResults;
+        const states = host === 'ubuntu' ? localStates : sharedStates;
+        if (host === 'ubuntu') localOwned = localScannerOwned(cacheDir);
+        const allKinds = REMOTE_TARGETS[host].filter(
+          (kind) => host !== 'ubuntu' || !local.overflow.includes(kind)
+        );
         const file = cacheFile(cacheDir, host);
         const cached = loadCache(file, () => new Date(now()).toISOString());
         cacheMarks.set(host, cached);
@@ -1230,7 +1411,7 @@ export async function loadAnalyticsRemoteSources(
           states.push(...noReaderStates(host, cached.discovery?.tools, cached.toolsAt ?? null));
           return;
         }
-        const alias = hosts[host];
+        const alias = host === 'ubuntu' ? LOCAL_ALIAS : hosts[host];
         if (!alias) {
           for (const tool of kinds)
             states.push({
@@ -1243,8 +1424,10 @@ export async function loadAnalyticsRemoteSources(
             });
           return;
         }
-        const onHostScan = deps.onHostScan;
-        onHostScan?.(host, 'start');
+        const onHostScan = (scanned: AnalyticsScanHost, phase: 'start' | 'done') => {
+          if (scanned !== 'ubuntu') deps.onHostScan?.(scanned, phase);
+        };
+        onHostScan(host, 'start');
         const failure: ScanFailure = { damaged: false, byKind: new Map() };
         const scan = await scanHost(
           runHelper,
@@ -1252,10 +1435,11 @@ export async function loadAnalyticsRemoteSources(
           host,
           kinds,
           cached,
-          remoteExtraRoots(host, kinds),
+          host === 'ubuntu' ? local.extra : remoteExtraRoots(host, kinds),
           minDateMs,
           failure,
-          captureCwd
+          captureCwd,
+          host === 'ubuntu' ? local.experiments : {}
         );
         if (!scan) {
           parts.set(host, {
@@ -1263,7 +1447,7 @@ export async function loadAnalyticsRemoteSources(
             rows: cached.rows.filter((row) => inWindow(row, minDateMs)),
             srows: cached.srows.filter((row) => sessionInWindow(row, minDateMs)),
           });
-          onHostScan?.(host, 'done');
+          onHostScan(host, 'done');
           const lastFailure: AnalyticsHostFailure = {
             cause: failure.damaged ? 'helper_damaged' : (failure.cause ?? 'helper_failed'),
             exitCode: failure.exitCode ?? null,
@@ -1474,8 +1658,15 @@ export async function loadAnalyticsRemoteSources(
               response.kinds[tool]?.partial !== true &&
               !(tool === 'antigravity' && response.kinds[tool]?.unreadable)
           );
+        // The local scanner owns a kind from its first complete read (DESIGN 16.0 B).
+        const owned =
+          host === 'ubuntu'
+            ? ownedAfter(cached.owned, kinds, kindReads, scannedAt, response, cutKinds, failedKinds)
+            : undefined;
+        if (owned) localOwned = new Set(Object.keys(owned) as AnalyticsRemoteKind[]);
         try {
           const saved = saveCache(file, {
+            ...(owned && Object.keys(owned).length ? { owned } : {}),
             version: CACHE_VERSION,
             fingerprints: prints,
             rows: merged,
@@ -1647,20 +1838,31 @@ export async function loadAnalyticsRemoteSources(
               reader,
             });
         states.push(...noReaderStates(host, discovery.tools, toolsAt ?? null));
-        onHostScan?.(host, 'done');
+        onHostScan(host, 'done');
       })()
     );
   }
   await Promise.all(jobs);
-  for (const [host, marks] of cacheMarks) {
-    const noted = withCacheNote(
-      states.filter((state) => state.host === host),
-      marks,
-      minDateMs
-    );
-    let next = 0;
-    for (let index = 0; index < states.length; index++)
-      if (states[index].host === host) states[index] = noted[next++];
+  for (const list of [sharedStates, localStates])
+    for (const [host, marks] of cacheMarks) {
+      const noted = withCacheNote(
+        list.filter((state) => state.host === host),
+        marks,
+        minDateMs
+      );
+      let next = 0;
+      for (let index = 0; index < list.length; index++)
+        if (list[index].host === host) list[index] = noted[next++];
+    }
+  // The local scanner's kinds join only once owned; until then the collector's numbers stand and
+  // its cell says the scanner is catching up. One step: the collection that sees the first complete
+  // read serves the scanner's rows, and the caller drops the collector's.
+  const catchingUp: Partial<Record<AnalyticsRemoteKind, string>> = {};
+  for (const entry of localResults) if (localOwned.has(entry.tool)) sharedResults.push(entry);
+  for (const entry of localStates) {
+    const tool = entry.tool as AnalyticsRemoteKind;
+    if (!LOCAL_SCANNER_KINDS.includes(tool) || localOwned.has(tool)) sharedStates.push(entry);
+    else catchingUp[tool] = catchUpText(entry);
   }
   const reconcileClaudeMirrors = mirrorReconciler(
     parts,
@@ -1669,5 +1871,17 @@ export async function loadAnalyticsRemoteSources(
     () => deps.claudeLogNames?.() ?? localClaudeLogNames(cacheDir, minDateMs)
   );
   reconcileClaudeMirrors();
-  return { results, states, fetchedAt: new Date(now()).toISOString(), reconcileClaudeMirrors };
+  return {
+    results,
+    states,
+    fetchedAt: new Date(now()).toISOString(),
+    reconcileClaudeMirrors,
+    local: localReady.ok
+      ? {
+          owned: [...localOwned],
+          catchingUp,
+          ...(local.overflow.length ? { tooManyRoots: local.overflow } : {}),
+        }
+      : { owned: [], catchingUp: {}, unavailable: localReady.cause },
+  };
 }

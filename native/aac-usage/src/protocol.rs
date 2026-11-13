@@ -17,6 +17,7 @@ pub const KINDS: [&str; 6] = ["claude", "codex", "omp", "muse", "zcode", "antigr
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 const EXTRA_ROOTS_MAX: usize = 16;
 const EXTRA_ZCODE_DBS_MAX: usize = 2048;
+const EXPERIMENT_ROOTS_MAX: usize = 256;
 
 pub struct Request {
     pub kinds: Vec<String>,
@@ -24,6 +25,9 @@ pub struct Request {
     pub immutable: bool,
     pub fingerprints: Map<String, Value>,
     pub extra_roots: Map<String, Value>,
+    /// Log folders an experiment harness kept (DESIGN 16.5): read through the copy rule, origin
+    /// `experiment`. Unlike `extraRoots`, which are tool homes read as defaults.
+    pub experiment_roots: Map<String, Value>,
     pub budget: f64,
     pub presence: bool,
     pub messages: bool,
@@ -59,6 +63,7 @@ pub fn parse_request(raw: &[u8]) -> Result<Request, String> {
         "immutableSqlite",
         "fingerprints",
         "extraRoots",
+        "experimentRoots",
         "deadlineMs",
         "zcodeRecords",
         "presence",
@@ -121,6 +126,20 @@ pub fn parse_request(raw: &[u8]) -> Result<Request, String> {
             return Err("request.extraRoots must map kinds to absolute paths".into());
         }
     }
+    let experiment_roots = match request.get("experimentRoots") {
+        None => Map::new(),
+        Some(Value::Object(map)) => map.clone(),
+        _ => return Err("request.experimentRoots must map kinds to absolute paths".into()),
+    };
+    for (kind, paths) in &experiment_roots {
+        let ok = ["claude", "codex", "omp", "muse"].contains(&kind.as_str())
+            && paths.as_array().is_some_and(|list| {
+                list.len() <= EXPERIMENT_ROOTS_MAX && list.iter().all(valid_extra_root)
+            });
+        if !ok {
+            return Err("request.experimentRoots must map kinds to absolute paths".into());
+        }
+    }
     let budget = match request.get("deadlineMs") {
         None => 20.0,
         Some(Value::Number(n)) => match n.as_f64() {
@@ -135,6 +154,7 @@ pub fn parse_request(raw: &[u8]) -> Result<Request, String> {
         immutable,
         fingerprints,
         extra_roots,
+        experiment_roots,
         budget,
         presence: flag("presence", false)?,
         messages: flag("messages", false)?,
@@ -143,10 +163,18 @@ pub fn parse_request(raw: &[u8]) -> Result<Request, String> {
     })
 }
 
+
 fn extras(request: &Request, kind: &str) -> Vec<PathBuf> {
-    request
-        .extra_roots
-        .get(kind)
+    paths_of(&request.extra_roots, kind)
+}
+
+/// The experiment log folders of a kind: the request's (DESIGN 16.0 B) and, later, discovery's.
+fn experiments(request: &Request, kind: &str) -> Vec<PathBuf> {
+    paths_of(&request.experiment_roots, kind)
+}
+
+fn paths_of(map: &Map<String, Value>, kind: &str) -> Vec<PathBuf> {
+    map.get(kind)
         .and_then(Value::as_array)
         .map(|list| list.iter().filter_map(Value::as_str).map(PathBuf::from).collect())
         .unwrap_or_default()
@@ -228,7 +256,14 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
         let cut_before = collector.truncated;
         let state = match kind.as_str() {
             "claude" => read::claude::collect(&mut collector, home, env, &extras(request, "claude"), &instances),
-            "codex" => read::codex::collect(&mut collector, home, env, &extras(request, "codex"), &instances),
+            "codex" => read::codex::collect(
+                &mut collector,
+                home,
+                env,
+                &extras(request, "codex"),
+                &experiments(request, "codex"),
+                &instances,
+            ),
             "omp" => read::omp::collect(&mut collector, home, env, &extras(request, "omp"), &instances),
             "muse" => read::muse::collect(&mut collector, home, env, &extras(request, "muse")),
             "zcode" => read::zcode::collect(&mut collector, home, env, request.immutable, &extras(request, "zcode")),

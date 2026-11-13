@@ -144,11 +144,15 @@ describe('a log read across calls', () => {
       ),
       '2026-11-13T10:00:00Z'
     );
-    expect(codexCell(first.states)?.detail).toContain(`${NAME} (3.2 GB, 31% read)`);
+    expect(codexCell(first.states)?.detail).toContain(
+      `${NAME} (3.2 GB, partly read: 1,450,000,000 of 4,637,763,647 bytes)`
+    );
     expect(JSON.stringify(first.states)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
     // After a restart, the cell still names it.
     const restarted = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
-    expect(codexCell(restarted.states)?.detail).toContain(`${NAME} (3.2 GB, 31% read)`);
+    expect(codexCell(restarted.states)?.detail).toContain(
+      `${NAME} (3.2 GB, partly read: 1,450,000,000 of 4,637,763,647 bytes)`
+    );
 
     // Call 2 reads on from there to the end: its rows add to the first call's.
     const second = await scan(
@@ -233,8 +237,12 @@ describe('naming and the fallback', () => {
     }));
     const text = unfinishedText(list, 9);
     expect(text).toStartWith('9 logs not read to the end yet: ');
-    expect(text).toContain('rollout-2026-11-01T00-00-00.jsonl.zst (700 MB, 10% read)');
-    expect(text).toContain('rollout-2026-11-02T00-00-00.jsonl.zst (700 MB, 100 MB read)');
+    expect(text).toContain(
+      'rollout-2026-11-01T00-00-00.jsonl.zst (700 MB, partly read: 104,857,600 of 1,048,576,000 bytes)'
+    );
+    expect(text).toContain(
+      'rollout-2026-11-02T00-00-00.jsonl.zst (700 MB, partly read: 104,857,600 bytes, full size not stated in the file)'
+    );
     expect(text).toContain('and 4 more');
   });
 

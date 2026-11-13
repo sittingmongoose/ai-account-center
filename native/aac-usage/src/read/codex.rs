@@ -215,9 +215,12 @@ pub fn collect(
     home: &Path,
     env: &Env,
     extra: &[PathBuf],
+    experiments: &[PathBuf],
     instances: &[T3Instance],
 ) -> &'static str {
-    let plan = discover::codex_roots(home, env, extra, instances);
+    let mut plan = discover::codex_roots(home, env, extra, instances);
+    // Experiment log folders are read through the copy rule, like other homes' logs (DESIGN 16.5).
+    plan.others.extend(experiments.iter().map(|p| (p.clone(), "experiment")));
     for (path, origin) in plan.defaults.iter().chain(plan.others.iter()) {
         collector.note_root("codex", path, origin);
     }

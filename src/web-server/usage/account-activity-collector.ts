@@ -142,7 +142,37 @@ interface StalledLog {
   name: string;
   sizeBytes: number;
   readThroughBytes: number;
+  /** The decoded size its zstd frame header states, when it does. */
+  decodedBytes?: number;
   terminal: boolean;
+}
+
+/** A zstd frame's stated content size, from its header alone (RFC 8878 3.1.1.1), or undefined. */
+export function zstdContentSize(file: string): number | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, 'r');
+    const header = Buffer.alloc(18);
+    const read = fs.readSync(fd, header, 0, 18, 0);
+    if (read < 6 || header.readUInt32LE(0) !== 0xfd2fb528) return undefined;
+    const descriptor = header[4];
+    const sizeFlag = descriptor >> 6;
+    const single = (descriptor >> 5) & 1;
+    const dictFlag = descriptor & 3;
+    const fieldSize = [single ? 1 : 0, 2, 4, 8][sizeFlag];
+    if (fieldSize === 0) return undefined;
+    const at = 5 + (single ? 0 : 1) + [0, 1, 2, 4][dictFlag];
+    if (at + fieldSize > read) return undefined;
+    if (fieldSize === 1) return header[at];
+    if (fieldSize === 2) return header.readUInt16LE(at) + 256;
+    if (fieldSize === 4) return header.readUInt32LE(at);
+    const value = header.readBigUInt64LE(at);
+    return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
 const CONVERSATION_ID = /[-_]?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -160,6 +190,7 @@ function stalledLogOf(
       name: path.basename(file).replace(CONVERSATION_ID, '').slice(0, 120),
       sizeBytes: stats?.size ?? value.size,
       readThroughBytes: checkpointProgress(value),
+      ...(zstdContentSize(file) !== undefined ? { decodedBytes: zstdContentSize(file) } : {}),
       terminal,
     },
   };
@@ -191,7 +222,7 @@ function compressedReplayDetail(
       .slice(0, 5)
       .map(
         (log) =>
-          `${log.name} (${sizeText(log.sizeBytes)}, ${sizeText(log.readThroughBytes)} decoded so far${log.terminal ? ', paused' : ''})`
+          `${log.name} (${sizeText(log.sizeBytes)}, partly read: ${log.readThroughBytes.toLocaleString('en-US')}${log.decodedBytes ? ` of ${log.decodedBytes.toLocaleString('en-US')}` : ''} bytes${log.decodedBytes ? '' : ', full size not stated in the file'}${log.terminal ? ', paused' : ''})`
       );
     parts.push(
       `Not finished: ${named.join(', ')}${logs.length > named.length ? ` and ${logs.length - named.length} more` : ''}.`

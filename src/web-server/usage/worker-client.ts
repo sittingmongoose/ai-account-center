@@ -108,7 +108,13 @@ export interface CodexPartitionFileResult {
   compressedReplayTerminal?: boolean;
   largeCodexRead?: LargeCodexReadSpec;
   /** A compressed log not read to its end, named without its conversation id (DESIGN 16.1). */
-  stalledLog?: { name: string; sizeBytes: number; readThroughBytes: number; terminal: boolean };
+  stalledLog?: {
+    name: string;
+    sizeBytes: number;
+    readThroughBytes: number;
+    decodedBytes?: number;
+    terminal: boolean;
+  };
 }
 
 /**

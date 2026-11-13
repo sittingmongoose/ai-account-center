@@ -19,13 +19,17 @@ import { collectorConcurrency, runBounded } from '../usage/collector-concurrency
 import type { PlanWorkerRequest, PlanWorkerResponse } from '../usage/analytics-plan-worker';
 import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
+  LOCAL_SCANNER_KINDS,
   analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
+  localScannerOwned,
   type AnalyticsRemoteSourceState,
+  type LocalScannerAnswer,
 } from './analytics-remote-sources';
 import {
   REMOTE_ANALYTICS_HOSTS,
+  localUsageScanReady,
   type AnalyticsRemoteHost,
   type AnalyticsRemoteKind,
 } from './analytics-remote-transport';
@@ -118,6 +122,15 @@ type RemoteAnswer = {
   fetchedAt?: string;
   results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
+  /** The scanner on this computer (DESIGN 16.0 B): the kinds it owns, or why it did not run. */
+  local?: LocalScannerAnswer;
+};
+
+/** How the local reader is labelled while the scanner cannot run here. */
+const LOCAL_FALLBACK_WORDS: Record<string, string> = {
+  binary_not_built: 'the usage scanner is not built for this computer',
+  binary_missing: "the usage scanner's file is missing from this install",
+  binary_damaged: "the usage scanner's file does not match its build",
 };
 
 interface LocalRequestIdentity {
@@ -296,6 +309,8 @@ export interface AccountAnalyticsActivityDeps {
    * remote cache when `remote` is the default.
    */
   remoteCached?: (minDateMs: number) => RemoteAnswer | null;
+  /** The kinds the scanner owns on this computer (DESIGN 16.0 B); tests pass their own. */
+  localScannerOwned?: () => Iterable<string>;
   now?: () => number;
   scope?: () => string;
   /**
@@ -747,6 +762,18 @@ export class AccountAnalyticsActivityService {
     this.largeCodexReads.enqueue(data.scan.largeCodexReads);
   }
 
+  /** The kinds the scanner owns here, while it can run; none in tests that inject the remote. */
+  private localScannerOwnedKinds(): Set<string> {
+    if (this.deps.localScannerOwned) return new Set(this.deps.localScannerOwned());
+    if (this.deps.remote !== undefined) return new Set();
+    try {
+      if (!localUsageScanReady().ok) return new Set();
+      return localScannerOwned(path.join((this.deps.scope ?? getCcsDir)(), 'cache'));
+    } catch {
+      return new Set();
+    }
+  }
+
   private cachedRemote(cutoff: number, scope: string): RemoteAnswer | null {
     if (this.deps.remoteCached) return this.deps.remoteCached(cutoff);
     return this.deps.remote === undefined
@@ -799,9 +826,19 @@ export class AccountAnalyticsActivityService {
     let failed = false;
     // The roots a few stats find start reading at once; the OMP marker scan's roots join the queue
     // when that scan finishes, without holding the others back.
-    const plan: LocalRequestPlan = this.deps.requests
+    const planned: LocalRequestPlan = this.deps.requests
       ? { ...injectedRequestPlan(this.deps.requests), reused: false }
       : await localRequestPlan(state.requests, this.deps.planThread);
+    // A kind the local scanner owns is not read by the collectors at all (DESIGN 16.0 B).
+    const scannerOwned = this.localScannerOwnedKinds();
+    const notOwned = (entry: AccountAnalyticsActivityRequest) => !scannerOwned.has(entry.provider);
+    const plan: LocalRequestPlan = scannerOwned.size
+      ? {
+          ...planned,
+          ready: planned.ready.filter(notOwned),
+          later: planned.later.then((entries) => entries.filter(notOwned)),
+        }
+      : planned;
     let discoveryFailed = false;
     const later = plan.later.catch((): AccountAnalyticsActivityRequest[] => {
       failed = true;
@@ -1271,6 +1308,9 @@ export class AccountAnalyticsActivityService {
     const merged = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
     for (const [provider, data] of collected) merged.set(provider, [...data]);
     let answer = remoteAnswer === undefined ? state.remote : remoteAnswer;
+    // A kind the local scanner owns comes from its answer alone; the collector's rows for it go,
+    // in the same step that adds the scanner's (DESIGN 16.0 B).
+    for (const kind of answer?.local?.owned ?? []) merged.delete(kind);
     const retainingClaude = args.retainedClaudeRemote !== undefined;
     if (retainingClaude) {
       answer = {
@@ -1331,7 +1371,8 @@ export class AccountAnalyticsActivityService {
       presence,
       remotePending,
       pendingHosts,
-      localReadAt
+      localReadAt,
+      answer?.local
     );
     for (const source of state.sourceStates) {
       if (
@@ -1649,9 +1690,11 @@ export class AccountAnalyticsActivityService {
     presence: Record<AccountAnalyticsActivityProvider, boolean> | null,
     remotePending = false,
     pendingHosts: readonly AnalyticsRemoteHost[] = [],
-    localReadAt = new Map<AccountAnalyticsActivityProvider, string>()
+    localReadAt = new Map<AccountAnalyticsActivityProvider, string>(),
+    local?: LocalScannerAnswer
   ): AccountAnalyticsSource[] {
     const entries: AccountAnalyticsSource[] = [];
+    const scannerOwned = new Set<string>(local?.owned ?? []);
     const previous = new Map(
       state.sourceStates.map((entry) => [`${entry.tool}\0${entry.host}`, entry])
     );
@@ -1664,6 +1707,8 @@ export class AccountAnalyticsActivityService {
       'jsonl',
       'antigravity',
     ] as const) {
+      // The scanner's own cell for this computer stands in for the collector's (DESIGN 16.0 B).
+      if (scannerOwned.has(tool)) continue;
       const key = `${tool}\0ubuntu`;
       const old = previous.get(key);
       const pending = unfinished.get(tool);
@@ -1745,6 +1790,22 @@ export class AccountAnalyticsActivityService {
           detail: attempted.has(tool) ? 'local scan failed' : 'no usage logs found on this host',
         });
       }
+    }
+    // While the local scanner catches up on a kind, or cannot run here, the collector's cell says so.
+    for (const entry of entries) {
+      if (
+        entry.host !== 'ubuntu' ||
+        !LOCAL_SCANNER_KINDS.includes(entry.tool as AnalyticsRemoteKind)
+      )
+        continue;
+      const note = local?.catchingUp[entry.tool as AnalyticsRemoteKind]
+        ? local.catchingUp[entry.tool as AnalyticsRemoteKind]
+        : local?.unavailable
+          ? `read by the built-in reader: ${LOCAL_FALLBACK_WORDS[local.unavailable] ?? local.unavailable}`
+          : local?.tooManyRoots?.includes(entry.tool as AnalyticsRemoteKind)
+            ? 'read by the built-in reader: this computer has more experiment folders than the usage scanner takes in one request'
+            : null;
+      if (note) entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
     }
     if (remote) {
       for (const entry of remote) entries.push({ ...entry });

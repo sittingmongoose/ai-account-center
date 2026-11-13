@@ -1,5 +1,8 @@
 import { ANALYTICS_TOOLS, type AnalyticsTool } from '../usage/analytics-tools';
 import { execFile } from 'child_process';
+import { createHash } from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import { readAnalyticsHelper } from './analytics-remote-helper';
@@ -9,6 +12,7 @@ import {
   UsageScanInstallError,
   binaryMarker,
   installUsageScan,
+  localUsageScan,
   readUsageScanManifest,
   scanCommand,
   type UsageScanManifest,
@@ -16,10 +20,16 @@ import {
 
 /**
  * The computers the packaged helper scans over ssh, in scan order: the Mac, Windows and Nas1. The
- * local Ubuntu computer is read by the local collectors, never through this transport.
+ * local Ubuntu computer is read by the local collectors, and by the same scanner run in place for
+ * the kinds it owns there (`runLocalUsageScan`, DESIGN 16.0 B), never over ssh.
  */
 export const REMOTE_ANALYTICS_HOSTS = REMOTE_HOSTS;
 export type AnalyticsRemoteHost = (typeof REMOTE_ANALYTICS_HOSTS)[number];
+/**
+ * A computer the usage scanner reads: the remote ones over ssh, and (DESIGN 16.0 B) the
+ * dashboard's own computer, `ubuntu`, run locally for the kinds the scanner owns there.
+ */
+export type AnalyticsScanHost = AnalyticsRemoteHost | 'ubuntu';
 /** The ssh alias to reach each remote host, or null when none is configured. */
 export type AnalyticsRemoteAliases = Record<AnalyticsRemoteHost, string | null>;
 export type AnalyticsRemoteKind = AnalyticsTool;
@@ -236,7 +246,14 @@ export interface AnalyticsRemoteKindResult {
 
 /** Where a root came from (the usage-report contract's `origin`). */
 export type AnalyticsRootOrigin =
-  'default' | 'env' | 'tool_config' | 't3_instance' | 'ccs_instance' | 'signature' | 'extra';
+  | 'default'
+  | 'env'
+  | 'tool_config'
+  | 't3_instance'
+  | 'ccs_instance'
+  | 'signature'
+  | 'extra'
+  | 'experiment';
 const ROOT_ORIGINS: ReadonlySet<string> = new Set([
   'default',
   'env',
@@ -245,6 +262,7 @@ const ROOT_ORIGINS: ReadonlySet<string> = new Set([
   'ccs_instance',
   'signature',
   'extra',
+  'experiment',
 ]);
 /** Why a computer has a tool apart from its logs. */
 const SIGNALS: ReadonlySet<string> = new Set(['home', 'binary', 't3_instance']);
@@ -541,6 +559,11 @@ export interface AnalyticsRemoteRequest {
    * they leave this host.
    */
   extraRoots?: Partial<Record<AnalyticsRemoteKind, string[]>>;
+  /**
+   * Rust scanner only: log folders an experiment harness kept (DESIGN 16.5), read through the
+   * copy rule with origin `experiment`. On the dashboard's own computer, the background walk's.
+   */
+  experimentRoots?: Partial<Record<AnalyticsRemoteKind, string[]>>;
   /** Rust scanner only: also report which tools without a reader the computer has. */
   presence?: boolean;
   /** Rust scanner only: send each session's working folder (home as ~); the cwd capture setting. */
@@ -561,6 +584,23 @@ function isValidExtraRoot(value: unknown): value is string {
     !value.includes('\0') &&
     !value.includes('..') &&
     (path.posix.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value))
+  );
+}
+
+/** At most this many experiment folders per kind travel in one request. */
+export const MAX_EXPERIMENT_ROOTS = 256;
+
+function isValidExperimentRoots(
+  value: unknown
+): value is Partial<Record<AnalyticsRemoteKind, string[]>> {
+  if (value === undefined) return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.entries(value as Record<string, unknown>).every(
+    ([kind, roots]) =>
+      (kind === 'claude' || kind === 'codex' || kind === 'omp' || kind === 'muse') &&
+      Array.isArray(roots) &&
+      roots.length <= MAX_EXPERIMENT_ROOTS &&
+      (roots as unknown[]).every(isValidExtraRoot)
   );
 }
 
@@ -1090,6 +1130,9 @@ async function runScanner(
       immutableSqlite: true,
       fingerprints: request.fingerprints,
       extraRoots: request.extraRoots ?? {},
+      ...(request.experimentRoots && isValidExperimentRoots(request.experimentRoots)
+        ? { experimentRoots: request.experimentRoots }
+        : {}),
       deadlineMs: 20_000,
       ...(request.presence === true ? { presence: true } : {}),
       ...(request.cwd === false ? { cwd: false } : {}),
@@ -1231,15 +1274,123 @@ export async function runAnalyticsRemoteScan(
   // The Python helper refuses fields it does not know; it reads the defaults and T3 homes only.
   // It cannot resume a part-read log: given that print it would take the file as read to its end,
   // so such prints are left out and Python reads the file whole (DESIGN 16.1).
-  const { presence: _presence, cwd: _cwd, ...older } = request;
+  const { presence: _presence, cwd: _cwd, experimentRoots: _experiments, ...older } = request;
   void _presence;
   void _cwd;
+  void _experiments;
   older.fingerprints = withoutPartialPrints(request.fingerprints);
   const answer = await python(sshHost, platform, older, {
     ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
     ...(deps.helperPath !== undefined ? { helperPath: deps.helperPath } : {}),
   });
   return { ...answer, reader: { name: 'python-fallback', cause: cause ?? 'binary_failed' } };
+}
+
+/** The local scanner's budget: inside the 60 s collection, above one decode of the largest log. */
+export const LOCAL_SCAN_DEADLINE_MS = 40_000;
+
+const localDigests = new Map<string, string>();
+
+/** The SHA-256 of the local binary, re-read whenever its size or mtime changes. */
+function localDigest(file: string): string | null {
+  try {
+    const stat = fs.statSync(file);
+    const key = `${file}\0${stat.size}\0${stat.mtimeMs}`;
+    const known = localDigests.get(key);
+    if (known) return known;
+    const digest = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    localDigests.clear();
+    localDigests.set(key, digest);
+    return digest;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the packaged scanner can read this computer (DESIGN 16.0 B): built for its target, in
+ * place, and matching its pinned digest. Otherwise the cause, which labels the TypeScript fallback.
+ */
+export function localUsageScanReady(
+  scanner: ReturnType<typeof localUsageScan> = localUsageScan()
+): { ok: true } | { ok: false; cause: 'binary_not_built' | 'binary_missing' | 'binary_damaged' } {
+  if (!scanner.ok) return scanner;
+  return localDigest(scanner.file) === scanner.sha256
+    ? { ok: true }
+    : { ok: false, cause: 'binary_damaged' };
+}
+
+/**
+ * The scanner on the dashboard's own computer: the same request and answer as a remote scan, run
+ * in place at low priority, with no ssh and no Python fallback (the TypeScript collectors are the
+ * fallback there). DESIGN 16.0 B.
+ */
+export async function runLocalUsageScan(
+  request: AnalyticsRemoteRequest,
+  deps: { scanner?: ReturnType<typeof localUsageScan>; timeoutMs?: number } = {}
+): Promise<AnalyticsRemoteResponse> {
+  const scanner = deps.scanner ?? localUsageScan();
+  if (!scanner.ok || !localUsageScanReady(scanner).ok)
+    throw new AnalyticsRemoteTransportError(false, 'helper_failed');
+  const input = Buffer.from(
+    JSON.stringify({
+      kinds: [...new Set(request.kinds)],
+      minDateMs: Math.floor(request.minDateMs),
+      immutableSqlite: true,
+      fingerprints: request.fingerprints,
+      extraRoots: request.extraRoots ?? {},
+      ...(request.experimentRoots && isValidExperimentRoots(request.experimentRoots)
+        ? { experimentRoots: request.experimentRoots }
+        : {}),
+      deadlineMs: LOCAL_SCAN_DEADLINE_MS,
+      ...(request.presence === true ? { presence: true } : {}),
+      ...(request.cwd === false ? { cwd: false } : {}),
+    })
+  );
+  if (input.length > MAX_RESPONSE_BYTES)
+    throw new ValidationError('Analytics remote request is invalid.');
+  const stdout = await new Promise<string>((resolve, reject) => {
+    const child = execFile(
+      scanner.file,
+      [],
+      {
+        encoding: 'utf8',
+        timeout: deps.timeoutMs ?? LOCAL_SCAN_DEADLINE_MS + 20_000,
+        maxBuffer: MAX_RESPONSE_BYTES,
+        windowsHide: true,
+      },
+      (error, result) => {
+        if (error) {
+          const failure = error as NodeJS.ErrnoException & { signal?: string | null };
+          const timedOut = error.killed === true && failure.signal === 'SIGTERM';
+          reject(
+            new AnalyticsRemoteTransportError(
+              timedOut,
+              failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+                ? 'bad_response'
+                : timedOut
+                  ? 'timeout'
+                  : 'helper_failed',
+              typeof failure.code === 'number' ? failure.code : null
+            )
+          );
+          return;
+        }
+        resolve(typeof result === 'string' ? result : '');
+      }
+    );
+    try {
+      if (child.pid) os.setPriority(child.pid, 10);
+    } catch {
+      /* Priority is a courtesy; the scan runs either way. */
+    }
+    child.stdin?.on('error', () => {
+      /* The exit is handled above. */
+    });
+    child.stdin?.end(input);
+  });
+  const answer = parseAnalyticsRemoteResponse(stdout);
+  return answer.reader ? answer : { ...answer, reader: { name: 'aac-usage-scan' } };
 }
 
 /** Prints of logs read to their end only, without the resume fields the Python helper lacks. */

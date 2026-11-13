@@ -88,6 +88,41 @@ export function readUsageScanManifest(dir = usageScanDir()): UsageScanManifest |
   }
 }
 
+/** This computer's scanner target, or null where none is built (DESIGN 16.0 B). */
+export function localUsageScanTarget(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): UsageScanTarget | null {
+  if (platform === 'linux' && arch === 'x64') return 'x86_64-unknown-linux-gnu';
+  if (platform === 'darwin' && arch === 'arm64') return 'aarch64-apple-darwin';
+  if (platform === 'darwin' && arch === 'x64') return 'x86_64-apple-darwin';
+  if (platform === 'win32' && arch === 'x64') return 'x86_64-pc-windows-msvc';
+  return null;
+}
+
+/**
+ * The packaged scanner for this computer, run in place on the dashboard's own computer: its path
+ * and pinned digest, or why there is none (`binary_not_built`: no manifest or no build for this
+ * target; `binary_missing`: the manifest names a file that is not there or has another size).
+ */
+export function localUsageScan(
+  manifest: UsageScanManifest | null = readUsageScanManifest()
+):
+  | { ok: true; file: string; sha256: string; size: number; target: UsageScanTarget }
+  | { ok: false; cause: 'binary_not_built' | 'binary_missing' } {
+  const target = localUsageScanTarget();
+  const entry = target ? manifest?.targets[target] : undefined;
+  if (!manifest || !target || !entry) return { ok: false, cause: 'binary_not_built' };
+  const file = path.join(manifest.dir, entry.file);
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size !== entry.size) return { ok: false, cause: 'binary_missing' };
+  } catch {
+    return { ok: false, cause: 'binary_missing' };
+  }
+  return { ok: true, file, sha256: entry.sha256, size: entry.size, target };
+}
+
 /** The copy's file name on the computer: the digest names the build. */
 export function remoteName(target: UsageScanTarget, sha256: string): string {
   return `${USAGE_SCAN_NAME}-${sha256.slice(0, 12)}${target.endsWith('windows-msvc') ? '.exe' : ''}`;
