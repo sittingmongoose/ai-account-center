@@ -217,3 +217,11 @@ describe('run-test-bucket', () => {
     ]);
   });
 });
+
+describe('slow bucket build on machines without local Rust builds', () => {
+  test('builds only the server when AAC_NO_LOCAL_RUST_BUILD is 1', () => {
+    expect(bucket.slowBucketBuildScript({ AAC_NO_LOCAL_RUST_BUILD: '1' })).toBe('build:server');
+    expect(bucket.slowBucketBuildScript({})).toBe('build');
+    expect(bucket.slowBucketBuildScript({ AAC_NO_LOCAL_RUST_BUILD: '0' })).toBe('build');
+  });
+});

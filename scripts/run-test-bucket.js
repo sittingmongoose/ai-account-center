@@ -203,12 +203,18 @@ function shouldVerifyRunFileCount(run) {
   return run.selected.every((file) => usesBunTestRunner(file));
 }
 
+// A machine that opts out of local Rust/WebAssembly builds (AAC_NO_LOCAL_RUST_BUILD=1)
+// gets only the TypeScript server build, so a missing dist/ never starts a UI compile.
+function slowBucketBuildScript(env = process.env) {
+  return env.AAC_NO_LOCAL_RUST_BUILD === '1' ? 'build:server' : 'build';
+}
+
 function ensureBuildForSlowBucket() {
   if (fs.existsSync(path.join(rootDir, 'dist', 'ccs.js'))) {
     return 0;
   }
 
-  const build = spawnSync('bun', ['run', 'build'], {
+  const build = spawnSync('bun', ['run', slowBucketBuildScript()], {
     cwd: rootDir,
     stdio: 'inherit',
     shell: process.platform === 'win32',
@@ -403,6 +409,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  slowBucketBuildScript,
   slowTests,
   fastJsTests,
   isolatedTests,
