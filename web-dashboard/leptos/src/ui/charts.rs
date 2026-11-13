@@ -442,13 +442,17 @@ pub(crate) fn pop_max_heights(vh: f64, top: f64, anchor_top: f64, safe_bottom: f
 }
 
 /// Reads the bottom safe inset from the page (`--safe-bottom`).
-fn page_safe_bottom() -> f64 {
+fn page_safe(name: &str) -> f64 {
     document()
         .document_element()
         .and_then(|r| window().get_computed_style(&r).ok().flatten())
-        .and_then(|st| st.get_property_value("--safe-bottom").ok())
+        .and_then(|st| st.get_property_value(name).ok())
         .map(|v| v.trim_end_matches("px").parse::<f64>().unwrap_or(0.0))
         .unwrap_or(0.0)
+}
+
+fn page_safe_bottom() -> f64 {
+    page_safe("--safe-bottom")
 }
 
 /// Reads the content bounds from the page's chrome (`data-chrome`, `data-rail-side`, `--rail-w`).
@@ -468,7 +472,26 @@ fn page_bounds(vw: f64) -> (f64, f64) {
         .and_then(|st| st.get_property_value("--rail-w").ok())
         .map(|v| v.trim_end_matches("px").parse::<f64>().unwrap_or(0.0))
         .unwrap_or(0.0);
-    content_bounds(vw, &chrome, &side, rail_w)
+    let (lo, hi) = content_bounds(vw, &chrome, &side, rail_w);
+    within_safe(
+        lo,
+        hi,
+        vw,
+        page_safe("--safe-left"),
+        page_safe("--safe-right"),
+    )
+}
+
+/// Content bounds kept out of the left and right safe insets (a phone on its side has its notch there).
+pub(crate) fn within_safe(
+    lo: f64,
+    hi: f64,
+    vw: f64,
+    safe_left: f64,
+    safe_right: f64,
+) -> (f64, f64) {
+    let (l, h) = (lo.max(safe_left), hi.min(vw - safe_right));
+    if h <= l { (lo, hi) } else { (l, h) }
 }
 
 /// The hover tip: one floating card for every element with `data-tip` inside `children`. A mouse shows it on hover;
@@ -831,6 +854,15 @@ mod tests {
             assert!(v >= last && v <= 1.0);
             last = v;
         }
+    }
+
+    #[test]
+    fn a_phone_on_its_side_keeps_panels_out_of_the_notch() {
+        // iPhone landscape: 812 wide, 62 px safe on each side; a panel never starts under the notch
+        assert_eq!(within_safe(8.0, 804.0, 812.0, 62.0, 62.0), (62.0, 750.0));
+        assert_eq!(within_safe(84.0, 943.0, 951.0, 0.0, 0.0), (84.0, 943.0));
+        // insets that leave nothing keep the plain bounds
+        assert_eq!(within_safe(8.0, 92.0, 100.0, 60.0, 60.0), (8.0, 92.0));
     }
 
     #[test]

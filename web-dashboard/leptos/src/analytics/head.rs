@@ -257,11 +257,12 @@ fn DateButton() -> impl IntoView {
                     }).collect_view()}
                 </div>
                 <div class="cal-nav">
-                    <button class="btn ghost sm icon-only" aria-label="Previous month" disabled=move || month.get() <= 0
-                        on:click=move |_| month.update(|m| *m = (*m - 1).max(0))><Icon name="chev-left"/></button>
+                    // braced: an unbraced closure with a comparison would end the tag early in `view!`
+                    <button class="btn ghost sm icon-only" aria-label="Previous month" disabled={move || month.get() <= 0}
+                        on:click={move |_| month.update(|m| *m = (*m - 1).max(0))}><Icon name="chev-left"/></button>
                     <b class="cal-month">{month_label}</b>
-                    <button class="btn ghost sm icon-only" aria-label="Next month" disabled=move || month.get() >= cal.with(|c| c.months.len() as i32) - 1
-                        on:click=move |_| { let last = cal.with_untracked(|c| c.months.len() as i32) - 1; month.update(|m| *m = (*m + 1).min(last)) }><Icon name="chev-right"/></button>
+                    <button class="btn ghost sm icon-only" aria-label="Next month" disabled={move || month.get() >= cal.with(|c| c.months.len() as i32) - 1}
+                        on:click={move |_| { let last = cal.with_untracked(|c| c.months.len() as i32) - 1; month.update(|m| *m = (*m + 1).min(last)) }}><Icon name="chev-right"/></button>
                 </div>
                 <div class="cal-grid" on:pointerleave=move |_| hover.set(-1)>
                     {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].into_iter().map(|w| view! { <span class="cap cal-wd">{w}</span> }).collect_view()}
