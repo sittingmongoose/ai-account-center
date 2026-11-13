@@ -2561,3 +2561,44 @@ test('unavailable removal checks show a disabled action with an honest retry rea
   assert.equal(remove.coming, false);
   assert.match(remove.tip, /Could not check/);
 });
+
+test('update rows name their cause instead of "Failed" and show what ran, which copy and its output', () => {
+  const now = Date.parse('2026-11-13T05:00:00.000Z');
+  const row = (platform, appId, appLabel, status, diagnostics, extra = {}) => ({
+    appId, appLabel, platform, status, previousVersion: '1.0.0', version: '1.0.0', message: 'Fixed words.', diagnostics, ...extra,
+  });
+  const view = updateResultsView({
+    state: 'completed', startedAt: '2026-11-13T04:55:00.000Z', finishedAt: '2026-11-13T04:58:00.000Z', activePlatform: null,
+    results: [
+      row('windows', 'cursor-cli', 'Cursor CLI', 'action_required',
+        { cause: 'auth_required', reason: 'http_401', command: 'cursor-agent update', exitCode: 1, phases: { update: 650 }, tail: 'Update failed: [unauthenticated] Error\nsecond line' }),
+      row('mac', 't3-acp-adapters', 'T3 ACP adapters', 'failed', {
+        cause: 'wrong_prefix', reason: 'owner_unchanged',
+        owner: { packages: [{ package: 'zcode-acp-server', manager: 'npm', prefix: '/opt/homebrew', source: 't3-config', version: '0.84.2' }],
+          elsewhere: [{ package: 'zcode-acp-server', prefix: '~/.local/opt/node-v26.13.1-darwin-arm64', version: '0.84.3' }] },
+      }, { version: null, previousVersion: null, parts: [{ name: 'zcode-acp-server', previousVersion: '0.84.2', version: '0.84.2' }] }),
+      row('alexis', 'antigravity-acp', 'Antigravity ACP (T3)', 'failed', { cause: 'lost_session_reply', reason: 'reply_empty' }),
+      row('nas1', 'antigravity-acp', 'Antigravity ACP (T3)', 'action_required', { cause: 'signin_needed', reason: 'token_storage_change', owner: { runtime: 'harness', target: 't3-offer' } },
+        { previousVersion: '1.4.5', version: '1.4.5', heldVersion: '1.5.8' }),
+      row('ubuntu', 'omp', 'OMP', 'current', { cause: 'none', command: 'omp update' }),
+      // An older helper's row: no diagnostics, the old words.
+      { appId: 'muse-code', appLabel: 'Muse Code', platform: 'ubuntu', status: 'failed', previousVersion: null, version: null, message: 'The app update failed; check its supported installer.' },
+    ],
+  }, now);
+  const item = (host, app) => view.hosts.find((h) => h.id === host).items.find((i) => i.app === app);
+  const cursor = item('windows', 'Cursor CLI');
+  assert.deepEqual([cursor.result, cursor.tone], ['Sign-in needed', 'warn']);
+  assert.match(cursor.tip, /Cause: the app refused its sign-in \(http_401\) · ran cursor-agent update \(exit 1\) · update 650ms · output: Update failed: \[unauthenticated\] Error \| second line$/);
+  const adapters = item('mac', 'T3 ACP adapters');
+  assert.deepEqual([adapters.result, adapters.tone], ['Updated the wrong copy', 'crit']);
+  assert.match(adapters.tip, /zcode-acp-server in \/opt\/homebrew \(what T3 runs\) · another zcode-acp-server in ~\/\.local\/opt\/node-v26\.13\.1-darwin-arm64 is 0\.84\.3/);
+  assert.equal(item('alexis', 'Antigravity ACP (T3)').result, 'T3 reply lost');
+  const hold = item('nas1', 'Antigravity ACP (T3)');
+  assert.equal(hold.result, 'Sign-in needed');
+  assert.match(hold.tip, /1\.5\.8 is available · version 1\.4\.5 · Cause: a new sign-in is needed \(token_storage_change\)/);
+  assert.match(hold.tip, /target from T3's offer/);
+  const omp = item('ubuntu', 'OMP');
+  assert.equal(omp.result, 'Already current');
+  assert.doesNotMatch(omp.tip, /Cause:/);
+  assert.deepEqual([item('ubuntu', 'Muse Code').result, item('ubuntu', 'Muse Code').tip], ['Failed', 'The app update failed; check its supported installer.']);
+});

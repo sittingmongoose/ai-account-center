@@ -1,0 +1,8 @@
+{
+  "note": "Alexis PC, %LOCALAPPDATA%\\cursor-agent, read-only listing 2026-11-13. Execution policy: every scope Undefined (Restricted default).",
+  "launchers": ["agent.cmd", "agent.ps1", "cursor-agent.cmd", "cursor-agent.ps1"],
+  "versions": ["2026.03.20-44cb435", "2026.11.11-b912975"],
+  "versionFiles": ["node.exe", "index.js"],
+  "promoteStaged": "versions/promote-staged.cmd",
+  "cmdLauncherRuns": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%SCRIPT_DIR%\\cursor-agent.ps1\" %*"
+}

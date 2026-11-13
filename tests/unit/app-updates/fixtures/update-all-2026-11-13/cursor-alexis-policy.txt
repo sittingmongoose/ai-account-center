@@ -1,0 +1,6 @@
+& : File C:\Users\<user>\AppData\Local\cursor-agent\cursor-agent.ps1 cannot be loaded because running scripts is disabled on this system. For more information, see about_Execution_Policies at https:/go.microsoft.com/fwlink/?LinkID=135170.
+At line:1 char:28
++ $ErrorActionPreference='Stop'; & 'C:\Users\<user>\AppData\Local\cursor-agent\cursor-agent.ps1' --version; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : SecurityError: (:) [], PSSecurityException
+    + FullyQualifiedErrorId : UnauthorizedAccess

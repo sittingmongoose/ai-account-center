@@ -10,6 +10,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -28,13 +29,231 @@ NO_AUTO_UPDATE = {
 
 
 class UpdateFailure(Exception):
-    def __init__(self, code="update_failed", output="", exit_code=None):
+    def __init__(self, code="update_failed", output="", exit_code=None, cause=None, reason=None):
         super().__init__(code)
         self.code = code
-        # Diagnostic text for in-memory classification only; it is never emitted.
+        # Diagnostic text for in-memory classification only; it is never emitted as is
+        # (a row carries only scrub()'s bounded tail of a command's stderr).
         self.output = output
         # The exit code of a command that ran to completion and failed (an installer's HRESULT, for example).
         self.exit_code = exit_code
+        # A fixed cause class (CAUSES) and a fixed reason word, when the raiser knows better than the code.
+        self.cause = cause
+        self.reason = reason
+
+
+# ---------------------------------------------------------------------------
+# Diagnosable outcomes. Every row carries a fixed cause class and, where they
+# exist, the command that decided it, its exit code, phase times, the install
+# owner it used and a short stderr tail with secrets scrubbed. Nothing here is
+# free text from a caller: words are fixed, paths are home-relative, and the
+# tail passes scrub() twice (here and at the dashboard boundary).
+# ---------------------------------------------------------------------------
+
+CAUSES = (
+    "none",                # the row finished as it says (updated, current, not installed, skipped)
+    "auth_required",       # the app's own updater was refused for its sign-in (Cursor's HTTP 401)
+    "signin_needed",       # the update needs, or left, a sign-in only the user can give
+    "policy_blocked",      # an execution policy refused the app's launcher
+    "wrong_prefix",        # the package manager changed a copy nothing runs
+    "not_writable",        # the copy in use belongs to another user or a system folder
+    "lost_session_reply",  # T3 issued a session but its reply never arrived
+    "t3_absent",           # T3 is not installed, or has never started, on this computer
+    "t3_not_ready",        # T3 is installed but its server did not answer in time
+    "t3_restart_pending",  # T3 was updated in this run; its new server starts after the job
+    "installer_failed",    # the supported installer ran and failed
+    "in_use",              # running copies keep the files; nothing changed
+    "timeout",             # a bounded step ran out of time
+    "unknown",             # anything else; reason names the fixed step
+)
+REASON = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,63}$")
+TAIL_LINES, TAIL_LINE_CHARS, TAIL_CHARS = 12, 200, 1200
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
+_SECRET_PATTERNS = (
+    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"), r"\1 <redacted>"),
+    # key=value and key: value forms, JSON included, for anything credential-like.
+    (re.compile(r'(?i)(["\']?(?:[a-z0-9_-]*(?:token|secret|password|passwd|apikey|api[_-]key|authorization|cookie|credential|session[_-]?id|bearer)[a-z0-9_-]*)["\']?\s*[:=]\s*)("[^"]*"|\'[^\']*\'|[^\s,;}&]+)'), r"\1<redacted>"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?"), "<redacted>"),
+    (re.compile(r"(?i)\b(?:npm_|ghp_|gho_|github_pat_|sk-|xox[abpr]-|aiza)[A-Za-z0-9_-]{8,}"), "<redacted>"),
+    (re.compile(r"(?i)\b(https?|wss?)://[^/\s@]+@"), r"\1://"),
+    (re.compile(r"(?i)\b((?:https?|wss?)://[^\s?#\"']+)[?#][^\s\"']*"), r"\1"),
+    (re.compile(r"[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b"), "<email>"),
+    (re.compile(r"[A-Za-z0-9+_=-]{40,}"), "<redacted>"),
+)
+
+
+def _home_forms():
+    home = str(pathlib.Path.home())
+    forms = {home, home.replace("\\", "/"), home.replace("\\", "\\\\"), home.replace("/", "\\")}
+    return sorted((form for form in forms if len(form) > 2), key=len, reverse=True)
+
+
+def _scrub_paths(text):
+    for form in _home_forms():
+        text = text.replace(form, "~")
+    text = re.sub(r"(?i)([A-Z]:(?:\\\\|\\|/)+Users(?:\\\\|\\|/)+)[^\\/\s\"']+", r"\1<user>", text)
+    return re.sub(r"(/(?:Users|home)/)[^/\s\"']+", r"\1<user>", text)
+
+
+def display_path(path):
+    """A path with the home folder as ~ and any other user's folder as <user>; bounded."""
+    return _scrub_paths(str(path))[-160:]
+
+
+def scrub(text, lines=TAIL_LINES):
+    """The bounded tail of command output with credentials, people and private paths removed."""
+    if not isinstance(text, str) or not text:
+        return ""
+    text = _ANSI.sub("", text[-65536:]).replace("\r\n", "\n").replace("\r", "\n")
+    text = "".join(char if char in "\n\t" or 32 <= ord(char) < 127 or ord(char) > 159 else " " for char in text)
+    text = _scrub_paths(text)
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    kept = [line.rstrip()[:TAIL_LINE_CHARS] for line in text.split("\n") if line.strip()][-lines:]
+    return "\n".join(kept)[-TAIL_CHARS:]
+
+
+def command_display(argv, label=None):
+    """What ran, for a row: the program's own name and its fixed arguments, never a script body."""
+    if label:
+        return scrub(label, 1)[:160]
+    words = []
+    skip = False
+    for index, arg in enumerate(str(item) for item in argv):
+        if skip:
+            words.append("<script>")
+            skip = False
+            continue
+        if index == 0 or ("/" in arg or "\\" in arg) and len(arg) > 3:
+            arg = re.split(r"[\\/]", arg)[-1] if index == 0 else display_path(arg)
+        if arg.lower() in ("-encodedcommand", "-command", "-c") and index > 0:
+            skip = True
+        words.append(arg if len(arg) <= 60 else arg[:57] + "...")
+    return scrub(" ".join(words), 1)[:160]
+
+
+class Diagnostics:
+    """One row's record. Helpers write to the recorder of the row their thread runs."""
+
+    def __init__(self):
+        self.started = time.monotonic()
+        self.phases = {}
+        self._phase = None
+        self.command = None
+        self.exit_code = None
+        self.tail = ""
+        self.owner = None
+        self.cause = None
+        self.reason = None
+        self.notes = []
+        self._failed = False
+
+    def phase(self, name):
+        now = time.monotonic()
+        if self._phase is not None:
+            previous, since = self._phase
+            self.phases[previous] = self.phases.get(previous, 0) + int((now - since) * 1000)
+        self._phase = (name, now) if name else None
+
+    def ran(self, argv, exit_code=None, output="", label=None, failed=None):
+        """Record one command. A failure stays the row's record: a later successful
+        command (the re-detection after a failed update) never replaces it."""
+        failed = exit_code not in (None, 0) if failed is None else failed
+        if not failed and self._failed:
+            return
+        self._failed = self._failed or failed
+        self.command = command_display(argv, label)
+        self.exit_code = exit_code
+        self.tail = scrub(output) if failed else ""
+
+    def blame(self, cause, reason=None):
+        if cause in CAUSES:
+            self.cause = cause
+        if reason is not None:
+            self.reason = reason if isinstance(reason, str) and REASON.fullmatch(reason) else "unlisted"
+
+    def note(self, word):
+        if isinstance(word, str) and REASON.fullmatch(word) and word not in self.notes and len(self.notes) < 6:
+            self.notes.append(word)
+
+    def export(self, row):
+        self.phase(None)
+        cause, reason = self.cause, self.reason
+        if cause is None:
+            cause, derived = cause_for(row, self.exit_code)
+            reason = reason or derived
+        value = {"cause": cause}
+        if reason:
+            value["reason"] = reason
+        if self.command:
+            value["command"] = self.command
+        if isinstance(self.exit_code, int) and -2 ** 31 <= self.exit_code < 2 ** 32:
+            value["exitCode"] = self.exit_code
+        phases = {name: max(0, min(ms, 86400000)) for name, ms in list(self.phases.items())[:8] if REASON.fullmatch(name)}
+        if phases:
+            value["phases"] = phases
+        if self.owner:
+            value["owner"] = self.owner
+        if self.notes:
+            value["notes"] = list(self.notes)
+        if self.tail and cause not in ("none",):
+            value["tail"] = self.tail
+        return value
+
+
+# Fixed classification of a finished row whose helper named no cause itself.
+_CODE_CAUSES = {
+    "signin_needed": "signin_needed", "cursor_signin_needed": "auth_required",
+    "antigravity_acp_signin_hold": "signin_needed", "policy_blocked": "policy_blocked",
+    "wrong_prefix": "wrong_prefix", "prefix_not_writable": "not_writable",
+    "t3_session_issue_unknown": "lost_session_reply", "t3_session_reply_lost": "lost_session_reply", "t3_absent": "t3_absent",
+    "t3_unreachable": "t3_not_ready", "t3_not_ready": "t3_not_ready", "t3_restart_pending": "t3_restart_pending",
+    "in_use": "in_use", "quit_first": "in_use", "busy": "in_use", "codex_busy": "in_use",
+    "cursor_update_staged": "in_use", "package_in_use": "in_use",
+    "timeout": "timeout", "check_timeout": "timeout", "host_timeout": "timeout", "t3_install_timeout": "timeout",
+    "t3_install_failed:installer": "installer_failed",
+}
+
+
+def cause_for(row, exit_code=None):
+    status, code = row.get("status"), row.get("messageCode")
+    if status in ("updated", "current", "not_installed", "skipped", "held") and code not in _CODE_CAUSES:
+        return "none", None
+    if code in _CODE_CAUSES:
+        return _CODE_CAUSES[code], None
+    if code == "update_failed" and isinstance(exit_code, int) and exit_code != 0:
+        return "installer_failed", None
+    return "unknown", (code if isinstance(code, str) and REASON.fullmatch(code) else "unlisted")
+
+
+_scope = threading.local()
+
+
+class _Silent(Diagnostics):
+    """Writes outside any row (inventory, tests) go nowhere."""
+
+
+def diagnostics():
+    """The recorder of the row this thread runs, or a throwaway one."""
+    value = getattr(_scope, "row", None)
+    return value if value is not None else _Silent()
+
+
+@contextlib.contextmanager
+def row_diagnostics():
+    previous = getattr(_scope, "row", None)
+    _scope.row = Diagnostics()
+    try:
+        yield _scope.row
+    finally:
+        _scope.row = previous
+
+
+def with_diagnostics(row, recorder):
+    """A row with its diagnostics attached; a row that already carries some keeps them."""
+    if isinstance(row, dict) and "diagnostics" not in row:
+        row["diagnostics"] = recorder.export(row)
+    return row
 
 
 @dataclasses.dataclass
@@ -54,6 +273,12 @@ class Install:
     # Other copies beside a managed Codex or Claude install: fixed location word,
     # bounded version and whether they shadow it on PATH. Set by app_updates.detect_cli.
     strays: list = dataclasses.field(default_factory=list)
+    # Why a probe failed, as one fixed word (policy_blocked, no_version_dir, ...), for the row's diagnostics.
+    probe_reason: str = None
+    # Which copy detection chose and how (diagnostics.owner): fixed words and home-relative paths only.
+    owner: dict = None
+    # Antigravity ACP only: "harness" for a 1.3/1.4 runtime pair, "native" for the 1.5+ CLI.
+    runtime_kind: str = None
 
 
 def strip_dashboard_secrets(values):
@@ -524,7 +749,7 @@ def _stop_group(process, tree=False):
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
-def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False, cwd=None, kill_tree=False):
+def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False, cwd=None, kill_tree=False, errors_sink=None):
     """Run one fixed command with no TTY and no stdin, killed at its timeout.
 
     A new session means the child has no controlling terminal, so a prompt that
@@ -533,50 +758,81 @@ def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False,
     opts this one call into whole-tree cleanup; every other caller keeps the
     pre-tree cleanup. Returns (returncode, stdout bytes), with stderr appended
     when merge_errors is set; raises subprocess.TimeoutExpired.
+
+    stderr goes to an unnamed temporary file, never a pipe: a detached
+    grandchild that inherits it cannot hold communicate() open, and the run's
+    last 64 KiB are read back into errors_sink (a list) for classification.
     """
     if os.name == "nt":
         options = {} if visible else {"creationflags": CREATE_NO_WINDOW}
     else:
         options = {"start_new_session": True}
-    process = subprocess.Popen(
-        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture or merge_errors else subprocess.DEVNULL,
-        stderr=subprocess.STDOUT if merge_errors else subprocess.DEVNULL, env=env, cwd=cwd, **options,
-    )
+    sink = None if merge_errors or errors_sink is None else tempfile.TemporaryFile()
     try:
-        stdout, _ = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _stop_group(process, tree=kill_tree)
-        raise
-    except BaseException:
-        _stop_group(process, tree=kill_tree)
-        raise
-    return process.returncode, stdout or b""
+        process = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture or merge_errors else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if merge_errors else (sink if sink is not None else subprocess.DEVNULL),
+            env=env, cwd=cwd, **options,
+        )
+        try:
+            stdout, _ = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _stop_group(process, tree=kill_tree)
+            raise
+        except BaseException:
+            _stop_group(process, tree=kill_tree)
+            raise
+        return process.returncode, stdout or b""
+    finally:
+        if sink is not None:
+            with contextlib.suppress(OSError, ValueError):
+                size = sink.seek(0, os.SEEK_END)
+                sink.seek(max(0, size - 65536))
+                errors_sink.append(sink.read(65536))
+            sink.close()
 
 
-def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False, cwd=None, kill_tree=False):
+def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False, cwd=None, kill_tree=False, label=None, stderr_tail=True):
     """Run one fixed command; a non-zero exit raises UpdateFailure. errors keeps the run's stderr,
     merged with its stdout, in the exception's output for in-memory classification only.
-    kill_tree opts this one call into whole-tree cleanup; only the muse warm sets it."""
+    kill_tree opts this one call into whole-tree cleanup; only the muse warm sets it.
+
+    Every run is recorded in the row's diagnostics: what ran (label, or the program's
+    own name and fixed arguments), its exit code, and for a failure the scrubbed tail
+    of its stderr. Without errors the failure's output is that stderr too, still in
+    memory only, so callers can classify a refusal (sign-in, policy) by its words.
+    stderr_tail=False keeps stderr on the null device: for commands that hand off a
+    long-lived app (open -a, wt.exe, systemd-run), whose output must not land anywhere."""
+    record = diagnostics()
+    stderr = []
     try:
         returncode, data = _run_bounded(
             [str(arg) for arg in argv], timeout,
             strip_dashboard_secrets(env) if preserve_env and env is not None else environment(env), capture, visible, errors, cwd, kill_tree,
+            None if errors or not stderr_tail else stderr,
         )
     except subprocess.TimeoutExpired:
+        record.ran(argv, None, label=label, failed=True)
+        record.note("timed_out")
         raise UpdateFailure("timeout") from None
     except OSError:
-        raise UpdateFailure("update_failed") from None
+        record.ran(argv, None, label=label, failed=True)
+        record.note("not_started")
+        raise UpdateFailure("update_failed", reason="not_started") from None
     if returncode != 0:
-        raise UpdateFailure(output=data.decode("utf-8", "replace")[-262144:] if errors else "", exit_code=returncode)
+        text = data.decode("utf-8", "replace")[-262144:] if errors else b"".join(stderr).decode("utf-8", "replace")
+        record.ran(argv, returncode, text if errors or text else data.decode("utf-8", "replace")[-65536:], label)
+        raise UpdateFailure(output=text, exit_code=returncode)
+    record.ran(argv, 0, label=label)
     if capture and len(data) > min(2 * 1024 * 1024, capture_limit):
         raise UpdateFailure()
     return data.decode("utf-8", "replace") if capture else ""
 
 
-def powershell(script, timeout=30, capture_limit=65536):
+def powershell(script, timeout=30, capture_limit=65536, label=None):
     import base64
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
-    return command(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], timeout, capture=True, capture_limit=capture_limit)
+    return command(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], timeout, capture=True, capture_limit=capture_limit, label=label)
 
 
 def ps_quote(value):

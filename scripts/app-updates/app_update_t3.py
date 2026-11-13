@@ -379,7 +379,7 @@ def update_mac(install, version, temporary, deadline, phase):
         if contexts:
             restart_desktops(install, contexts)
         else:
-            command(["/usr/bin/open", "-a", install.path], timeout=15)
+            command(["/usr/bin/open", "-a", install.path], timeout=15, stderr_tail=False)
         # The same migration risk the Windows relaunch has: a 30-second wait
         # failed a good install and rolled it back.
         health_check("mac", health_budget(deadline))

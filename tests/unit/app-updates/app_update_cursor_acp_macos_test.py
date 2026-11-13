@@ -15,6 +15,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts/app-updates"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import hermetic  # noqa: F401  (discovery stays inside each test's home)
 import app_update_common as common
 import app_update_cursor as cursor
 import app_update_antigravity as acp
@@ -41,7 +43,7 @@ class Fixtures(unittest.TestCase):
             real_stat = pathlib.Path.stat
             def unix_mode(path, *args, **kwargs):
                 value = real_stat(path, *args, **kwargs)
-                if path.name in ("agy_acp_server.par", "localharness_external"):
+                if path.name in ("agy_acp_server.par", "localharness_external", "antigravity"):
                     fields = list(value)
                     fields[0] |= 0o111
                     return os.stat_result(fields)
@@ -61,20 +63,6 @@ class Fixtures(unittest.TestCase):
             path.unlink(missing_ok=True)
             path.symlink_to(binary)
         return common.Install("cursor-cli", host, path, version)
-
-    def old_acp(self, host):
-        root = acp.managed_root(host)
-        old = root / "versions" / ("a" * 64)
-        old.mkdir(parents=True, exist_ok=True)
-        record = {"releaseId": old.name, "version": "1.3.0"}
-        for kind, name in (("executable", "agy_acp_server" + (".exe" if host == "windows" else ".par")),
-                           ("harness", "localharness_external" + (".exe" if host == "windows" else ""))):
-            (old / name).write_bytes(b"old")
-            (old / name).chmod(0o755)
-            record[kind] = {"name": name, "bytes": 3}
-        common.write_private_json(old / acp.RECORD, record)
-        common.write_private_json(root / "active.json", {"releaseId": old.name})
-        return acp.detect_antigravity_acp(host), old
 
 
 
@@ -162,30 +150,62 @@ class CursorTests(Fixtures):
 
 
 class AcpTests(Fixtures):
-    TOKEN = "private-fixture-bearer-never-output"
+    """T3 0.1.10-nightly.20261113.4616's managed Antigravity contract, offline.
 
-    def fake_t3(self, install, phase="succeeded", pin="1.4.5", failure=None, installed="1.4.5"):
+    T3 offers its target (null until its release check ends), installs Google's
+    newest native CLI on provider.install.start, refreshes models only for the
+    instance an install ran on and only when it is enabled, and lists its
+    disabled default `antigravity` instance first."""
+    TOKEN = "private-fixture-bearer-never-output"
+    SIGNIN = "Antigravity model refresh timed out. Try again or check Google sign-in."
+
+    def install_record(self, host, version, native, release=None):
+        root = acp.managed_root(host)
+        directory = root / "versions" / (release or ("a" * 64))
+        directory.mkdir(parents=True, exist_ok=True)
+        record = {"releaseId": directory.name, "version": version}
+        if native:
+            names = (("executable", "agy.exe" if host == "windows" else "antigravity"),)
+            record["harness"] = None
+        else:
+            names = (("executable", "agy_acp_server" + (".exe" if host == "windows" else ".par")),
+                     ("harness", "localharness_external" + (".exe" if host == "windows" else "")))
+        for kind, name in names:
+            (directory / name).write_bytes(b"bin")
+            (directory / name).chmod(0o755)
+            record[kind] = {"name": name, "bytes": 3}
+        common.write_private_json(directory / acp.RECORD, record)
+        return directory, record
+
+    def runtime(self, host, version="1.4.5", native=False):
+        directory, _ = self.install_record(host, version, native)
+        common.write_private_json(acp.managed_root(host) / "active.json", {"releaseId": directory.name})
+        return acp.detect_antigravity_acp(host), directory
+
+    def fake_t3(self, install, phase="succeeded", offer="1.5.8", failure=None, installed=None, newest=None,
+                refresh=None, first_null=True, providers=None):
         import app_update_t3_rpc as rpc
-        self.calls, self.auth, self.connections = [], [], []
+        self.calls, self.auth, self.connections, self.ready = [], [], [], []
         self.failure = failure
         self.clock = [100]
+        installed = installed or offer
         if failure in ("auth", "timeout"):
             self.stack.enter_context(mock.patch.object(rpc.time, "monotonic", side_effect=lambda: self.clock[0]))
-        state = {"driver": "antigravity", "operationId": "op", "phase": "idle", "version": pin}
+        idle = {"driver": "antigravity", "operationId": None, "phase": "idle", "downloadedBytes": 0, "totalBytes": None,
+                "version": offer, "installedVersion": install.version, "canRemove": True, "message": None}
         owner = self
-        old = install.path / "versions" / ("a" * 64)
         self.t3_writing = False
+        providers = providers if providers is not None else [
+            {"driver": "codex", "instanceId": "wrong", "enabled": True, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "antigravity", "enabled": False, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "agy-custom-id", "enabled": True, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "agy-second-id", "enabled": True, "setup": {"canInstall": True}},
+        ]
 
         def activate():
-            directory = old.with_name("b" * 64)
-            directory.mkdir(exist_ok=True)
-            record = acp.read_json(old / acp.RECORD)
-            record.update(releaseId=directory.name, version=installed)
-            for kind in ("executable", "harness"):
-                shutil.copyfile(old / record[kind]["name"], directory / record[kind]["name"])
+            directory, _ = owner.install_record(install.platform, installed, acp.version_tuple(installed) >= (1, 5, 0), "b" * 64)
             owner.t3_writing = True
             try:
-                common.write_private_json(directory / acp.RECORD, record)
                 common.write_private_json(install.path / "active.json", {"releaseId": directory.name})
             finally:
                 owner.t3_writing = False
@@ -208,23 +228,31 @@ class AcpTests(Fixtures):
                 if failure == "unreachable":
                     raise OSError(owner.TOKEN)
                 self.started = False
+                self.settle = None
             def close(self): pass
             def call(self, method, payload):
                 owner.calls.append((method, payload))
                 if method == "server.getConfig":
-                    return {"providers": [{"driver": "codex", "instanceId": "wrong", "setup": {"canInstall": True}},
-                                          {"driver": "antigravity", "instanceId": "agy-custom-id", "setup": {"canInstall": True}}]}
+                    return {"providers": providers}
+                if method == "server.refreshProviders":
+                    owner.assertEqual(payload["refreshModels"], True)
+                    if refresh:
+                        raise common.UpdateFailure("t3_install_failed:rpc", output="ProviderSetupError\n" + payload["instanceId"] + "\nrefresh-models\n" + refresh)
+                    return {"providers": [{"instanceId": payload["instanceId"], "driver": "antigravity", "auth": {"status": "authenticated"}}]}
                 owner.assertEqual(payload, {"instanceId": "agy-custom-id"})
                 self.started = True
                 if failure == "ambiguous":
                     raise OSError(owner.TOKEN)
-                return {**state, "phase": "downloading"}
+                return {**idle, "operationId": "op", "phase": "downloading"}
             def request(self, method, payload):
                 owner.calls.append((method, payload))
+                owner.assertEqual(payload, {"instanceId": "agy-custom-id"})
                 return "subscription"
             def receive(self, identifier):
                 if not self.started:
-                    yield state
+                    if first_null:
+                        yield {**idle, "version": None}
+                    yield idle
                 else:
                     if failure == "timeout":
                         owner.clock[0] += 30
@@ -232,13 +260,15 @@ class AcpTests(Fixtures):
                     if failure == "denied":
                         raise common.UpdateFailure("t3_auth_failed", output=owner.TOKEN)
                     if phase == "succeeded": activate()
-                    yield {**state, "phase": phase, "message": owner.TOKEN}
+                    yield {**idle, "operationId": "op", "phase": phase, "message": owner.TOKEN}
             def send(self, message): pass
 
+        self.stack.enter_context(mock.patch.object(rpc, "wait_ready", create=True, side_effect=lambda host, deadline, expected=None, **kwargs: owner.ready.append((expected, kwargs.get("seconds")))))
         self.stack.enter_context(mock.patch.object(rpc, "discover", return_value=(["fake-t3"], self.root, "fake-origin")))
         self.stack.enter_context(mock.patch.object(rpc, "auth_command", side_effect=lambda cli, base, args, timeout=30: auth([*cli, "auth", "session", *args], timeout=timeout)))
         self.stack.enter_context(mock.patch.object(rpc, "Rpc", Client))
         self.stack.enter_context(mock.patch.object(rpc, "revoke_session", side_effect=lambda cli, base, identifier, timeout=5: (auth([*cli, "auth", "session", "revoke", identifier]), True)[1]))
+        self.stack.enter_context(mock.patch.object(acp, "newest_cli_version", create=True, return_value=newest))
         # Trap opens AND atomic replacements. Only the fake T3 writer is allowed.
         original_open, original_os_open, original_replace = pathlib.Path.open, os.open, os.replace
         def path_open(path, mode="r", *args, **kwargs):
@@ -257,11 +287,15 @@ class AcpTests(Fixtures):
         self.stack.enter_context(mock.patch.object(os, "open", os_open))
         self.stack.enter_context(mock.patch.object(os, "replace", replace))
 
-    def run_update(self, install):
+    def run_update(self, install, t3_row=None):
         import io
         out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            row = acp.update_antigravity_acp(install, deadline=time.monotonic() + 20 if self.failure in ("auth", "timeout") else None)
+        # Diagnostics are attached where the helper has them (the fail-before run against main has none).
+        recorder = common.row_diagnostics() if hasattr(common, "row_diagnostics") else contextlib.nullcontext(None)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), recorder as record:
+            arguments = {"t3_row": t3_row} if t3_row is not None else {}
+            row = acp.update_antigravity_acp(install, deadline=time.monotonic() + 20 if self.failure in ("auth", "timeout") else None, **arguments)
+            row = common.with_diagnostics(row, record) if record is not None else row
         self.assertNotIn(self.TOKEN, out.getvalue() + err.getvalue() + json.dumps(row))
         return row
 
@@ -275,89 +309,180 @@ class AcpTests(Fixtures):
         self.assertLessEqual(float(ttl[:-1]), 900)
         self.assertNotIn(self.TOKEN, str(self.auth))
 
-    def test_success_all_platforms_t3_is_the_only_pointer_writer(self):
-        for host in ("windows", "mac", "ubuntu"):
-            with self.subTest(host=host), contextlib.ExitStack() as nested:
-                # Keep patches isolated between platform subtests.
-                original = self.stack
+    def started(self):
+        return sum(method == "provider.install.start" for method, _ in self.calls)
+
+    def isolated(self):
+        """Fresh patches per subtest."""
+        @contextlib.contextmanager
+        def scope():
+            original = self.stack
+            with contextlib.ExitStack() as nested:
                 self.stack = nested
                 try:
-                    install, old = self.old_acp(host)
-                    self.fake_t3(install)
-                    row = self.run_update(install)
-                    self.assertEqual((row["status"], row["version"], row["messageCode"]),
-                                     ("updated", "1.4.5", "antigravity_acp_updated"))
-                    self.assertTrue(old.is_dir())
-                    self.assertEqual(row["restartedProcesses"], 0)
-                    self.assert_revoked()
-                    self.assertEqual(len(self.connections), 1)
-                finally: self.stack = original
+                    yield
+                finally:
+                    self.stack = original
+        return scope()
 
+    # --- record shapes (lead fix 3) -------------------------------------------------------------
+    def test_detects_both_record_shapes_t3_writes(self):
+        # Shapes captured 2026-11-13 (share/2026-11-13-antigravity-models): VM 1.4.5 pair and 1.5.8 CLI, Windows 1.5.8 CLI.
+        for host, version, native in (("ubuntu", "1.4.5", False), ("ubuntu", "1.5.8", True), ("windows", "1.5.8", True),
+                                      ("windows", "1.3.0", False), ("mac", "1.5.8", True)):
+            with self.subTest(host=host, version=version), self.isolated():
+                shutil.rmtree(self.root / ".t3", ignore_errors=True)
+                found, _ = self.runtime(host, version, native)
+                self.assertEqual((found.version, found.probe, found.runtime_kind), (version, None, "native" if native else "harness"))
+
+    def test_a_native_record_with_the_wrong_executable_or_size_is_unknown(self):
+        found, directory = self.runtime("ubuntu", "1.5.8", native=True)
+        record = acp.read_json(directory / acp.RECORD)
+        for change in ({"executable": {"name": "agy.exe", "bytes": 3}}, {"executable": {"name": "antigravity", "bytes": 4}}):
+            common.write_private_json(directory / acp.RECORD, {**record, **change})
+            self.assertEqual(acp.detect_antigravity_acp("ubuntu").probe, "failed")
+
+    # --- target and instance (lead fixes 1 and 2) ----------------------------------------------
+    def test_installs_t3s_offer_on_an_enabled_instance_and_refreshes_every_enabled_one(self):
+        install, old = self.runtime("windows", "1.3.0")
+        self.fake_t3(install, offer="1.5.8")
+        row = self.run_update(install)
+        self.assertEqual((row["status"], row["previousVersion"], row["version"], row["messageCode"]),
+                         ("updated", "1.3.0", "1.5.8", "antigravity_acp_updated"))
+        # T3 was not replaced in this run: one short readiness window, no version expectation.
+        self.assertEqual(self.ready, [(None, acp.QUIET_READY_SECONDS)])
+        # Never the disabled default instance T3 lists first: T3 would skip its model refresh.
+        self.assertTrue(all(payload.get("instanceId") != "antigravity" for _, payload in self.calls))
+        self.assertEqual([payload["instanceId"] for method, payload in self.calls if method == "server.refreshProviders"],
+                         ["agy-custom-id", "agy-second-id"])
+        self.assertEqual(self.started(), 1)
+        self.assertEqual(acp.detect_antigravity_acp("windows").runtime_kind, "native")
+        self.assertTrue(old.is_dir())
+        self.assertEqual(row["diagnostics"]["owner"]["target"], "t3-offer")
+        self.assert_revoked()
+
+    def test_a_null_offer_waits_for_t3s_check_and_falls_back_to_the_cli_manifest(self):
+        with self.isolated():
+            install, _ = self.runtime("windows", "1.5.7", native=True)
+            self.fake_t3(install, offer=None, installed="1.5.8", newest="1.5.8")
+            row = self.run_update(install)
+            self.assertEqual((row["status"], row["version"], row["diagnostics"]["owner"]["target"]), ("updated", "1.5.8", "cli-manifest"))
+        with self.isolated():
+            shutil.rmtree(self.root / ".t3")
+            install, _ = self.runtime("windows", "1.5.7", native=True)
+            self.fake_t3(install, offer=None, newest=None)
+            row = self.run_update(install)
+            self.assertEqual((row["status"], row["messageCode"], row["diagnostics"]["reason"]), ("unknown", "antigravity_acp_offer_unknown", "no_offer"))
+            self.assertEqual(self.started(), 0)
+
+    def test_current_or_newer_never_calls_install_because_t3_would_reinstall_the_same_cli(self):
+        for installed, offer in (("1.5.8", "1.5.8"), ("1.5.9", "1.5.8")):
+            with self.subTest(installed=installed), self.isolated():
+                shutil.rmtree(self.root / ".t3", ignore_errors=True)
+                install, _ = self.runtime("windows", installed, native=True)
+                pointer = (install.path / "active.json").read_bytes()
+                self.fake_t3(install, offer=offer)
+                row = self.run_update(install)
+                self.assertEqual((row["status"], row["messageCode"], row["version"]), ("current", "current", installed))
+                self.assertEqual(self.started(), 0)
+                self.assertEqual((install.path / "active.json").read_bytes(), pointer)
+                self.assert_revoked()
+
+    def test_no_enabled_instance_fails_before_any_install(self):
+        install, _ = self.runtime("windows", "1.3.0")
+        self.fake_t3(install, providers=[{"driver": "antigravity", "instanceId": "antigravity", "enabled": False, "setup": {"canInstall": True}}])
+        row = self.run_update(install)
+        self.assertEqual((row["status"], row["messageCode"], row["diagnostics"]["reason"]),
+                         ("failed", "t3_install_failed:provider_unavailable", "no_enabled_instance"))
+        self.assertEqual(self.started(), 0)
+
+    # --- sign-in (lead fix 4) -----------------------------------------------------------------
+    def test_linux_and_mac_hold_the_move_to_the_native_cli_and_windows_makes_it(self):
+        for host in ("ubuntu", "mac", "windows"):
+            with self.subTest(host=host), self.isolated():
+                shutil.rmtree(self.root / ".t3", ignore_errors=True)
+                install, _ = self.runtime(host, "1.4.5")
+                pointer = (install.path / "active.json").read_bytes()
+                self.fake_t3(install, offer="1.5.8")
+                row = self.run_update(install)
+                if host == "windows":
+                    self.assertEqual((row["status"], row["version"]), ("updated", "1.5.8"))
+                    continue
+                self.assertEqual((row["status"], row["messageCode"], row["version"], row["heldVersion"], row["updateAttempted"]),
+                                 ("action_required", "antigravity_acp_signin_hold", "1.4.5", "1.5.8", False))
+                self.assertEqual((row["diagnostics"]["cause"], row["diagnostics"]["reason"]), ("signin_needed", "token_storage_change"))
+                self.assertEqual(self.started(), 0)
+                self.assertEqual((install.path / "active.json").read_bytes(), pointer)
+
+    def test_a_refresh_that_asks_for_sign_in_reports_sign_in_needed_not_updated(self):
+        # T3 4616's words when the new CLI cannot read the stored sign-in (VM, 2026-11-13).
+        install, _ = self.runtime("ubuntu", "1.5.7", native=True)
+        self.fake_t3(install, offer="1.5.8", refresh=self.SIGNIN)
+        row = self.run_update(install)
+        self.assertEqual((row["status"], row["messageCode"], row["previousVersion"], row["version"], row["updateAttempted"]),
+                         ("action_required", "antigravity_acp_signin_needed", "1.5.7", "1.5.8", True))
+        self.assertEqual(row["diagnostics"]["cause"], "signin_needed")
+        self.assertNotIn("Google", json.dumps(row))
+
+    def test_a_refresh_that_fails_for_another_reason_keeps_updated_and_says_models_are_stale(self):
+        install, _ = self.runtime("windows", "1.5.7", native=True)
+        self.fake_t3(install, offer="1.5.8", refresh="The provider instance configuration is invalid.")
+        row = self.run_update(install)
+        self.assertEqual((row["status"], row["messageCode"], row["version"]), ("updated", "antigravity_acp_models_stale", "1.5.8"))
+        self.assertEqual(row["diagnostics"]["notes"], ["refresh_failed"])
+
+    # --- ordering against T3 ------------------------------------------------------------------
+    def test_a_t3_restart_still_pending_never_uses_the_previous_servers_offer(self):
+        install, _ = self.runtime("ubuntu", "1.5.7", native=True)
+        self.fake_t3(install)
+        t3_row = {"appId": "t3-code", "platform": "ubuntu", "status": "updated", "updateAttempted": True,
+                  "restartTargets": [{"kind": "systemd", "service": "t3code.service", "delaySeconds": 30}]}
+        row = self.run_update(install, t3_row)
+        self.assertEqual((row["status"], row["messageCode"], row["diagnostics"]["cause"]),
+                         ("action_required", "t3_restart_pending", "t3_restart_pending"))
+        self.assertEqual((self.ready, self.calls, self.auth), ([], [], []))
+
+    def test_a_replaced_desktop_server_is_awaited_by_its_new_version(self):
+        import app_update_t3_rpc as rpc
+        install, _ = self.runtime("windows", "1.5.7", native=True)
+        self.fake_t3(install)
+        t3_row = {"appId": "t3-code", "platform": "windows", "status": "updated", "version": "0.1.10-nightly.20261113.4616",
+                  "updateAttempted": True, "restartTargets": [{"kind": "desktop"}]}
+        row = self.run_update(install, t3_row)
+        self.assertEqual(self.ready, [("0.1.10-nightly.20261113.4616", rpc.READY_SECONDS)])
+        self.assertEqual(row["status"], "updated")
+
+    # --- session and operation safety (unchanged rules) ---------------------------------------
     def test_reconnected_subscription_checks_original_operation_and_never_restarts(self):
         import app_update_t3_rpc as rpc
         for changed in (False, True):
-            with self.subTest(changed=changed), contextlib.ExitStack() as nested:
-                original = self.stack
-                self.stack = nested
-                try:
-                    install, _ = self.old_acp("windows")
-                    self.fake_t3(install)
-                    transport = rpc.Rpc
-                    clock = [100]
-                    connections = []
-                    class RenewingClient(transport):
-                        def __init__(self, *args):
-                            super().__init__(*args)
-                            connections.append(self)
-                        def receive(self, identifier):
-                            if self.started and len(connections) == 1:
-                                clock[0] = 130
-                                raise TimeoutError()
-                            for state in super().receive(identifier):
-                                if len(connections) > 1:
-                                    if changed:
-                                        state = {**state, "operationId": "different"}
-                                    else:
-                                        # The instance snapshot survives reconnection.
-                                        self.started = True
-                                        state = next(super().receive(identifier))
-                                yield state
-                    nested.enter_context(mock.patch.object(rpc, "Rpc", RenewingClient))
-                    nested.enter_context(mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]))
-                    row = self.run_update(install)
-                    self.assertEqual(row["messageCode"], "t3_install_state_unknown" if changed else "antigravity_acp_updated")
-                    self.assertEqual(len(connections), 2)
-                    self.assertEqual(sum(method == "provider.install.start" for method, _ in self.calls), 1)
-                    self.assertEqual(sum("revoke" in argv for argv in self.auth), 1)
-                finally:
-                    self.stack = original
-
-    def test_current_and_newer_never_call_install(self):
-        for version in ("1.4.5", "1.5.0"):
-            with self.subTest(version=version), contextlib.ExitStack() as nested:
-                original = self.stack; self.stack = nested
-                try:
-                    install, old = self.old_acp("windows")
-                    record = acp.read_json(old / acp.RECORD); record["version"] = version
-                    common.write_private_json(old / acp.RECORD, record)
-                    pointer = (install.path / "active.json").read_bytes()
-                    self.fake_t3(install)
-                    row = self.run_update(install)
-                    self.assertEqual(row["status"], "current")
-                    self.assertEqual(row["messageCode"], "current" if version == "1.4.5" else "antigravity_acp_newer_kept")
-                    self.assertFalse(any(method == "provider.install.start" for method, _ in self.calls))
-                    self.assertEqual((install.path / "active.json").read_bytes(), pointer)
-                    self.assert_revoked()
-                finally: self.stack = original
-
-    def test_live_server_pin_can_be_newer_than_aac(self):
-        install, old = self.old_acp("windows")
-        record = acp.read_json(old / acp.RECORD); record["version"] = "1.4.5"
-        common.write_private_json(old / acp.RECORD, record)
-        self.fake_t3(install, pin="1.5.0", installed="1.5.0")
-        row = self.run_update(install)
-        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.0"))
-        self.assert_revoked()
+            with self.subTest(changed=changed), self.isolated():
+                shutil.rmtree(self.root / ".t3", ignore_errors=True)
+                install, _ = self.runtime("windows", "1.3.0")
+                self.fake_t3(install)
+                transport = rpc.Rpc
+                clock = [100]
+                connections = []
+                class RenewingClient(transport):
+                    def __init__(self, *args):
+                        super().__init__(*args)
+                        # A reconnected subscription sees the operation already running in T3.
+                        self.started = any(other.started for other in connections)
+                        connections.append(self)
+                    def receive(self, identifier):
+                        if self.started and len(connections) == 1:
+                            clock[0] = 130
+                            raise TimeoutError()
+                        for state in super().receive(identifier):
+                            if len(connections) > 1 and changed:
+                                state = {**state, "operationId": "different"}
+                            yield state
+                self.stack.enter_context(mock.patch.object(rpc, "Rpc", RenewingClient))
+                self.stack.enter_context(mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]))
+                row = self.run_update(install)
+                self.assertEqual(row["messageCode"], "t3_install_state_unknown" if changed else "antigravity_acp_updated")
+                self.assertEqual(self.started(), 1)
+                self.assertEqual(sum("revoke" in argv for argv in self.auth), 1)
 
     def test_failures_never_write_pointer_or_leak_token_and_always_revoke(self):
         for failure, phase, code in [("ambiguous", "succeeded", "t3_install_state_unknown"),
@@ -366,70 +491,50 @@ class AcpTests(Fixtures):
                                       ("timeout", "succeeded", "t3_install_timeout"),
                                       ("unreachable", "succeeded", "t3_unreachable"),
                                       ("denied", "succeeded", "t3_auth_failed")]:
-            with self.subTest(failure=failure, phase=phase), contextlib.ExitStack() as nested:
-                original = self.stack; self.stack = nested
-                try:
-                    install, _ = self.old_acp("windows")
-                    pointer = (install.path / "active.json").read_bytes()
-                    self.fake_t3(install, phase=phase, failure=failure)
-                    row = self.run_update(install)
-                    self.assertEqual(row["messageCode"], code)
-                    self.assertEqual(row["status"], "action_required" if failure in ("unreachable", "denied") else "failed")
-                    self.assertEqual((install.path / "active.json").read_bytes(), pointer)
+            with self.subTest(failure=failure, phase=phase), self.isolated():
+                shutil.rmtree(self.root / ".t3", ignore_errors=True)
+                install, _ = self.runtime("windows", "1.3.0")
+                pointer = (install.path / "active.json").read_bytes()
+                self.fake_t3(install, phase=phase, failure=failure)
+                row = self.run_update(install)
+                self.assertEqual(row["messageCode"], code)
+                self.assertEqual(row["status"], "action_required" if failure in ("unreachable", "denied") else "failed")
+                self.assertEqual((install.path / "active.json").read_bytes(), pointer)
+                if failure != "unreachable":
                     self.assert_revoked()
-                finally: self.stack = original
 
     def test_failed_revoke_is_reported_in_the_row_without_token(self):
         import app_update_t3_rpc as rpc
-        install, _ = self.old_acp("windows")
+        install, _ = self.runtime("windows", "1.3.0")
         self.fake_t3(install)
         clock = [100]
         with mock.patch.object(rpc, "revoke_session", return_value=False), mock.patch.object(rpc.time, "monotonic", side_effect=lambda: clock[0]), mock.patch.object(rpc.time, "sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
             row = self.run_update(install)
-        self.assertEqual(row["status"], "failed")
-        self.assertEqual(row["messageCode"], "t3_session_revoke_failed")
-        self.assertNotIn(self.TOKEN, json.dumps(row))
+        self.assertEqual((row["status"], row["messageCode"]), ("failed", "t3_session_revoke_failed"))
         rpc._known_sessions.clear()
 
-    def test_auth_issue_failure_has_no_token_to_revoke(self):
-        install, _ = self.old_acp("windows")
+    def test_an_issue_failure_without_a_listed_session_is_issue_unknown_and_never_installs(self):
+        install, _ = self.runtime("windows", "1.3.0")
         self.fake_t3(install, failure="auth")
         row = self.run_update(install)
-        self.assertEqual((row["status"], row["messageCode"]), ("failed", "t3_session_issue_unknown"))
+        self.assertEqual((row["status"], row["messageCode"], row["diagnostics"]["cause"]), ("failed", "t3_session_issue_unknown", "lost_session_reply"))
         self.assertEqual(sum("issue" in argv for argv in self.auth), 1)
         self.assertTrue(any("list" in argv for argv in self.auth))
-        self.assertFalse(any(method == "provider.install.start" for method, _ in self.calls))
+        self.assertEqual(self.started(), 0)
 
     def test_false_success_is_rejected(self):
-        install, _ = self.old_acp("windows")
-        self.fake_t3(install, installed="1.3.0")
+        install, _ = self.runtime("windows", "1.3.0")
+        self.fake_t3(install, offer="1.5.8", installed="1.4.5")
         row = self.run_update(install)
         self.assertEqual(row["messageCode"], "t3_install_failed:verification")
         self.assert_revoked()
 
-    def test_newer_t3_activation_is_preserved_at_completion(self):
-        install, _ = self.old_acp("windows")
-        self.fake_t3(install, installed="1.5.0")
-        row = self.run_update(install)
-        self.assertEqual((row["status"], row["version"]), ("updated", "1.5.0"))
-        self.assertEqual(acp.detect_antigravity_acp("windows").version, "1.5.0")
-        self.assert_revoked()
-
-    def test_older_server_cannot_trigger_a_downgrade(self):
-        install, _ = self.old_acp("windows")
-        pointer = (install.path / "active.json").read_bytes()
-        self.fake_t3(install, pin="1.3.0")
-        row = self.run_update(install)
-        self.assertEqual(row["messageCode"], "t3_install_failed:server_outdated")
-        self.assertFalse(any(method == "provider.install.start" for method, _ in self.calls))
-        self.assertEqual((install.path / "active.json").read_bytes(), pointer)
-        self.assert_revoked()
-
     def test_unknown_pointer_is_unknown_and_absence_does_not_install(self):
         self.assertIsNone(acp.detect_antigravity_acp("ubuntu"))
-        install, _ = self.old_acp("ubuntu")
+        install, _ = self.runtime("ubuntu", "1.4.5")
         common.write_private_json(install.path / "active.json", {"releaseId": "../outside"})
-        self.assertEqual(acp.detect_antigravity_acp("ubuntu").probe, "failed")
+        found = acp.detect_antigravity_acp("ubuntu")
+        self.assertEqual((found.probe, found.probe_reason), ("failed", "runtime_record_invalid"))
 
 
 class PrivateJsonTests(Fixtures):

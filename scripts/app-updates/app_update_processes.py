@@ -897,7 +897,7 @@ def restart_desktops(install, contexts):
     for item in contexts:
         args = desktop_arguments(item, install.platform)
         if install.platform == "mac":
-            command(["/usr/bin/open", "-n", "-a", install.path, "--args", *args], timeout=15)
+            command(["/usr/bin/open", "-n", "-a", install.path, "--args", *args], timeout=15, stderr_tail=False)
         elif install.platform == "windows":
             subprocess.Popen([str(install.path), *args], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)

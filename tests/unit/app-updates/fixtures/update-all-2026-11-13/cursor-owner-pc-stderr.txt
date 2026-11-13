@@ -1,0 +1,1 @@
+{"event":"global.main.promiseCatch","level":"ERROR","data":{"message":"Update failed: [unauthenticated] Error","stack":"Error: Update failed: [unauthenticated] Error\n    at y (C:\\Users\\<user>\\AppData\\Local\\cursor-agent\\versions\\2026.11.11-b912975\\4261.index.js:1:24891)"}}

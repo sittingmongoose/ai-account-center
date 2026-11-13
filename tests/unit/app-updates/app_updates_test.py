@@ -19,6 +19,8 @@ import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'scripts/app-updates'))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import hermetic  # noqa: F401  (discovery stays inside each test's home)
 import urllib.error
 import app_updates as updater
 import app_update_common as common

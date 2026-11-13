@@ -7,6 +7,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / 'scripts/app-updates'))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import hermetic  # noqa: F401  (discovery stays inside each test's home)
 import app_update_t3_rpc as rpc
 from app_update_common import UpdateFailure
 

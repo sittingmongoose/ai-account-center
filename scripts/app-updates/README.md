@@ -17,7 +17,9 @@ Ubuntu, Mac, Windows, Nas1 and Alexis PC run **at the same time**; each computer
 four independent app updates together. Shared npm, apt and MSIX installers are
 serialized, as are Codex CLI/Desktop runtime operations. ZCode finishes before
 its adapters; Codex CLI finishes before Codex Desktop, which goes last when an
-installer needs serial work. T3 waits for every other app to finish. The job ends when
+installer needs serial work. T3 waits for every other app to finish, except
+Antigravity ACP, which T3 installs and which therefore runs after T3 (see
+[Cursor CLI and T3 Antigravity ACP](#cursor-cli-and-t3-antigravity-acp)). The job ends when
 the slowest computer finishes, so a busy or unreachable host never holds the
 others back. Five computers x twelve apps give 60 result rows. Per-computer
 progress is live: the helper prints one JSON line per event
@@ -67,8 +69,8 @@ modify or export account credentials/configuration.
 | App | Detected installation and supported update |
 | --- | --- |
 | Antigravity CLI | Active native `agy update`; on a managed switching installation a paused unreviewed runtime updates without checking running copies (see below) |
-| Cursor CLI | Official managed `cursor-agent update`; Linux/Nas1 directly, Mac in the login GUI session, Windows through its PowerShell launcher in the existing interactive task. No running agent is stopped. |
-| Antigravity ACP (T3) | Asks the local T3 server to install its pinned executable/harness pair using a temporary scoped session. Only T3 writes `active.json`. Separate from `agy`. |
+| Cursor CLI | Official managed `cursor-agent update`; Linux/Nas1 directly, Mac in the login GUI session, Windows the way Cursor's own `.cmd` runs it (`powershell -ExecutionPolicy Bypass -File cursor-agent.ps1`, a process-only policy) in the existing interactive task. Windows reads the version from the folder the launcher picks, without running it. A refused sign-in is `cursor_signin_needed`. No running agent is stopped. |
+| Antigravity ACP (T3) | After T3's own row: asks the local T3 server, once it answers, to install the release T3 offers on an enabled Antigravity instance, using a temporary scoped session, then refreshes every enabled instance's models. Only T3 writes `active.json`. Linux and Mac hold the move from the 1.3/1.4 runtime pair to the native 1.5+ CLI (sign-in). Separate from `agy`. |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
 | OMP | Active standalone `omp update`, installation directory first in PATH |
 | Codex CLI | Active native `codex update` on its managed standalone install (linked from `~/.local/bin/codex`), which detection picks whatever the PATH order; an npm global install (`<prefix>/bin/codex` linked into `<prefix>/lib/node_modules/@openai/codex`, such as Nas1's under `~/.local`) is reported as manager `npm` and updated by npm itself under that prefix, `node npm-cli.js install --global --prefix <prefix> @openai/codex@latest`, never by `codex update`; Windows active npm installation uses `@openai/codex@latest` with its existing global prefix. Other copies are reported as strays, see [Stray copies](#stray-copies-beside-a-managed-install) |
@@ -76,7 +78,7 @@ modify or export account credentials/configuration.
 | Codex Desktop | Ubuntu signed-repository `chatgpt` package only (a turned-off repository reports `source_disabled`); Mac verified OpenAI DMG; Windows same-publisher/same-identity MSIX |
 | Claude Desktop | Mac verified Anthropic ZIP from the publisher's own `RELEASES.json` feed (the old claude.ai redirect answers 403 to non-browser clients); Windows same-publisher/same-identity MSIX; absent Ubuntu installations are skipped |
 | ZCode | Official release page and that release's CDN `latest.yml` (sha512 and size); Ubuntu/Nas1 through the owner's `t3-acp-update.service`; Mac verified ZIP swap (never quit); Windows same-signer NSIS installer with close, install and reopen (see [ZCode and T3's ACP adapters](#zcode-and-t3s-acp-adapters)) |
-| T3 ACP adapters | `@brokkai/muse-acp` and `zcode-acp-server` from npm's `latest`, reported per package in `parts`; Ubuntu/Nas1 through the same unit run, Mac through the owner's `t3-acp-adapters-update`, Windows npm in `%APPDATA%\npm` |
+| T3 ACP adapters | `@brokkai/muse-acp` and `zcode-acp-server` from npm's `latest`, reported per package in `parts`, each installed into and verified in the copy T3 runs (its owner: T3's configured command, else PATH, else the usual folder): npm `--prefix <owner>`, or pnpm/bun's global folder. Ubuntu/Nas1 use the owner's unit only when it installs into that copy |
 | T3 Code | One `t3-code` row per host covers its nightly desktop/bundled server and any installed standalone runtime; Ubuntu uses the native updater and a detached delayed server restart; Mac verifies SHA512, codesign and notarization before a bundle swap; Windows verifies SHA512 and the T3 Tools Inc Authenticode publisher before the silent NSIS installer |
 
 Nas1 is a second Ubuntu computer: wherever this table or the text below names
@@ -99,49 +101,107 @@ Official methods: [Antigravity installer](https://antigravity.google/cli/install
 `~/.local/share/cursor-agent/versions` on Linux and Mac and
 `%LOCALAPPDATA%\cursor-agent` on Windows. It uses the CLI's supported `update`
 command (confirmed by `cursor-agent --help`), rather than re-running the Windows
-installer, whose initialization can delete the installation root. Windows uses
-its official `.ps1` launcher, or `.cmd` on an older installation, through
-PowerShell. Its native updater owns in-use staging. A remaining `.new` tree or
+installer, whose initialization can delete the installation root.
+
+On Windows the version is read without running anything: the launcher
+(`cursor-agent.ps1`) runs `versions\<YYYY.MM.DD-commit>\node.exe index.js` for the
+newest-dated folder, so detection picks that folder the same way (two folders
+from the same day fall back to the launcher's `--version`). The update runs the
+launcher exactly as Cursor's own `cursor-agent.cmd` does:
+`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File cursor-agent.ps1 update`.
+`-ExecutionPolicy Bypass` sets the policy for that one process only and never
+changes the user's or machine's policy. On 2026-11-13 Alexis PC (every policy
+scope Undefined, so Restricted) refused the old `& cursor-agent.ps1 --version`
+call and the row read "Unknown: the readiness check could not run". A Group
+Policy setting still overrides the process scope; then AAC runs the launcher's
+last step directly (the chosen folder's `node.exe index.js update`, with the
+`CURSOR_INVOKED_AS` variable the launcher sets) and, if that cannot run either,
+reports `action_required` / `policy_blocked`. An older `.cmd`-only install keeps
+PowerShell's call operator, which runs no script file.
+
+Cursor's updater authenticates. When it refuses the CLI's sign-in (HTTP 401,
+`[unauthenticated]`, `ERROR_NOT_LOGGED_IN`, as on the owner's Windows PC on 2026-11-13) the
+row is `action_required` / `cursor_signin_needed` with cause `auth_required`:
+sign in with `cursor-agent login` on that computer. The words come from the
+updater's own output, or from its newest session log under the temp folder
+(`cursor-agent-logs-*/session-*.log`, read in memory only). AAC never stores,
+reads or asks for credentials.
+
+Its native updater owns in-use staging. A remaining `.new` tree or
 pending launcher reports `action_required` / `cursor_update_staged`, with the
 version the launcher actually reports; AAC never promotes or removes it itself.
 Mac runs the native updater through the GUI LaunchAgent below because older
 Cursor launchers need the login Keychain even for read-only CLI commands. Mac
 detection can read the official symlink's release directory without credentials.
-All versions are bounded and every row reports `previousVersion` and `version`.
-No Cursor update is hidden in the T3 companions anymore. AAC never reads or
-writes `~/.cursor` and never stops a Cursor agent.
+Detection also records which copy it chose: whether it is on PATH, how many
+copies PATH has and which comes first. A `cursor-agent` only elsewhere on PATH
+(another installer's copy) is `unsupported` with reason `unmanaged_location`,
+not "not installed". All versions are bounded and every row reports
+`previousVersion` and `version`. AAC never reads or writes `~/.cursor` and never
+stops a Cursor agent.
 
 `antigravity-acp` updates an existing T3-managed runtime only; an absent
 `active.json` is `not_installed`, and an invalid/incomplete record is `unknown`.
-The package-owned pins in `app_update_antigravity_release.py` match
-[T3's release manifest at ab8e488e](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/provider/antigravityRelease.ts)
-and the installed `0.1.10-nightly.20261112.4580` server: **1.4.5** on all six
-OS/architecture pairs. Keep these pins aligned with T3 when its manifest changes;
-AAC does not guess a newer Google URL or accept one from a caller. The agy CLI's
-version is independent.
+T3 writes two record shapes and both are accepted: the 1.3/1.4 runtime pair
+(`agy_acp_server(.par|.exe)` plus `localharness_external(.exe)`) and the native
+1.5+ CLI (`antigravity`, or `agy.exe` on Windows, with `"harness": null`).
+
+There is no pin. From T3 0.1.10-nightly.20261113.4616, `provider.install.start`
+installs Google's newest native CLI (T3 `AntigravityInstallation.ts`
+`refreshRelease`/`start`; pins are only fresh-install defaults since
+[315b06c5ec](https://github.com/pingdotgg/t3code/commit/315b06c5ec)). AAC learns the
+target from T3's own offer, the `version` of a `provider.install.subscribe`
+state: subscribing starts T3's background release check, so the first state can
+say `null`, and AAC waits up to 15 seconds for a version. Without one it reads
+Google's CLI channel (`.../manifests/<linux_amd64|darwin_arm64|windows_amd64>.json`,
+the manifest T3's `antigravityCliRelease.ts` reads). An installed version at or
+above the target is `current` and start is never called (T3 4616 would
+reinstall the same CLI). Neither source answering is `unknown` /
+`antigravity_acp_offer_unknown`.
+
+AAC installs on an **enabled** Antigravity instance. T3 lists its disabled
+default `antigravity` instance first and refreshes models after an install only
+for the instance the install ran on, and only when it is enabled; installing on
+the disabled one left the Mac and VM model lists stale on 2026-11-13. After a
+successful install AAC calls `server.refreshProviders {instanceId, refreshModels:
+true}` for every enabled Antigravity instance, one request each, so another
+provider's refresh failure cannot hide this one's. (The same call without
+`instanceId` would also refresh every other provider and stop at the first
+failure.) A refresh refused for sign-in, or an instance that reads
+`unauthenticated`, makes the row `action_required` /
+`antigravity_acp_signin_needed` with the new version; any other refresh failure
+keeps `updated` / `antigravity_acp_models_stale`.
+
+**Sign-in guard.** The native CLI cannot read the sign-in the runtime pair kept
+in its file store (T3 runs it with `AGY_ACP_FORCE_FILE_STORAGE=1`): T3's
+1.4.5 to 1.5.8 install signed both VM instances out on 2026-11-13. Windows kept
+its sign-in through Credential Manager. So on Linux and the Mac (owner decision
+B, 2026-11-13: keep Nas1 and the Mac on 1.4.5 until T3 carries the sign-in over)
+a move from the runtime pair to the native CLI is not installed: the row is
+`action_required` / `antigravity_acp_signin_hold`, cause `signin_needed`, with the
+offered version as `heldVersion`. Install it from T3's Antigravity settings when
+you can sign in again there. Windows makes the move. The hosts that keep a
+sign-in are listed in `app_update_antigravity_release.py`.
+
+**Order.** Antigravity ACP runs after T3's own row. When T3 replaced its desktop
+in this run (Mac, Windows), AAC waits, bounded, for the new server to publish its
+endpoint with the new version and answer. On Ubuntu and Nas1 the new server only
+starts after the job, so the row is `action_required` / `t3_restart_pending` and
+nothing uses the previous server's offer; the next Update apps reconciles it.
 
 AAC reads the completion record and checks platform filenames, regular files,
 recorded sizes and Unix executable bits. It never downloads, stages, repairs,
 writes or renames the pointer or release directories. Download integrity,
 extraction, codesigning and ACP validation belong to T3's installer.
 
-AAC discovers the local server, issues a temporary bearer session, reads the
-server's Antigravity install state, and compares the active version with the
-**running server's pin**. A current or newer active version never calls install.
-An older server pin than AAC's recorded minimum fails before installation.
-Otherwise AAC sends the same `{instanceId}` input as T3's Install button to
-`provider.install.start`, then follows `provider.install.subscribe` for the
-returned operation ID. T3 remains the only pointer writer; AAC performs no
-reconciliation or repair writes. It verifies the completed active runtime is at
-least the server pin before reporting `updated`. Existing sessions retain their
-runtime; AAC restarts no processes and removes no versions.
-
 The session lasts at most 15 minutes, bounded by the remaining run deadline,
 has only `providers:manage` and
 `orchestration:read`, and is revoked in `finally`, including failures and
 cancellation. CLI stdout and the bearer stay in memory; they never enter logs,
 row data, argv or AAC files. If issue committed but failed to return its session
-ID, cleanup lists sessions by this run's unique label and revokes only matches.
+ID, cleanup lists sessions by this run's unique label and revokes only matches:
+`t3_session_reply_lost` when it found and revoked one, `t3_session_issue_unknown`
+when it could not (cause `lost_session_reply` for both).
 Revocation failure reports `failed` / `t3_session_revoke_failed`, even if
 installation completed.
 There is one session per run, with no rotation or renewal.
@@ -149,13 +209,13 @@ There is no saved AAC credential or auth bypass.
 
 The install observation timeout is 15 minutes, bounded by the host deadline.
 Timeout does not cancel an operation which T3 or another client may own. T3 may
-continue installing. `t3_install_timeout` says so. A missing/unreachable CLI or
-server returns `action_required` / `t3_unreachable`; failed session issue or
+continue installing. `t3_install_timeout` says so. No T3 install at all is
+`action_required` / `t3_absent`; an installed T3 whose server does not answer in
+time is `t3_not_ready` (older rows: `t3_unreachable`); failed session issue or
 authorization returns `action_required` / `t3_auth_failed`.
 Unconfirmed revocation returns `failed` / `t3_session_revoke_failed`.
-Ambiguous issuance returns `failed` / `t3_session_issue_unknown`. Failure to
-protect the issuer returns `failed` / `t3_issuer_protection_failed` before T3
-starts. Issuer lifetime guarantees and OS residuals are recorded in
+Failure to protect the issuer returns `failed` / `t3_issuer_protection_failed`
+before T3 starts. Issuer lifetime guarantees and OS residuals are recorded in
 [the session design](../../docs/app-update-short-sessions.md#issuer-lifetime-r9).
 Other failures use `t3_install_failed:<fixed reason>`; raw server diagnostics
 are never included. No fallback activates or stages a runtime.
@@ -814,11 +874,13 @@ replace anything.
   version. It is copied beside the app, checked again, checked for a ZCode opened
   meanwhile (`quit_first`) and swapped in with an atomic rename; a failed final
   check restores the old bundle. ZCode is not opened afterwards: it was not
-  running. The adapters live in `/opt/homebrew/lib/node_modules`; the owner's
-  `~/.local/bin/t3-acp-adapters-update` (his daily LaunchAgent runs it too)
-  installs both with Homebrew npm and is run and waited for, 5 minutes at most. It
-  does not defer, since macOS replaces files under running adapters safely, so an
-  unchanged result is `update_failed`; without the script the row is `unsupported`.
+  running. The adapters are installed by AAC itself into the copy T3 runs (see
+  **Which copy** below), 5 minutes at most per package. On 2026-11-13 the owner's
+  `~/.local/bin/t3-acp-adapters-update` ran plain `npm install -g` after
+  Homebrew's `node` had become a standalone Node: npm installed into that Node's
+  own folder while T3 runs `/opt/homebrew`, so AAC no longer runs that script.
+  Nothing defers, since macOS replaces files under running adapters safely, so an
+  unchanged result is `update_failed`.
 - **Windows.** The NSIS installer (`ZCode-<version>-win-x64.exe`, or arm64)
   downloads and is verified while ZCode keeps running: a valid Authenticode
   signature whose signer subject equals that of the installed `ZCode.exe`, which
@@ -856,6 +918,29 @@ replace anything.
   when the disk build is newer. Without Git's bash the zcode install fails alone and
   rolls back.
 
+**Which copy.** Each adapter's owner is the copy T3 actually runs: the package
+named by an enabled T3 provider instance's `config.commandPath` or
+`config.commandArgs` (symlinks resolved; environment values, which can be
+secrets, are never read), else the adapter command first on PATH (the Mac adds
+`/etc/paths`, `/opt/homebrew/bin` and `/usr/local/bin`), else the usual folder
+(`~/.local`, `/opt/homebrew`, `%APPDATA%\npm`), else the first other copy found.
+The owner's layout names its installer: npm (`<prefix>/lib/node_modules`, or
+`<prefix>\node_modules` on Windows), pnpm (`.../pnpm/global/<n>/node_modules`) or
+bun (`~/.bun/install/global/node_modules`). npm runs as
+`node npm-cli.js install --global --prefix <owner prefix> <package>@latest`, with
+T3's own `node` when its config names one; pnpm as `pnpm add --global
+--global-dir <dir>`; bun with `BUN_INSTALL_GLOBAL_DIR`. A yarn owner, or a
+missing pnpm/bun, is `unsupported`. An owner folder this account cannot write
+(a system install) is `action_required` / `prefix_not_writable`, and nothing is
+run as another user. Verification reads the owner's copy. When it did not move
+but another copy changed or appeared, the row is `failed` / `wrong_prefix`
+(cause `wrong_prefix`), and its diagnostics name both folders and versions:
+"npm updated the package in an unused prefix; the active one is unchanged."
+On Ubuntu and Nas1 the owner's `t3-acp-update.service` runs only when every
+owner is npm in `~/.local`, the folder it installs into; otherwise AAC installs
+directly, holding a package while an adapter process uses it (`in_use`), as the
+unit does.
+
 **Adapter rows.** The top-level versions stay null; `parts` lists `muse-acp` and
 `zcode-acp-server` once each with their previous and current versions (null for a
 package that is not installed). Neither package present is `not_installed`. npm's
@@ -878,6 +963,39 @@ required updates all succeeded.
 clearly, nothing runs and the row is `failed` / `update_failed`, as T3 and Claude
 Desktop report an unreadable release feed: nothing can be called current without
 it.
+
+## Diagnosable outcomes
+
+Every row the helper produces carries `diagnostics`, so the page can say why a
+row ended as it did instead of "The app update failed":
+
+| Field | What it holds |
+| --- | --- |
+| `cause` | One fixed class: `none`, `auth_required`, `signin_needed`, `policy_blocked`, `wrong_prefix`, `not_writable`, `lost_session_reply`, `t3_absent`, `t3_not_ready`, `t3_restart_pending`, `installer_failed`, `in_use`, `timeout` or `unknown` |
+| `reason` | One fixed word naming the step or refusal (`http_401`, `execution_policy`, `owner_unchanged`, `reply_empty`, `previous_server`, `token_storage_change`, `no_enabled_instance`; for `unknown`, the message code or probe failure) |
+| `command`, `exitCode` | What ran last: the program's own name and fixed arguments with home folders as `~`, never a script body or an encoded command; its exit code |
+| `phases` | Milliseconds per step (`checking`, `updating`, `t3_ready`, `offer`, `install`, `verify`, `refresh_models`, ...) |
+| `owner` | The copy used and how it was chosen: manager, prefix or executable (home-relative), source (`t3-config`, `path`, `default`, `found`, `versions-folder`), whether it is on PATH and which copy comes first, the Antigravity runtime kind and where its target came from, and other copies with their versions |
+| `notes` | Up to six fixed words (`policy_fallback_direct`, `direct_install`, `refresh_failed`, ...) |
+| `tail` | For a row that did not finish cleanly: the last 12 lines (at most 1200 characters) of the failing command's stderr |
+
+The tail passes the same scrubber twice, in the helper and at the dashboard
+boundary: control characters and ANSI codes, `Bearer`/`Basic` values, any
+`token`/`secret`/`password`/`authorization`/`cookie`/`session id` key's value,
+JWTs, npm/GitHub/API key shapes, URL credentials and query strings, email
+addresses, runs of 40 or more token characters, the home folder (`~`) and other
+users' folders (`/home/<user>`, `/Users/<user>`, `C:\Users\<user>`). T3 session
+commands never record output. Stderr is captured into an unnamed temporary file,
+never a pipe, so a detached grandchild cannot hold a run open.
+
+The dashboard keeps only these fields with bounded shapes. Rows from older
+helpers have no `diagnostics`. The digest-bound rollback view
+(`dashboard-job.json`) drops them, and `wrong_prefix` and `prefix_not_writable`
+show there with words older packages know; the expanded job keeps them, within
+its own 512 KiB limit. The page's cell names the cause ("Sign-in needed",
+"Blocked by policy", "Updated the wrong copy", "T3 reply lost", "T3 not ready")
+and its details add the cause, what ran, which copy, the step times and the
+output.
 
 ## Relaunching from the dashboard's service
 
@@ -989,9 +1107,10 @@ streamed rows survive both failures without exposing stderr.
 
 Results are `updated`, `current`, `not_installed`, `failed`, `restart_failed`,
 `skipped`, `unknown`, `held`, or `action_required`, with bounded versions, fixed message
-codes, restart counts/forced-stop counts and safe terminal target metadata. Raw
-package command output, process argv, environments, installer response bodies and
-credentials are never returned. Host/helper execution locks prevent overlapping
+codes, restart counts/forced-stop counts, safe terminal target metadata and
+`diagnostics` (see [Diagnosable outcomes](#diagnosable-outcomes)). Process argv,
+environments, installer response bodies and credentials are never returned; a
+failed command's output appears only as the scrubbed tail described there. Host/helper execution locks prevent overlapping
 work. Package operation timeout or a relaunch refusal is reported honestly and
 does not prevent other apps/hosts from producing their own results. Status reads
 never retry an interrupted job.

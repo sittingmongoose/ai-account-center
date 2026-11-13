@@ -99,7 +99,7 @@ def _broker_terminal(install, context, args):
             script = root / ("terminal-" + nonce + ".command")
             script.write_text("#!/bin/sh\nexec " + shlex.join(["/usr/bin/python3", str(child), "--socket", str(endpoint)]) + "\n", encoding="utf-8")
             script.chmod(0o700)
-            command(["/usr/bin/open", "-a", "Terminal", str(script)], timeout=15)
+            command(["/usr/bin/open", "-a", "Terminal", str(script)], timeout=15, stderr_tail=False)
         else:
             # Task Scheduler launches pythonw without a console. The terminal
             # child must use python.exe so the reopened CLI receives WT's PTY.
@@ -107,7 +107,7 @@ def _broker_terminal(install, context, args):
             console_python = pathlib.Path(sys.executable).with_name("python.exe")
             if not console_python.is_file():
                 raise UpdateFailure("restart_context")
-            command([shutil.which("wt.exe"), "-w", "0", "new-tab", "-d", context.cwd, "--", str(console_python), str(child), "--pipe", str(endpoint)], timeout=15, visible=True)
+            command([shutil.which("wt.exe"), "-w", "0", "new-tab", "-d", context.cwd, "--", str(console_python), str(child), "--pipe", str(endpoint)], timeout=15, visible=True, stderr_tail=False)
         if not complete.wait(25) or failures:
             raise UpdateFailure("restart_failed")
     finally:

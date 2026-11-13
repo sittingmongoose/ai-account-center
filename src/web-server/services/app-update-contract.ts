@@ -4,6 +4,8 @@ import { adapterInUseMessage, normalizeParts, type AdapterPart } from './app-upd
 import { normalizeStrays, olderShadow, strayNote, type AppUpdateStray } from './app-update-strays';
 import { record, safeVersion } from './app-update-values';
 import { MESSAGES, type MessageCode } from './app-update-messages';
+import { causeCodeMisplaced, normalizeDiagnostics } from './app-update-diagnostics';
+import type { AppUpdateDiagnostics } from './app-update-diagnostics';
 
 export type { AdapterPart } from './app-update-parts';
 export type { AppUpdateStray, AppUpdateStrayLocation } from './app-update-strays';
@@ -70,6 +72,8 @@ export interface AppUpdateResult {
   parts?: AdapterPart[];
   /** Other Codex or Claude copies beside a managed install; present only when there are some. */
   strays?: AppUpdateStray[];
+  /** Why the row ended as it did (cause class, command, exit code, phases, install owner, stderr tail). */
+  diagnostics?: AppUpdateDiagnostics;
   restartTargets: Array<{
     kind: 'tmux' | 'terminal' | 'windows-terminal' | 'desktop' | 'systemd';
     server?: string;
@@ -411,8 +415,7 @@ export function normalizeAppUpdateRow(
       (appId !== 'antigravity-acp' || row.status !== 'failed')) ||
     (code === 'antigravity_acp_staged' &&
       (appId !== 'antigravity-acp' || row.status !== 'action_required')) ||
-    ((code === 't3_unreachable' || code === 't3_auth_failed') &&
-      (appId !== 'antigravity-acp' || row.status !== 'action_required')) ||
+    causeCodeMisplaced(code, appId, row.status, HOST_OS[platform] === 'windows') ||
     ((code === 't3_install_timeout' ||
       code === 't3_install_state_unknown' ||
       code === 't3_session_revoke_failed' ||
@@ -436,8 +439,11 @@ export function normalizeAppUpdateRow(
       (appId !== 'zcode' || row.status !== 'failed' || row.updateAttempted === true))
   )
     return failure(platform, appId, 'helper_invalid');
-  const heldVersion = held && code === 'held_for_review' ? safeVersion(row.heldVersion) : null;
+  // A held Antigravity CLI build, or the Antigravity ACP release a sign-in hold did not install.
+  const holds = (held && code === 'held_for_review') || code === 'antigravity_acp_signin_hold';
+  const heldVersion = holds ? safeVersion(row.heldVersion) : null;
   const strays = rowStrays(row, appId);
+  const diagnostics = normalizeDiagnostics(row.diagnostics);
   return {
     appId,
     appLabel: UPDATE_APP_LABELS[appId],
@@ -453,6 +459,7 @@ export function normalizeAppUpdateRow(
     ...(heldVersion ? { heldVersion } : {}),
     ...(parts ? { parts } : {}),
     ...(strays.length ? { strays } : {}),
+    ...(diagnostics ? { diagnostics } : {}),
     restartTargets: targets,
   };
 }
