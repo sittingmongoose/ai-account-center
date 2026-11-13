@@ -23,7 +23,11 @@ export function createResetSourceAdapter(): ResetSource {
     if (!loaded.module) throw new ProviderError('Reset module unavailable.', 'reset-claims');
     return JSON.parse(await new loaded.module.NativeStatus().call(method, JSON.stringify(input)));
   }
-  async function execute(account: string, write?: ResetWrite): Promise<unknown> {
+  async function execute(
+    account: string,
+    write?: ResetWrite,
+    beforeHostDispatch?: () => void
+  ): Promise<unknown> {
     let context: { dbPath: string; routeAccount: string } | undefined;
     if (!write) {
       const dir = path.join(getCcsDir(), 'account-usage', 'reset-claims');
@@ -86,8 +90,10 @@ export function createResetSourceAdapter(): ResetSource {
       action: 'inventory',
       provider: 'claude',
     };
-    if (write)
+    if (write) {
+      beforeHostDispatch?.();
       return JSON.parse(await runPrivateUsageHelper(host, transportRequest, source, input));
+    }
     return native('resetClaudeSource', {
       ...context,
       command: privateUsageInvocation(host, transportRequest, source, input),
@@ -95,10 +101,18 @@ export function createResetSourceAdapter(): ResetSource {
   }
   return {
     read: (account) => execute(account),
-    send: async (write) =>
-      execute(write.routeAccount, write) as Promise<{
-        outcome: string;
-        retryAfterMs?: number;
-      }>,
+    send: async (write) => {
+      let dispatched = false;
+      try {
+        return (await execute(write.routeAccount, write, () => {
+          dispatched = true;
+        })) as { outcome: string; retryAfterMs?: number };
+      } catch (error) {
+        // A manifest/script failure before starting the Claude host command
+        // proves nothing was sent. A lost host response cannot prove that.
+        if (write.routeAccount.startsWith('claude:') && !dispatched) return { outcome: 'not-sent' };
+        throw error;
+      }
+    },
   };
 }

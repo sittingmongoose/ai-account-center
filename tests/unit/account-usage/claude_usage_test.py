@@ -1681,8 +1681,28 @@ class ResetHostOfflineTests(unittest.TestCase):
             write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"], "method": "claude.reset_rate_limits",
                      "body": {"program": "cedar_ember", "grant_id": "selected_grant", "request_id": "a" * 64}}
             with mock.patch.object(usage, "Client") as client:
-                self.assertEqual(usage.reset_host(dict(request, action="claim", write=write))["outcome"], "identity-changed")
+                self.assertEqual(usage.reset_host(dict(request, action="claim", write=write))["outcome"], "not-sent")
                 client.assert_not_called()
+
+    def test_missing_or_invalid_private_token_and_final_login_failure_are_not_sent(self):
+        for token in (None, "", "bad\nheader", "x" * 32769):
+            with self.subTest(token_kind=type(token).__name__):
+                private, collect, request = self.setup_host()
+                with mock.patch.object(usage, "collect", side_effect=collect), mock.patch.object(usage, "Client") as client:
+                    read = usage.reset_host(request)
+                    private["token"] = token
+                    write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"], "method": "claude.reset_rate_limits",
+                             "body": {"program": "cedar_ember", "grant_id": "selected_grant", "request_id": "a" * 64}}
+                    self.assertEqual(usage.reset_host(dict(request, action="claim", write=write)), {"outcome": "not-sent"})
+                    client.assert_not_called()
+        private, collect, request = self.setup_host()
+        with mock.patch.object(usage, "collect", side_effect=collect), mock.patch.object(usage, "Client") as client:
+            read = usage.reset_host(request)
+            private["verifyLogin"].side_effect = usage.UsageUnavailable()
+            write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"], "method": "claude.reset_rate_limits",
+                     "body": {"program": "cedar_ember", "grant_id": "selected_grant", "request_id": "a" * 64}}
+            self.assertEqual(usage.reset_host(dict(request, action="claim", write=write)), {"outcome": "not-sent"})
+            client.assert_not_called()
 
 class ResetReadIdentityTests(unittest.TestCase):
     def setUp(self):
@@ -1861,6 +1881,100 @@ class ResetWebInventoryTests(unittest.TestCase):
         self.assertEqual(result["failureCode"], "rate_limited")
         self.assertEqual(result["retryAfterSeconds"], 1800)
         self.assertEqual(result["windows"], [])
+
+    def claim_request(self):
+        read = usage.reset_host(self.request)
+        self.oauth.responses = [profile(), usage.UsageUnavailable("rate_limited", 1800)]
+        self.web.get.side_effect = [self.web_account, self.payload]
+        # The claim executor does a fresh OAuth identity check; its native
+        # write pins account/org and inventory, rather than an old access token.
+        return {"profile": "fixture", "expectedEmail": EMAIL, "host": "windows:fixture", "action": "claim",
+                "write": {"identity": read["identity"], "sourceBinding": read["sourceBinding"],
+                          "method": "claude.reset_rate_limits", "body": {"program": "cedar_ember",
+                          "grant_id": "fixture_grant", "request_id": "a" * 64}}}
+
+    def test_web_inventory_retains_the_verified_oauth_token_for_an_offline_claim(self):
+        request = self.claim_request()
+        opener = mock.Mock()
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b'{"result":"reset"}'
+        opener.open.return_value = response
+        self.oauth.opener = opener
+        result = usage.reset_host(request)
+        self.assertEqual(result, {"outcome": "reset"})
+        sent = opener.open.call_args.args[0]
+        self.assertEqual(sent.get_header("Authorization"), "Bearer " + TOKEN)
+        self.assertIsNone(sent.get_header("Cookie"))
+        self.assertEqual(sent.full_url, "https://api.anthropic.com/api/organizations/" + ORG + "/reset_rate_limits")
+        self.assertEqual(json.loads(sent.data), request["write"]["body"])
+        self.assertEqual([route for route, _ in self.oauth.calls], ["/api/oauth/profile", "/api/oauth/profile"])
+        opener.open.assert_called_once()
+        self.assertNotIn(TOKEN, json.dumps(result))
+
+    def test_claim_throttling_and_lost_answers_are_independent_of_usage_throttling(self):
+        for error, expected in [(urllib.error.HTTPError("fixture", 429, "synthetic", {"Retry-After": "1800"}, None),
+                                 {"outcome": "rate-limited", "retryAfterMs": 1800000}),
+                                (urllib.error.HTTPError("fixture", 401, "synthetic", {}, None), {"outcome": "signed-out"}),
+                                (urllib.error.HTTPError("fixture", 500, "synthetic", {}, None), {"outcome": "ambiguous"}),
+                                (urllib.error.URLError("synthetic lost response"), {"unavailable": True, "outcome": "ambiguous"})]:
+            with self.subTest(expected=expected):
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                self.oauth.opener = mock.Mock()
+                self.oauth.opener.open.side_effect = error
+                self.assertEqual(usage.reset_host(request), expected)
+                self.oauth.opener.open.assert_called_once()
+
+    def test_wrong_oauth_or_web_identity_never_reaches_the_offline_claim_opener(self):
+        for location in ("oauth-account", "oauth-org", "web-account", "web-org"):
+            with self.subTest(location=location):
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                self.oauth.opener = mock.Mock()
+                if location == "oauth-account":
+                    self.oauth.responses = [profile(account={"uuid": OTHER, "email": EMAIL})]
+                elif location == "oauth-org":
+                    self.oauth.responses = [profile(organization={"uuid": OTHER})]
+                else:
+                    wrong = {**self.web_account, "uuid": OTHER} if location == "web-account" else {
+                        **self.web_account, "memberships": [{"organization": {"uuid": OTHER}}]}
+                    self.web.get.side_effect = [wrong]
+                self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+                self.oauth.opener.open.assert_not_called()
+
+    def test_web_cookie_without_eligible_oauth_token_cannot_offer_or_claim(self):
+        request = self.claim_request()
+        self.current = (ACCOUNT, cache(token=""))
+        self.oauth.opener = mock.Mock()
+        self.web.reset_mock()
+        self.assertTrue(usage.reset_host(self.request).get("unavailable"))
+        self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+        self.web.get.assert_not_called()
+        self.oauth.opener.open.assert_not_called()
+
+    def test_rejected_oauth_profile_names_the_needed_signin_instead_of_stale_inventory(self):
+        self.oauth.responses = [usage.UsageUnavailable("needs_sign_in")]
+        self.assertEqual(usage.reset_host(self.request), {"unavailable": True, "reason": "signed-out"})
+        self.web.get.assert_not_called()
+
+    def test_cache_or_account_rotation_during_claim_web_read_is_not_sent(self):
+        for replacement in [(OTHER, cache(key(account=OTHER))), (ACCOUNT, cache(token="rotated-token"))]:
+            with self.subTest(account=replacement[0]):
+                self.current = self.saved
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                def get(route):
+                    if route == "/api/account": return self.web_account
+                    self.current = replacement
+                    return self.payload
+                self.web.get.side_effect = get
+                self.oauth.opener = mock.Mock()
+                self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+                self.oauth.opener.open.assert_not_called()
 
 
 class ResetCaptureTests(unittest.TestCase):

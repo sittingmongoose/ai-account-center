@@ -1,6 +1,42 @@
 use super::*;
 
 const ROUTE: &str = "codex:fixture";
+
+#[test]
+fn own_no_send_receipt_clears_only_its_own_unanswered_obligation() {
+    for another_send in [false, true] {
+        let t = trace(false);
+        Owner::new().with(|| {
+            let (rc, canonical) = start(&t);
+            let send = rc.begin_send(&canonical, 102.);
+            if another_send {
+                rc.begin_send(&canonical, 103.);
+            }
+            // Reuse real native receipt ordering/evidence; only the settled
+            // outcome is the new no-send outcome (native-tested separately).
+            let mut result: ClaimResult = serde_json::from_value(t["retry"].clone()).unwrap();
+            result.outcome = "not-sent".into();
+            result.provider_success = false;
+            let latest = result
+                .evidence
+                .as_mut()
+                .unwrap()
+                .latest_attempt
+                .as_mut()
+                .unwrap();
+            latest.outcome = "not-sent".into();
+            latest.provider_success = false;
+            rc.claim_answer(&canonical, send, Answer::Ok(result), 104.);
+            assert_eq!(rc.unresolved.get_untracked().blocks(), another_send);
+            let said = rc.said.get_untracked().unwrap();
+            if !another_send {
+                assert!(said.text.contains("did not send"));
+                assert!(!said.check);
+                assert!(!said.text.contains("may have been used"));
+            }
+        });
+    }
+}
 fn trace(prior: bool) -> serde_json::Value {
     serde_json::from_str(if prior {
         include_str!("../tests/fixtures/reset-refusal-after-success.json")

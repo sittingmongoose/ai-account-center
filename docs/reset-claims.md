@@ -196,6 +196,22 @@ Reset verification uses the same normalized usage windows as the dashboard.
 The provider's legacy Fable reset bucket is matched only to the exact unscoped
 Fable quota; missing or conflicting quota readings never enable a claim.
 
+A web inventory read still requires an eligible saved OAuth token and a successful
+OAuth account/organization check. The private Windows process retains that token;
+the read response never contains it. Claiming repeats those checks, verifies the
+web session against the same account and organization, and uses the OAuth Bearer
+token for the exact selected reset. A cookie-only session cannot enable Use reset.
+OAuth usage throttling does not establish whether the separate claim endpoint is
+throttled. A claim rejection respects the provider's delay; a lost send response
+remains unconfirmed.
+
+Claude's internal `not-sent` outcome is proof that the helper never reached its
+provider opener, or that manifest/script setup failed before host dispatch. Native
+settlement records that outcome, releases that reservation, and the page says
+"AAC did not send this reset." Exceptions after the opener or a lost host response
+retain the existing unconfirmed lock. No-send proof cannot erase earlier provider
+success for the same attempt or acknowledge another page's unanswered send.
+
 A native refusal includes its current recovery `evidence` when storage can be read;
 otherwise it includes null. The same revision rules apply to these snapshots.
 Only an explicit `sent: false` acknowledges a no-send refusal. An unreadable or

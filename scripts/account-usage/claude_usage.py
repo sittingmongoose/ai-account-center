@@ -1420,6 +1420,16 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
 
 
 def reset_host(request):
+    # Only reaching the actual opener can make a claim ambiguous. Collection,
+    # identity, binding and request-construction failures prove no POST occurred.
+    dispatch = {"started": False}
+    result = _reset_host(request, dispatch)
+    if request.get("action") == "claim" and not dispatch["started"]:
+        return {"outcome": "not-sent"}
+    return result
+
+
+def _reset_host(request, dispatch):
     """Private stdin host RPC. Credentials stay on this host, including during writes.
 
     The server must already have durably consumed the caller's exact confirmation.
@@ -1437,6 +1447,8 @@ def reset_host(request):
         if result.get("status") != "ok" or len(captured) != 1:
             if result.get("failureCode") == "rate_limited":
                 return {"unavailable": True, "reason": "rate-limited"}
+            if result.get("status") == "needs_sign_in":
+                return {"unavailable": True, "reason": "signed-out"}
             return {"unavailable": True}
         private = captured[0]
         cedar = private["usage"].get("cedar_ember")
@@ -1476,15 +1488,20 @@ def reset_host(request):
             return {"outcome": "unavailable"}
         if re.fullmatch(UUID, private["organization"]) is None:
             return {"outcome": "identity-changed"}
+        token = private.get("token")
+        if (not isinstance(token, str) or not token or len(token) > 32768
+                or any(ord(char) < 32 for char in token)):
+            return {"outcome": "unavailable"}
         private["verifyRoot"]()
         private["verifyLogin"]()
         client = Client()
         req = urllib.request.Request(
             "https://api.anthropic.com/api/organizations/" + private["organization"] + "/reset_rate_limits",
             data=json.dumps(body, separators=(",", ":")).encode("ascii"), method="POST",
-            headers={"Authorization": "Bearer " + private["token"], "anthropic-beta": "oauth-2025-04-20",
+            headers={"Authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20",
                      "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "CCS-ReadOnly-Usage/1.0"})
         try:
+            dispatch["started"] = True
             with client.opener.open(req, timeout=8) as response:
                 raw = response.read(MAX_BYTES + 1)
                 if len(raw) > MAX_BYTES:

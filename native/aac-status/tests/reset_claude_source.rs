@@ -49,6 +49,7 @@ scope['WebClient']=WebClient
 class Client:
  def get(self,route,token):
   with (root/'provider-reads').open('a') as f:f.write(route+'\n')
+  if (root/'signed-out').exists():raise scope['UsageUnavailable']('needs_sign_in')
   account=token[len('fixture-token-'):]
   if route=='/api/oauth/profile':return {'account':{'uuid':account,'email':'fixture@example.com','has_claude_pro':True},'organization':{'uuid':ORG}}
   if (root/'rate-limit').exists():raise scope['UsageUnavailable']('rate_limited',1800)
@@ -244,4 +245,16 @@ fn throttled_inventory_preserves_the_safe_reason_instead_of_stale_identity() {
         reset_claude_source::read(&dir.path().join("claims.sqlite"), "claude:reused", &command).unwrap_err(),
         "rate-limited"
     );
+}
+
+#[test]
+fn signed_out_oauth_does_not_turn_web_cookies_into_a_claim_executor() {
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("signed-out"), "").unwrap();
+    std::fs::write(dir.path().join("web-usage"), "").unwrap();
+    assert_eq!(
+        reset_claude_source::read(&dir.path().join("claims.sqlite"), "claude:reused", &command).unwrap_err(),
+        "signed-out"
+    );
+    assert!(!dir.path().join("web-reads").exists());
 }

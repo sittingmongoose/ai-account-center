@@ -7,6 +7,7 @@ import { join } from 'path';
 import type { Server } from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { attachDashboardEventServer } from '../../../src/web-server/dashboard-events';
+import { createResetSourceAdapter } from '../../../src/web-server/services/reset-source-adapter';
 import {
   createResetClaimRouter,
   type ResetSource,
@@ -38,6 +39,7 @@ async function serve(
   });
   const calls: string[] = [];
   const snapshots: Array<Record<string, unknown>> = [];
+  const finishes: Array<Record<string, unknown>> = [];
   const dir = mkdtempSync(join(tmpdir(), 'aac-reset-http-'));
   dirs.push(dir);
   app.use(
@@ -50,6 +52,7 @@ async function serve(
           const a = JSON.parse(raw);
           calls.push(a.op);
           if (a.snapshot) snapshots.push(a.snapshot);
+          if (a.op === 'finish') finishes.push(a);
           if (rejectGate && a.op.endsWith('Gate')) throw new Error('synthetic cooldown');
           if (reject && a.op === reject.op) throw new Error(reject.message);
           if (a.op === 'history') return '[]';
@@ -82,7 +85,7 @@ async function serve(
   servers.push(server);
   await new Promise<void>((r) => server.on('listening', r));
   const url = `http://127.0.0.1:${(server.address() as any).port}`;
-  return { url, calls, server, snapshots };
+  return { url, calls, server, snapshots, finishes };
 }
 const grantKey = 'b'.repeat(64);
 test('paired native devices and anonymous callers cannot prepare or read private history', async () => {
@@ -481,4 +484,72 @@ test('native source capture failure performs no inventory mutation or provider s
   expect((await response.json()).status).toBe('unavailable');
   expect(sends).toBe(0);
   expect(served.calls).toEqual(['pending']);
+});
+
+test('Claude manifest failure before host dispatch is proven not sent', async () => {
+  const prior = process.env.CCS_HOME;
+  const root = mkdtempSync(join(tmpdir(), 'aac-reset-adapter-'));
+  dirs.push(root);
+  process.env.CCS_HOME = root;
+  try {
+    const answer = await createResetSourceAdapter().send({
+      routeAccount: 'claude:synthetic-missing',
+      method: 'claude.reset_rate_limits',
+      body: {},
+      identity: { provider: 'claude' },
+      attemptKey: 'a'.repeat(64),
+      sourceBinding: 'synthetic',
+    });
+    expect(answer).toEqual({ outcome: 'not-sent' });
+  } finally {
+    if (prior === undefined) delete process.env.CCS_HOME;
+    else process.env.CCS_HOME = prior;
+  }
+});
+
+test('proven no-send settles without a verification read; a lost host answer stays ambiguous', async () => {
+  for (const proven of [true, false]) {
+    let reads = 0;
+    const source: ResetSource = {
+      async read() {
+        reads++;
+        return {};
+      },
+      async send() {
+        if (!proven) throw new Error('synthetic lost host answer');
+        return { outcome: 'not-sent' };
+      },
+    };
+    const served = await serve('session', source);
+    const response = await fetch(`${served.url}/accounts/claude%3Asynthetic/reset-claims`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: served.url },
+      body: JSON.stringify({ grantKey, confirmationToken: 'c'.repeat(64) }),
+    });
+    expect(response.status).toBe(200);
+    expect(reads).toBe(proven ? 1 : 2);
+    expect(served.finishes[0].outcome).toBe(proven ? 'not-sent' : 'ambiguous');
+  }
+});
+
+test('storage failure preserves truthful no-send proof instead of an unanswered-send claim', async () => {
+  const source: ResetSource = {
+    async read() {
+      return {};
+    },
+    async send() {
+      return { outcome: 'not-sent' };
+    },
+  };
+  const served = await serve('session', source, false, {
+    op: 'finish',
+    message: 'storage-unavailable: synthetic',
+  });
+  const response = await fetch(`${served.url}/accounts/claude%3Asynthetic/reset-claims`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: served.url },
+    body: JSON.stringify({ grantKey, confirmationToken: 'c'.repeat(64) }),
+  });
+  expect(response.status).toBe(409);
+  expect((await response.json()).sent).toBe(false);
 });
