@@ -709,7 +709,7 @@ mod tests {
 
     #[test]
     fn writer_names() {
-        let machines = ["vm", "mac", "windows", "nas1", "alexis"];
+        let machines = ["vm", "mac", "windows", "nas1"];
         assert!(is_writer_name("vm.t3-bdbeeaaa", &machines));
         assert!(is_writer_name("windows.opus-typed-decisions", &machines));
         assert!(!is_writer_name("ubuntu.lead", &machines));
