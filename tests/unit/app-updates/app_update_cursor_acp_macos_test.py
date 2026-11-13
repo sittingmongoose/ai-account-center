@@ -333,7 +333,8 @@ class AcpTests(Fixtures):
             with self.subTest(host=host, version=version), self.isolated():
                 shutil.rmtree(self.root / ".t3", ignore_errors=True)
                 found, _ = self.runtime(host, version, native)
-                self.assertEqual((found.version, found.probe, found.runtime_kind), (version, None, "native" if native else "harness"))
+                self.assertEqual((found.version, found.probe), (version, None))
+                self.assertEqual(found.runtime_kind, "native" if native else "harness")
 
     def test_a_native_record_with_the_wrong_executable_or_size_is_unknown(self):
         found, directory = self.runtime("ubuntu", "1.5.8", native=True)
