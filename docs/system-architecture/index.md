@@ -85,13 +85,17 @@ rules. The provider filter is validated against the server's provider table;
 errors carry a stable `code`.
 
 A read is answered with the newest numbers at once. It starts (or joins) the
-computation of a new answer and waits for it at most 250 ms; when that is not
-enough, it gets the selection's last answer, kept in memory and saved under
+computation of a new answer, which runs after the read's turn of the event loop.
+When that selection's last computation took at most 250 ms, the read waits for
+this one that long; otherwise, or when nothing was computed since the server
+started, it gets the selection's last answer, kept in memory and saved under
 `account-analytics/analytics-views-v1.json` (atomic, owner-only, versioned, the
-eight most recent selections), with `stale: true` and `refreshing: true`, and the
-computation finishes behind it. Every answer carries `asOf`, when its numbers were
-computed; a restarted server answers its first read from the saved file. Only a
-selection with nothing saved waits for its first answer. A computation slower than
+eight most recent selections), and the computation finishes behind it. A kept
+answer older than the refresh interval plus 30 s, or one from before a restart,
+is sent with `stale: true` and `refreshing: true` (the page reads again in 2 s).
+Every answer carries `asOf`, when its numbers were computed; a restarted server
+answers its first read from the saved file. Only a selection with nothing saved
+waits for its first answer. A computation slower than
 a second is logged by phase (`analytics.read_timing`). The app frame keeps the last
 answers in the browser too (cleared at sign-out) and draws them at once on the next
 visit under an updating strip ("Updating · showing data from 2m ago") with the
