@@ -10,8 +10,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Sync fs files affected (all) | 140 |
 | Sync fs occurrences (runtime hotpaths) | 740 |
 | Sync fs files affected (runtime hotpaths) | 81 |
-| Legacy shim markers | 239 |
-| Legacy shim files affected | 79 |
+| Legacy shim markers | 241 |
+| Legacy shim files affected | 80 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -37,8 +37,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/auth/profile-detector.ts` | 18 |
 | `src/utils/config-manager.ts` | 13 |
 | `src/config/schemas/websearch.ts` | 10 |
+| `src/web-server/services/app-update-service.ts` | 9 |
 | `src/commands/bar/native-app-paths.ts` | 8 |
-| `src/web-server/services/app-update-service.ts` | 8 |
 | `src/auth/profile-registry.ts` | 5 |
 | `src/codex-auth/commands/import-default-command.ts` | 5 |
 | `src/commands/bar/launch-descriptor.ts` | 5 |
@@ -57,7 +57,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 100.0% (15/15), target 40% |
 | hotpath console.error/warn occurrences | 72 (279 total, 207 CLI-UX exempt) |
 | hotpath console.error/warn files | 18 |
-| files with createLogger | 46/513 |
+| files with createLogger | 46/514 |
 | subdomains with zero createLogger | 22 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, status-native, targets, types) |
 | files > 400 LOC | 70 |
 | files > 600 LOC | 28 |
