@@ -152,8 +152,13 @@ for (const priorSuccess of [true, false])
         expect(prep.status).toBe(200);
         const withToken = await get();
         expect(withToken.evidence.claimTokens.tokenKeys).toContain(prep.body.confirmationKey);
-        // Another ordinary usage increment between confirmation and execute changes the bound state.
+        // Ordinary usage moving no longer refuses (percentages are display-only). A re-saved login (same
+        // account, new bytes) between confirmation and execute still changes the bound state.
         state(100, 21, priorSuccess);
+        writeFileSync(
+          join(home, 'auth.json'),
+          readFileSync(join(home, 'auth.json'), 'utf8') + '\n'
+        );
         const refused = await post('', {
           grantKey: key,
           confirmationToken: prep.body.confirmationToken,

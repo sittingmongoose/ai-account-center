@@ -65,6 +65,12 @@
         "outcome": "nothing-to-reset",
         "pending": false,
         "providerSuccess": false,
+        "sentUsage": [
+          {
+            "id": "primary",
+            "usedPercent": 100.0
+          }
+        ],
         "verification": "unconfirmed",
         "windows": []
       },
@@ -197,6 +203,12 @@
         "outcome": "claimed-unconfirmed",
         "pending": true,
         "providerSuccess": false,
+        "sentUsage": [
+          {
+            "id": "primary",
+            "usedPercent": 100.0
+          }
+        ],
         "verification": "unconfirmed",
         "windows": []
       },
@@ -278,7 +290,13 @@
       "providerWords": null,
       "refillsText": "Refills the eligible Codex usage windows.",
       "resetsLeft": 1
-    }
+    },
+    "usage": [
+      {
+        "id": "primary",
+        "usedPercent": 100.0
+      }
+    ]
   },
   "settled": {
     "attemptKey": "0000000000000000000000000000000000000000000000000000000000000386",
@@ -295,6 +313,12 @@
         "outcome": "nothing-to-reset",
         "pending": false,
         "providerSuccess": false,
+        "sentUsage": [
+          {
+            "id": "primary",
+            "usedPercent": 100.0
+          }
+        ],
         "verification": "unconfirmed",
         "windows": []
       },
@@ -304,6 +328,12 @@
     "outcome": "nothing-to-reset",
     "pending": false,
     "providerSuccess": false,
+    "sentUsage": [
+      {
+        "id": "primary",
+        "usedPercent": 100.0
+      }
+    ],
     "verification": "unconfirmed",
     "windows": []
   }

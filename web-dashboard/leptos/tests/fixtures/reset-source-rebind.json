@@ -16,6 +16,12 @@
         "outcome": "claimed-unconfirmed",
         "pending": true,
         "providerSuccess": false,
+        "sentUsage": [
+          {
+            "id": "primary",
+            "usedPercent": 100.0
+          }
+        ],
         "verification": "unconfirmed",
         "windows": []
       },
@@ -85,6 +91,12 @@
         "outcome": "claimed-unconfirmed",
         "pending": true,
         "providerSuccess": false,
+        "sentUsage": [
+          {
+            "id": "primary",
+            "usedPercent": 100.0
+          }
+        ],
         "verification": "unconfirmed",
         "windows": []
       },
@@ -169,6 +181,12 @@
         "outcome": "claimed-unconfirmed",
         "pending": true,
         "providerSuccess": false,
+        "sentUsage": [
+          {
+            "id": "primary",
+            "usedPercent": 100.0
+          }
+        ],
         "verification": "unconfirmed",
         "windows": []
       },
@@ -237,6 +255,12 @@
         "outcome": "claimed-unconfirmed",
         "pending": true,
         "providerSuccess": false,
+        "sentUsage": [
+          {
+            "id": "primary",
+            "usedPercent": 100.0
+          }
+        ],
         "verification": "unconfirmed",
         "windows": []
       },

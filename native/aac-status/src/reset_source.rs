@@ -207,7 +207,15 @@ fn codex_inner(
     let mut windows = BTreeMap::new();
     for k in ["primary", "secondary"] {
         if let Some(n) = limits[k]["usedPercent"].as_f64() {
-            windows.insert(k.to_owned(), n);
+            // primary/secondary are positions. A window the provider says is 5 hours or a week is named that way,
+            // so the confirmation can say which limit it is; anything else keeps its position name.
+            let named = match limits[k]["windowDurationMins"].as_i64() {
+                Some(300) => "five_hour",
+                Some(10_080) => "seven_day",
+                _ => k,
+            };
+            let name = if windows.contains_key(named) { k } else { named };
+            windows.insert(name.to_owned(), n);
         }
     }
     let mut grants = vec![];
@@ -226,11 +234,9 @@ fn codex_inner(
             .as_str()
             .filter(|s| !s.is_empty())
             .ok_or("exact-grant-unavailable")?;
-        let clears = windows
-            .iter()
-            .filter(|(_, v)| **v >= 100.0)
-            .map(|(k, _)| k.clone())
-            .collect::<Vec<_>>();
+        // A credit can be used at any usage. OpenAI chooses which limits it refills, so its target is every
+        // limit the provider reports; nothing here promises which of them will refill.
+        let clears = windows.keys().cloned().collect::<Vec<_>>();
         let known = g["resetType"] == "codexRateLimits";
         grants.push(Grant {
             id: Some(id.to_owned()),
@@ -241,7 +247,9 @@ fn codex_inner(
                 g["resetType"].as_str().and_then(crate::reset_inventory::provider_words)
             },
             clears,
-            left: if g["status"] == "available" { 1 } else { 0 },
+            // `redeeming` is in progress, not a finished spend: it keeps its count but can't be used or sent, and
+            // only `redeemed` shows the decrement that confirms a claim.
+            left: if g["status"] == "redeemed" { 0 } else { 1 },
             expires_at_ms: g["expiresAt"].as_i64().and_then(|n| n.checked_mul(1000)),
             usable: g["status"] == "available",
         });

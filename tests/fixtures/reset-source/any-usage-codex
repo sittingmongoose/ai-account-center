@@ -1,0 +1,38 @@
+#!/usr/bin/python3
+# Offline Codex app-server for reset-any-usage-native.test.ts: no network, no real provider writes.
+# fixture-state.json holds five/week usage, spent, outcome and an optional refill applied by a "reset".
+# An optional status overrides the credit's status (for example redeeming).
+import json, os, sys
+home = os.environ['CODEX_HOME']
+who = json.load(open(os.path.join(home, 'auth.json')))['tokens']['account_id']
+path = os.path.join(home, 'fixture-state.json')
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request:
+        continue
+    method = request['method']
+    state = json.load(open(path))
+    if method == 'initialize':
+        result = {}
+    elif method == 'account/read':
+        result = {'account': {'type': 'chatgpt', 'email': 'fixture-' + who}}
+    elif method == 'account/rateLimits/read':
+        status = state.get('status') or ('redeemed' if state['spent'] else 'available')
+        result = {'accountId': who,
+                  'rateLimits': {'primary': {'usedPercent': state['five'], 'windowDurationMins': 300},
+                                 'secondary': {'usedPercent': state['week'], 'windowDurationMins': 10080}},
+                  'rateLimitResetCredits': {'availableCount': 1 if status == 'available' else 0,
+                      'credits': [{'id': 'credit-a', 'resetType': 'codexRateLimits',
+                                   'status': status}]}}
+    elif method == 'account/rateLimitResetCredit/consume':
+        with open(os.path.join(home, 'sent.jsonl'), 'a') as sent:
+            sent.write(json.dumps(request['params']) + '\n')
+        if state['outcome'] == 'reset':
+            state['spent'] = True
+            state.update(state.get('refill', {}))
+            json.dump(state, open(path, 'w'))
+        result = {'outcome': state['outcome']}
+    else:
+        open(os.path.join(home, 'unexpected-send'), 'w').close()
+        result = {}
+    print(json.dumps({'id': request['id'], 'result': result}), flush=True)

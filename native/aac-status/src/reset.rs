@@ -139,12 +139,20 @@ fn public(s: &Snapshot, g: &Grant, key: &str, now: i64) -> Value {
     let words = if known { None } else { g.words.as_deref() };
     json!({"grantKey":key,"kind":if known{g.kind.as_str()}else{"unknown"},"label":label,"refillsText":text,"providerWords":words,"resetsLeft":g.left,"expiresAtMs":g.expires_at_ms,"claimable":blocked(s,g,now).is_none(),"claimBlockedReason":blocked(s,g,now)})
 }
+/// How much of each limit the grant targets is used in this read: the same read its confirmation is bound to.
+fn usage(s: &Snapshot, g: &Grant) -> Vec<Value> {
+    g.clears
+        .iter()
+        .filter_map(|k| s.windows.get(k).map(|v| json!({"id":k,"usedPercent":v})))
+        .collect()
+}
 fn fingerprint(s: &Snapshot, g: &Grant) -> Result<String> {
-    // Sample timestamp deliberately excluded: a fresh read of unchanged state must match.
+    // Binds what decides spend safety: the identity, the exact grant (id, kind, the window keys it refills, count,
+    // expiry, availability), the executor and the saved-source binding. Sample timestamp and live usage percentages
+    // are deliberately excluded: they are display-only, so ordinary use while the dialog is open cannot refuse.
     Ok(hash(&encode(&(
         s.identity.clone(),
         g.clone(),
-        &s.windows,
         s.executor_ready,
         &s.source_binding,
         &s.account_label,
@@ -718,7 +726,7 @@ impl Store {
         let response = Self::with_evidence(
             &tx,
             &Self::canonical(fresh)?,
-            json!({"account":{"label":fresh.account_label},"confirmationToken":token,"confirmationKey":hash(token),"expiresAtMs":now+120_000,"grant":public(fresh,&g,key,now),"costText":"Spends one selected reset. This cannot be undone."}),
+            json!({"account":{"label":fresh.account_label},"confirmationToken":token,"confirmationKey":hash(token),"expiresAtMs":now+120_000,"grant":public(fresh,&g,key,now),"usage":usage(fresh,&g),"costText":"Spends one selected reset. This cannot be undone."}),
         )?;
         sql(tx.commit())?;
         Ok(response)
@@ -815,11 +823,12 @@ impl Store {
         reserved
     }
     fn attempt_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
-        let (g, stored, previous_success, order, pending): (String, String, bool, i64, bool) = sql(tx.query_row(
-            "SELECT grant_json,outcome,provider_success,rowid,pending FROM attempts WHERE key=? AND account=?",
-            params![attempt, account],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        ))?;
+        let (g, stored, previous_success, order, pending, before): (String, String, bool, i64, bool, String) =
+            sql(tx.query_row(
+                "SELECT grant_json,outcome,provider_success,rowid,pending,before_json FROM attempts WHERE key=? AND account=?",
+                params![attempt, account],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            ))?;
         let details: Option<String> = sql(tx
             .query_row(
                 "SELECT details FROM history WHERE event='verification' AND target_hash=? ORDER BY seq DESC LIMIT 1",
@@ -831,21 +840,37 @@ impl Store {
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or(Value::Null);
         let grant: Grant = serde_json::from_str(&g).map_err(|_| "shape")?;
+        // The target windows' usage in the read the claim was reserved on, just before the send. It is history,
+        // never current usage; usage may have moved since the confirmation was shown.
+        let before: Value = serde_json::from_str(&before).unwrap_or(Value::Null);
+        let sent_usage: Vec<Value> = grant
+            .clears
+            .iter()
+            .filter_map(|k| before["windows"][k].as_f64().map(|v| json!({"id":k,"usedPercent":v})))
+            .collect();
+        // A Codex claim is confirmed by the credit alone, so its receipt names only the limits that fell.
+        let fell_only = details["provider"] == "codex";
         let windows: Vec<Value> = if stored == "claimed" {
             grant
                 .clears
                 .iter()
                 .filter_map(|k| {
-                    details["afterWindows"][k]
-                        .as_f64()
-                        .map(|v| json!({"id":k,"usedPercent":v}))
+                    let after = details["afterWindows"][k].as_f64()?;
+                    if fell_only
+                        && !details["beforeWindows"][k]
+                            .as_f64()
+                            .is_some_and(|before| after < before)
+                    {
+                        return None;
+                    }
+                    Some(json!({"id":k,"usedPercent":after}))
                 })
                 .collect()
         } else {
             vec![]
         };
         Ok(
-            json!({"attemptKey":attempt,"attemptOrder":order.to_string(),"pending":pending,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows}),
+            json!({"attemptKey":attempt,"attemptOrder":order.to_string(),"pending":pending,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows,"sentUsage":sent_usage}),
         )
     }
     fn committed_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
@@ -883,8 +908,10 @@ impl Store {
         }
         let before: Snapshot = serde_json::from_str(&before).map_err(|_| "shape")?;
         let g: Grant = serde_json::from_str(&g).map_err(|_| "shape")?;
+        // OpenAI itself answered `reset` or `alreadyRedeemed` for this attempt, now or earlier.
+        let provider_said_spent = previous_success || matches!(outcome, Outcome::Reset | Outcome::PriorSuccess);
         let verified = matches!(outcome, Outcome::Reset | Outcome::Ambiguous | Outcome::PriorSuccess)
-            && after.is_some_and(|a| verify(&before, &g, a, now));
+            && after.is_some_and(|a| verify(&before, &g, a, now, provider_said_spent));
         let (result, pending) = if verified {
             ("claimed", false)
         } else {
@@ -903,7 +930,7 @@ impl Store {
                 Outcome::NotSent => ("not-sent", false),
             }
         };
-        let provider_success = previous_success || matches!(outcome, Outcome::Reset | Outcome::PriorSuccess);
+        let provider_success = provider_said_spent;
         let changed = sql(tx.execute(
             "UPDATE attempts SET outcome=?,pending=?,provider_success=? WHERE key=? AND account=? AND pending=1",
             params![result, pending, provider_success, attempt, account],
@@ -1096,7 +1123,7 @@ impl Write {
         })
     }
 }
-fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64) -> bool {
+fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64, provider_said_spent: bool) -> bool {
     let after_order = after
         .read_ticket
         .as_ref()
@@ -1116,7 +1143,16 @@ fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64) -> bool {
     let Some(new) = after.grants.iter().find(|n| n.id == g.id) else {
         return false;
     };
-    new.left.checked_add(1) == Some(g.left)
+    let spent = new.left.checked_add(1) == Some(g.left);
+    if before.identity.provider == "codex" {
+        // OpenAI chooses which limits a credit refills, and a credit can be used at any usage, so no window
+        // movement is required: the exact credit `redeemed` is the proof. Windows that fell are reported as
+        // evidence by the receipt. A `redeeming` credit (same count, not usable) is still in progress; it counts
+        // only when OpenAI itself answered `reset` or `alreadyRedeemed` for this attempt.
+        let redeeming = new.left == g.left && !new.usable;
+        return spent || (provider_said_spent && redeeming);
+    }
+    spent
         && !g.clears.is_empty()
         && g.clears
             .iter()
