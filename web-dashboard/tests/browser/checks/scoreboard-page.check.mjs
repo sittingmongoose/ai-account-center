@@ -33,13 +33,13 @@ async function openBoard(t, query = '', change) {
 
 // The fixture's runs not scored (leptos/fixtures/scoreboard-view.json `unscored`): 12 + 23 + 6.
 const UNSCORED_LINE = '41 runs not scored: 12 unknown model, 23 no task type, 6 no model';
-const lineText = (t) => t.page.evaluate(() => document.querySelector('.sb-unscored > summary')?.textContent.replace(/\s+/g, ' ').trim() ?? null);
+const lineText = (t) => t.page.evaluate(() => document.querySelector('.sb-unscored summary')?.textContent.replace(/\s+/g, ' ').trim() ?? null);
 /** The list under the line: whether it shows, floats (a hover) or sits in the flow (open), and its box. */
 const listState = (t) => t.page.evaluate(() => {
 	const list = document.querySelector('.sb-unscored .sbu-list');
 	const cs = getComputedStyle(list);
 	const r = list.getBoundingClientRect();
-	return { shown: cs.display !== 'none', floating: cs.position === 'absolute', open: list.parentElement.open, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+	return { shown: cs.display !== 'none' && list.innerText.trim() !== '', floating: cs.position === 'absolute', open: document.querySelector('.sb-unscored > details').open, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
 });
 const stackTop = (t) => t.page.evaluate(() => document.querySelector('.sb-stack').getBoundingClientRect().top);
 
@@ -130,14 +130,14 @@ export const tests = {
 			const note = document.querySelector('.sb-unscored');
 			return note.getBoundingClientRect().height < parseFloat(getComputedStyle(note).lineHeight) * 1.5;
 		}));
-		await t.check('the line is a control at least 24 px tall', await t.page.evaluate(() => document.querySelector('.sb-unscored > summary').getBoundingClientRect().height >= 24));
+		await t.check('the line is a control at least 24 px tall', await t.page.evaluate(() => document.querySelector('.sb-unscored summary').getBoundingClientRect().height >= 24));
 		await t.check('the note carries no state colour', await t.page.evaluate(() => {
 			const probe = document.createElement('span');
 			document.body.append(probe);
 			const tone = (v) => { probe.style.color = `var(${v})`; return getComputedStyle(probe).color; };
 			const [ink3, ink2] = [tone('--ink-3'), tone('--ink-2')];
 			probe.remove();
-			return getComputedStyle(document.querySelector('.sb-unscored > summary')).color === ink3 && getComputedStyle(document.querySelector('.sb-unscored > summary b')).color === ink2;
+			return getComputedStyle(document.querySelector('.sb-unscored summary')).color === ink3 && getComputedStyle(document.querySelector('.sb-unscored summary b')).color === ink2;
 		}));
 		await t.equal('the list is closed at first', (await listState(t)).shown, false);
 		await t.audit('scoreboard runs not scored');
@@ -152,7 +152,7 @@ export const tests = {
 				for (const rule of rules) {
 					if (!(rule instanceof CSSMediaRule) || rule.conditionText.replace(/\s/g, '') !== '(hover:hover)') continue;
 					for (const inner of rule.cssRules) {
-						if (inner.selectorText !== '.sb-unscored:not([open]):hover > .sbu-list') continue;
+						if (inner.selectorText !== '.sb-unscored:hover > details:not([open]) + .sbu-list') continue;
 						const headless = !matchMedia('(hover: hover)').matches;
 						if (headless) sheet.insertRule(inner.cssText, sheet.cssRules.length);
 						return { headless };
@@ -163,9 +163,9 @@ export const tests = {
 		});
 		await t.check('the hover preview is gated to devices that hover', gate !== null);
 		// A mouse hover shows the list floating under the line, over the page; it goes when the pointer leaves.
-		const box = await t.page.locator('.sb-unscored > summary').boundingBox();
+		const box = await t.page.locator('.sb-unscored summary').boundingBox();
 		await t.page.mouse.move(box.x + 20, box.y + box.height / 2);
-		await t.until('a hover shows the list', () => getComputedStyle(document.querySelector('.sbu-list')).display !== 'none', null, { timeout: 3000 });
+		await t.until('a hover shows the list', () => document.querySelector('.sbu-list').innerText.includes('41 runs not scored'), null, { timeout: 3000 });
 		let list = await listState(t);
 		await t.check('the hovered list floats and moves nothing', list.floating && (await stackTop(t)) === before);
 		await t.check('the hovered list hangs under the line, inside the window', list.top >= box.y + box.height - 8 && list.top - (box.y + box.height) < 16 && list.right <= 1440);
@@ -186,14 +186,16 @@ export const tests = {
 		await t.page.mouse.move(box.x + box.width / 2, 880);
 		await t.until('the list goes when the pointer leaves', () => getComputedStyle(document.querySelector('.sbu-list')).display === 'none', null, { timeout: 3000 });
 		// A click keeps it open, in the flow under the line, after the pointer leaves; another click closes it.
-		await t.page.click('.sb-unscored > summary');
+		await t.page.click('.sb-unscored summary');
 		await t.page.mouse.move(box.x + box.width / 2, 880);
 		list = await listState(t);
 		await t.check('a click keeps the list open in the flow', list.open && list.shown && !list.floating && (await stackTop(t)) > before);
-		await t.page.click('.sb-unscored > summary');
-		await t.equal('another click closes it', (await listState(t)).shown, false);
+		await t.page.click('.sb-unscored summary');
+		await t.equal('another click closes it', (await listState(t)).open, false);
+		await t.page.mouse.move(box.x + box.width / 2, 880);
+		await t.until('closed, it goes when the pointer leaves', () => getComputedStyle(document.querySelector('.sbu-list')).display === 'none', null, { timeout: 3000 });
 		// The keyboard opens it too.
-		await t.page.focus('.sb-unscored > summary');
+		await t.page.focus('.sb-unscored summary');
 		await t.page.keyboard.press('Enter');
 		await t.equal('Enter opens it', (await listState(t)).open, true);
 		await t.page.keyboard.press('Enter');
@@ -216,7 +218,7 @@ export const tests = {
 			await openBoard(t, `?safe=${f.safe}`);
 			await t.equal(`${f.name}: the line`, await lineText(t), UNSCORED_LINE);
 			const shape = await t.page.evaluate(() => {
-				const summary = document.querySelector('.sb-unscored > summary');
+				const summary = document.querySelector('.sb-unscored summary');
 				const note = document.querySelector('.sb-unscored');
 				const lh = parseFloat(getComputedStyle(note).lineHeight);
 				// Each count (b) and its words (the span after it) sit on one line: one box each, at one height.
@@ -233,19 +235,21 @@ export const tests = {
 			await t.check(`${f.name}: inside the head`, shape.inside);
 			await t.audit(`${f.name} runs not scored`);
 			// A tap opens the list in the flow under the line, inside the content; another tap closes it.
-			await t.page.click('.sb-unscored > summary');
+			await t.page.click('.sb-unscored summary');
 			const list = await listState(t);
 			const content = await t.page.evaluate(() => {
 				const r = document.querySelector('.sb-head').getBoundingClientRect();
 				return { left: r.left, right: r.right };
 			});
 			await t.check(`${f.name}: a tap opens the list in the flow`, list.open && list.shown && !list.floating);
+			const lineBottom = await t.page.evaluate(() => document.querySelector('.sb-unscored > details').getBoundingClientRect().bottom);
+			await t.check(`${f.name}: the open list sits under the line, not beside it`, list.top >= lineBottom - 1, `list top ${Math.round(list.top)}, line bottom ${Math.round(lineBottom)}`);
 			await t.check(`${f.name}: the open list stays inside the content`, list.left >= content.left - 1 && list.right <= content.right + 1, `${Math.round(list.left)}-${Math.round(list.right)} in ${Math.round(content.left)}-${Math.round(content.right)}`);
 			await t.check(`${f.name}: no sideways scroll with it open`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 			await t.count('.sbu-list .sbu-id', 2);
 			await t.text('.sbu-list .sbu-why', /^Unknown model: 12 runs · /);
 			if (f.name === 'iphone' || f.name === 'duo-landscape') await t.shot(`scoreboard-unscored-${f.name}`, `runs not scored on ${f.name} (${f.w}x${f.h}): the list open under the line`);
-			await t.page.click('.sb-unscored > summary');
+			await t.page.click('.sb-unscored summary');
 			await t.equal(`${f.name}: another tap closes it`, (await listState(t)).shown, false);
 		}
 	},

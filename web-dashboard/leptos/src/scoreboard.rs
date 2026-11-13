@@ -1189,21 +1189,24 @@ pub fn unlisted_unknown_runs(u: &Unscored) -> u32 {
     u.unknown_model.saturating_sub(listed)
 }
 
-/// The quiet line under the head that names the runs left out of every verdict, hidden at none. It is a native
-/// disclosure: a tap, a click or the keyboard opens the reasons and the unknown model ids with their runs under the
-/// line, and with a mouse a hover shows them floating until the pointer leaves (CSS). No signals, timers or overlay:
-/// each is code in the page's WebAssembly, which is at its size limit.
+/// The quiet line under the head that names the runs left out of every verdict, hidden at none. The line is a native
+/// disclosure: a tap, a click or the keyboard opens the reasons and the unknown model ids with their runs under it, and
+/// with a mouse a hover shows them floating until the pointer leaves (CSS). The list is the disclosure's next sibling,
+/// not its content: browsers keep a closed disclosure's content unpainted, whatever its CSS says. No signals, timers or
+/// overlay: each is code in the page's WebAssembly, which is at its size limit.
 #[component]
 fn UnscoredNote(board: Board) -> impl IntoView {
     move || {
         board.view.with(|v| v.as_ref().and_then(shown_unscored)).map(|u| {
             view! {
-                <details class="sb-unscored">
-                    <summary>{runs_view(unscored_note(&u))}<Icon name="chev-down" class="chev"/></summary>
+                <div class="sb-unscored">
+                    <details>
+                        <summary>{runs_view(unscored_note(&u))}<Icon name="chev-down" class="chev"/></summary>
+                    </details>
                     <div class="sbu-list">
                         {unscored_lines(&u).into_iter().map(|(class, runs)| view! { <p class=class>{runs_view(runs)}</p> }).collect_view()}
                     </div>
-                </details>
+                </div>
             }
         })
     }

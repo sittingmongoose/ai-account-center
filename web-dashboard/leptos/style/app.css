@@ -1328,7 +1328,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
     .opt-gc dt { display: inline; margin-right: 5px; }
     .opt-gc dd { display: inline; }
     .opt-gc dd::after { content: ''; display: block; height: 5px; }
-    .page-head > div { display: flex; align-items: baseline; gap: 4px 14px; flex-wrap: wrap; }
+    .page-head > div:not(.sb-unscored) { display: flex; align-items: baseline; gap: 4px 14px; flex-wrap: wrap; }
     .page-head .headline { margin-top: 0; }
     .status-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       grid-template-areas: "q q" "pin pin" "phones phones" "mach mach" "spend spend"; }
@@ -1346,21 +1346,23 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 /* Runs read but not scored: one quiet line under the head (a meta line: ink-3, bold counts, no colour), a native
    disclosure (scoreboard.rs). Each count and its words are joined by no-break spaces, so a narrow line breaks only after
    a comma or the colon. Open (a tap, a click, the keyboard), the reasons and the unknown ids sit under the line; with a
-   mouse, a hover shows them floating until the pointer leaves. */
-.sb-unscored { position: relative; margin-top: 2px; font-size: var(--fs-small); color: var(--ink-3); line-height: 1.4; }
-.sb-unscored > summary { display: inline; padding: 6px 0; list-style: none; cursor: pointer; }
-.sb-unscored > summary::-webkit-details-marker { display: none; }
-.sb-unscored > summary b { color: var(--ink-2); font-weight: 600; font-variation-settings: 'wght' 600; }
-.sb-unscored > summary:hover, .sb-unscored[open] > summary { color: var(--ink-2); }
-.sb-unscored > summary:hover b, .sb-unscored[open] > summary b { color: var(--ink); }
+   mouse, a hover shows them floating until the pointer leaves. The list follows the disclosure rather than sitting in
+   it: a closed disclosure's content is never painted. */
+.sb-unscored { position: relative; width: fit-content; max-width: 100%; margin-top: 2px; font-size: var(--fs-small); color: var(--ink-3);
+  line-height: 1.4; }
+.sb-unscored summary { display: inline; padding: 6px 0; list-style: none; cursor: pointer; }
+.sb-unscored summary::-webkit-details-marker { display: none; }
+.sb-unscored summary b { color: var(--ink-2); font-weight: 600; font-variation-settings: 'wght' 600; }
+.sb-unscored summary:hover, .sb-unscored details[open] summary { color: var(--ink-2); }
+.sb-unscored summary:hover b, .sb-unscored details[open] summary b { color: var(--ink); }
 .sb-unscored .chev { display: inline-block; width: 12px; height: 12px; margin-left: 3px; vertical-align: -1px; transition: transform 260ms cubic-bezier(.2, .8, .2, 1); }
-.sb-unscored[open] .chev { transform: rotate(180deg); }
+.sb-unscored details[open] .chev { transform: rotate(180deg); }
 .sbu-list { display: none; max-width: 380px; margin-top: 6px; padding: 10px 14px 12px; border: 1px solid var(--rule); border-radius: 12px;
   background: var(--paper); font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }
-.sb-unscored[open] > .sbu-list { display: grid; }
+.sb-unscored > details[open] + .sbu-list { display: grid; }
 @media (hover: hover) {
-  .sb-unscored:not([open]):hover > .sbu-list { display: grid; position: absolute; z-index: 20; top: 100%; left: 0; width: min(380px, 100%);
-    margin-top: 0; box-shadow: var(--shadow-pop); }
+  .sb-unscored:hover > details:not([open]) + .sbu-list { display: grid; position: absolute; z-index: 20; top: 100%; left: 0;
+    width: min(380px, calc(100cqw - 2 * var(--gut, 0px))); margin-top: 0; box-shadow: var(--shadow-pop); }
 }
 .sbu-head { font-size: 14px; color: var(--ink); margin-bottom: 2px; }
 .sbu-head b { font-weight: 640; font-variation-settings: 'wght' 640; }
@@ -1388,7 +1390,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 /* Beside the rail, which shows the page, the page's name goes, as on the phone: the summary starts at the top. */
 :root[data-chrome='rail'] .page-title { display: none; }
 /* Beside the rail the page's name and its one-line summary share a line, as wider screens do: no line for a word. */
-:root[data-chrome='rail'] .page-head > div { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+:root[data-chrome='rail'] .page-head > div:not(.sb-unscored) { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
 :root[data-chrome='rail'] .page-head .headline { margin-top: 0; }
 
 /* ==========================================================================
