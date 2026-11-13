@@ -14,6 +14,8 @@ import { visibleUsageWindows } from './visible-usage.mjs';
 import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { lazyFormat } from './time-format.mjs';
+import { transportOf, transportNote, TRANSPORT_TEXT, TRUSTED_NOTE } from './transport.mjs';
+export { transportOf, transportNote, TRUSTED_NOTE };
 
 export const ACCOUNTS_VIEW_VERSION = 3;
 
@@ -881,31 +883,8 @@ export function updateResultsView(job, now = Date.now()) {
 }
 
 // ---------------------------------------------------------------- connection, the trusted local network and sign-in
-/** How this browser reaches the dashboard: https, loopback (this computer) or plain http on the network. */
-export function transportOf(protocol, hostname) {
-  if (protocol === 'https:') return 'https';
-  const host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
-  if (host === 'localhost' || host === '::1' || /^127\./.test(host)) return 'loopback';
-  return 'http';
-}
-const TRANSPORT_TEXT = {
-  https: host => `HTTPS to ${host}`,
-  loopback: host => `This computer, ${host}`,
-  http: host => `Plain HTTP to ${host}`,
-};
-export const TRUSTED_NOTE = 'Local network trusted. Passwords, keys and sign-in codes cross your home network without encryption.';
-/**
- * The sign-in card's network note. `check` is GET /api/auth/check ({ secureTransport, trustedLocalNetwork,
- * connection: { trusted } }); without it the note follows the address alone.
- */
-export function transportNote(transport, check = null) {
-  if (transport === 'https') return 'This address uses HTTPS, so the password is encrypted on its way to the dashboard.';
-  if (transport === 'loopback') return 'You are on the dashboard computer itself, so the password never crosses the network.';
-  if (check?.connection?.trusted === true) return TRUSTED_NOTE;
-  if (check?.trustedLocalNetwork === true) return 'This address is not on your trusted local network. Sign-in works, but password changes, keys and tray pairing stay off here.';
-  if (check && check.trustedLocalNetwork === false) return 'This address is plain HTTP and local network trust is off, so the password crosses your network unencrypted. Password changes, keys and tray pairing work once trust is turned on from the dashboard computer (Accounts & Settings, Sign-in & connection).';
-  return 'This address is plain HTTP, so the password crosses your network unencrypted.';
-}
+// transportOf, TRANSPORT_TEXT, TRUSTED_NOTE and transportNote live in transport.mjs, so the frame's sign-in reads them
+// without loading this module (re-exported below for its callers).
 
 /** True when a GET /api/auth/network answer says whether the trust is on. */
 const networkKnown = net => !!net && typeof net === 'object' && typeof net.trustLocalNetwork === 'boolean';

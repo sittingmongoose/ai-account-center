@@ -1,9 +1,11 @@
-//! Analytics, drawn natively in the app frame (PLAN step 7). bridge.js keeps the page state, the fetches, the timers
-//! and every word and number (public/analytics-*.mjs, `ANALYTICS_VIEW_VERSION` 7); it sends the view through the seam
-//! (`dash.rs`, `analytics`, `analytics-motion`, `analytics-head`, `analytics-loading`) and this page lays it out and
-//! sends the page's action kinds back (`analytics-range`, `analytics-focus` ...). The charts that are laid out in
-//! pixels (the trend, daily cost and the focus chart) report their boxes (`analytics-layout`), as the Slint page did.
+//! Analytics, drawn natively in the app frame (PLAN step 7). The frame reads its data itself: `public/frame-analytics.mjs`
+//! keeps the page state, the reads and the timers and words every number with the same builders as bridge.js
+//! (public/analytics-*.mjs, `ANALYTICS_VIEW_VERSION` 7). It sends the views (`feed.rs`: `analytics`, `analytics-motion`,
+//! `analytics-head`, `analytics-loading`) and this page lays them out and sends the page's action kinds back
+//! (`analytics-range`, `analytics-focus` ...). The charts that are laid out in pixels (the trend, daily cost and the
+//! focus chart) report their boxes (`analytics-layout`), as the Slint page did. No Slint dashboard is loaded for it.
 
+pub mod feed;
 mod head;
 mod models;
 mod quota;
@@ -12,17 +14,17 @@ mod time;
 mod trend;
 pub mod view;
 
-use crate::dash::DashCtx;
 use crate::ui::charts::*;
 use crate::ui::*;
+use feed::Feed;
 use leptos::prelude::*;
 use std::sync::Arc;
 use view::*;
 
-/// What every card reads: the parsed view and the dashboard's way back.
+/// What every card reads: the parsed view and the controller's way back.
 #[derive(Clone, Copy)]
 pub struct Ax {
-    pub dash: DashCtx,
+    pub feed: Feed,
     pub view: Memo<Option<Arc<AnalyticsView>>>,
     /// The page has had a useful answer (numbers, or a settled failure): sticky until the view is cleared.
     pub ready: Memo<bool>,
@@ -32,9 +34,9 @@ pub struct Ax {
 }
 
 impl Ax {
-    /// Runs one of the page's action kinds in the dashboard (nothing is sent while it is not signed in).
+    /// Runs one of the page's action kinds (nothing is done until the controller has loaded).
     pub fn act(&self, kind: &str, value: &str) {
-        self.dash.act(kind, value);
+        self.feed.act(kind, value);
     }
 
     /// A part of the view, memoized so a card redraws only when its own part changed.
@@ -47,9 +49,9 @@ impl Ax {
     }
 }
 
-fn start(dash: DashCtx) -> Ax {
+fn start(feed: Feed) -> Ax {
     let view = Memo::new(move |prev: Option<&Option<Arc<AnalyticsView>>>| {
-        let json = dash.analytics.get();
+        let json = feed.analytics.get();
         if json.is_empty() {
             return None;
         }
@@ -65,7 +67,7 @@ fn start(dash: DashCtx) -> Ax {
         })
     });
     let load = Memo::new(move |_| {
-        let json = dash.analytics_loading.get();
+        let json = feed.loading.get();
         serde_json::from_str::<LoadState>(&json).unwrap_or_default()
     });
     let head = RwSignal::new(Head::default());
@@ -75,13 +77,13 @@ fn start(dash: DashCtx) -> Ax {
         }
     });
     Effect::new(move |_| {
-        let json = dash.analytics_head.get();
+        let json = feed.head.get();
         if let Ok(h) = serde_json::from_str::<Head>(&json) {
             head.set(h);
         }
     });
     Ax {
-        dash,
+        feed,
         view,
         ready,
         load,
@@ -182,8 +184,8 @@ pub fn line_icon(name: &str) -> &'static str {
 
 #[component]
 pub fn AnalyticsPage() -> impl IntoView {
-    let dash = expect_context::<DashCtx>();
-    let ax = start(dash);
+    let feed = expect_context::<Feed>();
+    let ax = start(feed);
     provide_context(ax);
     models::provide_detail();
     let error = Memo::new(move |_| ax.load.with(|l| l.error.clone()));

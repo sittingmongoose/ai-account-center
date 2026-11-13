@@ -18,6 +18,8 @@ const frames = (t) =>
   t.page.evaluate(
     () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
   );
+/** Analytics reads its own data (analytics/feed.rs): its read is held open here and the fixture view handed to the
+ * page as its controller would (an `aac-analytics` event), so the shots stay the same fixture. */
 async function analytics(t, width = 669, height = 951, safe = '82,0,34,0', home = false) {
   await t.newContext({
     viewport: { width, height },
@@ -26,14 +28,25 @@ async function analytics(t, width = 669, height = 951, safe = '82,0,34,0', home 
     hasTouch: true,
     serviceWorkers: 'block',
   });
+  await t.page.route((u) => u.pathname === '/api/accounts/analytics', () => {});
+  // its side reads (the fixture server has no account routes): synthetic answers, so nothing 404s
+  const side = {
+    '/api/accounts/dashboard': { schemaVersion: 1, updatedAt: new Date().toISOString(), accounts: [], settings: {} },
+    '/api/accounts/preferences': { timeZone: 'UTC' },
+    '/api/antigravity/auto-switch': { enabled: false },
+  };
+  await t.page.route((u) => u.pathname in side, (r) => r.fulfill({ json: side[new URL(r.request().url()).pathname] }));
   await t.goto(`/app/${home ? 'home' : 'analytics'}?safe=${safe}`);
   if (home)
     await t.page
       .getByRole('link', { name: 'Analytics', exact: true })
       .filter({ visible: true })
       .click();
-  await t.page.waitForSelector('iframe.slint-frame', { state: 'attached' });
-  await bridge(t, 'analytics', read('analytics-view.json'));
+  await t.page.waitForSelector('.ax-page', { state: 'attached' });
+  await t.page.evaluate(
+    (json) => dispatchEvent(new CustomEvent('aac-analytics', { detail: { key: 'analytics', json } })),
+    JSON.stringify(read('analytics-view.json'))
+  );
   await t.page.waitForSelector('.prov-btn');
 }
 async function pose(t, width, height, padding) {

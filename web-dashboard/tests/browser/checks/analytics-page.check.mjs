@@ -1,6 +1,6 @@
-// The native Analytics page in the app frame (PLAN step 7, web-dashboard/leptos/src/analytics/): bridge.js in the
-// frame's hidden dashboard iframe keeps the page state and builds the view (ANALYTICS_VIEW_VERSION 7); the frame draws
-// it and sends the page's action kinds back. These check every block is drawn from made-up data
+// The native Analytics page in the app frame (PLAN step 7, web-dashboard/leptos/src/analytics/): the frame reads its own
+// data (public/frame-analytics.mjs, no Slint dashboard), keeps the page state and builds the view with bridge.js's
+// builders (ANALYTICS_VIEW_VERSION 7); the page draws it and sends its action kinds back. These check every block is drawn from made-up data
 // (../device/analytics-fixture.mjs), that the controls reach bridge.js and come back drawn, that the charts' labels
 // never overlap (DOM measurement), and the layout in each format with no sideways scroll.
 import { analyticsFixture } from '../device/analytics-fixture.mjs';
@@ -79,10 +79,8 @@ async function overlaps(t) {
 	});
 }
 
-const viewState = (t) => t.page.evaluate(() => {
-	const f = document.querySelector('iframe.slint-frame');
-	return f?.contentWindow?.__aacLastAnalytics?.state ?? null;
-});
+// the frame's controller keeps the last view it built (?e2e)
+const viewState = (t) => t.page.evaluate(() => window.__aacLastAnalytics?.state ?? null);
 
 export const tests = {
 	async 'analytics: every block is drawn from the view, and the controls come back drawn'(t) {
@@ -90,7 +88,7 @@ export const tests = {
 		await t.app.signIn();
 		await stubData(t);
 		await openAnalytics(t);
-		await t.check('the Slint iframe stays hidden on the native tab', await t.page.evaluate(() => document.querySelector('.slint-host').hidden));
+		await t.check('no Slint dashboard is loaded for the tab', await t.page.evaluate(() => document.querySelector('.slint-host').hidden && !document.querySelector('iframe.slint-frame')));
 		const counts = await t.page.evaluate(() => ({
 			cbm: document.querySelectorAll('.cbm-row').length,
 			arcs: document.querySelectorAll('.donut-svg .arcs path').length,
@@ -110,10 +108,10 @@ export const tests = {
 		await t.equal('no chart label overlaps another', await overlaps(t), []);
 		await t.audit('analytics 1440');
 
-		await t.step('range 30D: the dashboard reads the range and the trend is laid out again', async () => {
+		await t.step('range 30D: the page reads the range and the trend is laid out again', async () => {
 			await t.page.click('.ax-tools-row .seg button:has-text("30D")');
 			await t.until('30D drawn', () => document.querySelector('.ax-tools-row .seg button.on')?.textContent === '30D', null, { timeout: 15000 });
-			await t.equal('bridge.js holds the range', (await viewState(t))?.range, '30d');
+			await t.equal('the controller holds the range', (await viewState(t))?.range, '30d');
 		});
 		await t.step('token types: the trend stacks by type', async () => {
 			await t.page.click('.trend-card .switch:has-text("Token types")');
@@ -136,7 +134,7 @@ export const tests = {
 			await t.visible('.pick-list', 'picker open');
 			await t.page.click('.pick-row:has-text("Codex")');
 			await t.until('Codex picked', () => document.querySelector('.prov-btn')?.textContent.includes('Codex'), null, { timeout: 15000 });
-			await t.equal('bridge.js holds the provider', (await viewState(t))?.prov, 'codex');
+			await t.equal('the controller holds the provider', (await viewState(t))?.prov, 'codex');
 			await t.page.click('.prov-btn');
 			await t.page.click('.pick-row:has-text("All providers")');
 			await t.until('all again', () => document.querySelector('.prov-btn')?.textContent.includes('All providers'), null, { timeout: 15000 });
@@ -147,7 +145,7 @@ export const tests = {
 			await t.page.click('.cal-quick button:has-text("Last 3 days")');
 			await t.page.click('.cal-acts .btn.primary');
 			await t.until('custom range drawn', () => document.querySelector('.date-btn .on') !== null, null, { timeout: 15000 });
-			await t.equal('bridge.js holds a custom range', (await viewState(t))?.range, 'custom');
+			await t.equal('the controller holds a custom range', (await viewState(t))?.range, 'custom');
 		});
 		await t.step('a quota row opens its focus chart, laid out in its own box', async () => {
 			await t.page.click('button.qh-row >> nth=0');

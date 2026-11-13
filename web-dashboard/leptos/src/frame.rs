@@ -1,14 +1,16 @@
-//! The app frame (PLAN step 4): one chrome around all five tabs, every one drawn here. The Slint dashboard stays loaded,
-//! content-only and hidden, in one same-origin iframe (`/?content=1`) for its bridge: it keeps the network, the session
-//! and every server call for Home, Analytics and Accounts. The two talk by postMessage:
+//! The app frame (PLAN step 4): one chrome around all five tabs, every one drawn here. Status, the Scoreboard and
+//! Analytics read their own data. The Slint dashboard is loaded, content-only and hidden, in one same-origin iframe
+//! (`/?content=1`) the first time Home or Accounts is shown, for its bridge: it keeps the network, the session and every
+//! server call for those two. The two talk by postMessage:
 //!
 //! - frame to dashboard: `{type: "aac-frame", action, value}` with action navigate, refresh, update-apps, theme,
 //!   logout or auth-recheck (bridge.js runs them as its own actions);
 //! - dashboard to frame: `{type: "aac-content", kind, ...}` with kind ready, page (its own links moved it), toast,
 //!   chrome (the header's status line) or auth (it signed out, or its session ended).
 //!
-//! Home, Analytics and Accounts & Settings draw the dashboard's views (dash.rs). Details (details.rs) and the switch
-//! confirmation (activation.rs) are the frame's own overlays over every tab.
+//! Home and Accounts & Settings draw the dashboard's views (dash.rs); Analytics draws its own controller's
+//! (analytics/feed.rs). Details (details.rs) and the switch confirmation (activation.rs) are the frame's own overlays
+//! over every tab.
 //!
 //! Sign-in is the frame's (session.rs); until it is done no tab is drawn.
 
@@ -683,7 +685,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
         let name = view_signal.with(|v| v.username.clone());
         ctx.username.set(name);
     });
-    // The dashboard's chrome line stands for its three tabs.
+    // The dashboard's chrome line stands for its two tabs (Analytics words its own, `AnalyticsRoute`).
     let chrome = SlintChrome {
         lead: RwSignal::new(String::new()),
         strong: RwSignal::new(String::new()),
@@ -705,7 +707,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
             }
         })),
     };
-    for page in [Page::Home, Page::Analytics, Page::Accounts] {
+    for page in [Page::Home, Page::Accounts] {
         ctx.register(page, slint_info);
     }
     listen_to_dashboard(ctx, chrome);
@@ -810,7 +812,8 @@ fn AccountsRoute(ctx: FrameCtx) -> impl IntoView {
     }
 }
 
-/// Analytics, drawn here from the dashboard's views (analytics.rs); built the first time its tab is shown.
+/// Analytics, drawn here from its own reads (analytics/feed.rs, public/frame-analytics.mjs): built the first time its
+/// tab is shown, then kept. It never loads the dashboard; its reads and timers run only while its tab is shown.
 #[component]
 fn AnalyticsRoute(ctx: FrameCtx) -> impl IntoView {
     let seen = Memo::new(move |prev: Option<&bool>| {
@@ -818,7 +821,30 @@ fn AnalyticsRoute(ctx: FrameCtx) -> impl IntoView {
     });
     view! {
         <div class="route" hidden=move || ctx.route.get() != Page::Analytics>
-            {move || seen.get().then(|| view! { <analytics::AnalyticsPage/> })}
+            {move || seen.get().then(|| {
+                let shown = Signal::derive(move || ctx.route.get() == Page::Analytics);
+                // A read found the session gone: the frame's sign-in says why (revoked, or worked out from when the
+                // session was last seen, as for Status).
+                let feed = analytics::feed::start(shown, |reason: String| {
+                    session::dashboard_signed_out("expired", (!reason.is_empty()).then_some(reason.as_str()));
+                });
+                provide_context(feed);
+                let line = feed.chrome_line();
+                let id = ctx.register(Page::Analytics, ChromeInfo {
+                    updated: Signal::derive(move || line.with(|l| l.status_strong.clone())),
+                    live: Signal::derive(move || line.with(|l| l.status_more == "live")),
+                    summary: Signal::derive(Vec::new),
+                    refresh: Callback::new(move |_| {
+                        feed.act("analytics-refresh", "");
+                    }),
+                    lead: Some(Signal::derive(move || {
+                        let lead = line.with(|l| l.status_lead.clone());
+                        if lead.is_empty() { "Updated".into() } else { lead }
+                    })),
+                });
+                on_cleanup(move || ctx.unregister(Page::Analytics, id));
+                view! { <analytics::AnalyticsPage/> }
+            })}
         </div>
     }
 }
