@@ -292,6 +292,57 @@ test('the refresh interval and Refresh say Refreshing in the header while they r
   assert.ok(l[0] === 'Refreshing' && l.at(-1) === 'Updated', `Refresh: ${JSON.stringify(l)}`);
 });
 
+const rowIds = (json) => JSON.parse(json).quota.groups.flatMap((g) => g.rows.map((r) => r.id));
+/** A dashboard whose hidden accounts the test changes, as Accounts & Settings would. */
+function hiding() {
+  const state = { hidden: [] };
+  const routes = defaultRoutes({
+    '/api/accounts/dashboard': () => ({ status: 200, body: dashboard({ settings: { refreshIntervalSeconds: 120, hiddenProviders: [], hiddenAccountIds: state.hidden } }) }),
+  });
+  return { state, routes };
+}
+
+test('back on the tab, an account hidden meanwhile is never drawn again (review L2)', async () => {
+  const { state, routes } = hiding();
+  const { controller, sent, c, server } = make(routes);
+  controller.show();
+  await settle();
+  await settle();
+  assert.ok(rowIds(last(sent, 'analytics')).includes('codex-1'), 'the account is drawn first');
+  controller.hide();
+  state.hidden = ['codex-1'];
+  await c.run(30_000);
+  const from = sent.length;
+  const calls = server.calls.length;
+  controller.show();
+  for (let i = 0; i < 4; i++) await settle();
+  const views = sent.slice(from).filter(([k]) => k === 'analytics');
+  assert.ok(views.length >= 1, 'the page is drawn again on its return');
+  assert.ok(views.every(([, j]) => !rowIds(j).includes('codex-1')), 'no view drawn on return shows the hidden account');
+  assert.ok(!server.calls.slice(calls).some((p) => p.startsWith('/api/accounts/analytics')), 'the young answer is not read again');
+});
+
+test('an account hidden on another tab leaves the Analytics page before it comes back (review L2)', async () => {
+  const { state, routes } = hiding();
+  const { controller, sent, c, server } = make(routes);
+  controller.show();
+  await settle();
+  await settle();
+  controller.hide();
+  state.hidden = ['codex-1'];
+  const calls = server.calls.length;
+  // the dashboard's own view changed (bridge.js after a hide): the frame tells the Analytics controller
+  controller.dashboardChanged();
+  controller.dashboardChanged();
+  await c.run(1000);
+  for (let i = 0; i < 4; i++) await settle();
+  const read = server.calls.slice(calls);
+  assert.equal(read.filter((p) => p.startsWith('/api/accounts/dashboard')).length, 1, `one dashboard read for a burst: ${JSON.stringify(read)}`);
+  assert.ok(!read.some((p) => p.startsWith('/api/accounts/analytics')), 'no analytics read while the tab is away');
+  assert.ok(!rowIds(last(sent, 'analytics')).includes('codex-1'), 'the hidden account is gone before the tab is shown');
+  assert.deepEqual(c.pending(), [], 'no timer left while the tab is away');
+});
+
 test('hidden, nothing is read and no timer runs; shown again with a young answer, it draws without a read', async () => {
   const { controller, server, c } = make();
   controller.show();

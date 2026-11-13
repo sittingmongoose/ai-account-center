@@ -424,8 +424,13 @@ fn listen_to_dashboard(ctx: FrameCtx, chrome: SlintChrome) {
                     }
                 }
                 "view" => {
+                    let key = read_str(&data, "key");
                     let json = read_str(&data, "json");
-                    ctx.dash.receive(&read_str(&data, "key"), json);
+                    if key == "dashboard" {
+                        // an account hidden, shown or removed: Analytics follows while its tab is away
+                        analytics::feed::dashboard_view(&json);
+                    }
+                    ctx.dash.receive(&key, json);
                 }
                 "done" => {
                     if let Some(id) = js_sys::Reflect::get(&data, &"id".into())

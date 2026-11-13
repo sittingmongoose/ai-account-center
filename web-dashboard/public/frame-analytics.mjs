@@ -28,6 +28,8 @@ import { setDisplayTimeZone } from './time-format.mjs';
 export const HEAD_EVERY_MS = 15_000;
 /** The dashboard's refresh interval until its settings say otherwise. */
 export const DEFAULT_INTERVAL_SECONDS = 60;
+/** A burst of dashboard changes elsewhere in the frame is read once, this long after the last. */
+export const SIDE_SETTLE_MS = 250;
 
 /**
  * The frame's Analytics controller. `fetch`, `now()`, `setTimeout`/`clearTimeout`, `visible()` (the document is on
@@ -61,7 +63,7 @@ export function createFrameAnalytics({
   let lastSize = '';
   // when the page first got an answer without numbers (a server that just started): its first polls come quickly
   let waitingSince = null;
-  const timers = { poll: 0, layout: 0, tick: 0, interval: 0 };
+  const timers = { poll: 0, layout: 0, tick: 0, interval: 0, side: 0 };
   const pushed = new Map();
 
   const clear = (name) => {
@@ -237,21 +239,39 @@ export function createFrameAnalytics({
 
   /**
    * The page comes on screen. A response that still covers the range and is younger than the refresh interval is drawn
-   * as it is (the interval reads the next one); otherwise it is read now. The dashboard beside it is read again either
-   * way (it is cheap): an account hidden or shown on another tab meanwhile is followed at once.
+   * as it is (the interval reads the next one); otherwise it is read now. Either way the dashboard beside it is read
+   * again first (it is cheap), and the page is drawn once that read lands, so an account hidden or shown on another
+   * tab meanwhile is never drawn the old way. Until then the page keeps the view it had.
    */
   function enter() {
     const age = now() - Date.parse(payload?.updatedAt ?? '');
     if (payload && Number.isFinite(age) && age >= 0 && age < intervalSeconds * 1000 && analyticsCovers(payload, page, now())) {
-      render();
-      renderChrome();
       const gen = generation;
       void readSide(false).then(() => {
-        if (gen === generation && shown) render();
+        if (gen !== generation || !shown || stopped) return;
+        render();
+        renderChrome();
       });
       return;
     }
     void refresh();
+  }
+
+  /**
+   * The dashboard changed elsewhere in the frame (bridge.js sent Home or Accounts a new view: an account hidden, shown
+   * or removed). While this tab is away, the dashboard is read again (once for a burst) and the page is drawn with it,
+   * so it is current before it comes back on screen. Nothing else is read.
+   */
+  function dashboardChanged() {
+    if (stopped || shown || !payload) return;
+    clear('side');
+    timers.side = later(() => {
+      timers.side = 0;
+      const gen = generation;
+      void readSide(false).then(() => {
+        if (gen === generation && !shown && !stopped) render();
+      });
+    }, SIDE_SETTLE_MS);
   }
 
   async function changeRange() {
@@ -300,6 +320,7 @@ export function createFrameAnalytics({
     resumed() {
       if (shown && !stopped) enter();
     },
+    dashboardChanged,
     /** One of the page's action kinds; false for one that isn't the page's. */
     act(kind, value) {
       if (stopped) return false;

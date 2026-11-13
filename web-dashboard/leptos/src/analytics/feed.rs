@@ -115,6 +115,53 @@ fn read_str(data: &JsValue, key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The ids a dashboard view shows (every string `id`: accounts and providers), sorted and once each. Hiding, showing
+/// or removing an account changes them; a clock tick (the view's relative times) does not.
+pub(crate) fn view_ids(json: &str) -> Vec<String> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Array(all) => all.iter().for_each(|x| walk(x, out)),
+            serde_json::Value::Object(map) => {
+                for (k, x) in map {
+                    if k == "id" {
+                        out.extend(x.as_str().map(str::to_string));
+                    }
+                    walk(x, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
+        walk(&v, &mut out);
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+thread_local! {
+    /// The ids of the last dashboard view the frame was sent.
+    static DASHBOARD_IDS: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The dashboard sent Home and Accounts a new view (bridge.js). When the accounts in it changed (one hidden, shown or
+/// removed), the Analytics controller reads the dashboard again while its tab is away, so it never comes back with an
+/// account drawn the old way (frame-analytics.mjs `dashboardChanged`); a view that only ticked reads nothing.
+pub(crate) fn dashboard_view(json: &str) {
+    let ids = view_ids(json);
+    let changed = DASHBOARD_IDS.with(|last| {
+        let mut last = last.borrow_mut();
+        let changed = last.as_ref() != Some(&ids);
+        *last = Some(ids);
+        changed
+    });
+    if changed {
+        call("dashboardChanged", &[]);
+    }
+}
+
 /// Loads the controller and follows its views. `shown` says whether the Analytics tab is on screen (reads and timers
 /// run only then); `ended` runs when a read found the session gone (its reason: revoked, or empty). Everything stops
 /// with the owner (sign-out).
@@ -206,6 +253,18 @@ mod tests {
         assert_eq!(feed.chrome_line().get_untracked(), ChromeLine::default());
         feed.receive("chrome", "not json".into());
         assert_eq!(feed.chrome_line().get_untracked(), ChromeLine::default());
+    }
+
+    #[test]
+    fn a_dashboard_view_changes_its_ids_only_when_its_accounts_change() {
+        let a = r#"{"sections":[{"id":"codex","cards":[{"id":"codex:one","line":"1m ago"},{"id":"codex:two"}]}]}"#;
+        let ticked = r#"{"sections":[{"id":"codex","cards":[{"id":"codex:two"},{"id":"codex:one","line":"2m ago"}]}]}"#;
+        let hidden =
+            r#"{"sections":[{"id":"codex","cards":[{"id":"codex:two","line":"2m ago"}]}]}"#;
+        assert_eq!(view_ids(a), vec!["codex", "codex:one", "codex:two"]);
+        assert_eq!(view_ids(a), view_ids(ticked));
+        assert_ne!(view_ids(a), view_ids(hidden));
+        assert!(view_ids("").is_empty() && view_ids("not json").is_empty());
     }
 
     #[test]
