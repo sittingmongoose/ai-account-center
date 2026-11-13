@@ -60,7 +60,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | files with createLogger | 46/514 |
 | subdomains with zero createLogger | 22 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, status-native, targets, types) |
 | files > 400 LOC | 70 |
-| files > 600 LOC | 28 |
+| files > 600 LOC | 29 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -90,12 +90,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/account-analytics-activity.ts` | 1802 |
 | `src/web-server/status/answers.ts` | 1744 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1340 |
+| `src/web-server/services/analytics-remote-sources.ts` | 1136 |
 | `src/antigravity/registry.ts` | 1104 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/usage-failover-service.ts` | 999 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 990 |
 | `src/web-server/status/status-collectors.ts` | 986 |
-| `src/web-server/services/analytics-remote-sources.ts` | 958 |
 | `src/web-server/services/account-analytics-service.ts` | 957 |
 | `src/web-server/services/account-dashboard-service.ts` | 941 |
 | `src/cliproxy/model-catalog.ts` | 895 |

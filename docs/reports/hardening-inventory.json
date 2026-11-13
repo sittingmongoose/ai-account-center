@@ -784,7 +784,7 @@
     },
     "largeFiles": {
       "countOver400": 70,
-      "countOver600": 28,
+      "countOver600": 29,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
@@ -801,6 +801,10 @@
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
           "loc": 1340
+        },
+        {
+          "file": "src/web-server/services/analytics-remote-sources.ts",
+          "loc": 1136
         },
         {
           "file": "src/antigravity/registry.ts",
@@ -821,10 +825,6 @@
         {
           "file": "src/web-server/status/status-collectors.ts",
           "loc": 986
-        },
-        {
-          "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 958
         },
         {
           "file": "src/web-server/services/account-analytics-service.ts",
