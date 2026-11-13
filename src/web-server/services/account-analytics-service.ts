@@ -332,6 +332,8 @@ export class AccountAnalyticsService {
   private readonly views = new Map<string, AnalyticsSavedViews>();
   /** The computation running for each scope and selection; reads arriving meanwhile join it. */
   private readonly flights = new Map<string, Promise<AccountAnalytics>>();
+  /** How long each selection's last computation took. */
+  private readonly computeMs = new Map<string, number>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingSample: Promise<void> | null = null;
   private running = false;
@@ -521,14 +523,27 @@ export class AccountAnalyticsService {
     const saved = views.get(key);
     const flightKey = JSON.stringify([scope, key]);
     let flight = this.flights.get(flightKey);
+    const budget = this.deps.freshBudgetMs ?? 250;
     // Every read computes (or joins the computation running): an unchanged selection is answered from the
-    // computation's own memo in milliseconds, and a changed one is never served as current.
+    // computation's own memo in milliseconds, and a changed one is never served as current. The computation starts
+    // after this turn of the event loop, so an answer served from the saved view is written before its synchronous
+    // parts (the snapshot load and the projection) hold the loop.
     if (query.refresh === true || !flight) {
-      const started = this.compute(query, scope, tz).then((answer) => {
-        // kept without the per-read memo fields: a kept answer is described by its own `asOf`
-        const { cached: _cached, cacheAgeSeconds: _age, ...kept } = answer;
-        views.set(key, kept);
-        return answer;
+      const elapsed = this.deps.elapsedMs ?? (() => performance.now());
+      const started = new Promise<void>((resolve) => setImmediate(resolve)).then(() => {
+        const begin = elapsed();
+        return this.compute(query, scope, tz).then((answer) => {
+          this.computeMs.set(flightKey, elapsed() - begin);
+          while (this.computeMs.size > 64) {
+            const oldest = this.computeMs.keys().next();
+            if (oldest.done) break;
+            this.computeMs.delete(oldest.value);
+          }
+          // kept without the per-read memo fields: a kept answer is described by its own `asOf`
+          const { cached: _cached, cacheAgeSeconds: _age, ...kept } = answer;
+          views.set(key, kept);
+          return answer;
+        });
       });
       flight = started.finally(() => {
         if (this.flights.get(flightKey) === flight) this.flights.delete(flightKey);
@@ -538,15 +553,34 @@ export class AccountAnalyticsService {
       flight.catch(() => undefined);
     }
     if (!saved) return fresh(await (flight as Promise<AccountAnalytics>));
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const answer = await Promise.race([
-      flight.then(fresh, () => null),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), this.deps.freshBudgetMs ?? 250);
-      }),
-    ]).finally(() => clearTimeout(timer));
-    // the computation is still running (or failed): the newest saved answer, said to be older than this read
-    return answer ?? { ...saved, asOf: saved.updatedAt, stale: true, refreshing: true };
+    // A selection whose last computation fit the budget waits for this one that long. One that did not, or that has
+    // not been computed since the server started, is answered from the saved view at once.
+    const last = this.computeMs.get(flightKey);
+    if (last !== undefined && last <= budget) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const answer = await Promise.race([
+        flight.then(fresh, () => null),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), budget);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      if (answer) return answer;
+    }
+    // The saved answer is current while it is younger than the refresh interval (plus a poll's slack) and was
+    // computed by this server; otherwise it is said to be older than this read, and the page reads again shortly.
+    const age = (this.deps.now ?? Date.now)() - Date.parse(saved.updatedAt);
+    if (!views.fromDisk(key) && age >= 0 && age < this.currentForMs()) return fresh(saved);
+    return { ...saved, asOf: saved.updatedAt, stale: true, refreshing: true };
+  }
+
+  /** How long a saved answer counts as current: the refresh interval and 30 s for the page's poll to arrive. */
+  private currentForMs(): number {
+    const configured =
+      this.deps.samplingIntervalMs?.() ?? getAccountRefreshIntervalSeconds() * 1000;
+    const interval = Number.isFinite(configured)
+      ? Math.min(3_600_000, Math.max(30_000, configured))
+      : 60_000;
+    return interval + 30_000;
   }
 
   private savedViews(scope: string): AnalyticsSavedViews {

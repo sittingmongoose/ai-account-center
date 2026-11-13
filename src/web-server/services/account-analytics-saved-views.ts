@@ -60,6 +60,8 @@ export function validSavedViews(value: unknown): value is SavedViewsFile {
 /** One scope's saved answers. `persist` false keeps them in memory only (tests, ad-hoc scopes). */
 export class AnalyticsSavedViews {
   private readonly views = new Map<string, AccountAnalytics>();
+  /** Selections whose answer came from the file and has not been computed again since. */
+  private readonly loadedFromFile = new Set<string>();
   private loaded = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private lastSave = -Infinity;
@@ -90,7 +92,10 @@ export class AnalyticsSavedViews {
       if (!file || fs.statSync(file).size > MAX_FILE_BYTES) return;
       const value = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
       if (!validSavedViews(value)) return;
-      for (const [key, answer] of value.views) this.views.set(key, answer);
+      for (const [key, answer] of value.views) {
+        this.views.set(key, answer);
+        this.loadedFromFile.add(key);
+      }
     } catch {
       /* A missing or unreadable file behaves like a first run. */
     }
@@ -107,9 +112,15 @@ export class AnalyticsSavedViews {
     return answer;
   }
 
+  /** Whether the selection's answer came from the saved file (an earlier server) and was not computed since. */
+  fromDisk(key: string): boolean {
+    return this.loadedFromFile.has(key);
+  }
+
   /** Keeps `answer` unless the one held is newer (two computations can finish out of order). */
   set(key: string, answer: AccountAnalytics): void {
     this.load();
+    this.loadedFromFile.delete(key);
     const held = this.views.get(key);
     if (held && Date.parse(held.updatedAt) > Date.parse(answer.updatedAt)) return;
     this.views.delete(key);

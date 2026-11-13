@@ -124,8 +124,9 @@ describe('analytics saved views', () => {
     expect(first.stale).toBe(false);
     expect(first.asOf).toBe(first.updatedAt);
 
-    // the next computation is slow: the read is answered with the saved answer within the budget
-    now += 60_000;
+    // the next computation is slow: the read is answered with the saved answer within the budget; five minutes on,
+    // past the refresh interval, it is said to be older than the read
+    now += 5 * 60_000;
     logs.set(25);
     logs.hold();
     const started = performance.now();
@@ -143,6 +144,41 @@ describe('analytics saved views', () => {
     expect(events(next)).toBe(25);
     expect(next.stale).toBe(false);
     expect(Date.parse(next.asOf as string)).toBe(now);
+  });
+
+  it('a selection whose computation is slow is answered from the saved view at once; current while it is young', async () => {
+    let now = NOW;
+    let slow = 0;
+    const service = new AccountAnalyticsService({
+      getDashboard: async () => {
+        // the dashboard read waits on its providers
+        if (slow) await new Promise((resolve) => setTimeout(resolve, slow));
+        return board;
+      },
+      getActivity: async () => activity(now === NOW ? 5 : 6),
+      createHistoryStore: memory,
+      now: () => now,
+      freshBudgetMs: 40,
+      samplingIntervalMs: () => 60_000,
+    });
+    await service.get(QUERY);
+    slow = 300;
+    now += 20_000;
+    // the computation outlives the budget: the saved answer, 20 s old, is current
+    let started = performance.now();
+    const young = await service.get(QUERY);
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(young.stale).toBe(false);
+    expect(events(young)).toBe(5);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // that selection is now known to be slow: the next read does not wait at all
+    now += 2 * 60_000;
+    started = performance.now();
+    const old = await service.get(QUERY);
+    expect(performance.now() - started).toBeLessThan(30);
+    expect(old.stale).toBe(true);
+    expect(old.refreshing).toBe(true);
+    expect(events(old)).toBe(6);
   });
 
   it('answers within the budget with the fresh answer when the computation is quick', async () => {
@@ -172,16 +208,19 @@ describe('analytics saved views', () => {
       },
       getActivity: async () => activity(1),
       createHistoryStore: memory,
-      now: () => NOW,
+      now: () => now,
       freshBudgetMs: 1,
     });
+    let now = NOW;
     await expect(service.get(QUERY)).rejects.toThrow('fixture dashboard down');
     fail = false;
     const answer = await service.get(QUERY);
     expect(answer.stale).toBe(false);
     expect(events(answer)).toBe(1);
-    // a later failure keeps the saved answer on screen, said to be older than this read
+    // a later failure keeps the saved answer on screen, said to be older than this read once it is
     fail = true;
+    expect((await service.get(QUERY)).stale).toBe(false);
+    now += 5 * 60_000;
     const kept = await service.get(QUERY);
     expect(kept.stale).toBe(true);
     expect(events(kept)).toBe(1);
@@ -219,6 +258,7 @@ describe('analytics saved views', () => {
     expect(first.refreshing).toBe(true);
     expect(first.asOf).toBe(computed.updatedAt);
     logs.release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
     const next = await after.get(QUERY);
     expect(events(next)).toBe(50);
     expect(next.stale).toBe(false);
