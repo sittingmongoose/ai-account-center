@@ -3,6 +3,7 @@ import type { ReportProblem } from '../status/agent-reports-reader';
 import { ageSeconds, clockText, iso, plural } from '../status/status-view-words';
 import type { CatalogState, SeedFailure } from './catalog';
 import type { RunsState } from './runs-reader';
+import type { RunDoc } from '../status/report-schema';
 import type { ScoreboardSource } from './scoreboard-view-types';
 
 export const STALE_AFTER_SECONDS = 180;
@@ -13,6 +14,8 @@ export interface ScoreboardInputs {
   root: string;
   catalog: CatalogState;
   runs: RunsState;
+  /** Review runs outside a filtered view that review its runs (joined, never rows). */
+  joinReviews?: readonly RunDoc[];
   /** Catalog seeds this server could not write at start. */
   seedFailures?: readonly SeedFailure[];
 }

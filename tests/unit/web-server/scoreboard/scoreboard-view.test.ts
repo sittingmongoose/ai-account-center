@@ -859,7 +859,10 @@ describe('service', () => {
     const second = await service.view();
     expect(second.generatedAt).toBe(first.generatedAt);
     expect(second.sources.some((source) => source.detail.includes('Cached view'))).toBe(true);
-    await (service as unknown as { building: Promise<unknown> }).building;
+    // One build in flight per filter set (Scoreboard v2); wait for this one.
+    await Promise.all(
+      (service as unknown as { building: Map<string, Promise<unknown>> }).building.values()
+    );
     expect((await service.view()).generatedAt).toBe(new Date(now).toISOString());
   });
 

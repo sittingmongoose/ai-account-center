@@ -381,6 +381,7 @@ fn queries_filter_by_date_source_and_task_type() {
     assert_eq!(ids(json!({ "source": "benchmark" })), vec!["vm.lead--d"]);
     assert_eq!(ids(json!({ "taskType": "no-such-type" })), Vec::<String>::new());
     assert_eq!(ids(json!({ "fromMs": T0 + 30 * DAY, "toMs": T0 })), Vec::<String>::new());
+    assert_eq!(ids(json!({ "reviewsOnly": true })), Vec::<String>::new(), "no run here has a review block");
 }
 
 #[test]

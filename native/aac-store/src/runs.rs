@@ -1641,6 +1641,8 @@ pub struct QueryArgs {
     /// observed or benchmark; absent means both.
     pub source: Option<String>,
     pub task_type: Option<String>,
+    /// Only runs with a review block: the reviews a filtered view still joins to its runs.
+    pub reviews_only: Option<bool>,
     /// Resume after this `[endedMs, r]` cursor.
     pub after: Option<(u64, u32)>,
     pub limit: Option<usize>,
@@ -1744,6 +1746,9 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
                 _ => {}
             }
             if task_type.is_some_and(|t| t != head.id(at::TASK_TYPE)) {
+                continue;
+            }
+            if args.reviews_only == Some(true) && head.flags & F_REVIEW == 0 {
                 continue;
             }
             if out.len() == limit {

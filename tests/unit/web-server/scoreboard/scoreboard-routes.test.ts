@@ -100,6 +100,42 @@ describe('scoreboard route', () => {
     expect((await response.json()).code).toBe('unexpected_query');
   });
 
+  it('takes only the four filters, each once, with fixed refusals', async () => {
+    const seen: unknown[] = [];
+    const recording = service();
+    recording.view = async (filters) => {
+      seen.push(filters);
+      return { version: 1 } as never;
+    };
+    const url = await start(recording);
+    const ok = await fetch(`${url}?from=2026-11-01&to=2026-11-13&source=real&taskType=build`, {
+      headers: session,
+    });
+    expect(ok.status).toBe(200);
+    expect(seen).toEqual([
+      { from: '2026-11-01', to: '2026-11-13', source: 'real', taskType: 'build' },
+    ]);
+    await fetch(url, { headers: session });
+    expect(seen[1]).toEqual({ from: null, to: null, source: 'all', taskType: null });
+    for (const [query, code, error] of [
+      ['?from=2026-13-01', 'invalid_filter', 'Dates are days written YYYY-MM-DD.'],
+      ['?from=2026-11-13&to=2026-11-01', 'invalid_filter', 'The first day is after the last day.'],
+      ['?source=everything', 'invalid_filter', 'Source is all, real or benchmark.'],
+      ['?taskType=../x', 'invalid_filter', 'The task type is not a task type id.'],
+      ['?source=real&source=all', 'invalid_filter', 'Each filter may be given once.'],
+      [
+        '?family=openai',
+        'unexpected_query',
+        'This request takes only from, to, source and taskType.',
+      ],
+    ]) {
+      const refused = await fetch(`${url}${query}`, { headers: session });
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toEqual({ error, code });
+    }
+    expect(seen).toHaveLength(2);
+  });
+
   it('answers a failure with fixed words', async () => {
     const broken = service();
     broken.view = async () => {

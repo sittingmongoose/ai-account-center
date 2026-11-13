@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 /** Must equal the crate's BINDING_VERSION (native/aac-store/src/node.rs). */
-export const STORE_BINDING_VERSION = 1;
+export const STORE_BINDING_VERSION = 2;
 
 export interface NativeStoreHandle {
   call(method: string, args: string): Promise<string>;

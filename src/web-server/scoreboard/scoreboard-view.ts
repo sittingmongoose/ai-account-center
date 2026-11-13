@@ -370,7 +370,7 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
       .sort((a, b) => Date.parse(b.endedAt) - Date.parse(a.endedAt) || a.id.localeCompare(b.id))
       .slice(0, 10),
   };
-  const index = buildReviewIndex(docs);
+  const index = buildReviewIndex(docs, inputs.joinReviews ?? []);
   const shared: Shared = {
     index,
     defs: new Map(catalog.measures.map((measure) => [measure.id, measure])),
