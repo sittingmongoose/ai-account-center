@@ -202,8 +202,8 @@ export const tests = {
           .map((e) => e.getBoundingClientRect().top),
       }));
       await t.check(
-        `${label}: rail clears the measured 116px cluster plus margin`,
-        p.reserve >= 136 && p.controls.every((y) => y >= 136),
+        `${label}: rail clears the measured status area (204px under a Live Activity) plus margin`,
+        p.reserve >= 212 && p.controls.every((y) => y >= 212),
         JSON.stringify(p)
       );
     };
