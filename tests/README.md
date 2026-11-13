@@ -9,12 +9,17 @@ application-update contracts, authentication, and package compatibility.
 Run commands from the repository root with the root dependencies already
 available. The authoritative commands are in [package.json](../package.json).
 
+Run tests with `TMPDIR` on disk, not `/tmp` (which is a RAM tmpfs and fills quickly
+with test homes and tool caches). Create a disk-backed temp dir and point `TMPDIR`
+at it; the test fixture also sweeps stale `ccs-test-*` leftovers there.
+
 ```bash
-bun run test:fast
-bun run test:slow
-bun run test:all
-bun run test:unit
-bun run test:npm
+mkdir -p ~/aac-tmp
+TMPDIR=~/aac-tmp bun run test:fast
+TMPDIR=~/aac-tmp bun run test:slow
+TMPDIR=~/aac-tmp bun run test:all
+TMPDIR=~/aac-tmp bun run test:unit
+TMPDIR=~/aac-tmp bun run test:npm
 ```
 
 [test bucket selection](../scripts/run-test-bucket.js) discovers suites under
