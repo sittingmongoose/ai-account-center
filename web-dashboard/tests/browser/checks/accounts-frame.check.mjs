@@ -172,7 +172,7 @@ export const tests = {
 		});
 		await t.check('the failed cell says "installer failed" in red, not just "failed"', !!cell && cell.crit);
 		await t.check('its tip names the cause, the command, the exit code and the steps',
-			!!cell && /Cause: its installer failed · ran agy update \(exit 1\) · checking 0\.9s, updating 4\.2s · output: Error: connection reset by peer/.test(cell.title));
+			!!cell && /Cause: its installer failed · ran agy update \(exit 1\) · checking 900ms, updating 4\.2s · output: Error: connection reset by peer/.test(cell.title));
 		await t.page.evaluate(() => [...document.querySelectorAll('.ut-item')].find((i) => i.querySelector('.ut-app')?.textContent.trim() === 'Antigravity CLI')?.querySelector('button.ut-row')?.click());
 		await t.until('its details list the output for Nas1', () => [...document.querySelectorAll('.ut-details li')].some((li) => li.textContent.includes('Nas1') && li.textContent.includes('output: Error: connection reset by peer')), null, { timeout: 5000 });
 		await t.check('rows without diagnostics keep their old words', await t.page.evaluate(() => [...document.querySelectorAll('.ut-cell')].some((c) => c.textContent.trim() === 'quit to finish')));
