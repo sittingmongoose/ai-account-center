@@ -98,6 +98,15 @@ const SLOW_FIRST_LOAD = `(() => {
 	});
 })();`;
 
+/** The fixture while a scan runs on every computer: half the tools still scanning, the remote scans out. */
+const scanningEverywhere = (range) => {
+	const answer = analyticsFixture({ range, accounts: ACCOUNTS });
+	(answer.activity.sources || []).forEach((source, i) => { if (source.tool !== 'cursor' && i % 2 === 0) source.state = 'scanning'; });
+	answer.activity.refreshing = true;
+	answer.activity.refreshingRemote = ['mac', 'windows', 'nas1'];
+	return answer;
+};
+
 /** The fixture with every source settled (none still scanning), so current numbers carry no updating words. */
 const settled = (range) => {
 	const answer = analyticsFixture({ range, accounts: ACCOUNTS });
@@ -114,7 +123,7 @@ async function stubSettled(t) {
  * Holds the page's data reads (analytics, dashboard, preferences, Antigravity switching) until `release()`, so a visit
  * can be checked before any of them has answered. Returns the release and how many reads are held.
  */
-async function holdData(t) {
+async function holdData(t, answer = settled) {
 	let release;
 	const gate = new Promise((resolve) => { release = resolve; });
 	const held = { count: 0, answered: 0 };
@@ -124,7 +133,7 @@ async function holdData(t) {
 		await gate;
 		held.answered++;
 		const url = new URL(r.request().url());
-		if (url.pathname === '/api/accounts/analytics') return r.fulfill({ json: settled(url.searchParams.get('range') || '7d') });
+		if (url.pathname === '/api/accounts/analytics') return r.fulfill({ json: answer(url.searchParams.get('range') || '7d') });
 		if (url.pathname === '/api/accounts/dashboard') return r.fulfill({ json: DASHBOARD });
 		if (url.pathname === '/api/accounts/preferences') return r.fulfill({ json: { timeZone: 'UTC' } });
 		// Antigravity switching off: nothing for the page to mark
@@ -141,6 +150,11 @@ const freshness = () => {
 		kpis: document.querySelectorAll('.ax-page .kpi').length,
 		values: [...document.querySelectorAll('.ax-page .kpi-val')].map((e) => e.textContent.trim()),
 		strip: strip ? strip.textContent.trim() : null,
+		tip: strip?.dataset.tip ?? null,
+		// one line: the note is no taller than one line of its text, and the strip ends inside the window
+		noteLines: (() => { const n = strip?.querySelector('.ax-fresh-note'); if (!n) return 0; return Math.round(n.getBoundingClientRect().height / parseFloat(getComputedStyle(n).lineHeight || '16')); })(),
+		stripRight: strip ? Math.round(strip.getBoundingClientRect().right) : 0,
+		width: innerWidth,
 		state: strip?.dataset.state ?? null,
 		stale: !!page?.classList.contains('ax-stale'),
 		stripHeight: strip ? Math.round(strip.getBoundingClientRect().height) : 0,
@@ -169,7 +183,8 @@ export const tests = {
 		await t.equal('no data read has answered yet', held.answered, 0);
 		await t.check(`the data reads are out and held (${held.count})`, held.count >= 1);
 		await t.check(`drawn without the loading placeholders (${shownAfterMs} ms after the open)`, !before.loading);
-		await t.check(`the strip says the numbers are older and being updated: "${before.strip}"`, /^Updating · showing data from /.test(before.strip ?? '') && before.state === 'updating');
+		await t.check(`the strip says the numbers are older and being updated: "${before.strip}"`, /^Updating · data from /.test(before.strip ?? '') && before.state === 'updating');
+		await t.check(`its tip says it in full: "${before.tip}"`, /The numbers shown are from .*; newer ones are on their way\./.test(before.tip ?? ''));
 		await t.check('the kept numbers are dimmed, never shown as current', before.stale);
 		await t.equal('they are the numbers the first open showed', before.values, first.values);
 		await t.crop('analytics-kept', await t.page.evaluate(() => { const r = document.querySelector('.ax-fresh').getBoundingClientRect(); return { x: 0, y: Math.max(0, r.y - 80), width: 1440, height: r.height + 260 }; }), 'second open: kept numbers dimmed under the updating strip');
@@ -188,15 +203,19 @@ export const tests = {
 				await stubSettled(t);
 				await openAnalytics(t, f.safe);
 				await t.until('kept', () => !!localStorage.getItem('aac.analytics.saved.v1'), null, { timeout: 10000, hard: true });
-				const { release } = await holdData(t);
+				// the next answers come from a scan running on every computer: the longest progress words
+				const { release } = await holdData(t, scanningEverywhere);
 				await t.goto(`/app/analytics?e2e&safe=${f.safe}`, { settleMs: 0 });
 				await t.until('the kept numbers under the strip', () => document.querySelectorAll('.ax-page .kpi').length === 5 && !!document.querySelector('.ax-fresh'), null, { timeout: 30000, hard: true });
-				const state = await t.page.evaluate(freshness);
-				await t.check(`the strip is compact (${state.stripHeight} px): "${state.strip}"`, state.stripHeight > 0 && state.stripHeight <= 46);
-				await t.check('nothing goes sideways', !state.sideways);
+				const kept = await t.page.evaluate(freshness);
+				await t.check(`kept numbers: one line, ${kept.stripHeight} px: "${kept.strip}"`, kept.noteLines === 1 && kept.stripHeight > 0 && kept.stripHeight <= 30 && kept.stripRight <= kept.width && !kept.sideways, JSON.stringify(kept));
 				await t.crop(`analytics-kept-${f.name}`, await t.page.evaluate(() => { const r = document.querySelector('.ax-fresh').getBoundingClientRect(); return { x: 0, y: Math.max(0, r.y - 60), width: innerWidth, height: Math.min(innerHeight - Math.max(0, r.y - 60), r.height + 240) }; }), `${f.name}: kept numbers under the updating strip`);
 				release();
-				await t.until('current', () => !document.querySelector('.ax-fresh'), null, { timeout: 15000, hard: true });
+				await t.until('current numbers while the scan runs: the progress in short', () => /^Updating · \d+ of \d+ tools/.test(document.querySelector('.ax-fresh')?.textContent.trim() ?? '') && !document.querySelector('.ax-page.ax-stale'), null, { timeout: 15000, hard: true });
+				const scan = await t.page.evaluate(freshness);
+				await t.check(`scan progress: one line, ${scan.stripHeight} px: "${scan.strip}"`, scan.noteLines === 1 && scan.stripHeight <= 30 && scan.stripRight <= scan.width && !scan.sideways, JSON.stringify(scan));
+				await t.check(`its tip holds the full scan words: "${scan.tip}"`, /^Updating: new log lines are being read\./.test(scan.tip ?? ''));
+				await t.crop(`analytics-scan-${f.name}`, await t.page.evaluate(() => { const r = document.querySelector('.ax-fresh').getBoundingClientRect(); return { x: 0, y: Math.max(0, r.y - 20), width: innerWidth, height: r.height + 40 }; }), `${f.name}: the strip with the scan's progress, one line`);
 			});
 		}
 	},

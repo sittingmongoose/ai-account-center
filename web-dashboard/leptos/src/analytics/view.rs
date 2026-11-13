@@ -1019,16 +1019,21 @@ pub struct LoadState {
 
 /// Whether the numbers on screen are current (`analytics-fresh`). `stale`: they predate this visit's newest answer
 /// (kept in this browser or by the server while it computes the next); `updating`: newer ones are on their way. `note`
-/// says it in words ("Updating · showing data from 2m ago"); nothing is shown when it is empty.
+/// says it in one short line ("Updating · 3 of 11 tools · data from 2m ago"); nothing is shown when it is empty.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Fresh {
     pub shown: bool,
     pub updating: bool,
     pub stale: bool,
+    /// The last read, or the server's last computation, failed: nothing newer is on its way.
+    pub failed: bool,
     pub as_of: Option<f64>,
     #[serde(deserialize_with = "nullable")]
     pub note: String,
+    /// The whole sentence behind the short `note` (the strip's tip).
+    #[serde(deserialize_with = "nullable")]
+    pub tip: String,
 }
 
 /// The view, or None for an empty, unreadable or other-version push (the page then shows what it had).

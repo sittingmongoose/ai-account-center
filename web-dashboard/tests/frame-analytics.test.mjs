@@ -225,7 +225,22 @@ test('a failed read says so and keeps what was on screen; one failed poll stays 
   assert.equal(sent.filter(([k]) => k === 'analytics-loading').length, loadingBefore, 'one failed poll says nothing');
   controller.act('analytics-range', '30d');
   for (let i = 0; i < 4; i++) await settle();
+  // numbers on screen: one message, in the strip (never "Updating" beside an error banner); the error is its tip
+  assert.deepEqual(JSON.parse(last(sent, 'analytics-loading')), { loading: false, error: '' });
+  const state = JSON.parse(last(sent, 'analytics-fresh'));
+  assert.equal(state.failed, true);
+  assert.equal(state.updating, false);
+  assert.equal(state.stale, true);
+  assert.match(state.note, /^Couldn't update · data from /);
+  assert.match(state.tip, /Analytics failed on the server\./);
+});
+
+test('a failed read with nothing on screen says so in the banner', async () => {
+  const { controller, sent } = make(defaultRoutes({ '/api/accounts/analytics': () => ({ status: 500, body: { error: 'Analytics failed on the server.' } }) }));
+  controller.show();
+  for (let i = 0; i < 4; i++) await settle();
   assert.deepEqual(JSON.parse(last(sent, 'analytics-loading')), { loading: false, error: 'Analytics failed on the server.' });
+  assert.equal(last(sent, 'analytics-fresh'), undefined);
 });
 
 test('a server that just started answers loading first: the page reads again after 2 s, not 10 s', async () => {
@@ -508,7 +523,8 @@ test('a second visit draws the kept answer before any network answer, said to be
   const shown = fresh(second.sent);
   assert.equal(shown.stale, true);
   assert.equal(shown.updating, true);
-  assert.match(shown.note, /^Updating · showing data from 2m ago$/);
+  assert.equal(shown.note, 'Updating · data from 2m ago');
+  assert.match(shown.tip, /The numbers shown are from 2m ago; newer ones are on their way\./);
   // the server answers: the strip goes away and the numbers are current
   answer({ status: 200, body: analyticsFixture({ range: '7d', now: second.c.now(), accounts: dashboard().accounts }) });
   await settle();
@@ -531,7 +547,7 @@ test('an answer the server kept from before the read is said to be older and rea
   const state = fresh(sent);
   assert.equal(state.stale, true);
   assert.equal(state.updating, true);
-  assert.equal(state.note, 'Updating · showing data from 3m ago');
+  assert.equal(state.note, 'Updating · data from 3m ago');
   // the next read comes in 2 s, not at the refresh interval
   const reads = () => server.calls.filter((p) => p.startsWith('/api/accounts/analytics')).length;
   const before = reads();
@@ -595,7 +611,7 @@ test('offline with a kept answer: it stays on screen and the strip says it is no
   const state = fresh(second.sent);
   assert.equal(state.stale, true);
   assert.equal(state.updating, false);
-  assert.match(state.note, /^Offline · showing data from /);
+  assert.match(state.note, /^Offline · data from /);
   assert.ok(JSON.parse(last(second.sent, 'analytics')).usage.ready, 'the kept numbers stay');
 });
 
@@ -612,5 +628,65 @@ test('current numbers while the server reads new log lines: the strip says so, t
   const state = fresh(sent);
   assert.equal(state.stale, false);
   assert.equal(state.updating, true);
-  assert.equal(state.note, 'Updating · refreshing Mac…');
+  // the scan's progress in short (the fixture's Windows cells and Mac still scanning); the full words are the tip
+  assert.match(state.note, /^Updating · \d+ of \d+ tools$/);
+  assert.match(state.tip, /^Updating: new log lines are being read\./);
+});
+
+test('the server could not compute newer numbers: the strip says so once, and polls go back to the usual pace', async () => {
+  const failing = (url) => {
+    const body = analyticsFixture({ range: url.searchParams.get('range') || '7d', now: NOW - 25 * 60_000, accounts: dashboard().accounts });
+    body.activity = { ...body.activity, refreshing: false, sources: (body.activity.sources || []).map((r) => ({ ...r, state: r.state === 'scanning' ? 'ok' : r.state })) };
+    return { status: 200, body: { ...body, asOf: body.updatedAt, stale: true, refreshing: false, refreshError: 'The newest numbers could not be computed; the last ones are shown.' } };
+  };
+  const { controller, sent, c } = make(defaultRoutes({ '/api/accounts/analytics': failing }));
+  controller.show();
+  await settle();
+  await settle();
+  const state = fresh(sent);
+  assert.equal(state.failed, true);
+  assert.equal(state.updating, false);
+  assert.equal(state.note, "Couldn't update · data from 25m ago");
+  assert.match(state.tip, /could not be computed/);
+  // no quick polls: the next read is the refresh interval's
+  assert.ok(!c.pending().some((ms) => ms > 0 && ms <= 10_000), JSON.stringify(c.pending()));
+  assert.equal(analyticsPollDelay({ stale: true, refreshing: false, refreshError: 'x', activity: { status: 'ok' } }), 0);
+});
+
+test('an answer timed ahead of this clock is from an earlier read, never "a moment ago"', async () => {
+  const ahead = (url) => {
+    const body = analyticsFixture({ range: url.searchParams.get('range') || '7d', now: NOW + 60 * 60_000, accounts: dashboard().accounts });
+    return { status: 200, body: { ...body, asOf: body.updatedAt, stale: true, refreshing: true } };
+  };
+  const { controller, sent } = make(defaultRoutes({ '/api/accounts/analytics': ahead }));
+  controller.show();
+  await settle();
+  await settle();
+  const state = fresh(sent);
+  assert.equal(state.stale, true);
+  assert.match(state.note, /^Updating · (\d+ of \d+ tools · )?data from an earlier read$/);
+  assert.doesNotMatch(state.note + state.tip, /moment/);
+});
+
+test('a kept answer saved mid-scan: while it is the one shown, only the read under way says "Updating"', async () => {
+  const storage = memoryStorage();
+  const midScan = (url) => {
+    const body = analyticsFixture({ range: url.searchParams.get('range') || '7d', now: NOW, accounts: dashboard().accounts });
+    body.activity = { ...body.activity, refreshing: true, refreshingRemote: ['mac', 'windows'] };
+    return { status: 200, body };
+  };
+  const first = make(defaultRoutes({ '/api/accounts/analytics': midScan }), { storage });
+  first.controller.show();
+  await settle();
+  await settle();
+  first.controller.stop();
+  // the next visit's read fails over HTTP: the strip says it could not update, not "Updating"
+  const second = make(defaultRoutes({ '/api/accounts/analytics': () => ({ status: 502, body: { error: 'Bad gateway.' } }) }), { storage });
+  second.controller.show();
+  for (let i = 0; i < 4; i++) await settle();
+  const state = fresh(second.sent);
+  assert.equal(state.updating, false);
+  assert.equal(state.failed, true);
+  assert.match(state.note, /^Couldn't update · data from /);
+  assert.deepEqual(JSON.parse(last(second.sent, 'analytics-loading')), { loading: false, error: '' });
 });

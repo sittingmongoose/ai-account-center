@@ -1622,12 +1622,14 @@ body { min-height: 100dvh; }
   background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); color: var(--accent-text);
   animation: ax-fade 180ms ease-out both; }
 .ax-fresh[data-state='stale'] { background: var(--paper-2); border-color: var(--rule); color: var(--ink-2); }
+.ax-fresh[data-state='failed'] { background: var(--paper-2); border-color: color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn-text); }
 .ax-fresh-ic { display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; color: var(--accent); }
 .ax-fresh[data-state='stale'] .ax-fresh-ic { color: var(--ink-3); }
+.ax-fresh[data-state='failed'] .ax-fresh-ic { color: var(--warn-text); }
 .ax-fresh-ic .ic { width: 15px; height: 15px; }
 .ax-fresh-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent); border-top-color: var(--accent);
   animation: ac-turn .9s linear infinite; }
-.ax-fresh-note { min-width: 0; }
+.ax-fresh-note { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ax-fresh-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
   background: linear-gradient(90deg, transparent 0 30%, var(--accent) 30% 70%, transparent 70%); background-size: 200% 100%; animation: ac-run 1.4s linear infinite; }
 .ax-fresh-bar[hidden] { display: none; }

@@ -49,7 +49,8 @@ export function analyticsCovers(payload, page, now = Date.now()) {
  */
 export function analyticsPollDelay(payload, waitedMs = Infinity) {
   // an answer the server kept from before this read (`stale`): it is computing the next one, which lands in seconds
-  if (payload?.stale === true) return waitedMs < 10_000 ? 2000 : waitedMs < 30_000 ? 5000 : 10000;
+  // (one sent with refreshError has nothing newer on its way: the usual pace below)
+  if (payload?.stale === true && !payload.refreshError) return waitedMs < 10_000 ? 2000 : waitedMs < 30_000 ? 5000 : 10000;
   const act = payload?.activity;
   const busyNow = act?.status === 'loading' || act?.refreshing === true;
   const converging = Array.isArray(act?.sources) && act.sources.some(r => r?.state === 'scanning');

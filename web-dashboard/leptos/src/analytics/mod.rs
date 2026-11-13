@@ -227,8 +227,9 @@ pub fn AnalyticsPage() -> impl IntoView {
 }
 
 /// The updating strip under the header: while newer numbers are on their way, or the ones on screen are older than
-/// this visit's newest answer, one compact line says so ("Updating · showing data from 2m ago") over a running bar.
-/// Gone once the numbers are current and nothing is being read.
+/// this visit's newest answer, one compact line says so ("Updating · data from 2m ago") over a running bar; when they
+/// could not be updated, it says that instead ("Couldn't update · data from 25m ago"). Always one line (an ellipsis
+/// past its width); the whole sentence is its tip. Gone once the numbers are current and nothing is being read.
 #[component]
 fn FreshStrip() -> impl IntoView {
     let ax = expect_context::<Ax>();
@@ -237,11 +238,17 @@ fn FreshStrip() -> impl IntoView {
     view! {
         <Show when=move || shown.get()>
             <div class="ax-fresh" role="status" aria-live="polite"
-                data-state=move || fresh.with(|f| if f.updating { "updating" } else if f.stale { "stale" } else { "current" })>
+                data-tip=move || fresh.with(|f| (!f.tip.is_empty()).then(|| f.tip.clone()))
+                aria-label=move || fresh.with(|f| if f.tip.is_empty() { f.note.clone() } else { f.tip.clone() })
+                data-state=move || fresh.with(|f| if f.failed { "failed" } else if f.updating { "updating" } else if f.stale { "stale" } else { "current" })>
                 <span class="ax-fresh-ic" aria-hidden="true">
-                    {move || if fresh.with(|f| f.updating) { view! { <span class="ax-fresh-spin"></span> }.into_any() } else { view! { <Icon name="clock"/> }.into_any() }}
+                    {move || match fresh.with(|f| (f.failed, f.updating)) {
+                        (true, _) => view! { <Icon name="alert-circle"/> }.into_any(),
+                        (false, true) => view! { <span class="ax-fresh-spin"></span> }.into_any(),
+                        _ => view! { <Icon name="clock"/> }.into_any(),
+                    }}
                 </span>
-                <span class="ax-fresh-note">{move || fresh.with(|f| parts(&f.note))}</span>
+                <span class="ax-fresh-note">{move || fresh.with(|f| f.note.clone())}</span>
                 <span class="ax-fresh-bar" aria-hidden="true" hidden=move || !fresh.with(|f| f.updating)></span>
             </div>
         </Show>
@@ -375,15 +382,17 @@ mod tests {
     #[test]
     fn the_fresh_state_reads_whole_and_tolerates_nulls() {
         let f: Fresh = serde_json::from_str(
-            r#"{"shown":true,"updating":true,"stale":true,"asOf":1763028000000,"note":"Updating · showing data from 2m ago"}"#,
+            r#"{"shown":true,"updating":true,"stale":true,"failed":false,"asOf":1763028000000,"note":"Updating · data from 2m ago","tip":"Updating."}"#,
         )
         .expect("fresh state");
-        assert!(f.shown && f.updating && f.stale);
+        assert!(f.shown && f.updating && f.stale && !f.failed);
         assert_eq!(f.as_of, Some(1763028000000.0));
-        assert_eq!(f.note, "Updating · showing data from 2m ago");
+        assert_eq!(f.note, "Updating · data from 2m ago");
+        assert_eq!(f.tip, "Updating.");
         let none: Fresh =
-            serde_json::from_str(r#"{"shown":false,"asOf":null,"note":null}"#).expect("nulls");
-        assert!(!none.shown && none.as_of.is_none() && none.note.is_empty());
+            serde_json::from_str(r#"{"shown":false,"asOf":null,"note":null,"tip":null}"#)
+                .expect("nulls");
+        assert!(!none.shown && none.as_of.is_none() && none.note.is_empty() && none.tip.is_empty());
         assert_eq!(
             serde_json::from_str::<Fresh>("not json").unwrap_or_default(),
             Fresh::default()

@@ -15,7 +15,7 @@
 // runs. With nothing kept, nothing is sent until the first answer but `analytics-loading`: the page shows its loading
 // state, never zeros.
 import { analyticsSlintModel } from './analytics-data.mjs';
-import { usageView, usageHead, apiRangeFor, trendPaths } from './analytics-usage.mjs';
+import { usageView, usageHead, apiRangeFor, trendPaths, hostProgress } from './analytics-usage.mjs';
 import { quotaView, agendaView } from './analytics-quota.mjs';
 import {
   createAnalyticsPage,
@@ -43,6 +43,12 @@ export const SAVE_EVERY_MS = 30_000;
 export const SAVED_MAX_AGE_MS = 7 * 24 * 3_600_000;
 /** What this browser keeps at most, in characters (localStorage holds about 5 million per site). */
 export const SAVED_MAX_CHARS = 2_500_000;
+
+/** A kept or served answer timed more than this ahead of this clock is from an earlier read (clocks can differ). */
+export const FUTURE_SLACK_MS = 120_000;
+const REMOTE_NAMES = { mac: 'Mac', windows: 'Windows', nas1: 'Nas1' };
+/** The remote computers a scan is still waiting on, by name, in page order. */
+const remoteNames = (list) => (Array.isArray(list) ? Object.keys(REMOTE_NAMES).filter((h) => list.includes(h)).map((h) => REMOTE_NAMES[h]) : []);
 
 const validPayload = (p) => !!p && typeof p === 'object' && p.schemaVersion === 1 && Array.isArray(p.accounts) && !!p.activity && typeof p.activity === 'object' && typeof p.updatedAt === 'string';
 /** When an answer's numbers were computed. */
@@ -87,6 +93,8 @@ export function createFrameAnalytics({
   let restored = false;
   // an analytics read is out
   let fetching = false;
+  // the last analytics read failed (not offline): what it said; null after a good one
+  let readError = null;
   let lastSaved = -Infinity;
   const timers = { poll: 0, layout: 0, tick: 0, interval: 0, side: 0, save: 0 };
   const pushed = new Map();
@@ -173,27 +181,49 @@ export function createFrameAnalytics({
   }
 
   /**
-   * Whether the numbers on screen are current, for the page's updating strip. `stale`: they predate this visit's
-   * newest answer (kept in this browser, or kept by the server while it computes the next one); `updating`: newer
-   * numbers are on their way (that read or computation, or the server reading new log lines). `note` words it.
+   * Whether the numbers on screen are current, for the page's updating strip: `note` is one short line ("Updating · 3
+   * of 11 tools · data from 2m ago"), `tip` the whole sentence. `stale`: the numbers predate this visit's newest answer
+   * (kept in this browser, kept by the server while it computes the next one, or timed ahead of this clock);
+   * `updating`: newer ones are on their way; `failed`: the last read, or the server's last computation, failed, so
+   * nothing newer is on its way and the strip says so instead of "Updating" (one message, never both).
    */
   function renderFresh() {
     if (!payload || stopped) return;
     const t = now();
     const asOf = asOfOf(payload);
-    const act = payload.activity || {};
-    const stale = restored || payload.stale === true;
-    const head = (() => { try { return usageHead(payload, page, { now: t }); } catch { return null; } })();
-    const collecting = payload.refreshing === true || act.refreshing === true || act.status === 'loading' || head?.updating === true;
-    const updating = online && ((restored && fetching) || payload.stale === true || collecting);
-    const ago = asOf === null ? 'an earlier read' : t - asOf < 10_000 ? 'a moment ago' : relTxt(asOf, t);
-    const note = stale
-      ? updating ? `Updating · showing data from ${ago}`
-        : !online ? `Offline · showing data from ${ago}`
-          : `Showing data from ${ago} · not updated`
-      : updating ? (head?.updateNote || 'Updating…')
-        : !online ? `Offline · showing data from ${ago}` : '';
-    push('analytics-fresh', JSON.stringify({ shown: note !== '', updating, stale: stale || !online, asOf, note }));
+    // a time ahead of this clock (a clock stepped back on either side): from an earlier read, never "a moment ago"
+    const ahead = asOf !== null && asOf - t > FUTURE_SLACK_MS;
+    const ago = asOf === null || ahead ? 'an earlier read' : t - asOf < 10_000 ? 'a moment ago' : relTxt(asOf, t);
+    const failure = readError ?? (typeof payload.refreshError === 'string' && payload.refreshError ? payload.refreshError : null);
+    const stale = restored || payload.stale === true || ahead || failure !== null || !online;
+    // a kept answer's own scan flags say nothing about now; only the read under way does
+    const act = restored ? {} : payload.activity || {};
+    const scanning = restored ? [] : hostProgress(payload).filter((p) => p.scanning > 0);
+    const collecting = !restored && (payload.refreshing === true || act.refreshing === true || act.status === 'loading' || scanning.length > 0);
+    const updating = online && failure === null && ((restored && fetching) || (payload.stale === true && payload.refreshing !== false) || collecting);
+    const remote = restored ? [] : remoteNames(act.refreshingRemote);
+    const tools = scanning.length
+      ? `${scanning.reduce((n, p) => n + p.done, 0)} of ${scanning.reduce((n, p) => n + p.total, 0)} tools`
+      : remote.length ? remote.join(', ') : '';
+    const from = `data from ${ago}`;
+    const shownFrom = ahead || asOf === null ? 'from an earlier read' : `from ${ago}`;
+    let note = '';
+    let tip = '';
+    if (failure !== null) {
+      note = `Couldn't update · ${from}`;
+      tip = `Couldn't update: ${failure} The numbers shown are ${shownFrom}.`;
+    } else if (!online) {
+      note = `Offline · ${from}`;
+      tip = `The dashboard did not answer. The numbers shown are ${shownFrom}.`;
+    } else if (updating) {
+      note = ['Updating', tools, stale ? from : ''].filter(Boolean).join(' · ');
+      const scan = restored ? '' : (() => { try { return usageHead(payload, page, { now: t }).updateNote; } catch { return ''; } })();
+      tip = [stale ? `Updating. The numbers shown are ${shownFrom}; newer ones are on their way.` : 'Updating: new log lines are being read.', scan].filter(Boolean).join(' ');
+    } else if (stale) {
+      note = `Data from ${ago} · not updated`;
+      tip = `The numbers shown are ${shownFrom} and are not being updated.`;
+    }
+    push('analytics-fresh', JSON.stringify({ shown: note !== '', updating, stale, failed: failure !== null, asOf, note, tip }));
   }
 
   /** The kept answer for the page's range, drawn at once on a visit with nothing read yet. */
@@ -336,6 +366,7 @@ export function createFrameAnalytics({
     if (result.r && result.r.schemaVersion === 1 && Array.isArray(result.r.accounts)) {
       payload = result.r;
       restored = false;
+      readError = null;
       render(mode);
       save();
       pollFails = 0;
@@ -344,10 +375,16 @@ export function createFrameAnalytics({
     }
     const error = result.error || new Error('Unsupported analytics response.');
     render();
-    renderFresh();
-    if (quiet && ++pollFails < 2) return;
+    if (quiet && ++pollFails < 2) {
+      renderFresh();
+      return;
+    }
     pollFails = 0;
-    loading(false, error?.message || 'Unable to load account analytics.');
+    const message = error?.message || 'Unable to load account analytics.';
+    if (!error?.network) readError = message;
+    renderFresh();
+    // numbers on screen: the strip says it could not update (one message); with nothing on screen, the banner does
+    loading(false, payload ? '' : message);
   }
 
   /**
