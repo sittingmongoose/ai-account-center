@@ -343,6 +343,23 @@ test('an account hidden on another tab leaves the Analytics page before it comes
   assert.deepEqual(c.pending(), [], 'no timer left while the tab is away');
 });
 
+test('a successful read records when the session was last seen; a refused one does not (review L3)', async () => {
+  const store = new Map();
+  const storage = { setItem: (k, v) => store.set(k, String(v)), getItem: (k) => store.get(k) ?? null, removeItem: (k) => store.delete(k) };
+  const { controller } = make(defaultRoutes(), { storage });
+  controller.show();
+  await settle();
+  await settle();
+  assert.equal(store.get('aac-session-seen-at'), String(NOW), 'seen at the read');
+  store.clear();
+  // a session the server no longer knows: every read is refused
+  const refused = make(() => ({ status: 401, body: { code: 'auth_required' } }), { storage });
+  refused.controller.show();
+  await settle();
+  await settle();
+  assert.equal(store.get('aac-session-seen-at'), undefined, 'a session the server refused is not marked seen');
+});
+
 test('hidden, nothing is read and no timer runs; shown again with a young answer, it draws without a read', async () => {
   const { controller, server, c } = make();
   controller.show();

@@ -23,6 +23,7 @@ import {
 import { chromeView } from './view-model.mjs';
 import { validAntigravityAuto } from './antigravity-data.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
+import { rememberSeen } from './auth-view.mjs';
 
 /** The header and the chrome line are worded again this often while the page is shown (bridge.js does the same). */
 export const HEAD_EVERY_MS = 15_000;
@@ -33,7 +34,8 @@ export const SIDE_SETTLE_MS = 250;
 
 /**
  * The frame's Analytics controller. `fetch`, `now()`, `setTimeout`/`clearTimeout`, `visible()` (the document is on
- * screen) and `reducedMotion()` are injected; `platform` is 'mac' or 'windows' as bridge.js picks it.
+ * screen), `reducedMotion()` and `storage` (localStorage or null) are injected; `platform` is 'mac' or 'windows' as
+ * bridge.js picks it.
  */
 export function createFrameAnalytics({
   fetch: fetchImpl,
@@ -46,6 +48,7 @@ export function createFrameAnalytics({
   emit = () => {},
   signedOut = () => {},
   onView = null,
+  storage = null,
 }) {
   const page = createAnalyticsPage();
   let payload = null;
@@ -97,6 +100,9 @@ export function createFrameAnalytics({
       }
       throw Object.assign(new Error(body?.error || `Request failed (${response.status}).`), { status: response.status, payload: body });
     }
+    // the server accepted the session just now (bridge.js does the same): a later sign-out within its lifetime ended
+    // early, and the frame's sign-in words it so (auth-view.mjs endedReason)
+    rememberSeen(storage, now());
     return body;
   }
 
@@ -382,6 +388,13 @@ export function installFrameAnalytics(win = globalThis) {
   };
   const controller = createFrameAnalytics({
     fetch: (...args) => win.fetch(...args),
+    storage: (() => {
+      try {
+        return win.localStorage;
+      } catch {
+        return null;
+      }
+    })(),
     platform: /Windows/i.test(agent) ? 'windows' : 'mac',
     visible: () => win.document?.visibilityState !== 'hidden',
     reducedMotion: () => headless || !!motion?.matches,
