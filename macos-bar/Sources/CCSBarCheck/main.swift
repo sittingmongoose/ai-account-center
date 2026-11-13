@@ -1636,11 +1636,12 @@ private func checkAntigravityPlanDisplay() throws {
   let original = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
   let prototype = (original["accounts"] as! [[String: Any]])[0]
   func account(_ id: String, _ provider: String = "antigravity", windows: [[String: Any]] = [],
-    plan: Any? = nil) throws -> DashboardAccount {
+    plan: Any? = nil, status: String? = nil) throws -> DashboardAccount {
     var value = prototype
     value["id"] = id
     value["provider"] = provider
     value["windows"] = windows
+    if let status { value["status"] = status }
     value["antigravityPlan"] = plan ?? NSNull()
     return try JSONDecoder().decode(DashboardAccount.self, from: JSONSerialization.data(withJSONObject: value))
   }
@@ -1746,6 +1747,32 @@ private func checkAntigravityPlanDisplay() throws {
   try expect(noPlanAccount.antigravityMissingCell("gemini-5h") == .unavailable
     && pro.antigravityMissingCell("3p-weekly") == .unavailable,
     "Without a plan fact that explains the gap, the cell keeps the unavailable treatment")
+  // An extra pool another account reports (Gemini 4 Argon on Pro, 2026-11-13) reads Not reported on a
+  // free-tier account whose own reading has no such bucket; with no reading at all it stays unavailable.
+  let argonFree = try account("agy-argon-free", windows: [
+    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+    window("3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+  ], plan: plan("free", "weekly", thirdParty: false), status: "ok")
+  let argonPro = try account("agy-argon-pro", windows: [
+    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 1, "windowMinutes": 10080]),
+    window("gemini-argon-wtu-weekly", "Gemini 4 Argon · Weekly", ["usedPercent": 1, "windowMinutes": 10080]),
+  ], plan: plan("pro", "five-hour-weekly", thirdParty: true), status: "ok")
+  try expect(TrayColumns.antigravity([argonPro, argonFree]).map(\.key).contains("gemini-argon-wtu-weekly"),
+    "The Argon pool gets its own column")
+  try expect(argonFree.antigravityMissingCell("gemini-argon-wtu-weekly") == .notReported
+    && argonFree.antigravityMissingCell("gemini-5h") == .weeklyOnly
+    && argonFree.antigravityMissingCell("3p-5h") == .notOnPlan,
+    "A pool another account reports reads Not reported; the four columns keep their plan wording")
+  let argonNoReading = try account("agy-argon-none", plan: plan("free", "weekly", thirdParty: false), status: "ok")
+  let argonFailed = try account("agy-argon-failed", windows: [
+    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+  ], plan: plan("free", "weekly", thirdParty: false), status: "error")
+  try expect(argonNoReading.antigravityMissingCell("gemini-argon-wtu-weekly") == .unavailable
+    && argonFailed.antigravityMissingCell("gemini-argon-wtu-weekly") == .unavailable,
+    "Without any reading the extra pool stays unavailable, never Not reported")
+  try expect(AntigravityMissingCell.notReported.text == "Not reported"
+    && AntigravityMissingCell.notReported.help == "Google reports no such quota for this account.",
+    "The Not reported cell's text and tooltip")
   try expect(AntigravityMissingCell.weeklyOnly.text == "Weekly only" && AntigravityMissingCell.notOnPlan.text == "Not on plan"
     && AntigravityMissingCell.unavailable.text == "Unavailable",
     "The muted cell texts are the spec's exact strings")

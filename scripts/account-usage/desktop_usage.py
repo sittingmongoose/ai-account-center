@@ -30,6 +30,10 @@ AGY_BASE = "https://cloudcode-pa.googleapis.com/v1internal:"
 # while current Antigravity client versions still do. One constant, so a future
 # version bump is a single change; the per-model retrieveUserQuota fallback in
 # normalize_antigravity_gemini covers any window the summary then omits.
+# Re-checked 2026-11-13: this string and the Antigravity 1.5.8 client's get the
+# same groups and buckets. 1.5.x clients call the daily-cloudcode-pa host, whose
+# summary matches this one; only its per-model read also lists the Gemini 4
+# Hydrogen models, inside the Gemini Models windows (no bucket of their own).
 AGY_USER_AGENT = "antigravity/hub/2.24.0 (aidev_client; os_type=linux; arch=amd64)"
 # The transport's deadline spans the whole collector process. This budget
 # starts when the module is imported, so credential reads and every quota

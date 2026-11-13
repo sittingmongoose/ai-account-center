@@ -92,7 +92,12 @@ describe('Antigravity plan table dated 2026-10-07', () => {
         'GPT-OSS-120B'
       );
       expect(antigravityPlanDisplay(plan, AFTER).antigravityPlan).toMatchObject({
-        models: [...GEMINI, 'Claude Sonnet 5.5', 'Claude Opus 5.5'],
+        models: [
+          ...GEMINI,
+          ...(plan === 'pro' ? ['Gemini 4 Argon', 'Gemini 4 Hydrogen'] : []),
+          'Claude Sonnet 5.5',
+          'Claude Opus 5.5',
+        ],
         thirdPartyModels: true,
         creditsOverage: true,
       });
@@ -101,6 +106,26 @@ describe('Antigravity plan table dated 2026-10-07', () => {
           'Claude Sonnet 4.6'
         );
     }
+  });
+
+  it('reads the free tier by its current Google name and records Pro Argon and Hydrogen pools (2026-11-13)', () => {
+    const free = antigravityPlanDisplay(null, AFTER, {
+      paidTier: { id: 'free-tier', name: 'Antigravity Starter Quota' },
+      currentTier: { id: 'free-tier', name: 'Antigravity' },
+    });
+    expect(free.plan).toBe('Free');
+    expect(free.antigravityPlan).toMatchObject({ class: 'free', quotaPolicy: 'weekly' });
+    expect(antigravityPlanDisplay('Antigravity Starter Quota', AFTER).plan).toBe('Free');
+    for (const plan of ['free', 'plus', 'pro-trial', 'ultra'])
+      expect(antigravityPlanDisplay(plan, AFTER).antigravityPlan?.models).not.toContain(
+        'Gemini 4 Hydrogen'
+      );
+    const pro = antigravityPlanDisplay(null, AFTER, {
+      paidTier: { id: 'g1-pro-tier', name: 'Google AI Pro' },
+    }).antigravityPlan;
+    expect(pro?.models).toEqual(expect.arrayContaining(['Gemini 4 Argon', 'Gemini 4 Hydrogen']));
+    expect(pro?.summary).toContain('Gemini 4 Hydrogen counts against the Gemini Models limits');
+    expect(pro?.summary).toContain('Gemini 4 Argon has its own weekly limit');
   });
 
   it('keeps enterprise Gemini-only, Code Assist quota separate, Workspace empty and model arrays independent', () => {

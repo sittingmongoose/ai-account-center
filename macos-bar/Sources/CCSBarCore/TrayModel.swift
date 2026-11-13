@@ -364,6 +364,9 @@ public enum AntigravityMissingCell: Sendable, Equatable {
   case weeklyOnly
   /// The plan has no Claude/GPT models at the sample time: "Not on plan".
   case notOnPlan
+  /// An extra pool column (such as Gemini 4 Argon) that another account reports: this account's own
+  /// reading arrived without it, so Google reported no such quota here. Not a failed reading.
+  case notReported
   /// The plan facts do not explain the gap: the existing unavailable treatment.
   case unavailable
 
@@ -372,6 +375,7 @@ public enum AntigravityMissingCell: Sendable, Equatable {
     switch self {
     case .weeklyOnly: return "Weekly only"
     case .notOnPlan: return "Not on plan"
+    case .notReported: return "Not reported"
     case .unavailable: return "Unavailable"
     }
   }
@@ -383,6 +387,8 @@ public enum AntigravityMissingCell: Sendable, Equatable {
       return "This plan has a weekly quota only; there is no 5-hour window to report."
     case .notOnPlan:
       return "This plan has no Claude or GPT models, so this pool is not reported."
+    case .notReported:
+      return "Google reports no such quota for this account."
     case .unavailable:
       return "Unavailable: no reading was reported, which is not the same as zero."
     }
@@ -394,6 +400,10 @@ extension DashboardAccount {
   /// first: on a plan with no third-party models at all, "Not on plan" is the honest reason for both of
   /// that pool's cells, where "Weekly only" would imply a weekly window exists.
   public func antigravityMissingCell(_ columnKey: String) -> AntigravityMissingCell {
+    if !TrayColumns.antigravityKeys.contains(columnKey), ["ok", "cached", "fresh"].contains(status),
+      visibleWindows.contains(where: { $0.isMeter }) {
+      return .notReported
+    }
     guard let plan = antigravityPlan else { return .unavailable }
     if ["3p-5h", "3p-weekly"].contains(columnKey), plan.thirdPartyModels == false { return .notOnPlan }
     if ["gemini-5h", "3p-5h"].contains(columnKey), plan.weeklyOnly { return .weeklyOnly }

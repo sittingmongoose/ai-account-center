@@ -96,6 +96,43 @@ test('reported windows win over plan metadata and unknown extra windows keep gen
   );
 });
 
+test('an extra pool another account reports reads Not reported, never Unavailable or zero', () => {
+  // Shapes from the 2026-11-13 quota reads: the Pro account lists a Gemini 4 Argon weekly
+  // bucket; the free-tier account's reading has only the two weekly buckets.
+  const argon = {
+    ...window('gemini-argon-wtu-weekly', 1),
+    label: 'Gemini 4 Argon · Weekly',
+  };
+  const pro = account('pro', { quotaPolicy: 'five-hour-weekly', thirdPartyModels: true }, [
+    window('gemini-5h', 1),
+    window('gemini-weekly', 1),
+    window('3p-5h', 0),
+    window('3p-weekly', 0),
+    argon,
+  ]);
+  const free = account('free', { quotaPolicy: 'weekly', thirdPartyModels: false }, [
+    window('gemini-weekly', 0),
+    window('3p-weekly', 0),
+  ]);
+  const failed = { ...account('failed', null, []), status: 'unavailable' };
+  const v = section([pro, free, failed]);
+  const at = v.columns.findIndex((column) => column.key === 'gemini-argon-wtu-weekly');
+  assert.equal(v.columns[at].label, 'Gemini 4 Argon · Weekly');
+  assert.equal(v.rows[0].cells[at].hasValue, true);
+  assert.equal(v.rows[0].cells[at].valueText, '1');
+  const missing = v.rows[1].cells[at];
+  assert.equal(missing.hasValue, false);
+  assert.equal(missing.valueText, '');
+  assert.equal(missing.naText, 'Not reported');
+  assert.equal(missing.naSub, 'Google reports no such quota for this account');
+  // The canonical columns keep their plan wording.
+  assert.equal(v.rows[1].cells[0].naText, 'Weekly only');
+  assert.equal(v.rows[1].cells[0].naSub, '');
+  // An account with no reading at all is still unavailable, not "not reported".
+  assert.equal(v.rows[2].cells[at].naText, 'Unavailable');
+  assert.equal(v.rows[2].cells[at].naSub, '');
+});
+
 test('no-quota plans with no windows use the existing row text and retain reported windows when present', () => {
   const empty = account(
     'workspace',

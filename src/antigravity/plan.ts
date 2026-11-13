@@ -1,6 +1,9 @@
 /** Antigravity coding plans, 2026-10-07. Keep labels, policies and model availability here.
  * loadCodeAssist fields/legacy IDs: google-gemini/gemini-cli, packages/core/src/code_assist/types.ts.
  * AAC fixture/history: planInfo.planType = pro (6298e60a, 9cf75fbe); generic tiers are ambiguous.
+ * 2026-11-13 quota reads: Google AI Pro lists Gemini 4 Argon with its own weekly bucket and
+ * Gemini 4 Hydrogen in the Gemini Models windows (same reset and fraction); the free tier,
+ * now named "Antigravity Starter Quota", lists neither.
  */
 export interface AntigravityPlan {
   class?: AntigravityPlanClass;
@@ -32,6 +35,10 @@ const RETIRING_MODELS = ['Claude Sonnet 4.6', 'Claude Opus 4.6', 'GPT-OSS-120B']
 const PAID_CLAUDE_MODELS = ['Claude Sonnet 5.5', 'Claude Opus 5.5'];
 const MODEL_REMOVAL_AT = Date.parse('2026-11-02T00:00:00Z');
 const DUAL_WINDOW = 'Refreshes every 5 hours up to a weekly limit.';
+/** Observed on Google AI Pro only; other paid plans are not verified. */
+const PRO_GEMINI_MODELS = ['Gemini 4 Argon', 'Gemini 4 Hydrogen'];
+const PRO_POOLS =
+  'Gemini 4 Hydrogen counts against the Gemini Models limits; Gemini 4 Argon has its own weekly limit.';
 const NO_QUOTA = 'This plan does not include Antigravity coding quota.';
 
 interface PlanDefinition {
@@ -46,7 +53,7 @@ interface PlanDefinition {
 const PLANS = {
   free: {
     label: 'Free',
-    aliases: ['free-tier'],
+    aliases: ['free-tier', 'Antigravity Starter Quota'],
     quotaPolicy: 'weekly',
     summary: 'Weekly quota only; no 5-hour refresh.',
     models: 'consumer',
@@ -69,7 +76,7 @@ const PLANS = {
     label: 'Google AI Pro',
     aliases: ['pro', 'Gemini Code Assist in Google One AI Pro'],
     quotaPolicy: 'five-hour-weekly',
-    summary: DUAL_WINDOW,
+    summary: `${DUAL_WINDOW} ${PRO_POOLS}`,
     models: 'paid-consumer',
     creditsOverage: true,
   },
@@ -213,7 +220,11 @@ export function antigravityPlanDisplay(
       class: planClass,
       quotaPolicy: definition.quotaPolicy,
       summary: definition.summary,
-      models: [...(definition.models === 'none' ? [] : GEMINI_MODELS), ...thirdParty],
+      models: [
+        ...(definition.models === 'none' ? [] : GEMINI_MODELS),
+        ...(planClass === 'pro' ? PRO_GEMINI_MODELS : []),
+        ...thirdParty,
+      ],
       thirdPartyModels: thirdParty.length > 0,
       creditsOverage: definition.creditsOverage === true,
     },
