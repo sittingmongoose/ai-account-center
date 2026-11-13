@@ -138,7 +138,9 @@ export class RunsStore {
     if (full) this.lastFullAt = now;
     const files: ScanFile[] = [];
     const refused: Array<Scan['refused'][number] & { sha256?: string }> = [...scan.refused];
-    for (const file of scan.files) {
+    for (const [index, file] of scan.files.entries()) {
+      // A backfill hands over thousands of texts: let the server answer between batches.
+      if (index > 0 && index % 100 === 0) await new Promise((resolve) => setImmediate(resolve));
       const verdict = filtered(file.text, REPORT_SIZE_CAPS.run);
       if (verdict.ok) files.push(file);
       else
