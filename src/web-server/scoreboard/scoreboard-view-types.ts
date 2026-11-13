@@ -182,7 +182,7 @@ export interface ScoreboardUse {
 }
 
 /** Why a run was not scored: no model, no task type, or a model the catalog does not know. */
-export type UnscoredReason = 'no-model' | 'no-task-type' | 'unknown-model';
+export type UnscoredReason = 'no-model' | 'no-task-type' | 'unknown-model' | 'unknown-task-type';
 
 export interface UnscoredExample {
   /** The run id (safe for the page; never an account). */
@@ -196,16 +196,22 @@ export interface UnscoredExample {
 }
 
 /**
- * Runs the view read but never scored, by reason. Precedence is `no-model`, then `no-task-type`,
- * then `unknown-model`, so the three counts sum to `total`. `unknownModels` names each remaining
- * raw model id (sorted by runs desc, then id, at most 20) so new aliases can be added from here.
- * `examples` holds the newest few runs across every reason (at most 10, newest first).
+ * Runs that count toward no row and no verdict, by reason, so `total` is every run not scored.
+ * `unreadable` is the run files the runs reader refused (named in the runs Source, and refused in
+ * the readers check) with no earlier good copy to score. Every run it accepted has at most one
+ * reason, in this precedence: `no-model`, `no-task-type`, `unknown-model` (its model resolves to
+ * no catalog id), `unknown-task-type` (its task type is not in the catalog). The five counts sum
+ * to `total`. `unknownModels` names each raw unknown model id (sorted by runs desc, then id, at
+ * most 20) so new aliases can be added from here. `examples` holds the newest few accepted runs
+ * across every reason (at most 10, newest first; an unreadable file has no run to show).
  */
 export interface UnscoredSummary {
   total: number;
+  unreadable: number;
   noModel: number;
   noTaskType: number;
   unknownModel: number;
+  unknownTaskType: number;
   unknownModels: Array<{ id: string; runs: number }>;
   examples: UnscoredExample[];
 }

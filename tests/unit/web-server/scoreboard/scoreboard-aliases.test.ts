@@ -321,9 +321,9 @@ describe('the view with aliases', () => {
     expect(gemini?.inCatalog).toBe(true);
     const glm = build.find((row) => row.model === 'zai/glm-5.3');
     expect(glm?.inCatalog).toBe(true);
-    // The unknown spelling keeps its own row, labelled by its id, never guessed.
-    const future = build.find((row) => row.model === 'future-model-9.9');
-    expect(future).toMatchObject({ label: 'future-model-9.9', inCatalog: false });
+    // The unknown spelling is never guessed and forms no row: it is counted as not scored.
+    expect(build.some((row) => row.model === 'future-model-9.9')).toBe(false);
+    expect(build.every((row) => row.inCatalog)).toBe(true);
   });
 
   it('counts what was not scored by reason, with examples', async () => {

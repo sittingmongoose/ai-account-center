@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import fs from 'fs';
 import path from 'path';
-import { CatalogReader, type CatalogUse } from '../../../../src/web-server/scoreboard/catalog';
+import {
+  CatalogReader,
+  type CatalogState,
+  type CatalogUse,
+} from '../../../../src/web-server/scoreboard/catalog';
 import { RunsReader } from '../../../../src/web-server/scoreboard/runs-reader';
 import { judgeGroup } from '../../../../src/web-server/scoreboard/scoreboard-verdicts';
 import {
@@ -32,9 +36,12 @@ const EXAMPLE = path.resolve(
   '../../../../docs/agent-reports/examples/scoreboard-view.example.json'
 );
 
-async function fixtureView(): Promise<ScoreboardView> {
+async function fixtureView(
+  change: (root: string) => void = () => undefined
+): Promise<ScoreboardView> {
   const root = dirs.make('ccs-scoreboard-');
   writeScoreboardFixture(root, { now: NOW });
+  change(root);
   const options = { root: () => root, now: () => NOW };
   const catalog = new CatalogReader(options);
   const runs = new RunsReader(options);
@@ -208,14 +215,19 @@ describe('the fixture view', () => {
     ]);
   });
 
-  it('marks imported runs and labels a model the catalog does not know by its id', async () => {
+  it('marks imported runs and leaves a model the catalog does not know out of every row', async () => {
     const view = await fixtureView();
     const build = rows(view, 'pm-users', 'build');
     const sonnet = build.find((r) => r.model.includes('sonnet'));
     expect(sonnet?.observed?.imported).toBe(2);
     expect(sonnet?.observed?.runs[0].imported?.from).toContain('closure-reaudit');
-    const unlisted = build.find((r) => r.model === 'example-1');
-    expect(unlisted).toMatchObject({ label: 'example-1', inCatalog: false });
+    const all = view.uses.flatMap((use) => use.taskTypes.flatMap((type) => type.rows));
+    expect(all.some((row) => row.model === 'example-1')).toBe(false);
+    expect(all.every((row) => row.inCatalog)).toBe(true);
+    expect(view.unscored.unknownModels).toEqual([{ id: 'example-1', runs: 1 }]);
+    expect(view.sources[1].detail).toContain(
+      'Models in runs but not in the catalog, not scored: example-1 (1 run).'
+    );
   });
 
   it('lists the latest runs, newest first, in plain terms', async () => {
@@ -237,6 +249,123 @@ describe('the fixture view', () => {
     const text = `${JSON.stringify(view, null, 2)}\n`;
     if (process.env.UPDATE_SCOREBOARD_EXAMPLE) fs.writeFileSync(EXAMPLE, text);
     expect(text).toBe(fs.readFileSync(EXAMPLE, 'utf8'));
+  });
+});
+
+function emptyCatalog(): CatalogState {
+  return {
+    state: 'ok',
+    scannedAt: NOW,
+    missingFiles: [],
+    problems: [],
+    minRuns: 5,
+    models: [],
+    aliases: {},
+    effortSuffixes: [],
+    taskTypes: [],
+    measures: [],
+    uses: [],
+    benchmarks: [],
+  };
+}
+
+describe('what is not scored', () => {
+  // Review 1, M1: a model the catalog lacks was still judged in an unlisted row (Opus Recommended,
+  // GLM 5.3 Avoid against it) while the page called its runs "left out of every verdict".
+  it('leaves runs of a model the catalog lacks out of every row and verdict (the reviewer fixture)', async () => {
+    const listed = await fixtureView();
+    const opusRuns = listed.uses
+      .flatMap((use) => use.taskTypes.flatMap((type) => type.rows))
+      .filter((row) => row.model === 'anthropic/claude-opus-5-5');
+    expect(opusRuns.length).toBeGreaterThan(0);
+    const view = await fixtureView((root) => {
+      const file = path.join(root, 'v1', 'catalog', 'models.json');
+      const doc = JSON.parse(fs.readFileSync(file, 'utf8')) as { models: Array<{ model: string }> };
+      doc.models = doc.models.filter((model) => model.model !== 'anthropic/claude-opus-5-5');
+      fs.writeFileSync(file, JSON.stringify(doc));
+    });
+    const all = view.uses.flatMap((use) => use.taskTypes.flatMap((type) => type.rows));
+    expect(all.some((row) => /opus/.test(row.model))).toBe(false);
+    expect(all.every((row) => row.inCatalog)).toBe(true);
+    // Every ranked row is a catalog model judged against catalog models only.
+    for (const use of view.uses)
+      for (const type of use.taskTypes) {
+        const ranks = type.rows.flatMap((row) => (row.rank === null ? [] : [row.rank]));
+        expect(ranks).toEqual(ranks.map((_, i) => i + 1));
+      }
+    const opus = view.unscored.unknownModels.find((model) => /claude-opus-5-5/.test(model.id));
+    expect(opus?.runs).toBeGreaterThan(30);
+    expect(view.unscored.unknownModel).toBe(
+      view.unscored.unknownModels.reduce((sum, model) => sum + model.runs, 0)
+    );
+    const { unscored } = view;
+    expect(unscored.total).toBe(
+      unscored.unreadable +
+        unscored.noModel +
+        unscored.noTaskType +
+        unscored.unknownModel +
+        unscored.unknownTaskType
+    );
+  });
+
+  // Review 1, M2: the total counted only the runs the reader accepted.
+  it('counts the run files the reader refused and the task types the catalog lacks', async () => {
+    const view = await fixtureView((root) => {
+      const file = path.join(root, 'v1', 'catalog', 'task-types.json');
+      const doc = JSON.parse(fs.readFileSync(file, 'utf8')) as { taskTypes: Array<{ id: string }> };
+      doc.taskTypes = doc.taskTypes.filter((type) => type.id !== 'audit-read');
+      fs.writeFileSync(file, JSON.stringify(doc));
+    });
+    // The fixture's damaged file is refused by the reader: unreadable, and in the total.
+    expect(view.unscored.unreadable).toBe(1);
+    expect(view.unscored.unknownTaskType).toBeGreaterThan(0);
+    expect(view.sources[1].detail).toContain(
+      'Task types in runs but not in the catalog, not scored'
+    );
+    const { unscored } = view;
+    expect(unscored.total).toBe(
+      unscored.unreadable +
+        unscored.noModel +
+        unscored.noTaskType +
+        unscored.unknownModel +
+        unscored.unknownTaskType
+    );
+    expect(unscored.examples.some((example) => example.reason === 'unknown-task-type')).toBe(true);
+  });
+
+  it('counts a refused file once, and not when an earlier good copy of that run still scores', async () => {
+    const view = await fixtureView();
+    const base = { now: NOW, timeZone: 'UTC', root: '/reports', catalog: emptyCatalog() };
+    const kept = projectRun(runDoc('vm.a', 'A') as unknown as Record<string, unknown>, 'vm.a');
+    const runsState = {
+      state: 'ok' as const,
+      scannedAt: NOW,
+      writers: 1,
+      runs: [
+        { file: 'writers/vm.a/runs/2026-11-06/a.json', doc: kept, firstSeenAt: NOW, sha256: 'x' },
+      ],
+      problems: [
+        // a newer version of a run whose earlier copy still reads: scored from that copy
+        {
+          file: 'writers/vm.a/runs/2026-11-06/a.json',
+          reason: 'task.id is missing or not valid',
+          since: NOW,
+        },
+        {
+          file: 'writers/vm.a/runs/2026-11-06/b.json',
+          reason: 'task.id is missing or not valid',
+          since: NOW,
+        },
+        // limits and folders name no single run file
+        { file: 'limits/runs', reason: 'over the limit', since: NOW },
+        { file: 'writers/vm.a/runs/2026-11-07', reason: 'could not be listed', since: NOW },
+        // not a run file
+        { file: 'writers/vm.a/thread.json', reason: 'schema is missing or not valid', since: NOW },
+      ],
+    };
+    const counted = buildScoreboardView({ ...base, runs: runsState });
+    expect(counted.unscored.unreadable).toBe(1);
+    expect(view.unscored.unreadable).toBe(1);
   });
 });
 

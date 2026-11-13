@@ -6,6 +6,7 @@
  */
 import { normalizeModel } from './model-identity';
 import type { RunDoc } from '../status/report-schema';
+import type { RunsState } from './runs-reader';
 import type { CatalogMeasure, CatalogTaskType, CatalogUse } from './catalog';
 import {
   buildReviewIndex,
@@ -263,6 +264,19 @@ function bump(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1);
 }
 
+/**
+ * Run files the runs reader refused (each named in the runs Source and refused in the readers
+ * check) that left no good copy to score. A refused newer version of a run whose earlier copy
+ * still reads is scored from that copy and not counted; a folder the reader could not list is
+ * named in the Source but holds no countable file.
+ */
+function unreadableRuns(runs: RunsState): number {
+  const read = new Set(runs.runs.map((run) => run.file));
+  return runs.problems.filter(
+    (problem) => /^writers\/[^/]+\/runs\/.+\.json$/.test(problem.file) && !read.has(problem.file)
+  ).length;
+}
+
 export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
   const { catalog, runs, now } = inputs;
   // The alias table applies to every run read, history included, before scoring: a run keeps its
@@ -279,28 +293,42 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
       model: { ...doc.model, id: identity.id, effort: identity.effort, provider: null },
     };
   });
-  const knownModels = new Set(catalog.models.map((model) => model.model));
-  let noModel = 0;
-  let noTaskType = 0;
-  let unknownModel = 0;
+  const labels = new Map(catalog.models.map((model) => [model.model, model.label]));
+  const knownTypes = new Set(catalog.taskTypes.map((type) => type.id));
+  const counts = { noModel: 0, noTaskType: 0, unknownModel: 0, unknownTaskType: 0 };
   const unknownCounts = new Map<string, number>();
   const examplesAll: UnscoredExample[] = [];
+  // What the catalog Source names: task types not in the catalog (any model), and models not in
+  // it (under a catalog task type).
+  const missingTypes = new Map<string, number>();
+  const missingModels = new Map<string, number>();
+  // Only runs with a catalog model and a catalog task type form rows and verdicts; every other
+  // run is counted under one reason in `unscored` and left out, as the page says.
+  const byType = new Map<string, RunDoc[]>();
   for (let i = 0; i < rawDocs.length; i++) {
     const raw = rawDocs[i];
-    const resolved = docs[i].model.id;
-    const written = raw.model.id;
+    const run = docs[i];
+    const model = modelOf(run);
+    const type = raw.task.type;
+    if (model && type && !knownTypes.has(type)) bump(missingTypes, type);
+    else if (model && type && !labels.has(model)) bump(missingModels, model);
     let reason: UnscoredReason | null = null;
-    if (!written) {
-      noModel += 1;
-      reason = 'no-model';
-    } else if (!raw.task.type) {
-      noTaskType += 1;
-      reason = 'no-task-type';
-    } else if (resolved === null || !knownModels.has(resolved)) {
-      unknownModel += 1;
-      reason = 'unknown-model';
-      bump(unknownCounts, written);
+    if (!raw.model.id) reason = 'no-model';
+    else if (!type) reason = 'no-task-type';
+    else if (!model || !labels.has(model)) reason = 'unknown-model';
+    else if (!knownTypes.has(type)) reason = 'unknown-task-type';
+    if (reason === null && type) {
+      const held = byType.get(type);
+      if (held) held.push(run);
+      else byType.set(type, [run]);
+      continue;
     }
+    if (reason === 'no-model') counts.noModel += 1;
+    else if (reason === 'no-task-type') counts.noTaskType += 1;
+    else if (reason === 'unknown-model') {
+      counts.unknownModel += 1;
+      if (raw.model.id) bump(unknownCounts, raw.model.id);
+    } else counts.unknownTaskType += 1;
     if (reason)
       examplesAll.push({
         id: raw.id,
@@ -310,11 +338,19 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
         endedAt: raw.endedAt,
       });
   }
+  const unreadable = unreadableRuns(runs);
   const unscoredSummary: UnscoredSummary = {
-    total: noModel + noTaskType + unknownModel,
-    noModel,
-    noTaskType,
-    unknownModel,
+    total:
+      unreadable +
+      counts.noModel +
+      counts.noTaskType +
+      counts.unknownModel +
+      counts.unknownTaskType,
+    unreadable,
+    noModel: counts.noModel,
+    noTaskType: counts.noTaskType,
+    unknownModel: counts.unknownModel,
+    unknownTaskType: counts.unknownTaskType,
     unknownModels: [...unknownCounts]
       .map(([id, runs]) => ({ id, runs }))
       .sort((a, b) => b.runs - a.runs || a.id.localeCompare(b.id))
@@ -324,7 +360,6 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
       .slice(0, 10),
   };
   const index = buildReviewIndex(docs);
-  const labels = new Map(catalog.models.map((model) => [model.model, model.label]));
   const shared: Shared = {
     index,
     defs: new Map(catalog.measures.map((measure) => [measure.id, measure])),
@@ -332,22 +367,6 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
     benchmarkLabels: new Map(catalog.benchmarks.map((item) => [item.id, item.label])),
     minRuns: catalog.minRuns,
   };
-  const byType = new Map<string, RunDoc[]>();
-  const known = new Set(catalog.taskTypes.map((type) => type.id));
-  const missingTypes = new Map<string, number>();
-  const missingModels = new Map<string, number>();
-  for (const run of docs) {
-    const model = modelOf(run);
-    if (!model || !run.task.type) continue;
-    if (!known.has(run.task.type)) {
-      bump(missingTypes, run.task.type);
-      continue;
-    }
-    if (!labels.has(model)) bump(missingModels, model);
-    const held = byType.get(run.task.type);
-    if (held) held.push(run);
-    else byType.set(run.task.type, [run]);
-  }
   const base = new Map(
     catalog.taskTypes.map((type) => [type.id, baseRows(type, byType.get(type.id) ?? [], shared)])
   );

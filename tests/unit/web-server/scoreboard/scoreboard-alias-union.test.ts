@@ -116,6 +116,24 @@ describe('the published alias table', () => {
     expect(runs).toBe(35);
   });
 
+  // Review 1, L5: a catalog model whose own name ends in an effort word must have its spellings as
+  // explicit entries, so no reader (AAC or agent-report) can split the word off as an effort.
+  it('gives every catalog model whose name ends in an effort word explicit entries', () => {
+    const suffixes = [...new Set([...packaged.effortSuffixes, ...builtin.effortSuffixes])];
+    const named = models.filter((model) => {
+      const name = model.model.slice(model.model.indexOf('/') + 1);
+      return suffixes.some((suffix) => name.endsWith(suffix));
+    });
+    // Today only Qwen 3.8 Max; a new one fails here until its entries are added.
+    expect(named.map((model) => model.model)).toEqual(['alibaba/qwen3.8-max']);
+    for (const { model } of named) {
+      const name = model.slice(model.indexOf('/') + 1);
+      expect([name, packaged.aliases[name]]).toEqual([name, model]);
+      const spelled = Object.entries(packaged.aliases).filter(([, target]) => target === model);
+      expect(spelled.length).toBeGreaterThanOrEqual(3);
+    }
+  });
+
   it("keeps '-max' in Qwen's names: it is part of the name, never an effort", async () => {
     const published = await publishedTable();
     const resolve = (id: string, effort: string | null = null) =>

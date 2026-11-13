@@ -66,11 +66,15 @@ files and anything not `.json` are ignored, NUL bytes are refused, 32 KB cap, on
 dropped silently; a FIFO or a link in a run folder, or anything but a folder directly in `runs/`, is named too. A file over its cap takes nothing from the 64 MB. One scan reads at most 1,000 writer folders, 5,000 run files and 64 MB (over a limit the most recently changed
 `runs/` folders and the newest date folders are kept); the rest is named in the runs Source (`limits/run-writers`, `limits/runs`). More writers than the
 Status reader: an old writer's runs are still history. A review with no boolean `review.overturned`, or a negative
-`wallSeconds`, `cost.credits` or `cost.usd`, makes the file unreadable, by name. A run with no `model.id` or no `task.type` is not scored and is counted there too; a task type the
-catalog does not list is not scored and is named in the catalog Source (a model it does not list is scored, labelled by
-its id, `inCatalog: false`, and named there). The view's `unscored` counts these runs by reason; the page names them
-in one line under its head ("41 runs not scored: 12 unknown model, 23 no task type, 6 no model", hidden at none),
-which a tap, a click or a hover opens to the reasons and the unknown model ids with their runs.
+`wallSeconds`, `cost.credits` or `cost.usd`, makes the file unreadable, by name. A run with no `model.id` or no `task.type` is not scored and is counted there too. A task type
+the catalog does not list, and a model that resolves to no catalog id (after the alias table), are not scored either: they
+form no row and take no part in any verdict, and the catalog Source names them ("not scored"). So every row is a catalog
+model (`inCatalog` is always true). The view's `unscored` counts every run not scored, by one reason each: `unreadable`
+(run files the reader refused with no earlier good copy, the same files the runs Source names and the readers check
+refuses), then, for runs it read, `no-model`, `no-task-type`, `unknown-model`, `unknown-task-type`, in that precedence;
+the five sum to `total`. The page names them in one line under its head ("48 runs not scored: 4 unreadable, 12 unknown
+model, 3 unknown task type, 23 no task type, 6 no model", hidden at none), which a tap, a click or a hover opens to the
+reasons and the unknown model ids with their runs.
 
 ## Measures (v1)
 Computed per column (see the view) within one task type, from that column's runs only. `outcome` stays free text in the

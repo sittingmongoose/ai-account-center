@@ -163,6 +163,6 @@ export function catalogSource(
   if (missingTypes.size > 0)
     parts.push(`Task types in runs but not in the catalog, not scored: ${counted(missingTypes)}.`);
   if (missingModels.size > 0)
-    parts.push(`Models in runs but not in the catalog: ${counted(missingModels)}.`);
+    parts.push(`Models in runs but not in the catalog, not scored: ${counted(missingModels)}.`);
   return { ...base, state: 'ok', detail: `${parts.join(' ')}${notAdded}` } as const;
 }

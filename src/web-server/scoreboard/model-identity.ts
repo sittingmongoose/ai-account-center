@@ -24,15 +24,20 @@ function bare(
 }
 
 /**
- * Every written spelling maps to a canonical catalog id by exactly one rule, in this order:
+ * Every written spelling maps to a canonical catalog id by exactly one rule, in this order (the
+ * same as agent-report 1.6's lookup):
  * 1. the id itself is in the catalog;
  * 2. it is an explicit alias-table entry whose target is in the catalog;
- * 3. it carries one effort suffix (`-high`, ...) whose base resolves by rule 1, 2 or 4, and the
- *    suffix word moves to `effort` (an effort the run already names wins);
- * 4. it names no provider and exactly one catalog id ends with `/<id>`.
- * Nothing else resolves. The alias table itself is exact: a prefix (`codex/`, `zcode/`, ...) or a
- * harness form (`builtin:<plan>\<Model>`) resolves only when its full written string is an entry,
- * never by stripping the prefix. Effort suffixes come from the table's `effortSuffixes` and, for
+ * 3. it names no provider and exactly one catalog id ends with `/<id>`;
+ * 4. only then, it carries one effort suffix (`-high`, ...) whose base resolves by rule 1, 2 or 3,
+ *    and the suffix word moves to `effort` (an effort the run already names wins).
+ * Nothing else resolves. A model whose own name ends in an effort word (`qwen3.8-max`) resolves
+ * whole by rule 1-3; every such catalog model also has its spellings as explicit entries, so no
+ * reader splits them (checked by test). An unlisted `<x>-max` beside a listed `<x>` would read as
+ * `<x>` at effort `max`: list it, with its entries, before its runs arrive.
+ * The alias table itself is exact: a prefix (`codex/`, `zcode/`, ...) or a harness form
+ * (`builtin:<plan>\<Model>`) resolves only when its full written string is an entry, never by
+ * stripping the prefix. Effort suffixes come from the table's `effortSuffixes` and, for
  * callers without a table, from each model's catalog `efforts` (so `gemini-4-argon-high` still
  * moves its suffix). An alias whose target is not in the catalog resolves nothing.
  */
