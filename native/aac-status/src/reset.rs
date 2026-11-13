@@ -908,8 +908,10 @@ impl Store {
         }
         let before: Snapshot = serde_json::from_str(&before).map_err(|_| "shape")?;
         let g: Grant = serde_json::from_str(&g).map_err(|_| "shape")?;
+        // OpenAI itself answered `reset` or `alreadyRedeemed` for this attempt, now or earlier.
+        let provider_said_spent = previous_success || matches!(outcome, Outcome::Reset | Outcome::PriorSuccess);
         let verified = matches!(outcome, Outcome::Reset | Outcome::Ambiguous | Outcome::PriorSuccess)
-            && after.is_some_and(|a| verify(&before, &g, a, now));
+            && after.is_some_and(|a| verify(&before, &g, a, now, provider_said_spent));
         let (result, pending) = if verified {
             ("claimed", false)
         } else {
@@ -928,7 +930,7 @@ impl Store {
                 Outcome::NotSent => ("not-sent", false),
             }
         };
-        let provider_success = previous_success || matches!(outcome, Outcome::Reset | Outcome::PriorSuccess);
+        let provider_success = provider_said_spent;
         let changed = sql(tx.execute(
             "UPDATE attempts SET outcome=?,pending=?,provider_success=? WHERE key=? AND account=? AND pending=1",
             params![result, pending, provider_success, attempt, account],
@@ -1121,7 +1123,7 @@ impl Write {
         })
     }
 }
-fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64) -> bool {
+fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64, provider_said_spent: bool) -> bool {
     let after_order = after
         .read_ticket
         .as_ref()
@@ -1144,9 +1146,11 @@ fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64) -> bool {
     let spent = new.left.checked_add(1) == Some(g.left);
     if before.identity.provider == "codex" {
         // OpenAI chooses which limits a credit refills, and a credit can be used at any usage, so no window
-        // movement is required: the exact credit leaving the available set is the proof. Windows that fell are
-        // reported as evidence by the receipt.
-        return spent;
+        // movement is required: the exact credit `redeemed` is the proof. Windows that fell are reported as
+        // evidence by the receipt. A `redeeming` credit (same count, not usable) is still in progress; it counts
+        // only when OpenAI itself answered `reset` or `alreadyRedeemed` for this attempt.
+        let redeeming = new.left == g.left && !new.usable;
+        return spent || (provider_said_spent && redeeming);
     }
     spent
         && !g.clears.is_empty()

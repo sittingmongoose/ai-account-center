@@ -46,6 +46,10 @@ be provided by the browser. Responses and errors never echo private input.
 Claude also requires no affected window increasing and at least one affected
 percentage falling. Codex requires only the exact credit's decrement: OpenAI
 chooses which limits a credit refills, so window movement is evidence, not proof.
+Only a `redeemed` credit is a decrement. A `redeeming` credit keeps its count but
+cannot be used or sent; it confirms a claim only when OpenAI itself answered
+`reset` or `alreadyRedeemed` for that attempt. After a lost answer it stays
+`claimed-unconfirmed` and locked until a read says `redeemed`.
 The confirmation must render prepare's authoritative `account.label`, never a
 cached account card label. Provider `reset` without proof is
 `claimed-unconfirmed`; `providerSuccess` distinguishes this from a timeout.

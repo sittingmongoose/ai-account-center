@@ -30,6 +30,7 @@ fn wall() -> i64 {
 
 /// A saved profile whose fake app-server reports one credit and the 5-hour and weekly limits in `state.json`.
 /// `consume` answers `state.outcome`; a "reset" marks the credit redeemed and applies `state.refill`.
+/// `state.status`, when set, overrides the credit's status (for example `redeeming`).
 struct Fixture {
     _dir: tempfile::TempDir,
     home: PathBuf,
@@ -71,10 +72,11 @@ for line in sys.stdin:
  if method=='initialize': result={}
  elif method=='account/read': result={'account':{'type':'chatgpt','email':'synthetic-principal'}}
  elif method=='account/rateLimits/read':
+  status=st.get('status') or ('redeemed' if st['spent'] else 'available')
   result={'accountId':'synthetic-account',
    'rateLimits':{'primary':window(st['five'],st.get('fiveMins')),'secondary':window(st['week'],st.get('weekMins'))},
-   'rateLimitResetCredits':{'availableCount':0 if st['spent'] else 1,
-    'credits':[{'id':'credit_a','resetType':'codexRateLimits','status':'redeemed' if st['spent'] else 'available'}]}}
+   'rateLimitResetCredits':{'availableCount':1 if status=='available' else 0,
+    'credits':[{'id':'credit_a','resetType':'codexRateLimits','status':status}]}}
  elif method=='account/rateLimitResetCredit/consume':
   with open(os.path.join(home,'sent.jsonl'),'a') as f: f.write(json.dumps(r['params'])+'\n')
   if st['outcome']=='reset':
@@ -519,5 +521,91 @@ fn usage_moving_while_the_dialog_is_open_never_refuses_but_spend_safety_still_do
             "confirmation-invalid",
             "{case}"
         );
+    }
+}
+
+#[test]
+fn a_redeeming_credit_stays_unconfirmed_and_locked_until_a_read_says_redeemed() {
+    let f = Fixture::new();
+    // The consume answer is lost; OpenAI is still redeeming the credit when AAC reads again.
+    f.state(
+        json!({"five":2,"week":60,"fiveMins":300,"weekMins":10080,"spent":false,"outcome":"reset",
+        "refill":{"status":"redeeming"}}),
+    );
+    let mut s = f.store();
+    let attempt = nonce(3);
+    let (_, write, _) = reserve(&f, &mut s, &attempt);
+    f.send(&write);
+    let redeeming = f.read();
+    assert_eq!(
+        (redeeming.grants[0].left, redeeming.grants[0].usable),
+        (1, false),
+        "redeeming is in progress, not spent"
+    );
+    let r = s
+        .finish(ROUTE, &attempt, Outcome::Ambiguous, Some(&redeeming), wall(), None)
+        .unwrap();
+    assert_eq!(r["outcome"], "claimed-unconfirmed");
+    assert_eq!(r["verification"], "unconfirmed");
+    assert_eq!(r["pending"], true);
+    // Locked, and the redeeming credit itself can't be used or sent.
+    let inv = s.inventory(ROUTE, &f.read(), wall(), &nonce(5)).unwrap();
+    assert_eq!(inv["pendingAttempt"], attempt);
+    assert_eq!(inv["grants"][0]["claimable"], false);
+    assert_eq!(inv["grants"][0]["claimBlockedReason"], "grant-unavailable");
+    let key = inv["grants"][0]["grantKey"].as_str().unwrap().to_owned();
+    assert_eq!(s.gate(ROUTE, &key, wall(), true), Err("check-again-required"));
+    // Check again while it is still redeeming: still unconfirmed, still locked, nothing sent.
+    let r = s.check(ROUTE, &attempt, &f.read(), wall()).unwrap();
+    assert_eq!(
+        (r["outcome"].clone(), r["pending"].clone()),
+        (json!("claimed-unconfirmed"), json!(true))
+    );
+    assert_eq!(f.sent().len(), 1, "check never sends");
+    // A later read that says redeemed confirms it.
+    f.state(json!({"five":2,"week":0,"fiveMins":300,"weekMins":10080,"spent":true,"outcome":"reset"}));
+    let r = s.check(ROUTE, &attempt, &f.read(), wall()).unwrap();
+    assert_eq!(r["outcome"], "claimed");
+    assert_eq!(r["pending"], false);
+    assert_eq!(r["windows"], json!([{"id":"seven_day","usedPercent":0.0}]));
+    assert_eq!(s.pending(ROUTE, wall()).unwrap()["attemptKey"], Value::Null);
+    assert_eq!(f.sent().len(), 1);
+}
+
+#[test]
+fn a_redeeming_credit_confirms_only_when_openai_answered_this_attempt() {
+    for answered_now in [true, false] {
+        let f = Fixture::new();
+        f.state(
+            json!({"five":2,"week":60,"fiveMins":300,"weekMins":10080,"spent":false,"outcome":"reset",
+            "refill":{"status":"redeeming"}}),
+        );
+        let mut s = f.store();
+        let attempt = nonce(3);
+        let (_, write, began) = reserve(&f, &mut s, &attempt);
+        assert_eq!(f.send(&write)["outcome"], "reset");
+        if answered_now {
+            // OpenAI answered `reset` and the read shows the credit redeeming: today's handling, confirmed.
+            let r = s
+                .finish(ROUTE, &attempt, Outcome::Reset, Some(&f.read()), wall(), None)
+                .unwrap();
+            assert_eq!(r["outcome"], "claimed");
+            assert_eq!(r["providerSuccess"], true);
+        } else {
+            // OpenAI answered `reset`, but the read lagged (still available): unconfirmed with provider success.
+            let lagging = began.clone();
+            let r = s
+                .read_finish(ROUTE, &attempt, Outcome::Reset, Some(&lagging), wall(), None)
+                .unwrap();
+            assert_eq!(
+                (r["outcome"].clone(), r["providerSuccess"].clone()),
+                (json!("claimed-unconfirmed"), json!(true))
+            );
+            // Check again later sees it redeeming: the earlier `reset` answer for this attempt counts.
+            let r = s.check(ROUTE, &attempt, &f.read(), wall()).unwrap();
+            assert_eq!(r["outcome"], "claimed");
+        }
+        assert_eq!(s.pending(ROUTE, wall()).unwrap()["attemptKey"], Value::Null);
+        assert_eq!(f.sent().len(), 1);
     }
 }

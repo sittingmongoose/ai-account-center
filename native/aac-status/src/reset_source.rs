@@ -247,7 +247,9 @@ fn codex_inner(
                 g["resetType"].as_str().and_then(crate::reset_inventory::provider_words)
             },
             clears,
-            left: if g["status"] == "available" { 1 } else { 0 },
+            // `redeeming` is in progress, not a finished spend: it keeps its count but can't be used or sent, and
+            // only `redeemed` shows the decrement that confirms a claim.
+            left: if g["status"] == "redeemed" { 0 } else { 1 },
             expires_at_ms: g["expiresAt"].as_i64().and_then(|n| n.checked_mul(1000)),
             usable: g["status"] == "available",
         });
