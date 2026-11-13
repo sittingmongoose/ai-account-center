@@ -29,6 +29,7 @@ export {
  * Why a computer's scan failed, as one fixed word (the usage-report contract's `cause`):
  * - `ssh_unreachable`: ssh could not connect (exit 255 without an authentication refusal);
  * - `ssh_auth`: the computer refused this account's key;
+ * - `ssh_host_key`: this side refused the computer: its host key is unknown or changed (known_hosts);
  * - `runtime_missing`: no Python 3.9 or later; `runtime_missing:store_alias` when the only
  *   `python3.exe`/`python.exe` found is the Microsoft Store alias stub;
  * - `helper_failed`: the helper exited non-zero for another reason (its exit code is kept);
@@ -38,6 +39,7 @@ export {
 export type AnalyticsScanFailureCause =
   | 'ssh_unreachable'
   | 'ssh_auth'
+  | 'ssh_host_key'
   | 'runtime_missing'
   | 'runtime_missing:store_alias'
   | 'helper_failed'
@@ -47,6 +49,7 @@ export type AnalyticsScanFailureCause =
 export const ANALYTICS_SCAN_FAILURE_CAUSES: readonly AnalyticsScanFailureCause[] = [
   'ssh_unreachable',
   'ssh_auth',
+  'ssh_host_key',
   'runtime_missing',
   'runtime_missing:store_alias',
   'helper_failed',
@@ -98,12 +101,18 @@ export function classifyAnalyticsScanFailure(failure: {
   // cmd, 49 started directly. An older launcher still meets it.
   if (/Python was not found/i.test(stderr) || failure.exitCode === 9009)
     return 'runtime_missing:store_alias';
-  if (failure.exitCode === 255)
-    return /Permission denied|Too many authentication failures|Host key verification failed/i.test(
-      stderr
+  if (failure.exitCode === 255) {
+    // known_hosts refusing the computer is not the computer refusing this account's key.
+    if (
+      /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|No .* host key is known/i.test(
+        stderr
+      )
     )
+      return 'ssh_host_key';
+    return /Permission denied|Too many authentication failures/i.test(stderr)
       ? 'ssh_auth'
       : 'ssh_unreachable';
+  }
   return 'helper_failed';
 }
 

@@ -63,7 +63,22 @@ export interface AnalyticsHostFailure {
   cause: AnalyticsScanFailureCause | 'helper_damaged';
   exitCode: number | null;
   at: string;
+  /**
+   * The tools this failure stopped (the ones the failed calls carried). Tools not in it were read
+   * or skipped as recent and keep their own state. Absent (a failure saved before this field):
+   * every tool.
+   */
+  kinds?: AnalyticsRemoteKind[];
 }
+
+const REMOTE_KIND_NAMES: ReadonlySet<string> = new Set([
+  'claude',
+  'codex',
+  'omp',
+  'muse',
+  'zcode',
+  'antigravity',
+]);
 
 const HOST_FAILURE_CAUSES: ReadonlySet<string> = new Set([
   ...ANALYTICS_SCAN_FAILURE_CAUSES,
@@ -77,6 +92,8 @@ export function scanFailureText(cause: string | null | undefined): string {
       return 'the computer did not answer over ssh';
     case 'ssh_auth':
       return "the computer refused this account's ssh key";
+    case 'ssh_host_key':
+      return "the computer's ssh host key is not the one on record (unknown or changed), so ssh would not connect";
     case 'runtime_missing:store_alias':
       return 'no working Python 3.9 or later on this computer (only the Microsoft Store alias, which is not Python)';
     case 'runtime_missing':
@@ -206,6 +223,11 @@ function loadCache(file: string): RemoteCache {
             cause: failure.cause as AnalyticsHostFailure['cause'],
             exitCode: failure.exitCode ?? null,
             at: failure.at,
+            ...(Array.isArray(failure.kinds) &&
+            failure.kinds.length <= 6 &&
+            failure.kinds.every((kind) => REMOTE_KIND_NAMES.has(kind))
+              ? { kinds: [...failure.kinds] }
+              : {}),
           }
         : undefined;
     if (value.version !== CACHE_VERSION) {
@@ -372,10 +394,14 @@ function standingFailure(
   tool: AnalyticsRemoteKind,
   failure: AnalyticsHostFailure | undefined
 ): AnalyticsHostFailure | undefined {
-  if (failure) return failure;
+  // Only the tools a failure stopped: one read or skipped as recent keeps its own state.
+  const stopped = (entry: AnalyticsHostFailure) => !entry.kinds || entry.kinds.includes(tool);
+  if (failure) return stopped(failure) ? failure : undefined;
   const last = cached.lastFailure;
   const read = cached.kinds?.[tool]?.lastScanAt;
-  return last && (!read || Date.parse(last.at) > Date.parse(read)) ? last : undefined;
+  return last && stopped(last) && (!read || Date.parse(last.at) > Date.parse(read))
+    ? last
+    : undefined;
 }
 
 /**
@@ -815,6 +841,7 @@ export async function loadAnalyticsRemoteSources(
             cause: failure.damaged ? 'helper_damaged' : (failure.cause ?? 'helper_failed'),
             exitCode: failure.exitCode ?? null,
             at: new Date(now()).toISOString(),
+            kinds: [...kinds],
           };
           // Saved with the host, rows and prints untouched, so the failure is named until a scan
           // answers again, also after a restart. A damaged package fails every host alike and is
@@ -950,6 +977,7 @@ export async function loadAnalyticsRemoteSources(
                     cause: failure.cause ?? 'helper_failed',
                     exitCode: failure.exitCode ?? null,
                     at: scannedAt,
+                    kinds: [...failedKinds],
                   },
                 }
               : {}),

@@ -31,10 +31,15 @@ import {
   POSIX_EXTRACT,
 } from '../../../src/web-server/services/app-update-service';
 import {
+  HELPER_RUNTIME_MISSING_EXIT,
   analyticsHelperCommand,
   fixedAnalyticsRemoteAliases,
 } from '../../../src/web-server/services/analytics-remote-transport';
-import { NAS1_SSH_ALIAS, DASHBOARD_HOSTS, REMOTE_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
+import {
+  NAS1_SSH_ALIAS,
+  DASHBOARD_HOSTS,
+  REMOTE_HOSTS,
+} from '../../../src/web-server/services/dashboard-hosts';
 import { forbiddenWordsIn } from './nas1-no-switching';
 
 const directories: string[] = [];
@@ -343,10 +348,13 @@ describe('no account switching reaches Nas1', () => {
           {
             name: 'analytics helper',
             argv: ['--', fixedAnalyticsRemoteAliases().nas1!, analyticsHelperCommand('nas1')],
-            // The POSIX form, not the encoded PowerShell one.
+            // The POSIX form, not the encoded PowerShell one: the fixed probe loop that finds a
+            // Python 3.9+ and runs the streamed helper with it, nothing else.
             fixed: (command) =>
               command === analyticsHelperCommand('nas1') &&
-              command.startsWith("/usr/bin/python3 -c 'import sys,json,io;"),
+              command.startsWith("/bin/sh -c 'probe=") &&
+              command.includes(`exec "$p" -c '"'"'import sys,json,io;`) &&
+              command.endsWith(`exit ${HELPER_RUNTIME_MISSING_EXIT}'`),
           },
         ];
       const problems: string[] = [];

@@ -155,6 +155,17 @@ describe('scan failure causes', () => {
         stderr: 'user@x: Permission denied (publickey).',
       })
     ).toBe('ssh_auth');
+    // This side refusing the computer's host key is not the computer refusing this account's key.
+    expect(
+      classifyAnalyticsScanFailure({ exitCode: 255, stderr: 'Host key verification failed.' })
+    ).toBe('ssh_host_key');
+    expect(
+      classifyAnalyticsScanFailure({
+        exitCode: 255,
+        stderr:
+          '@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n@@@@@\nHost key verification failed.',
+      })
+    ).toBe('ssh_host_key');
     expect(
       classifyAnalyticsScanFailure({ exitCode: 86, stderr: 'aac-helper: runtime_missing\n' })
     ).toBe('runtime_missing');
@@ -214,6 +225,8 @@ describe('scan failure causes', () => {
       expect(((await run()) as AnalyticsRemoteTransportError).cause).toBe('ssh_unreachable');
       fakeSsh(255, 'user@alexis: Permission denied (publickey).');
       expect(((await run()) as AnalyticsRemoteTransportError).cause).toBe('ssh_auth');
+      fakeSsh(255, 'Host key verification failed.');
+      expect(((await run()) as AnalyticsRemoteTransportError).cause).toBe('ssh_host_key');
     });
   });
 });
@@ -300,6 +313,7 @@ describe('a standing scan failure (the Alexis PC case)', () => {
       cause: 'runtime_missing:store_alias',
       exitCode: 86,
       at: '2026-11-13T05:34:00.000Z',
+      kinds: expect.arrayContaining(KINDS),
     });
     expect(saved.rows).toHaveLength(1);
     const restarted = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
@@ -321,6 +335,67 @@ describe('a standing scan failure (the Alexis PC case)', () => {
       fs.readFileSync(path.join(cache, 'analytics-remote-v1', 'alexis.json'), 'utf8')
     );
     expect(cleared.lastFailure).toBeUndefined();
+  });
+
+  it('names a failure only on the tools it stopped, never on tools read a minute before', async () => {
+    const cache = path.join(dir, 'cache');
+    const hosts = async () => ({ mac: null, windows: null, nas1: null, alexis: 'alexis-windows' });
+    const codexPending = () => {
+      const body = {
+        version: 2,
+        truncated: false,
+        kinds: Object.fromEntries(
+          KINDS.map((kind) => [
+            kind,
+            kind === 'codex'
+              ? { state: 'pending', fingerprints: {} }
+              : { state: 'ok', fingerprints: {} },
+          ])
+        ),
+        rows: [],
+        srows: [],
+      };
+      return parseAnalyticsRemoteResponse(JSON.stringify(body));
+    };
+    let now = Date.parse('2026-11-13T10:00:00Z');
+    // 10:00: five tools read; Codex not reached in the time budget.
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      cacheDir: cache,
+      now: () => now,
+      hosts,
+      runHelper: async () => codexPending(),
+    });
+    // 10:01: only Codex is retried (the others are recent) and ssh fails.
+    now = Date.parse('2026-11-13T10:01:00Z');
+    const tried: string[][] = [];
+    const failed = await loadAnalyticsRemoteSources(MIN_DATE, {
+      cacheDir: cache,
+      now: () => now,
+      hosts,
+      runHelper: async (_alias, _host, request) => {
+        tried.push([...request.kinds]);
+        throw new AnalyticsRemoteTransportError(false, 'ssh_unreachable', 255);
+      },
+    });
+    expect(tried).toEqual([['codex']]);
+    const cell = (states: typeof failed.states, tool: string) =>
+      states.find((entry) => entry.host === 'alexis' && entry.tool === tool);
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(cache, 'analytics-remote-v1', 'alexis.json'), 'utf8')
+    );
+    expect(saved.lastFailure.kinds).toEqual(['codex']);
+    // The same at the collection and after a restart (the cache alone).
+    const restarted = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
+    for (const states of [failed.states, restarted.states]) {
+      expect(cell(states, 'codex')).toMatchObject({
+        state: 'scan_failed',
+        cause: 'ssh_unreachable',
+      });
+      for (const tool of ['claude', 'omp', 'muse', 'zcode', 'antigravity']) {
+        expect(cell(states, tool)?.state).toBe('no_usage');
+        expect(cell(states, tool)?.cause).toBeUndefined();
+      }
+    }
   });
 
   it('drops a damaged saved failure instead of trusting it', async () => {

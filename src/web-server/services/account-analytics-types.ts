@@ -139,7 +139,7 @@ export interface AccountAnalyticsSource {
   detail: string | null;
   /**
    * One fixed word, when the source is not read now: a scan failure cause (`ssh_unreachable`,
-   * `ssh_auth`, `runtime_missing`, `runtime_missing:store_alias`, `helper_failed`, `timeout`,
+   * `ssh_auth`, `ssh_host_key`, `runtime_missing`, `runtime_missing:store_alias`, `helper_failed`, `timeout`,
    * `bad_response`, `helper_damaged`) or `read_failed`.
    */
   cause?: string | null;
