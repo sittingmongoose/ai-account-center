@@ -57,6 +57,7 @@ import {
   type UsageWorkerResult,
 } from './worker-client';
 import { availableCpus } from './collector-concurrency';
+import { modelsDevRegistryIdentity } from '../models-dev/registry-cache';
 
 export type { CompactEntry, AccountActivityScanOptions, CodexPartitionFileResult };
 
@@ -402,6 +403,14 @@ function unresolvedCheckpointFiles(
   };
   if (kind === 'claude') for (const name of names) locate(name);
   const result: Array<{ file: string; stats: fs.Stats; unresolved: true }> = [];
+  // With every root listed, a checkpoint can only matter here if it has no recorded path (a legacy one, removed
+  // below): one of a listed log never does, and one that recorded its path is skipped while it stays unchanged
+  // (<source>.orphans.json in the passes folder lists those already read), instead of parsing every checkpoint on
+  // every pass.
+  const settled = unresolved.length === 0;
+  const orphanIndex = passFile(directory, '.orphans');
+  const knownOrphans = settled ? loadOrphanIndex(orphanIndex) : new Map<string, string>();
+  const seenOrphans = new Map<string, string>();
   const caches = fs.opendirSync(directory);
   try {
     let visited = 0;
@@ -412,10 +421,18 @@ function unresolvedCheckpointFiles(
     ) {
       if (!item.isFile() || !item.name.endsWith('.json')) continue;
       visited++;
+      if (settled && knownCaches.has(item.name)) continue;
       try {
         const cache = path.join(directory, item.name);
-        if (fs.statSync(cache).size > MAX_CACHE_BYTES) continue;
+        const cacheStats = fs.statSync(cache);
+        if (cacheStats.size > MAX_CACHE_BYTES) continue;
+        const stamp = `${cacheStats.size}:${cacheStats.mtimeMs}:${cacheStats.ino}`;
+        if (settled && knownOrphans.get(item.name) === stamp) {
+          seenOrphans.set(item.name, stamp);
+          continue;
+        }
         const value = JSON.parse(fs.readFileSync(cache, 'utf8')) as Checkpoint;
+        if (settled && typeof value.file === 'string') seenOrphans.set(item.name, stamp);
         if (kind === 'claude' && value.file === undefined && !legacyPaths.has(item.name)) {
           for (const entry of [
             ...value.rows.map((row) => row.entry),
@@ -475,7 +492,51 @@ function unresolvedCheckpointFiles(
   } finally {
     caches.closeSync();
   }
+  if (settled) saveOrphanIndex(orphanIndex, knownOrphans, seenOrphans);
   return result;
+}
+
+/** Checkpoints of logs no longer listed that recorded their path, by name, with their size, time and inode. */
+function loadOrphanIndex(file: string): Map<string, string> {
+  try {
+    if (fs.statSync(file).size > MAX_CACHE_BYTES) return new Map();
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      version?: number;
+      entries?: unknown;
+    };
+    if (value.version !== 1 || !Array.isArray(value.entries)) return new Map();
+    return new Map(
+      value.entries.filter(
+        (entry): entry is [string, string] =>
+          Array.isArray(entry) && typeof entry[0] === 'string' && typeof entry[1] === 'string'
+      )
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+function saveOrphanIndex(
+  file: string,
+  before: Map<string, string>,
+  after: Map<string, string>
+): void {
+  if (before.size === after.size && [...after].every(([name, stamp]) => before.get(name) === stamp))
+    return;
+  try {
+    if (!after.size) {
+      fs.rmSync(file, { force: true });
+      return;
+    }
+    const body = JSON.stringify({ version: 1, entries: [...after] });
+    if (Buffer.byteLength(body) > MAX_CACHE_BYTES) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const temporary = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, body, { mode: 0o600 });
+    fs.renameSync(temporary, file);
+  } catch {
+    /* Without the index every checkpoint is read, as before. */
+  }
 }
 /** The traversal bounds of filesUnder, for the T3 home walk (filesUnderT3Root). */
 function walkCeilings(limits: AccountActivityScanOptions['traversalLimits']): {
@@ -2640,6 +2701,10 @@ export type CodexPartitionRunner = (
 
 export interface CollectAccountActivityDeps {
   partitionRunner?: CodexPartitionRunner;
+  /** False runs the full pass even when the last clean one could be reused (tests compare the two). */
+  reuse?: boolean;
+  /** How close to its walk a log may have changed for a summary to be trusted; RACY_MS by default (tests: 0). */
+  racyMs?: number;
 }
 
 interface CodexFileTallies {
@@ -3295,6 +3360,126 @@ async function collectExperimentActivity(
 }
 
 /** No legacy all-event cache is loaded; compact per-file checkpoints survive workers. */
+/**
+ * The last clean pass of a source (account-activity-passes-v1/<source>.json, beside the source's checkpoint folder so
+ * nothing that lists checkpoints ever sees it): what it read (every log's
+ * path, device, inode, size, change and modification times), what priced it, and its result. A pass whose logs,
+ * request and price list are all unchanged returns that result without loading a checkpoint, reading a log or
+ * aggregating again: it is exactly what the full pass would compute (incremental-pass tests compare the two). Saved
+ * only after a complete pass with no failure, skipped line, unfinished record, unresolved root, legacy checkpoint or
+ * background read. A log changed within RACY_MS of the walk that recorded it, or a
+ * retained row the moving 31-day window would now drop, makes the next pass a full one.
+ */
+const PASS_SUMMARY_DIR = 'account-activity-passes-v1';
+const PASS_SUMMARY_VERSION = 1;
+
+/** A source's own file in the passes folder: `<source>.json` (its summary) or `<source>.orphans.json`. */
+function passFile(directory: string, suffix = ''): string {
+  return path.join(
+    path.dirname(path.dirname(directory)),
+    PASS_SUMMARY_DIR,
+    `${path.basename(directory)}${suffix}.json`
+  );
+}
+const RACY_MS = 2_000;
+
+interface PassSummary {
+  version: typeof PASS_SUMMARY_VERSION;
+  key: string;
+  manifest: string;
+  walkedAt: number;
+  minDate: number;
+  /** The oldest retained row's time; the result holds while the window's start stays at or before it. */
+  earliestRowAt: number | null;
+  /** The newest change of any log it read; a log changed close to the walk is not trusted to be settled. */
+  newestChangeAt: number;
+  result: AccountActivityScanResult;
+}
+
+function passKey(
+  request: Extract<UsageWorkerRequest, { kind: ActivityKind }>,
+  options: AccountActivityScanOptions
+): string {
+  const { activity: _activity, ...identity } = request as typeof request & { activity?: unknown };
+  const { minDate: _minDate, cacheDir: _cacheDir, budgetMs: _budgetMs, ...scan } = options;
+  return hash(
+    JSON.stringify([
+      PASS_SUMMARY_VERSION,
+      request.kind,
+      PARSER_VERSION[request.kind] ?? 0,
+      identity,
+      scan,
+      modelsDevRegistryIdentity(),
+    ])
+  );
+}
+
+function passManifest(files: ReadonlyArray<{ file: string; stats: fs.Stats }>): {
+  manifest: string;
+  newestChangeAt: number;
+} {
+  const lines = files
+    .map(
+      ({ file, stats }) =>
+        `${file}\0${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
+    )
+    .sort();
+  let newestChangeAt = 0;
+  for (const { stats } of files)
+    newestChangeAt = Math.max(newestChangeAt, stats.mtimeMs, stats.ctimeMs);
+  return { manifest: hash(lines.join('\n')), newestChangeAt };
+}
+
+function reusablePass(
+  directory: string,
+  key: string,
+  manifest: { manifest: string; newestChangeAt: number },
+  minDate: number,
+  racyMs = RACY_MS
+): AccountActivityScanResult | null {
+  try {
+    const file = passFile(directory);
+    if (fs.statSync(file).size > MAX_CACHE_BYTES) return null;
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as PassSummary;
+    if (
+      value.version !== PASS_SUMMARY_VERSION ||
+      value.key !== key ||
+      value.manifest !== manifest.manifest ||
+      !Number.isFinite(value.walkedAt) ||
+      // a log changed within the timestamp granularity of the walk could change again unseen
+      value.newestChangeAt >= value.walkedAt - racyMs ||
+      !Number.isFinite(value.minDate) ||
+      minDate < value.minDate ||
+      (value.earliestRowAt !== null && minDate > value.earliestRowAt) ||
+      !value.result ||
+      !Array.isArray(value.result.hourly) ||
+      !Array.isArray(value.result.session) ||
+      value.result.scan?.complete !== true
+    )
+      return null;
+    return { ...value.result, scan: { ...value.result.scan, readBytes: 0 } };
+  } catch {
+    return null;
+  }
+}
+
+function savePass(directory: string, summary: PassSummary): void {
+  const file = passFile(directory);
+  try {
+    const body = JSON.stringify(summary);
+    if (Buffer.byteLength(body) > MAX_CACHE_BYTES) {
+      fs.rmSync(file, { force: true });
+      return;
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const temporary = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(temporary, body, { mode: 0o600 });
+    fs.renameSync(temporary, file);
+  } catch {
+    /* Without a summary the next pass is a full one. */
+  }
+}
+
 export async function collectAccountActivity(
   request: Extract<UsageWorkerRequest, { kind: ActivityKind }>,
   options: AccountActivityScanOptions,
@@ -3342,6 +3527,7 @@ export async function collectAccountActivity(
       : collectZcodeAccountActivity(request.dbPath, options, directory, deadline);
   const issues = { failed: 0, unresolved: [] as string[] };
   const files: ActivityFile[] = [];
+  const walkedAt = Date.now();
   // Whether traversal saw any candidate file at all, before the mtime pre-filter
   // drops out-of-window ones. "Found files but all are stale" means no usage in
   // the window (a complete, empty scan), never an unavailable source.
@@ -3384,6 +3570,19 @@ export async function collectAccountActivity(
       issues.unresolved.push(root, ...roots.slice(rootIndex + 1));
       break;
     }
+  }
+  // Nothing changed since the last clean pass: its result is this pass's result.
+  const summaryKey = passKey(request, options);
+  const manifest = passManifest(files);
+  const clean =
+    !issues.failed &&
+    !issues.unresolved.length &&
+    !options.discoveryTruncated &&
+    files.length < MAX_FILES &&
+    deps?.reuse !== false;
+  if (clean) {
+    const reused = reusablePass(directory, summaryKey, manifest, options.minDate, deps?.racyMs);
+    if (reused) return reused;
   }
   const previousClaude =
     request.kind === 'claude' ? loadClaudeCoherent(directory, options.minDate) : undefined;
@@ -3653,7 +3852,7 @@ export async function collectAccountActivity(
   if (!rows.length && scanned.length > 0 && failed >= scanned.length && failed > 0)
     throw new CCSError('Native log sources could not be read');
   const { hourly, session } = aggregateRows(rows, source, request.kind);
-  return {
+  const result: AccountActivityScanResult = {
     daily: [],
     monthly: [],
     hourly,
@@ -3677,4 +3876,31 @@ export async function collectAccountActivity(
       ...(largeCodexReads.length ? { largeCodexReads } : {}),
     },
   };
+  let earliestRowAt: number | null = null;
+  for (const row of rows) {
+    const at = Date.parse(row.entry.timestamp);
+    if (Number.isFinite(at) && (earliestRowAt === null || at < earliestRowAt)) earliestRowAt = at;
+  }
+  // Any other pass leaves the last summary alone: its manifest (change times included) can no longer match.
+  if (
+    clean &&
+    result.scan?.complete === true &&
+    !legacy.length &&
+    !heldClaude.size &&
+    !unfinishedFiles &&
+    !stalledCompressedFiles &&
+    !terminalCompressedFiles &&
+    !largeCodexReads.length
+  )
+    savePass(directory, {
+      version: PASS_SUMMARY_VERSION,
+      key: summaryKey,
+      manifest: manifest.manifest,
+      walkedAt,
+      minDate: options.minDate,
+      earliestRowAt,
+      newestChangeAt: manifest.newestChangeAt,
+      result,
+    });
+  return result;
 }

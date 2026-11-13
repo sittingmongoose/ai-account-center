@@ -84,6 +84,19 @@ range with hashed keys and whole-session totals, and the original CCS anomaly
 rules. The provider filter is validated against the server's provider table;
 errors carry a stable `code`.
 
+A read is answered with the newest numbers at once. It starts (or joins) the
+computation of a new answer and waits for it at most 250 ms; when that is not
+enough, it gets the selection's last answer, kept in memory and saved under
+`account-analytics/analytics-views-v1.json` (atomic, owner-only, versioned, the
+eight most recent selections), with `stale: true` and `refreshing: true`, and the
+computation finishes behind it. Every answer carries `asOf`, when its numbers were
+computed; a restarted server answers its first read from the saved file. Only a
+selection with nothing saved waits for its first answer. A computation slower than
+a second is logged by phase (`analytics.read_timing`). The app frame keeps the last
+answers in the browser too (cleared at sign-out) and draws them at once on the next
+visit under an updating strip ("Updating · showing data from 2m ago") with the
+numbers dimmed until current ones land.
+
 Usage activity covers Claude Code, Codex, OMP, Muse, zcode and Antigravity
 (`scope: 'multi-host-cli'`), grouped under the dashboard provider that served
 each call ([attribution](../../src/web-server/services/account-analytics-attribution.ts)):
@@ -91,7 +104,11 @@ Claude Code, Codex, the Muse CLI and Antigravity are their own provider, OMP and
 record a route per call (Qwen, Z.ai, Kimi Code, OpenCode Go, Cursor, Muse Code,
 Antigravity), and a route no provider claims is `other`. Every model with usage
 is published. Ubuntu logs are parsed in bounded worker
-scans with per-file checkpoints; the Mac, Windows and Nas1 contribute per-model,
+scans with per-file checkpoints (each log is read from where the last pass
+stopped; a truncated, rotated or rewritten log is read again from its start).
+A source whose logs, request and price list are all unchanged since its last
+clean pass returns that pass's result without loading a checkpoint or
+aggregating again (`cache/account-activity-passes-v1/`); the Mac, Windows and Nas1 contribute per-model,
 per-hour aggregates through one packaged Python helper streamed over the
 existing ssh channel ([remote transport](../../src/web-server/services/analytics-remote-transport.ts)),
 never raw events. Nas1, a second Ubuntu computer, is scanned the same way: the
