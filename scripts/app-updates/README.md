@@ -1149,4 +1149,4 @@ returned by start. Lost start replies fail closed because T3 exposes no caller
 correlation key. Finally cleanup confirms revocation within five seconds;
 signals retain a one-second revoke budget and two-second exit watchdog.
 See [the session design notes](../../docs/app-update-short-sessions.md) for
-The owner's dated acceptance, source references and offline regressions.
+the owner's dated acceptance, source references and offline regressions.
