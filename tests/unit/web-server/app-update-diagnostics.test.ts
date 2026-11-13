@@ -152,6 +152,45 @@ describe('Update apps diagnostics', () => {
     );
   });
 
+  it('drops whole credential headers and npm auth lines at the boundary (fix round 1, B1)', () => {
+    const tail = [
+      'npm error //registry.example.test/:_auth=dXNlcjpmaXh0dXJl',
+      'Cookie: SID=fixtureCookieOne; HSID=fixtureCookieTwo',
+      'Set-Cookie: sid=abc123; Path=/; HttpOnly',
+      'error: login failed for --password hunter2secret --user bob',
+      'secret was wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY end',
+      'code=4/0AfJohXabc-def_ghi state=xyz',
+      'AKIAIOSFODNN7EXAMPLE',
+      String.raw`c:\users\Jane Doe\AppData\Roaming\npm`,
+      'ssh: connect to host: someone@macbook-pro',
+    ].join('\n');
+    const kept = normalizeDiagnostics({ cause: 'installer_failed', tail })!.tail!;
+    for (const secret of [
+      'dXNlcjpmaXh0dXJl',
+      'fixtureCookieOne',
+      'fixtureCookieTwo',
+      'abc123',
+      'hunter2secret',
+      'wJalrXUtnFEMI',
+      '0AfJohX',
+      'AKIAIOSFODNN7EXAMPLE',
+      'Doe',
+      'someone',
+    ])
+      expect(kept).not.toContain(secret);
+    expect(kept).toContain('npm error //registry.example.test/:_auth=<redacted>');
+    const ordinary =
+      'npm error code E401 zcode-acp-server@latest @brokkai/muse-acp@0.21.0 node_modules/zcode-acp-server/dist/cli.js';
+    expect(scrubText(ordinary)).toBe(ordinary);
+  });
+
+  it('scrubs a long unbroken run in linear time (fix round 1, B1)', () => {
+    const started = performance.now();
+    scrubText('a'.repeat(65536));
+    scrubText(('x'.repeat(2000) + '\n').repeat(40));
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   it('drops unknown causes, fields and shapes instead of passing them through', () => {
     expect(normalizeDiagnostics({ cause: 'because' })).toBeUndefined();
     expect(
@@ -184,6 +223,8 @@ describe('Update apps diagnostics', () => {
     const cases: Array<[string, UpdateAppId, string, UpdatePlatform, Record<string, unknown>?]> = [
       ['cursor_signin_needed', 'cursor-cli', 'action_required', 'windows'],
       ['policy_blocked', 'cursor-cli', 'action_required', 'alexis'],
+      ['cursor_shadowed', 'cursor-cli', 'action_required', 'mac'],
+      ['registry_mismatch', 't3-acp-adapters', 'failed', 'ubuntu'],
       ['wrong_prefix', 't3-acp-adapters', 'failed', 'mac'],
       ['prefix_not_writable', 't3-acp-adapters', 'action_required', 'mac'],
       ['t3_session_reply_lost', 'antigravity-acp', 'failed', 'windows'],

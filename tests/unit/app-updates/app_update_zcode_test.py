@@ -344,7 +344,7 @@ class ZCodeFixtures(unittest.TestCase):
             zrow = zcode.update_zcode(zcode.detect_zcode("ubuntu"), self.deadline)
             arow = zcode.update_adapters(adapters, self.deadline)
         self.assertEqual((zrow["status"], zrow["messageCode"], zrow["updateAttempted"]), ("failed", "unsupported", False))
-        self.assertEqual(runs, [[str(node), str(cli), "install", "--global", "--prefix", str(self.root / ".local"), "@brokkai/muse-acp@latest"]])
+        self.assertEqual(runs, [[str(node), str(cli), "install", "--global", "--prefix", str(self.root / ".local"), "@brokkai/muse-acp@0.10.1"]])
         self.assertEqual((arow["status"], arow["messageCode"], arow["updateAttempted"]), ("updated", "updated", True))
         self.assertEqual(self.parts(arow), [("muse-acp", "0.10.0", "0.10.1"), ("zcode-acp-server", "0.65.1", "0.65.1")])
 
@@ -575,7 +575,7 @@ class ZCodeFixtures(unittest.TestCase):
         node, cli = self.root / "node/bin/node", self.root / "node/lib/node_modules/npm/bin/npm-cli.js"
         with mock.patch.object(zcode, "adapter_root", return_value=root):
             install = zcode.detect_adapters("mac")
-            self.assertEqual((install.owners["muse-acp"].prefix, install.owners["muse-acp"].source), (prefix, "default"))
+            self.assertEqual([(owner.prefix, owner.source) for owner in install.owners["muse-acp"]], [(prefix, "default")])
             for outcome, expected in ((lambda argv, **kwargs: write_package(root, "@brokkai/muse-acp", "0.10.1"), ("updated", "updated")),
                                       (None, ("failed", "update_failed")), (common.UpdateFailure("timeout"), ("failed", "timeout"))):
                 write_package(root, "@brokkai/muse-acp", "0.10.0")
@@ -583,7 +583,7 @@ class ZCodeFixtures(unittest.TestCase):
                         mock.patch.object(zcode, "resolve_npm", return_value=(node, cli)), mock.patch.object(zcode, "scan") as scan:
                     row = zcode.update_adapters(install, self.deadline)
                     self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), (*expected, True))
-                    self.assertEqual(run.call_args.args[0], [str(node), str(cli), "install", "--global", "--prefix", str(prefix), "@brokkai/muse-acp@latest"])
+                    self.assertEqual(run.call_args.args[0], [str(node), str(cli), "install", "--global", "--prefix", str(prefix), "@brokkai/muse-acp@0.10.1"])
                     self.assertLessEqual(run.call_args.kwargs["timeout"], zcode.NPM_SECONDS)
                     scan.assert_not_called()  # macOS replaces files under running adapters safely.
         self.assertEqual(self.parts(row), [("muse-acp", "0.10.0", "0.10.0"), ("zcode-acp-server", "0.65.1", "0.65.1")])
@@ -732,7 +732,7 @@ class ZCodeFixtures(unittest.TestCase):
         install = self.adapters("windows", muse=installed["muse-acp"], acp=installed["zcode-acp-server"])
         prefix, runs = self.root / "roaming/npm", []
         def npm(argv, **kwargs):
-            name = next(name for name, package in zcode.PACKAGES.items() if argv[-1] == package + "@latest")
+            name = next(name for name, package in zcode.PACKAGES.items() if argv[-1].startswith(package + "@"))
             runs.append((argv, kwargs["timeout"]))
             outcome = (outcomes or {}).get(name, "updated")
             if isinstance(outcome, Exception):
@@ -756,8 +756,8 @@ class ZCodeFixtures(unittest.TestCase):
         row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"})
         prefix = str(self.root / "roaming/npm")
         self.assertEqual([argv for argv, _ in runs], [
-            [str(NODE), str(CLI), "install", "--global", "--prefix", prefix, "--script-shell", str(GIT_BASH), "@brokkai/muse-acp@latest"],
-            [str(NODE), str(CLI), "install", "--global", "--prefix", prefix, "--script-shell", str(GIT_BASH), "zcode-acp-server@latest"],
+            [str(NODE), str(CLI), "install", "--global", "--prefix", prefix, "--script-shell", str(GIT_BASH), "@brokkai/muse-acp@0.10.1"],
+            [str(NODE), str(CLI), "install", "--global", "--prefix", prefix, "--script-shell", str(GIT_BASH), "zcode-acp-server@0.65.1"],
         ])
         self.assertTrue(all(timeout <= zcode.NPM_SECONDS for _, timeout in runs))
         self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("updated", "updated", True))
@@ -769,7 +769,7 @@ class ZCodeFixtures(unittest.TestCase):
         self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("current", "current", False))
         self.assertEqual(runs, [])
         row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.1"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"})
-        self.assertEqual([argv[-1] for argv, _ in runs], ["@brokkai/muse-acp@latest"])
+        self.assertEqual([argv[-1] for argv, _ in runs], ["@brokkai/muse-acp@0.10.1"])
 
     def test_windows_zcode_postinstall_failure_leaves_muse_acp_updated(self):
         row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
@@ -781,7 +781,7 @@ class ZCodeFixtures(unittest.TestCase):
     def test_windows_running_muse_is_never_installed_while_zcode_still_updates(self):
         row, runs = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
                                          running=[self.muse_running()])
-        self.assertEqual([argv[-1] for argv, _ in runs], ["zcode-acp-server@latest"])
+        self.assertEqual([argv[-1] for argv, _ in runs], ["zcode-acp-server@0.65.1"])
         self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "in_use", True))
         self.assertEqual(row["parts"], [
             {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.0", "inUse": True},

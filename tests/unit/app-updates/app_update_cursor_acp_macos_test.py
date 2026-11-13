@@ -183,7 +183,7 @@ class AcpTests(Fixtures):
         return acp.detect_antigravity_acp(host), directory
 
     def fake_t3(self, install, phase="succeeded", offer="1.5.8", failure=None, installed=None, newest=None,
-                refresh=None, first_null=True, providers=None):
+                refresh=None, first_null=False, providers=None):
         import app_update_t3_rpc as rpc
         self.calls, self.auth, self.connections, self.ready = [], [], [], []
         self.failure = failure
@@ -195,10 +195,12 @@ class AcpTests(Fixtures):
                 "version": offer, "installedVersion": install.version, "canRemove": True, "message": None}
         owner = self
         self.t3_writing = False
+        # The enabled instance comes first by default, so a test reaches the behavior it is named for on any
+        # helper (main installed on the first installable instance); the instance test lists the disabled one first.
         providers = providers if providers is not None else [
             {"driver": "codex", "instanceId": "wrong", "enabled": True, "setup": {"canInstall": True}},
-            {"driver": "antigravity", "instanceId": "antigravity", "enabled": False, "setup": {"canInstall": True}},
             {"driver": "antigravity", "instanceId": "agy-custom-id", "enabled": True, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "antigravity", "enabled": False, "setup": {"canInstall": True}},
             {"driver": "antigravity", "instanceId": "agy-second-id", "enabled": True, "setup": {"canInstall": True}},
         ]
 
@@ -346,7 +348,13 @@ class AcpTests(Fixtures):
     # --- target and instance (lead fixes 1 and 2) ----------------------------------------------
     def test_installs_t3s_offer_on_an_enabled_instance_and_refreshes_every_enabled_one(self):
         install, old = self.runtime("windows", "1.3.0")
-        self.fake_t3(install, offer="1.5.8")
+        # T3 lists its disabled default instance first.
+        self.fake_t3(install, offer="1.5.8", providers=[
+            {"driver": "codex", "instanceId": "wrong", "enabled": True, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "antigravity", "enabled": False, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "agy-custom-id", "enabled": True, "setup": {"canInstall": True}},
+            {"driver": "antigravity", "instanceId": "agy-second-id", "enabled": True, "setup": {"canInstall": True}},
+        ])
         row = self.run_update(install)
         self.assertEqual((row["status"], row["previousVersion"], row["version"], row["messageCode"]),
                          ("updated", "1.3.0", "1.5.8", "antigravity_acp_updated"))
@@ -365,13 +373,13 @@ class AcpTests(Fixtures):
     def test_a_null_offer_waits_for_t3s_check_and_falls_back_to_the_cli_manifest(self):
         with self.isolated():
             install, _ = self.runtime("windows", "1.5.7", native=True)
-            self.fake_t3(install, offer=None, installed="1.5.8", newest="1.5.8")
+            self.fake_t3(install, offer=None, installed="1.5.8", newest="1.5.8", first_null=True)
             row = self.run_update(install)
             self.assertEqual((row["status"], row["version"], row["diagnostics"]["owner"]["target"]), ("updated", "1.5.8", "cli-manifest"))
         with self.isolated():
             shutil.rmtree(self.root / ".t3")
             install, _ = self.runtime("windows", "1.5.7", native=True)
-            self.fake_t3(install, offer=None, newest=None)
+            self.fake_t3(install, offer=None, newest=None, first_null=True)
             row = self.run_update(install)
             self.assertEqual((row["status"], row["messageCode"], row["diagnostics"]["reason"]), ("unknown", "antigravity_acp_offer_unknown", "no_offer"))
             self.assertEqual(self.started(), 0)
@@ -518,7 +526,8 @@ class AcpTests(Fixtures):
         install, _ = self.runtime("windows", "1.3.0")
         self.fake_t3(install, failure="auth")
         row = self.run_update(install)
-        self.assertEqual((row["status"], row["messageCode"], row["diagnostics"]["cause"]), ("failed", "t3_session_issue_unknown", "lost_session_reply"))
+        # The CLI failed (it did not answer with an empty reply): not a lost reply, and not "T3 reply lost".
+        self.assertEqual((row["status"], row["messageCode"], row["diagnostics"]["cause"]), ("failed", "t3_session_issue_unknown", "unknown"))
         self.assertEqual(sum("issue" in argv for argv in self.auth), 1)
         self.assertTrue(any("list" in argv for argv in self.auth))
         self.assertEqual(self.started(), 0)

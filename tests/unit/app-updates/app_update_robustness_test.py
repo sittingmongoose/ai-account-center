@@ -10,6 +10,7 @@ T3 missing and T3 not ready yet. Everything is offline: no real installer, T3 or
 
 import base64
 import contextlib
+import getpass
 import io
 import json
 import os
@@ -38,6 +39,11 @@ EVIDENCE = pathlib.Path(__file__).resolve().parent / "fixtures/update-all-2026-1
 
 def evidence(name):
     return (EVIDENCE / name).read_text(encoding="utf-8")
+
+
+def log_name(epoch, pid=30540):
+    stamp = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime(epoch)) + "-%03dZ" % int(epoch % 1 * 1000)
+    return "session-%s-%d-1.log" % (stamp, pid)
 
 
 def scope():
@@ -178,10 +184,11 @@ class CursorWindowsRegressions(Home):
 
     def test_401_found_only_in_cursors_own_session_log_is_still_sign_in_needed(self):
         self.layout()
-        logs = self.root / "tmp/cursor-agent-logs-user"
+        logs = self.root / "tmp" / ("cursor-agent-logs-" + getpass.getuser())
         def write_log():
             logs.mkdir(parents=True, exist_ok=True)
-            (logs / "session-2026-11-13T04-55-21-130Z-30540-1.log").write_text(evidence("cursor-owner-pc-session.log"))
+            # Cursor names each run's log by its start time (UTC) and process id.
+            (logs / log_name(time.time())).write_text(evidence("cursor-owner-pc-session.log"))
         fake = FakeWindows(self, policy_restricted=False, update_stderr="", write_log=write_log)
         with mock.patch.object(tempfile, "gettempdir", return_value=str(self.root / "tmp")):
             install, row = self.run_row(fake)
@@ -316,6 +323,7 @@ class AdapterOwnershipRegressions(Home):
             self.assertIn("install", argv)
             prefix = pathlib.Path(argv[argv.index("--prefix") + 1])
             packages = [argv[-1].rsplit("@", 1)[0]]
+            self.assertNotEqual(argv[-1].rsplit("@", 1)[1], "latest")
         for package in packages:
             name = next(key for key, value in zcode.PACKAGES.items() if value == package)
             write_package(prefix / "lib/node_modules", package, self.latest[name])
@@ -386,13 +394,13 @@ class AdapterOwnershipRegressions(Home):
                         mock.patch.object(zcode.shutil, "which", side_effect=lambda name: str(tool) if name == manager else None):
                     install = zcode.detect_adapters("ubuntu")
                     row = zcode.update_adapters(install, time.monotonic() + 600)
-                self.assertEqual(install.owners["zcode-acp-server"].manager, manager)
+                self.assertEqual([owner.manager for owner in install.owners["zcode-acp-server"]], [manager])
                 self.assertEqual(row["status"], "updated")
                 argv, env = runs[0]
                 if manager == "pnpm":
-                    self.assertEqual(argv, [str(tool), "add", "--global", "--global-dir", str(root.parent.parent), "zcode-acp-server@latest"])
+                    self.assertEqual(argv, [str(tool), "add", "--global", "--global-dir", str(root.parent.parent), "zcode-acp-server@0.84.3"])
                 else:
-                    self.assertEqual(argv, [str(tool), "add", "--global", "zcode-acp-server@latest"])
+                    self.assertEqual(argv, [str(tool), "add", "--global", "zcode-acp-server@0.84.3"])
                     self.assertEqual(env["BUN_INSTALL_GLOBAL_DIR"], str(root.parent))
                 shutil.rmtree(root.parents[2] if manager == "pnpm" else root.parents[2], ignore_errors=True)
 
@@ -404,7 +412,7 @@ class AdapterOwnershipRegressions(Home):
                 mock.patch.object(common, "_run_bounded", side_effect=AssertionError("nothing may run")):
             install = zcode.detect_adapters("mac")
             row = zcode.update_adapters(install, time.monotonic() + 600)
-        self.assertEqual(install.owners["zcode-acp-server"].manager, "other")
+        self.assertEqual([owner.manager for owner in install.owners["zcode-acp-server"]], ["other"])
         self.assertEqual((row["status"], row["messageCode"]), ("failed", "unsupported"))
 
     @unittest.skipIf(os.name == "nt", "the Mac fixture uses symlinks, which Windows creates only with Developer Mode")

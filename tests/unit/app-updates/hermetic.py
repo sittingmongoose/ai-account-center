@@ -8,16 +8,29 @@ home (pathlib.Path.home); a test that leaves home unpatched sees nothing.
 Tests of the discovery itself call REAL[...] with their own fixtures.
 """
 
+import atexit
+import os
 import pathlib
+import shutil
 import sys
+import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts/app-updates"))
+import app_update_common as common  # noqa: E402
 import app_update_cursor as cursor  # noqa: E402
 import app_update_zcode as zcode  # noqa: E402
+
+# Windows locations come from the environment, not from Path.home(): a test that patches only
+# home would otherwise find this machine's real T3 or npm folders. A test can still set its own.
+_ISOLATED = tempfile.mkdtemp(prefix="aac-hermetic-")
+atexit.register(shutil.rmtree, _ISOLATED, True)
+os.environ["LOCALAPPDATA"] = os.path.join(_ISOLATED, "Local")
+os.environ["APPDATA"] = os.path.join(_ISOLATED, "Roaming")
 
 REAL_HOME = pathlib.Path.home().resolve()
 # getattr: the same tests also run against an older helper (fail-before evidence) that lacks these.
 REAL = {
+    "common_effective_path": getattr(common, "effective_path", None),
     "effective_path": getattr(zcode, "effective_path", None),
     "candidate_roots": getattr(zcode, "candidate_roots", None),
     "path_copies": getattr(cursor, "path_copies", None),
@@ -37,6 +50,8 @@ def inside_home(path):
 
 if not getattr(zcode, "_hermetic", False):
     zcode._hermetic = True
+    if REAL["common_effective_path"]:
+        common.effective_path = lambda host: [folder for folder in REAL["common_effective_path"](host) if inside_home(folder)]
     if REAL["effective_path"]:
         zcode.effective_path = lambda host: [folder for folder in REAL["effective_path"](host) if inside_home(folder)]
     if REAL["candidate_roots"]:

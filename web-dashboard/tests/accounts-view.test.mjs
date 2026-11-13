@@ -2581,6 +2581,7 @@ test('update rows name their cause instead of "Failed" and show what ran, which 
       row('nas1', 'antigravity-acp', 'Antigravity ACP (T3)', 'action_required', { cause: 'signin_needed', reason: 'token_storage_change', owner: { runtime: 'harness', target: 't3-offer' } },
         { previousVersion: '1.4.5', version: '1.4.5', heldVersion: '1.5.8' }),
       row('ubuntu', 'omp', 'OMP', 'current', { cause: 'none', command: 'omp update' }),
+      row('nas1', 'cursor-cli', 'Cursor CLI', 'action_required', { cause: 'shadowed', reason: 'other_copy_first', owner: { executable: '~/.local/bin/cursor-agent', onPath: true, firstOnPath: '~/opt/bin/cursor-agent', firstOnPathVersion: '2026.01.01-old' } }),
       // An older helper's row: no diagnostics, the old words.
       { appId: 'muse-code', appLabel: 'Muse Code', platform: 'ubuntu', status: 'failed', previousVersion: null, version: null, message: 'The app update failed; check its supported installer.' },
     ],
@@ -2597,6 +2598,9 @@ test('update rows name their cause instead of "Failed" and show what ran, which 
   assert.equal(hold.result, 'Sign-in needed');
   assert.match(hold.tip, /1\.5\.8 is available · version 1\.4\.5 · Cause: a new sign-in is needed \(token_storage_change\)/);
   assert.match(hold.tip, /target from T3's offer/);
+  const shadow = item('nas1', 'Cursor CLI');
+  assert.equal(shadow.result, 'Another copy runs');
+  assert.match(shadow.tip, /~\/opt\/bin\/cursor-agent \(2026\.01\.01-old\) comes first on PATH/);
   const omp = item('ubuntu', 'OMP');
   assert.equal(omp.result, 'Already current');
   assert.doesNotMatch(omp.tip, /Cause:/);
