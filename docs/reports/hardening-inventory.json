@@ -549,15 +549,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 752,
+      "totalThrows": 754,
       "typedThrows": 222,
       "plainThrows": 69,
-      "otherThrows": 461,
-      "adoptionRatio": 0.2952,
+      "otherThrows": 463,
+      "adoptionRatio": 0.2944,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 387,
+          "count": 389,
           "typed": 156,
           "plain": 7
         },
@@ -631,8 +631,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 45,
-      "totalSourceFiles": 511,
-      "coverageRatio": 0.0881,
+      "totalSourceFiles": 512,
+      "coverageRatio": 0.0879,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "api",
@@ -660,7 +660,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 228,
+          "count": 229,
           "withLogger": 28
         },
         {
