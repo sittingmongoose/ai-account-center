@@ -118,7 +118,12 @@ pub fn compare(sort: SortKey, a: &RowKeys, b: &RowKeys) -> Ordering {
         SortKey::Runs => b.runs.cmp(&a.runs),
         SortKey::PassRate => known_first(a.pass_rate(), b.pass_rate(), |x, y| y.total_cmp(&x))
             .then(b.decided.unwrap_or(0).cmp(&a.decided.unwrap_or(0))),
-        SortKey::Cost => known_first(a.cost, b.cost, |x, y| x.total_cmp(&y)),
+        // Costs compare only within one basis (the same unit in the same job): rows group by
+        // basis, cheapest first within it; an unknown cost sorts last, never as zero.
+        SortKey::Cost => known_first(a.cost, b.cost, |x, y| {
+            let basis = |k: &RowKeys| (k.cost_unit.clone(), k.cost_job.clone());
+            basis(a).cmp(&basis(b)).then(x.total_cmp(&y))
+        }),
         SortKey::Recency => known_first(
             a.last_run_at.as_deref(),
             b.last_run_at.as_deref(),
@@ -851,6 +856,32 @@ mod tests {
             vec!["medium", "max", ""]
         );
         assert_eq!(sol.efforts[2].1, "Not recorded");
+    }
+
+    #[test]
+    fn cost_sorts_only_within_one_unit_and_job_and_unknown_is_last() {
+        let row = |cost: Option<f64>, unit: &str, job: &str| RowKeys {
+            cost,
+            cost_unit: cost.map(|_| unit.to_string()),
+            cost_job: cost.map(|_| job.to_string()),
+            ..RowKeys::default()
+        };
+        let usd_build = row(Some(0.5), "USD per task", "Build");
+        let usd_build_cheap = row(Some(0.2), "USD per task", "Build");
+        let credits_plan = row(Some(1.0), "credits per word", "Planning wizard");
+        let credits_plan_cheap = row(Some(0.1), "credits per word", "Planning wizard");
+        let unknown = row(None, "", "");
+        let mut rows = vec![
+            &usd_build,
+            &unknown,
+            &credits_plan,
+            &usd_build_cheap,
+            &credits_plan_cheap,
+        ];
+        rows.sort_by(|a, b| compare(SortKey::Cost, a, b));
+        let got: Vec<Option<f64>> = rows.iter().map(|r| r.cost).collect();
+        // Each basis together, cheapest first within it; 0.1 credits never outranks USD rows by value.
+        assert_eq!(got, vec![Some(0.2), Some(0.5), Some(0.1), Some(1.0), None]);
     }
 
     #[test]
