@@ -1631,7 +1631,8 @@ body { min-height: 100dvh; }
 .date-btn .tnum { font-family: var(--font); }
 .cal { display: grid; gap: 8px; }
 .cal-note { font-size: 12px; }
-.cal-quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.cal-quick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.cal-quick .btn { padding: 0 6px; white-space: nowrap; justify-content: center; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
 .cal-wd { text-align: center; padding: 4px 0; }
 .cal-day { height: 38px; border: 0; background: none; border-radius: 8px; font-size: 13px; color: var(--ink); display: grid; place-content: center; line-height: 1.05; }

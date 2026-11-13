@@ -302,7 +302,7 @@ export const tests = {
 		await t.step('a custom range from the calendar', async () => {
 			await t.page.click('.date-btn');
 			await t.visible('.cal', 'calendar open');
-			await t.page.click('.cal-quick button:has-text("Last 7 days")');
+			await t.page.click('.cal-quick button:has-text("7 days")');
 			await t.page.click('.cal-acts .btn.primary');
 			await t.until('custom range drawn', () => document.querySelector('.date-btn .on') !== null, null, { timeout: 15000 });
 			await t.equal('the controller holds a custom range', (await viewState(t))?.range, 'custom');

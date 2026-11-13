@@ -1193,7 +1193,8 @@ export function calendarView(A, R, now, monthGrid = true) {
   const lo = byDay.get(isoDay(R.a2)) ?? -1;
   const hi = byDay.get(isoDay(Math.max(R.a2, R.b - 1))) ?? lo;
   const firstN = cells.find(c => !c.off)?.n ?? 0, lastN = cells.findLast(c => !c.off)?.n ?? 0;
-  const quick = [['Today', 0], ['Last 7 days', 6], ['Last 30 days', 29], ['Last 90 days', 89]].map(([label, back]) => {
+  // short labels, so the four fit one row on a folded Duo
+  const quick = [['Today', 0], ['7 days', 6], ['30 days', 29], ['90 days', 89]].map(([label, back]) => {
     const want = addDays(last, -back);
     return { label, lo: want < first ? firstN : byDay.get(isoDay(want)) ?? firstN, hi: lastN };
   });

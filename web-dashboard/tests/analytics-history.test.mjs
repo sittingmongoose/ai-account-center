@@ -72,7 +72,8 @@ test('the picker spans months back to the oldest stored day, and refuses a day b
   // Monday-first weeks: August 2026 starts on a Saturday, so five blank cells come first
   assert.equal(cal.cells.filter(c => c.m === 0 && c.pad).length, 5);
   // quick picks stop at the oldest stored day
-  assert.equal(cal.quick.find(q => q.label === 'Last 90 days').lo, cal.firstN);
+  assert.deepEqual(cal.quick.map(q => q.label), ['Today', '7 days', '30 days', '90 days']);
+  assert.equal(cal.quick.find(q => q.label === '90 days').lo, cal.firstN);
   assert.match(cal.note, /back to Aug 20, 2026, across months/);
   const oldest = Date.parse('2026-08-20T10:00:00Z');
   const page = state();
