@@ -93,13 +93,18 @@ started, it gets the selection's last answer, kept in memory and saved under
 eight most recent selections), and the computation finishes behind it. A kept
 answer older than the refresh interval plus 30 s, or one from before a restart,
 is sent with `stale: true` and `refreshing: true` (the page reads again in 2 s).
-Every answer carries `asOf`, when its numbers were computed; a restarted server
-answers its first read from the saved file. Only a selection with nothing saved
-waits for its first answer. A computation slower than
+While the selection's newest finished computation failed, the kept answer is sent
+with `stale: true`, `refreshing: false` and `refreshError` instead, and the page
+says it could not update and keeps its usual pace. Kept answers are ordered by when
+their computation started, never by clock time, so a clock stepped back cannot
+freeze a selection on an older answer. Every answer carries `asOf`, when its numbers
+were computed; a restarted server answers its first read from the saved file. Only a
+selection with nothing saved waits for its first answer. A computation slower than
 a second is logged by phase (`analytics.read_timing`). The app frame keeps the last
 answers in the browser too (cleared at sign-out) and draws them at once on the next
-visit under an updating strip ("Updating · showing data from 2m ago") with the
-numbers dimmed until current ones land.
+visit under a one-line updating strip ("Updating · data from 2m ago", "Updating · 3 of
+11 tools", "Couldn't update · data from 25m ago"; the full sentence is its tip) with
+the numbers dimmed until current ones land.
 
 Usage activity covers Claude Code, Codex, OMP, Muse, zcode and Antigravity
 (`scope: 'multi-host-cli'`), grouped under the dashboard provider that served
