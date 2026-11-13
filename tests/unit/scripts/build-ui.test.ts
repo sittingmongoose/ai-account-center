@@ -8,6 +8,7 @@ import zlib from 'zlib';
 
 const {
   buildUi,
+  localRustBuildRefusal,
   readBuildCommit,
   assertSlintPin,
   assertLockedSlint,
@@ -840,3 +841,23 @@ it.skipIf(process.platform === 'win32')(
     );
   }
 );
+
+describe('local Rust build refusal', () => {
+  it('refuses only when AAC_NO_LOCAL_RUST_BUILD is exactly 1', () => {
+    expect(localRustBuildRefusal({})).toBeNull();
+    expect(localRustBuildRefusal({ AAC_NO_LOCAL_RUST_BUILD: '0' })).toBeNull();
+    expect(localRustBuildRefusal({ AAC_NO_LOCAL_RUST_BUILD: '1' })).toContain(
+      'AAC_NO_LOCAL_RUST_BUILD=1'
+    );
+  });
+
+  it('stops the build command before any toolchain runs', () => {
+    const script = path.join(import.meta.dir, '../../../scripts/build-ui.js');
+    const result = spawnSync(process.execPath, [script], {
+      env: { ...process.env, AAC_NO_LOCAL_RUST_BUILD: '1' },
+      encoding: 'utf8',
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('not compiled here');
+  });
+});

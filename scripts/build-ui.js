@@ -624,7 +624,25 @@ function buildUi(options = {}) {
   return manifest;
 }
 
+/**
+ * Opt-in refusal for machines that must not compile Rust/WebAssembly (a shared VM
+ * whose memory other work needs). Set AAC_NO_LOCAL_RUST_BUILD=1 there; nothing is
+ * keyed to a host name.
+ */
+function localRustBuildRefusal(env = process.env) {
+  if (env.AAC_NO_LOCAL_RUST_BUILD !== '1') return null;
+  return (
+    'This machine sets AAC_NO_LOCAL_RUST_BUILD=1, so the dashboard is not compiled here. ' +
+    'Build on a build host (the landing gate or the Windows build recipe) instead.'
+  );
+}
+
 if (require.main === module) {
+  const refusal = localRustBuildRefusal();
+  if (refusal) {
+    console.error(`[X] ${refusal}`);
+    process.exit(1);
+  }
   try {
     const manifest = buildUi();
     console.log(
@@ -640,6 +658,7 @@ if (require.main === module) {
 
 module.exports = {
   buildUi,
+  localRustBuildRefusal,
   readBuildCommit,
   assertSlintPin,
   assertLockedSlint,
