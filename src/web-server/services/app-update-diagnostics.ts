@@ -70,6 +70,8 @@ export interface AppUpdateDiagnostics {
 export const CAUSE_CODE_RULES: Record<string, { app: string; status: string; windows?: true }> = {
   cursor_signin_needed: { app: 'cursor-cli', status: 'action_required' },
   cursor_shadowed: { app: 'cursor-cli', status: 'action_required' },
+  mixed_ownership: { app: 't3-acp-adapters', status: 'skipped' },
+  pnpm_store_copy: { app: 't3-acp-adapters', status: 'skipped' },
   registry_mismatch: { app: 't3-acp-adapters', status: 'failed' },
   policy_blocked: { app: 'cursor-cli', status: 'action_required', windows: true },
   wrong_prefix: { app: 't3-acp-adapters', status: 'failed' },
@@ -171,12 +173,30 @@ function scrubPaths(text: string): string {
 
 /** The dashboard's own pass over helper text: control characters, credentials, people and other users' folders. */
 export function scrubText(value: string, lines = TAIL_LINES): string {
-  const candidates = value
-    .slice(-65536)
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .filter((line) => line.trim())
-    .map((line) => line.slice(0, SCRUB_LINE_CHARS));
+  const candidates: string[] = [];
+  let removing = false;
+  let carry = false;
+  // Scan complete physical lines before truncation: the marker may be outside the tail.
+  for (const raw of value.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = raw.replace(
+      /\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g,
+      ''
+    );
+    const probe = line.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+    if (
+      (removing && (carry || /^[\s\x00-\x1f\x7f-\x9f]/.test(line))) ||
+      /auth|token|passw(?:or)?d|passphrase|pwd|secret|cookie|bearer|api[_-]?key|credential|session|private[\s_-]?key/i.test(
+        probe
+      )
+    ) {
+      if (!removing) candidates.push('<line removed: may contain a credential>');
+      removing = true;
+      carry = /[\\,;:={\[(]$/.test(probe.trimEnd());
+      continue;
+    }
+    removing = carry = false;
+    if (line.trim()) candidates.push(line.slice(0, SCRUB_LINE_CHARS));
+  }
   let text = candidates.slice(-SCRUB_LINES).join('\n');
   text = text.replace(
     /\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g,

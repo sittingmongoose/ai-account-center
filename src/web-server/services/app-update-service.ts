@@ -712,6 +712,18 @@ function legacyRow(row: AppUpdateResult): AppUpdateResult {
     ].some((message) => message === row.message)
   )
     return { ...rest, message: LEGACY_MESSAGES.model_catalog_unrefreshed as string };
+  if (
+    [
+      MESSAGES.version_went_down,
+      MESSAGES.shared_updater_unsafe,
+      MESSAGES.mixed_ownership,
+      MESSAGES.pnpm_store_copy,
+    ].some((message) => message === row.message)
+  )
+    return {
+      ...rest,
+      message: row.status === 'skipped' ? MESSAGES.unsupported : MESSAGES.update_failed,
+    };
   if (row.appId === 't3-acp-adapters' && row.message === MESSAGES.wrong_prefix)
     return { ...rest, message: MESSAGES.update_failed };
   if (row.appId === 't3-acp-adapters' && row.message === MESSAGES.prefix_not_writable)

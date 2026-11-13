@@ -100,6 +100,34 @@ _SECRET_PATTERNS = (
     (re.compile(r"\b[0-9a-fA-F]{32,600}\b"), "<redacted>"),
     (re.compile(r"[A-Za-z0-9+_=-]{40,600}"), "<redacted>"),
 )
+# A line naming any credential marker goes whole, with the lines that continue it (indented, or
+# after a line ending in a separator), before any cut: no partial redaction can keep a tail.
+CREDENTIAL_LINE = "<line removed: may contain a credential>"
+_CREDENTIAL_MARKER = re.compile(r"(?i)auth|token|passw(?:or)?d|passphrase|pwd|secret|cookie|bearer|api[_-]?key"
+                                r"|credential|session|private[\s_-]?key")
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_INDENTED = re.compile(r"[\s\x00-\x1f\x7f-\x9f]")
+_CONTINUES = ("\\", ",", ";", ":", "=", "{", "[", "(")
+
+
+def _drop_credential_lines(lines):
+    """Drop credential carriers and continuations before taking any diagnostic tail."""
+    kept = []
+    removing = carry = False
+    for line in lines:
+        probe = _CONTROL.sub("", line)
+        continued = removing and (carry or bool(_INDENTED.match(line)))
+        if continued or _CREDENTIAL_MARKER.search(probe):
+            if not removing:
+                kept.append(CREDENTIAL_LINE)
+            removing = True
+            carry = probe.rstrip().endswith(_CONTINUES)
+            continue
+        removing = carry = False
+        kept.append(line)
+    return kept
+
+
 # Runs with '/' (base64 secrets) are redacted only when they look random, never ordinary paths.
 _SLASHED = re.compile(r"(?<![\w/+=-])[A-Za-z0-9+/=_-]{32,600}(?![\w/+=-])")
 
@@ -137,9 +165,9 @@ def scrub(text, lines=TAIL_LINES):
     """The bounded tail of command output with credentials, people and private paths removed."""
     if not isinstance(text, str) or not text:
         return ""
-    candidates = [line[:SCRUB_LINE_CHARS] for line in text[-65536:].replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
+    raw = (_ANSI.sub("", line) for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+    candidates = [line[:SCRUB_LINE_CHARS] for line in _drop_credential_lines(raw) if line.strip()]
     text = "\n".join(candidates[-SCRUB_LINES:])
-    text = _ANSI.sub("", text)
     text = "".join(char if char in "\n\t" or 32 <= ord(char) < 127 or ord(char) > 159 else " " for char in text)
     text = _scrub_paths(text)
     for pattern, replacement in _SECRET_PATTERNS:
@@ -266,7 +294,7 @@ _CODE_CAUSES = {
     "in_use": "in_use", "quit_first": "in_use", "busy": "in_use", "codex_busy": "in_use",
     "cursor_update_staged": "in_use", "package_in_use": "in_use",
     "timeout": "timeout", "check_timeout": "timeout", "host_timeout": "timeout", "t3_install_timeout": "timeout",
-    "t3_install_failed:installer": "installer_failed",
+    "t3_install_failed:installer": "installer_failed", "version_went_down": "installer_failed",
 }
 
 
@@ -849,8 +877,9 @@ def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False,
         if sink is not None:
             with contextlib.suppress(OSError, ValueError):
                 size = sink.seek(0, os.SEEK_END)
-                sink.seek(max(0, size - 65536))
-                errors_sink.append(sink.read(65536))
+                sink.seek(0)
+                # A truncated credential block cannot be scrubbed safely without its marker.
+                errors_sink.append(sink.read(65536) if size <= 65536 else b"<output omitted: diagnostic limit>")
             sink.close()
 
 
@@ -885,7 +914,8 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
         raise UpdateFailure("update_failed", reason="not_started") from None
     if returncode != 0:
         text = data.decode("utf-8", "replace")[-262144:] if errors else b"".join(stderr).decode("utf-8", "replace")
-        record.ran(argv, returncode, text if errors or text else data.decode("utf-8", "replace")[-65536:], label)
+        diagnostic = data.decode("utf-8", "replace") if errors or not text else text
+        record.ran(argv, returncode, diagnostic, label)
         raise UpdateFailure(output=text, exit_code=returncode)
     record.ran(argv, 0, label=label)
     if capture and len(data) > min(2 * 1024 * 1024, capture_limit):

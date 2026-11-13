@@ -589,17 +589,19 @@ class Rpc:
         try:
             self.socket = socket.create_connection((origin.hostname, origin.port), remaining(deadline, 10))
             self.stream = self.socket.makefile("rb")
+            self.handshake_deadline = min(deadline, time.monotonic() + 10)
             key = base64.b64encode(os.urandom(16)).decode("ascii")
             host = "[::1]" if origin.hostname == "::1" else origin.hostname
             request = ("GET /ws?orchestrationProtocol=2 HTTP/1.1\r\n"
                        f"Host: {host}:{origin.port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                        f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
                        f"Authorization: Bearer {token}\r\n\r\n")
+            self.socket.settimeout(self.read_timeout())
             self.socket.sendall(request.encode("ascii"))
-            status = self.stream.readline(8193).split()
+            status = self.read_line(8193).split()
             headers, size = {}, 0
             while True:
-                line = self.stream.readline(8193)
+                line = self.read_line(8193)
                 size += len(line)
                 if not line or len(line) > 8192 or size > 32768:
                     raise UpdateFailure("t3_unreachable")
@@ -614,6 +616,7 @@ class Rpc:
                     headers.get("upgrade", "").lower() != "websocket" or
                     "upgrade" not in headers.get("connection", "").lower()):
                 raise UpdateFailure("t3_unreachable")
+            self.handshake_deadline = None
         except BaseException:
             self.close()
             raise
@@ -625,7 +628,7 @@ class Rpc:
             self.socket.close()
 
     def frame(self, payload, opcode=1):
-        self.socket.settimeout(remaining(self.deadline))
+        self.socket.settimeout(self.read_timeout())
         mask = os.urandom(4)
         size = len(payload)
         header = bytes([0x80 | opcode, 0x80 | size]) if size < 126 else (
@@ -642,17 +645,36 @@ class Rpc:
         self.send({"_tag": "Request", "id": identifier, "tag": method, "payload": payload, "headers": []})
         return identifier
 
-    def read(self, size):
-        # ACP validation can be quiet for 90 seconds. A quiet stream must keep
-        # the full operation budget rather than fail at the CLI's 30s bound.
-        timeout = remaining(self.deadline, 900)
+    def read_timeout(self):
+        # Every receive gets the remaining absolute budget, including handshake and offer settle.
+        deadline = min(self.deadline, getattr(self, "handshake_deadline", None) or self.deadline)
+        timeout = remaining(deadline, 900)
         if self.settle is not None:
-            timeout = min(timeout, max(0.05, self.settle - time.monotonic()))
-        self.socket.settimeout(timeout)
-        data = self.stream.read(size)
-        if len(data) != size:
-            raise UpdateFailure("t3_unreachable")
-        return data
+            quiet = self.settle - time.monotonic()
+            if quiet <= 0:
+                raise TimeoutError("offer deadline")
+            timeout = min(timeout, quiet)
+        return timeout
+
+    def read(self, size):
+        data = bytearray()
+        while len(data) < size:
+            self.socket.settimeout(self.read_timeout())
+            # read1 makes at most one underlying receive; read(size) can wait on many trickled bytes.
+            chunk = self.stream.read1(min(65536, size - len(data)))
+            self.read_timeout()
+            if not chunk:
+                raise UpdateFailure("t3_unreachable")
+            data.extend(chunk)
+        return bytes(data)
+
+    def read_line(self, limit):
+        line = bytearray()
+        while len(line) < limit:
+            line.extend(self.read(1))
+            if line[-1:] == b"\n":
+                return bytes(line)
+        raise UpdateFailure("t3_unreachable")
 
     def messages(self):
         data = bytearray()

@@ -222,7 +222,9 @@ def restart_pending(t3_row):
 
 def replaced_version(t3_row):
     """The server version T3's own row put in place in this run (Mac and Windows reopen it at once)."""
-    if isinstance(t3_row, dict) and t3_row.get("status") == "updated" and isinstance(t3_row.get("version"), str):
+    if (isinstance(t3_row, dict) and t3_row.get("status") == "updated" and isinstance(t3_row.get("version"), str)
+            and any(isinstance(target, dict) and target.get("kind") == "desktop"
+                    for target in t3_row.get("restartTargets") or [])):
         return t3_row["version"]
     return None
 

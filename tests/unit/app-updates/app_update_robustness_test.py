@@ -177,12 +177,11 @@ class CursorWindowsRegressions(Home):
         install, row = self.run_row(fake)
         self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "cursor_signin_needed", True))
         self.assertEqual((row["diagnostics"]["cause"], row["diagnostics"]["exitCode"]), ("auth_required", 1))
-        self.assertIn("[unauthenticated]", row["diagnostics"]["tail"])
+        self.assertIn("<line removed: may contain a credential>", row["diagnostics"]["tail"])
         # Every user folder in the row is the placeholder, never an account name.
-        self.assertEqual(set(re.findall(r"Users(?:\\\\|\\|/)+([^\\/\"]+)", json.dumps(row))), {"<user>"})
-        self.assertIn("<user>", row["diagnostics"]["tail"])
+        self.assertTrue(set(re.findall(r"Users(?:\\\\|\\|/)+([^\\/\"]+)", json.dumps(row))).issubset({"<user>"}))
 
-    def test_401_found_only_in_cursors_own_session_log_is_still_sign_in_needed(self):
+    def test_401_in_an_unbound_session_log_leaves_signin_undetermined(self):
         self.layout()
         logs = self.root / "tmp" / ("cursor-agent-logs-" + getpass.getuser())
         def write_log():
@@ -192,8 +191,9 @@ class CursorWindowsRegressions(Home):
         fake = FakeWindows(self, policy_restricted=False, update_stderr="", write_log=write_log)
         with mock.patch.object(tempfile, "gettempdir", return_value=str(self.root / "tmp")):
             install, row = self.run_row(fake)
-        self.assertEqual((row["status"], row["messageCode"]), ("action_required", "cursor_signin_needed"))
+        self.assertEqual((row["status"], row["messageCode"]), ("failed", "update_failed"))
 
+        self.assertIn("signin_undetermined", row["diagnostics"]["notes"])
 
 class DiagnosticsRecordTests(unittest.TestCase):
     @staticmethod

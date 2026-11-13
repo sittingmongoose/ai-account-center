@@ -67,7 +67,7 @@ SESSION_MARKERS = ("zcode-acp-server/dist/cli.js", "resources/glm/zcode.cjs")
 # The adapter names t3-acp-update's own deferral looks for.
 ADAPTER_NAMES = ("muse-acp", "muse-acp.cjs")
 # npm's words for a file a running program holds: Windows refuses to replace or remove it.
-LOCKED = re.compile(r"\b(?:EPERM|EBUSY)\b")
+LOCKED = re.compile(r"\b(?:EPERM|EACCES|EBUSY)\b")
 # Rows that change nothing and tell the user what to do.
 ACTIONS = ("quit_first", "in_use")
 # The one t3-acp-update run of this helper process (one Update apps job); both Ubuntu rows share it.
@@ -259,8 +259,8 @@ def _shim_package(path):
     return None
 
 
-def t3_consumers():
-    """{adapter: [(node_modules, node), ...]}: every distinct copy T3's enabled ACP provider instances run.
+def t3_consumers(host=None):
+    """{adapter: [(node_modules, node, refusal), ...]}: copies T3's enabled instances run.
 
     Only config.commandPath and config.commandArgs are read: they are paths and flags. Environment values,
     which can be secrets, are never read. A missing or unreadable settings file names nothing."""
@@ -273,6 +273,7 @@ def t3_consumers():
     except (OSError, ValueError, AttributeError):
         return {}
     found = {}
+    on_path = path_consumers(host)
     for instance in (instances.values() if isinstance(instances, dict) else []):
         if not isinstance(instance, dict) or instance.get("enabled") is False:
             continue
@@ -280,13 +281,23 @@ def t3_consumers():
         command_path = config.get("commandPath") if isinstance(config.get("commandPath"), str) else None
         args = [arg for arg in (config.get("commandArgs") or [])[:16] if isinstance(arg, str)]
         node = pathlib.Path(command_path) if command_path and pathlib.PurePath(command_path).stem.casefold() == "node" else None
+        bare = pathlib.PurePath(command_path).stem.casefold() if command_path else None
+        if command_path and "/" not in command_path and "\\" not in command_path:
+            for name, bins in BINS.items():
+                if bare in bins:
+                    root = on_path.get(name)
+                    found.setdefault(name, []).append((root or adapter_root(host), node,
+                                                       None if root else "mixed_ownership"))
         for candidate in ([command_path] if command_path else []) + args:
             if len(candidate) > 1024 or not ("/" in candidate or "\\" in candidate):
                 continue
-            hit = package_in(candidate) if pathlib.Path(candidate).exists() else None
-            hit = hit or _shim_package(candidate)
-            if hit and not any(_real(root) == _real(hit[0]) for root, _ in found.get(hit[1], [])):
-                found.setdefault(hit[1], []).append((hit[0], node))
+            hit = package_in(candidate) or _shim_package(candidate)
+            if hit:
+                pinned_store = (".pnpm" in _lexical(candidate).parts or
+                                (".pnpm" in _real(candidate).parts and _modules_of(_lexical(candidate)) is None))
+                refusal = ("pnpm_store_copy" if pinned_store else
+                           "mixed_ownership" if not pathlib.Path(candidate).exists() else None)
+                found.setdefault(hit[1], []).append((hit[0], node, refusal))
     return found
 
 
@@ -384,12 +395,16 @@ def discover_owners(host):
     copies, and each is updated and verified), else the command on PATH, else the usual
     folder for this OS, else the first other copy found. Each owner records its source,
     so a row says why it updated (and verified) that copy."""
-    consumers, on_path = t3_consumers(), path_consumers(host)
+    consumers, on_path = t3_consumers(host), path_consumers(host)
     owners, copies = {}, {}
     for name in PACKAGES:
         copies[name] = copies_of(host, name)
         if name in consumers:
-            owners[name] = [owner_of_modules(root, "t3-config", node, host) for root, node in consumers[name]]
+            owners[name] = []
+            for root, node, refusal in consumers[name]:
+                owner = owner_of_modules(root, refusal or "t3-config", node, host)
+                if refusal or not any(_real(other.root) == _real(root) for other in owners[name]):
+                    owners[name].append(owner)
         elif name in on_path:
             owners[name] = [owner_of_modules(on_path[name], "path", host=host)]
         elif (adapter_root(host) / PACKAGES[name] / "package.json").is_file():
@@ -487,7 +502,7 @@ def _read_metadata_file(url, prefix, limit, destination, timeout):
     request = urllib.request.Request(url, headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
     try:
         with urllib.request.urlopen(request, timeout=min(20, timeout)) as response:
-            if not response.geturl().startswith(prefix):
+            if response.status != 200 or not response.geturl().startswith(prefix):
                 raise UpdateFailure()
             raw = response.read(limit + 1)
         if len(raw) > limit:
@@ -769,10 +784,26 @@ def zcode_ubuntu(install, deadline, phase, state):
         raise UpdateFailure("unsupported")
     if t3_sessions(scan("ubuntu")):
         raise UpdateFailure("in_use")
+    # The shared unit also touches both adapters. Do not let this row lower a sibling.
+    modules = pathlib.Path.home() / ".local/lib/node_modules"
+    siblings = {name: package_version(modules, name) for name in PACKAGES
+                if (modules / PACKAGES[name] / "package.json").exists()}
+    offers = {name: registry_version(name) for name in siblings}
+    if any(not old or not offers[name] or npm_version_key(offers[name]) < npm_version_key(old)
+           for name, old in siblings.items()):
+        return result("zcode", "ubuntu", "skipped", before, before, install.manager, "shared_updater_unsafe")
     phase("updating")
     code = run_unit(deadline)
     state["attempted"] = True
     after = installed_version(install)
+    for name, old in siblings.items():
+        current = package_version(modules, name)
+        if current is None:
+            raise UpdateFailure("version_unknown")
+        if npm_version_key(current) < npm_version_key(old):
+            raise UpdateFailure("version_went_down")
+    if after and version_tuple(after) < version_tuple(before):
+        raise UpdateFailure("version_went_down")
     if after and version_tuple(after) > version_tuple(before):
         return result("zcode", "ubuntu", "updated", before, after, install.manager, attempted=True)
     if not after:
@@ -922,7 +953,7 @@ def update_zcode(install, deadline, phase=None):
             return result("zcode", install.platform, "action_required", before, before, install.manager, code, state["attempted"])
         # Report the bits actually installed after any rollback, never the old snapshot.
         after = installed_version(install) if state["attempted"] else before
-        status = "restart_failed" if after and before and after != before else "failed"
+        status = "restart_failed" if code != "version_went_down" and after and before and after != before else "failed"
         return result("zcode", install.platform, status, before, after, install.manager,
                       "update_failed" if code == "download_blocked" else code, state["attempted"])
 
@@ -1009,10 +1040,8 @@ def writable(owner, host):
     return True
 
 
-# npm's words when the folder itself refuses the write (an ACL or a system folder): EPERM or EACCES on
-# creating something. Removing or renaming a file a program holds (rmdir, unlink, rename) or EBUSY is a lock.
+# A syscall name is not lock evidence: ACLs can deny rename/unlink even when the parent is writable.
 DENIED = re.compile(r"\b(?:EPERM|EACCES)\b")
-LOCK_SYSCALL = re.compile(r"\bEBUSY\b|\bsyscall (?:rmdir|unlink|rename|scandir|lstat)\b|(?:EPERM|EACCES)[^\n]{0,60}, (?:rmdir|unlink|rename) ")
 
 
 def install_owned(install, deadline, phase, state, plan, held, targets, busy=frozenset()):
@@ -1045,7 +1074,7 @@ def install_owned(install, deadline, phase, state, plan, held, targets, busy=fro
         except UpdateFailure as error:
             # npm's output is read here only, never shown in full.
             if install.platform == "windows" and locked_here(error.output, name):
-                if name in busy or not DENIED.search(error.output or "") or LOCK_SYSCALL.search(error.output or ""):
+                if name in busy or (not DENIED.search(error.output or "") and "EBUSY" in error.output):
                     held.add(name)
                 else:
                     failed[name] = "prefix_not_writable"
@@ -1078,6 +1107,16 @@ def adapters_settle(install, behind, targets, failed, held, attempted, unit_code
     before = install.before or {}
     changed = set()
     held = set(held)
+    # Check all snapshotted owners before success shortcuts, including siblings outside the plan.
+    for name, originals in before.items():
+        versions = now.get(name, [])
+        if any(old is not None and new is not None and npm_version_key(new) < npm_version_key(old)
+               for old, new in zip(originals, versions)):
+            diagnostics().blame("installer_failed", "version_went_down")
+            return adapters_row(install, "failed", after, "version_went_down", attempted, held)
+        if len(versions) != len(originals) or any(old is not None and new is None
+                                                 for old, new in zip(originals, versions)):
+            failed[name] = "version_unknown"
     for name in behind:
         versions = now.get(name, [])
         reached = [version is not None and npm_version_key(version) >= npm_version_key(targets[name]) for version in versions]
@@ -1089,11 +1128,7 @@ def adapters_settle(install, behind, targets, failed, held, attempted, unit_code
         if name in held or name in failed:
             continue
         moved = [old != new for old, new in zip(before.get(name, []), versions)]
-        if any(moved) and any(new is not None and old is not None and npm_version_key(new) < npm_version_key(old)
-                              for old, new in zip(before.get(name, []), versions)):
-            failed[name] = "registry_mismatch"
-            diagnostics().blame("installer_failed", "registry_older")
-        elif any(moved):
+        if any(moved):
             failed[name] = "registry_mismatch"
             diagnostics().blame("installer_failed", "registry_other")
         elif moved_elsewhere(install, name):
@@ -1128,13 +1163,26 @@ def unit_owns(install):
 def adapters_ubuntu(install, deadline, phase, state, plan, targets):
     behind = list(dict.fromkeys(name for name, _ in plan))
     busy = lambda: bool(busy_packages(scan("ubuntu"), install.owners))
-    if acp_unit_present() and unit_owns(install):
+    unit_safe = (set(install.owners or {}) == set(PACKAGES) and
+                 all(targets.get(name) and all(npm_version_key(targets[name]) >= npm_version_key(old)
+                                              for old in versions)
+                     for name, versions in (install.before or {}).items()))
+    if acp_unit_present() and unit_owns(install) and unit_safe:
         # The zcode row may already have run t3-acp-update in this job; it never runs twice.
         if "code" not in UBUNTU_RUN and busy():
             raise UpdateFailure("in_use")
+        desktop = detect_zcode("ubuntu")
+        if desktop is not None and not desktop.version:
+            return adapters_row(install, "skipped", code="shared_updater_unsafe")
         phase("updating")
         code = run_unit(deadline)
         state["attempted"] = True
+        if desktop is not None:
+            after_desktop = installed_version(desktop)
+            if after_desktop is None:
+                return adapters_row(install, "failed", owned_parts(install), "version_unknown", True)
+            if version_tuple(after_desktop) < version_tuple(desktop.version):
+                return adapters_row(install, "failed", owned_parts(install), "version_went_down", True)
         return adapters_settle(install, behind, targets, {}, set(), True, code, busy)
     # No unit, or T3 runs a copy the unit does not install: install there directly.
     diagnostics().note("direct_install")
@@ -1171,6 +1219,11 @@ def update_adapters(install, deadline, phase=None):
     phase = phase or (lambda name: None)
     state, behind = {"attempted": False}, []
     try:
+        for owners in (install.owners or {}).values():
+            for owner in owners:
+                if owner.source in ("mixed_ownership", "pnpm_store_copy"):
+                    diagnostics().note(owner.source)
+                    return adapters_row(install, "skipped", code=owner.source)
         present = [name for name in PACKAGES if name in (install.owners or {})]
         versions = install.before or owner_versions(install)
         if not present or not all(all(versions.get(name, [None])) for name in present):

@@ -128,8 +128,10 @@ class T3Fixtures(unittest.TestCase):
         self.assertEqual(install.path, launcher)
         self.assertEqual(install.probe, "timeout")
 
+    @mock.patch("app_update_zcode._metadata_command", new=hermetic.metadata_inline)
     def test_release_selection_ignores_drafts_and_stable_and_uses_full_nightly(self):
         response = mock.MagicMock()
+        response.status = 200
         response.geturl.return_value = t3.RELEASES
         response.read.return_value = json.dumps([
             {"tag_name": "v" + OLD}, {"tag_name": "v" + NEW},
@@ -138,11 +140,13 @@ class T3Fixtures(unittest.TestCase):
         with mock.patch.object(t3.urllib.request, "urlopen", return_value=contextlib.nullcontext(response)):
             self.assertEqual(t3.latest_release(), NEW)
 
+    @mock.patch("app_update_zcode._metadata_command", new=hermetic.metadata_inline)
     def test_release_lookup_uses_small_bounded_pages_and_checks_later_pages(self):
         self.assertTrue(t3.RELEASES.endswith("per_page=20"))
         responses = []
         for page, rows in ((1, [{"tag_name": "v1.0.0"}]), (2, [{"tag_name": "v" + NEW}])):
             response = mock.MagicMock()
+            response.status = 200
             response.geturl.return_value = t3.RELEASES + ("&page=2" if page == 2 else "")
             response.read.return_value = json.dumps(rows).encode()
             responses.append(contextlib.nullcontext(response))

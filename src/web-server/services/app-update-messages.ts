@@ -7,6 +7,14 @@ export const MESSAGES = {
   unsupported: 'This installation has no supported unattended updater.',
   restart_context: 'A running instance cannot be restarted safely; no update was attempted.',
   update_failed: 'The app update failed; check its supported installer.',
+  shared_updater_unsafe:
+    'Skipped: the shared updater could lower another installed package. Update each package separately.',
+  version_went_down:
+    'The installed version decreased; the update could not be verified as an upgrade.',
+  mixed_ownership:
+    'Skipped: the adapter copies T3 runs could not be resolved unambiguously. Check its configured commands and PATH.',
+  pnpm_store_copy:
+    'Skipped: T3 runs a pnpm store copy; update it with pnpm and select its global command in T3.',
   version_unknown: 'The installed version could not be verified after the update.',
   restart_failed: 'The update finished, but an original instance could not restart.',
   restart_not_running: 'Updated, but Codex did not restart. Start it again when you need it.',

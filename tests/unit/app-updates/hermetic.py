@@ -58,3 +58,8 @@ if not getattr(zcode, "_hermetic", False):
         zcode.candidate_roots = lambda host: [root for root in REAL["candidate_roots"](host) if inside_home(root)]
     if REAL["path_copies"]:
         cursor.path_copies = lambda platform: [copy for copy in REAL["path_copies"](platform) if inside_home(copy)]
+
+
+def metadata_inline(url, prefix, limit, destination, timeout):
+    """Exercise metadata parsing with the test's urlopen fake; never launch a real network child."""
+    return zcode._read_metadata_file(url, prefix, limit, destination, timeout)

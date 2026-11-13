@@ -114,7 +114,7 @@ describe('Update apps diagnostics', () => {
         onPath: true,
         copies: 1,
       },
-      tail: '{"event":"global.main.promiseCatch","level":"ERROR","data":{"message":"Update failed: [unauthenticated] Error"}}',
+      tail: '<line removed: may contain a credential>',
     });
     const adapters = normalizeAppUpdateRow(WRONG_PREFIX, 't3-acp-adapters', 'mac');
     expect(adapters.message).toBe(MESSAGES.wrong_prefix);
@@ -145,7 +145,7 @@ describe('Update apps diagnostics', () => {
       'A'.repeat(48),
     ])
       expect(kept).not.toContain(secret);
-    expect(kept).toContain('npm error 401 Unauthorized');
+    expect(kept).toContain('<line removed: may contain a credential>');
     expect(kept).toContain('C:\\Users\\<user>\\AppData');
     expect(scrubText('zcode-acp-server@0.84.3 installed')).toBe(
       'zcode-acp-server@0.84.3 installed'
@@ -178,7 +178,7 @@ describe('Update apps diagnostics', () => {
       'someone',
     ])
       expect(kept).not.toContain(secret);
-    expect(kept).toContain('npm error //registry.example.test/:_auth=<redacted>');
+    expect(kept).toContain('<line removed: may contain a credential>');
     const ordinary =
       'npm error code E401 zcode-acp-server@latest @brokkai/muse-acp@0.21.0 node_modules/zcode-acp-server/dist/cli.js';
     expect(scrubText(ordinary)).toBe(ordinary);

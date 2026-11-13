@@ -36,6 +36,7 @@ const slowTests = [
   'tests/unit/web-server/antigravity-usage-helper.test.ts',
   'tests/unit/web-server/app-update-helper-sync.test.ts',
   'tests/unit/web-server/app-update-nas1.test.ts',
+  'tests/unit/web-server/app-update-round2.test.ts',
   'tests/unit/app-updates/codex-update-runtime-bundle.test.ts',
   'tests/unit/web-server/status/status-routes.test.ts',
 ];

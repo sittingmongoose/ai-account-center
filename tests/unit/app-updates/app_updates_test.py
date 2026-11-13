@@ -2565,6 +2565,7 @@ class WindowsDesktopReopenTests(unittest.TestCase):
 
 
 class _Manifest:
+    status = 200
     """A fixture HTTP response for the official Antigravity manifest."""
     def __init__(self, body, url=None):
         self.body, self.url = body, url or updater.AGY_MANIFEST_BASE + 'linux_amd64.json'
@@ -2630,6 +2631,7 @@ class AntigravityReviewHoldTests(unittest.TestCase):
         self.assertEqual(updater.agy_manifest_key('windows', 'AMD64'), 'windows_amd64')
         self.assertIsNone(updater.agy_manifest_key('windows', 'i686'))
 
+    @mock.patch("app_update_zcode._metadata_command", new=hermetic.metadata_inline)
     def test_latest_version_reads_only_a_bounded_official_manifest(self):
         body = json.dumps({'version': '1.3.0', 'url': 'https://fixture.invalid/agy.tgz', 'sha512': 'f' * 128}).encode()
         with mock.patch('urllib.request.urlopen', return_value=_Manifest(body)) as opened, mock.patch('platform.machine', return_value='x86_64'):
@@ -3533,13 +3535,14 @@ class ClaudeLatestPointerTests(unittest.TestCase):
     def install(self, version='2.1.295', manager='native'):
         return common.Install('claude-code', 'ubuntu', self.home / '.local/bin/claude', version, manager)
 
+    @mock.patch("app_update_zcode._metadata_command", new=hermetic.metadata_inline)
     def test_pointer_reads_only_a_bounded_official_version(self):
         base = updater.CLAUDE_RELEASES
         self.assertEqual(base, 'https://downloads.claude.ai/claude-code-releases/')
         with mock.patch('urllib.request.urlopen', return_value=_Pointer(b'2.1.295\n', base + 'latest')) as opened:
             self.assertEqual(updater.claude_pointer('latest'), '2.1.295')
         self.assertEqual(opened.call_args.args[0].full_url, base + 'latest')
-        self.assertEqual(opened.call_args.kwargs['timeout'], 10)
+        self.assertGreater(opened.call_args.kwargs['timeout'], 9)
         for response in (_Pointer(b'2.1.295', 'https://elsewhere.invalid/claude-code-releases/latest'),
                          _Pointer(b'2.1.295', base + 'latest', status=203), _Pointer(b'2.1.295; id', base + 'latest'),
                          _Pointer(b'v2.1.295', base + 'latest'), _Pointer(b'2.1', base + 'latest'), _Pointer(b'<html>', base + 'latest'),

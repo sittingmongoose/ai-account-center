@@ -113,18 +113,13 @@ def agy_manifest_key(platform, machine=None):
 
 def latest_agy_version(platform):
     """The newest official build's version for this computer, or None. Read-only."""
-    import urllib.request
     key = agy_manifest_key(platform)
     if key is None:
         return None
     try:
-        request = urllib.request.Request(AGY_MANIFEST_BASE + key + ".json", headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
-        with urllib.request.urlopen(request, timeout=20) as response:
-            if not response.geturl().startswith(AGY_MANIFEST_BASE):
-                return None
-            raw = response.read(16 * 1024 + 1)
-        if len(raw) > 16 * 1024:
-            return None
+        from app_update_zcode import read_bounded
+        raw = read_bounded(AGY_MANIFEST_BASE + key + ".json", AGY_MANIFEST_BASE, 16 * 1024,
+                           deadline=time.monotonic() + 20)
         value = json.loads(raw.decode("utf-8"))
         return _agy_version(value.get("version")) if isinstance(value, dict) else None
     except Exception:
@@ -216,13 +211,10 @@ CLAUDE_VERSION = re.compile(r"^\d{1,6}\.\d{1,6}\.\d{1,6}$")
 
 def claude_pointer(channel):
     """One official channel pointer's version, or None when it does not answer clearly."""
-    import urllib.request
     try:
-        request = urllib.request.Request(CLAUDE_RELEASES + channel, headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
-        with urllib.request.urlopen(request, timeout=10) as response:
-            if response.status != 200 or not response.geturl().startswith(CLAUDE_RELEASES):
-                return None
-            raw = response.read(65)
+        from app_update_zcode import read_bounded
+        raw = read_bounded(CLAUDE_RELEASES + channel, CLAUDE_RELEASES, 64,
+                           deadline=time.monotonic() + 10)
         text = raw.decode("ascii").strip() if len(raw) <= 64 else ""
         return text if CLAUDE_VERSION.fullmatch(text) else None
     except Exception:

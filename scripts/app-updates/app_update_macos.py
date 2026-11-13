@@ -36,7 +36,7 @@ def gui_command(action, timeout):
             raise UpdateFailure("timeout")
         return command(argv, timeout=min(maximum, remaining), capture=capture, errors=errors, quiet=True)
 
-    shown = {"muse-warm": "muse exec (GUI session)", "cursor-update": "cursor-agent update (GUI session)"}[action]
+    shown = {"muse-warm": "muse exec (Mac GUI)", "cursor-update": "cursor-agent update (Mac GUI)"}[action]
 
     domain = "gui/" + str(os.getuid())
     try:
@@ -118,7 +118,9 @@ def _tail(path, limit=65536):
     try:
         with pathlib.Path(path).open("rb") as stream:
             size = stream.seek(0, 2)
-            stream.seek(max(0, size - limit))
+            if size > limit:
+                return "<output omitted: diagnostic limit>"
+            stream.seek(0)
             return stream.read(limit).decode("utf-8", "replace")
     except OSError:
         return ""

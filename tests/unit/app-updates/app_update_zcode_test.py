@@ -73,6 +73,7 @@ def page(*entries):
 
 def response(body, url):
     value = mock.MagicMock()
+    value.status = 200
     value.geturl.return_value = url
     value.read.side_effect = io.BytesIO(body).read
     return contextlib.nullcontext(value)
@@ -795,7 +796,7 @@ class ZCodeFixtures(unittest.TestCase):
         self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "in_use", False))
         self.assertEqual([part.get("inUse", False) for part in row["parts"]], [True, False])
 
-    def test_windows_npm_lock_on_a_package_is_in_use_for_that_package_only(self):
+    def test_windows_denied_without_a_process_is_permission_but_ebusy_is_in_use(self):
         # npm's fatal error lines name the lock and its folder; the path is read with and without escaped backslashes.
         escaped = "\n".join([
             r"npm error code EPERM",
@@ -805,9 +806,9 @@ class ZCodeFixtures(unittest.TestCase):
         ])
         row, _ = self.windows_npm_run({"muse-acp": "0.10.0", "zcode-acp-server": "0.65.0"}, {"muse-acp": "0.10.1", "zcode-acp-server": "0.65.1"},
                                       outcomes={"muse-acp": common.UpdateFailure("update_failed", escaped)})
-        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "in_use", True))
+        self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "prefix_not_writable", True))
         self.assertEqual(row["parts"], [
-            {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.0", "inUse": True},
+            {"name": "muse-acp", "previousVersion": "0.10.0", "version": "0.10.0"},
             {"name": "zcode-acp-server", "previousVersion": "0.65.0", "version": "0.65.1"},
         ])
         busy = "\n".join([

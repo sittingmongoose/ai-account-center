@@ -62,7 +62,7 @@ class B1Scrubber(unittest.TestCase):
         tail = self.failed_command_tail(self.ASTRA)
         for secret in ("dXNlcjpmaXh0dXJl", "fixtureCookieOne", "fixtureCookieTwo"):
             self.assertNotIn(secret, tail)
-        self.assertIn("npm error //registry.example.test/:_auth=", tail)
+        self.assertIn("<line removed: may contain a credential>", tail)
 
     def test_other_credential_shapes_go_and_ordinary_words_stay(self):
         cases = {
@@ -190,7 +190,7 @@ class B4MacGui(Home):
             install = cursor.detect_cursor("mac")
             row = attach(cursor.update_cursor(install, time.monotonic() + 60), record)
         self.assertEqual((row["status"], row["messageCode"]), ("action_required", "cursor_signin_needed"))
-        self.assertEqual((record_of(row)["command"], record_of(row)["exitCode"]), ("cursor-agent update (GUI session)", 1))
+        self.assertEqual((record_of(row)["command"], record_of(row)["exitCode"]), ("cursor-agent update (Mac GUI)", 1))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -259,7 +259,7 @@ class Adapters(Home):
         runs = []
         writes = self.npm_writes(version_for={str(self.root / "opt/homebrew"): "0.83.0"}, runs=runs)
         install, row = self.update("mac", writes)
-        self.assertEqual((row["status"], row["messageCode"]), ("failed", "registry_mismatch"))
+        self.assertEqual((row["status"], row["messageCode"]), ("failed", "version_went_down"))
         self.assertTrue(runs[0][-1].endswith("@0.84.3"), runs[0])
 
     @unittest.skipUnless(POSIX, "pnpm's store uses symlinks")
@@ -576,8 +576,14 @@ class Recheck1(Home):
     L9 a held row whose target could not be read."""
 
     def test_l5_the_prelude_asks_for_utf8_without_a_byte_order_mark(self):
-        self.assertIn("New-Object System.Text.UTF8Encoding $false", common.POWERSHELL_UTF8)
-        self.assertNotIn("[System.Text.Encoding]::UTF8", common.POWERSHELL_UTF8)
+        emitted = []
+        def run(argv, *args, **kwargs):
+            emitted.append(base64.b64decode(argv[-1]).decode("utf-16le"))
+            return 0, b""
+        with mock.patch.object(common, "_run_bounded", side_effect=run):
+            common.powershell("Write-Output 'fixture'")
+        self.assertIn("New-Object System.Text.UTF8Encoding $false", emitted[0])
+        self.assertNotIn("[System.Text.Encoding]::UTF8", emitted[0])
 
     def test_l5_a_leading_bom_never_reaches_the_json_parse(self):
         reply = "\ufeff" + json.dumps({"a": "\u00e9"}, ensure_ascii=False)
@@ -602,10 +608,10 @@ class Recheck1(Home):
                 mock.patch.object(common, "_run_bounded", side_effect=fake.run), scope() as record:
             return attach(cursor.update_cursor(cursor.detect_cursor("windows"), time.monotonic() + 60), record)
 
-    def test_l1_output_naming_no_cause_reads_this_runs_log(self):
+    def test_l1_unbound_logs_leave_signin_undetermined(self):
         row = self.cursor_with_log("Checking for updates...\nUpdate failed: Error\n")
-        self.assertEqual((row["status"], row["messageCode"]), ("action_required", "cursor_signin_needed"))
-        self.assertEqual(record_of(row)["reason"], "session_log_401")
+        self.assertEqual((row["status"], row["messageCode"]), ("failed", "update_failed"))
+        self.assertIn("signin_undetermined", record_of(row)["notes"])
 
     def test_l1_output_naming_its_own_cause_still_wins_over_a_401_log(self):
         row = self.cursor_with_log("Error: ENOSPC: no space left on device, write\n")

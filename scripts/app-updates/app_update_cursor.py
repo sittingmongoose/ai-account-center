@@ -1,16 +1,13 @@
 """Cursor's supported native updater, independently of T3's own update."""
 
-import calendar
-import getpass
 import os
 import pathlib
 import re
-import tempfile
 import time
 
 import app_update_common as _common
 from app_update_common import (
-    Install, UpdateFailure, cli_probe, command, diagnostics, display_path, environment, powershell, ps_quote, result, version_text,
+    Install, UpdateFailure, cli_probe, command, diagnostics, display_path, environment, powershell, ps_quote, result, version_text, version_tuple,
 )
 from app_update_macos import gui_command
 
@@ -27,12 +24,8 @@ POLICY = re.compile(r"PSSecurityException|FullyQualifiedErrorId\s*:\s*Unauthoriz
 AUTH = re.compile(r"\[unauthenticated\]|ERROR_NOT_LOGGED_IN|not logged in|\"status\"\s*:\s*401\b|\b401\b[^\n]{0,40}unauthori[sz]ed|please (?:log|sign) in", re.I)
 # Words by which a run names its own cause (an errno, a disk or permission refusal): then its own output decides.
 NAMED_CAUSE = re.compile(r"\bE(?:NOSPC|PERM|ACCES|BUSY|NOENT|NOTFOUND|CONNREFUSED|CONNRESET|TIMEDOUT|AI_AGAIN|NETUNREACH|HOSTUNREACH|ROFS|MFILE|EXIST|NOTEMPTY|IO)\b"
-                         r"|no space left on device|permission denied|operation not permitted|read-only file system", re.I)
-# A session log belongs to an update run only when it records the update's own failure.
-UPDATE_FAILED = re.compile(r"Update failed:", re.I)
-LOG_NAME = re.compile(r"^session-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z-(\d+)-\d+\.log$")
-LOG_TAIL = 65536
-LOG_LIMIT = 20
+                         r"|no space left on device|permission denied|operation not permitted|read-only file system"
+                         r"|\bTLS\b|\bSSL\b|certificate|CERT_[A-Z_]+|SELF_SIGNED|UNABLE_TO_VERIFY", re.I)
 
 
 def cursor_root():
@@ -209,62 +202,20 @@ def cursor_staged(path):
             any((versions / "pending-launchers").glob("*.pending")))
 
 
-def _log_folder():
-    """This user's own Cursor log folder (cursor-agent-logs-<user>), never another user's."""
-    try:
-        folder = pathlib.Path(tempfile.gettempdir()) / ("cursor-agent-logs-" + getpass.getuser())
-        if not folder.is_dir():
-            return None
-        if os.name != "nt" and folder.stat().st_uid != os.getuid():
-            return None
-        return folder
-    except (OSError, KeyError, ImportError):
-        return None
-
-
-def session_log_says_signin(started, ended):
-    """Whether Cursor's own log of this update run records a sign-in refusal.
-
-    Only this user's folder, only a log whose name says it started during this run,
-    and only one that records the update's own failure ("Update failed:") with the
-    sign-in words: another Cursor session's 401 never decides this row."""
-    folder = _log_folder()
-    if folder is None:
-        return False
-    try:
-        logs = sorted((log for log in folder.glob("session-*.log") if LOG_NAME.fullmatch(log.name)), key=lambda log: log.name)[-LOG_LIMIT:]
-    except OSError:
-        return False
-    for log in reversed(logs):
-        year, month, day, hour, minute, second, millis = map(int, LOG_NAME.fullmatch(log.name).groups()[:7])
-        stamp = calendar.timegm((year, month, day, hour, minute, second)) + millis / 1000
-        if not started - 2 <= stamp <= ended + 2:
-            continue
-        try:
-            with log.open("rb") as stream:
-                stream.seek(max(0, log.stat().st_size - LOG_TAIL))
-                text = stream.read(LOG_TAIL).decode("utf-8", "replace")
-        except OSError:
-            continue
-        if UPDATE_FAILED.search(text) and AUTH.search(text):
-            return True
-    return False
-
-
 def classify(error, started, ended=None):
-    """A failed Cursor run, by its own words. Output that names a cause (sign-in, policy, an errno)
-    decides; otherwise (nothing printed, or only a generic line) Cursor's own log of this run is read."""
+    """Classify only the updater's own output: GUI and launcher PIDs are not bound to log PIDs."""
     text = error.output or ""
     if error.code not in ("update_failed", "policy_blocked"):
+        return error
+    if NAMED_CAUSE.search(text):
+        diagnostics().note("signin_undetermined")
         return error
     if AUTH.search(text):
         return UpdateFailure("cursor_signin_needed", text, error.exit_code, cause="auth_required",
                              reason="http_401" if re.search(r"401|unauthenticated", text, re.I) else "not_logged_in")
     if POLICY.search(text):
         return UpdateFailure("policy_blocked", text, error.exit_code, cause="policy_blocked", reason="execution_policy")
-    if error.code == "update_failed" and not NAMED_CAUSE.search(text):
-        if session_log_says_signin(started, ended if ended is not None else time.time()):
-            return UpdateFailure("cursor_signin_needed", text, error.exit_code, cause="auth_required", reason="session_log_401")
+    if error.code == "update_failed":
         diagnostics().note("signin_undetermined")
     return error
 
@@ -320,6 +271,11 @@ def update_cursor(install, deadline=None, progress=None):
         after = refreshed.version if refreshed else None
         if not after:
             raise UpdateFailure("version_unknown")
+        if before and version_tuple(after) < version_tuple(before):
+            raise UpdateFailure("version_went_down")
+        if before is None or (after != before and version_tuple(after) == version_tuple(before)):
+            # Commit hashes from the same date are not an ordering: fail honestly.
+            raise UpdateFailure("version_unknown")
         if install.platform == "windows" and cursor_staged(install.path):
             return result("cursor-cli", install.platform, "action_required", before, after, install.manager,
                           "cursor_update_staged", True)
@@ -331,13 +287,16 @@ def update_cursor(install, deadline=None, progress=None):
                 record.note("first_on_path_" + ("older" if shadow["version"] < after else "same" if shadow["version"] == after else "newer"))
             return result("cursor-cli", install.platform, "action_required", before, after, install.manager,
                           "cursor_shadowed", True)
-        return result("cursor-cli", install.platform, "updated" if after != before else "current",
-                      before, after, install.manager, "cursor_updated" if after != before else "current", True)
+        return result("cursor-cli", install.platform, "updated" if after > before else "current",
+                      before, after, install.manager, "cursor_updated" if after > before else "current", True)
     except (UpdateFailure, OSError) as error:
         # A native Windows updater may safely stage its files while handles are
         # open and exit nonzero. Never stop those agents or delete their trees.
         refreshed = detect_cursor(install.platform)
         after = refreshed.version if refreshed else None
+        if before and after and version_tuple(after) < version_tuple(before):
+            return result("cursor-cli", install.platform, "failed", before, after, install.manager,
+                          "version_went_down", attempted)
         if isinstance(error, UpdateFailure) and (error.cause or error.reason):
             record.blame(error.cause, error.reason)
         if isinstance(error, UpdateFailure) and error.code == "cursor_signin_needed":
