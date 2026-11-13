@@ -2,7 +2,7 @@
 //! on stdin, one JSON response on stdout (protocol.rs). A refused request exits 1 with one line on
 //! stderr; no path or log content is ever printed.
 
-use std::io::{Read, Write};
+use std::io::Read;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -27,16 +27,19 @@ fn main() {
         }
     };
     aac_usage::lower_priority();
-    let env: aac_usage::discover::Env = std::env::vars_os()
-        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
-        .collect();
+    // Windows names variables in any case (`Path`): keys are upper-cased there, and every lookup
+    // uses upper case (FIX-ROUND-BIG 12).
+    let env = aac_usage::discover::env_from(
+        std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))),
+    );
     let Some(home) = aac_usage::home_dir(&env).filter(|h| h.is_dir()) else {
         eprintln!("aac-usage-scan: home directory is unavailable");
         std::process::exit(1);
     };
+    // The last guard (FIX-ROUND-BIG 9): should anything still block past the deadline (a mount
+    // that dies mid-scan), the watchdog answers for the scan, every kind "pending", so the server
+    // keeps what it had and names the stall, and the process ends without waiting for it.
+    aac_usage::protocol::watchdog(&request);
     let response = aac_usage::protocol::scan(&request, &home, &env);
-    let mut out = std::io::stdout().lock();
-    if serde_json::to_writer(&mut out, &response).is_err() || out.flush().is_err() {
-        std::process::exit(1);
-    }
+    aac_usage::protocol::answer(&response);
 }

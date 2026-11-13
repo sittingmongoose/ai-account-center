@@ -7,7 +7,6 @@ use crate::discover::{self, Env};
 use crate::read;
 use crate::util;
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -178,22 +177,22 @@ fn extras(request: &Request, kind: &str) -> Vec<PathBuf> {
 }
 
 /// The experiment log folders of a kind: the request's (DESIGN 16.0 B) and those discovery finds
-/// below home (16.5), each once. Discovery runs at the first kind that asks, within 2 s; true when a
-/// bound cut it.
+/// below home (16.5), each once. Discovery runs at the first kind that asks, within 2 s; a bound
+/// that cut this kind's search is returned as (kept, seen).
 fn experiment_dirs(
-    found: &mut Option<(HashMap<&'static str, Vec<PathBuf>>, bool)>,
+    found: &mut Option<discover::ExperimentRoots>,
     request: &Request,
     home: &Path,
     kind: &str,
-) -> (Vec<PathBuf>, bool) {
-    let (discovered, cut) = found.get_or_insert_with(|| discover::experiment_roots(home, Duration::from_secs(2)));
+) -> (Vec<PathBuf>, Option<(usize, Option<usize>)>) {
+    let discovered = found.get_or_insert_with(|| discover::experiment_roots(home, Duration::from_secs(2)));
     let mut list = paths_of(&request.experiment_roots, kind);
-    for path in discovered.get(kind).cloned().unwrap_or_default() {
+    for path in discovered.found.get(kind).cloned().unwrap_or_default() {
         if !list.contains(&path) {
             list.push(path);
         }
     }
-    (list, *cut)
+    (list, discovered.limits.get(kind).copied())
 }
 
 fn paths_of(map: &Map<String, Value>, kind: &str) -> Vec<PathBuf> {
@@ -265,24 +264,88 @@ pub fn target() -> &'static str {
     }
 }
 
+/// The answer goes out once: from the scan, or from the watchdog when the scan is stuck.
+static ANSWERED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+/// Write the answer unless the watchdog already did; exit 1 when stdout fails.
+pub fn answer(response: &Value) {
+    let mut answered = ANSWERED.lock().unwrap_or_else(|e| e.into_inner());
+    if *answered {
+        return;
+    }
+    let mut out = std::io::stdout().lock();
+    if serde_json::to_writer(&mut out, response).is_err() || std::io::Write::flush(&mut out).is_err() {
+        std::process::exit(1);
+    }
+    *answered = true;
+}
+
+/// The answer for a scan that did not finish: every kind "pending" (nothing confirmed, nothing
+/// dropped), `stalled` set.
+pub fn stalled_answer(request: &Request) -> Value {
+    let kinds: Map<String, Value> = request
+        .kinds
+        .iter()
+        .map(|kind| (kind.clone(), json!({"state": "pending", "fingerprints": {}})))
+        .collect();
+    json!({
+        "version": VERSION,
+        "truncated": true,
+        "discoveryTruncated": false,
+        "kinds": kinds,
+        "rows": [],
+        "srows": [],
+        "discovery": {"kinds": {}},
+        "reader": version_json(),
+        "sessions": {},
+        "stalled": true,
+    })
+}
+
+/// Start the watchdog: at the deadline plus a grace (a fifth of the budget, 1 to 4 s) it answers
+/// for a scan that has not, and ends the process.
+pub fn watchdog(request: &Request) {
+    let grace = (request.budget * 0.2).clamp(1.0, 4.0);
+    let wait = Duration::from_secs_f64(request.budget + grace);
+    let fallback = stalled_answer(request);
+    std::thread::spawn(move || {
+        std::thread::sleep(wait);
+        let mut answered = ANSWERED.lock().unwrap_or_else(|e| e.into_inner());
+        if !*answered {
+            let mut out = std::io::stdout().lock();
+            let _ = serde_json::to_writer(&mut out, &fallback);
+            let _ = std::io::Write::flush(&mut out);
+            *answered = true;
+            std::process::exit(0);
+        }
+    });
+}
+
 /// One scan: every requested kind in order, then the response.
 pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     let mut collector = Collector::new(request.min_date_ms, request.budget, request.fingerprints.clone());
     collector.capture_cwd = request.cwd;
     collector.messages_wanted = request.messages;
     collector.lines_left = request.line_budget;
+    // Network and FUSE mounts answer a probe first, or are never touched (FIX-ROUND-BIG 9). One under
+    // home may hold logs a walk from home would have found: those kinds are partial.
+    collector.unanswered_mounts = crate::fsx::guard_mounts(Duration::from_secs(2));
+    let mounts_under_home = crate::fsx::avoided_under(home) > 0;
     let instances = discover::t3_instances(home);
     // Experiment log folders outside PM-Experiments, found once per scan (DESIGN 16.5).
-    let mut found: Option<(HashMap<&'static str, Vec<PathBuf>>, bool)> = None;
+    let mut found: Option<discover::ExperimentRoots> = None;
     let mut states: Map<String, Value> = Map::new();
     let mut partials: Vec<String> = Vec::new();
     for kind in &request.kinds {
         collector.fresh.entry(kind.clone()).or_default();
         let cut_before = collector.truncated;
         let experiment_list = if ["claude", "codex", "omp", "muse"].contains(&kind.as_str()) {
-            let (list, cut) = experiment_dirs(&mut found, request, home, kind);
-            if cut {
-                collector.discovery_truncated = true;
+            let (list, limit) = experiment_dirs(&mut found, request, home, kind);
+            if let Some((read, seen)) = limit {
+                collector.search_limit(kind, read, seen);
+            }
+            if mounts_under_home {
+                collector.usage_partial.insert(kind.clone());
             }
             list
         } else {
@@ -380,6 +443,16 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
             entry.insert("partial".into(), json!(true));
             entry.insert("unreadableRecords".into(), json!(count));
         }
+        // Folders inside a root that could not be listed (FIX-ROUND-BIG 4).
+        if let Some(folders) = collector.unreadable_folders.get(kind).filter(|f| !f.is_empty()) {
+            entry.insert("partial".into(), json!(true));
+            entry.insert("unreadableFolders".into(), json!(folders.len()));
+        }
+        // A discovery bound that left this kind's roots unlooked-at (FIX-ROUND-BIG 6).
+        if let Some((read, seen)) = collector.search_limits.get(kind) {
+            entry.insert("partial".into(), json!(true));
+            entry.insert("searchLimit".into(), json!({"read": read, "found": seen}));
+        }
         if kind == "antigravity" && collector.agy_unreadable > 0 {
             entry.insert("unreadable".into(), json!(true));
         }
@@ -462,6 +535,9 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
         "reader": version_json(),
         "sessions": sessions,
     });
+    if collector.unanswered_mounts > 0 {
+        response["unansweredMounts"] = json!(collector.unanswered_mounts);
+    }
     if request.messages {
         response["messages"] = Value::Array(
             collector

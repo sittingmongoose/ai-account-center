@@ -49,10 +49,21 @@ fn epoch_ms(stamp: &Sql, node: &Sql) -> Option<i64> {
     }
 }
 
+/// Devin's cache counters: the format leaves them out when there were none (on the VM, cache
+/// creation is never logged and cache reads are missing on 168 of 3,584 replies), so a missing one
+/// reads 0. Input and output are required: a reply without them is unreadable (FIX-ROUND-BIG 5).
+fn cache_count(value: &Sql) -> Option<u64> {
+    match value {
+        Sql::Null => Some(0),
+        other => sqlite::count(other),
+    }
+}
+
 /// "not_installed" without the database, else "ok" (or "error" when it cannot be read).
 pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static str {
     let db = database(home, env);
-    if !crate::fsx::is_file(&db) {
+    // Probed first (FIX-ROUND-BIG 9): a database that does not answer is named, never read.
+    if collector.gate_files("devin", std::slice::from_ref(&db)).is_empty() {
         return "not_installed";
     }
     collector.note_root("devin", db.parent().unwrap_or(&db), "default");
@@ -66,6 +77,7 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
         return "error";
     };
     if sqlite::note_db(collector, "devin", &filekey, current) {
+        super::cursor::replay(collector, "devin", &filekey);
         collector.confirm_file("devin", &filekey);
         return "ok";
     }
@@ -81,6 +93,7 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
             .is_some_and(|p| p.wal_size.unwrap_or(0) > 0)
     {
         collector.kind_wal_unread.insert("devin".into());
+        collector.set_pending("devin", &filekey, |print| print.wal_unread = Some(true));
     }
     let tables = sqlite::tables(&connection).unwrap_or_default();
     if !tables.iter().any(|t| t == "message_nodes") || !tables.iter().any(|t| t == "sessions") {
@@ -101,25 +114,29 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
         return "error";
     };
     let mut seen: HashSet<String> = HashSet::new();
+    let mut unreadable = 0u64;
     for reply in replies {
         let Some(session) = sqlite::text(&reply[0]) else {
             continue;
         };
         let Some(id) = sqlite::text(&reply[1]).or_else(|| sqlite::text(&reply[2])) else {
-            *collector.unreadable_records.entry("devin".into()).or_default() += 1;
+            unreadable += 1;
             continue;
         };
         if !seen.insert(id.clone()) {
             continue;
         }
-        let numbers: Vec<Option<u64>> = reply[6..10].iter().map(sqlite::count).collect();
-        let (Some(input), Some(output), Some(read), Some(write)) = (numbers[0], numbers[1], numbers[2], numbers[3])
-        else {
-            *collector.unreadable_records.entry("devin".into()).or_default() += 1;
+        let (Some(input), Some(output), Some(read), Some(write)) = (
+            sqlite::count(&reply[6]),
+            sqlite::count(&reply[7]),
+            cache_count(&reply[8]),
+            cache_count(&reply[9]),
+        ) else {
+            unreadable += 1;
             continue;
         };
         let Some(at) = epoch_ms(&reply[3], &reply[4]) else {
-            *collector.unreadable_records.entry("devin".into()).or_default() += 1;
+            unreadable += 1;
             continue;
         };
         if at < collector.min_date_ms {
@@ -135,6 +152,10 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
         // Devin's input_tokens holds no cache traffic (VM, deduplicated: 11.7M input, 181M cache reads).
         let tokens = [input, output, read, write];
         collector.add("devin", &filekey, &model, None, &hour, tokens, 0.0);
+        // A row cap that drops a reply leaves the database unconfirmed (FIX-ROUND-BIG 5).
+        if collector.row_cap {
+            return "ok";
+        }
         let session_key = util::session_key("devin", Some(&session));
         collector.sadd("devin", &filekey, session_key.as_deref(), &model, None, at, tokens, 0.0);
         collector.note_session("devin", &session, sqlite::text(&reply[10]));
@@ -150,6 +171,10 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
             tokens,
             0.0,
         );
+    }
+    if unreadable > 0 {
+        *collector.unreadable_records.entry("devin".into()).or_default() += unreadable as usize;
+        collector.set_pending("devin", &filekey, |print| print.unreadable_records = Some(unreadable));
     }
     collector.confirm_file("devin", &filekey);
     "ok"

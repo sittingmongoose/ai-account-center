@@ -15,7 +15,6 @@ use crate::fsx;
 use crate::util::{self, path_text};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -325,7 +324,7 @@ pub fn read_into(
         .and_then(|p| p.msg_through)
         .unwrap_or(0);
     line_box.message_from = message_from;
-    let Ok(file) = File::open(path) else {
+    let Ok(file) = fsx::open_regular(path) else {
         return Outcome::Unreadable;
     };
     let compressed = kind == "codex" && path_text(path).ends_with(".jsonl.zst");
@@ -504,6 +503,62 @@ pub fn deps_print(kind: &str, copies: &[PathBuf], deadline: Instant) -> Option<S
     Some(util::sha256_hex(lines.join("\n").as_bytes()))
 }
 
+/// One identity rule per tool (FIX-ROUND-BIG 1 and 2): files grouped by what they hold (`key`: a
+/// Codex conversation, a Muse session), and of each group only the single longest readable copy is
+/// read, then the newest, then the first by path. Copies are never added together; a shorter copy
+/// is a prefix the owner already holds (logs only grow), and a copy that diverged loses its own
+/// tail rather than being guessed at. Hard links and plain copies fall out the same way.
+pub fn owners(paths: &[PathBuf], key: &dyn Fn(&Path) -> String, length: &dyn Fn(&Path) -> Option<u64>) -> Vec<PathBuf> {
+    let mut groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for path in paths {
+        let group = key(path);
+        if !groups.contains_key(&group) {
+            order.push(group.clone());
+        }
+        groups.entry(group).or_default().push(path.clone());
+    }
+    let mut chosen = Vec::with_capacity(order.len());
+    for group in order {
+        let members = groups.remove(&group).unwrap_or_default();
+        if members.len() == 1 {
+            chosen.extend(members);
+            continue;
+        }
+        let best = members
+            .into_iter()
+            .filter_map(|path| {
+                let meta = std::fs::metadata(&path).ok()?;
+                Some((length(&path).unwrap_or(meta.len()), util::mtime_ns(&meta), path))
+            })
+            .max_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then(a.1.cmp(&b.1))
+                    .then_with(|| path_text(&b.2).cmp(&path_text(&a.2)))
+            });
+        chosen.extend(best.map(|(_, _, path)| path));
+    }
+    chosen
+}
+
+/// What a log holds, by bytes: a compressed Codex log's decoded size when its frame states it.
+pub fn content_length(path: &Path) -> Option<u64> {
+    if path_text(path).ends_with(".zst") {
+        collector::decoded_size(path)
+    } else {
+        std::fs::metadata(path).ok().map(|m| m.len())
+    }
+}
+
+/// A file's key in the answer: Codex logs by conversation, every other log by path.
+pub fn file_key(kind: &str, path: &Path) -> String {
+    if kind == "codex" {
+        codex::file_key(path)
+    } else {
+        util::filekey(kind, path)
+    }
+}
+
 /// Python's `_t3_files`: non-default files to read, each mapped to the default and earlier non-default
 /// files that may hold copies of its records. A file that is a default file (a link or hard link to
 /// it) or an earlier non-default file is not listed.
@@ -524,7 +579,7 @@ pub fn other_files(
     let mut found = Vec::new();
     for root in other_dirs {
         let start = found.len();
-        for (path, identity) in fsx::walk_t3_files(root, accept, collector, &exclude) {
+        for (path, identity) in fsx::walk_t3_files(kind, root, accept, collector, &exclude) {
             if !identities.insert(identity) {
                 continue;
             }
@@ -588,7 +643,7 @@ pub fn scan_kind_files(
         }
         let start = paths.len();
         let mut capped = false;
-        for path in fsx::walk_files(directory, accept, collector, None) {
+        for path in fsx::walk_files(kind, directory, accept, collector, None) {
             paths.push(path);
             if paths.len() > MAX_FILES {
                 collector.truncated = true;
@@ -610,36 +665,17 @@ pub fn scan_kind_files(
         }
     }
     if kind == "codex" {
-        let recent: Vec<PathBuf> = paths
-            .iter()
+        // One owner per conversation across every folder, defaults and copies alike (FIX-ROUND-BIG
+        // 1): no record is read from a second copy, so none is counted twice or left to a guess.
+        paths = owners(&paths, &|p| copy_key("codex", p), &content_length)
+            .into_iter()
             .filter(|p| {
                 std::fs::metadata(p)
                     .map(|m| util::mtime_seconds(&m) * 1000.0 >= (collector.min_date_ms - 86_400_000) as f64)
                     .unwrap_or(false)
             })
-            .cloned()
             .collect();
-        let plain: HashSet<String> = recent
-            .iter()
-            .filter(|p| !path_text(p).ends_with(".zst"))
-            .map(|p| copy_key(kind, p))
-            .collect();
-        let mut compressed: HashSet<String> = HashSet::new();
-        paths = Vec::new();
-        for path in recent {
-            let key = copy_key(kind, &path);
-            if path_text(&path).ends_with(".zst") {
-                if plain.contains(&key) || compressed.contains(&key) {
-                    continue;
-                }
-                compressed.insert(key);
-            }
-            paths.push(path);
-        }
-        let allowed: HashSet<PathBuf> = paths.iter().cloned().collect();
-        for copies in refs.values_mut() {
-            copies.retain(|c| allowed.contains(c));
-        }
+        refs.clear();
     }
     if kind == "claude" {
         return claude::scan_groups(collector, &paths, parse, flush);
@@ -676,10 +712,10 @@ pub fn scan_kind_files(
             };
             Some(print)
         };
-        let Some(filekey) = collector.note_file(kind, &path, deps.as_deref()) else {
-            let staged = util::filekey(kind, &path);
-            if collector.is_pending(kind, &staged) {
-                collector.confirm_file(kind, &staged);
+        let key = file_key(kind, &path);
+        let Some(filekey) = collector.note_file_as(kind, &path, key.clone(), deps.as_deref()) else {
+            if collector.is_pending(kind, &key) {
+                collector.confirm_file(kind, &key);
             }
             continue;
         };

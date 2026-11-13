@@ -118,9 +118,16 @@ pub struct Collector {
     pub kind_wal_unread: HashSet<String>,
     /// Cursor SDK run stores found; with any, presence does not report Cursor apart.
     pub run_stores: usize,
-    /// Log folders that are links whose target could not be listed or did not answer (DESIGN
-    /// 16.4): (kind, folder) -> "link_unreadable" | "link_unreachable". Never stat'ed again.
-    pub link_states: HashMap<(String, PathBuf), &'static str>,
+    /// Roots (log folders, databases) that are there but could not be read (DESIGN 16.4,
+    /// FIX-ROUND-BIG 4 and 9): (kind, path) -> (root state, cause). Never stat'ed again.
+    pub root_failures: HashMap<(String, PathBuf), (&'static str, &'static str)>,
+    /// Folders inside a root that exist but could not be listed, per kind (digests of their paths).
+    pub unreadable_folders: HashMap<String, BTreeSet<String>>,
+    /// A discovery bound that left roots unlooked-at, per kind: (what was read, how many were
+    /// found, None when the search stopped before it could count them all). FIX-ROUND-BIG 6.
+    pub search_limits: HashMap<String, (usize, Option<usize>)>,
+    /// Network or FUSE mounts that did not answer their probe this scan.
+    pub unanswered_mounts: usize,
 }
 
 /// Kinds whose reads resume where the deadline cut them (DESIGN 16.1): Codex, whose largest logs
@@ -172,7 +179,10 @@ impl Collector {
             unreadable_records: HashMap::new(),
             kind_wal_unread: HashSet::new(),
             run_stores: 0,
-            link_states: HashMap::new(),
+            root_failures: HashMap::new(),
+            unreadable_folders: HashMap::new(),
+            search_limits: HashMap::new(),
+            unanswered_mounts: 0,
         }
     }
 
@@ -221,21 +231,62 @@ impl Collector {
         entry.1 = entry.1.max(newest);
     }
 
+    /// A file that was found but could not be read: counted once, as failed, never also as found
+    /// (FIX-ROUND-BIG 3).
     pub fn read_failure(&mut self, kind: &str, key: String) {
+        if let Some(pending) = self.pending.get_mut(kind) {
+            pending.remove(&key);
+        }
         self.read_failures.entry(kind.to_string()).or_default().insert(key);
+        self.usage_partial.insert(kind.to_string());
+    }
+
+    /// A folder inside a root that exists but cannot be listed: the kind is partial and says how
+    /// many (FIX-ROUND-BIG 4). Its cached rows stay.
+    pub fn unreadable_folder(&mut self, kind: &str, directory: &Path) {
+        self.unreadable_folders
+            .entry(kind.to_string())
+            .or_default()
+            .insert(util::filekey(kind, directory));
+        self.usage_partial.insert(kind.to_string());
+    }
+
+    /// A root that is there but could not be read: named on the root, and the kind is partial.
+    pub fn root_failure(&mut self, kind: &str, path: &Path, state: &'static str, cause: &'static str) {
+        self.root_failures
+            .insert((kind.to_string(), path.to_path_buf()), (state, cause));
+        self.usage_partial.insert(kind.to_string());
+    }
+
+    /// A discovery bound cut this kind's search: `read` of `found` (None: more than could be
+    /// counted). The kind is partial, so nothing it did not reach is dropped or taken over.
+    pub fn search_limit(&mut self, kind: &str, read: usize, found: Option<usize>) {
+        let entry = self.search_limits.entry(kind.to_string()).or_insert((read, found));
+        entry.0 = entry.0.max(read);
+        entry.1 = match (entry.1, found) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            _ => None,
+        };
+        self.discovery_truncated = true;
         self.usage_partial.insert(kind.to_string());
     }
 
     /// The filekey when the file needs parsing (new or changed); None when unchanged, capped or
     /// unreadable. `deps` (a copy's references) is folded into the tail print.
     pub fn note_file(&mut self, kind: &str, path: &Path, deps: Option<&str>) -> Option<String> {
+        self.note_file_as(kind, path, util::filekey(kind, path), deps)
+    }
+
+    /// `note_file` under a key that names the file's conversation or session rather than its path
+    /// (FIX-ROUND-BIG 1): a copy anywhere, or the file moved, keeps the same rows.
+    pub fn note_file_as(&mut self, kind: &str, path: &Path, key: String, deps: Option<&str>) -> Option<String> {
         self.files_seen += 1;
         if self.files_seen > MAX_FILES {
             self.truncated = true;
             return None;
         }
         let Some(mut current) = util::fingerprint(path) else {
-            self.read_failure(kind, util::filekey(kind, path));
+            self.read_failure(kind, key);
             return None;
         };
         if kind == "claude" {
@@ -249,7 +300,6 @@ impl Collector {
         if let Some(deps) = deps {
             current.tail = util::sha256_hex(format!("{}\n{}", current.tail, deps).as_bytes());
         }
-        let key = util::filekey(kind, path);
         let same = util::same_print(self.prior_print(kind, &key), &current);
         // An unchanged file an earlier call left part-read is read on from where it stopped.
         let resume = if same && resumable(kind) {
@@ -640,25 +690,61 @@ impl Collector {
         }
     }
 
-    /// A kind's log folders with each probed first (DESIGN 16.4): the real paths of those that
-    /// answer; a link that cannot be listed or does not answer within 2 s is recorded, not read.
-    pub fn reachable_dirs(&mut self, kind: &str, dirs: &[PathBuf]) -> Vec<PathBuf> {
-        let wait = std::time::Duration::from_secs(2).min(
+    fn probe_wait(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(2).min(
             self.deadline()
                 .saturating_duration_since(Instant::now())
                 .max(std::time::Duration::from_millis(100)),
-        );
+        )
+    }
+
+    /// A kind's log folders with each probed first (DESIGN 16.4, FIX-ROUND-BIG 4 and 9): the real
+    /// paths of those that answer; one that is there but cannot be listed, or does not answer
+    /// within 2 s, is recorded on its root (and the kind is partial), never read.
+    pub fn reachable_dirs(&mut self, kind: &str, dirs: &[PathBuf]) -> Vec<PathBuf> {
+        let wait = self.probe_wait();
+        self.reachable(kind, crate::fsx::probe_dirs(dirs, wait))
+    }
+
+    /// `reachable_dirs` for database files.
+    pub fn reachable_files(&mut self, kind: &str, files: &[PathBuf]) -> Vec<PathBuf> {
+        let wait = self.probe_wait();
+        self.reachable(kind, crate::fsx::probe_files(files, wait))
+    }
+
+    /// The given paths (not their real paths) whose probe answered: folders.
+    pub fn gate_dirs(&mut self, kind: &str, dirs: &[PathBuf]) -> Vec<PathBuf> {
+        let wait = self.probe_wait();
+        let probes = crate::fsx::probe_dirs(dirs, wait);
+        self.gate(kind, probes)
+    }
+
+    /// The given paths (not their real paths) whose probe answered: database files.
+    pub fn gate_files(&mut self, kind: &str, files: &[PathBuf]) -> Vec<PathBuf> {
+        let wait = self.probe_wait();
+        let probes = crate::fsx::probe_files(files, wait);
+        self.gate(kind, probes)
+    }
+
+    fn gate(&mut self, kind: &str, probes: Vec<(PathBuf, crate::fsx::Probe)>) -> Vec<PathBuf> {
         let mut found = Vec::new();
-        for (dir, probe) in crate::fsx::probe_dirs(dirs, wait) {
+        for (path, probe) in probes {
+            match probe {
+                crate::fsx::Probe::Readable(_) => found.push(path),
+                crate::fsx::Probe::Absent => {}
+                crate::fsx::Probe::Failed { state, cause } => self.root_failure(kind, &path, state, cause),
+            }
+        }
+        found
+    }
+
+    fn reachable(&mut self, kind: &str, probes: Vec<(PathBuf, crate::fsx::Probe)>) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for (path, probe) in probes {
             match probe {
                 crate::fsx::Probe::Readable(real) => found.push(real),
                 crate::fsx::Probe::Absent => {}
-                crate::fsx::Probe::Unreadable => {
-                    self.link_states.insert((kind.to_string(), dir), "link_unreadable");
-                }
-                crate::fsx::Probe::Unreachable => {
-                    self.link_states.insert((kind.to_string(), dir), "link_unreachable");
-                }
+                crate::fsx::Probe::Failed { state, cause } => self.root_failure(kind, &path, state, cause),
             }
         }
         found

@@ -9,19 +9,29 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// The conversation id a rollout's file name ends with (`...-<uuid>.jsonl[.zst]`), lower case.
+/// Checked on bytes, so a name with multi-byte characters is never cut inside one
+/// (FIX-ROUND-BIG 8).
 pub fn conversation_id(name: &str) -> Option<String> {
     let stem = name
         .strip_suffix(".jsonl.zst")
-        .or_else(|| name.strip_suffix(".jsonl"))?;
-    if stem.len() < 36 {
-        return None;
-    }
-    let tail = &stem[stem.len() - 36..];
-    let ok = tail.char_indices().all(|(i, c)| match i {
-        8 | 13 | 18 | 23 => c == '-',
-        _ => c.is_ascii_hexdigit(),
+        .or_else(|| name.strip_suffix(".jsonl"))?
+        .as_bytes();
+    let tail = stem.get(stem.len().checked_sub(36)?..)?;
+    let ok = tail.iter().enumerate().all(|(i, b)| match i {
+        8 | 13 | 18 | 23 => *b == b'-',
+        _ => b.is_ascii_hexdigit(),
     });
-    if ok { Some(tail.to_lowercase()) } else { None }
+    // All ASCII when it passed, so the bytes are a valid string.
+    ok.then(|| String::from_utf8_lossy(tail).to_lowercase())
+}
+
+/// A Codex log's key: its conversation (FIX-ROUND-BIG 1), so every copy of one conversation, in
+/// any folder, and the log after Codex moves it to `archived_sessions`, keep the same rows.
+pub fn file_key(path: &Path) -> String {
+    util::filekey_text(
+        "codex",
+        &format!("aac-conversation-v1:{}", super::copy_key("codex", path)),
+    )
 }
 
 fn number(value: Option<&Value>) -> f64 {
@@ -219,6 +229,11 @@ pub fn collect(
     instances: &[T3Instance],
 ) -> &'static str {
     let mut plan = discover::codex_roots(home, env, extra, instances);
+    // Home has more children than the signature search looks at: named, and the kind is partial
+    // (FIX-ROUND-BIG 6).
+    if let Some((read, total)) = plan.limit {
+        collector.search_limit("codex", read, Some(total));
+    }
     // Experiment log folders are read through the copy rule, like other homes' logs (DESIGN 16.5).
     plan.others
         .extend(experiments.iter().map(|p| (p.clone(), "experiment")));

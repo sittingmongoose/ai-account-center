@@ -335,11 +335,18 @@ fn a_log_folder_linked_out_of_home_is_read_or_reported() {
     ask.min_date_ms = 1_780_000_000_000;
     let answer = protocol::scan(&ask, h, &env(h));
     assert_eq!(sums(&answer, "codex")[0], 400);
-    // The target is gone: the root says so; nothing else is read or guessed.
+    // The target is gone: the root says so (a dangling link is unreachable, FIX-ROUND-BIG 17), and
+    // the kind is partial, so the server keeps what it read through the link (FIX-ROUND-BIG 4).
     fs::remove_dir_all(&archived).unwrap();
     let answer = protocol::scan(&ask, h, &env(h));
     let roots = answer["discovery"]["kinds"]["codex"]["roots"].as_array().unwrap();
-    assert!(roots.iter().any(|r| r["state"] == "link_unreadable"), "{roots:?}");
+    assert!(
+        roots
+            .iter()
+            .any(|r| r["state"] == "link_unreachable" && r["cause"] == "target_missing"),
+        "{roots:?}"
+    );
+    assert_eq!(answer["kinds"]["codex"]["partial"], true);
     assert_eq!(sums(&answer, "codex")[0], 0);
 }
 
@@ -381,15 +388,17 @@ fn experiment_folders_outside_pm_experiments_are_found_and_copies_count_once() {
         .unwrap();
     }
     fs::create_dir_all(h.join("src/some-repo/.git")).unwrap();
-    let (found, cut) = aac_usage::discover::experiment_roots(h, std::time::Duration::from_secs(5));
-    assert!(!cut);
+    let roots = aac_usage::discover::experiment_roots(h, std::time::Duration::from_secs(5));
+    assert!(roots.limits.is_empty());
+    let found = roots.found;
     assert_eq!(
         found.get("codex").cloned().unwrap_or_default(),
         vec![h.join("t3setup-codex-v6/retained-usage/run-1/codex")]
     );
     assert_eq!(
         found.get("muse").cloned().unwrap_or_default(),
-        vec![h.join("t3setup-codex-v6/retained-usage/run-1/muse/a8bb139c2c98b181")]
+        // A Muse folder is one root (FIX-ROUND-BIG 6): its sessions are found under it.
+        vec![h.join("t3setup-codex-v6/retained-usage/run-1/muse")]
     );
     let mut ask = request(&["codex"], false);
     ask.min_date_ms = 1_780_000_000_000;

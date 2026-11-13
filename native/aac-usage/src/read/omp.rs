@@ -134,7 +134,8 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
             break;
         }
         if visited >= SCAN_MAX_DIRS || examined > SCAN_MAX_ENTRIES || Instant::now() >= deadline {
-            collector.discovery_truncated = true;
+            // Said on the OMP cell as a search limit (FIX-ROUND-BIG 6): roots past it are unknown.
+            collector.search_limit("omp", found.len(), None);
             break;
         }
         if depth > SCAN_MAX_DEPTH {
@@ -278,7 +279,7 @@ fn roots(
         add(found, "signature", collector, &mut list);
     }
     if list.len() > SCAN_MAX_ROOTS {
-        collector.discovery_truncated = true;
+        collector.search_limit("omp", SCAN_MAX_ROOTS, Some(list.len()));
     }
     list.truncate(SCAN_MAX_ROOTS);
     // Saved extras are configuration, not discovery: they join after the cap, never cut by it.
@@ -481,10 +482,9 @@ pub fn collect(
         collector.note_root("omp", path, "experiment");
         listed.push(path.clone());
     }
-    let roots: Vec<PathBuf> = fsx::dedup_dirs(&listed)
-        .into_iter()
-        .filter(|r| fsx::is_dir(r))
-        .collect();
+    // Each root is probed first (FIX-ROUND-BIG 4 and 9): one that is there but cannot be read, or
+    // does not answer, is named on its root and the kind is partial.
+    let roots: Vec<PathBuf> = fsx::dedup_dirs(&collector.gate_dirs("omp", &listed));
     if roots.is_empty() {
         return "not_installed";
     }
@@ -493,7 +493,7 @@ pub fn collect(
     for root in &roots {
         let start = paths.len();
         let mut capped = false;
-        for path in fsx::walk_files(root, &accept, collector, None) {
+        for path in fsx::walk_files("omp", root, &accept, collector, None) {
             paths.push(path);
             if paths.len() > MAX_FILES {
                 collector.truncated = true;
@@ -525,7 +525,12 @@ pub fn collect(
         };
         match read_file_with(collector, "omp", &path, &filekey, parse_line, None, line_box) {
             Outcome::Cut => return "ok",
-            Outcome::Unreadable => continue,
+            Outcome::Unreadable => {
+                // Named as failed (FIX-ROUND-BIG 3); a prefix it may have emitted is not kept.
+                collector.read_failure("omp", filekey.clone());
+                collector.drop_file_rows(&HashSet::from([filekey]));
+                continue;
+            }
             Outcome::Ok => {
                 collector.sent_through("omp", &filekey, &path);
                 collector.confirm_file("omp", &filekey);

@@ -178,9 +178,11 @@ fn a_single_frame_log_is_read_across_calls_without_counting_twice() {
     assert!(parts.calls > 10, "cut into many calls: {}", parts.calls);
     assert_eq!(parts.totals, whole.totals);
 
-    // While part-read, the log is named without its conversation id, with how far it got.
+    // While part-read, the log is named by its time and session key, never its conversation id
+    // (FIX-ROUND-BIG 18), with how far it got.
     let first = &parts.unfinished[0];
-    assert_eq!(first["name"], "rollout-2026-11-03T03-38-31.jsonl.zst");
+    assert_eq!(first["name"], aac_usage::util::display_name(Path::new(NAME)));
+    assert!(!first["name"].as_str().unwrap().contains("01a19f7c"));
     assert_eq!(first["decodedBytes"], decoded);
     assert_eq!(first["reason"], "deadline");
     let throughs: Vec<u64> = parts
@@ -272,16 +274,33 @@ fn a_saved_place_for_another_session_reads_the_log_whole() {
 
 #[test]
 fn display_names_drop_conversation_ids() {
+    // FIX-ROUND-BIG 18: a rollout is named by its time and the contract's session key; any other
+    // log by a digest of its name. No part of a file name past what is checked ever leaves.
+    let id = &NAME["rollout-2026-11-03T03-38-31-".len()..NAME.len() - ".jsonl.zst".len()];
+    let key = aac_usage::util::session_key("codex", Some(id)).unwrap();
     assert_eq!(
         aac_usage::util::display_name(Path::new(NAME)),
-        "rollout-2026-11-03T03-38-31.jsonl.zst"
+        format!("rollout-2026-11-03T03-38-31-{key}.jsonl.zst")
     );
-    assert_eq!(
-        aac_usage::util::display_name(Path::new(
-            "2026-09-26T05-39-12-615Z_01a0dc39-8667-7224-b0cb-6f3aaeabc153.jsonl"
-        )),
-        "2026-09-26T05-39-12-615Z.jsonl"
-    );
+    for (name, extension) in [
+        (
+            "2026-09-26T05-39-12-615Z_01a0dc39-8667-7224-b0cb-6f3aaeabc153.jsonl",
+            ".jsonl",
+        ),
+        // Astra M11: a retained, renamed rollout whose id is not a UUID.
+        ("rollout-2026-11-11T12-00-00-private-session-handle.jsonl", ".jsonl"),
+        ("rollout-\u{e9}\u{e9}-2026.jsonl.zst", ".jsonl.zst"),
+    ] {
+        let shown = aac_usage::util::display_name(Path::new(name));
+        let digest = shown
+            .strip_prefix("log-")
+            .and_then(|rest| rest.strip_suffix(extension))
+            .unwrap_or_else(|| panic!("{shown}"));
+        assert!(
+            digest.len() == 12 && digest.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{shown}"
+        );
+    }
 }
 
 /// Several GB decoded in one frame: read whole with no size cap, then cut every 4,001 lines so each

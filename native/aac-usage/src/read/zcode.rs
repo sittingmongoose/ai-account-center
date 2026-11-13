@@ -33,15 +33,11 @@ fn same(prior: Option<&Value>, current: &Print) -> bool {
         && get("walMtimeMs") == current.wal_mtime_ms.unwrap_or(0)
 }
 
-/// `file:<path>?mode=ro[&immutable=1]`, as the Python helper spells it.
-fn uri(db: &Path, immutable: bool) -> String {
-    let text = util::path_text(db).replace('?', "%3F").replace('#', "%23");
-    format!("file:{text}?mode=ro{}", if immutable { "&immutable=1" } else { "" })
-}
-
 fn open(db: &Path, immutable: bool) -> rusqlite::Result<Connection> {
+    // The shared builder encodes `%` too (FIX-ROUND-BIG 11): `account%20one` is that folder, never
+    // `account one`.
     let connection = Connection::open_with_flags(
-        uri(db, immutable),
+        super::sqlite::uri(db, immutable),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     connection.busy_timeout(Duration::from_secs(5))?;
@@ -93,6 +89,7 @@ fn scan_db(collector: &mut Collector, db: &Path, immutable: bool) -> &'static st
         return "ok";
     }
     let Ok(connection) = open(db, immutable) else {
+        collector.read_failure("zcode", filekey);
         return "error";
     };
     let hourly: rusqlite::Result<Vec<Vec<Sql>>> = (|| {
@@ -110,6 +107,7 @@ fn scan_db(collector: &mut Collector, db: &Path, immutable: bool) -> &'static st
         rows.collect()
     })();
     let Ok(groups) = hourly else {
+        collector.read_failure("zcode", filekey);
         return "error";
     };
     for group in groups {
@@ -251,10 +249,10 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env, immutable: boo
         }
     }
     let mut states = Vec::new();
-    for candidate in dbs {
-        if !crate::fsx::is_file(&candidate) || crate::fsx::is_link(&candidate) {
-            continue;
-        }
+    // Each database is probed first (FIX-ROUND-BIG 9): one that does not answer, or is there but
+    // cannot be read, is named on its root.
+    let dbs: Vec<PathBuf> = dbs.into_iter().filter(|db| !crate::fsx::is_link(db)).collect();
+    for candidate in collector.gate_files("zcode", &dbs) {
         collector.count_root("zcode", &util::realpath(&candidate), std::slice::from_ref(&candidate));
         states.push(scan_db(collector, &candidate, immutable));
     }

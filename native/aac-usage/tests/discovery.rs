@@ -151,7 +151,8 @@ fn signature_homes_are_found_by_what_they_hold_not_their_name() {
         &h.join("PM-Experiments/sessions/rollout-2026-10-01T15-00-00-cccccccc-0000-0000-0000-000000000002.jsonl"),
         &codex_rollout("pm", 1),
     );
-    let (codex, claude) = discover::signature_homes(h);
+    let (codex, claude, limit) = discover::signature_homes(h);
+    assert!(limit.is_none());
     let names = |list: &[PathBuf]| {
         list.iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())

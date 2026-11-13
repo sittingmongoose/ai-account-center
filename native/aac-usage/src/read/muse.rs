@@ -134,48 +134,51 @@ pub fn parse_line(line: &str, collector: &mut Collector, kind: &str, filekey: &s
     }
 }
 
-/// One sessions folder; true when the scan stopped early.
-fn scan_dir(collector: &mut Collector, directory: &Path) -> bool {
-    let listed = fsx::walk_files(
-        directory,
-        &|name: &str| name == "session.jsonl",
-        collector,
-        Some(&holds_no_logs),
-    );
-    collector.count_root("muse", &util::realpath(directory), &listed);
-    for path in listed {
-        if collector.expired() {
-            collector.truncated = true;
-            return true;
-        }
-        let Some(filekey) = collector.note_file("muse", &path, None) else {
-            let staged = util::filekey("muse", &path);
-            if collector.is_pending("muse", &staged) {
-                collector.confirm_file("muse", &staged);
-            }
-            continue;
-        };
-        let session = path
-            .parent()
-            .and_then(|p| p.file_name())
-            .map(|n| util::prefix_chars(&n.to_string_lossy(), util::SESSION_MAX_LEN));
-        let line_box = LineBox {
-            session,
-            ..LineBox::default()
-        };
-        match read_file_with(collector, "muse", &path, &filekey, parse_line, None, line_box) {
-            Outcome::Cut => return true,
-            Outcome::Unreadable => continue,
-            Outcome::Ok => {
-                collector.sent_through("muse", &filekey, &path);
-                collector.confirm_file("muse", &filekey);
-            }
-        }
-    }
-    false
+/// A Muse log's key: its session (the folder `session.jsonl` sits in), so every copy of a session
+/// in any folder keeps the same rows (FIX-ROUND-BIG 2).
+fn session_of(path: &Path) -> String {
+    path.parent()
+        .and_then(|p| p.file_name())
+        .map(|n| util::prefix_chars(&n.to_string_lossy(), util::SESSION_MAX_LEN))
+        .unwrap_or_default()
 }
 
-/// Python's `_collect_muse`.
+fn file_key(path: &Path) -> String {
+    util::filekey_text("muse", &format!("aac-session-file-v1:{}", session_of(path)))
+}
+
+/// Read one session's owner log; true when the scan stopped early.
+fn read_owner(collector: &mut Collector, path: &Path) -> bool {
+    let key = file_key(path);
+    let Some(filekey) = collector.note_file_as("muse", path, key.clone(), None) else {
+        if collector.is_pending("muse", &key) {
+            collector.confirm_file("muse", &key);
+        }
+        return false;
+    };
+    let line_box = LineBox {
+        session: Some(session_of(path)).filter(|s| !s.is_empty()),
+        ..LineBox::default()
+    };
+    match read_file_with(collector, "muse", path, &filekey, parse_line, None, line_box) {
+        Outcome::Cut => true,
+        Outcome::Unreadable => {
+            // Named as failed (FIX-ROUND-BIG 3); a prefix it may have emitted is not kept.
+            collector.read_failure("muse", filekey.clone());
+            collector.drop_file_rows(&std::collections::HashSet::from([filekey]));
+            false
+        }
+        Outcome::Ok => {
+            collector.sent_through("muse", &filekey, path);
+            collector.confirm_file("muse", &filekey);
+            false
+        }
+    }
+}
+
+/// Python's `_collect_muse`, with one rule for copies (FIX-ROUND-BIG 2): every `session.jsonl`
+/// under every root is found first, and of each session only its longest copy is read (a retained
+/// hard link, an experiment copy or a backup never adds to it).
 pub fn collect(
     collector: &mut Collector,
     home: &Path,
@@ -198,15 +201,38 @@ pub fn collect(
     let mut candidates = vec![sessions];
     candidates.extend(extra.iter().cloned());
     candidates.extend(experiments.iter().cloned());
-    let mut scanned = false;
-    for directory in fsx::dedup_dirs(&candidates) {
-        if !fsx::is_dir(&directory) || fsx::is_link(&directory) {
-            continue;
-        }
-        scanned = true;
-        if scan_dir(collector, &directory) {
+    // Probed first (FIX-ROUND-BIG 9): a folder that is there but cannot be read is named.
+    let candidates: Vec<PathBuf> = candidates.into_iter().filter(|d| !fsx::is_link(d)).collect();
+    let directories = fsx::dedup_dirs(&collector.gate_dirs("muse", &candidates));
+    if directories.is_empty() {
+        return "not_installed";
+    }
+    let mut found = Vec::new();
+    for directory in &directories {
+        let listed = fsx::walk_files(
+            "muse",
+            directory,
+            &|name: &str| name == "session.jsonl",
+            collector,
+            Some(&holds_no_logs),
+        );
+        collector.count_root("muse", &util::realpath(directory), &listed);
+        found.extend(listed);
+        if collector.expired() {
+            collector.truncated = true;
             return "ok";
         }
     }
-    if scanned { "ok" } else { "not_installed" }
+    for path in super::owners(&found, &|p| session_of(p), &|p| {
+        std::fs::metadata(p).ok().map(|m| m.len())
+    }) {
+        if collector.expired() {
+            collector.truncated = true;
+            return "ok";
+        }
+        if read_owner(collector, &path) {
+            return "ok";
+        }
+    }
+    "ok"
 }

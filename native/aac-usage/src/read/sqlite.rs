@@ -35,12 +35,44 @@ pub fn same(prior: Option<&Value>, current: &Print) -> bool {
         && get("walMtimeMs") == current.wal_mtime_ms.unwrap_or(0)
 }
 
-fn uri(db: &Path, immutable: bool) -> String {
-    let text = util::path_text(db)
-        .replace('%', "%25")
-        .replace('?', "%3F")
-        .replace('#', "%23");
-    format!("file:{text}?mode=ro{}", if immutable { "&immutable=1" } else { "" })
+/// The one SQLite URI every reader opens (FIX-ROUND-BIG 11 and 13): `%`, `?` and `#` in the path are
+/// percent-encoded (so `%20` in a folder name never selects another file), and on Windows the path
+/// is written verbatim (`\\?\C:\...`, `\\?\UNC\...`), which SQLite passes to the system unchanged:
+/// past 260 characters too. The verbatim `?` is encoded like any other and decoded by SQLite.
+pub fn uri(db: &Path, immutable: bool) -> String {
+    let text = util::path_text(&util::abspath(db));
+    #[cfg(windows)]
+    let text = verbatim(&text);
+    let mut encoded = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        match c {
+            '%' => encoded.push_str("%25"),
+            '?' => encoded.push_str("%3F"),
+            '#' => encoded.push_str("%23"),
+            other => encoded.push(other),
+        }
+    }
+    // A path that starts with `//` would read as an authority after `file:`.
+    let prefix = if encoded.starts_with("//") { "file://" } else { "file:" };
+    format!(
+        "{prefix}{encoded}?mode=ro{}",
+        if immutable { "&immutable=1" } else { "" }
+    )
+}
+
+/// A Windows path in its verbatim form: no length limit, no `/` or `.` rewriting.
+pub fn verbatim(text: &str) -> String {
+    if text.starts_with(r"\\?\") {
+        return text.to_string();
+    }
+    let text = text.replace('/', "\\");
+    if let Some(rest) = text.strip_prefix(r"\\") {
+        return format!(r"\\?\UNC\{rest}");
+    }
+    if text.len() > 2 && text.as_bytes()[1] == b':' {
+        return format!(r"\\?\{text}");
+    }
+    text
 }
 
 /// An open read-only connection, and whether it is immutable (so blind to the write-ahead log).
@@ -87,9 +119,9 @@ pub fn note_db(collector: &mut Collector, kind: &str, filekey: &str, current: Pr
 }
 
 /// A non-negative whole number from a JSON-extracted SQLite value (integers, or reals that are).
+/// A missing counter (NULL) is not a number: the record is unreadable, never 0 (FIX-ROUND-BIG 5).
 pub fn count(value: &rusqlite::types::Value) -> Option<u64> {
     match value {
-        rusqlite::types::Value::Null => Some(0),
         rusqlite::types::Value::Integer(v) if *v >= 0 => Some(*v as u64),
         rusqlite::types::Value::Real(v) if v.is_finite() && *v >= 0.0 && v.fract() == 0.0 => Some(*v as u64),
         _ => None,

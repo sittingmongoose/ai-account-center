@@ -32,10 +32,13 @@ pub struct Pending {
 pub fn is_mirror(path: &Path) -> bool {
     let normal = util::normpath(path);
     let parts: Vec<String> = normal.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    // Bytes, never a string cut: a 40-byte name of multi-byte characters is simply no mirror
+    // (FIX-ROUND-BIG 8).
     parts[..parts.len().saturating_sub(1)].iter().any(|part| {
-        part.len() == 40
-            && part[..4].eq_ignore_ascii_case("ssh-")
-            && part[4..].chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+        let bytes = part.as_bytes();
+        bytes.len() == 40
+            && bytes[..4].eq_ignore_ascii_case(b"ssh-")
+            && bytes[4..].iter().all(|b| b.is_ascii_hexdigit() || *b == b'-')
     })
 }
 
@@ -545,6 +548,11 @@ pub fn collect(
     instances: &[T3Instance],
 ) -> &'static str {
     let mut plan = discover::claude_roots(home, env, extra, instances);
+    // Home has more children than the signature search looks at: named, and the kind is partial
+    // (FIX-ROUND-BIG 6).
+    if let Some((read, total)) = plan.limit {
+        collector.search_limit("claude", read, Some(total));
+    }
     // Experiment log folders are read through the copy rule, like other homes' logs (DESIGN 16.5).
     plan.others
         .extend(experiments.iter().map(|p| (p.clone(), "experiment")));

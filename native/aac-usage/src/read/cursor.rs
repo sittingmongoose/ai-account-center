@@ -11,7 +11,7 @@ use crate::collector::Collector;
 use crate::util;
 use rusqlite::types::Value as Sql;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub const MAX_PROJECTS: usize = 4096;
@@ -92,28 +92,30 @@ const RUNS_NO_AGENTS: &str = "SELECT r.run_id, r.agent_id, r.model, r.started_at
      FROM runs r WHERE r.usage_json IS NOT NULL AND json_valid(r.usage_json)";
 const BROKEN: &str = "SELECT count(*) FROM runs WHERE usage_json IS NOT NULL AND NOT json_valid(usage_json)";
 
-/// One store: "ok", "empty" (no `runs` table yet), "error" or "cut".
-fn scan_store(collector: &mut Collector, db: &Path, agents: &mut HashMap<String, ()>) -> &'static str {
+/// One store: "ok", "empty" (no `runs` table yet), "error" or "cut". A run another store already
+/// counted (a copied store) counts once, in the first store by path (FIX-ROUND-BIG 2). A store is
+/// confirmed only when every run in it was counted or named unreadable: a row cap that drops a
+/// run leaves it unconfirmed (FIX-ROUND-BIG 5).
+fn scan_store(
+    collector: &mut Collector,
+    db: &Path,
+    agents: &mut HashMap<String, ()>,
+    runs_seen: &mut HashSet<String>,
+) -> &'static str {
     let filekey = util::filekey("cursor", db);
-    let Some(current) = sqlite::print_of(db) else {
-        return "error";
-    };
-    if sqlite::note_db(collector, "cursor", &filekey, current) {
-        collector.confirm_file("cursor", &filekey);
-        return "ok";
-    }
     let Some((connection, immutable)) = sqlite::open(db, collector.deadline()) else {
         collector.read_failure("cursor", filekey);
         return "error";
     };
-    if immutable
+    let wal_waiting = immutable
         && collector
             .pending
             .get("cursor")
             .and_then(|m| m.get(&filekey))
-            .is_some_and(|p| p.wal_size.unwrap_or(0) > 0)
-    {
+            .is_some_and(|p| p.wal_size.unwrap_or(0) > 0);
+    if wal_waiting {
         collector.kind_wal_unread.insert("cursor".into());
+        collector.set_pending("cursor", &filekey, |print| print.wal_unread = Some(true));
     }
     let Ok(tables) = sqlite::tables(&connection) else {
         collector.read_failure("cursor", filekey);
@@ -142,11 +144,15 @@ fn scan_store(collector: &mut Collector, db: &Path, agents: &mut HashMap<String,
         return "error";
     };
     let broken: i64 = connection.query_row(BROKEN, [], |row| row.get(0)).unwrap_or(0);
-    *collector.unreadable_records.entry("cursor".into()).or_default() += broken.max(0) as usize;
+    let mut unreadable = broken.max(0) as u64;
     for run in runs {
         let (Some(run_id), Some(agent_id)) = (sqlite::text(&run[0]), sqlite::text(&run[1])) else {
             continue;
         };
+        if !runs_seen.insert(run_id.clone()) {
+            continue;
+        }
+        // Every counter must be there: a missing one is "not logged", never 0 (FIX-ROUND-BIG 5).
         let numbers: Vec<Option<u64>> = run[5..9].iter().map(sqlite::count).collect();
         let total = match &run[9] {
             Sql::Null => None,
@@ -154,18 +160,18 @@ fn scan_store(collector: &mut Collector, db: &Path, agents: &mut HashMap<String,
         };
         let (Some(input), Some(output), Some(read), Some(write)) = (numbers[0], numbers[1], numbers[2], numbers[3])
         else {
-            *collector.unreadable_records.entry("cursor".into()).or_default() += 1;
+            unreadable += 1;
             continue;
         };
         let Some(split) = tokens(input, output, read, write, total) else {
-            *collector.unreadable_records.entry("cursor".into()).or_default() += 1;
+            unreadable += 1;
             continue;
         };
         let at = sqlite::text(&run[4])
             .or_else(|| sqlite::text(&run[3]))
             .and_then(|t| util::iso_ms(&t));
         let Some(epoch_ms) = at else {
-            *collector.unreadable_records.entry("cursor".into()).or_default() += 1;
+            unreadable += 1;
             continue;
         };
         if epoch_ms < collector.min_date_ms {
@@ -179,6 +185,9 @@ fn scan_store(collector: &mut Collector, db: &Path, agents: &mut HashMap<String,
         )))
         .unwrap_or_else(|| "unknown-cursor-model".into());
         collector.add("cursor", &filekey, &model, None, &hour, split, 0.0);
+        if collector.row_cap {
+            return "cut";
+        }
         let session_key = util::session_key("cursor", Some(&agent_id));
         collector.sadd(
             "cursor",
@@ -204,6 +213,10 @@ fn scan_store(collector: &mut Collector, db: &Path, agents: &mut HashMap<String,
             split,
             0.0,
         );
+    }
+    if unreadable > 0 {
+        *collector.unreadable_records.entry("cursor".into()).or_default() += unreadable as usize;
+        collector.set_pending("cursor", &filekey, |print| print.unreadable_records = Some(unreadable));
     }
     collector.confirm_file("cursor", &filekey);
     "ok"
@@ -247,29 +260,83 @@ pub fn t3_threads(home: &Path, collector: &Collector) -> HashMap<String, (String
 }
 
 /// "not_installed" without a run store (presence then says whether Cursor is there at all, with
-/// "No local usage records"), else "ok"; a run store without a `runs` table yet counts as found,
-/// with no logs.
+/// "No local usage records"); "error" when every store failed; else "ok". A run store without a
+/// `runs` table yet counts as found, with no logs.
+///
+/// Stores are read together (FIX-ROUND-BIG 2): when none changed and they are the stores of the
+/// last scan, nothing is read and each keeps its rows, with the unreadable runs and write-ahead-log
+/// note its print carries (FIX-ROUND-BIG 5); when any changed, every store is read again in path
+/// order and each run counts once, in the first store that holds it.
 pub fn collect(collector: &mut Collector, home: &Path) -> &'static str {
     let projects = home.join(".cursor").join("projects");
-    let (dbs, cut) = stores(home);
+    if collector
+        .gate_dirs("cursor", std::slice::from_ref(&projects))
+        .is_empty()
+    {
+        return "not_installed";
+    }
+    let (mut dbs, cut) = stores(home);
     if cut {
-        collector.discovery_truncated = true;
+        collector.search_limit("cursor", dbs.len(), None);
     }
     if dbs.is_empty() {
         return "not_installed";
     }
+    dbs.sort();
     collector.note_root("cursor", &projects, "default");
     collector.count_root("cursor", &util::realpath(&projects), &dbs);
     collector.run_stores += dbs.len();
+    let mut changed = false;
+    let mut failed = 0usize;
+    let mut keys: HashSet<String> = HashSet::new();
+    for db in &dbs {
+        let filekey = util::filekey("cursor", db);
+        keys.insert(filekey.clone());
+        let Some(current) = sqlite::print_of(db) else {
+            collector.read_failure("cursor", filekey);
+            failed += 1;
+            continue;
+        };
+        if !sqlite::note_db(collector, "cursor", &filekey, current) {
+            changed = true;
+        }
+    }
+    let before: HashSet<String> = collector
+        .prior_kind("cursor")
+        .map(|prints| prints.keys().cloned().collect())
+        .unwrap_or_default();
+    if !changed && before == keys {
+        for key in keys {
+            if collector.is_pending("cursor", &key) {
+                replay(collector, "cursor", &key);
+                collector.confirm_file("cursor", &key);
+            }
+        }
+        return if failed == dbs.len() { "error" } else { "ok" };
+    }
     let mut agents = HashMap::new();
-    for db in super::newest_first(&dbs) {
+    let mut runs_seen = HashSet::new();
+    let mut read = 0usize;
+    for db in &dbs {
+        let filekey = util::filekey("cursor", db);
+        if !collector.is_pending("cursor", &filekey) {
+            continue;
+        }
         if collector.expired() {
             collector.truncated = true;
             return "ok";
         }
-        if scan_store(collector, &db, &mut agents) == "cut" {
-            return "ok";
+        match scan_store(collector, db, &mut agents, &mut runs_seen) {
+            "cut" => {
+                collector.truncated = true;
+                return "ok";
+            }
+            "error" => failed += 1,
+            _ => read += 1,
         }
+    }
+    if read == 0 && failed > 0 {
+        return "error";
     }
     if !agents.is_empty() && !collector.expired() {
         let threads = t3_threads(home, collector);
@@ -280,4 +347,24 @@ pub fn collect(collector: &mut Collector, home: &Path) -> &'static str {
         }
     }
     "ok"
+}
+
+/// An unchanged database keeps what its last read found wrong (FIX-ROUND-BIG 5): its unreadable
+/// records and its write-ahead-log note, from the print the server sent back.
+pub fn replay(collector: &mut Collector, kind: &str, key: &str) {
+    let Some(prior) = collector.prior_print(kind, key).cloned() else {
+        return;
+    };
+    if let Some(count) = prior
+        .get("unreadableRecords")
+        .and_then(Value::as_u64)
+        .filter(|n| *n > 0)
+    {
+        *collector.unreadable_records.entry(kind.to_string()).or_default() += count as usize;
+        collector.set_pending(kind, key, |print| print.unreadable_records = Some(count));
+    }
+    if prior.get("walUnread").and_then(Value::as_bool) == Some(true) {
+        collector.kind_wal_unread.insert(kind.to_string());
+        collector.set_pending(kind, key, |print| print.wal_unread = Some(true));
+    }
 }

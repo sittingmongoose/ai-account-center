@@ -56,6 +56,10 @@ pub fn abspath(path: &Path) -> PathBuf {
 
 /// Python's `os.path.realpath`: links resolved; Windows' verbatim `\\?\` prefix dropped.
 pub fn realpath(path: &Path) -> PathBuf {
+    // Under a mount that did not answer, nothing is resolved (FIX-ROUND-BIG 9).
+    if crate::fsx::avoided(path) {
+        return abspath(path);
+    }
     match fs::canonicalize(path) {
         Ok(real) => strip_verbatim(real),
         Err(_) => {
@@ -113,6 +117,20 @@ pub fn filekey(kind: &str, path: &Path) -> String {
     text
 }
 
+/// A file key that names what a file holds (a Codex conversation, a Muse session) rather than where
+/// it lies (FIX-ROUND-BIG 1 and 2): every copy, and the file after a move, keep the same rows.
+pub fn filekey_text(kind: &str, text: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(kind.as_bytes());
+    digest.update([0u8]);
+    digest.update(text.as_bytes());
+    let mut out = String::with_capacity(64);
+    for byte in digest.finalize().iter() {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 /// Python's `int(stat.st_mtime * 1000)`: seconds as a double, then milliseconds truncated.
 pub fn mtime_ms(meta: &fs::Metadata) -> i64 {
     (mtime_seconds(meta) * 1000.0) as i64
@@ -163,6 +181,11 @@ pub struct Print {
     /// How far a read that the deadline cut got, and where this answer's rows for the file start
     /// (DESIGN 16.1). None for a file read whole in one call.
     pub progress: Option<ReadProgress>,
+    /// Records (Cursor runs, Devin replies) this database's last read could not count: an unchanged
+    /// database says so again (FIX-ROUND-BIG 5).
+    pub unreadable_records: Option<u64>,
+    /// The last read was immutable while the write-ahead log held rows: said again while unchanged.
+    pub wal_unread: Option<bool>,
 }
 
 /// A resumable read's place in one file (DESIGN 16.1). `through` is the decoded byte offset after
@@ -179,47 +202,38 @@ pub struct ReadProgress {
     pub decoded: Option<u64>,
 }
 
-/// A log's file name without any conversation id (8-4-4-4-12 hex), so it can be shown: raw ids
-/// never leave the computer. ASCII only, at most 120 characters.
+/// A log's name for the page (FIX-ROUND-BIG 18): never any part of the file name past what is
+/// checked. A Codex rollout is `rollout-<its time>-<session key>` (the contract's 16-hex session
+/// key, never the id); any other log is `log-<12 hex of its name>`. The extension is kept.
 pub fn display_name(path: &Path) -> String {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let bytes = name.as_bytes();
-    let shape = [8usize, 4, 4, 4, 12];
-    let is_id_at = |start: usize| -> Option<usize> {
-        let mut at = start;
-        for (index, length) in shape.iter().enumerate() {
-            if at + length > bytes.len() || !bytes[at..at + length].iter().all(u8::is_ascii_hexdigit) {
-                return None;
-            }
-            at += length;
-            if index < 4 {
-                if bytes.get(at) != Some(&b'-') {
-                    return None;
-                }
-                at += 1;
-            }
-        }
-        Some(at)
-    };
-    let mut out = String::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if let Some(end) = is_id_at(index) {
-            // Drop the id and the separator before it.
-            while out.ends_with('-') || out.ends_with('_') {
-                out.pop();
-            }
-            index = end;
-            continue;
-        }
-        let c = bytes[index] as char;
-        out.push(if c.is_ascii_graphic() { c } else { '_' });
-        index += 1;
+    let extension = [".jsonl.zst", ".jsonl", ".json", ".db", ".sqlite"]
+        .iter()
+        .find(|e| name.ends_with(*e))
+        .copied()
+        .unwrap_or("");
+    let time = name
+        .strip_prefix("rollout-")
+        .and_then(|rest| rest.get(..19))
+        .filter(|stamp| {
+            stamp.bytes().enumerate().all(|(i, b)| match i {
+                4 | 7 | 13 | 16 => b == b'-',
+                10 => b == b'T',
+                _ => b.is_ascii_digit(),
+            })
+        });
+    if let (Some(time), Some(id)) = (time, crate::read::codex::conversation_id(&name))
+        && let Some(key) = session_key("codex", Some(&id))
+    {
+        return format!("rollout-{time}-{key}{extension}");
     }
-    out.chars().take(120).collect()
+    format!(
+        "log-{}{extension}",
+        &sha256_hex(format!("aac-log-name-v1:{name}").as_bytes())[..12]
+    )
 }
 
 impl Print {
@@ -238,6 +252,8 @@ impl Print {
             msg_through: None,
             msg_head: None,
             progress: None,
+            unreadable_records: None,
+            wal_unread: None,
         }
     }
 
@@ -273,6 +289,12 @@ impl Print {
         if let Some(head) = &self.msg_head {
             map.insert("msgHead".into(), Value::from(head.clone()));
         }
+        if let Some(count) = self.unreadable_records {
+            map.insert("unreadableRecords".into(), Value::from(count));
+        }
+        if let Some(wal) = self.wal_unread {
+            map.insert("walUnread".into(), Value::from(wal));
+        }
         if let Some(progress) = &self.progress {
             if let Some(through) = progress.through {
                 map.insert("readThrough".into(), Value::from(through));
@@ -295,8 +317,9 @@ impl Print {
 }
 
 pub fn fingerprint(path: &Path) -> Option<Print> {
-    let meta = fs::metadata(path).ok()?;
-    let mut handle = fs::File::open(path).ok()?;
+    // Regular files only, never a FIFO or a cloud placeholder (FIX-ROUND-BIG 9 and 15).
+    let mut handle = crate::fsx::open_regular(path).ok()?;
+    let meta = handle.metadata().ok()?;
     let mut buffer = vec![0u8; 256];
     let read = read_up_to(&mut handle, &mut buffer).ok()?;
     let head = sha256_hex(&buffer[..read]);
@@ -563,7 +586,7 @@ pub fn iso_from_ms(epoch_ms: i64) -> String {
 
 /// sha256 of a file's first `length` bytes (at most 256), for `msgHead`.
 pub fn head_digest(path: &Path, length: u64) -> Option<String> {
-    let mut handle = fs::File::open(path).ok()?;
+    let mut handle = crate::fsx::open_regular(path).ok()?;
     let mut buffer = vec![0u8; length.min(256) as usize];
     let read = read_up_to(&mut handle, &mut buffer).ok()?;
     if read != buffer.len() {

@@ -32,6 +32,15 @@ pub const AGY_DIRS: [&str; 4] = [
 /// The environment the scan runs with (tests pass their own).
 pub type Env = HashMap<String, String>;
 
+/// The scan's environment from the process's variables. Windows names variables in any case (the
+/// system's `Path`, say): there every key is upper-cased, and every lookup here uses upper case
+/// (FIX-ROUND-BIG 12).
+pub fn env_from(vars: impl IntoIterator<Item = (String, String)>) -> Env {
+    vars.into_iter()
+        .map(|(key, value)| (if cfg!(windows) { key.to_uppercase() } else { key }, value))
+        .collect()
+}
+
 /// One T3 Code provider instance: id, driver, enabled, config.
 #[derive(Clone, Debug)]
 pub struct T3Instance {
@@ -45,13 +54,9 @@ pub struct T3Instance {
 /// none and never fails the scan. Only `driver`, `enabled` and `config` are kept.
 pub fn t3_instances(home: &Path) -> Vec<T3Instance> {
     let settings = home.join(".t3").join("userdata").join("settings.json");
-    let Ok(meta) = fs::metadata(&settings) else {
-        return Vec::new();
-    };
-    if meta.len() > T3_SETTINGS_MAX_BYTES {
-        return Vec::new();
-    }
-    let Ok(text) = fs::read(&settings) else {
+    // A regular file of at most 1 MiB, read without blocking (FIX-ROUND-BIG 9): a FIFO or a device
+    // there is no settings file.
+    let Some(text) = fsx::read_regular(&settings, T3_SETTINGS_MAX_BYTES) else {
         return Vec::new();
     };
     let Ok(value) = serde_json::from_slice::<Value>(&text) else {
@@ -106,13 +111,17 @@ fn has_state_db(path: &Path) -> bool {
 /// Direct children of home with a Codex home's signature (`sessions` or `archived_sessions`, with
 /// `config.toml`, `auth.json` or a `state_*.sqlite`) or a Claude config dir's (`projects`, with one of
 /// CLAUDE_DIR_MARKERS), whatever their name. A link counts only when its target stays inside home.
-pub fn signature_homes(home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+/// Cloud-synced and personal folders are not looked in (FIX-ROUND-BIG 15). The third value is
+/// `(looked at, children)` when home has more children than the search takes (FIX-ROUND-BIG 6).
+pub fn signature_homes(home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<(usize, usize)>) {
     let (mut codex, mut claude) = (Vec::new(), Vec::new());
     let Some(names) = sorted_names(home) else {
-        return (codex, claude);
+        return (codex, claude, None);
     };
+    let total = names.len();
+    let limit = (total > SIGNATURE_MAX_CHILDREN).then_some((SIGNATURE_MAX_CHILDREN, total));
     for name in names.into_iter().take(SIGNATURE_MAX_CHILDREN) {
-        if skipped(&name) || name == "PM-Experiments" {
+        if skipped(&name) || name == "PM-Experiments" || fsx::personal_or_cloud(&name) {
             continue;
         }
         let path = home.join(&name);
@@ -132,7 +141,7 @@ pub fn signature_homes(home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
             claude.push(path);
         }
     }
-    (codex, claude)
+    (codex, claude, limit)
 }
 
 /// The log folders of tool homes: Claude's `projects`; Codex's `sessions` and `archived_sessions`
@@ -181,6 +190,8 @@ pub struct RootPlan {
     pub defaults: Vec<(PathBuf, &'static str)>,
     /// Read through the copy rule: a record a default log already holds counts once.
     pub others: Vec<(PathBuf, &'static str)>,
+    /// The signature search's bound, when home has more children than it looks at.
+    pub limit: Option<(usize, usize)>,
 }
 
 /// Claude Code: `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`, `$XDG_CONFIG_HOME/claude/projects`,
@@ -200,12 +211,13 @@ pub fn claude_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3In
             .into_iter()
             .map(|p| (p, "ccs_instance")),
     );
-    others.extend(
-        log_dirs("claude", &signature_homes(home).1)
-            .into_iter()
-            .map(|p| (p, "signature")),
-    );
-    RootPlan { defaults, others }
+    let (_, signed, limit) = signature_homes(home);
+    others.extend(log_dirs("claude", &signed).into_iter().map(|p| (p, "signature")));
+    RootPlan {
+        defaults,
+        others,
+        limit,
+    }
 }
 
 /// Codex: `sessions` and `archived_sessions` of `$CODEX_HOME`, `~/.codex` and each extra home; then
@@ -231,12 +243,13 @@ pub fn codex_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3Ins
             .into_iter()
             .map(|p| (p, "ccs_instance")),
     );
-    others.extend(
-        log_dirs("codex", &signature_homes(home).0)
-            .into_iter()
-            .map(|p| (p, "signature")),
-    );
-    RootPlan { defaults, others }
+    let (signed, _, limit) = signature_homes(home);
+    others.extend(log_dirs("codex", &signed).into_iter().map(|p| (p, "signature")));
+    RootPlan {
+        defaults,
+        others,
+        limit,
+    }
 }
 
 /// A T3 instance's launch arguments as a bounded list.
@@ -319,11 +332,18 @@ fn has_binary(home: &Path, env: &Env, names: &[&str]) -> bool {
         .map(|path| std::env::split_paths(path).collect())
         .unwrap_or_default();
     dirs.push(home.join(".local").join("bin"));
-    let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ""] } else { &[""] };
+    let exts: &[&str] = if cfg!(windows) {
+        &[".exe", ".cmd", ".bat", ""]
+    } else {
+        &[""]
+    };
     for name in names {
         for dir in &dirs {
             for ext in exts {
                 let file = dir.join(format!("{name}{ext}"));
+                if fsx::avoided(&file) {
+                    continue;
+                }
                 if let Ok(meta) = fs::metadata(&file) {
                     #[cfg(unix)]
                     {
@@ -421,6 +441,9 @@ fn count_files(root: &Path, accept: &dyn Fn(&str) -> bool, deadline: Instant) ->
     while let Some((directory, depth)) = pending.pop() {
         if Instant::now() >= deadline {
             return (files, newest, true);
+        }
+        if fsx::avoided(&directory) {
+            continue;
         }
         let Ok(list) = fs::read_dir(&directory) else {
             continue;
@@ -661,7 +684,10 @@ pub fn tilde(path: &Path, home: &Path) -> String {
     }
     let sep = std::path::MAIN_SEPARATOR;
     if a.starts_with(&format!("{h}{sep}")) {
-        return format!("~{}", &absolute[home_text.len()..]);
+        // Lower-casing can change byte lengths (Windows): never cut inside a character.
+        if let Some(rest) = absolute.get(home_text.len()..) {
+            return format!("~{rest}");
+        }
     }
     absolute
 }
@@ -672,13 +698,15 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
     let mut roots = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (path, origin) in collector.root_origins.get(kind).cloned().unwrap_or_default() {
-        // A link that could not be listed or did not answer is reported as such, never stat'ed again.
-        if let Some(state) = collector.link_states.get(&(kind.to_string(), path.clone())) {
+        // A root that is there but could not be read is reported as such (with why), never stat'ed
+        // again (DESIGN 16.4, FIX-ROUND-BIG 4).
+        if let Some((state, cause)) = collector.root_failures.get(&(kind.to_string(), path.clone())) {
             if seen.insert(path.clone()) {
                 roots.push(json!({
                     "root": root_id(kind, &origin, &path, home),
                     "origin": origin,
                     "state": state,
+                    "cause": cause,
                     "counts": {"filesFound": 0, "newestMtime": Value::Null},
                 }));
             }
@@ -703,8 +731,11 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
             break;
         }
     }
-    let found =
-        collector.pending.get(kind).map_or(0, |m| m.len()) + collector.read_failures.get(kind).map_or(0, |s| s.len());
+    // Each log once: a file that failed is counted as failed, not also as found pending.
+    let failed = collector.read_failures.get(kind);
+    let found = collector.pending.get(kind).map_or(0, |m| {
+        m.keys().filter(|k| !failed.is_some_and(|f| f.contains(*k))).count()
+    }) + failed.map_or(0, |s| s.len());
     let newest = roots.iter().filter_map(|r| r["counts"]["newestMtime"].as_i64()).max();
     let signals = installed_signals(home, env, kind, instances);
     json!({
@@ -723,6 +754,7 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
 
 pub const EXPERIMENT_MAX_DEPTH: usize = 4;
 pub const EXPERIMENT_MAX_ENTRIES: usize = 20_000;
+/// Per kind (FIX-ROUND-BIG 6): one kind's many folders never use up another's.
 pub const EXPERIMENT_MAX_ROOTS: usize = 64;
 const EXPERIMENT_KINDS: [&str; 4] = ["codex", "claude", "omp", "muse"];
 
@@ -765,21 +797,34 @@ fn holds_logs(kind: &str, dir: &Path) -> bool {
     false
 }
 
+/// What the experiment walk found: each kind's folders, and the kinds whose search a bound cut,
+/// with how many it kept and how many it saw (None: the walk itself stopped, so more may exist).
+pub struct ExperimentRoots {
+    pub found: HashMap<&'static str, Vec<PathBuf>>,
+    pub limits: HashMap<&'static str, (usize, Option<usize>)>,
+}
+
 /// Experiment log folders outside `~/PM-Experiments` (DESIGN 16.5), for example
 /// `~/t3setup-codex-v6/retained-usage/<run>/<kind>/`: a folder named after a kind (codex, claude,
-/// omp, muse) that holds that kind's logs, at most 4 levels below home. Bounded by entries and time;
-/// hidden folders (tool homes and caches), `node_modules`, `PM-Experiments` (its own walk) and git
-/// checkouts (a `.git` inside: fixtures, not logs) are never entered, nor is any link. A Muse
-/// folder's sessions sit one level down, so each of its sub-folders is the root.
-pub fn experiment_roots(home: &Path, budget: Duration) -> (HashMap<&'static str, Vec<PathBuf>>, bool) {
+/// omp, muse) that holds that kind's logs, at most 4 levels below home, at most 64 per kind. Bounded
+/// by entries and time; hidden folders (tool homes and caches), `node_modules`, `PM-Experiments`
+/// (its own walk), cloud-synced and personal folders, and git checkouts (a `.git` inside: fixtures,
+/// not logs) are never entered, nor is any link. A Muse folder is one root: its sessions are found
+/// under it at any depth. A bound that cuts the walk is a limit on every kind (FIX-ROUND-BIG 6).
+pub fn experiment_roots(home: &Path, budget: Duration) -> ExperimentRoots {
     let deadline = Instant::now() + budget;
-    let mut found: HashMap<&'static str, Vec<PathBuf>> = HashMap::new();
-    let mut total = 0usize;
+    let mut result = ExperimentRoots {
+        found: HashMap::new(),
+        limits: HashMap::new(),
+    };
+    let mut seen: HashMap<&'static str, usize> = HashMap::new();
     let mut entries = 0usize;
     let mut pending: Vec<(PathBuf, usize)> = vec![(home.to_path_buf(), 0)];
-    while let Some((folder, depth)) = pending.pop() {
+    let mut cut = false;
+    'walk: while let Some((folder, depth)) = pending.pop() {
         if Instant::now() >= deadline || entries >= EXPERIMENT_MAX_ENTRIES {
-            return (found, true);
+            cut = true;
+            break;
         }
         if depth > 0 && fsx::exists(&folder.join(".git")) {
             continue;
@@ -790,9 +835,15 @@ pub fn experiment_roots(home: &Path, budget: Duration) -> (HashMap<&'static str,
         for name in names {
             entries += 1;
             if entries >= EXPERIMENT_MAX_ENTRIES {
-                return (found, true);
+                cut = true;
+                break 'walk;
             }
-            if name.starts_with('.') || fsx::skipped(&name) || name == "node_modules" || name == "PM-Experiments" {
+            if name.starts_with('.')
+                || fsx::skipped(&name)
+                || name == "node_modules"
+                || name == "PM-Experiments"
+                || fsx::personal_or_cloud(&name)
+            {
                 continue;
             }
             let path = folder.join(&name);
@@ -803,17 +854,10 @@ pub fn experiment_roots(home: &Path, budget: Duration) -> (HashMap<&'static str,
                 && let Some(kind) = EXPERIMENT_KINDS.iter().find(|k| **k == name)
             {
                 if holds_logs(kind, &path) {
-                    let roots = if *kind == "muse" {
-                        fsx::child_dirs(&path)
-                    } else {
-                        vec![path.clone()]
-                    };
-                    for root in roots {
-                        if total >= EXPERIMENT_MAX_ROOTS {
-                            return (found, true);
-                        }
-                        total += 1;
-                        found.entry(kind).or_default().push(root);
+                    let count = seen.entry(kind).or_default();
+                    *count += 1;
+                    if *count <= EXPERIMENT_MAX_ROOTS {
+                        result.found.entry(kind).or_default().push(path);
                     }
                 }
                 continue;
@@ -823,5 +867,13 @@ pub fn experiment_roots(home: &Path, budget: Duration) -> (HashMap<&'static str,
             }
         }
     }
-    (found, false)
+    for kind in EXPERIMENT_KINDS {
+        let count = seen.get(kind).copied().unwrap_or(0);
+        if cut {
+            result.limits.insert(kind, (count.min(EXPERIMENT_MAX_ROOTS), None));
+        } else if count > EXPERIMENT_MAX_ROOTS {
+            result.limits.insert(kind, (EXPERIMENT_MAX_ROOTS, Some(count)));
+        }
+    }
+    result
 }

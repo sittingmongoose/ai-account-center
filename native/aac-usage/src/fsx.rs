@@ -1,10 +1,16 @@
-//! Bounded folder walks and link rules, as the Python helper applies them.
+//! Bounded folder walks and link rules, as the Python helper applies them; and the guards that keep a
+//! scan answering (FIX-ROUND-BIG 9): network and FUSE mounts are probed once on a thread before any
+//! walk touches them, a mount that does not answer is never stat'ed again, and only regular files
+//! are opened.
 
 use crate::collector::Collector;
 use crate::util::{self, abspath, normpath, path_text, realpath};
 use std::collections::HashSet;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Duration;
 
 pub const WALK_MAX_DIRS: usize = 10_000;
 pub const WALK_MAX_ENTRIES: usize = 100_000;
@@ -26,34 +32,219 @@ pub fn skipped(name: &str) -> bool {
     SCAN_SKIP_DIRS.contains(&name)
 }
 
-/// A symlink or (Windows) junction: Rust's `is_symlink` covers both name-surrogate reparse points.
+/// Folders a walk from home never enters (FIX-ROUND-BIG 15, Fable L12): cloud-synced folders, whose
+/// files may be placeholders that a read downloads, and the personal folders a Mac guards with a
+/// consent prompt. Tool homes are never kept there by default; a configured root there is still read.
+pub fn personal_or_cloud(name: &str) -> bool {
+    const NAMES: [&str; 14] = [
+        "OneDrive",
+        "Dropbox",
+        "iCloudDrive",
+        "iCloud Drive",
+        "Google Drive",
+        "Library",
+        "AppData",
+        "Desktop",
+        "Documents",
+        "Downloads",
+        "Pictures",
+        "Music",
+        "Movies",
+        "Videos",
+    ];
+    NAMES.iter().any(|n| n.eq_ignore_ascii_case(name))
+        || name.starts_with("OneDrive - ")
+        || name.starts_with("OneDrive-")
+        || name.starts_with("GoogleDrive-")
+}
+
+/// Mounts that did not answer their probe this scan: nothing under them is stat'ed, listed or opened.
+static AVOID: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn fold(text: &str) -> String {
+    if cfg!(windows) {
+        text.replace('/', "\\").to_lowercase()
+    } else {
+        text.to_string()
+    }
+}
+
+fn under(text: &str, mount: &str) -> bool {
+    let trimmed = mount.trim_end_matches(['\\', '/']);
+    text == mount || text.starts_with(&format!("{trimmed}{}", std::path::MAIN_SEPARATOR))
+}
+
+fn avoided_text(text: &str) -> bool {
+    let list = AVOID.lock().unwrap_or_else(|e| e.into_inner());
+    if list.is_empty() {
+        return false;
+    }
+    let folded = fold(text);
+    list.iter().any(|mount| under(&folded, mount))
+}
+
+/// Record a mount (or folder) that did not answer: never touched again this scan.
+pub fn avoid(path: &Path) {
+    let text = fold(&path_text(&abspath(path)));
+    let mut list = AVOID.lock().unwrap_or_else(|e| e.into_inner());
+    if !list.contains(&text) {
+        list.push(text);
+    }
+}
+
+/// How many avoided mounts lie under `base` (a walk from home would have looked there).
+pub fn avoided_under(base: &Path) -> usize {
+    let base = fold(&path_text(&abspath(base)));
+    AVOID
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|mount| under(mount, &base))
+        .count()
+}
+
+/// Tests only: forget the mounts recorded by `avoid`.
+pub fn reset_avoided() {
+    AVOID.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+/// True when `path`, or what its links point at (followed by their written text, never by a stat
+/// past an avoided mount), lies under a mount that did not answer.
+pub fn avoided(path: &Path) -> bool {
+    if AVOID.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+        return false;
+    }
+    let mut current = abspath(path);
+    for _ in 0..8 {
+        if avoided_text(&path_text(&current)) {
+            return true;
+        }
+        let Ok(meta) = fs::symlink_metadata(&current) else {
+            return false;
+        };
+        if !meta.file_type().is_symlink() {
+            return false;
+        }
+        let Ok(target) = fs::read_link(&current) else {
+            return false;
+        };
+        current = normpath(&current.parent().unwrap_or(Path::new("")).join(target));
+    }
+    false
+}
+
+/// A symlink or (Windows) junction: Rust's `is_symlink` covers name-surrogate reparse points only,
+/// so a cloud placeholder (OneDrive) or an app-execution alias is not a link (FIX-ROUND-BIG 15).
 pub fn is_link(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false)
+    !avoided_text(&path_text(&abspath(path)))
+        && fs::symlink_metadata(path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
 }
 
 pub fn is_dir(path: &Path) -> bool {
-    fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false)
+    !avoided(path) && fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false)
 }
 
 pub fn is_file(path: &Path) -> bool {
-    fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
+    !avoided(path) && fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
+}
+
+/// A cloud-only placeholder (Windows: recall on open or on data access, or offline): reading it
+/// would download it, so a walk never opens one (FIX-ROUND-BIG 15).
+pub fn placeholder(meta: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const OFFLINE: u32 = 0x1000;
+        const RECALL_ON_OPEN: u32 = 0x40000;
+        const RECALL_ON_DATA_ACCESS: u32 = 0x400000;
+        meta.file_attributes() & (OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS) != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+/// Open a file only when it is a regular file (FIX-ROUND-BIG 9): a FIFO, socket or device would
+/// block or never end. On Unix the open itself cannot block (O_NONBLOCK, checked on the handle).
+pub fn open_regular(path: &Path) -> io::Result<fs::File> {
+    if avoided(path) {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "did not answer"));
+    }
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)?
+    };
+    #[cfg(not(unix))]
+    let file = fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() || placeholder(&meta) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: an open descriptor; only the non-blocking flag is cleared again.
+        unsafe {
+            let fd = file.as_raw_fd();
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+            }
+        }
+    }
+    Ok(file)
+}
+
+/// A whole regular file of at most `limit` bytes; None when larger, not regular or unreadable.
+pub fn read_regular(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = open_regular(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= limit).then_some(bytes)
+}
+
+/// A folder's entry names, sorted (Python's `sorted(os.listdir(...))`), or why it cannot be listed.
+pub fn list_dir(directory: &Path) -> io::Result<Vec<String>> {
+    if avoided(directory) {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "did not answer"));
+    }
+    let mut names: Vec<String> = fs::read_dir(directory)?
+        .filter_map(|entry| entry.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+        .collect();
+    names.sort();
+    Ok(names)
 }
 
 /// Sorted entry names of a folder (Python's `sorted(os.listdir(...))`), None when unreadable.
 pub fn sorted_names(directory: &Path) -> Option<Vec<String>> {
-    let mut names: Vec<String> = fs::read_dir(directory)
-        .ok()?
-        .filter_map(|entry| entry.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
-        .collect();
-    names.sort();
-    Some(names)
+    list_dir(directory).ok()
+}
+
+/// A folder inside a walk that exists but cannot be listed (FIX-ROUND-BIG 4): named, never silent.
+fn listing(collector: &mut Collector, kind: &str, directory: &Path) -> Option<Vec<String>> {
+    match list_dir(directory) {
+        Ok(names) => Some(names),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => {
+            collector.unreadable_folder(kind, directory);
+            None
+        }
+    }
 }
 
 /// Python's `_iter_jsonl_files`: depth-first (a stack), names sorted, links never descended, caps
 /// flag truncation. `skip_dir` names folders that never hold logs.
 pub fn walk_files(
+    kind: &str,
     root: &Path,
     accept: &dyn Fn(&str) -> bool,
     collector: &mut Collector,
@@ -69,7 +260,7 @@ pub fn walk_files(
             return found;
         }
         visited_dirs += 1;
-        let Some(names) = sorted_names(&directory) else {
+        let Some(names) = listing(collector, kind, &directory) else {
             continue;
         };
         for name in names {
@@ -82,19 +273,26 @@ pub fn walk_files(
                 continue;
             }
             let path = directory.join(&name);
-            if is_dir(&path) && !is_link(&path) {
+            // The link test comes first: it never follows the link (FIX-ROUND-BIG 9).
+            let link = is_link(&path);
+            if !link && is_dir(&path) {
                 if skip_dir.is_some_and(|skip| skip(&name)) {
                     continue;
                 }
                 if depth < 64 {
                     pending.push((path, depth + 1));
                 }
-            } else if is_file(&path) && accept(&name) {
+            } else if accept(&name) && regular(&path) {
                 found.push(path);
             }
         }
     }
     found
+}
+
+/// A regular file that is no cloud placeholder (links followed, unless onto an avoided mount).
+pub fn regular(path: &Path) -> bool {
+    !avoided(path) && fs::metadata(path).is_ok_and(|m| m.is_file() && !placeholder(&m))
 }
 
 /// Sub-folders of base (a link to a folder counts), by name, at most T3_MAX_HOMES.
@@ -145,7 +343,7 @@ pub fn link_inside(path: &Path, start: &Path) -> Option<PathBuf> {
         text = rest.to_string();
     }
     let target = normpath(&path.parent().unwrap_or(Path::new("")).join(text));
-    if !same_or_inside(&target, &[start.to_path_buf()]) {
+    if !same_or_inside(&target, &[start.to_path_buf()]) || avoided(&target) {
         return None;
     }
     let real = realpath(path);
@@ -176,6 +374,9 @@ pub fn dedup_dirs(candidates: &[PathBuf]) -> Vec<PathBuf> {
 /// File identity (device, inode) for "each real file once". On Windows, as Python's `os.stat`:
 /// the volume serial number and the 64-bit file index.
 pub fn identity(path: &Path) -> Option<(u64, u64)> {
+    if avoided(path) {
+        return None;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -243,6 +444,7 @@ fn windows_identity(path: &Path) -> Option<(u64, u64)> {
 /// to a target inside the root's own real path; a root or folder inside `exclude` (the real default
 /// roots) is not read; each folder is entered once by identity.
 pub fn walk_t3_files(
+    kind: &str,
     root: &Path,
     accept: &dyn Fn(&str) -> bool,
     collector: &mut Collector,
@@ -269,7 +471,7 @@ pub fn walk_t3_files(
             }
             None => continue,
         }
-        let Some(names) = sorted_names(&directory) else {
+        let Some(names) = listing(collector, kind, &directory) else {
             continue;
         };
         for name in names {
@@ -297,8 +499,8 @@ pub fn walk_t3_files(
                 if depth < 64 {
                     pending.push((real, depth + 1));
                 }
-            } else if is_file(&real)
-                && accept(&name)
+            } else if accept(&name)
+                && regular(&real)
                 && let Some(id) = identity(&real)
             {
                 found.push((real, id));
@@ -335,63 +537,258 @@ pub fn home_path(value: Option<&serde_json::Value>, home: &Path) -> Option<PathB
 }
 
 pub fn exists(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok()
+    !avoided_text(&path_text(&abspath(path))) && fs::symlink_metadata(path).is_ok()
 }
 
 pub fn abs(path: &Path) -> PathBuf {
     abspath(path)
 }
 
-/// A log folder's probe (DESIGN 16.4): its real path when it answers and can be listed, or why not.
+/// A log folder's (or database's) probe (DESIGN 16.4, FIX-ROUND-BIG 4 and 9): its real path when it
+/// answers and can be read, or why not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Probe {
     Readable(PathBuf),
     /// Not there at all (and not a link): an ordinary absent folder, said nothing about.
     Absent,
-    /// A link whose target does not exist or cannot be listed.
-    Unreadable,
-    /// It did not answer in time: a link (or a folder under one) onto a mount that hangs.
-    Unreachable,
+    /// There, but it cannot be read: `state` is the root's state for the report contract
+    /// (`unreadable`, `link_unreadable` or `link_unreachable`) and `cause` says why
+    /// (`permission_denied`, `io_error`, `target_missing` or `did_not_answer`).
+    Failed {
+        state: &'static str,
+        cause: &'static str,
+    },
+}
+
+fn failed(linked: bool, error: &io::Error) -> Probe {
+    let cause = match error.kind() {
+        io::ErrorKind::PermissionDenied => "permission_denied",
+        io::ErrorKind::TimedOut => "did_not_answer",
+        _ => "io_error",
+    };
+    Probe::Failed {
+        state: if !linked {
+            "unreadable"
+        } else if cause == "did_not_answer" {
+            "link_unreachable"
+        } else {
+            "link_unreadable"
+        },
+        cause,
+    }
+}
+
+/// A link whose target is not there (a dangling symlink or Windows junction): its written target,
+/// resolved against the link's folder, does not exist.
+fn dangling(path: &Path) -> bool {
+    let Ok(target) = fs::read_link(path) else {
+        return false;
+    };
+    let target = path.parent().unwrap_or(Path::new("")).join(target);
+    matches!(fs::symlink_metadata(&target), Err(e) if e.kind() == io::ErrorKind::NotFound)
+}
+
+fn probe_one(path: &Path, folder: bool, linked: bool) -> Probe {
+    if avoided(path) {
+        return failed(linked, &io::Error::new(io::ErrorKind::TimedOut, "did not answer"));
+    }
+    let real = match fs::canonicalize(path) {
+        Ok(real) => real,
+        Err(error) if linked && (error.kind() == io::ErrorKind::NotFound || dangling(path)) => {
+            return Probe::Failed {
+                state: "link_unreachable",
+                cause: "target_missing",
+            };
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Probe::Absent,
+        Err(error) => return failed(linked, &error),
+    };
+    let readable = if folder {
+        fs::read_dir(&real).map(|_| ())
+    } else {
+        fs::metadata(&real).and_then(|meta| {
+            if meta.is_file() {
+                Ok(())
+            } else {
+                Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"))
+            }
+        })
+    };
+    match readable {
+        Ok(()) => Probe::Readable(real),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Probe::Absent,
+        Err(error) => failed(linked, &error),
+    }
 }
 
 /// Probe each folder on its own thread, all within `wait` together: a stat of a dead network mount
 /// can block for minutes, and a thread left waiting on one never holds up the scan. Folders are
-/// returned in order, each with its probe.
-pub fn probe_dirs(dirs: &[PathBuf], wait: std::time::Duration) -> Vec<(PathBuf, Probe)> {
+/// returned in order, each with its probe; one that did not answer is avoided from then on.
+pub fn probe_dirs(dirs: &[PathBuf], wait: Duration) -> Vec<(PathBuf, Probe)> {
+    probe_paths(dirs, wait, true)
+}
+
+/// `probe_dirs` for files (databases): readable means a regular file.
+pub fn probe_files(files: &[PathBuf], wait: Duration) -> Vec<(PathBuf, Probe)> {
+    probe_paths(files, wait, false)
+}
+
+enum Heard {
+    /// The path's own lstat answered: whether it is a link.
+    Linked(usize, bool),
+    Done(usize, Probe),
+}
+
+fn probe_paths(paths: &[PathBuf], wait: Duration, folder: bool) -> Vec<(PathBuf, Probe)> {
     let deadline = std::time::Instant::now() + wait;
     let (sender, receiver) = std::sync::mpsc::channel();
-    for (index, dir) in dirs.iter().enumerate() {
+    for (index, path) in paths.iter().enumerate() {
         let sender = sender.clone();
-        let dir = dir.clone();
+        let path = path.clone();
         std::thread::spawn(move || {
-            let linked = is_link(&dir);
-            let probe = match fs::canonicalize(&dir) {
-                Ok(real) if fs::read_dir(&real).is_ok() => Probe::Readable(real),
-                _ if linked => Probe::Unreadable,
-                _ => Probe::Absent,
-            };
-            let _ = sender.send((index, probe));
+            let linked = is_link(&path);
+            let _ = sender.send(Heard::Linked(index, linked));
+            let _ = sender.send(Heard::Done(index, probe_one(&path, folder, linked)));
         });
     }
     drop(sender);
-    let mut probes: Vec<Option<Probe>> = vec![None; dirs.len()];
-    let mut left = dirs.len();
+    let mut probes: Vec<Option<Probe>> = vec![None; paths.len()];
+    let mut links: Vec<Option<bool>> = vec![None; paths.len()];
+    let mut left = paths.len();
     while left > 0 {
         let now = std::time::Instant::now();
         if now >= deadline {
             break;
         }
         match receiver.recv_timeout(deadline - now) {
-            Ok((index, probe)) => {
+            Ok(Heard::Linked(index, linked)) => links[index] = Some(linked),
+            Ok(Heard::Done(index, probe)) => {
                 probes[index] = Some(probe);
                 left -= 1;
             }
             Err(_) => break,
         }
     }
-    dirs.iter()
+    paths
+        .iter()
         .cloned()
-        .zip(probes)
-        .map(|(dir, probe)| (dir, probe.unwrap_or(Probe::Unreachable)))
+        .zip(probes.into_iter().zip(links))
+        .map(|(path, (probe, linked))| {
+            let probe = probe.unwrap_or_else(|| {
+                // Not answered: never stat'ed again this scan. A link whose own lstat answered is
+                // named as one, and its written target (read without touching it) is avoided too.
+                let linked = linked == Some(true);
+                if linked && let Ok(target) = fs::read_link(&path) {
+                    avoid(&normpath(&path.parent().unwrap_or(Path::new("")).join(target)));
+                }
+                avoid(&path);
+                failed(linked, &io::Error::new(io::ErrorKind::TimedOut, "did not answer"))
+            });
+            (path, probe)
+        })
         .collect()
+}
+
+/// Network and FUSE mounts from the mount table (read without touching any mount): where a stat
+/// can hang. Linux: /proc/self/mountinfo; macOS: getfsstat without waiting. None on Windows.
+pub fn network_mounts() -> Vec<PathBuf> {
+    const TYPES: [&str; 14] = [
+        "nfs",
+        "nfs4",
+        "cifs",
+        "smb3",
+        "smbfs",
+        "sshfs",
+        "9p",
+        "davfs",
+        "webdav",
+        "afpfs",
+        "ncpfs",
+        "glusterfs",
+        "ceph",
+        "autofs",
+    ];
+    let network = |fstype: &str| TYPES.contains(&fstype) || fstype.starts_with("fuse") || fstype.contains("fuse");
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(text) = fs::read_to_string("/proc/self/mountinfo") else {
+            return Vec::new();
+        };
+        let unescape = |field: &str| {
+            let bytes = field.as_bytes();
+            let mut out = Vec::with_capacity(bytes.len());
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'\\'
+                    && i + 3 < bytes.len()
+                    && bytes[i + 1..i + 4].iter().all(|b| (b'0'..=b'7').contains(b))
+                {
+                    out.push((bytes[i + 1] - b'0') * 64 + (bytes[i + 2] - b'0') * 8 + (bytes[i + 3] - b'0'));
+                    i += 4;
+                } else {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            String::from_utf8_lossy(&out).into_owned()
+        };
+        text.lines()
+            .filter_map(|line| {
+                let (left, right) = line.split_once(" - ")?;
+                let point = left.split(' ').nth(4)?;
+                let fstype = right.split(' ').next()?;
+                network(fstype).then(|| PathBuf::from(unescape(point)))
+            })
+            .collect()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: getfsstat fills at most `count` statfs records; MNT_NOWAIT never asks a mount.
+        unsafe {
+            let count = libc::getfsstat(std::ptr::null_mut(), 0, libc::MNT_NOWAIT);
+            if count <= 0 {
+                return Vec::new();
+            }
+            let mut buffer: Vec<libc::statfs> = Vec::with_capacity(count as usize + 8);
+            let size = (buffer.capacity() * std::mem::size_of::<libc::statfs>()) as libc::c_int;
+            let got = libc::getfsstat(buffer.as_mut_ptr(), size, libc::MNT_NOWAIT);
+            if got <= 0 {
+                return Vec::new();
+            }
+            buffer.set_len(got as usize);
+            buffer
+                .iter()
+                .filter_map(|record| {
+                    let text = |chars: &[libc::c_char]| {
+                        let bytes: Vec<u8> = chars.iter().take_while(|c| **c != 0).map(|c| *c as u8).collect();
+                        String::from_utf8_lossy(&bytes).into_owned()
+                    };
+                    network(&text(&record.f_fstypename)).then(|| PathBuf::from(text(&record.f_mntonname)))
+                })
+                .collect()
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = network;
+        Vec::new()
+    }
+}
+
+/// Probe this computer's network and FUSE mounts once, together, before any walk: one that does not
+/// answer in `wait` is avoided for the rest of the scan. Returns how many did not answer.
+pub fn guard_mounts(wait: Duration) -> usize {
+    let mounts = network_mounts();
+    probe_dirs(&mounts, wait)
+        .into_iter()
+        .filter(|(_, probe)| {
+            matches!(
+                probe,
+                Probe::Failed {
+                    cause: "did_not_answer",
+                    ..
+                }
+            )
+        })
+        .count()
 }

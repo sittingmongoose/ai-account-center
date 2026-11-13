@@ -310,29 +310,8 @@ fn metadata(blob: &[u8], step: bool) -> Result<Meta<'_>, AgyError> {
     })
 }
 
-/// Python's `urllib.parse.quote(text, safe="/:")`.
-fn quote(text: &str) -> String {
-    let mut out = String::new();
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || b"_.-~/:".contains(&byte) {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 fn uri(path: &Path, immutable: bool) -> String {
-    let mut text = path_text(&abspath(path)).replace('\\', "/");
-    if !text.starts_with('/') {
-        text = format!("/{text}");
-    }
-    format!(
-        "file://{}?mode=ro{}",
-        quote(&text),
-        if immutable { "&immutable=1" } else { "" }
-    )
+    super::sqlite::uri(path, immutable)
 }
 
 /// Size, mtime and file identity: a writer opening a database changes one of them.
@@ -353,10 +332,15 @@ fn closed_wal(path: &Path) -> bool {
     if wal_exists(path) {
         return false;
     }
-    let Ok(data) = fs::read(path).map(|d| d.into_iter().take(20).collect::<Vec<u8>>()) else {
+    // The 20-byte header only, never the database (FIX-ROUND-BIG 10).
+    let mut data = [0u8; 20];
+    let Ok(mut file) = fsx::open_regular(path) else {
         return false;
     };
-    data.len() == 20 && &data[..16] == b"SQLite format 3\x00" && data[18..20] == [2, 2]
+    if std::io::Read::read_exact(&mut file, &mut data).is_err() {
+        return false;
+    }
+    &data[..16] == b"SQLite format 3\x00" && data[18..20] == [2, 2]
 }
 
 struct Candidate {
@@ -657,9 +641,16 @@ pub fn roots(home: &Path, env: &Env, collector: &mut Collector) -> (Vec<PathBuf>
     for (path, origin) in &listed {
         collector.note_root("antigravity", path, origin);
     }
+    // Each root is probed first (FIX-ROUND-BIG 9): one that is there but cannot be read, or does
+    // not answer, is named on its root; the rest are read as before.
+    let paths: Vec<PathBuf> = listed.iter().map(|(p, _)| p.clone()).collect();
+    let answered: HashSet<PathBuf> = collector.gate_dirs("antigravity", &paths).into_iter().collect();
     let mut dirs = Vec::new();
     let mut present = false;
     for (root, _) in listed {
+        if !answered.contains(&root) {
+            continue;
+        }
         let Some(real) = real_dir(&root, home) else {
             continue;
         };
@@ -733,7 +724,7 @@ fn walk(collector: &mut Collector, directory: &Path, start: &Path, depth: usize,
                 return false;
             }
             let session = if name.len() > 3 {
-                name[..name.len() - 3].to_string()
+                name.get(..name.len() - 3).unwrap_or(&name).to_string()
             } else {
                 name.clone()
             };
