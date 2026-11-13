@@ -85,6 +85,39 @@ class Round2(Home):
             self.assertRegex(flag, common._CREDENTIAL_MARKER)
         self.assertIn(common.CREDENTIAL_FLAG, common.CREDENTIAL_MARKERS)
 
+    AFTER = 'update step finished'
+    # (output, expected tail): a quote left open after the marker removes lines up to its close, or to the end.
+    H1_MULTILINE = (
+        ('installer --pass "correct\nhorse battery staple"\n' + AFTER, REMOVED + '\n' + AFTER),
+        ("installer --pass 'correct\nhorse battery staple'\n" + AFTER, REMOVED + '\n' + AFTER),
+        ("installer -OTP 'correct\nhorse battery\nstaple'\n" + AFTER, REMOVED + '\n' + AFTER),
+        ('installer -OTP "correct\nhorse battery staple"\n' + AFTER, REMOVED + '\n' + AFTER),
+        ('installer --password "correct\nhorse battery staple"\n' + AFTER, REMOVED + '\n' + AFTER),
+        ("installer --password 'correct\nhorse battery staple'\n" + AFTER, REMOVED + '\n' + AFTER),
+        ('installer --pass "correct\\"\nhorse battery staple"\n' + AFTER, REMOVED + '\n' + AFTER),
+        ('installer --pass "correct\nhorse battery staple\n' + AFTER, REMOVED),
+        ("installer -OTP 'correct\nhorse\nbattery staple\n" + AFTER, REMOVED),
+        ('installer --password "correct\nhorse battery staple', REMOVED),
+    )
+
+    def test_h1_a_quote_open_after_the_marker_removes_lines_until_it_closes(self):
+        for sample, expected in self.H1_MULTILINE:
+            with self.subTest(sample=sample), scope() as record:
+                with self.assertRaises(common.UpdateFailure):
+                    common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(sample) + '); sys.exit(1)'],
+                                   errors=True, label='fixture updater')
+                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
+                self.assertEqual(row['diagnostics']['tail'], expected)
+                self.assertEqual(common.scrub(sample), expected)
+                for witness in self.H1_WITNESSES:
+                    self.assertNotIn(witness, json.dumps(row))
+
+    def test_h1_an_exit_code_keeps_its_failure_line(self):
+        line = 'installer failed: exit code=1; ENOSPC: no space left on device'
+        self.assertEqual(common.scrub(line), line)
+        self.assertEqual(common.scrub('callback code=abc123def'), REMOVED)
+        self.assertEqual(common.scrub('verification code=482913'), REMOVED)
+
     def test_h1_ordinary_installer_output_keeps_its_text(self):
         control = 'installer: unpacking zcode-acp-server 0.84.3 (mkdir -p prefix; lsof -a -p 4242 found 0 holders)'
         with scope() as record:

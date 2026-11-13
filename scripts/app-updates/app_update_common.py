@@ -79,10 +79,12 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,51
 CREDENTIAL_FLAGS = ("password", "passwd", "pass", "token", "api-?key", "auth(?:-?token)?", "secret",
                     "access-?token", "otp")
 CREDENTIAL_FLAG = r"--?(?:" + "|".join(CREDENTIAL_FLAGS) + r")\b"
+# code= is an OAuth code, except the integer in "exit code=1".
+_CODE_KEY = r"\bcode=(?!(?<=exit code=)\d{1,10}\b)"
 CREDENTIAL_MARKERS = ("auth", "token", "passw(?:or)?d", "passphrase", "pwd", "secret", "cookie", "bearer",
                       "api[_-]?key", "credential", "session", r"private[\s_-]?key",
                       # The other keys the token pass recognises, and -p given a quoted or '=' value.
-                      r"access[_-]?key", r"\bbasic\s+[A-Za-z0-9._~+/=-]", r"\bcode=",
+                      r"access[_-]?key", r"\bbasic\s+[A-Za-z0-9._~+/=-]", _CODE_KEY,
                       r"one[- ]time (?:code|password)", r"(?<![\w-])-p(?:\s*=|\s*[\"'])",
                       CREDENTIAL_FLAG)
 _CREDENTIAL_WORD = (r"(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential"
@@ -99,7 +101,7 @@ _SECRET_PATTERNS = (
     (re.compile(r"(?im)(\bpass(?:word|wd|phrase)\b[^:=\n]{0,40}[:=]\s*)\S.{0,600}$"), r"\1<redacted>"),
     # Command-line flag forms: --password value, --token=value.
     (re.compile(r"(?i)(" + CREDENTIAL_FLAG + r")(?:\s+|=)(?!-)\S{1,600}"), r"\1 <redacted>"),
-    (re.compile(r"(?i)\bcode=\S{1,600}"), "code=<redacted>"),
+    (re.compile("(?i)" + _CODE_KEY + r"\S{1,600}"), "code=<redacted>"),
     (re.compile(r"(?i)(one[- ]time (?:code|password)\D{0,20})\d{4,10}"), r"\1<redacted>"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,600}\.[A-Za-z0-9_-]{8,600}(?:\.[A-Za-z0-9_-]{1,600})?"), "<redacted>"),
     (re.compile(r"(?i)\b(?:npm_|ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abpr]-|aiza)[A-Za-z0-9_-]{8,600}"), "<redacted>"),
@@ -121,17 +123,40 @@ _INDENTED = re.compile(r"[\s\x00-\x1f\x7f-\x9f]")
 _CONTINUES = ("\\", ",", ";", ":", "=", "{", "[", "(")
 
 
+def _open_quote(text, quote=None):
+    """The quote still open at the end of text; a backslash inside quotes never closes one."""
+    escaped = False
+    for char in text:
+        if quote is None:
+            if char in "\"'":
+                quote = char
+        elif escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == quote:
+            quote = None
+    return quote
+
+
 def _drop_credential_lines(lines):
-    """Drop credential carriers and continuations before taking any diagnostic tail."""
+    """Drop credential carriers and continuations before taking any diagnostic tail.
+
+    A quote left open after the marker keeps removing lines up to the one that closes it, or to
+    the end of the text when it never closes: a quoted value may hold a literal newline.
+    """
     kept = []
     removing = carry = False
+    quote = None
     for line in lines:
         probe = _CONTROL.sub("", line)
-        continued = removing and (carry or bool(_INDENTED.match(line)))
-        if continued or _CREDENTIAL_MARKER.search(probe):
+        continued = removing and (carry or quote is not None or bool(_INDENTED.match(line)))
+        marker = None if continued else _CREDENTIAL_MARKER.search(probe)
+        if continued or marker:
             if not removing:
                 kept.append(CREDENTIAL_LINE)
             removing = True
+            quote = _open_quote(probe, quote) if continued else _open_quote(probe[marker.start():])
             carry = probe.rstrip().endswith(_CONTINUES)
             continue
         removing = carry = False

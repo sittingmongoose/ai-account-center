@@ -247,3 +247,51 @@ it('H1 an ordinary installer line keeps its text through the same path', async (
   expect(normalizeAppUpdateRow(raw, 't3-acp-adapters', 'mac').diagnostics?.tail).toBe(H1_CONTROL);
   expect((await savedTail(path.join(root, 'job'), raw)).tail).toBe(H1_CONTROL);
 });
+
+const AFTER = 'update step finished';
+const REMOVED = '<line removed: may contain a credential>';
+// [output, expected tail]: a quote left open after the marker removes lines up to its close, or to the end.
+const H1_MULTILINE: Array<[string, string]> = [
+  [`installer --pass "correct\nhorse battery staple"\n${AFTER}`, `${REMOVED}\n${AFTER}`],
+  [`installer --pass 'correct\nhorse battery staple'\n${AFTER}`, `${REMOVED}\n${AFTER}`],
+  [`installer -OTP 'correct\nhorse battery\nstaple'\n${AFTER}`, `${REMOVED}\n${AFTER}`],
+  [`installer -OTP "correct\nhorse battery staple"\n${AFTER}`, `${REMOVED}\n${AFTER}`],
+  [`installer --password "correct\nhorse battery staple"\n${AFTER}`, `${REMOVED}\n${AFTER}`],
+  [`installer --password 'correct\nhorse battery staple'\n${AFTER}`, `${REMOVED}\n${AFTER}`],
+  [`installer --pass "correct\\"\nhorse battery staple"\n${AFTER}`, `${REMOVED}\n${AFTER}`],
+  [`installer --pass "correct\nhorse battery staple\n${AFTER}`, REMOVED],
+  [`installer -OTP 'correct\nhorse\nbattery staple\n${AFTER}`, REMOVED],
+  ['installer --password "correct\nhorse battery staple', REMOVED],
+];
+
+it('H1 a quote open after the marker removes lines until it closes, through every saved path', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-h1-multiline-'));
+  roots.push(root);
+  const rows = helperRows(
+    root,
+    H1_MULTILINE.map(([sample]) => sample)
+  );
+  for (const [index, raw] of rows.entries()) {
+    const [sample, expected] = H1_MULTILINE[index];
+    expect([sample, scrubText(sample)]).toEqual([sample, expected]);
+    const normalized = normalizeAppUpdateRow(raw, 't3-acp-adapters', 'mac');
+    expect([sample, normalized.diagnostics?.tail]).toEqual([sample, expected]);
+    const { tail, files } = await savedTail(path.join(root, String(index)), raw);
+    expect([sample, tail]).toEqual([sample, expected]);
+    expect(files[1]).toContain(expected.split('\n').pop()!);
+    for (const text of [JSON.stringify(raw), ...files])
+      for (const witness of H1_WITNESSES) expect(text).not.toContain(witness);
+  }
+}, 30_000);
+
+it('H1 an exit code keeps its failure line through the same path', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-h1-exit-'));
+  roots.push(root);
+  const line = 'installer failed: exit code=1; ENOSPC: no space left on device';
+  const [raw] = helperRows(root, [line]);
+  expect(scrubText(line)).toBe(line);
+  expect(scrubText('callback code=abc123def')).toBe(REMOVED);
+  expect(scrubText('verification code=482913')).toBe(REMOVED);
+  expect(normalizeAppUpdateRow(raw, 't3-acp-adapters', 'mac').diagnostics?.tail).toBe(line);
+  expect((await savedTail(path.join(root, 'job'), raw)).tail).toBe(line);
+});
