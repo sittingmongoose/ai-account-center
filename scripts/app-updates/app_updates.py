@@ -23,6 +23,9 @@ from app_update_common import (
     APP_LABELS, Install, UpdateFailure, cli_probe, command, download, execution_lock,
     powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, npm_version_key, write_private_json,
 )
+from app_update_cursor import detect_cursor, update_cursor
+from app_update_antigravity import detect_antigravity_acp, update_antigravity_acp
+from app_update_macos import MUSE_WARM_PROMPT, gui_command
 from app_update_desktop import detect_desktop, update_desktop
 from app_update_processes import cli_contexts, cli_instances, family, scan, terminate_cli
 from app_update_terminal import check_terminal, restart_cli
@@ -31,7 +34,7 @@ from app_update_zcode import detect_adapters, detect_zcode, update_adapters, upd
 
 CLI_NAMES = {"antigravity-cli": "agy", "muse-code": "muse", "omp": "omp", "codex-cli": "codex", "claude-code": "claude"}
 # Apps with their own verified update flow; ZCode and the ACP adapters never stop a T3 session.
-OWN_UPDATERS = ("zcode", "t3-acp-adapters", "t3-code")
+OWN_UPDATERS = ("zcode", "t3-acp-adapters", "t3-code", "cursor-cli", "antigravity-acp")
 # The Codex bridge's whole budget: lock (30 s) + update (180 s) + idle wait
 # (60 s) + proxy restart checks. It never waits hours for a busy Codex.
 CODEX_BRIDGE_SECONDS = 420
@@ -530,6 +533,10 @@ def detect_cli(app_id, platform):
 
 
 def _detect_one(app_id, platform):
+    if app_id == "cursor-cli":
+        return detect_cursor(platform)
+    if app_id == "antigravity-acp":
+        return detect_antigravity_acp(platform)
     if app_id == "t3-code":
         return detect_t3(platform)
     if app_id == "zcode":
@@ -628,7 +635,6 @@ def _clamp(seconds, deadline):
 # replaces the binary therefore leaves T3 showing the old model list until someone
 # runs Muse. The warm step below starts one tiny headless session after the
 # install so the new binary refreshes its catalog before AAC reports done.
-MUSE_WARM_PROMPT = "Reply with the word: ok"
 
 
 def muse_catalog_dir(platform):
@@ -702,8 +708,13 @@ def muse_warm_catalog(refreshed, deadline, started_at):
                 if remaining <= 0:
                     return False
                 timeout = min(60, remaining)
-            command(argv, timeout=timeout, cwd=str(cwd), kill_tree=True)
-    except UpdateFailure:
+            if refreshed.platform == "mac":
+                gui_command("muse-warm", timeout)
+            else:
+                command(argv, timeout=timeout, cwd=str(cwd), kill_tree=True)
+    except UpdateFailure as error:
+        if error.code.startswith("mac_"):
+            raise
         return False
     return muse_catalog_fresh(refreshed.platform, started_at)
 
@@ -897,13 +908,17 @@ def update_cli(install, deadline, restart_managed=False):
             pass
         needs_restart = marker_version == refreshed.version and marker_version != before
         catalog_ok = True
+        catalog_code = "model_catalog_unrefreshed"
         if install.app_id == "muse-code" and refreshed.version != before:
             # Changed binary: never warm while the launcher's own updater holds
             # the lock; the gate below then refuses to claim "updated".
             if muse_update_busy(install.path.parent):
                 catalog_ok = False
             else:
-                catalog_ok = muse_warm_catalog(refreshed, deadline, install_started)
+                try:
+                    catalog_ok = muse_warm_catalog(refreshed, deadline, install_started)
+                except UpdateFailure as error:
+                    catalog_ok, catalog_code = False, error.code
         if refreshed.version == before and not needs_restart:
             if install.app_id == "muse-code" and muse_update_busy(install.path.parent):
                 # The launcher's own updater holds the lock, so Meta's installer
@@ -956,7 +971,7 @@ def update_cli(install, deadline, restart_managed=False):
             # restarted; keep their counts and targets and let the next click
             # heal the catalog on the current path.
             value["status"] = "restart_failed"
-            value["messageCode"] = "model_catalog_unrefreshed"
+            value["messageCode"] = catalog_code
             return outcome(value)
         return outcome(value)
     except UpdateFailure as error:
@@ -1143,7 +1158,8 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                 if app_id.endswith("-desktop") or app_id in OWN_UPDATERS:
                     # A desktop app reports its long steps (a package download,
                     # then the install) so the page shows what it waits on.
-                    update = {"zcode": update_zcode, "t3-acp-adapters": update_adapters, "t3-code": update_t3}.get(app_id, update_desktop)
+                    update = {"zcode": update_zcode, "t3-acp-adapters": update_adapters, "t3-code": update_t3,
+                              "cursor-cli": update_cursor, "antigravity-acp": update_antigravity_acp}.get(app_id, update_desktop)
                     return update(install, deadline, lambda name: phase(app_id, name))
                 if app_id == "antigravity-cli":
                     return mark_unreviewed(update_cli(install, deadline, restart_managed=restart_managed), agy_reviewed)
@@ -1169,7 +1185,10 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                     running[pool.submit(update_one, app_id)] = (app_id, resources)
                     reserved.update(resources)
                 if running:
-                    finished, _ = wait(running, return_when=FIRST_COMPLETED)
+                    # Windows dispatches Python console signals on the main
+                    # thread between waits. Keep it responsive while an ACP
+                    # worker is blocked, so direct revocation can run promptly.
+                    finished, _ = wait(running, timeout=0.25, return_when=FIRST_COMPLETED)
                     for future in finished:
                         running.pop(future)
                         report(future.result())
@@ -1428,4 +1447,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from app_update_t3_rpc import session_signals
+    with session_signals():
+        main()

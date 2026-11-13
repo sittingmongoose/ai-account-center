@@ -86,18 +86,18 @@ describe('fixed app update service', () => {
     expect([...calls].sort()).toEqual([...DASHBOARD_HOSTS].sort());
     expect(
       service.getStatus().job!.results.filter((row) => row.platform !== 'ubuntu')
-    ).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
+    ).toHaveLength((DASHBOARD_HOSTS.length - 1) * 12);
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
     expect(calls).toHaveLength(DASHBOARD_HOSTS.length);
-    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 12);
     expect(job.state).toBe('failed');
     expect(job.activePlatform).toBeNull();
     expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');
     const clone = service.getStatus().job!;
     clone.results.length = 0;
-    expect(service.getStatus().job!.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
+    expect(service.getStatus().job!.results).toHaveLength(DASHBOARD_HOSTS.length * 12);
   });
   it('executes only the four fixed host-local helpers', () => {
     const local = appUpdateInvocation('ubuntu');
@@ -448,7 +448,7 @@ describe('fixed app update service', () => {
     'returns fixed errors for malformed helper output',
     (raw) => {
       const rows = normalizeAppUpdateResults(raw, 'ubuntu');
-      expect(rows).toHaveLength(10);
+      expect(rows).toHaveLength(12);
       expect(rows.every((row) => row.status === 'failed')).toBe(true);
     }
   );
@@ -535,7 +535,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(first);
     expect(second.getStatus().job!.state).toBe('completed');
-    expect(second.getStatus().job!.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
+    expect(second.getStatus().job!.results).toHaveLength(DASHBOARD_HOSTS.length * 12);
     expect(fs.existsSync(path.join(root, 'app-updates/dashboard-update.lock'))).toBe(false);
   });
   it('refuses to start while a live T3 restart worker holds its marker, and after a stale one', async () => {
@@ -583,7 +583,7 @@ describe('fixed app update service', () => {
     release(payload());
     await finish(owner);
     expect(owner.getStatus().job!.results.filter((row) => row.status === 'skipped')).toHaveLength(
-      (DASHBOARD_HOSTS.length - 1) * 10
+      (DASHBOARD_HOSTS.length - 1) * 12
     );
   });
   it('marks an interrupted persisted job failed without replaying it', () => {

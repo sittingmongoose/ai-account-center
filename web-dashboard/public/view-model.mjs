@@ -1482,10 +1482,10 @@ const listWords = (words) =>
 /** The computers Update all runs on, in the order the header names them. */
 export const UPDATE_HOST_IDS = HOST_IDS;
 /** The apps the update helper checks on every computer (one result row each). */
-const UPDATE_APPS_PER_HOST = 10;
+const UPDATE_APPS_PER_HOST = 12;
 /**
  * The result rows a run expects: the job's own `expectedResults`, else one row per app on every
- * computer (ten apps per registered computer), never a stale fixed count.
+ * computer (twelve apps per registered computer), never a stale fixed count.
  */
 export const updateTotal = (job) =>
   finite(job?.expectedResults) && job.expectedResults > 0

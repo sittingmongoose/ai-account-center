@@ -1137,7 +1137,7 @@ test('Update apps results are grouped by computer, never invented', () => {
     now
   );
   // A job that names no expectedResults counts 10 apps on each of the 4 computers.
-  assert.equal(running.headRuns.map((r) => r.text).join(''), 'Running now · 1 of 50 done');
+  assert.equal(running.headRuns.map((r) => r.text).join(''), 'Running now · 1 of 60 done');
   assert.deepEqual(
     running.hosts.map((h) => h.items.map((i) => i.result)),
     [['Running'], [''], ['Already current'], [''], ['']]

@@ -623,7 +623,8 @@ class T3Fixtures(unittest.TestCase):
                 mock.patch.object(updater, "antigravity_plan", return_value=(None, True)), mock.patch.object(updater, "update_cli", side_effect=update), \
                 mock.patch.object(updater, "latest_claude_version", return_value=None), \
                 mock.patch.object(updater, "update_desktop", side_effect=update), mock.patch.object(updater, "update_t3", side_effect=update), \
-                mock.patch.object(updater, "update_zcode", side_effect=update), mock.patch.object(updater, "update_adapters", side_effect=update):
+                mock.patch.object(updater, "update_zcode", side_effect=update), mock.patch.object(updater, "update_adapters", side_effect=update), \
+                mock.patch.object(updater, "update_cursor", side_effect=update), mock.patch.object(updater, "update_antigravity_acp", side_effect=update):
             updater.run_apply("ubuntu")
         self.assertEqual(seen[-1], "t3-code")
         self.assertLess(seen.index("zcode"), seen.index("t3-acp-adapters"))
@@ -960,7 +961,7 @@ class T3Fixtures(unittest.TestCase):
         ])
         components = self.components()
         self.assertEqual(set(components), set(t3.COMPONENT_KEYS))
-        self.assertEqual((components["cursorAgent"]["status"], components["acpUpdater"]), ("absent", "absent"))
+        self.assertEqual((components["cursorAgent"]["status"], components["acpUpdater"]), ("separate_row", "absent"))
 
     def test_detached_restart_reloads_the_stale_unit_right_before_restarting(self):
         root = t3.state_root(); root.mkdir(parents=True)
@@ -1087,29 +1088,12 @@ class T3Fixtures(unittest.TestCase):
         self.assertEqual(deleted, [named(number) for number in range(1000, 1020)])
         self.assertEqual(len(list(versions.iterdir())), 6)  # 1020 to 1024, the rollback 1024 among them, plus 2849.
 
-    def test_cursor_agent_update_runs_only_for_the_managed_install(self):
-        deadline = time.monotonic() + 60
-        with mock.patch.object(t3, "command") as command, mock.patch.object(t3, "cli_probe") as probe:
-            self.assertEqual(t3.cursor_agent_update(deadline), {"before": None, "after": None, "status": "absent"})
-            outside = self.root / "outside/cursor-agent"
-            outside.parent.mkdir()
-            outside.touch()
-            (self.root / ".local/bin").mkdir(parents=True, exist_ok=True)
-            (self.root / ".local/bin/cursor-agent").symlink_to(outside)
-            self.assertEqual(t3.cursor_agent_update(deadline)["status"], "unmanaged")
-            command.assert_not_called(); probe.assert_not_called()
-        (self.root / ".local/bin/cursor-agent").unlink()
-        link = self.managed_cursor()
-        with mock.patch.object(t3, "command") as command, \
-                mock.patch.object(t3, "cli_probe", side_effect=[("2026.10.01-old", None), ("2026.10.02-new", None)]):
-            self.assertEqual(t3.cursor_agent_update(deadline), {"before": "2026.10.01-old", "after": "2026.10.02-new", "status": "updated"})
-        command.assert_called_once_with([link, "update"], timeout=mock.ANY)
-        with mock.patch.object(t3, "command", side_effect=common.UpdateFailure()), \
-                mock.patch.object(t3, "cli_probe", side_effect=[("2026.10.01-old", None), ("2026.10.01-old", None)]):
-            self.assertEqual(t3.cursor_agent_update(deadline)["status"], "failed")
-        with mock.patch.object(t3, "command") as command, mock.patch.object(t3, "cli_probe", return_value=("2026.10.01-old", None)):
-            self.assertEqual(t3.cursor_agent_update(time.monotonic() - 1)["status"], "failed")
-        command.assert_not_called()
+    def test_cursor_is_left_to_its_own_row(self):
+        self.managed_cursor()
+        with mock.patch.object(t3, "command") as command:
+            t3.ubuntu_companions(t3.state_root(), time.monotonic() + 60, False, "no")
+        self.assertFalse(any("update" in call.args[0] for call in command.call_args_list))
+        self.assertEqual(self.components()["cursorAgent"], {"status": "separate_row"})
 
     def test_acp_updater_is_left_to_the_zcode_rows_when_no_restart_is_scheduled(self):
         self.acp_unit()
@@ -1172,7 +1156,7 @@ class T3Fixtures(unittest.TestCase):
                 mock.patch.object(t3, "cli_probe", return_value=("2026.10.01-fixture", None)):
             row = t3.update_t3(install, time.monotonic() + 60)
         self.assertEqual((row["status"], row["messageCode"], row["version"], row["updateAttempted"]), ("current", "current", NEW, False))
-        self.assertEqual((self.components()["cursorAgent"]["status"], self.components()["acpUpdater"]), ("failed", "rows"))
+        self.assertEqual((self.components()["cursorAgent"]["status"], self.components()["acpUpdater"]), ("separate_row", "rows"))
 
     def test_muse_cmd_detection_versions_official_launcher_and_disables_auto_update(self):
         root = self.root / "local/Programs/muse"; root.mkdir(parents=True)

@@ -824,23 +824,6 @@ def prune_runtimes():
     return deleted
 
 
-def cursor_agent_update(deadline):
-    """Update the Cursor agent CLI behind T3's Cursor provider; returns a fixed record and never raises."""
-    home = pathlib.Path.home()
-    link = home / ".local/bin/cursor-agent"
-    if not link.exists():
-        return {"before": None, "after": None, "status": "absent"}
-    if not real_path(link).is_relative_to(real_path(home / ".local/share/cursor-agent/versions")):
-        return {"before": None, "after": None, "status": "unmanaged"}
-    before = cli_probe(link)[0]
-    try:
-        command([link, "update"], timeout=budget(deadline, 180))
-    except UpdateFailure:
-        return {"before": before, "after": cli_probe(link)[0], "status": "failed"}
-    after = cli_probe(link)[0]
-    return {"before": before, "after": after, "status": "updated" if after and after != before else "current"}
-
-
 def acp_unit_present():
     return (pathlib.Path.home() / ".config/systemd/user" / ACP_UNIT).exists()
 
@@ -877,7 +860,9 @@ def record_components(root, **values):
 
 
 def ubuntu_companions(root, deadline, restarting, daemon_reload):
-    """Ubuntu companions beside T3 (Cursor CLI, old runtimes); best effort.
+    """Ubuntu companions beside T3 (old runtimes); best effort.
+
+    Cursor CLI is updated only by its own cursor-cli row.
 
     Nothing here may change the t3-code row. The zcode and t3-acp-adapters
     rows already ran the ACP updater earlier in this job ("rows"). A scheduled
@@ -886,14 +871,13 @@ def ubuntu_companions(root, deadline, restarting, daemon_reload):
     record says "pending".
     """
     try:
-        cursor = cursor_agent_update(deadline)
         if restarting:
             acp = "pending" if acp_unit_present() else "absent"
             pruned = []
         else:
             acp = "rows" if acp_unit_present() else "absent"
             pruned = prune_runtimes()
-        record_components(root, cursorAgent=cursor, acpUpdater=acp, prunedRuntimes=pruned, daemonReload=daemon_reload)
+        record_components(root, cursorAgent={"status": "separate_row"}, acpUpdater=acp, prunedRuntimes=pruned, daemonReload=daemon_reload)
     except Exception:
         pass  # A companion bug must never change the T3 row.
 

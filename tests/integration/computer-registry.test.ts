@@ -74,7 +74,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     ).toHaveLength(7);
     const updates = await load('src/web-server/services/app-update-contract.ts');
     expect(updates.PLATFORMS).toContain('future');
-    expect(updates.EXPECTED_RESULTS).toBe(60);
+    expect(updates.EXPECTED_RESULTS).toBe(72);
     const transport = await load('src/web-server/services/app-update-hosts.ts');
     expect(transport.appUpdateInvocation('future', '').args.slice(-2)).toEqual([
       'future-linux',
@@ -144,7 +144,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     expect(schema.properties.agent.properties.machine.enum).toContain('future');
     const view = await load('web-dashboard/public/view-model.mjs');
     expect(view.UPDATE_HOST_IDS).toContain('future');
-    expect(view.updateTotal(null)).toBe(60);
+    expect(view.updateTotal(null)).toBe(72);
     expect(view.platformLabel('future')).toBe('Future Linux');
     const accounts = await load('web-dashboard/public/accounts-view.mjs');
     for (const tool of ['omp', 'muse', 'zcode', 'claude-code', 'codex'])

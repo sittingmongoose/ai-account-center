@@ -56,15 +56,15 @@ describe('cancellable app updates', () => {
     expect(calls).toEqual(['ubuntu']);
     const running = job.results.filter((row) => row.platform === 'ubuntu');
     const queued = job.results.filter((row) => row.platform !== 'ubuntu');
-    expect(running).toHaveLength(10);
+    expect(running).toHaveLength(12);
     expect(running.every((row) => row.status === 'current')).toBe(true);
-    expect(queued).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
-    expect(queued.filter((row) => row.platform === 'nas1')).toHaveLength(10);
+    expect(queued).toHaveLength((DASHBOARD_HOSTS.length - 1) * 12);
+    expect(queued.filter((row) => row.platform === 'nas1')).toHaveLength(12);
     expect(queued.every((row) => row.status === 'skipped')).toBe(true);
     expect(queued.every((row) => row.message === MESSAGES.skipped_cancelled)).toBe(true);
     expect(queued.every((row) => row.updateAttempted === false)).toBe(true);
-    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
-    expect(job.expectedResults).toBe(DASHBOARD_HOSTS.length * 10);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 12);
+    expect(job.expectedResults).toBe(DASHBOARD_HOSTS.length * 12);
     expect(job.state).toBe('completed');
     expect(job.cancelRequested).toBe(true);
     expect(job.activePlatform).toBeNull();
@@ -102,8 +102,8 @@ describe('cancellable app updates', () => {
     release(payload());
     await finish(service);
     const job = service.getStatus().job!;
-    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 10);
-    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
+    expect(job.results).toHaveLength(DASHBOARD_HOSTS.length * 12);
+    expect(job.results.filter((row) => row.status === 'skipped')).toHaveLength((DASHBOARD_HOSTS.length - 1) * 12);
   });
 
   it('cancel with no job is a no-op', () => {
@@ -138,13 +138,13 @@ describe('cancellable app updates', () => {
       await finish(service);
       const job = service.getStatus().job!;
       const unreachable = job.results.filter((row) => row.platform === down);
-      expect(unreachable).toHaveLength(10);
+      expect(unreachable).toHaveLength(12);
       expect(unreachable.every((row) => row.status === 'unknown')).toBe(true);
       expect(unreachable.every((row) => row.message === MESSAGES.host_unknown)).toBe(true);
       expect(unreachable.every((row) => row.updateAttempted === false)).toBe(true);
       // The other computers still report their own rows.
       const rest = job.results.filter((row) => row.platform !== down);
-      expect(rest).toHaveLength((DASHBOARD_HOSTS.length - 1) * 10);
+      expect(rest).toHaveLength((DASHBOARD_HOSTS.length - 1) * 12);
       expect(rest.every((row) => row.status === 'current')).toBe(true);
       expect(job.state).toBe('failed');
       expect(JSON.stringify(job)).not.toContain('PRIVATE_SENTINEL');
