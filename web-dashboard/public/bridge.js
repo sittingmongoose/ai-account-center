@@ -9,8 +9,9 @@ import { createActivationConfirmation } from './activation-confirmation.mjs';
 import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from './antigravity-data.mjs';
 import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
 import { analyticsView, analyticsChoiceId, analyticsSlintModel } from './analytics-data.mjs';
-import { usageView, usageHead, apiRangeFor, trendPaths, mixGeo, parseIsoDay, addDays, RANGES, H, D } from './analytics-usage.mjs';
-import { quotaView, agendaView, QUOTA_PROVIDERS } from './analytics-quota.mjs';
+import { usageView, usageHead, apiRangeFor, trendPaths, mixGeo } from './analytics-usage.mjs';
+import { quotaView, agendaView } from './analytics-quota.mjs';
+import { createAnalyticsPage, analyticsThresholds, analyticsCovers as coversRange, analyticsPollDelay, applyAnalyticsAction, applyAnalyticsLayout } from './analytics-page.mjs';
 import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './renderer.mjs';
 import { requireWasmFeatures, WASM_REQUIRED_MESSAGE } from './renderer.mjs';
 import { premultiplySvgTextureUploads } from './renderer.mjs';
@@ -19,7 +20,7 @@ import { PAGES, pageFromUrl, pagePath } from './page-route.mjs';
 import { installLoginBridge } from './login-bridge.mjs';
 import { createShellFrames, effectiveTheme } from './shell-frame.mjs';
 import { createFrameViews, pageAction, viewsSubscription } from './frame-seam.mjs';
-import { setDisplayTimeZone, zonedMonthStart } from './time-format.mjs';
+import { setDisplayTimeZone } from './time-format.mjs';
 import { readSafeArea, keyboardHeight, isAppleMobile, installRow, themeColor, themeScreen, viewportSize } from './device.mjs';
 
 // The browser bridge: network, session, timers and every truthfulness rule stay in JavaScript
@@ -109,14 +110,9 @@ function analyticsNative() { return frameViews.owns('analytics'); }
 function pageFromLocation() { return pageFromUrl(location.pathname, location.search); }
 let currentPage = pageFromLocation();
 const analyticsSelection = { range: '7d', provider: 'all', account: 'all', metricKey: '', activityInterval: 'Daily' };
-// The Analytics page state (version 3). Every number and label is computed in analytics-*.mjs from the response.
-const analyticsPage = {
-  range: '7d', from: null, to: null, prov: 'all', split: false, cache: false, donut: 'tokens', heat: 'cost', cbmSort: 'cost',
-  // donutOpen: the donut legend groups that are open (_other: the models under 1%; _undrawn: by cost, no arc)
-  open: new Set(), compare: new Set(), collapsed: new Set(), donutOpen: new Set(),
-  // chart boxes reported by the Slint layout (analytics-layout): the charts are laid out in these pixels
-  sizes: { trend: null, daily: null, heat: null, focus: null },
-};
+// The Analytics page state (version 3, analytics-page.mjs). Every number and label is computed in analytics-*.mjs from
+// the response.
+const analyticsPage = createAnalyticsPage();
 let motionReduced = false;
 const platform = /Windows/i.test(navigator.userAgent) ? 'windows' : 'mac';
 const host = typeof location.host === 'string' ? location.host : '';
@@ -527,11 +523,7 @@ async function refresh(force = false, restart = false) {
 let shownGeo = null, shownSize = '', trendRaf = 0, layoutTimer = 0;
 const easeInOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 function analyticsContext(now) {
-  const auto = data?.codexAutoSwitch;
-  const codex = auto?.enabled === true && Number.isFinite(auto?.thresholdPercent) ? 100 - auto.thresholdPercent : null;
-  const agAccounts = (data?.accounts || []).filter(account => account.provider === 'antigravity').length;
-  const antigravity = antigravityAuto?.enabled === true && agAccounts > 1 && Number.isFinite(antigravityAuto?.thresholdUsedPercent) ? antigravityAuto.thresholdUsedPercent : null;
-  return { now, dashboard: data, open: analyticsPage.open, compare: analyticsPage.compare, collapsed: analyticsPage.collapsed, focusWidth: analyticsPage.sizes.focus?.w, focusHeight: analyticsPage.sizes.focus?.h, thresholds: { codex, antigravity } };
+  return { now, dashboard: data, open: analyticsPage.open, compare: analyticsPage.compare, collapsed: analyticsPage.collapsed, focusWidth: analyticsPage.sizes.focus?.w, focusHeight: analyticsPage.sizes.focus?.h, thresholds: analyticsThresholds(data, antigravityAuto) };
 }
 /** The choice lists behind the legacy analytics metric and account actions; Rust never reads them. */
 function choiceLists() {
@@ -587,15 +579,11 @@ function renderAnalytics(mode = 'static') {
   if (native) pushModel('analytics-frame', JSON.stringify(slintView), json => { frameView('analytics-motion', morph ? 'morph' : 'static'); frameView('analytics', json); });
   else pushModel('analytics', JSON.stringify(slintView), set_analytics);
   clearTimeout(analyticsPollTimer);
-  const act = analyticsPayload?.activity;
-  // While the server is reading (a cold load or a refresh running) the page re-reads it every
-  // 10 s - a live analytics projection costs real server CPU, so the poll stays calm; while
-  // cells are merely waiting for the next scheduled scan, a 15 s poll watches them settle.
-  // Poll answers render as morphs, so converging numbers glide in place.
-  const busyNow = act?.status === 'loading' || act?.refreshing === true;
-  const converging = Array.isArray(act?.sources) && act.sources.some(r => r?.state === 'scanning');
-  if (currentPage === 'analytics' && (busyNow || converging))
-    analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(false, 'morph', { silent: true }); }, act?.totals ? 60000 : busyNow ? 10000 : 15000);
+  // While the server is still reading, the page reads again (analytics-page.mjs analyticsPollDelay). Poll answers render
+  // as morphs, so converging numbers glide in place.
+  const pollMs = analyticsPollDelay(analyticsPayload);
+  if (currentPage === 'analytics' && pollMs > 0)
+    analyticsPollTimer = setTimeout(() => { if (currentPage === 'analytics') void refreshAnalytics(false, 'morph', { silent: true }); }, pollMs);
   shownSize = size;
   if (!morph || native) { shownGeo = next; return; }
   const t0 = performance.now();
@@ -617,16 +605,7 @@ function analyticsLoading(loading, error) {
   else set_analytics_loading(loading, error);
 }
 /** True when the response in hand already holds the hours of the page range (no fetch is needed to draw it). */
-function analyticsCovers(payload, now = Date.now()) {
-  const from = Date.parse(payload?.range?.from);
-  if (!Number.isFinite(from)) return false;
-  const { range } = analyticsPage;
-  if (range === 'all') return payload.range?.preset === '30d';
-  const start = range === '24h' ? now - D : range === '7d' ? now - 7 * D : range === '30d' ? now - 30 * D
-    : range === 'month' ? zonedMonthStart(now)
-    : Number.isFinite(analyticsPage.from) ? analyticsPage.from : now - 30 * D;
-  return from <= start + H;
-}
+function analyticsCovers(payload, now = Date.now()) { return coversRange(payload, analyticsPage, now); }
 /**
  * opts.silent: a background poll. It keeps the view calm - no loading flag, and a single failed
  * fetch does not replace the page's words; it simply tries again on the next tick. A second
@@ -672,23 +651,9 @@ async function changeAnalyticsRange() {
   if (covered) renderAnalytics('morph');
   if (!analyticsPayload || analyticsPayload.range?.preset !== apiRangeFor(analyticsPage, Date.now())) await refreshAnalytics(false, covered ? 'static' : 'morph');
 }
-const toggleIn = (set, value) => { if (set.has(value)) set.delete(value); else set.add(value); };
 /** A chart box's size ("kind,w,h" or "heat-cell,w"): the charts are laid out in those pixels. */
 function analyticsLayout(value) {
-  const [kind, w, h] = String(value).split(',');
-  const width = Number(w), height = Number(h);
-  if (kind === 'heat-cell') {
-    const prior = analyticsPage.sizes.heat;
-    if (!Number.isFinite(width) || width <= 0 || Math.abs((prior?.cellW || 0) - width) < 0.1) return;
-    analyticsPage.sizes.heat = { ...prior, cellW: width };
-    clearTimeout(layoutTimer);
-    layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
-    return;
-  }
-  if (!(kind in analyticsPage.sizes) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0) return;
-  const prior = analyticsPage.sizes[kind];
-  if (prior && Math.abs(prior.w - width) < 1 && Math.abs(prior.h - height) < 1) return;
-  analyticsPage.sizes[kind] = { ...prior, w: width, h: height };
+  if (!applyAnalyticsLayout(analyticsPage, value)) return;
   // a layout report arrives while Slint lays out: draw again once it has finished
   clearTimeout(layoutTimer);
   layoutTimer = setTimeout(() => renderAnalytics('static'), 30);
@@ -696,36 +661,13 @@ function analyticsLayout(value) {
 async function analyticsAction(action, value) {
   // an Analytics page the frame draws reports its own boxes (the message listener); the hidden canvas's say nothing
   if (action === 'analytics-layout') { if (!analyticsNative()) analyticsLayout(value); return; }
-  if (action === 'analytics-range') {
-    if (!RANGES.some(([id]) => id === value) || (analyticsPage.range === value)) return;
-    analyticsPage.range = value; analyticsPage.from = null; analyticsPage.to = null;
-    await changeAnalyticsRange(); return;
-  }
-  if (action === 'analytics-custom') {
-    const [first, last] = String(value).split(',').map(parseIsoDay);
-    const now = Date.now();
-    if (!Number.isFinite(first) || !Number.isFinite(last) || last < first || first < now - 31 * D || first > now) return;
-    analyticsPage.range = 'custom'; analyticsPage.from = first; analyticsPage.to = addDays(last, 1);
-    await changeAnalyticsRange(); return;
-  }
-  // the picker offers All and the providers that served usage (dashboard ids, or "other")
-  if (action === 'analytics-provider' && (value === 'all' || /^[a-z][a-z0-9-]{0,39}$/.test(value))) {
-    if (analyticsPage.prov === value) return;
-    analyticsPage.prov = value; renderAnalytics('morph'); return;
-  }
-  if (action === 'analytics-split') { analyticsPage.split = value === 'true'; renderAnalytics('morph'); return; }
-  if (action === 'analytics-cache') { analyticsPage.cache = value === 'true'; renderAnalytics('morph'); return; }
-  if (action === 'analytics-donut') { if (['tokens', 'cost'].includes(value)) { analyticsPage.donut = value; renderAnalytics(); } return; }
-  if (action === 'analytics-cbm-sort') { if (['cost', 'tokens'].includes(value)) { analyticsPage.cbmSort = value; renderAnalytics(); } return; }
-  if (action === 'analytics-donut-open') { if (['_other', '_undrawn'].includes(value)) { toggleIn(analyticsPage.donutOpen, value); renderAnalytics(); } return; }
-  if (action === 'analytics-heat') { if (['cost', 'tokens'].includes(value)) { analyticsPage.heat = value; renderAnalytics(); } return; }
-  if (action === 'analytics-focus' || action === 'analytics-compare') {
-    if (!analyticsPayload?.accounts?.some(account => account?.id === value) && !data?.accounts?.some(account => account?.id === value)) return;
-    toggleIn(action === 'analytics-focus' ? analyticsPage.open : analyticsPage.compare, value); renderAnalytics(); return;
-  }
-  if (action === 'analytics-group') {
-    if (!QUOTA_PROVIDERS.some(([id]) => id === value)) return;
-    toggleIn(analyticsPage.collapsed, value); renderAnalytics(); return;
+  // the page's own controls (analytics-page.mjs, shared with the app frame's Analytics)
+  const known = id => !!analyticsPayload?.accounts?.some(account => account?.id === id) || !!data?.accounts?.some(account => account?.id === id);
+  const step = applyAnalyticsAction(analyticsPage, action, value, { known, now: Date.now() });
+  if (step) {
+    if (step.range) await changeAnalyticsRange();
+    else if (step.render) renderAnalytics(step.render);
+    return;
   }
   // the earlier analytics kinds keep working (they drive the quota-history data, not the page controls)
   if (action === 'analytics-activity-interval') {

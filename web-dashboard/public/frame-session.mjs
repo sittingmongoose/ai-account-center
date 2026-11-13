@@ -27,7 +27,7 @@ import {
   rememberSessionHours,
   rememberedSessionHours,
 } from './auth-view.mjs';
-import { transportOf, transportNote } from './accounts-view.mjs';
+import { transportOf, transportNote } from './transport.mjs';
 import { signOutFailureText } from './account-actions.mjs';
 
 /** Offline at launch: try again this often while the page is shown (bridge.js OFFLINE_RETRY_MS). */

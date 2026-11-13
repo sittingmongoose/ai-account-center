@@ -17,21 +17,32 @@
     <link rel="stylesheet" href="/status-bar.css" />
     <link rel="stylesheet" href="{{CSS}}" />
     <link rel="modulepreload" href="{{PKG}}/aac_web.js" />
+    <link rel="preload" href="{{PKG}}/aac_web_bg.wasm" as="fetch" type="application/wasm" crossorigin />
   </head>
   <body>
     <noscript><main class="start-message">This page needs JavaScript.</main></noscript>
     <script type="module">
-      // The app frame signs in with a real form (public/frame-session.mjs); a page inside today's shell (?embed=1)
-      // doesn't load it.
+      // The runtime starts first: its wasm (preloaded above) compiles while the sign-in module loads. The app frame signs
+      // in with a real form (public/frame-session.mjs); a page inside today's shell (?embed=1) doesn't load it.
+      // Analytics reads its own data (public/frame-analytics.mjs): its module loads on first use, at once on its address.
       try {
+        const wasm = '{{PKG}}/aac_web_bg.wasm';
+        const runtime = import('{{PKG}}/aac_web.js');
+        runtime.catch(() => {});
+        // a server that doesn't say application/wasm: the runtime fetches it itself
+        const compiled = WebAssembly.compileStreaming ? WebAssembly.compileStreaming(fetch(wasm)).catch(() => wasm) : Promise.resolve(wasm);
         if (!/[?&]embed=1(&|$)/.test(location.search)) {
+          let analytics = /\/app\/analytics\/?$/.test(location.pathname) ? import('/frame-analytics.mjs') : null;
+          analytics?.catch(() => {});
+          // the module; the page that asked installs its controller only if it is still there (analytics/feed.rs)
+          window.aacLoadAnalytics = () => (analytics ??= import('/frame-analytics.mjs'));
           const { installFrameSession } = await import('/frame-session.mjs');
           installFrameSession(window);
         }
         const { installResetHints } = await import('/reset-live.mjs');
         installResetHints(window);
-        const { default: init } = await import('{{PKG}}/aac_web.js');
-        await init({ module_or_path: '{{PKG}}/aac_web_bg.wasm' });
+        const { default: init } = await runtime;
+        await init({ module_or_path: await compiled });
       } catch {
         const message = document.createElement('main');
         message.className = 'start-message';

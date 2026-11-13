@@ -154,7 +154,7 @@ pub fn DailyCard() -> impl IntoView {
         if w > 0.0
             && h > 0.0
             && reported.get_value() != (w, h)
-            && ax.dash.act("analytics-layout", &format!("daily,{w},{h}"))
+            && ax.feed.act("analytics-layout", &format!("daily,{w},{h}"))
         {
             reported.set_value((w, h));
         }

@@ -33,7 +33,7 @@ pub fn TrendCard() -> impl IntoView {
             observe_size(&el, move |w, h| size.set((w.round(), h.round())));
         }
     });
-    // The view is laid out for the box bridge.js last heard of: report this box whenever they differ.
+    // The view is laid out for the box the controller last heard of: report this box whenever they differ.
     Effect::new(move |_| {
         let (w, h) = size.get();
         let (tw, th) = trend.with(|t| (t.w, t.h));
@@ -42,7 +42,7 @@ pub fn TrendCard() -> impl IntoView {
         }
     });
     let trace = RwSignal::new(String::new());
-    let shown = shown_paths(trend, ax.dash.analytics_motion, trace);
+    let shown = shown_paths(trend, ax.feed.motion, trace);
     let e2e = window()
         .location()
         .search()

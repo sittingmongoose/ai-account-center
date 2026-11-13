@@ -1,15 +1,15 @@
 // The app frame (PLAN step 4, web-dashboard/leptos/src/frame.rs): one chrome around all five tabs at /app/<page>.
-// The frame draws all five tabs itself. The Slint dashboard stays loaded, content-only and hidden, in one same-origin
-// iframe (/?content=1) for its bridge: it feeds Home, Analytics and Accounts their views (home-page.check.mjs,
-// analytics-page.check.mjs, accounts-frame.check.mjs). These check the navigation, the chrome in each format (the Duo's strip and
+// The frame draws all five tabs itself. The Slint dashboard is loaded, content-only and hidden, in one same-origin
+// iframe (/?content=1) for its bridge: it feeds Home and Accounts their views (home-page.check.mjs,
+// accounts-frame.check.mjs). Analytics reads its own data (analytics-page.check.mjs, page-load.check.mjs). These check the navigation, the chrome in each format (the Duo's strip and
 // band rules, with `?safe=t,r,b,l` giving the measured insets), the setting and the way back, and the offline copy.
 // Sign-in has its own folder (../frame-signin): its limiter step closes this server's sign-in for 15 minutes.
 // Status and Scoreboard read the kit's fixture home (scripts/status-fixture.mjs, scoreboard-fixture.mjs).
 
 const SLINT = new Set();
 /** Tabs drawn here from the dashboard's views: the dashboard is on that page, signed in, but hidden. */
-const BRIDGED = new Set(['home', 'analytics', 'accounts']);
-const DASH_PATH = { home: '/', analytics: '/analytics', accounts: '/accounts' };
+const BRIDGED = new Set(['home', 'accounts']);
+const DASH_PATH = { home: '/', accounts: '/accounts' };
 /** What each native tab shows once it has its data. */
 const NATIVE = { status: '.status-grid, .q-card', home: '.home .hsec', scoreboard: '.page-title', accounts: '.ac-page .prov', analytics: '.ax-page' };
 /** The dashboard's own header and tab bar probes: none may report inside the frame. */
@@ -108,7 +108,7 @@ export const tests = {
 				await t.check(`${page}: the address and the marked tab follow`, s.path === `/app/${page}` && s.current.every((h) => h === `/app/${page}`) && s.current.length >= 1, JSON.stringify(s));
 			});
 		}
-		await t.equal('one dashboard iframe for its three tabs', await t.page.locator('iframe.slint-frame').count(), 1);
+		await t.equal('one dashboard iframe for its two tabs', await t.page.locator('iframe.slint-frame').count(), 1);
 
 		const dash = await slintFrame(t);
 		await dash.evaluate(() => { window.__kitKept = 1; });
@@ -133,8 +133,8 @@ export const tests = {
 		});
 
 		await t.step('the dashboard draws its page only', async () => {
-			await t.page.click(`${NAV.desk}[href="/app/analytics"]`);
-			await routeShown(t, 'analytics');
+			await t.page.click(`${NAV.desk}[href="/app/home"]`);
+			await routeShown(t, 'home');
 			const f = await slintFrame(t);
 			const ids = await f.evaluate(async () => {
 				window.__aacProbeNow && __aacProbeNow();
@@ -303,7 +303,7 @@ export const tests = {
 					await t.check(`${label}: no tab is covered`, s.covered.length === 0, s.covered.join(', '));
 					await t.check(`${label}: no sideways scroll`, s.scrollW <= s.w + 1, `${s.scrollW} > ${s.w}`);
 					if (page === 'analytics') {
-						// every tab is drawn here: the dashboard only feeds Analytics, hidden
+						// every tab is drawn here, and Analytics reads its own data: no dashboard is on screen
 						await t.check(`${label}: Analytics is drawn here, the dashboard stays hidden`, !s.iframe, s.iframe ? 'the dashboard iframe is on screen' : '');
 					}
 					if (f.chrome === 'rail') {

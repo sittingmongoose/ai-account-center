@@ -1,4 +1,5 @@
-//! The dashboard seam for the frame's native pages (Accounts & Settings, Details, Analytics, and Home once native).
+//! The dashboard seam for the frame's native pages that take its data (Home, Accounts & Settings, Details). Analytics
+//! reads its own (analytics/feed.rs) and never loads the dashboard.
 //!
 //! `bridge.js` keeps the network, the session, the timers, the accounts controller, switch approvals and every server
 //! call. It runs in the frame's hidden dashboard iframe (`/?content=1`) and, once the frame subscribes, sends each view
@@ -24,7 +25,8 @@ pub fn owns(overlay: &str) -> bool {
 pub static DETAILS_ASKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The pages the frame draws itself (`FRAME_PAGES` in frame-seam.mjs), named in the same subscription: bridge.js
-/// then sends their views here only and takes their layout reports from here only.
+/// then never draws them in Slint. Analytics reads its own data now (analytics/feed.rs): if the dashboard ever builds
+/// its view (its own link to Analytics), `receive` drops it.
 pub const PAGES: &[&str] = &["analytics"];
 
 /// The latest view of each key, as raw JSON (each page parses its own types). Empty until the first push.
@@ -46,14 +48,6 @@ pub struct DashCtx {
     pub busy: RwSignal<bool>,
     /// `{"seconds": 60, "confirmed": true}` (`set_refresh_interval`).
     pub refresh_interval: RwSignal<String>,
-    /// Analytics, `ANALYTICS_VIEW_VERSION` 7 (`set_analytics`); `usage.trend.paths` is the shape to end on.
-    pub analytics: RwSignal<String>,
-    /// How the trend reaches that shape: "morph" (glide) or "static". Arrives just before `analytics`.
-    pub analytics_motion: RwSignal<String>,
-    /// The Analytics header between refreshes (`set_analytics_head`).
-    pub analytics_head: RwSignal<String>,
-    /// `{"loading": bool, "error": "..."}` (`set_analytics_loading`).
-    pub analytics_loading: RwSignal<String>,
     /// The dashboard has started and signed in: only then do actions go to it.
     pub(crate) live: RwSignal<bool>,
 }
@@ -69,15 +63,11 @@ impl DashCtx {
             update: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
             refresh_interval: RwSignal::new(String::new()),
-            analytics: RwSignal::new(String::new()),
-            analytics_motion: RwSignal::new(String::new()),
-            analytics_head: RwSignal::new(String::new()),
-            analytics_loading: RwSignal::new(String::new()),
             live: RwSignal::new(false),
         }
     }
 
-    /// One view from the dashboard. Unknown keys are ignored.
+    /// One view from the dashboard. Unknown keys are ignored, and so are Analytics' (it reads its own).
     pub(crate) fn receive(&self, key: &str, json: String) {
         crate::ui::reconcile_overlay_focus(|| match key {
             "dashboard" => self.dashboard.set(json),
@@ -88,10 +78,6 @@ impl DashCtx {
             "update" => self.update.set(json),
             "busy" => self.busy.set(json == "true"),
             "refresh-interval" => self.refresh_interval.set(json),
-            "analytics" => self.analytics.set(json),
-            "analytics-motion" => self.analytics_motion.set(json),
-            "analytics-head" => self.analytics_head.set(json),
-            "analytics-loading" => self.analytics_loading.set(json),
             _ => {}
         });
     }
@@ -102,7 +88,6 @@ impl DashCtx {
         self.details.set(String::new());
         self.activation.set(String::new());
         self.busy.set(false);
-        self.analytics_loading.set(String::new());
     }
 
     /// The dashboard's page is gone (sign-out): nothing of that session stays on screen.
@@ -115,10 +100,6 @@ impl DashCtx {
             self.activation,
             self.update,
             self.refresh_interval,
-            self.analytics,
-            self.analytics_motion,
-            self.analytics_head,
-            self.analytics_loading,
         ] {
             let _ = signal.try_set(String::new());
         }
@@ -182,20 +163,36 @@ mod tests {
         dash.receive("accounts", "{\"version\":3}".into());
         dash.receive("details", "{\"id\":\"a\"}".into());
         dash.receive("busy", "true".into());
-        dash.receive("analytics", "{\"version\":7}".into());
-        dash.receive("analytics-loading", "{\"loading\":true}".into());
+        dash.receive("refresh-interval", "{\"seconds\":60}".into());
         dash.receive("unknown", "x".into());
         assert_eq!(dash.accounts.get_untracked(), "{\"version\":3}");
         assert!(dash.busy.get_untracked());
-        assert_eq!(dash.analytics.get_untracked(), "{\"version\":7}");
         dash.restarted();
         assert!(dash.details.get_untracked().is_empty());
-        assert!(dash.analytics_loading.get_untracked().is_empty());
-        assert_eq!(dash.analytics.get_untracked(), "{\"version\":7}");
+        assert!(!dash.busy.get_untracked());
         assert_eq!(dash.accounts.get_untracked(), "{\"version\":3}");
         dash.clear();
         assert!(dash.accounts.get_untracked().is_empty());
-        assert!(dash.analytics.get_untracked().is_empty());
+        assert!(dash.refresh_interval.get_untracked().is_empty());
+    }
+
+    #[test]
+    fn analytics_views_from_the_dashboard_are_dropped() {
+        // Analytics reads its own data (analytics/feed.rs): a view the dashboard builds for it must not land anywhere
+        let owner = Owner::new();
+        owner.set();
+        let dash = DashCtx::new();
+        for key in [
+            "analytics",
+            "analytics-motion",
+            "analytics-head",
+            "analytics-loading",
+        ] {
+            dash.receive(key, "{\"version\":7}".into());
+        }
+        assert!(
+            dash.dashboard.get_untracked().is_empty() && dash.accounts.get_untracked().is_empty()
+        );
     }
 
     #[test]
