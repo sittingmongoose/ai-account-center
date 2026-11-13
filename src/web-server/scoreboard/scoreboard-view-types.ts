@@ -198,8 +198,8 @@ export interface UnscoredExample {
 
 /**
  * Runs that count toward no row and no verdict, by reason, so `total` is every run not scored.
- * `scanLimit` is the run files past the reader's scan limit (counted from the `limits/runs` problem;
- * the newest days are kept, named in the runs Source). `unreadable` is the run files the runs reader
+ * `scanLimit` is the run files past any scan cap, from `RunsState.skipped.runFiles` (runs, writers
+ * or bytes; the newest days/writers are kept, named in the runs Source). `unreadable` is the run files the runs reader
  * refused (named in the runs Source, and refused in the readers check) with no earlier good copy to
  * score. Every run it accepted has at most one reason, in this precedence: `no-model`, `no-task-type`,
  * `unknown-model` (its model resolves to no catalog id), `unknown-task-type` (its task type is not in

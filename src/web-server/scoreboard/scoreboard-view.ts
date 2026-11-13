@@ -278,17 +278,11 @@ function unreadableRuns(runs: RunsState): number {
 }
 
 /**
- * Run files past the reader's scan limit, counted from the `limits/runs` problem (the newest days
- * are kept, named in the runs Source). A problem without the count does not count.
+ * Run files past any scan cap (runs, writers or bytes), from the reader's structured count.
+ * The newest days/writers are kept; the file count is named in the runs Source.
  */
 function scanLimitRuns(runs: RunsState): number {
-  let total = 0;
-  for (const problem of runs.problems) {
-    if (problem.file !== 'limits/runs') continue;
-    const match = /^(\d+)\s+run files past the limit/.exec(problem.reason.trim());
-    if (match) total += Number.parseInt(match[1], 10);
-  }
-  return total;
+  return runs.skipped?.runFiles ?? 0;
 }
 
 export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {

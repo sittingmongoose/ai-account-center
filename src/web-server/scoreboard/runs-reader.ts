@@ -42,7 +42,7 @@ export function runFileNameReadable(name: string): boolean {
  * writers than the Status reader's: an old writer's runs are still history. Past a limit the rest
  * is named in the runs Source.
  */
-export const RUN_LIMITS = { writers: 1000, runs: 50000, bytes: 256 * 1024 * 1024 };
+export const RUN_LIMITS = { writers: 20000, runs: 50000, bytes: 256 * 1024 * 1024 };
 
 export interface RunsState {
   /** missing: no `v1/writers` folder; error: the folder could not be listed. */
@@ -51,6 +51,8 @@ export interface RunsState {
   /** The newest copy of each run, by run id. */
   runs: ShareFile<RunDoc>[];
   writers: number;
+  /** Files and writers left out by any cap (the newest days/writers are kept). */
+  skipped: { runFiles: number; writerFolders: number };
   problems: ReportProblem[];
 }
 
@@ -61,6 +63,7 @@ export class RunsReader {
   private readonly listingMisses = new TransientMisses();
   private state: RunsState['state'] = 'missing';
   private scannedAt: number | null = null;
+  private skipped = { runFiles: 0, writerFolders: 0 };
   private scanning: Promise<void> | null = null;
 
   constructor(
@@ -163,12 +166,14 @@ export class RunsReader {
         `${names.length - kept.length} writer folders past the limit of ${limits.writers} were not read (the most recently changed are kept)`
       );
     const candidates: Array<{ date: string; absolute: string; rel: string }> = [];
-    for (const name of kept) {
+    // One writer's run files. Dates under one writer stay listed in order; writers run 16 at a time.
+    const collectWriter = async (name: string) => {
       const writerRel = `writers/${name}`;
       const inWriter = await listing(path.join(writersDir, name), writerRel);
-      if (!inWriter?.some((entry) => entry.name === 'runs')) continue;
+      if (!inWriter?.some((entry) => entry.name === 'runs')) return [];
       const runsRel = `${writerRel}/runs`;
       const dates = await listing(path.join(writersDir, name, 'runs'), runsRel);
+      const out: Array<{ date: string; absolute: string; rel: string }> = [];
       for (const date of dates ?? []) {
         if (date.name.startsWith('.')) continue;
         const dateRel = `${runsRel}/${date.name}`;
@@ -188,13 +193,28 @@ export class RunsReader {
             folderProblem(`${dateRel}/${file.name}`, 'is not a regular file');
             continue;
           }
-          candidates.push({
+          out.push({
             date: date.name,
             absolute: path.join(dateDir, file.name),
             rel: `${dateRel}/${file.name}`,
           });
         }
       }
+      return out;
+    };
+    for (let offset = 0; offset < kept.length; offset += 16) {
+      const batch = kept.slice(offset, offset + 16);
+      const parts = await Promise.all(batch.map((name) => collectWriter(name)));
+      for (const part of parts) candidates.push(...part);
+    }
+    // Writers past the cap: list their run files to count them (never read).
+    const keptSet = new Set(kept);
+    const dropped = names.filter((name) => !keptSet.has(name));
+    const droppedFiles: string[] = [];
+    for (let offset = 0; offset < dropped.length; offset += 16) {
+      const batch = dropped.slice(offset, offset + 16);
+      const parts = await Promise.all(batch.map((name) => collectWriter(name)));
+      for (const part of parts) for (const cand of part) droppedFiles.push(cand.rel);
     }
     // Over a limit the newest days are the ones kept, whichever writer they came from.
     candidates.sort((a, b) => b.date.localeCompare(a.date) || a.rel.localeCompare(b.rel));
@@ -226,11 +246,20 @@ export class RunsReader {
         admitted.map((candidate) => this.files.visit(candidate.absolute, candidate.rel, seen))
       );
     }
+    const skippedRunFiles = candidates.length - visited + droppedFiles.length;
     if (visited < candidates.length)
       folderProblem(
         'limits/runs',
         `${candidates.length - visited} run files past the limit of ${limits.runs} runs or ${limits.bytes / (1024 * 1024)} MB were not read (the newest days are kept)`
       );
+    // A file past a cap was listed, not missing: forget it at once so a grace-held copy is not also
+    // scored while it is counted as not read on the same scan.
+    for (const cand of candidates.slice(visited)) this.files.forget(cand.rel);
+    for (const rel of droppedFiles) this.files.forget(rel);
+    this.skipped = {
+      runFiles: skippedRunFiles,
+      writerFolders: names.length - kept.length,
+    };
     this.files.sweep(seen);
     // A folder listed well this scan (or not tried) starts over.
     this.listingMisses.keepOnly(failedListings);
@@ -251,6 +280,7 @@ export class RunsReader {
       scannedAt: this.scannedAt,
       runs,
       writers: new Set(runs.map((run) => run.doc.writer)).size,
+      skipped: { ...this.skipped },
       problems: byFile([...this.files.problems(), ...this.folderProblems.values()]),
     };
   }
