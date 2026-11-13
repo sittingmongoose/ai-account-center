@@ -3,19 +3,42 @@
 //! by TypeScript and Rust alike. This module keeps no patterns or thresholds of its own.
 //!
 //! Usage rows carry account ids, labels and pool names, which may name an email address by
-//! design, so `looks_secret` applies every shared rule except the email scan. Agent-report text
-//! (runs, threads, captures) uses the policy in full.
+//! design (`claude:<profile id or email>`), so usage text is held to every shared rule except
+//! the reading of such an address as personal data: the email scan, and the scheme-less
+//! userinfo rule when what it read as `user:password@host` is a provider prefix and an address
+//! (`claude:person@example.com`). Agent-report text (runs, threads, captures) uses the policy in
+//! full.
 
 use crate::secret_policy::find_secret;
 
-/// The shared policy's name for its email scan, the one rule usage text is not held to.
+/// The shared policy's name for its email scan.
 const EMAIL: &str = "an email address";
 
 /// Whether `text` holds something the shared policy refuses as a credential.
 pub fn looks_secret(text: &str) -> bool {
     // `find_secret` answers with the first rule that matches, in policy order, and the email
     // scan is the last rule (a test pins that), so an email answer means no credential rule did.
-    find_secret(text).is_some_and(|kind| kind != EMAIL)
+    match find_secret(text) {
+        None => false,
+        Some(EMAIL) => false,
+        Some(_) => !provider_and_address(text),
+    }
+}
+
+/// `<provider>:<an email address and nothing else>`, an account id the policy would otherwise
+/// read as userinfo. The rest is checked again by the same policy: a credential anywhere in it,
+/// a URL (`https://...`), or a host that is no email domain (`agent:pw@localhost`) still refuses.
+fn provider_and_address(text: &str) -> bool {
+    let Some((provider, rest)) = text.split_once(':') else {
+        return false;
+    };
+    !provider.is_empty()
+        && provider
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && !rest.contains(':')
+        && !rest.chars().any(char::is_whitespace)
+        && find_secret(rest) == Some(EMAIL)
 }
 
 #[cfg(test)]
@@ -56,6 +79,12 @@ mod tests {
             "Basic c3ludGhldGljOnBhc3N3b3JkMTIz",
             // An email next to a credential is still a credential.
             "person@example.com sk-abcdefghijklmnopqrstuvwx",
+            "claude:person@example.com sk-abcdefghijklmnopqrstuvwx",
+            // Userinfo is refused whenever it is more than a provider and an address.
+            "agent:synthetic-password123@localhost",
+            "https://agent:synthetic-password123@example.com/path",
+            "codex:acct:synthetic-password123@example.com",
+            "label agent:synthetic-password123@example.com",
         ] {
             assert!(looks_secret(secret), "{secret}");
         }
@@ -80,6 +109,8 @@ mod tests {
             "eyJabc.eyJabc.",
             // Usage keeps account ids that may be addresses.
             "codex:person@example.com",
+            "claude:person.name+tag@example.co.uk",
+            "person@example.com",
         ] {
             assert!(!looks_secret(ordinary), "{ordinary}");
         }
