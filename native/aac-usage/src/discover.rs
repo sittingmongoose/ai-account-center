@@ -423,7 +423,8 @@ pub fn installed_signals(home: &Path, env: &Env, kind: &str, instances: &[T3Inst
         _ => (&[], None),
     };
     let mut signals = Vec::new();
-    if homes.iter().any(|path| path.exists()) {
+    // The home is there (a link counts, never followed: its target may be a mount that hangs).
+    if homes.iter().any(|path| fsx::exists(path)) {
         signals.push("home");
     }
     if has_binary(home, env, binaries) {
@@ -627,7 +628,7 @@ pub fn presence(home: &Path, env: &Env, instances: &[T3Instance], budget: Durati
     let mut result = Map::new();
     for spec in specs {
         let mut signals = Vec::new();
-        if spec.homes.iter().any(|path| is_dir(path)) {
+        if spec.homes.iter().any(|path| fsx::exists(path)) {
             signals.push("home");
         }
         if !spec.binaries.is_empty() && has_binary(home, env, spec.binaries) {
@@ -638,7 +639,8 @@ pub fn presence(home: &Path, env: &Env, instances: &[T3Instance], budget: Durati
         }
         let (mut files, mut newest, mut cut) = (0usize, 0i64, false);
         for (directory, accept) in &spec.dirs {
-            if !is_dir(directory) {
+            // A linked folder is not followed: its target may be a mount that hangs.
+            if is_link(directory) || !is_dir(directory) {
                 continue;
             }
             let (count, last, truncated) = count_files(directory, accept.as_ref(), deadline);

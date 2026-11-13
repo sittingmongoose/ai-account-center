@@ -251,8 +251,9 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env, immutable: boo
     let mut states = Vec::new();
     // Each database is probed first (FIX-ROUND-BIG 9): one that does not answer, or is there but
     // cannot be read, is named on its root.
-    let dbs: Vec<PathBuf> = dbs.into_iter().filter(|db| !crate::fsx::is_link(db)).collect();
-    for candidate in collector.gate_files("zcode", &dbs) {
+    // The probe is the first touch: even a link test would follow a linked folder above it.
+    let answered = collector.gate_files("zcode", &dbs);
+    for candidate in answered.into_iter().filter(|db| !crate::fsx::is_link(db)) {
         collector.count_root("zcode", &util::realpath(&candidate), std::slice::from_ref(&candidate));
         states.push(scan_db(collector, &candidate, immutable));
     }

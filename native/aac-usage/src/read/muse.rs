@@ -201,9 +201,9 @@ pub fn collect(
     let mut candidates = vec![sessions];
     candidates.extend(extra.iter().cloned());
     candidates.extend(experiments.iter().cloned());
-    // Probed first (FIX-ROUND-BIG 9): a folder that is there but cannot be read is named.
-    let candidates: Vec<PathBuf> = candidates.into_iter().filter(|d| !fsx::is_link(d)).collect();
-    let directories = fsx::dedup_dirs(&collector.gate_dirs("muse", &candidates));
+    // Probed first, before any other touch (FIX-ROUND-BIG 9): a folder (or a link) that is there
+    // but cannot be read, or does not answer, is named; one that answers is read by its real path.
+    let directories = fsx::dedup_dirs(&collector.reachable_dirs("muse", &candidates));
     if directories.is_empty() {
         return "not_installed";
     }
