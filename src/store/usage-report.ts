@@ -40,7 +40,8 @@ export interface UsageCounts {
   filesFound?: number;
   filesRead?: number;
   filesFailed?: number;
-  newestMtime?: string | null;
+  /** The newest log file's modification time: an ISO UTC time or epoch milliseconds. */
+  newestMtime?: string | number | null;
   /** Records left out because they were dated more than `FUTURE_SLACK_MS` after the read. */
   futureDated?: number;
 }
@@ -89,9 +90,34 @@ export interface UsageSession {
   last: string;
   parts: UsageSessionPart[];
   target?: string | null;
+  /** Reserved evidence: the working folder, home as `~`, at most `MAX_CWD_PATH` characters. */
   cwd?: { key: string; path: string } | null;
   quality?: UsageQualityFlag[];
 }
+
+/** Where a root was found (contract `ORIGINS`). */
+export type UsageRootOrigin =
+  | 'default'
+  | 'env'
+  | 'tool_config'
+  | 't3_instance'
+  | 'ccs_instance'
+  | 'extra'
+  | 'signature'
+  | 'experiment';
+
+/** One root a read covered: a hashed path, never the path (contract `Root`). */
+export interface UsageRoot {
+  root: string;
+  origin: UsageRootOrigin;
+  /** A report state, or for a root only `link_unreadable` / `link_unreachable`. */
+  state: UsageReportState | 'link_unreadable' | 'link_unreachable';
+  cause?: string | null;
+  counts?: UsageCounts;
+}
+
+/** The longest working folder a session may name (contract `MAX_CWD_PATH`). */
+export const MAX_CWD_PATH = 1024;
 
 export interface UsageReport {
   schema: typeof USAGE_REPORT_SCHEMA;
@@ -103,6 +129,7 @@ export interface UsageReport {
   coverFrom?: string | null;
   cause?: string | null;
   counts?: UsageCounts;
+  roots?: UsageRoot[];
   cells: UsageCell[];
   sessions: UsageSession[];
   kind?: 'live' | 'backfill' | 'import';

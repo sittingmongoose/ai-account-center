@@ -32,6 +32,7 @@ import { readDashboardPreferences } from './dashboard-preferences';
 import { runBounded } from '../usage/collector-concurrency';
 import { localClaudeLogNames, type ClaudeLogNames } from './analytics-claude-log-names';
 import { cellsFromCompact } from '../usage/activity-cells';
+import type { AccountAnalyticsActivityProvider } from './account-analytics-types';
 
 export type AnalyticsSourceTool = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'antigravity';
 export type AnalyticsSourceState =
@@ -347,7 +348,8 @@ function toWorkerResult(
   rows: AnalyticsRemoteRow[],
   srows: AnalyticsRemoteSessionRow[],
   kind: AnalyticsRemoteKind,
-  host: AnalyticsRemoteHost
+  // the computer read: a remote host, or this one when the usage scanner read it
+  host: AnalyticsRemoteHost | 'ubuntu'
 ): UsageWorkerResult {
   const { hourly } = aggregateRows(toCompact(rows), `${kind}-remote`, kind);
   // Session-hour cells for the history store: a row's file names its session through the
@@ -361,7 +363,7 @@ function toWorkerResult(
       ...entry,
       entry: { ...entry.entry, sessionId: sessionOf.get(rows[index].f) ?? '' },
     })),
-    kind,
+    kind as AccountAnalyticsActivityProvider,
     true,
     { future }
   );

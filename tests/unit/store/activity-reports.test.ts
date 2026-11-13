@@ -261,3 +261,68 @@ describe('flagged usage in the day-level views (recheck 1 L-c)', () => {
     expect(projected.totals?.outputTokens).toBe(9000 + 40);
   });
 });
+
+describe('reads of the usage scanner (aac-usage-scan) on this computer (Stage 1 review M3)', () => {
+  const state = (
+    tool: 'codex' | 'cursor' | 'claude',
+    host: 'ubuntu' | 'mac',
+    st: 'ok' | 'no_usage' = 'ok'
+  ) => ({
+    tool,
+    host,
+    state: st,
+    lastScanAt: new Date(NOW - 60_000).toISOString(),
+    rowCount: 1,
+    detail: null,
+  });
+  const base = {
+    windowFromMs: NOW - 31 * DAY,
+    now: NOW,
+    localComplete: () => false,
+  };
+  const input = (r: { cells: Array<{ inputTokens: number }> }) =>
+    r.cells.reduce((n, c) => n + c.inputTokens, 0);
+
+  it('keeps the scanner rows of the tools it owns, never the collector rows as well', () => {
+    const reports = buildActivityReports({
+      ...base,
+      // the collector still holds older Codex rows; the scanner owns Codex and reads Cursor
+      local: new Map([['codex', [worker([{ at: NOW - 2 * H, input: 999 }])]]]),
+      remote: [
+        { tool: 'codex', host: 'ubuntu', data: worker([{ at: NOW - H, input: 100 }]) },
+        { tool: 'cursor', data: { ...worker([{ at: NOW - H, input: 40 }]), host: 'ubuntu' } },
+        { tool: 'codex', host: 'mac', data: worker([{ at: NOW - H, input: 7 }]) },
+      ],
+      states: [state('codex', 'ubuntu'), state('cursor', 'ubuntu'), state('codex', 'mac')],
+      scannerOwned: new Set(['codex', 'cursor']),
+    });
+    const of = (tool: string, host: string) =>
+      reports.find((r) => r.tool === tool && r.computer === host)!;
+    expect(input(of('codex', 'ubuntu'))).toBe(100);
+    expect(input(of('cursor', 'ubuntu'))).toBe(40);
+    expect(input(of('codex', 'mac'))).toBe(7);
+    // a scanner read that finished is complete, like a remote one; the collector's flag does not apply
+    expect(of('codex', 'ubuntu').complete).toBe(true);
+    expect(of('cursor', 'ubuntu').complete).toBe(true);
+  });
+
+  it('reads an owned tool with no usage as the scanner says, and leaves other tools to the collector', () => {
+    const reports = buildActivityReports({
+      ...base,
+      localComplete: (tool) => tool === 'claude',
+      local: new Map([
+        ['codex', [worker([{ at: NOW - 2 * H, input: 999 }])]],
+        ['claude', [worker([{ at: NOW - H, input: 5 }])]],
+      ]),
+      remote: [],
+      states: [state('codex', 'ubuntu', 'no_usage'), state('claude', 'ubuntu')],
+      scannerOwned: new Set(['codex']),
+    });
+    const codex = reports.find((r) => r.tool === 'codex')!;
+    expect(codex.cells).toEqual([]);
+    expect(codex.complete).toBe(true);
+    const claude = reports.find((r) => r.tool === 'claude')!;
+    expect(input(claude)).toBe(5);
+    expect(claude.complete).toBe(true);
+  });
+});

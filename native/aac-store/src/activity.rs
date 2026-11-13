@@ -1308,7 +1308,7 @@ fn counts_row(c: &contract::Counts) -> CountsRow {
         found: c.files_found,
         read: c.files_read,
         failed: c.files_failed,
-        newest_ms: c.newest_mtime.as_deref().and_then(contract::parse_iso),
+        newest_ms: c.newest_mtime.as_ref().and_then(contract::Mtime::ms),
         future_dated: c.future_dated.filter(|n| *n > 0),
     }
 }

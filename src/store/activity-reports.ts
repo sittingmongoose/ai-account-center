@@ -169,26 +169,38 @@ function reportState(
  */
 export function buildActivityReports(args: {
   local: ReadonlyMap<AccountAnalyticsActivityProvider, readonly UsageWorkerResult[]>;
-  remote: ReadonlyArray<{ tool: string; data: UsageWorkerResult }>;
+  /**
+   * Reads made by the remote helper or the usage scanner (`aac-usage-scan`), each naming the
+   * computer it read: `host` on the entry, or `data.host`. On this computer the scanner's reads
+   * come here too, named `ubuntu`.
+   */
+  remote: ReadonlyArray<{ tool: string; host?: string; data: UsageWorkerResult }>;
   states: readonly AccountAnalyticsSource[];
   /** The start of the window the readers read (31 days before the pass). */
   windowFromMs: number;
   now: number;
   localComplete: (tool: AccountAnalyticsActivityProvider) => boolean;
+  /** The tools the usage scanner owns on this computer (its answer's `local.owned`). */
+  scannerOwned?: ReadonlySet<string>;
 }): UsageReport[] {
   const reports: UsageReport[] = [];
   const coverFrom = Math.ceil(args.windowFromMs / HOUR) * HOUR;
   const limit = args.now + FUTURE_SLACK_MS;
+  const hostOf = (entry: (typeof args.remote)[number]) => entry.host ?? entry.data.host;
   for (const source of args.states) {
-    const tool = source.tool;
+    const tool: string = source.tool;
+    const scannerRows = args.remote
+      .filter((entry) => entry.tool === tool && hostOf(entry) === source.host)
+      .map((entry) => entry.data);
+    // On this computer a tool the scanner owns (Cursor and Devin always; Codex and others once it
+    // takes them over) is read from the scanner's rows alone, never the collector's as well, so
+    // nothing counts twice (discovery DESIGN 16.0 B). Its read is finished like a remote one.
+    const scannerHere =
+      source.host === 'ubuntu' && (scannerRows.length > 0 || !!args.scannerOwned?.has(tool));
     const data =
-      source.host === 'ubuntu'
-        ? tool === 'cursor'
-          ? []
-          : [...(args.local.get(tool) ?? [])]
-        : args.remote
-            .filter((entry) => entry.tool === tool && entry.data.host === source.host)
-            .map((entry) => entry.data);
+      source.host !== 'ubuntu' || scannerHere
+        ? scannerRows
+        : [...(args.local.get(tool as AccountAnalyticsActivityProvider) ?? [])];
     let derived = false;
     const read: UsageCell[] = [];
     const sessionRows: SessionUsage[] = [];
@@ -217,6 +229,7 @@ export function buildActivityReports(args: {
       (state === 'ok' || state === 'no_usage') &&
       !derived &&
       (source.host !== 'ubuntu' ||
+        scannerHere ||
         (tool !== 'cursor' && args.localComplete(tool as AccountAnalyticsActivityProvider)));
     reports.push({
       schema: USAGE_REPORT_SCHEMA,

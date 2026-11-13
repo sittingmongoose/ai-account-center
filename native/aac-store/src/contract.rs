@@ -28,7 +28,27 @@ pub const STATES: [&str; 10] = [
 pub const STATES_WITH_CELLS: [&str; 2] = ["ok", "partial"];
 /// States a complete report may have.
 pub const STATES_COMPLETE: [&str; 2] = ["ok", "no_usage"];
-pub const ORIGINS: [&str; 6] = ["default", "env", "tool_config", "t3_instance", "ccs_instance", "extra"];
+/// Where a root was found: a tool's default folder, an environment variable, the tool's own config,
+/// a T3 or CCS instance home, an extra root the user named, a folder found by its files' shape
+/// (`signature`), or an experiment folder (`experiment`, the background walk's PM-Experiments roots).
+pub const ORIGINS: [&str; 8] = [
+    "default",
+    "env",
+    "tool_config",
+    "t3_instance",
+    "ccs_instance",
+    "extra",
+    "signature",
+    "experiment",
+];
+/// A root's own state may also say that it is a link the reader could not follow: its target is
+/// there but cannot be read (`link_unreadable`), or is gone (`link_unreachable`). Root entries only;
+/// a report's state stays one of `STATES`.
+pub const ROOT_LINK_STATES: [&str; 2] = ["link_unreadable", "link_unreachable"];
+/// The longest working folder a session may name (home as `~`), as the scanner bounds it.
+pub const MAX_CWD_PATH: usize = 1024;
+/// 3000-01-01T00:00:00Z: a newest-file time past it is not a time.
+const MAX_MTIME_MS: u64 = 32_503_680_000_000;
 pub const KINDS: [&str; 3] = ["live", "backfill", "import"];
 pub const MAX_CELLS: usize = 200_000;
 pub const MAX_SESSIONS: usize = 20_000;
@@ -59,12 +79,32 @@ pub struct Counts {
     pub files_read: Option<u64>,
     #[serde(default)]
     pub files_failed: Option<u64>,
+    /// The newest log file's modification time: an ISO UTC time or epoch milliseconds.
     #[serde(default)]
-    pub newest_mtime: Option<String>,
+    pub newest_mtime: Option<Mtime>,
     /// Records the reader left out because they were dated more than `FUTURE_SLACK_MS` after the
     /// time it read them. The store adds the cells it leaves out for the same reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub future_dated: Option<u64>,
+}
+
+/// A file time as readers send it: an ISO UTC string (`2026-11-13T14:00:00Z`) or epoch milliseconds.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum Mtime {
+    Ms(u64),
+    Iso(String),
+}
+
+impl Mtime {
+    /// Epoch milliseconds, or None for a string that is not an ISO UTC time or a time past 3000.
+    pub fn ms(&self) -> Option<u64> {
+        match self {
+            Mtime::Ms(ms) => Some(*ms),
+            Mtime::Iso(text) => parse_iso(text),
+        }
+        .filter(|ms| *ms <= MAX_MTIME_MS)
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -384,10 +424,7 @@ fn counts_ok(c: &Counts) -> bool {
     [c.roots, c.files_found, c.files_read, c.files_failed, c.future_dated]
         .iter()
         .all(|v| v.map(|n| n <= 100_000_000).unwrap_or(true))
-        && c.newest_mtime
-            .as_deref()
-            .map(|t| parse_iso(t).is_some())
-            .unwrap_or(true)
+        && c.newest_mtime.as_ref().map(|t| t.ms().is_some()).unwrap_or(true)
 }
 
 /// A report checked whole, with its times as milliseconds.
@@ -456,7 +493,7 @@ impl Report {
         for r in &self.roots {
             if !hex16_ok(&r.root)
                 || !ORIGINS.contains(&r.origin.as_str())
-                || !STATES.contains(&r.state.as_str())
+                || !(STATES.contains(&r.state.as_str()) || ROOT_LINK_STATES.contains(&r.state.as_str()))
                 || r.cause.as_deref().map(|c| !cause_ok(c)).unwrap_or(false)
                 || r.counts.as_ref().map(|c| !counts_ok(c)).unwrap_or(false)
             {
@@ -587,7 +624,7 @@ impl Report {
             if s.target.as_deref().map(|t| !label_ok(t, 32)).unwrap_or(false)
                 || s.cwd
                     .as_ref()
-                    .map(|c| !hex16_ok(&c.key) || !label_ok(&c.path, 512))
+                    .map(|c| !hex16_ok(&c.key) || !label_ok(&c.path, MAX_CWD_PATH))
                     .unwrap_or(false)
             {
                 fail!("invalid", "a session's target or folder is malformed");
@@ -617,6 +654,45 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scanner's report (aac-usage-scan): roots by origin, link states, numeric file times, deep folders.
+    fn scanner_report(edit: impl FnOnce(&mut serde_json::Value)) -> Result<()> {
+        let mut v = serde_json::json!({
+            "schema": REPORT_SCHEMA, "computer": "ubuntu", "tool": "codex", "readAt": "2026-11-13T14:00:00Z",
+            "state": "ok", "complete": true, "coverFrom": "2026-10-13T14:00:00Z",
+            "counts": { "roots": 3, "filesFound": 2, "filesRead": 2, "newestMtime": 1_794_578_000_000u64 },
+            "roots": [
+                { "root": "0123456789abcdef", "origin": "signature", "state": "ok",
+                  "counts": { "filesFound": 1, "newestMtime": "2026-11-13T13:00:00Z" } },
+                { "root": "1123456789abcdef", "origin": "experiment", "state": "ok", "counts": { "filesFound": 1, "newestMtime": null } },
+                { "root": "2123456789abcdef", "origin": "default", "state": "link_unreachable" },
+                { "root": "3123456789abcdef", "origin": "extra", "state": "link_unreadable" }
+            ],
+            "sessions": [{ "sessionKey": "0123456789abcdef", "first": "2026-11-13T12:00:00Z", "last": "2026-11-13T13:00:00Z",
+                           "cwd": { "key": "fedcba9876543210", "path": format!("~/{}", "a".repeat(MAX_CWD_PATH - 2)) } }],
+        });
+        edit(&mut v);
+        let report: Report =
+            serde_json::from_value(v).map_err(|e| crate::error::Error::new("invalid", e.to_string()))?;
+        report.check_at(1_794_578_400_000).map(|_| ())
+    }
+
+    #[test]
+    fn a_scanner_report_is_accepted_with_its_origins_link_states_file_times_and_deep_folders() {
+        scanner_report(|_| ()).unwrap();
+        // what stays refused: an unknown origin, a link state for a whole report, a folder past the
+        // bound, a file time that is not a time
+        assert!(scanner_report(|v| v["roots"][0]["origin"] = "guess".into()).is_err());
+        assert!(scanner_report(|v| v["state"] = "link_unreadable".into()).is_err());
+        assert!(
+            scanner_report(|v| v["sessions"][0]["cwd"]["path"] = format!("~/{}", "a".repeat(MAX_CWD_PATH)).into())
+                .is_err()
+        );
+        assert!(scanner_report(|v| v["counts"]["newestMtime"] = "yesterday".into()).is_err());
+        assert!(scanner_report(|v| v["counts"]["newestMtime"] = 99_999_999_999_999u64.into()).is_err());
+        assert_eq!(Mtime::Ms(5).ms(), Some(5));
+        assert_eq!(Mtime::Iso("1970-01-01T00:00:01Z".into()).ms(), Some(1000));
+    }
 
     #[test]
     fn labels_follow_the_shared_secret_policy() {
