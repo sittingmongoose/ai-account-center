@@ -12,6 +12,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts/app-updates"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import hermetic  # noqa: F401  (discovery stays inside each test's home)
 import app_update_common as common
 import app_update_desktop as desktop
 import app_update_processes as processes
@@ -137,11 +139,14 @@ class ParallelUpdateTests(unittest.TestCase):
                     violations.append("adapters before ZCode")
                 # T3's desktop replacement interrupts the CLI updaters (the ones
                 # that stop or restart its hosted sessions), so all of those are
-                # finished and quiet before it runs. Codex Desktop is the one app
-                # allowed beside it in the pool.
+                # finished and quiet before it runs. Codex Desktop is allowed
+                # beside it; Antigravity ACP, which T3 installs, waits for it.
                 others = active - {"codex-desktop"}
-                if app_id == "t3-code" and (others or len(finished - {"codex-desktop"}) != len(common.APP_LABELS) - 2):
+                if app_id == "t3-code" and (others or len(finished - {"codex-desktop"}) != len(common.APP_LABELS) - 3
+                                            or "antigravity-acp" in finished):
                     violations.append("T3 before barrier")
+                if app_id == "antigravity-acp" and ("t3-code" not in finished or kwargs.get("t3_row", {}).get("appId") != "t3-code"):
+                    violations.append("Antigravity ACP before T3")
                 active.add(app_id)
             time.sleep(.01)
             with lock:

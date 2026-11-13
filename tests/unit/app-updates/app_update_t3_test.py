@@ -20,6 +20,8 @@ import zipfile
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts/app-updates"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import hermetic  # noqa: F401  (discovery stays inside each test's home)
 import app_update_common as common
 import app_update_processes as processes
 import app_update_t3 as t3
@@ -126,8 +128,10 @@ class T3Fixtures(unittest.TestCase):
         self.assertEqual(install.path, launcher)
         self.assertEqual(install.probe, "timeout")
 
+    @mock.patch("app_update_zcode._metadata_command", new=hermetic.metadata_inline)
     def test_release_selection_ignores_drafts_and_stable_and_uses_full_nightly(self):
         response = mock.MagicMock()
+        response.status = 200
         response.geturl.return_value = t3.RELEASES
         response.read.return_value = json.dumps([
             {"tag_name": "v" + OLD}, {"tag_name": "v" + NEW},
@@ -136,11 +140,13 @@ class T3Fixtures(unittest.TestCase):
         with mock.patch.object(t3.urllib.request, "urlopen", return_value=contextlib.nullcontext(response)):
             self.assertEqual(t3.latest_release(), NEW)
 
+    @mock.patch("app_update_zcode._metadata_command", new=hermetic.metadata_inline)
     def test_release_lookup_uses_small_bounded_pages_and_checks_later_pages(self):
         self.assertTrue(t3.RELEASES.endswith("per_page=20"))
         responses = []
         for page, rows in ((1, [{"tag_name": "v1.0.0"}]), (2, [{"tag_name": "v" + NEW}])):
             response = mock.MagicMock()
+            response.status = 200
             response.geturl.return_value = t3.RELEASES + ("&page=2" if page == 2 else "")
             response.read.return_value = json.dumps(rows).encode()
             responses.append(contextlib.nullcontext(response))
@@ -613,7 +619,7 @@ class T3Fixtures(unittest.TestCase):
         self.assertEqual(command.call_count, 2)  # The unit query, then the one restart.
         self.assertFalse((root / "t3-code-pending-restart.json").exists())
 
-    def test_t3_is_last_after_independent_updates_and_shared_dependencies(self):
+    def test_t3_closes_the_pool_and_antigravity_acp_follows_it(self):
         installations = {key: common.Install(key, "ubuntu", self.root / key, "1.0.0") for key in common.APP_LABELS}
         seen = []
         def update(install, deadline, phase=None, **_kwargs):
@@ -626,7 +632,8 @@ class T3Fixtures(unittest.TestCase):
                 mock.patch.object(updater, "update_zcode", side_effect=update), mock.patch.object(updater, "update_adapters", side_effect=update), \
                 mock.patch.object(updater, "update_cursor", side_effect=update), mock.patch.object(updater, "update_antigravity_acp", side_effect=update):
             updater.run_apply("ubuntu")
-        self.assertEqual(seen[-1], "t3-code")
+        # T3 closes the pool; the Antigravity ACP runtime T3 installs is reconciled after it.
+        self.assertEqual(seen[-2:], ["t3-code", "antigravity-acp"])
         self.assertLess(seen.index("zcode"), seen.index("t3-acp-adapters"))
         self.assertLess(seen.index("codex-cli"), seen.index("codex-desktop"))
         self.assertEqual(len(seen), len(common.APP_LABELS))

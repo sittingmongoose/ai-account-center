@@ -118,13 +118,8 @@ def latest_release():
             if remaining <= 0:
                 raise UpdateFailure("timeout")
             url = RELEASES if page == 1 else RELEASES + "&page=" + str(page)
-            request = urllib.request.Request(url, headers={"User-Agent": "AAC-App-Updater", "Accept": "application/vnd.github+json"})
-            with urllib.request.urlopen(request, timeout=min(20, remaining)) as response:
-                if response.geturl() != url:
-                    raise UpdateFailure()
-                raw = response.read(2 * 1024 * 1024 + 1)
-            if len(raw) > 2 * 1024 * 1024:
-                raise UpdateFailure()
+            from app_update_zcode import read_bounded
+            raw = read_bounded(url, url, 2 * 1024 * 1024, deadline=deadline)
             releases = json.loads(raw)
             versions = [row["tag_name"][1:] for row in releases if isinstance(row, dict) and
                         not row.get("draft") and isinstance(row.get("tag_name"), str) and row["tag_name"].startswith("v") and exact_version(row["tag_name"][1:])]
@@ -379,7 +374,7 @@ def update_mac(install, version, temporary, deadline, phase):
         if contexts:
             restart_desktops(install, contexts)
         else:
-            command(["/usr/bin/open", "-a", install.path], timeout=15)
+            command(["/usr/bin/open", "-a", install.path], timeout=15, stderr_tail=False)
         # The same migration risk the Windows relaunch has: a 30-second wait
         # failed a good install and rolled it back.
         health_check("mac", health_budget(deadline))

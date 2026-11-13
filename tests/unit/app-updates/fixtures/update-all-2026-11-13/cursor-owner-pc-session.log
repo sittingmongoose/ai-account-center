@@ -1,0 +1,10 @@
+[2026-11-13T04:55:21.508Z] logger.default {"level":"info","message":"Resolved the fallback encoding for shell output","metadata":{"encoding":"none","oemcp":437,"acp":1252},"contextPath":[]}
+[2026-11-13T04:55:21.515Z] analytics.track {"eventName":"cli.launch"}
+[2026-11-13T04:55:21.573Z] statsig.setupLazyInit {"endpoint":"https://api2.cursor.sh"}
+[2026-11-13T04:55:21.593Z] statsig.initialize.success {"fromCache":true}
+[2026-11-13T04:55:21.735Z] <redacted> {"status":401,"statusText":"Unauthorized"}
+[2026-11-13T04:55:21.742Z] privacy.refresh.start {"isStale":true,"sampleEvery":10}
+[2026-11-13T04:55:21.776Z] privacy.refresh.error ConnectError: [unauthenticated] Error https://api2.cursor.sh
+[2026-11-13T04:55:21.781Z] analytics.flush.error {"error":{"name":"ConnectError","rawMessage":"Error","code":16,"metadata":{},"details":[{"type":"aiserver.v1.ErrorDetails","value":"<redacted>"}]}}
+{"event":"global.main.promiseCatch","level":"ERROR","data":{"message":"Update failed: [unauthenticated] Error","stack":"Error: Update failed: [unauthenticated] Error\n    at y (C:\\Users\\<user>\\AppData\\Local\\cursor-agent\\versions\\2026.11.11-b912975\\4261.index.js:1:24891)"}}
+[2026-11-13T04:55:21.781Z] global.main.promiseCatch {"message":"Update failed: [unauthenticated] Error","stack":"Error: Update failed: [unauthenticated] Error\n    at y (C:\\Users\\<user>\\AppData\\Local\\cursor-agent\\versions\\2026.11.11-b912975\\4261.index.js:1:24891)"}

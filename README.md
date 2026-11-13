@@ -172,6 +172,7 @@ Details: [agent usage snapshot](docs/agent-usage-snapshot.md).
 - **Safe restarts:** only CLI sessions running in a terminal are stopped and reopened. Background agents are never killed.
 - **Nothing automatic:** updates run only when you press the button. Cancel skips whatever hasn't started.
 - **Antigravity always updates.** Account switching pauses on a build it has not reviewed yet, and a running Antigravity session is never stopped for one.
+- **Says why.** A row that did not update names its cause (sign-in needed, blocked by policy, the wrong copy updated, T3 not ready) with what ran, which copy and the last lines of output, credentials removed.
 
 ### 📈 Analytics
 

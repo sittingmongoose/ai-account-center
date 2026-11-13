@@ -10,6 +10,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts/app-updates"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import hermetic  # noqa: F401  (discovery stays inside each test's home)
 import app_update_common as common
 import app_update_desktop as desktop
 import app_update_processes as processes
@@ -96,12 +98,17 @@ class ReviewTests(unittest.TestCase):
 
     def test_partial_adapter_update_fails_only_for_unfinished_required_parts(self):
         names = list(zcode.PACKAGES)
-        install = zcode.AdaptersInstall("t3-acp-adapters", "ubuntu", pathlib.Path("/fixture"), parts={name: "1.0.0" for name in names})
+        owner = zcode.Owner(pathlib.Path("/fixture/lib/node_modules"), pathlib.Path("/fixture"), "npm")
+        install = zcode.AdaptersInstall("t3-acp-adapters", "ubuntu", owner.root, parts={name: "1.0.0" for name in names},
+                                        owners={name: [owner] for name in names}, copies={},
+                                        before={name: ["1.0.0"] for name in names})
         after = {names[0]: "2.0.0", names[1]: "1.0.0"}
-        with mock.patch.object(zcode, "read_parts", return_value=after):
-            row = zcode.adapters_outcome(install, "timeout", behind=names)
+        targets = {name: "2.0.0" for name in names}
+        with mock.patch.object(zcode, "owned_parts", return_value=after), \
+                mock.patch.object(zcode, "owner_versions", return_value={name: [after[name]] for name in names}):
+            row = zcode.adapters_settle(install, names, targets, {}, set(), True, "timeout")
             self.assertEqual((row["status"], row["messageCode"]), ("failed", "timeout"))
-            self.assertEqual(zcode.adapters_outcome(install, "timeout", behind=names[:1])["status"], "updated")
+            self.assertEqual(zcode.adapters_settle(install, names[:1], targets, {}, set(), True, "timeout")["status"], "updated")
             self.assertEqual(len(row["parts"]), 2)
 
     def test_windows_timeout_keeps_completed_rows_and_task_busy_is_busy(self):

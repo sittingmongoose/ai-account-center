@@ -60,14 +60,26 @@ expose `sessionId` and `client.label` through `auth session list --json`.
 After ambiguity AAC spends up to five seconds on that lookup and revokes the
 matching session in finally with the existing confirmed five-second budget.
 A failed/empty lookup cannot prove absence (a commit can race cleanup). The row
-always fails before installation with `t3_session_issue_unknown`: no install
-started; one session may stay valid up to 15 minutes. Even successful cleanup
-never turns ambiguous issuance into a successful update.
+always fails before installation: `t3_session_reply_lost` when the lookup found
+the session and revocation was confirmed, otherwise `t3_session_issue_unknown`
+(one session may stay valid up to 15 minutes). Both carry the cause class
+`lost_session_reply` and a reason word (`reply_empty`, `reply_invalid`,
+`issuer_exit_nonzero`, `issuer_timeout`). Even successful cleanup never turns
+ambiguous issuance into a successful update, and issuance is never repeated.
 
 One connection is used until a transport failure. Reconnection uses the same
 token and resumes `provider.install.subscribe`. Start is sent at most once.
-Every resumed state must match the operation ID returned by start and its pin.
+Every resumed state must match the operation ID returned by start. T3 owns the
+target (from 0.1.10-nightly.20261113.4616 it installs Google's newest native
+CLI); AAC follows the version that operation names instead of a pin.
 A different operation reports "Install state unknown, check T3".
+
+No session is issued until the local server answers: `wait_ready` reads only
+`server-runtime.json` and makes a TCP connect, with 1, 2, 4 and 8 second waits
+for up to three minutes (bounded by the run deadline). After T3 itself was
+replaced in the same run, the record must name the new server version, so the
+previous server's endpoint never passes. No T3 install at all is `t3_absent`;
+a server that never answers is `t3_not_ready`.
 
 ## Recovery correlation
 
@@ -133,6 +145,18 @@ cannot execute T3 until the helper releases its stdin gate; helper death before
 release closes the pipe and prevents issuance. Signals kill tracked issuer trees
 before revoking known sessions, within the existing one-second shared budget,
 without waiting on workers. The two-second exit watchdog remains.
+
+On Windows the launcher runs T3 with `subprocess.call` and passes all three
+standard handles explicitly (stdin `DEVNULL`, stdout its own stdout, stderr
+`DEVNULL`). The scheduled task runs `pythonw.exe`, a windowless parent, and a
+child of such a parent gets standard handles only when Python sets
+`STARTF_USESTDHANDLES`, which it does only when every handle is given. On
+2026-11-13 the inherited form lost T3's JSON reply on both Windows computers:
+T3 issued the session, AAC read an empty reply, found the session by its label,
+revoked it and installed nothing (share/ai-account-center/2026-11-13-update-all-robustness).
+`app_update_robustness_test.LostSessionReplyRegressions` runs the launcher
+under a windowless-parent emulation everywhere, and the real pythonw.exe path
+on Windows.
 
 On Windows, a noninherited job handle has JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
 The launcher joins the job before gate release; T3 and its descendants inherit

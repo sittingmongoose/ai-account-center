@@ -7,6 +7,14 @@ export const MESSAGES = {
   unsupported: 'This installation has no supported unattended updater.',
   restart_context: 'A running instance cannot be restarted safely; no update was attempted.',
   update_failed: 'The app update failed; check its supported installer.',
+  shared_updater_unsafe:
+    'Skipped: the shared updater could lower another installed package. Update each package separately.',
+  version_went_down:
+    'The installed version decreased; the update could not be verified as an upgrade.',
+  mixed_ownership:
+    'Skipped: the adapter copies T3 runs could not be resolved unambiguously. Check its configured commands and PATH.',
+  pnpm_store_copy:
+    'Skipped: T3 runs a pnpm store copy; update it with pnpm and select its global command in T3.',
   version_unknown: 'The installed version could not be verified after the update.',
   restart_failed: 'The update finished, but an original instance could not restart.',
   restart_not_running: 'Updated, but Codex did not restart. Start it again when you need it.',
@@ -68,8 +76,28 @@ export const MESSAGES = {
     'Updated Cursor CLI. Running agents keep their version until they are started again.',
   cursor_update_staged:
     'Cursor staged its update while an agent is running. Let the agent finish, then run Update apps again.',
+  cursor_signin_needed:
+    "Sign-in needed: Cursor refused the CLI's sign-in when it checked for updates (HTTP 401), so nothing changed. Run cursor-agent login in a terminal on this computer, then run Update apps again. AAC never stores or asks for credentials.",
+  cursor_shadowed:
+    "Cursor CLI's own install is at the version shown, but another cursor-agent comes first on PATH and runs instead. Remove that copy, or put Cursor's own folder first, then run Update apps again.",
+  policy_blocked:
+    "A Windows execution policy refused the app's launcher, so nothing changed. AAC runs it the way the app's own .cmd does (a Bypass for that one process); a Group Policy setting overrides that. Ask this computer's administrator to allow it, then run Update apps again.",
+  wrong_prefix:
+    'npm reported success, but it changed a copy T3 does not run; the copy T3 uses is unchanged. The details name both folders.',
+  registry_mismatch:
+    "npm installed a version other than the newest published one (an older or mirrored registry?), so the update did not complete. The details list each copy's version.",
+  prefix_not_writable:
+    "The adapters T3 runs are in a folder this account cannot change, so nothing was installed. Update them as that folder's owner, or reinstall them in a folder you own.",
   antigravity_acp_updated:
-    'T3 installed and activated its pinned Antigravity ACP runtime. Existing sessions keep their version; new sessions use the update.',
+    'T3 installed and activated its newest Antigravity ACP runtime and refreshed its models. Existing sessions keep their version; new sessions use the update.',
+  antigravity_acp_models_stale:
+    'T3 installed and activated its newest Antigravity ACP runtime, but could not refresh its model list. Press Refresh provider status in T3.',
+  antigravity_acp_signin_hold:
+    "Sign-in needed: the newer Antigravity runtime cannot read the sign-in saved on this computer, so Update apps did not install it. Install it from T3's Antigravity settings when you can sign in again there.",
+  antigravity_acp_signin_needed:
+    "Updated, but Antigravity needs a new sign-in: the new runtime could not use the saved one. Sign in again in T3's Antigravity settings, then press Refresh provider status.",
+  antigravity_acp_offer_unknown:
+    "Unknown: neither T3 nor Google's release channel said which Antigravity ACP release is newest, so nothing was installed. Try Update apps again.",
   antigravity_acp_newer_kept:
     "Newer kept: T3's active Antigravity ACP runtime is newer than its pin.",
   antigravity_acp_activation_unsettled:
@@ -81,7 +109,15 @@ export const MESSAGES = {
   t3_auth_failed:
     'Action required: T3 could not issue, authorize, or revoke the temporary update session. Check local T3 access, then run Update apps again.',
   t3_session_issue_unknown:
-    'No T3 session in time; no install started. One session may stay valid up to 15 minutes. Check T3.',
+    'T3 may have issued an update session, but its reply never arrived and AAC could not find it to revoke; no install started. That session expires within 15 minutes.',
+  t3_session_reply_lost:
+    'T3 issued an update session, but AAC did not get a usable reply, so no install started. AAC found that session and revoked it.',
+  t3_absent:
+    'T3 Code is not installed, or has never run, on this computer; its Antigravity ACP runtime updates only through T3.',
+  t3_not_ready:
+    "T3's server did not answer in time (it may still be starting or upgrading its database), so nothing was installed. Run Update apps again once T3 is open.",
+  t3_restart_pending:
+    'T3 was updated in this run and its server restarts after the job, so Antigravity ACP is checked against the new T3 on the next Update apps.',
   t3_issuer_protection_failed:
     'T3 session issuer could not be protected against helper termination. No install started. Check the local T3 installation and process permissions.',
   t3_install_state_unknown: 'Install state unknown, check T3.',
@@ -128,4 +164,8 @@ export const LEGACY_MESSAGES: Partial<Record<MessageCode, string>> = {
     'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
   runtime_paused_blocked:
     'Antigravity switching is paused on an unreviewed build and its runtime is stopped; the update could not safely start without it (a pending switch recovery, a process check that could not finish, or a failed backup), so nothing was installed.',
+  antigravity_acp_updated:
+    'T3 installed and activated its pinned Antigravity ACP runtime. Existing sessions keep their version; new sessions use the update.',
+  t3_session_issue_unknown:
+    'No T3 session in time; no install started. One session may stay valid up to 15 minutes. Check T3.',
 };

@@ -127,7 +127,81 @@ def discover(host):
             cli = candidates[0]
         return cli, base, origin
     except (OSError, ValueError, KeyError, TypeError):
-        raise UpdateFailure("t3_unreachable") from None
+        if not t3_installed(host):
+            raise UpdateFailure("t3_absent", cause="t3_absent", reason="no_t3_install") from None
+        raise UpdateFailure("t3_unreachable", cause="t3_not_ready", reason="no_server_endpoint") from None
+
+
+def t3_installed(host):
+    """Whether any T3 install exists here: the desktop app, its CLI shim or a standalone runtime."""
+    home = pathlib.Path.home()
+    if host == "windows":
+        local = pathlib.Path(os.environ.get("LOCALAPPDATA", str(home / "AppData/Local")))
+        candidates = [local / "Programs/t3code/T3 Code (Nightly).exe"]
+    else:
+        candidates = [home / ".t3/bin/t3", home / ".local/bin/t3"]
+        if host == "mac":
+            candidates.append(pathlib.Path("/Applications/T3 Code (Nightly).app"))
+    try:
+        versions = home / ".t3/runtime/versions"
+        if versions.is_dir() and any((child / "t3").is_file() for child in versions.iterdir()):
+            return True
+    except OSError:
+        pass
+    return any(path.exists() for path in candidates)
+
+
+def server_state():
+    """T3's published endpoint record, or None. Read only; never guessed."""
+    try:
+        path = pathlib.Path.home() / ".t3/userdata/server-runtime.json"
+        if path.stat().st_size > 65536:
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+READY_SECONDS = 180
+
+
+def wait_ready(host, deadline, expected_version=None, seconds=READY_SECONDS, sleep=time.sleep):
+    """Wait, bounded, until the local T3 server answers on its published endpoint.
+
+    Only safe, repeatable reads happen here: the endpoint record and a TCP
+    connect. No session is issued until this returns. With expected_version
+    (T3 was replaced in this run) the record must name that server version, so
+    an old server's endpoint never passes. Raises t3_absent when no T3 is
+    installed at all, t3_not_ready when its server did not come up in time."""
+    end = min(deadline, time.monotonic() + seconds)
+    backoff, attempts = 1.0, 0
+    reason = "no_server_endpoint"
+    while True:
+        attempts += 1
+        state = server_state()
+        if state is None and attempts == 1 and not t3_installed(host):
+            raise UpdateFailure("t3_absent", cause="t3_absent", reason="no_t3_install")
+        try:
+            if state is None:
+                raise ValueError("no_server_endpoint")
+            origin = urllib.parse.urlsplit(state.get("origin", ""))
+            if origin.hostname not in ("127.0.0.1", "localhost", "::1") or not origin.port:
+                raise ValueError("no_server_endpoint")
+            # After T3 was replaced the record must name the new server; a record without a
+            # version cannot prove it is not the previous server's.
+            if expected_version and state.get("serverVersion") != expected_version:
+                raise ValueError("previous_server" if state.get("serverVersion") else "no_server_version")
+            with socket.create_connection((origin.hostname, origin.port), timeout=max(0.2, min(3, end - time.monotonic()))):
+                pass
+            return attempts
+        except (OSError, ValueError) as error:
+            reason = error.args[0] if isinstance(error, ValueError) and error.args else "connection_refused"
+        wait = min(backoff, end - time.monotonic())
+        if wait <= 0:
+            raise UpdateFailure("t3_not_ready", cause="t3_not_ready", reason=reason)
+        sleep(wait)
+        backoff = min(8.0, backoff * 2)
 
 
 _issuers = {}
@@ -147,7 +221,13 @@ if sys.stdin.buffer.read(1) != b'1':
     sys.exit(125)
 os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
 if os.name == 'nt':
-    sys.exit(subprocess.call(sys.argv[2:]))
+    # A windowless parent (pythonw.exe from the scheduled task) gives a child
+    # no standard handles unless all three are explicit (subprocess sets
+    # STARTF_USESTDHANDLES only then), so T3's JSON reply would be lost.
+    if sys.stdout is None:
+        sys.exit(125)
+    sys.stdout.flush()
+    sys.exit(subprocess.call(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=sys.stdout.fileno(), stderr=subprocess.DEVNULL))
 try:
     os.execvp(sys.argv[2], sys.argv[2:])
 except OSError:
@@ -261,7 +341,7 @@ def auth_command(cli, base, args, timeout=30):
         output, _ = process.communicate(timeout=timeout)
     except (subprocess.TimeoutExpired, OSError):
         issuer.stop() if issuer else _stop_group(process, tree=True)
-        raise UpdateFailure("t3_auth_failed") from None
+        raise UpdateFailure("t3_auth_failed", reason="issuer_timeout") from None
     except BaseException:
         issuer.stop() if issuer else _stop_group(process, tree=True)
         raise
@@ -270,7 +350,7 @@ def auth_command(cli, base, args, timeout=30):
             issuer.stop()
             _issuers.pop(id(issuer), None)
     if process.returncode or len(output) > 65536:
-        raise UpdateFailure("t3_auth_failed")
+        raise UpdateFailure("t3_auth_failed", reason="issuer_exit_nonzero" if process.returncode else "reply_too_large")
     return output.decode("utf-8", "replace")
 
 
@@ -374,6 +454,7 @@ def bearer(cli, base, deadline):
     session_id = None
     label = "aac-acp-" + uuid.uuid4().hex
     attempted = False
+    lost = "reply_unparsed"
     try:
         try:
             backoff = 1
@@ -385,10 +466,12 @@ def bearer(cli, base, deadline):
                         "issue", "--scope", "providers:manage", "--scope", "orchestration:read",
                         "--ttl", ttl, "--label", label, "--json",
                     ], remaining(deadline, float("inf")))
+                    lost = "reply_empty" if not reply.strip() else "reply_invalid"
                     issued = json.loads(reply)
                     break
                 except UpdateFailure as error:
                     if error.code != "t3_cli_not_started":
+                        lost = error.reason or "issuer_failed"
                         raise
                     attempted = False
                     time.sleep(remaining(deadline, backoff))
@@ -405,10 +488,14 @@ def bearer(cli, base, deadline):
             if isinstance(error, UpdateFailure) and error.code == "t3_issuer_protection_failed":
                 raise
             if attempted and not session_id:
+                # Only an empty or unreadable reply is a lost reply; a CLI that failed or timed out is not.
+                cause = "lost_session_reply" if lost.startswith("reply_") else "unknown"
                 session_id = find_issued_session(cli, base, label)
                 if session_id:
                     _known_sessions[session_id] = (cli, base)
-                raise UpdateFailure("t3_session_issue_unknown") from None
+                    # Revoked in finally; a failed revoke replaces this with t3_session_revoke_failed.
+                    raise UpdateFailure("t3_session_reply_lost", cause=cause, reason=lost) from None
+                raise UpdateFailure("t3_session_issue_unknown", cause=cause, reason=lost) from None
             raise UpdateFailure("t3_auth_failed") from None
         yield token
     finally:
@@ -494,22 +581,27 @@ class Rpc:
 
     def __init__(self, origin, token, deadline):
         self.deadline, self.serial = deadline, 0
+        # A monotonic time after which a quiet read gives up (TimeoutError) instead of
+        # waiting for the operation deadline: reading an offer that may never change.
+        self.settle = None
         self.socket = None
         self.stream = None
         try:
             self.socket = socket.create_connection((origin.hostname, origin.port), remaining(deadline, 10))
             self.stream = self.socket.makefile("rb")
+            self.handshake_deadline = min(deadline, time.monotonic() + 10)
             key = base64.b64encode(os.urandom(16)).decode("ascii")
             host = "[::1]" if origin.hostname == "::1" else origin.hostname
             request = ("GET /ws?orchestrationProtocol=2 HTTP/1.1\r\n"
                        f"Host: {host}:{origin.port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                        f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
                        f"Authorization: Bearer {token}\r\n\r\n")
+            self.socket.settimeout(self.read_timeout())
             self.socket.sendall(request.encode("ascii"))
-            status = self.stream.readline(8193).split()
+            status = self.read_line(8193).split()
             headers, size = {}, 0
             while True:
-                line = self.stream.readline(8193)
+                line = self.read_line(8193)
                 size += len(line)
                 if not line or len(line) > 8192 or size > 32768:
                     raise UpdateFailure("t3_unreachable")
@@ -524,6 +616,7 @@ class Rpc:
                     headers.get("upgrade", "").lower() != "websocket" or
                     "upgrade" not in headers.get("connection", "").lower()):
                 raise UpdateFailure("t3_unreachable")
+            self.handshake_deadline = None
         except BaseException:
             self.close()
             raise
@@ -535,7 +628,7 @@ class Rpc:
             self.socket.close()
 
     def frame(self, payload, opcode=1):
-        self.socket.settimeout(remaining(self.deadline))
+        self.socket.settimeout(self.read_timeout())
         mask = os.urandom(4)
         size = len(payload)
         header = bytes([0x80 | opcode, 0x80 | size]) if size < 126 else (
@@ -552,14 +645,36 @@ class Rpc:
         self.send({"_tag": "Request", "id": identifier, "tag": method, "payload": payload, "headers": []})
         return identifier
 
+    def read_timeout(self):
+        # Every receive gets the remaining absolute budget, including handshake and offer settle.
+        deadline = min(self.deadline, getattr(self, "handshake_deadline", None) or self.deadline)
+        timeout = remaining(deadline, 900)
+        if self.settle is not None:
+            quiet = self.settle - time.monotonic()
+            if quiet <= 0:
+                raise TimeoutError("offer deadline")
+            timeout = min(timeout, quiet)
+        return timeout
+
     def read(self, size):
-        # ACP validation can be quiet for 90 seconds. A quiet stream must keep
-        # the full operation budget rather than fail at the CLI's 30s bound.
-        self.socket.settimeout(remaining(self.deadline, 900))
-        data = self.stream.read(size)
-        if len(data) != size:
-            raise UpdateFailure("t3_unreachable")
-        return data
+        data = bytearray()
+        while len(data) < size:
+            self.socket.settimeout(self.read_timeout())
+            # read1 makes at most one underlying receive; read(size) can wait on many trickled bytes.
+            chunk = self.stream.read1(min(65536, size - len(data)))
+            self.read_timeout()
+            if not chunk:
+                raise UpdateFailure("t3_unreachable")
+            data.extend(chunk)
+        return bytes(data)
+
+    def read_line(self, limit):
+        line = bytearray()
+        while len(line) < limit:
+            line.extend(self.read(1))
+            if line[-1:] == b"\n":
+                return bytes(line)
+        raise UpdateFailure("t3_unreachable")
 
     def messages(self):
         data = bytearray()
@@ -607,8 +722,13 @@ class Rpc:
                     exit_value = message["exit"]
                     if exit_value.get("_tag") != "Success":
                         causes = exit_value.get("cause", [])
-                        denied = any(c.get("error", {}).get("_tag") == "EnvironmentAuthorizationError" for c in causes)
-                        raise UpdateFailure("t3_auth_failed" if denied else "t3_install_failed:rpc")
+                        causes = causes if isinstance(causes, list) else []
+                        errors = [c.get("error") for c in causes if isinstance(c, dict) and isinstance(c.get("error"), dict)]
+                        denied = any(e.get("_tag") == "EnvironmentAuthorizationError" for e in errors)
+                        # Server details can name paths or accounts: classification only, never emitted.
+                        # Only the error's tag and its detail: an instance or operation name is no evidence.
+                        detail = "\n".join(str(e.get(key, ""))[:2000] for e in errors for key in ("_tag", "detail"))
+                        raise UpdateFailure("t3_auth_failed" if denied else "t3_install_failed:rpc", output=detail)
                     yield exit_value.get("value")
                     return
 

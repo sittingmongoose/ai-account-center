@@ -1,0 +1,17 @@
+{
+  "note": "The owner's Mac 2026-11-13, read-only. {HOME} replaces the home folder. T3's enabled zcode instance runs Homebrew's node symlink (now a standalone Node) with the Homebrew-prefix adapter; muse runs natively, so muse-acp is found on PATH. The owner's script ran plain `npm install -g`, whose default prefix is the standalone Node's own folder.",
+  "t3Instance": {"driver": "acpRegistry", "enabled": true, "config": {"source": "local", "commandPath": "/opt/homebrew/bin/node", "commandArgs": ["/opt/homebrew/lib/node_modules/zcode-acp-server/dist/cli.js", "server"]}},
+  "symlinks": {
+    "/opt/homebrew/bin/node": "{HOME}/.local/opt/node-v26.13.1-darwin-arm64/bin/node",
+    "/opt/homebrew/bin/npm": "{HOME}/.local/opt/node-v26.13.1-darwin-arm64/bin/npm",
+    "/opt/homebrew/bin/zcode-acp-server": "../lib/node_modules/zcode-acp-server/dist/cli.js",
+    "/opt/homebrew/bin/muse-acp": "../lib/node_modules/@brokkai/muse-acp/bin/muse-acp.cjs"
+  },
+  "before": {
+    "/opt/homebrew/lib/node_modules": {"@brokkai/muse-acp": "0.21.0", "zcode-acp-server": "0.84.2"},
+    "{HOME}/.local/opt/node-v26.13.1-darwin-arm64/lib/node_modules": {"@brokkai/muse-acp": "0.21.0"}
+  },
+  "registryLatest": {"muse-acp": "0.21.0", "zcode-acp-server": "0.84.3"},
+  "ownerScript": "{HOME}/.local/bin/t3-acp-adapters-update",
+  "npmExit": 0
+}

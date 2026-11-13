@@ -57,8 +57,13 @@ export function updateJob() {
 			if (appId === 'claude-code' && host !== 'windows') { status = 'updated'; previousVersion = '2.1.0'; version = '2.1.3'; }
 			if (appId === 'codex-desktop' && host === 'mac') { status = 'action_required'; message = 'Quit Codex Desktop to finish the update.'; }
 			if (appId === 'zcode' && host === 'windows') { status = 'not_installed'; version = ''; }
-			if (appId === 'antigravity-cli' && host === 'nas1') { status = 'failed'; message = 'The download stopped: connection reset.'; }
-			results.push({ platform: host, appId, appLabel, status, version, previousVersion, message });
+			let diagnostics;
+			if (appId === 'antigravity-cli' && host === 'nas1') {
+				status = 'failed'; message = 'The download stopped: connection reset.';
+				// What a helper now says about a failed row: its cause, what ran, the step times and the output's tail.
+				diagnostics = { cause: 'installer_failed', command: 'agy update', exitCode: 1, phases: { checking: 900, updating: 4200 }, tail: 'Error: connection reset by peer' };
+			}
+			results.push({ platform: host, appId, appLabel, status, version, previousVersion, message, ...(diagnostics ? { diagnostics } : {}) });
 		}
 	}
 	return { id: '0123abcd-0000-4000-8000-00000000abcd', state: 'succeeded', startedAt: at(-190), finishedAt: at(-182), expectedResults: results.length, results };

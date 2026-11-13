@@ -61,6 +61,8 @@ export type { HostRunControl } from './app-update-hosts';
  * result reads "Timed out" instead of the job waiting forever.
  */
 const HOST_DEADLINE_MS = 33 * 60 * 1000;
+/** The expanded saved job: 60 rows, each with its diagnostics (stderr tails are at most 1200 characters). */
+const MAX_SAVED_JOB = 512 * 1024;
 
 export class AppUpdateBusyError extends Error {
   constructor() {
@@ -501,17 +503,7 @@ export class AppUpdateService {
                 LEGACY_STORAGE_HOSTS.includes(row.platform) &&
                 LEGACY_STORAGE_APPS.includes(row.appId)
             )
-            .map((row) =>
-              row.appId === 'muse-code' &&
-              [
-                MESSAGES.model_catalog_unrefreshed,
-                MESSAGES.mac_keychain_locked,
-                MESSAGES.mac_gui_unavailable,
-                MESSAGES.mac_gui_cleanup_failed,
-              ].some((message) => message === row.message)
-                ? { ...row, message: LEGACY_MESSAGES.model_catalog_unrefreshed }
-                : row
-            ),
+            .map(legacyRow),
           hosts: hosts
             ? Object.fromEntries(
                 LEGACY_STORAGE_HOSTS.map((host) => {
@@ -602,7 +594,12 @@ export class AppUpdateService {
   private restoreFile(name: string): boolean {
     try {
       const file = path.join(this.directory, name);
-      if (fs.statSync(file).size > MAX_OUTPUT) return false;
+      // Rows carry diagnostics in the expanded file only; the legacy view keeps the older limit.
+      if (
+        fs.statSync(file).size >
+        (name === 'dashboard-job-expanded.json' ? MAX_SAVED_JOB : MAX_OUTPUT)
+      )
+        return false;
       const saved = record(JSON.parse(fs.readFileSync(file, 'utf8')));
       if (name === 'dashboard-job-expanded.json') {
         if (typeof saved?.legacyDigest !== 'string' || !/^[a-f0-9]{64}$/.test(saved.legacyDigest))
@@ -696,6 +693,42 @@ export class AppUpdateService {
       return false;
     }
   }
+}
+
+/**
+ * One row as an older package reads it: no diagnostics (unknown to it, and it keeps the file under its
+ * 64 KiB limit), and words it knows for codes it predates.
+ */
+function legacyRow(row: AppUpdateResult): AppUpdateResult {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { diagnostics, ...rest } = row;
+  if (
+    row.appId === 'muse-code' &&
+    [
+      MESSAGES.model_catalog_unrefreshed,
+      MESSAGES.mac_keychain_locked,
+      MESSAGES.mac_gui_unavailable,
+      MESSAGES.mac_gui_cleanup_failed,
+    ].some((message) => message === row.message)
+  )
+    return { ...rest, message: LEGACY_MESSAGES.model_catalog_unrefreshed as string };
+  if (
+    [
+      MESSAGES.version_went_down,
+      MESSAGES.shared_updater_unsafe,
+      MESSAGES.mixed_ownership,
+      MESSAGES.pnpm_store_copy,
+    ].some((message) => message === row.message)
+  )
+    return {
+      ...rest,
+      message: row.status === 'skipped' ? MESSAGES.unsupported : MESSAGES.update_failed,
+    };
+  if (row.appId === 't3-acp-adapters' && row.message === MESSAGES.wrong_prefix)
+    return { ...rest, message: MESSAGES.update_failed };
+  if (row.appId === 't3-acp-adapters' && row.message === MESSAGES.prefix_not_writable)
+    return { ...rest, message: MESSAGES.unsupported };
+  return rest;
 }
 
 const services = new Map<string, AppUpdateService>();

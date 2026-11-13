@@ -23,6 +23,8 @@ import urllib.parse
 from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "scripts/app-updates"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import hermetic  # noqa: F401  (discovery stays inside each test's home)
 import app_update_common as common
 import app_update_t3_rpc as rpc
 
@@ -87,6 +89,11 @@ class DiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(temporary)):
             state = pathlib.Path(temporary) / ".t3/userdata/server-runtime.json"
             state.parent.mkdir(parents=True)
+            # Nothing of T3 installed is "T3 absent", not a server that failed to answer.
+            with self.assertRaises(common.UpdateFailure) as raised: rpc.discover("ubuntu")
+            self.assertEqual((raised.exception.code, raised.exception.cause), ("t3_absent", "t3_absent"))
+            shim = pathlib.Path(temporary) / ".t3/bin/t3"
+            shim.parent.mkdir(parents=True); shim.touch()
             for origin in ("http://example.com:4444", "http://user:secret@localhost:4444", "https://localhost:4444", "http://127.0.0.1:4444/other"):
                 state.write_text(json.dumps({"version": 1, "origin": origin, "port": 4444}))
                 with self.assertRaises(common.UpdateFailure) as raised: rpc.discover("ubuntu")
@@ -186,7 +193,7 @@ def crash_fixture(stage, base):
         client.refresh()
         kill("authenticated")
         client.call("provider.install.start", {})
-        next(acp.install_state(client, "agy"))
+        next(client.subscribe("agy"))
         client.close()
     raise AssertionError("kill point not reached")
 
@@ -253,10 +260,11 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(len(rows), 12)
         for row in rows:
             if row["appId"] == "antigravity-acp":
-                self.assertEqual((row["status"], row["messageCode"]), ("action_required", "t3_unreachable"))
+                # No T3 install in this home at all: "T3 absent", found before any session or discovery.
+                self.assertEqual((row["status"], row["messageCode"], row["diagnostics"]["cause"]), ("action_required", "t3_absent", "t3_absent"))
             else:
                 self.assertEqual(row["status"], "current", row)
-        discover.assert_called_once_with("windows")
+        discover.assert_not_called()
         self.assertTrue(pending.exists(), "legacy records are ignored")
         self.assertNotIn(TOKEN, out.getvalue())
 
@@ -305,7 +313,8 @@ class AuthTests(unittest.TestCase):
                                   [{"sessionId": "unrelated", "client": {"label": "aac-acp-other"}}])
             with mock.patch.object(rpc, "auth_command", side_effect=command), mock.patch.object(rpc, "revoke_session", side_effect=store.revoke), mock.patch.object(rpc, "Rpc") as transport:
                 with contextlib.closing(rpc.InstallRpc(["fake"], self.base, None, time.monotonic() + 900)) as client:
-                    with self.assertRaisesRegex(common.UpdateFailure, "t3_session_issue_unknown"):
+                    # A session found by its label is revoked, so the reply is "lost"; one not found may still be valid.
+                    with self.assertRaisesRegex(common.UpdateFailure, "t3_session_reply_lost" if listing_available else "t3_session_issue_unknown"):
                         client.call("provider.install.start", {})
                 transport.assert_not_called()
             self.assertEqual(len(store.rows), 1)

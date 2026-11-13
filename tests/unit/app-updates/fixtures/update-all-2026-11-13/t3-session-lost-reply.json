@@ -1,0 +1,6 @@
+{
+  "note": "Rows 4 and 5 (the owner's Windows PC and Alexis PC), 2026-11-13. The scheduled task ran pythonw.exe; T3 issued the session (auth_sessions: issued, then revoked 1.4 s later by AAC's label lookup) but the issuer's stdout reached AAC empty. Identifiers and tokens are fixture values.",
+  "issueReply": {"sessionId": "fixture-session", "token": "fixture-token-not-a-secret", "scopes": ["providers:manage", "orchestration:read"]},
+  "replyReceivedUnderPythonw": "",
+  "savedRow": {"appId": "antigravity-acp", "platform": "windows", "status": "failed", "previousVersion": "1.3.0", "version": "1.3.0", "manager": "official-download", "message": "No T3 session in time; no install started. One session may stay valid up to 15 minutes. Check T3.", "updateAttempted": false}
+}

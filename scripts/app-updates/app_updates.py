@@ -20,8 +20,9 @@ import uuid
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from app_update_common import (
-    APP_LABELS, Install, UpdateFailure, cli_probe, command, download, execution_lock,
-    powershell, private_temporary, ps_quote, resolve_npm, result, version_text, version_tuple, npm_version_key, write_private_json,
+    APP_LABELS, Install, UpdateFailure, cli_probe, command, diagnostics, download, execution_lock,
+    powershell, private_temporary, ps_quote, resolve_npm, result, row_diagnostics, version_text, version_tuple,
+    npm_version_key, with_diagnostics, write_private_json,
 )
 from app_update_cursor import detect_cursor, update_cursor
 from app_update_antigravity import detect_antigravity_acp, update_antigravity_acp
@@ -112,18 +113,13 @@ def agy_manifest_key(platform, machine=None):
 
 def latest_agy_version(platform):
     """The newest official build's version for this computer, or None. Read-only."""
-    import urllib.request
     key = agy_manifest_key(platform)
     if key is None:
         return None
     try:
-        request = urllib.request.Request(AGY_MANIFEST_BASE + key + ".json", headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
-        with urllib.request.urlopen(request, timeout=20) as response:
-            if not response.geturl().startswith(AGY_MANIFEST_BASE):
-                return None
-            raw = response.read(16 * 1024 + 1)
-        if len(raw) > 16 * 1024:
-            return None
+        from app_update_zcode import read_bounded
+        raw = read_bounded(AGY_MANIFEST_BASE + key + ".json", AGY_MANIFEST_BASE, 16 * 1024,
+                           deadline=time.monotonic() + 20)
         value = json.loads(raw.decode("utf-8"))
         return _agy_version(value.get("version")) if isinstance(value, dict) else None
     except Exception:
@@ -215,13 +211,10 @@ CLAUDE_VERSION = re.compile(r"^\d{1,6}\.\d{1,6}\.\d{1,6}$")
 
 def claude_pointer(channel):
     """One official channel pointer's version, or None when it does not answer clearly."""
-    import urllib.request
     try:
-        request = urllib.request.Request(CLAUDE_RELEASES + channel, headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
-        with urllib.request.urlopen(request, timeout=10) as response:
-            if response.status != 200 or not response.geturl().startswith(CLAUDE_RELEASES):
-                return None
-            raw = response.read(65)
+        from app_update_zcode import read_bounded
+        raw = read_bounded(CLAUDE_RELEASES + channel, CLAUDE_RELEASES, 64,
+                           deadline=time.monotonic() + 10)
         text = raw.decode("ascii").strip() if len(raw) <= 64 else ""
         return text if CLAUDE_VERSION.fullmatch(text) else None
     except Exception:
@@ -1070,6 +1063,7 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
 
     def phase(app_id, name):
         nonlocal visible
+        diagnostics().phase(name)
         with progress_lock:
             active[app_id] = name
             visible = app_id
@@ -1100,16 +1094,21 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
         # Desktop after its CLI — so the slow MSIX download and install overlap
         # T3's run instead of trailing it (review finding: serialized behind
         # T3's health wait, its own time budget ran out).
+        #
+        # T3's managed runtimes follow T3: Antigravity ACP is reconciled only after
+        # T3's row, against the server T3 left running (a replaced desktop server
+        # once it answers; on Ubuntu the new server starts after the job, so that
+        # row reports t3_restart_pending instead of using the old server's offer).
         if platform == "ubuntu":
-            order = [app_id for app_id in APP_LABELS if app_id not in ("codex-desktop", "t3-code")] + ["codex-desktop", "t3-code"]
+            order = [app_id for app_id in APP_LABELS if app_id not in ("codex-desktop", "t3-code", "antigravity-acp")] + ["codex-desktop", "t3-code", "antigravity-acp"]
         else:
-            order = [app_id for app_id in APP_LABELS if app_id not in ("codex-desktop", "t3-code")] + ["t3-code", "codex-desktop"]
-        dependencies = {"codex-desktop": {"codex-cli"}, "t3-acp-adapters": {"zcode"}}
+            order = [app_id for app_id in APP_LABELS if app_id not in ("codex-desktop", "t3-code", "antigravity-acp")] + ["t3-code", "antigravity-acp", "codex-desktop"]
+        dependencies = {"codex-desktop": {"codex-cli"}, "t3-acp-adapters": {"zcode"}, "antigravity-acp": {"t3-code"}}
         # On the desktop platforms the pool schedules T3 itself, so its barrier
         # is a dependency: the CLI updaters (the ones that stop or restart its
         # hosted sessions) must all be finished before T3's replacement runs.
-        # Codex Desktop is the one app allowed beside it.
-        t3_barriers = frozenset(APP_LABELS) - {"t3-code", "codex-desktop"}
+        # Codex Desktop is allowed beside it, and Antigravity ACP waits for it.
+        t3_barriers = frozenset(APP_LABELS) - {"t3-code", "codex-desktop", "antigravity-acp"}
 
         def gates(app_id):
             if app_id == "t3-code" and platform != "ubuntu":
@@ -1117,7 +1116,19 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
             return dependencies.get(app_id, set())
 
         def update_one(app_id):
-            install = installations[app_id]
+            with row_diagnostics() as record:
+                install = installations[app_id]
+                if install is not None and install.owner:
+                    record.owner = install.owner
+                try:
+                    row = attempt(app_id, install, record)
+                except Exception:
+                    record.blame("unknown", "helper_exception")
+                    row = result(app_id, platform, "failed", install.version if install else None,
+                                 install.version if install else None, install.manager if install else None, "update_failed")
+                return with_diagnostics(row, record)
+
+        def attempt(app_id, install, record):
             if cancelled():
                 return result(app_id, platform, "skipped", code="skipped_cancelled")
             if install is None:
@@ -1125,6 +1136,10 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
             if install.probe == "timeout":
                 return result(app_id, platform, "unknown", None, None, install.manager, "check_timeout")
             if install.probe is not None:
+                if install.probe_reason == "policy_blocked":
+                    record.blame("policy_blocked", "execution_policy")
+                    return result(app_id, platform, "action_required", None, None, install.manager, "policy_blocked")
+                record.blame("unknown", install.probe_reason or "probe_failed")
                 return result(app_id, platform, "unknown", None, None, None, "readiness_unknown")
             if time.monotonic() >= deadline:
                 return result(app_id, platform, "failed", install.version, install.version, install.manager, "timeout")
@@ -1158,20 +1173,24 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                 if app_id.endswith("-desktop") or app_id in OWN_UPDATERS:
                     # A desktop app reports its long steps (a package download,
                     # then the install) so the page shows what it waits on.
+                    if app_id == "antigravity-acp":
+                        return update_antigravity_acp(install, deadline, lambda name: phase(app_id, name),
+                                                      t3_row=results.get("t3-code"))
                     update = {"zcode": update_zcode, "t3-acp-adapters": update_adapters, "t3-code": update_t3,
-                              "cursor-cli": update_cursor, "antigravity-acp": update_antigravity_acp}.get(app_id, update_desktop)
+                              "cursor-cli": update_cursor}.get(app_id, update_desktop)
                     return update(install, deadline, lambda name: phase(app_id, name))
                 if app_id == "antigravity-cli":
                     return mark_unreviewed(update_cli(install, deadline, restart_managed=restart_managed), agy_reviewed)
                 return update_cli(install, deadline)
             except Exception:
+                record.blame("unknown", "helper_exception")
                 return result(app_id, platform, "failed", install.version, install.version, install.manager, "update_failed")
 
-        # Ubuntu's T3 row only schedules the detached restart, so it can close
-        # the pool after every other worker; the desktop platforms run all ten
-        # apps in the pool under their gates.
-        deferred_last = "t3-code" if platform == "ubuntu" else None
-        pending, running = order[:len(order) - 1].copy() if deferred_last else order.copy(), {}
+        # Ubuntu's T3 row only schedules the detached restart, so it closes the
+        # pool after every other worker, and Antigravity ACP follows it; the
+        # desktop platforms run every app in the pool under their gates.
+        deferred = ["t3-code", "antigravity-acp"] if platform == "ubuntu" else []
+        pending, running = [app_id for app_id in order if app_id not in deferred], {}
         with ThreadPoolExecutor(max_workers=MAX_PARALLEL_UPDATES) as pool:
             while pending or running:
                 reserved = set().union(*(resources for _, resources in running.values()))
@@ -1192,9 +1211,9 @@ def run_apply(platform, emit=None, cancelled=None, agy_reviewed=None):
                     for future in finished:
                         running.pop(future)
                         report(future.result())
-        if deferred_last:
+        for app_id in deferred:
             # No T3 replacement or deferred restart can interrupt another worker.
-            report(update_one(deferred_last))
+            report(update_one(app_id))
     return {"results": [results[app_id] for app_id in order]}
 
 

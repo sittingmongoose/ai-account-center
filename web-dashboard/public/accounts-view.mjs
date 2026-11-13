@@ -765,6 +765,11 @@ const heldTip = (row) => {
   const kept = text(row.version);
   return `Update held: Antigravity ${held} is waiting for a switching review${kept ? `; ${kept} stays installed` : ''}.`;
 };
+// An Antigravity ACP release a sign-in hold did not install.
+const heldOffer = (row) => {
+  const held = text(row.heldVersion);
+  return row.status !== 'held' && held && held.length <= 64 && VERSION_WORD.test(held) ? `${held} is available` : '';
+};
 // One adapter part: "muse-acp 0.10.0 to 0.10.1" when it moved, "zcode-acp-server version 0.65.1" when not.
 const partWords = (part) => {
   const previous = text(part.previousVersion);
@@ -790,11 +795,58 @@ const actionWord = (row) => {
   if (message.startsWith('The download was blocked')) return 'Update it in the app';
   return RESULT.action_required[0];
 };
-const rowWord = (row, label) => row.status === 'unknown'
-  ? [unknownWord(row, label), /timed out/i.test(text(row.message)) ? 'warn' : '']
-  : row.status === 'action_required' ? [actionWord(row), 'warn']
-    : isCatalogPending(row) ? [row.status === 'restart_failed' ? 'Updated, models not registered yet' : 'Models not registered yet', 'warn']
-    : (RESULT[row.status] || ['Unknown result', '']);
+// The cause a helper named for a row that did not simply finish: its cell says it in a few words
+// instead of "Failed" or "Needs action". Rows from older helpers carry no diagnostics and keep the old words.
+const CAUSE_WORDS = {
+  auth_required: 'Sign-in needed', signin_needed: 'Sign-in needed', policy_blocked: 'Blocked by policy', shadowed: 'Another copy runs',
+  wrong_prefix: 'Updated the wrong copy', not_writable: 'Folder not writable', lost_session_reply: 'T3 reply lost',
+  t3_absent: 'T3 not installed', t3_not_ready: 'T3 not ready', t3_restart_pending: 'After T3 restarts',
+  installer_failed: 'Installer failed',
+};
+const CAUSE_LINES = {
+  auth_required: 'the app refused its sign-in', signin_needed: 'a new sign-in is needed', policy_blocked: 'an execution policy refused its launcher',
+  shadowed: 'another copy comes first on PATH and runs instead',
+  wrong_prefix: 'the installer changed a copy that is not the one in use', not_writable: 'the copy in use is in a folder this account cannot change',
+  lost_session_reply: "T3's session reply never arrived", t3_absent: 'T3 is not installed here', t3_not_ready: "T3's server did not answer in time",
+  t3_restart_pending: "T3's new server starts after this run", installer_failed: 'its installer failed', in_use: 'it is in use',
+  timeout: 'a step ran out of time', unknown: 'not recognised',
+};
+const causeOf = (row) => {
+  const cause = row?.diagnostics?.cause;
+  return typeof cause === 'string' && Object.prototype.hasOwnProperty.call(CAUSE_LINES, cause) ? cause : '';
+};
+const seconds = (ms) => ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, '0')}s` : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+// "Cause: ... · ran `cursor-agent update` (exit 1) · uses ~/x (T3 settings) · also ~/y 0.84.3 · update 0.7s · output: ..."
+const diagnosticsWords = (row) => {
+  const d = row?.diagnostics;
+  if (!d || typeof d !== 'object') return '';
+  const cause = causeOf(row);
+  const words = [];
+  if (cause && cause !== 'none') words.push(`Cause: ${CAUSE_LINES[cause]}${text(d.reason) ? ` (${d.reason})` : ''}`);
+  if (text(d.command)) words.push(`ran ${d.command}${Number.isInteger(d.exitCode) ? ` (exit ${d.exitCode})` : ''}`);
+  const owner = d.owner && typeof d.owner === 'object' ? d.owner : null;
+  for (const item of Array.isArray(owner?.packages) ? owner.packages : [])
+    words.push(`${text(item.package)} in ${text(item.prefix)} (${text(item.source) === 't3-config' ? 'what T3 runs' : text(item.source) === 'path' ? 'first on PATH' : text(item.source)})`);
+  for (const item of Array.isArray(owner?.elsewhere) ? owner.elsewhere : [])
+    words.push(`another ${text(item.package)} in ${text(item.prefix)}${text(item.version) ? ` is ${item.version}` : ''}`);
+  if (owner && text(owner.executable)) words.push(`uses ${owner.executable}${owner.onPath === false ? ' (not on PATH)' : ''}${text(owner.firstOnPath) ? `; ${owner.firstOnPath}${text(owner.firstOnPathVersion) ? ` (${owner.firstOnPathVersion})` : ''} comes first on PATH` : ''}`);
+  if (owner && text(owner.target)) words.push(owner.target === 't3-offer' ? "target from T3's offer" : "target from Google's release channel");
+  if (Array.isArray(d.notes) && d.notes.length) words.push(`notes: ${d.notes.join(', ')}`);
+  const phases = d.phases && typeof d.phases === 'object' ? Object.entries(d.phases).filter(([, ms]) => Number.isInteger(ms)) : [];
+  if (phases.length) words.push(phases.map(([name, ms]) => `${name.replaceAll('_', ' ')} ${seconds(ms)}`).join(', '));
+  if (text(d.tail)) words.push(`output: ${d.tail.split('\n').join(' | ')}`);
+  return words.join(' · ');
+};
+const rowWord = (row, label) => {
+  const cause = causeOf(row);
+  if (CAUSE_WORDS[cause] && ['action_required', 'failed', 'unknown'].includes(row.status))
+    return [CAUSE_WORDS[cause], row.status === 'failed' ? 'crit' : 'warn'];
+  return row.status === 'unknown'
+    ? [unknownWord(row, label), /timed out/i.test(text(row.message)) ? 'warn' : '']
+    : row.status === 'action_required' ? [actionWord(row), 'warn']
+      : isCatalogPending(row) ? [row.status === 'restart_failed' ? 'Updated, models not registered yet' : 'Models not registered yet', 'warn']
+      : (RESULT[row.status] || ['Unknown result', '']);
+};
 // How long a computer has been on its current step ("45s", "3m 05s"); '' below the
 // threshold or when the step's start is unknown, so short steps stay calm.
 const phaseElapsed = (host, now, threshold) => {
@@ -852,7 +904,7 @@ export function updateResultsView(job, now = Date.now()) {
       return {
         key: `${id}|${text(row.appId) || index}`, app: text(row.appLabel) || text(row.appId) || 'App',
         result: row.status === 'updated' && text(row.version) && !parts.length ? `Updated to ${row.version}` : word, tone, running: false,
-        tip: row.status === 'held' ? heldTip(row) : [text(row.message), parts.length ? parts.map(partWords).join(' · ') : versions].filter(Boolean).join(' · '),
+        tip: row.status === 'held' ? heldTip(row) : [text(row.message), heldOffer(row), parts.length ? parts.map(partWords).join(' · ') : versions, diagnosticsWords(row)].filter(Boolean).join(' · '),
       };
     });
     if (progress) {
