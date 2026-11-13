@@ -15,6 +15,7 @@ import {
   ScoreboardService,
 } from '../../../../src/web-server/scoreboard/scoreboard-service';
 import {
+  NAME_WITHHELD,
   pathHash,
   RunsStore,
   SECRET_NAME_REASON,
@@ -130,12 +131,13 @@ describe.skipIf(!haveModule)('Scoreboard with the history store', () => {
     expect(sol.identity).toMatchObject({ harnessSource: 'corrected', modelFamily: 'openai' });
     const qwen = stored.find((run) => run.doc.id === 'vm.lead--qwen')!;
     expect(qwen.doc.model).toMatchObject({ id: 'alibaba/qwen3.8-max', effort: null });
-    // A refusal is kept by the path's hash and writer, never by its path.
+    // A refusal is kept by the path's hash alone: no path, name or writer.
     const refused = await store!.runs<RefusedRow[]>('runsRefused');
     expect(refused).toEqual([
       expect.objectContaining({
-        pathHash: pathHash('writers/vm.lead/runs/' + iso(NOW - DAY).slice(0, 10) + '/vm.lead--secret.json'),
-        writer: 'vm.lead',
+        pathHash: pathHash(
+          'writers/vm.lead/runs/' + iso(NOW - DAY).slice(0, 10) + '/vm.lead--secret.json'
+        ),
         reason: 'refused: it contains what looks like an API key',
       }),
     ]);
@@ -244,26 +246,37 @@ describe.skipIf(!haveModule)('Scoreboard v2 review regressions', () => {
       const dir = path.join(shareRoot, 'v1', 'writers', 'vm.lead', 'runs', day);
       fs.mkdirSync(dir, { recursive: true });
       // The reviewer's witness: the credential as the file name and the run id.
-      const named = runDoc('vm.lead', WITNESS, { endedAt: iso(NOW - DAY), writtenAt: iso(NOW - DAY) });
+      const named = runDoc('vm.lead', WITNESS, {
+        endedAt: iso(NOW - DAY),
+        writtenAt: iso(NOW - DAY),
+      });
       fs.writeFileSync(path.join(dir, `${WITNESS}.json`), JSON.stringify(named));
       // A clean document under a credential-shaped name: refused for the name alone.
-      const clean = runDoc('vm.lead', 'clean-1', { endedAt: iso(NOW - DAY), writtenAt: iso(NOW - DAY) });
+      const clean = runDoc('vm.lead', 'clean-1', {
+        endedAt: iso(NOW - DAY),
+        writtenAt: iso(NOW - DAY),
+      });
       fs.writeFileSync(path.join(dir, `vm.lead--${WITNESS}-copy.json`), JSON.stringify(clean));
       writeRun(shareRoot, runDoc('vm.lead', 'ok-1', { endedAt: iso(NOW - DAY) }), day);
       const storeDir = path.join(box, 'store');
       let opened = await openStore(storeDir);
-      const runsStore = new RunsStore({ store: () => opened, root: () => shareRoot, now: () => NOW });
+      const runsStore = new RunsStore({
+        store: () => opened,
+        root: () => shareRoot,
+        now: () => NOW,
+      });
       const pass = await runsStore.pass({ full: true });
       expect([pass.recorded, pass.refused]).toEqual([1, 2]);
       const refused = await opened.runs<RefusedRow[]>('runsRefused');
       expect(JSON.stringify(refused)).not.toContain(WITNESS);
       // Both names carry it, so both are refused for the name before their text is read.
       expect(refused.map((row) => row.reason)).toEqual([SECRET_NAME_REASON, SECRET_NAME_REASON]);
-      expect(refused.every((row) => row.writer === 'vm.lead' && row.pathHash.length === 32)).toBe(true);
+      // No writer either: only the path's hash, the reason and the time.
+      expect(refused.every((row) => !('writer' in row) && row.pathHash.length === 32)).toBe(true);
       // Not in memory for display either: named by writer and hash only.
       const files = (await runsStore.state({})).problems.map((problem) => problem.file);
       expect(JSON.stringify(files)).not.toContain(WITNESS);
-      expect(files.filter((file) => file.includes('(name withheld '))).toHaveLength(2);
+      expect(files.filter((file) => file.includes(`${NAME_WITHHELD} `))).toHaveLength(2);
       await opened.close();
       expect(holding(storeDir, WITNESS)).toEqual([]);
       opened = await openStore(storeDir);
@@ -272,6 +285,58 @@ describe.skipIf(!haveModule)('Scoreboard v2 review regressions', () => {
       expect(holding(storeDir, WITNESS)).toEqual([]);
       // The share copy does hold it, so the byte check is not vacuous.
       expect(holding(shareRoot, WITNESS).length).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(box, { recursive: true, force: true });
+    }
+  });
+
+  it('H1 recheck: a credential-shaped writer folder is kept nowhere, sealed, reopened or replayed', async () => {
+    // Recheck 1's witness: a valid writer name whose name the filter reads as an API key.
+    const writer = 'vm.sk-abcdefghijklmnopqrstuvwx';
+    const secret = 'sk-abcdefghijklmnopqrstuvwx';
+    const box = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-sb-h1w-'));
+    try {
+      const shareRoot = path.join(box, 'share');
+      fs.mkdirSync(path.join(shareRoot, 'v1', 'catalog'), { recursive: true });
+      for (const name of fs.readdirSync(CATALOG))
+        fs.copyFileSync(path.join(CATALOG, name), path.join(shareRoot, 'v1', 'catalog', name));
+      writeRun(shareRoot, runDoc(writer, 'probe'), '2026-11-06');
+      fs.writeFileSync(
+        path.join(shareRoot, 'v1', 'writers', writer, 'thread.json'),
+        JSON.stringify({
+          schema: 'agent-reports/thread@1',
+          writer,
+          seq: 1,
+          writtenAt: iso(NOW),
+          agent: { t3Thread: 'thread-1' },
+        })
+      );
+      const storeDir = path.join(box, 'store');
+      let opened = await openStore(storeDir);
+      const runsStore = new RunsStore({
+        store: () => opened,
+        root: () => shareRoot,
+        now: () => NOW,
+      });
+      const pass = await runsStore.pass({ full: true });
+      expect([pass.recorded, pass.refused]).toEqual([0, 1]);
+      expect(JSON.stringify(await opened.runs('runsRefused'))).not.toContain(secret);
+      const shown = JSON.stringify((await runsStore.state({})).problems);
+      expect(shown).not.toContain(secret);
+      expect(shown).toContain(NAME_WITHHELD);
+      // Sealed (maintenance seals and compresses the ledger), closed, reopened, replayed.
+      await opened.maintain({ nowMs: NOW + DAY });
+      await opened.close();
+      expect(holding(storeDir, secret)).toEqual([]);
+      opened = await openStore(storeDir);
+      expect(JSON.stringify(await opened.runs('runsRefused'))).not.toContain(secret);
+      await opened.close();
+      fs.rmSync(path.join(storeDir, 'aac.redb'));
+      opened = await openStore(storeDir);
+      expect(await opened.runs<RefusedRow[]>('runsRefused')).toHaveLength(1);
+      await opened.close();
+      expect(holding(storeDir, secret)).toEqual([]);
+      expect(holding(shareRoot, secret).length).toBeGreaterThan(0);
     } finally {
       fs.rmSync(box, { recursive: true, force: true });
     }
@@ -292,7 +357,11 @@ describe.skipIf(!haveModule)('Scoreboard v2 review regressions', () => {
           day
         );
       const opened = await openStore(path.join(box, 'store'));
-      const runsStore = new RunsStore({ store: () => opened, root: () => shareRoot, now: () => NOW });
+      const runsStore = new RunsStore({
+        store: () => opened,
+        root: () => shareRoot,
+        now: () => NOW,
+      });
       // M2: A (done) on Nov 01, the same bytes on Nov 03, then B (failed) on Nov 02; same seq
       // and writtenAt, so the greatest path decides.
       const a = put('m2', '2026-11-01', { outcome: 'done' });
@@ -312,13 +381,27 @@ describe.skipIf(!haveModule)('Scoreboard v2 review regressions', () => {
         reader.snapshot().runs.map((run) => [run.doc.id, [run.file, run.doc.seq, run.doc.outcome]])
       );
       const got = (stored: Awaited<ReturnType<RunsStore['query']>>) =>
-        Object.fromEntries(stored.map((run) => [run.doc.id, [run.file, run.doc.seq, run.doc.outcome]]));
-      expect(expected['vm.lead--m2']).toEqual(['writers/vm.lead/runs/2026-11-03/vm.lead--m2.json', 1, 'done']);
-      expect(expected['vm.lead--m1']).toEqual(['writers/vm.lead/runs/2026-11-01/vm.lead--m1.json', 2 ** 32 + 1, 'done']);
+        Object.fromEntries(
+          stored.map((run) => [run.doc.id, [run.file, run.doc.seq, run.doc.outcome]])
+        );
+      expect(expected['vm.lead--m2']).toEqual([
+        'writers/vm.lead/runs/2026-11-03/vm.lead--m2.json',
+        1,
+        'done',
+      ]);
+      expect(expected['vm.lead--m1']).toEqual([
+        'writers/vm.lead/runs/2026-11-01/vm.lead--m1.json',
+        2 ** 32 + 1,
+        'done',
+      ]);
       expect(got(await runsStore.query({}))).toEqual(expected);
       // A fresh store reading every file at once agrees too.
       const fresh = await openStore(path.join(box, 'fresh'));
-      const freshRuns = new RunsStore({ store: () => fresh, root: () => shareRoot, now: () => NOW });
+      const freshRuns = new RunsStore({
+        store: () => fresh,
+        root: () => shareRoot,
+        now: () => NOW,
+      });
       await freshRuns.pass({ full: true });
       expect(got(await freshRuns.query({}))).toEqual(expected);
       await fresh.close();

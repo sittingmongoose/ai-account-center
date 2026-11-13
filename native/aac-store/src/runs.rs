@@ -11,7 +11,7 @@
 //! | `run_rev` | r u32, rev u16 | every revision's row (`Head`, binary v2): dedupe by run id + content hash; its path is the greatest path that content was seen at |
 //! | `run_payload` | day u32, block u32 | the original documents, up to 32 per block (raw while open, zstd once full) |
 //! | `run_by_time` | endedAt ms u64, r u32 | current revisions by end time (the page's date range) |
-//! | `run_file` | sha256(path)[0..16] | the file's last stat and content hash (the scan's skip); for a refused file only its writer (when safe), reason and time, never its path or name |
+//! | `run_file` | sha256(path)[0..16] | the file's last stat and content hash (the scan's skip); for a refused file only its reason and time, never its path, name or writer |
 //! | `run_catalog` | sha256 catalog[0..16] | each catalog version used (zstd) |
 //!
 //! The current revision is the one TypeScript's runs reader would pick: the highest `seq` (the
@@ -53,7 +53,7 @@ pub const RUN_FILE: Bytes = TableDefinition::new("run_file");
 pub const RUN_CATALOG: Bytes = TableDefinition::new("run_catalog");
 
 /// Bump when projection rules change: the run tables are then rebuilt from the ledger.
-pub const RUNS_PROJECTOR_VERSION: u32 = 2;
+pub const RUNS_PROJECTOR_VERSION: u32 = 3;
 /// Original documents per payload block.
 pub const BLOCK_DOCS: u16 = 32;
 const ZSTD_LEVEL: i32 = 9;
@@ -397,8 +397,8 @@ mod at {
 }
 
 /// A file's last stat: the scan skips it while size and mtime stay the same. A refused file's
-/// row holds no path or file name (it is keyed by the path's hash), only the writer when its name
-/// is safe, the reason and when it was refused.
+/// row holds no path, file name or writer (it is keyed by the path's hash): only the reason and
+/// when it was refused.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct FileRow {
     /// 1 stored, 2 refused.
@@ -408,12 +408,11 @@ struct FileRow {
     sha: [u8; 32],
     run: u32,
     reason: u32,
-    writer: u32,
     at_ms: u64,
 }
 
-const FILE_VERSION: u8 = 2;
-const FILE_LEN: usize = 1 + 1 + 8 + 8 + 32 + 4 + 4 + 4 + 8;
+const FILE_VERSION: u8 = 3;
+const FILE_LEN: usize = 1 + 1 + 8 + 8 + 32 + 4 + 4 + 8;
 
 impl FileRow {
     fn encode(&self) -> Vec<u8> {
@@ -425,7 +424,6 @@ impl FileRow {
         out.extend_from_slice(&self.sha);
         out.extend_from_slice(&self.run.to_be_bytes());
         out.extend_from_slice(&self.reason.to_be_bytes());
-        out.extend_from_slice(&self.writer.to_be_bytes());
         out.extend_from_slice(&self.at_ms.to_be_bytes());
         out
     }
@@ -441,8 +439,7 @@ impl FileRow {
             sha: b[18..50].try_into().unwrap(),
             run: be_u32(b, 50),
             reason: be_u32(b, 54),
-            writer: be_u32(b, 58),
-            at_ms: be_u64(b, 62),
+            at_ms: be_u64(b, 58),
         })
     }
 }
@@ -658,8 +655,8 @@ struct IdentityEventPayload {
     identity: IdentityPayload,
 }
 
-/// A refused file. No path or file name is kept (a file's name may be the very secret it was
-/// refused for): only the path's hash, the writer when its name is safe, the reason and the time.
+/// A refused file. No path, file name or writer is kept (any of them may be the very secret it
+/// was refused for): only the path's hash, the reason and the time.
 #[derive(Clone, Debug, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RefusedPayload {
@@ -668,7 +665,8 @@ struct RefusedPayload {
     /// Written by builds up to 6baa2f370 only: read to find its hash, never stored again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     path: Option<String>,
-    #[serde(default)]
+    /// Written by 7a32d39d0 only: read for compatibility, never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     writer: Option<String>,
     size: u64,
     mtime_ms: u64,
@@ -867,7 +865,6 @@ fn stored_file(
             sha,
             run: r,
             reason: 0,
-            writer: 0,
             at_ms,
         }
         .encode(),
@@ -1007,7 +1004,6 @@ fn project_refused(txn: &WriteTransaction, p: &RefusedPayload) -> Result<()> {
     } else {
         p.reason.as_str()
     };
-    let writer = p.writer.as_deref().filter(|w| !crate::secret::looks_secret(w));
     let row = FileRow {
         state: 2,
         size: p.size,
@@ -1015,7 +1011,6 @@ fn project_refused(txn: &WriteTransaction, p: &RefusedPayload) -> Result<()> {
         sha: p.sha256.as_deref().and_then(unhex32).unwrap_or([0; 32]),
         run: 0,
         reason: intern(txn, kind::REASON, Some(reason))?,
-        writer: intern(txn, kind::WRITER, writer)?,
         at_ms: p.ingested_at_ms,
     };
     put(txn, RUN_FILE, &key, &row.encode())
@@ -1505,25 +1500,21 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
         .iter()
         .map(|(w, text)| (w.clone(), thread_facts(text, w)))
         .collect();
-    let machines_owned = machine_ids();
-    let machines: Vec<&str> = machines_owned.iter().map(String::as_str).collect();
-    // A refusal keeps the writer only when its folder name is a writer name and nothing like a
-    // credential.
-    let safe_writer = |path: &str| -> Option<String> {
-        writer_of_path(path)
-            .filter(|w| run_schema::is_writer_name(w, &machines) && !crate::secret::looks_secret(w))
-            .map(str::to_string)
-    };
     let (mut recorded, mut known, mut refused) = (0usize, 0usize, 0usize);
     // (path, size, mtime, sha, state): a stat refresh of content already on record.
     let mut touch: Vec<(String, u64, u64, [u8; 32], u8)> = Vec::new();
-    // A refused file is recorded by its path's hash: its path or name is never kept, nor put in
-    // the event's idempotency key.
+    // A refused file is recorded by its path's hash: its path, name and writer are never kept,
+    // nor put in the event's idempotency key, and a reason that quotes the writer folder (the id
+    // rule does) says "<writer>" instead.
     let refuse =
         |events: &mut Vec<Event>, path: &str, size: u64, mtime: u64, sha: Option<String>, reason: &str| -> Result<()> {
             let path_hash = hex(&path_key(path));
-            let reason = if crate::secret::looks_secret(reason) {
-                WITHHELD_REASON
+            let reason = match writer_of_path(path) {
+                Some(writer) if !writer.is_empty() => reason.replace(writer, "<writer>"),
+                _ => reason.to_string(),
+            };
+            let reason = if crate::secret::looks_secret(&reason) {
+                WITHHELD_REASON.to_string()
             } else {
                 reason
             };
@@ -1535,7 +1526,7 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                 &RefusedPayload {
                     path_hash: Some(path_hash),
                     path: None,
-                    writer: safe_writer(path),
+                    writer: None,
                     size,
                     mtime_ms: mtime,
                     sha256: sha,
@@ -1697,7 +1688,6 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
                         sha: *sha,
                         run: 0,
                         reason: 0,
-                        writer: 0,
                         at_ms: args.now_ms,
                     },
                 };
@@ -2059,8 +2049,8 @@ pub fn history(engine: &Engine, run_id: &str) -> Result<Json> {
     })
 }
 
-/// Refused files on record: the path's hash, the writer when its name is safe, the reason and
-/// when it was refused. No path or file name is kept for a refused file.
+/// Refused files on record: the path's hash, the reason and when it was refused. No path, file
+/// name or writer is kept for a refused file.
 pub fn refused(engine: &Engine) -> Result<Json> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
@@ -2076,16 +2066,13 @@ pub fn refused(engine: &Engine) -> Result<Json> {
             }
             out.push(json!({
                 "pathHash": hex(k.value()),
-                "writer": dict.text(kind::WRITER, row.writer)?,
                 "reason": dict.text(kind::REASON, row.reason)?,
                 "size": row.size,
                 "mtimeMs": row.mtime_ms,
                 "atMs": row.at_ms,
             }));
         }
-        out.sort_by(|a, b| {
-            (a["writer"].as_str(), a["pathHash"].as_str()).cmp(&(b["writer"].as_str(), b["pathHash"].as_str()))
-        });
+        out.sort_by(|a, b| a["pathHash"].as_str().cmp(&b["pathHash"].as_str()));
         Ok(Json::Array(out))
     })
 }

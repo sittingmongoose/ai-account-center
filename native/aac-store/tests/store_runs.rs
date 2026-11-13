@@ -708,7 +708,7 @@ fn a_refused_file_keeps_no_name_and_no_credential_reaches_the_db_or_the_ledger()
         let rows = refused.as_array().unwrap();
         assert!(
             rows.iter()
-                .all(|r| r["writer"] == json!("vm.lead") && r["pathHash"].as_str().unwrap().len() == 32)
+                .all(|r| r.get("writer").is_none() && r["pathHash"].as_str().unwrap().len() == 32)
         );
         let reasons: Vec<&str> = rows.iter().map(|r| r["reason"].as_str().unwrap()).collect();
         assert!(reasons.contains(&"refused: its file name looks like a credential"));
@@ -717,12 +717,14 @@ fn a_refused_file_keeps_no_name_and_no_credential_reaches_the_db_or_the_ledger()
         let (scan, again) = pass(&engine, &share, T0 + 11 * DAY, 100, true);
         assert_eq!(scan["files"].as_array().unwrap().len(), 0);
         assert_eq!(again["refused"], json!(0));
+        // Sealed and compressed before the bytes are read.
+        call(&engine, "maintain", json!({ "nowMs": T0 + 12 * DAY }));
         engine.close().unwrap();
     }
     assert_eq!(
         store_holds(&store, WITNESS.as_bytes()),
         Vec::<String>::new(),
-        "after close"
+        "after sealing and close"
     );
     // Reopened, then rebuilt from the ledger: still nowhere.
     {
@@ -864,4 +866,33 @@ fn a_copy_at_a_greater_path_keeps_the_typescript_winner() {
     let other = open(&fresh);
     pass(&other, &share, T0 + 13 * DAY, 100, true);
     assert_eq!(winner(&other), (later, "done".to_string()), "fresh ingest");
+}
+
+#[test]
+fn a_refusal_reason_never_quotes_the_writer_folder() {
+    let share = Share::new("runs-reason");
+    let day = &iso(T0 + DAY)[..10];
+    let dir = share.root.join("v1/writers/vm.lead/runs").join(day);
+    fs::create_dir_all(&dir).unwrap();
+    // An id naming another writer: the id rule's reason quotes the folder's writer.
+    let doc = json!({
+        "schema": "agent-reports/run@1", "id": "vm.other--x", "writer": "vm.lead", "seq": 1,
+        "writtenAt": iso(T0 + DAY), "source": "observed",
+        "task": { "id": "t", "type": "build", "title": "plain" },
+        "model": { "id": "gpt-6.1-sol" }, "endedAt": iso(T0 + DAY), "outcome": "done"
+    });
+    fs::write(dir.join("vm.lead--x.json"), doc.to_string()).unwrap();
+    let store = temp_dir("runs-reason-store");
+    let engine = open(&store);
+    pass(&engine, &share, T0 + 10 * DAY, 100, true);
+    let refused = call(&engine, "runsRefused", json!({}));
+    assert_eq!(
+        refused[0]["reason"],
+        json!("id does not name its writer: it must start with \"<writer>--\"")
+    );
+    assert!(refused[0].get("writer").is_none());
+    call(&engine, "maintain", json!({ "nowMs": T0 + 12 * DAY }));
+    engine.close().unwrap();
+    // Nothing of the refused file's writer or name was kept.
+    assert!(store_holds(&store, b"vm.lead").is_empty());
 }

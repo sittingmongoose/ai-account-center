@@ -99,14 +99,21 @@ export function pathHash(path: string): string {
 /** The fixed reason for a file whose name looks like a credential (the store's words too). */
 export const SECRET_NAME_REASON = 'refused: its file name looks like a credential';
 
-/** One refused file as the store keeps it: never its path or name. */
+/** One refused file as the store keeps it: never its path, name or writer. */
 export interface RefusedRow {
   pathHash: string;
-  writer: string | null;
   reason: string | null;
   size: number;
   mtimeMs: number;
   atMs: number;
+}
+
+/** What a display shows for a name it may not show. */
+export const NAME_WITHHELD = '(name withheld)';
+
+/** A path or folder for display: as it is when the secret filter passes it, else withheld. */
+function shown(path: string): string {
+  return findSecret(path) === null ? path : NAME_WITHHELD;
 }
 
 /** The secret filter over one text: its value when accepted, else the fixed reason. */
@@ -207,7 +214,11 @@ export class RunsStore {
       },
       nowMs: now,
     });
-    const problems: ReportProblem[] = scan.problems.map((problem) => ({ ...problem, since: now }));
+    const problems: ReportProblem[] = scan.problems.map((problem) => ({
+      ...problem,
+      file: shown(problem.file),
+      since: now,
+    }));
     if (scan.more)
       problems.push({
         file: 'limits/import',
@@ -255,13 +266,13 @@ export class RunsStore {
     const store = this.deps.store();
     const runs = await this.query(query);
     const refused = store ? await store.runs<RefusedRow[]>('runsRefused') : [];
-    // A refused file is named by the path this server saw (when the secret filter passes it),
-    // else by its writer and hash only.
+    // A refused file is named by the path this server saw when the secret filter passes it,
+    // else by its hash alone: the store keeps no path, name or writer for it.
     const problems: ReportProblem[] = [
       ...refused.map((row) => ({
         file:
           this.safePaths.get(row.pathHash) ??
-          `writers/${row.writer ?? 'unknown'}/runs/(name withheld ${row.pathHash.slice(0, 12)})`,
+          `refused/${NAME_WITHHELD} ${row.pathHash.slice(0, 12)}`,
         reason: row.reason ?? 'refused',
         since: row.atMs,
       })),
