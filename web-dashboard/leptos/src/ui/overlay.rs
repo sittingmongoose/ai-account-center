@@ -224,6 +224,21 @@ fn place_start_guard(root: &web_sys::Element, elements: &[web_sys::HtmlElement])
     }
 }
 
+/// The control an overlay focuses when it opens, or when a fold makes it modal: its close or primary action, else its
+/// first button.
+fn opening_target(root: &web_sys::Element) -> Option<web_sys::HtmlElement> {
+    [
+        ".sheet-close",
+        "[data-probe='details-close']",
+        ".btn.primary",
+        ".viewer-btn.close",
+        "button:not(.sheet-scrim):not(.details-scrim)",
+    ]
+    .into_iter()
+    .find_map(|selector| root.query_selector(selector).ok().flatten())
+    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+}
+
 fn top_overlay(id: u64) -> bool {
     STACK.with(|s| s.borrow().last().map(|(n, _)| *n) == Some(id))
 }
@@ -381,6 +396,10 @@ fn repair_top_focus() {
 pub fn OverlayPortal(
     children: ChildrenFn,
     #[prop(optional)] on_close: Option<Callback<()>>,
+    // Told, besides `on_close`, when leaving the owning page retires this opening. An owner whose close can be refused
+    // (a switch approval while its request runs) uses it to close its state once it can, so the hidden, retired
+    // opening is never updated back into view on another page.
+    #[prop(optional)] on_retire: Option<Callback<()>>,
     #[prop(default = true.into(), into)] trap_focus: Signal<bool>,
     #[prop(default = true.into(), into)] lock_scroll: Signal<bool>,
 ) -> impl IntoView {
@@ -394,6 +413,9 @@ pub fn OverlayPortal(
     crate::owned::listen(&window(), crate::PAGE_EVENT, move || {
         if !crate::owns_page(page) {
             retired.set(true);
+            if let Some(retire) = on_retire {
+                retire.run(());
+            }
             if let Some(close) = on_close {
                 close.run(());
             }
@@ -730,19 +752,53 @@ fn OverlaySurface(
                 return;
             }
             place_start_guard(node.as_ref(), &tab_stops(node.as_ref()));
-            let target = [
-                ".sheet-close",
-                "[data-probe='details-close']",
-                ".btn.primary",
-                ".viewer-btn.close",
-                "button:not(.sheet-scrim):not(.details-scrim)",
-            ]
-            .into_iter()
-            .find_map(|selector| node.query_selector(selector).ok().flatten());
-            if let Some(el) = target.and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok()) {
+            if let Some(el) = opening_target(node.as_ref()) {
                 focus(&el);
             }
         }
+    });
+    // A fold can make a nonmodal popover the modal phone sheet in place (Sol max 6 M1). Focus left on the page behind
+    // it then moves inside, as at opening; focus already inside, a native media control included, stays. Unfolding
+    // back keeps focus where it is unless the control it was on went away with the phone layout: then it returns to
+    // the overlay's opening control rather than the page body. The new guards render first, so wait a frame.
+    Effect::new(move |previous: Option<bool>| {
+        let trap = trap_focus.get();
+        if previous.is_some_and(|was| was != trap) {
+            let settle = Closure::once_into_js(move || {
+                let Some(root) = node.get_untracked() else {
+                    return;
+                };
+                if !top_overlay(id) || !root.is_connected() {
+                    return;
+                }
+                let active = document().active_element();
+                let inside = active
+                    .as_ref()
+                    .is_some_and(|el| root.contains(Some(el.as_ref())));
+                let held = inside
+                    && active.as_ref().is_some_and(|el| {
+                        !el.has_attribute("data-overlay-guard")
+                            && el.get_bounding_client_rect().width() > 0.0
+                    });
+                let lost = active.as_ref().is_none_or(|el| {
+                    !el.is_connected()
+                        || document()
+                            .body()
+                            .is_some_and(|body| js_sys::Object::is(el.as_ref(), body.as_ref()))
+                });
+                if held || (!trap && !inside && !lost) {
+                    return;
+                }
+                if trap {
+                    place_start_guard(root.as_ref(), &tab_stops(root.as_ref()));
+                }
+                if let Some(el) = opening_target(root.as_ref()) {
+                    focus(&el);
+                }
+            });
+            let _ = window().request_animation_frame(settle.unchecked_ref());
+        }
+        trap
     });
     let cleanup_pending = StoredValue::new_local(pending);
     on_cleanup(move || {

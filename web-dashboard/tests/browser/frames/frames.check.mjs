@@ -39,7 +39,7 @@ export const tests = Object.fromEntries(
 			THEMES.map((theme) => [
 				`${page} ${f.name} ${theme}`,
 				async (t) => {
-					await t.newContext({ viewport: { width: f.width, height: f.height }, ...(f.duo ? { screen: DUO_SCREEN } : {}), isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1 });
+					await t.newContext({ viewport: { width: f.width, height: f.height }, ...(f.duo ? { screen: DUO_SCREEN } : {}), isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1, serviceWorkers: 'block' });
 					await t.goto(`/app/${page}?safe=${f.safe}`, { settleMs: 300 });
 					if (page === 'status') await openQuestions(t);
 					else await t.page.waitForSelector('.picks');
@@ -61,7 +61,7 @@ export const tests = Object.fromEntries(
 
 // The review screen at the Duo's landscape size: its Send and Back replace the deck's navigation.
 tests['status duo-landscape review light'] = async (t) => {
-	await t.newContext({ viewport: { width: 951, height: 669 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+	await t.newContext({ viewport: { width: 951, height: 669 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1, serviceWorkers: 'block' });
 	await t.goto('/app/status?safe=0,84,34,0', { settleMs: 300 });
 	await openQuestions(t);
 	await t.page.locator('.plate-tools.only-land .primary').click();

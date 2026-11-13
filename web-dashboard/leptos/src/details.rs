@@ -315,6 +315,19 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
             close();
         }
     });
+    // Leaving Accounts retires the panel's opening. While a switch approval waits its close is refused (above): close
+    // it once the approval has gone, so the retired panel isn't left open and hidden for the next account it shows.
+    let retired = RwSignal::new(false);
+    let on_retire = Callback::new(move |_| retired.set(true));
+    Effect::new(move |_| {
+        if !open.get() {
+            if retired.get_untracked() {
+                retired.set(false);
+            }
+        } else if retired.get() && dash.activation.with(|a| a.is_empty()) {
+            close();
+        }
+    });
     // A press outside the panel closes it once the click is handled, unless that click asked for another account
     // (a row: the panel swaps) or a switch confirmation waits. Captured first, so a button that stops its click
     // closes it too, as the Slint canvas did. iOS sends no click for a tap on a plain area (the page under the side
@@ -402,7 +415,7 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
     });
     view! {
         <Show when=move || open.get()>
-            <OverlayPortal on_close=on_close trap_focus=false>
+            <OverlayPortal on_close=on_close on_retire=on_retire trap_focus=false>
             // A button, so iOS sends the tap's click; the window's listeners above close the panel.
             <button type="button" class="details-scrim" tabindex="-1" aria-label="Close"></button>
             <aside class="details" role="dialog" aria-modal="false" data-probe="details"

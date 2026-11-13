@@ -144,3 +144,19 @@ and overlay-local exact-token hover/touch tips. It also exercises pose and route
 viewers, Details, activation dialogs and Scoreboard model sheets. Routes keep their page state while
 open body portals retire on departure; Forward cannot resurrect a retired opening. The fixture server
 serves the same committed computers.json as the product, without a reviewer-only routing wrapper.
+
+`frames/duo-polish.check.mjs` (`--grep 'duo polish'`) covers owner report 2. In the landscape rail (folded and open,
+with the strip on either side, light and dark), a one-pixel column inside the rail and the rail's edge line are each
+one colour from the top edge to the bottom edge. Under an open sheet's scrim they may shade but must not step.
+White status glyphs keep 7:1 on the rail's top. Open upright (band), every text line in the band clears the 55 pt
+rounded top corners by 12 pt on every page, including an owner-length Status summary. A one-line summary keeps
+the band at 82 pt, and the account menu and toasts start below a taller band.
+
+`frames/duo-portals.check.mjs` also has the max round 6 cases:
+- A switch approval made busy with the real `activation-confirmation.mjs` controller, then Back, then the request
+  failing: no modal returns over Home. The busy update keeps the same dialog element and focus.
+- A nonmodal Provider with page focus (reached by trusted Tab, or focused directly) moves the focus into the sheet
+  when a fold makes it modal. Enter can't open Custom range behind it, and unfolding doesn't strand focus.
+- An open exact-token explanation follows a live model update.
+
+The fixture server answers `/` with the start page, which the frame warms 4 s after it starts.
