@@ -132,6 +132,12 @@ export class ShareFiles<T> {
     return size;
   }
 
+  /** Forgets a file at once (a scan-limit skip, not a disappearance). */
+  forget(file: string): void {
+    this.entries.delete(file);
+    this.misses.clear(file);
+  }
+
   /** Marks every file under a folder that could not be listed: not listed is not withdrawn. */
   keep(prefix: string, seen: Set<string>): void {
     for (const file of this.entries.keys()) if (file.startsWith(prefix)) seen.add(file);

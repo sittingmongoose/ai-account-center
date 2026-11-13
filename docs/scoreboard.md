@@ -63,7 +63,7 @@ ENOENT and ESTALE keep the last good copy and retry (on a file or a folder listi
 row is named in the runs Source), a file absent from its listing stays for 2 minutes, temporary (dot)
 files and anything not `.json` are ignored, NUL bytes are refused, 32 KB cap, only changed files are read. The highest
 `seq` per run id wins, across date folders. A file that does not read is counted and named in the runs Source, never
-dropped silently; a FIFO or a link in a run folder, or anything but a folder directly in `runs/`, is named too. A file over its cap takes nothing from the 64 MB. One scan reads at most 1,000 writer folders, 5,000 run files and 64 MB (over a limit the most recently changed
+dropped silently; a FIFO or a link in a run folder, or anything but a folder directly in `runs/`, is named too. A file over its cap takes nothing from the 256 MB. One scan reads at most 20,000 writer folders, 50,000 run files and 256 MB (over a limit the most recently changed
 `runs/` folders and the newest date folders are kept); the rest is named in the runs Source (`limits/run-writers`, `limits/runs`). More writers than the
 Status reader: an old writer's runs are still history. A review with no boolean `review.overturned`, or a negative
 `wallSeconds`, `cost.credits` or `cost.usd`, makes the file unreadable, by name. A run with no `model.id` or no `task.type` is not scored and is counted there too. A task type
@@ -72,7 +72,8 @@ form no row and take no part in any verdict, and the catalog Source names them (
 model (`inCatalog` is always true). The view's `unscored` counts every run not scored, by one reason each: `unreadable`
 (run files the reader refused with no earlier good copy, the same files the runs Source names and the readers check
 refuses), then, for runs it read, `no-model`, `no-task-type`, `unknown-model`, `unknown-task-type`, in that precedence;
-the five sum to `total`. The page names them in one line under its head ("48 runs not scored: 4 unreadable, 12 unknown
+plus `scanLimit` (run files past any cap, `RunsState.skipped.runFiles`, the newest days/writers kept,
+named in the runs Source), the six sum to `total`. The page names them in one line under its head ("48 runs not scored: 4 unreadable, 12 unknown
 model, 3 unknown task type, 23 no task type, 6 no model", hidden at none), which a tap, a click or a hover opens to the
 reasons and the unknown model ids with their runs.
 

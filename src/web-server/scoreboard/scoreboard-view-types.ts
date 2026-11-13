@@ -181,8 +181,9 @@ export interface ScoreboardUse {
   taskTypes: ScoreboardTaskType[];
 }
 
-/** Why a run was not scored: no model, no task type, or a model the catalog does not know. */
-export type UnscoredReason = 'no-model' | 'no-task-type' | 'unknown-model' | 'unknown-task-type';
+/** Why a run was not scored: the scan did not read it, it was unreadable, or it names no catalog model or task type. */
+export type UnscoredReason =
+  'scan-limit' | 'no-model' | 'no-task-type' | 'unknown-model' | 'unknown-task-type';
 
 export interface UnscoredExample {
   /** The run id (safe for the page; never an account). */
@@ -197,16 +198,19 @@ export interface UnscoredExample {
 
 /**
  * Runs that count toward no row and no verdict, by reason, so `total` is every run not scored.
- * `unreadable` is the run files the runs reader refused (named in the runs Source, and refused in
- * the readers check) with no earlier good copy to score. Every run it accepted has at most one
- * reason, in this precedence: `no-model`, `no-task-type`, `unknown-model` (its model resolves to
- * no catalog id), `unknown-task-type` (its task type is not in the catalog). The five counts sum
- * to `total`. `unknownModels` names each raw unknown model id (sorted by runs desc, then id, at
- * most 20) so new aliases can be added from here. `examples` holds the newest few accepted runs
- * across every reason (at most 10, newest first; an unreadable file has no run to show).
+ * `scanLimit` is the run files past any scan cap, from `RunsState.skipped.runFiles` (runs, writers
+ * or bytes; the newest days/writers are kept, named in the runs Source). `unreadable` is the run files the runs reader
+ * refused (named in the runs Source, and refused in the readers check) with no earlier good copy to
+ * score. Every run it accepted has at most one reason, in this precedence: `no-model`, `no-task-type`,
+ * `unknown-model` (its model resolves to no catalog id), `unknown-task-type` (its task type is not in
+ * the catalog). The six counts sum to `total`. `unknownModels` names each raw unknown model id (sorted
+ * by runs desc, then id, at most 20) so new aliases can be added from here. `examples` holds the newest
+ * few accepted runs across every reason (at most 10, newest first; an unreadable file and a scan-limit
+ * file have no run to show).
  */
 export interface UnscoredSummary {
   total: number;
+  scanLimit: number;
   unreadable: number;
   noModel: number;
   noTaskType: number;

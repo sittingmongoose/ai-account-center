@@ -11803,6 +11803,7 @@
   ],
   "unscored": {
     "total": 3,
+    "scanLimit": 0,
     "unreadable": 1,
     "noModel": 0,
     "noTaskType": 1,

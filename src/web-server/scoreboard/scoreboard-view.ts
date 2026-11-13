@@ -277,6 +277,14 @@ function unreadableRuns(runs: RunsState): number {
   ).length;
 }
 
+/**
+ * Run files past any scan cap (runs, writers or bytes), from the reader's structured count.
+ * The newest days/writers are kept; the file count is named in the runs Source.
+ */
+function scanLimitRuns(runs: RunsState): number {
+  return runs.skipped?.runFiles ?? 0;
+}
+
 export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
   const { catalog, runs, now } = inputs;
   // The alias table applies to every run read, history included, before scoring: a run keeps its
@@ -339,13 +347,16 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
       });
   }
   const unreadable = unreadableRuns(runs);
+  const scanLimit = scanLimitRuns(runs);
   const unscoredSummary: UnscoredSummary = {
     total:
+      scanLimit +
       unreadable +
       counts.noModel +
       counts.noTaskType +
       counts.unknownModel +
       counts.unknownTaskType,
+    scanLimit,
     unreadable,
     noModel: counts.noModel,
     noTaskType: counts.noTaskType,

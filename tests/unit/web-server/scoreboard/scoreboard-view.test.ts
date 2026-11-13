@@ -344,6 +344,7 @@ describe('what is not scored', () => {
       runs: [
         { file: 'writers/vm.a/runs/2026-11-06/a.json', doc: kept, firstSeenAt: NOW, sha256: 'x' },
       ],
+      skipped: { runFiles: 0, writerFolders: 0 },
       problems: [
         // a newer version of a run whose earlier copy still reads: scored from that copy
         {
@@ -366,6 +367,160 @@ describe('what is not scored', () => {
     const counted = buildScoreboardView({ ...base, runs: runsState });
     expect(counted.unscored.unreadable).toBe(1);
     expect(view.unscored.unreadable).toBe(1);
+  });
+
+  it('when the scan cap is hit the newest runs win and the rest count as not read (scan limit)', async () => {
+    const root = dirs.make('ccs-scan-cap-');
+    const { writeRun } = await import('./scoreboard-test-helpers.ts');
+    const { runDoc: makeDoc } = await import('./scoreboard-test-helpers.ts');
+    writeRun(root, makeDoc('vm.old', 'A'), '2026-01-01');
+    writeRun(root, makeDoc('vm.old', 'B'), '2026-11-05');
+    writeRun(root, makeDoc('vm.new', 'C'), '2026-11-06');
+    const catalog = new CatalogReader({ root: () => root, now: () => NOW });
+    await catalog.scan();
+    const reader = new RunsReader({ root: () => root, now: () => NOW, limits: { runs: 2 } });
+    await reader.scan();
+    const state = reader.snapshot();
+    expect(state.runs.map((run) => run.doc.id).sort()).toEqual(['vm.new--C', 'vm.old--B']);
+    expect(state.problems.map((prob) => prob.file)).toEqual(['limits/runs']);
+    const view = buildScoreboardView({
+      now: NOW,
+      timeZone: 'UTC',
+      root,
+      catalog: catalog.snapshot(),
+      runs: state,
+    });
+    // the file left out counts as "not read (scan limit)" in the unscored summary
+    expect(view.unscored.scanLimit).toBe(1);
+    expect(view.unscored.total).toBe(
+      view.unscored.unreadable +
+        view.unscored.noModel +
+        view.unscored.noTaskType +
+        view.unscored.unknownModel +
+        view.unscored.unknownTaskType +
+        view.unscored.scanLimit
+    );
+    expect(view.sources[0].detail).toContain('past the limit');
+    expect(view.sources[0].detail).toContain('were not read');
+  });
+
+  it('below the cap nothing changes and the scan limit is zero', async () => {
+    const view = await fixtureView();
+    expect(view.unscored.scanLimit).toBe(0);
+    const { unscored } = view;
+    expect(unscored.total).toBe(
+      unscored.unreadable +
+        unscored.noModel +
+        unscored.noTaskType +
+        unscored.unknownModel +
+        unscored.unknownTaskType +
+        unscored.scanLimit
+    );
+    expect(view.sources[0].detail).not.toContain('past the limit');
+  });
+
+  it('a writer limit drops the older writer and counts its run as not read (scan limit)', async () => {
+    const root = dirs.make('ccs-scan-writers-');
+    const { writeRun } = await import('./scoreboard-test-helpers.ts');
+    const { runDoc: makeDoc } = await import('./scoreboard-test-helpers.ts');
+    // vm.a's runs folder is older, vm.b's is newer, so a limit of 1 keeps vm.b.
+    writeRun(root, makeDoc('vm.a', 'A'), '2026-11-06');
+    writeRun(root, makeDoc('vm.b', 'B'), '2026-11-06');
+    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.a', 'runs'), new Date(1000), new Date(1000));
+    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.b', 'runs'), new Date(3000), new Date(3000));
+    const catalog = new CatalogReader({ root: () => root, now: () => NOW });
+    await catalog.scan();
+    const reader = new RunsReader({ root: () => root, now: () => NOW, limits: { writers: 1 } });
+    await reader.scan();
+    const state = reader.snapshot();
+    expect(state.runs.map((run) => run.doc.id)).toEqual(['vm.b--B']);
+    expect(state.problems.map((prob) => prob.file)).toContain('limits/run-writers');
+    const view = buildScoreboardView({
+      now: NOW,
+      timeZone: 'UTC',
+      root,
+      catalog: catalog.snapshot(),
+      runs: state,
+    });
+    expect(view.unscored.scanLimit).toBe(1);
+    expect(view.unscored.total).toBe(
+      view.unscored.unreadable +
+        view.unscored.noModel +
+        view.unscored.noTaskType +
+        view.unscored.unknownModel +
+        view.unscored.unknownTaskType +
+        view.unscored.scanLimit
+    );
+    expect(view.sources[0].detail).toContain('writer folders past the limit');
+  });
+
+  it('a file pushed past the cap leaves the read set at once, so read plus scanLimit equals files on disk', async () => {
+    const root = dirs.make('ccs-scan-grace-');
+    const { writeRun } = await import('./scoreboard-test-helpers.ts');
+    const { runDoc: makeDoc } = await import('./scoreboard-test-helpers.ts');
+    let now = NOW;
+    writeRun(root, makeDoc('vm.a', 'A'), '2026-11-01');
+    writeRun(root, makeDoc('vm.a', 'B'), '2026-11-05');
+    writeRun(root, makeDoc('vm.a', 'C'), '2026-11-06');
+    const reader = new RunsReader({ root: () => root, now: () => now, limits: { runs: 2 } });
+    await reader.scan();
+    expect(reader.snapshot().runs).toHaveLength(2);
+    // A fourth, newer file arrives; the boundary moves and B is pushed past the cap.
+    // The next scan runs 60s later, inside the 2-minute grace.
+    writeRun(root, makeDoc('vm.a', 'D'), '2026-11-07');
+    now += 60_000;
+    await reader.scan();
+    const state = reader.snapshot();
+    const read = state.runs.length;
+    const scanLimit = (buildScoreboardView({
+      now,
+      timeZone: 'UTC',
+      root: '/reports',
+      catalog: {
+        state: 'ok',
+        scannedAt: now,
+        missingFiles: [],
+        problems: [],
+        minRuns: 5,
+        models: [],
+        aliases: {},
+        effortSuffixes: [],
+        taskTypes: [],
+        measures: [],
+        uses: [],
+        benchmarks: [],
+      },
+      runs: state,
+    }).unscored.scanLimit);
+    expect(read + scanLimit).toBe(4);
+  });
+
+  it('the scan limit reason sums into the total with the other reasons', async () => {
+    const base = { now: NOW, timeZone: 'UTC', root: '/reports', catalog: emptyCatalog() };
+    const kept = projectRun(runDoc('vm.a', 'A') as unknown as Record<string, unknown>, 'vm.a');
+    const runsState = {
+      state: 'ok' as const,
+      scannedAt: NOW,
+      writers: 1,
+      runs: [{ file: 'writers/vm.a/runs/2026-11-06/a.json', doc: kept, firstSeenAt: NOW, sha256: 'x' }],
+      skipped: { runFiles: 2, writerFolders: 0 },
+      problems: [
+        { file: 'writers/vm.a/runs/2026-11-06/b.json', reason: 'task.id is missing or not valid', since: NOW },
+        { file: 'limits/runs', reason: '2 run files past the limit of 2 runs or 1024 MB were not read (the newest days are kept)', since: NOW },
+      ],
+    };
+    const view = buildScoreboardView({ ...base, runs: runsState });
+    expect(view.unscored.unreadable).toBe(1);
+    expect(view.unscored.scanLimit).toBe(2);
+    expect(view.unscored.total).toBe(
+      view.unscored.unreadable +
+        view.unscored.noModel +
+        view.unscored.noTaskType +
+        view.unscored.unknownModel +
+        view.unscored.unknownTaskType +
+        view.unscored.scanLimit
+    );
+    expect(view.sources[0].detail).toContain('past the limit');
   });
 });
 
@@ -813,6 +968,7 @@ describe('the runs Source', () => {
         scannedAt: NOW,
         runs: [doc('A', 'done'), doc('B', 'partial'), doc('C', 'partial'), doc('D', 'blocked')],
         writers: 1,
+        skipped: { runFiles: 0, writerFolders: 0 },
         problems: [],
       },
     });
@@ -856,6 +1012,7 @@ describe('what the Sources name', () => {
         scannedAt: NOW,
         runs: [{ file: 'x', firstSeenAt: NOW, doc: run }],
         writers: 1,
+        skipped: { runFiles: 0, writerFolders: 0 },
         problems: [],
       },
     });

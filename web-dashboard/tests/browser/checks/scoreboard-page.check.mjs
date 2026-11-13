@@ -219,6 +219,7 @@ export const tests = {
 			['fixture', (v) => v],
 			['share 2026-11-13', (v) => ({ ...v, unscored: { total: 46, unreadable: 0, noModel: 11, noTaskType: 35, unknownModel: 0, unknownTaskType: 0, unknownModels: [], examples: [] } })],
 			['share with refusals', (v) => ({ ...v, unscored: { total: 752, unreadable: 706, noModel: 11, noTaskType: 35, unknownModel: 0, unknownTaskType: 0, unknownModels: [], examples: [] } })],
+			['share with scan limit', (v) => ({ ...v, unscored: { total: 1250, scanLimit: 498, unreadable: 706, noModel: 11, noTaskType: 35, unknownModel: 0, unknownTaskType: 0, unknownModels: [], examples: [] } })],
 		];
 		for (const [name, change] of texts) {
 			await t.newContext({ viewport: { width: 1440, height: 900 } });
