@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { zstdCompressSync } from 'zlib';
+import { rustParity } from './usage-scan-parity';
 import { collectAccountActivity } from '../../../src/web-server/usage/account-activity-collector';
 import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
 import { ompSessionIdForFile } from '../../../src/web-server/usage/omp-native-usage-collector';
@@ -168,6 +169,17 @@ function writeFixtures(options: { muse?: boolean; zcode?: boolean } = {}) {
   }
 }
 
+/**
+ * A server request as the transport sends it to the Python helper: without the fields only the Rust
+ * scanner reads (`presence`, `cwd`), which the helper refuses (runAnalyticsRemoteScan strips them).
+ */
+function pythonRequest(request: AnalyticsRemoteRequest): Record<string, unknown> {
+  const { presence: _presence, cwd: _cwd, ...older } = request;
+  void _presence;
+  void _cwd;
+  return { ...older };
+}
+
 /** Runs the helper with some of its module constants replaced (caps too large to reach in a fixture). */
 function runPatchedHelper(
   request: Record<string, unknown>,
@@ -244,8 +256,12 @@ function runHelper(request: Record<string, unknown>): Record<string, unknown> {
       PYTHONUTF8: '1',
     },
   });
-  return JSON.parse(output) as Record<string, unknown>;
+  const python = JSON.parse(output) as Record<string, unknown>;
+  rustParity(request, python, { HOME: home, USERPROFILE: home });
+  return python;
 }
+
+
 
 describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
   it('finds depth-nine native OMP sessions and reports depth and entry bounds', () => {
@@ -575,7 +591,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
                   'module._read_file = fail_read',
                 ];
           const answer = parseAnalyticsRemoteResponse(
-            JSON.stringify(runPatchedHelper({ ...request }, {}, setup))
+            JSON.stringify(runPatchedHelper(pythonRequest(request), {}, setup))
           );
           if (request.kinds.includes('claude') && broken) {
             expect(answer.kinds.claude.readFailures).toBe(all ? 2 : 1);
@@ -696,7 +712,7 @@ describe.skipIf(!HAVE_PYTHON)('analytics remote helper', () => {
                     'module._read_file = fail',
                   ];
             const response = parseAnalyticsRemoteResponse(
-              JSON.stringify(runPatchedHelper({ ...request }, {}, setup))
+              JSON.stringify(runPatchedHelper(pythonRequest(request), {}, setup))
             );
             if (request.kinds.includes('claude') && broken) {
               expect(response.kinds.claude).toMatchObject({
