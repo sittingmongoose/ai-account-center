@@ -115,7 +115,20 @@ test('an extra pool another account reports reads Not reported, never Unavailabl
     window('3p-weekly', 0),
   ]);
   const failed = { ...account('failed', null, []), status: 'unavailable' };
-  const v = section([pro, free, failed]);
+  // A cached reading is the last good one after a failed refresh (possibly from before Argon
+  // existed), and an ok row can still carry cached windows: neither may claim "Not reported".
+  const cached = {
+    ...account('cached', { quotaPolicy: 'weekly', thirdPartyModels: false }, [
+      window('gemini-weekly', 0),
+      window('3p-weekly', 0),
+    ]),
+    status: 'cached',
+    sampledAt: new Date(now - 3 * 86400000).toISOString(),
+  };
+  const cachedWindows = account('cached-windows', { quotaPolicy: 'weekly', thirdPartyModels: false }, [
+    { ...window('gemini-weekly', 0), status: 'cached', cached: true },
+  ]);
+  const v = section([pro, free, failed, cached, cachedWindows]);
   const at = v.columns.findIndex((column) => column.key === 'gemini-argon-wtu-weekly');
   assert.equal(v.columns[at].label, 'Gemini 4 Argon · Weekly');
   assert.equal(v.rows[0].cells[at].hasValue, true);
@@ -124,13 +137,19 @@ test('an extra pool another account reports reads Not reported, never Unavailabl
   assert.equal(missing.hasValue, false);
   assert.equal(missing.valueText, '');
   assert.equal(missing.naText, 'Not reported');
-  assert.equal(missing.naSub, 'Google reports no such quota for this account');
+  // Plain like "Weekly only": no second line, so it never takes the pending-reset look.
+  assert.equal(missing.naSub, '');
   // The canonical columns keep their plan wording.
   assert.equal(v.rows[1].cells[0].naText, 'Weekly only');
   assert.equal(v.rows[1].cells[0].naSub, '');
   // An account with no reading at all is still unavailable, not "not reported".
   assert.equal(v.rows[2].cells[at].naText, 'Unavailable');
   assert.equal(v.rows[2].cells[at].naSub, '');
+  for (const row of [3, 4]) {
+    assert.equal(v.rows[row].cells[at].naText, 'Unavailable');
+    assert.equal(v.rows[row].cells[at].hasValue, false);
+    assert.equal(v.rows[row].cells[at].valueText, '');
+  }
 });
 
 test('no-quota plans with no windows use the existing row text and retain reported windows when present', () => {

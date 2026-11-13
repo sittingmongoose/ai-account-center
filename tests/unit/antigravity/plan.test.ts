@@ -124,7 +124,7 @@ describe('Antigravity plan table dated 2026-10-07', () => {
       paidTier: { id: 'g1-pro-tier', name: 'Google AI Pro' },
     }).antigravityPlan;
     expect(pro?.models).toEqual(expect.arrayContaining(['Gemini 4 Argon', 'Gemini 4 Hydrogen']));
-    expect(pro?.summary).toContain('Gemini 4 Hydrogen counts against the Gemini Models limits');
+    expect(pro?.summary).toContain('Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining)');
     expect(pro?.summary).toContain('Gemini 4 Argon has its own weekly limit');
   });
 

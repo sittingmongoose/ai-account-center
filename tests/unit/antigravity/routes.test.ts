@@ -466,7 +466,7 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
         class: 'pro',
         quotaPolicy: 'five-hour-weekly',
         summary:
-          'Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen counts against the Gemini Models limits; Gemini 4 Argon has its own weekly limit.',
+          'Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.',
         models: [
           'Gemini 3.8 Flash',
           'Gemini 3.7 Flash',

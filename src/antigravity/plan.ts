@@ -38,7 +38,7 @@ const DUAL_WINDOW = 'Refreshes every 5 hours up to a weekly limit.';
 /** Observed on Google AI Pro only; other paid plans are not verified. */
 const PRO_GEMINI_MODELS = ['Gemini 4 Argon', 'Gemini 4 Hydrogen'];
 const PRO_POOLS =
-  'Gemini 4 Hydrogen counts against the Gemini Models limits; Gemini 4 Argon has its own weekly limit.';
+  'Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.';
 const NO_QUOTA = 'This plan does not include Antigravity coding quota.';
 
 interface PlanDefinition {

@@ -400,7 +400,9 @@ extension DashboardAccount {
   /// first: on a plan with no third-party models at all, "Not on plan" is the honest reason for both of
   /// that pool's cells, where "Weekly only" would imply a weekly window exists.
   public func antigravityMissingCell(_ columnKey: String) -> AntigravityMissingCell {
-    if !TrayColumns.antigravityKeys.contains(columnKey), ["ok", "cached", "fresh"].contains(status),
+    // Only a live reading can say Google reports no such pool: a cached one is the last good reading
+    // after a failed refresh, possibly from before the pool existed.
+    if !TrayColumns.antigravityKeys.contains(columnKey), status == "ok",
       visibleWindows.contains(where: { $0.isMeter }) {
       return .notReported
     }

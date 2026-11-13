@@ -13,7 +13,6 @@ import {
   antigravityColumns,
   antigravityWindowLabel,
   antigravityMissingWindow,
-  antigravityMissingNote,
   antigravityNoQuota,
   antigravityPlanFacts,
   antigravityPlanNote,
@@ -1043,7 +1042,6 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
             notchFaint: !active,
             label,
             naText: w ? 'Unavailable' : antigravityMissingWindow(account, key),
-            naSub: w ? '' : antigravityMissingNote(account, key),
           });
           if (!w) cell.key = `${account.id}|${key}`;
           return cell;

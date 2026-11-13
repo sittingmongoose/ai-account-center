@@ -1767,9 +1767,15 @@ private func checkAntigravityPlanDisplay() throws {
   let argonFailed = try account("agy-argon-failed", windows: [
     window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
   ], plan: plan("free", "weekly", thirdParty: false), status: "error")
+  // A cached reading is the last good one after a failed refresh: it can't say Google reports no such pool.
+  let argonCached = try account("agy-argon-cached", windows: [
+    window("gemini-weekly", "Gemini Models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+    window("3p-weekly", "Claude and GPT models · Weekly", ["usedPercent": 0, "windowMinutes": 10080]),
+  ], plan: plan("free", "weekly", thirdParty: false), status: "cached")
   try expect(argonNoReading.antigravityMissingCell("gemini-argon-wtu-weekly") == .unavailable
-    && argonFailed.antigravityMissingCell("gemini-argon-wtu-weekly") == .unavailable,
-    "Without any reading the extra pool stays unavailable, never Not reported")
+    && argonFailed.antigravityMissingCell("gemini-argon-wtu-weekly") == .unavailable
+    && argonCached.antigravityMissingCell("gemini-argon-wtu-weekly") == .unavailable,
+    "Without a live reading (none, failed or cached) the extra pool stays unavailable, never Not reported")
   try expect(AntigravityMissingCell.notReported.text == "Not reported"
     && AntigravityMissingCell.notReported.help == "Google reports no such quota for this account.",
     "The Not reported cell's text and tooltip")
