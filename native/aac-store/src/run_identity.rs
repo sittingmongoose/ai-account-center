@@ -41,7 +41,11 @@ pub fn effort_level(word: &str) -> Option<&'static str> {
 pub fn effort_rank(effort: Option<&str>) -> u32 {
     match effort {
         None => 100,
-        Some(e) => EFFORT_ORDER.iter().position(|l| *l == e).map(|p| p as u32).unwrap_or(50),
+        Some(e) => EFFORT_ORDER
+            .iter()
+            .position(|l| *l == e)
+            .map(|p| p as u32)
+            .unwrap_or(50),
     }
 }
 
@@ -90,14 +94,20 @@ pub fn parse_models(text: &str) -> Option<Vec<CatalogModel>> {
     let rows = doc.get("models")?.as_array()?;
     let mut out = Vec::new();
     for row in rows {
-        let (Some(model), Some(label)) = (row.get("model").and_then(Json::as_str), row.get("label").and_then(Json::as_str))
-        else {
+        let (Some(model), Some(label)) = (
+            row.get("model").and_then(Json::as_str),
+            row.get("label").and_then(Json::as_str),
+        ) else {
             return None;
         };
         out.push(CatalogModel {
             model: model.to_string(),
             label: label.to_string(),
-            family: row.get("family").and_then(Json::as_str).filter(|f| !f.is_empty()).map(str::to_string),
+            family: row
+                .get("family")
+                .and_then(Json::as_str)
+                .filter(|f| !f.is_empty())
+                .map(str::to_string),
             runtimes: strings(row.get("runtimes")),
             efforts: strings(row.get("efforts")),
         });
@@ -241,7 +251,13 @@ pub fn family_of(catalog: &Catalog, model_id: &str) -> Option<Family> {
     let word = catalog.model(model_id).and_then(|m| m.family.clone())?;
     let slug: String = word
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect();
     Some(Family {
         id: format!("catalog-{slug}"),
@@ -361,7 +377,11 @@ fn suffix_split(catalog: &Catalog, id: &str) -> Option<(String, &'static str)> {
             continue;
         }
         let word = &trimmed[i + 1..];
-        if word.is_empty() || !word.chars().all(|c| c.is_ascii_alphabetic() || matches!(c, '-' | '_' | ' ')) {
+        if word.is_empty()
+            || !word
+                .chars()
+                .all(|c| c.is_ascii_alphabetic() || matches!(c, '-' | '_' | ' '))
+        {
             continue;
         }
         if let Some(level) = effort_level(word)
@@ -371,12 +391,12 @@ fn suffix_split(catalog: &Catalog, id: &str) -> Option<(String, &'static str)> {
         }
     }
     // The table's own effort suffixes, exactly as model-identity.ts reads them.
-    for suffix in catalog
-        .effort_suffixes
-        .iter()
-        .cloned()
-        .chain(catalog.models.iter().flat_map(|m| m.efforts.iter().map(|e| format!("-{e}"))))
-    {
+    for suffix in catalog.effort_suffixes.iter().cloned().chain(
+        catalog
+            .models
+            .iter()
+            .flat_map(|m| m.efforts.iter().map(|e| format!("-{e}"))),
+    ) {
         if trimmed.len() > suffix.len()
             && trimmed.ends_with(&suffix)
             && let Some(level) = effort_level(&suffix[1..])
@@ -390,7 +410,12 @@ fn suffix_split(catalog: &Catalog, id: &str) -> Option<(String, &'static str)> {
 
 /// A run's identity under `catalog` (DESIGN.md section 3).
 pub fn identify(catalog: &Catalog, written: &Written) -> Identity {
-    let model_raw = written.model.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let model_raw = written
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let mut out = Identity {
         model_raw: model_raw.clone(),
         model_source: "none".into(),
@@ -440,7 +465,11 @@ pub fn identify(catalog: &Catalog, written: &Written) -> Identity {
 
     // Harness: as written when it can run the model's family; a launch path or nothing is
     // inferred from the family; a harness that cannot run the family is corrected.
-    let vendor = out.model_id.as_deref().and_then(|m| m.split_once('/')).map(|(v, _)| v.to_string());
+    let vendor = out
+        .model_id
+        .as_deref()
+        .and_then(|m| m.split_once('/'))
+        .map(|(v, _)| v.to_string());
     let default = vendor.as_deref().and_then(vendor_harness);
     let written_harness = written.harness.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let inferred = |out: &mut Identity| match default {
@@ -528,15 +557,36 @@ mod tests {
     #[test]
     fn every_effort_spelling_reads_as_one_level() {
         for (spelling, level) in [
-            ("none", "none"), ("off", "none"),
-            ("minimal", "minimal"), ("MIN", "minimal"), ("minimum", "minimal"),
-            ("low", "low"), ("Lo", "low"),
-            ("medium", "medium"), ("med", "medium"), ("mid", "medium"), ("Moderate", "medium"),
-            ("high", "high"), ("HI", "high"), (" High ", "high"),
-            ("xhigh", "xhigh"), ("x-high", "xhigh"), ("x_high", "xhigh"), ("X High", "xhigh"),
-            ("extra-high", "xhigh"), ("extra_high", "xhigh"), ("extrahigh", "xhigh"), ("very-high", "xhigh"), ("XH", "xhigh"),
-            ("max", "max"), ("MAX", "max"), ("maximum", "max"), ("xx-high", "max"),
-            ("ultrathink", "ultrathink"), ("ultra-think", "ultrathink"), ("Ultra", "ultrathink"),
+            ("none", "none"),
+            ("off", "none"),
+            ("minimal", "minimal"),
+            ("MIN", "minimal"),
+            ("minimum", "minimal"),
+            ("low", "low"),
+            ("Lo", "low"),
+            ("medium", "medium"),
+            ("med", "medium"),
+            ("mid", "medium"),
+            ("Moderate", "medium"),
+            ("high", "high"),
+            ("HI", "high"),
+            (" High ", "high"),
+            ("xhigh", "xhigh"),
+            ("x-high", "xhigh"),
+            ("x_high", "xhigh"),
+            ("X High", "xhigh"),
+            ("extra-high", "xhigh"),
+            ("extra_high", "xhigh"),
+            ("extrahigh", "xhigh"),
+            ("very-high", "xhigh"),
+            ("XH", "xhigh"),
+            ("max", "max"),
+            ("MAX", "max"),
+            ("maximum", "max"),
+            ("xx-high", "max"),
+            ("ultrathink", "ultrathink"),
+            ("ultra-think", "ultrathink"),
+            ("Ultra", "ultrathink"),
         ] {
             assert_eq!(effort_level(spelling), Some(level), "{spelling}");
             let identity = id("gpt-6.1-sol", Some(spelling), None);
@@ -549,7 +599,10 @@ mod tests {
             assert_eq!(identity.effort_source, "unset");
         }
         let odd = id("gpt-6.1-sol", Some("turbo"), None);
-        assert_eq!((odd.effort.as_deref(), odd.effort_source.as_str()), (Some("turbo"), "unrecognized"));
+        assert_eq!(
+            (odd.effort.as_deref(), odd.effort_source.as_str()),
+            (Some("turbo"), "unrecognized")
+        );
         assert!(effort_rank(Some("xhigh")) < effort_rank(Some("max")));
         assert!(effort_rank(Some("max")) < effort_rank(Some("ultrathink")));
         assert!(effort_rank(Some("ultrathink")) < effort_rank(Some("turbo")));
@@ -559,7 +612,10 @@ mod tests {
     #[test]
     fn names_that_end_in_an_effort_word_are_never_split() {
         let qwen = id("qwen3.8-max", None, None);
-        assert_eq!((qwen.model_id.as_deref(), qwen.effort.as_deref()), (Some("alibaba/qwen3.8-max"), None));
+        assert_eq!(
+            (qwen.model_id.as_deref(), qwen.effort.as_deref()),
+            (Some("alibaba/qwen3.8-max"), None)
+        );
         let plan = id("alibaba-token-plan/qwen3.8-max", None, Some("omp"));
         assert_eq!(plan.model_id.as_deref(), Some("alibaba/qwen3.8-max"));
         assert_eq!(plan.effort, None);
@@ -569,12 +625,21 @@ mod tests {
         assert_eq!(preview.model_id.as_deref(), Some("alibaba/qwen4-max-preview"));
         // An unknown name that ends in -max stays unmapped, kept as written, family null.
         let unknown = id("foo-max", None, None);
-        assert_eq!((unknown.model_id.as_deref(), unknown.model_source.as_str()), (None, "unmapped"));
-        assert_eq!((unknown.effort.as_deref(), unknown.model_family.as_deref()), (None, None));
+        assert_eq!(
+            (unknown.model_id.as_deref(), unknown.model_source.as_str()),
+            (None, "unmapped")
+        );
+        assert_eq!(
+            (unknown.effort.as_deref(), unknown.model_family.as_deref()),
+            (None, None)
+        );
         assert_eq!(unknown.model_shown(), Some("foo-max"));
         // A listed -max name with an effort suffix after it splits at the outer word only.
         let both = id("qwen3.8-max-high", None, None);
-        assert_eq!((both.model_id.as_deref(), both.effort.as_deref()), (Some("alibaba/qwen3.8-max"), Some("high")));
+        assert_eq!(
+            (both.model_id.as_deref(), both.effort.as_deref()),
+            (Some("alibaba/qwen3.8-max"), Some("high"))
+        );
     }
 
     #[test]
@@ -593,7 +658,10 @@ mod tests {
             let identity = id(written, None, None);
             assert_eq!(identity.model_id.as_deref(), Some(model), "{written}");
             assert_eq!(identity.effort.as_deref(), Some(effort), "{written}");
-            assert_eq!((identity.model_source.as_str(), identity.effort_source.as_str()), ("suffix", "suffix"));
+            assert_eq!(
+                (identity.model_source.as_str(), identity.effort_source.as_str()),
+                ("suffix", "suffix")
+            );
         }
     }
 
@@ -612,8 +680,14 @@ mod tests {
         assert_eq!(id("codex/gpt-6.1-sol", None, None).model_source, "alias");
         assert_eq!(id("gpt-6-astra", None, None).model_source, "bare");
         let upper = id("GPT-6.1-Sol", None, None);
-        assert_eq!((upper.model_id.as_deref(), upper.model_source.as_str()), (Some("openai/gpt-6.1-sol"), "case"));
-        assert_eq!(id("builtin:zai-coding-plan\\GLM-5.3", None, None).model_id.as_deref(), Some("zai/glm-5.3"));
+        assert_eq!(
+            (upper.model_id.as_deref(), upper.model_source.as_str()),
+            (Some("openai/gpt-6.1-sol"), "case")
+        );
+        assert_eq!(
+            id("builtin:zai-coding-plan\\GLM-5.3", None, None).model_id.as_deref(),
+            Some("zai/glm-5.3")
+        );
         // A prefix the table does not list is not stripped; a dangling alias resolves nothing.
         assert_eq!(id("party/gpt-6.1-sol", None, None).model_source, "unmapped");
         assert_eq!(id("dangling", None, None).model_source, "unmapped");
@@ -623,21 +697,45 @@ mod tests {
     #[test]
     fn harness_is_inferred_corrected_or_kept() {
         let delegate = id("claude-opus-5-5", None, Some("t3-delegate"));
-        assert_eq!((delegate.harness.as_deref(), delegate.harness_source.as_str()), (Some("claude-code"), "inferred"));
+        assert_eq!(
+            (delegate.harness.as_deref(), delegate.harness_source.as_str()),
+            (Some("claude-code"), "inferred")
+        );
         let missing = id("gpt-6.1-sol", None, None);
-        assert_eq!((missing.harness.as_deref(), missing.harness_source.as_str()), (Some("codex"), "inferred"));
+        assert_eq!(
+            (missing.harness.as_deref(), missing.harness_source.as_str()),
+            (Some("codex"), "inferred")
+        );
         let wrong = id("gpt-6.1-sol", None, Some("claude-code"));
-        assert_eq!((wrong.harness.as_deref(), wrong.harness_source.as_str()), (Some("codex"), "corrected"));
+        assert_eq!(
+            (wrong.harness.as_deref(), wrong.harness_source.as_str()),
+            (Some("codex"), "corrected")
+        );
         let proxy = id("qwen4-max-preview", None, Some("claude-code"));
-        assert_eq!((proxy.harness.as_deref(), proxy.harness_source.as_str()), (Some("claude-code"), "reported"));
+        assert_eq!(
+            (proxy.harness.as_deref(), proxy.harness_source.as_str()),
+            (Some("claude-code"), "reported")
+        );
         let omp = id("opencode-go/deepseek-v4.1-flash", None, Some("omp"));
         assert_eq!(omp.harness_source, "reported");
         let spelled = id("claude-opus-5-5", None, Some("Claude Code"));
-        assert_eq!((spelled.harness.as_deref(), spelled.harness_source.as_str()), (Some("claude-code"), "reported"));
+        assert_eq!(
+            (spelled.harness.as_deref(), spelled.harness_source.as_str()),
+            (Some("claude-code"), "reported")
+        );
         let grok = id("xai/grok-4.7", None, None);
         assert_eq!((grok.harness, grok.harness_source.as_str()), (None, "unknown"));
-        let none = identify(&catalog(), &Written { harness: Some("codex".into()), ..Written::default() });
-        assert_eq!((none.harness.as_deref(), none.harness_source.as_str()), (Some("codex"), "reported"));
+        let none = identify(
+            &catalog(),
+            &Written {
+                harness: Some("codex".into()),
+                ..Written::default()
+            },
+        );
+        assert_eq!(
+            (none.harness.as_deref(), none.harness_source.as_str()),
+            (Some("codex"), "reported")
+        );
     }
 
     #[test]
@@ -647,7 +745,10 @@ mod tests {
         assert_eq!(family_of(&c, "alibaba/qwen3.8-max").unwrap().id, "qwen");
         assert_eq!(family_of(&c, "acme/widget-2").unwrap().id, "catalog-widget");
         assert_eq!(family_of(&c, "nowhere/x"), None);
-        assert!(family_of(&c, "anthropic/claude-opus-5-5").unwrap().order < family_of(&c, "openai/gpt-6.1-sol").unwrap().order);
+        assert!(
+            family_of(&c, "anthropic/claude-opus-5-5").unwrap().order
+                < family_of(&c, "openai/gpt-6.1-sol").unwrap().order
+        );
     }
 
     /// DESIGN.md 1.1: every model string written in the share's runs (2026-11-13) under the
@@ -660,36 +761,186 @@ mod tests {
         )
         .unwrap();
         let table: [(&str, Option<&str>, Option<&str>, &str, Option<&str>); 35] = [
-            ("openai/gpt-6.1-sol", Some("openai/gpt-6.1-sol"), None, "exact", Some("openai")),
+            (
+                "openai/gpt-6.1-sol",
+                Some("openai/gpt-6.1-sol"),
+                None,
+                "exact",
+                Some("openai"),
+            ),
             ("gpt-6.1-sol", Some("openai/gpt-6.1-sol"), None, "alias", Some("openai")),
-            ("codex/gpt-6.1-sol", Some("openai/gpt-6.1-sol"), None, "alias", Some("openai")),
-            ("openai/gpt-6-astra", Some("openai/gpt-6-astra"), None, "exact", Some("openai")),
+            (
+                "codex/gpt-6.1-sol",
+                Some("openai/gpt-6.1-sol"),
+                None,
+                "alias",
+                Some("openai"),
+            ),
+            (
+                "openai/gpt-6-astra",
+                Some("openai/gpt-6-astra"),
+                None,
+                "exact",
+                Some("openai"),
+            ),
             ("gpt-6-astra", Some("openai/gpt-6-astra"), None, "alias", Some("openai")),
-            ("codex/gpt-6-astra", Some("openai/gpt-6-astra"), None, "alias", Some("openai")),
-            ("openai/gpt-6-luna", Some("openai/gpt-6-luna"), None, "exact", Some("openai")),
-            ("anthropic/claude-opus-5-5", Some("anthropic/claude-opus-5-5"), None, "exact", Some("anthropic")),
-            ("claude-opus-5-5", Some("anthropic/claude-opus-5-5"), None, "alias", Some("anthropic")),
-            ("anthropic/claude-fable-5-2", Some("anthropic/claude-fable-5-2"), None, "exact", Some("anthropic")),
-            ("claude-fable-5-2", Some("anthropic/claude-fable-5-2"), None, "alias", Some("anthropic")),
-            ("anthropic/claude-fable-5-1", Some("anthropic/claude-fable-5-1"), None, "exact", Some("anthropic")),
-            ("anthropic/claude-sonnet-5-5", Some("anthropic/claude-sonnet-5-5"), None, "exact", Some("anthropic")),
-            ("anthropic/claude-haiku-5-5", Some("anthropic/claude-haiku-5-5"), None, "exact", Some("anthropic")),
-            ("google/gemini-4-argon-high", Some("google/gemini-4-argon"), Some("high"), "suffix", Some("google")),
-            ("google/gemini-4-argon", Some("google/gemini-4-argon"), None, "exact", Some("google")),
-            ("muse/muse-wonder-full-1.0", Some("muse/muse-wonder-full-1.0"), None, "exact", Some("muse")),
-            ("muse-wonder-full-1.0", Some("muse/muse-wonder-full-1.0"), None, "alias", Some("muse")),
-            ("muse/muse-ember-1.0", Some("muse/muse-ember-1.0"), None, "exact", Some("muse")),
-            ("muse-ember-1.0", Some("muse/muse-ember-1.0"), None, "alias", Some("muse")),
-            ("muse-spark-1.3", Some("muse/muse-spark-1.3-contributor"), None, "alias", Some("muse")),
+            (
+                "codex/gpt-6-astra",
+                Some("openai/gpt-6-astra"),
+                None,
+                "alias",
+                Some("openai"),
+            ),
+            (
+                "openai/gpt-6-luna",
+                Some("openai/gpt-6-luna"),
+                None,
+                "exact",
+                Some("openai"),
+            ),
+            (
+                "anthropic/claude-opus-5-5",
+                Some("anthropic/claude-opus-5-5"),
+                None,
+                "exact",
+                Some("anthropic"),
+            ),
+            (
+                "claude-opus-5-5",
+                Some("anthropic/claude-opus-5-5"),
+                None,
+                "alias",
+                Some("anthropic"),
+            ),
+            (
+                "anthropic/claude-fable-5-2",
+                Some("anthropic/claude-fable-5-2"),
+                None,
+                "exact",
+                Some("anthropic"),
+            ),
+            (
+                "claude-fable-5-2",
+                Some("anthropic/claude-fable-5-2"),
+                None,
+                "alias",
+                Some("anthropic"),
+            ),
+            (
+                "anthropic/claude-fable-5-1",
+                Some("anthropic/claude-fable-5-1"),
+                None,
+                "exact",
+                Some("anthropic"),
+            ),
+            (
+                "anthropic/claude-sonnet-5-5",
+                Some("anthropic/claude-sonnet-5-5"),
+                None,
+                "exact",
+                Some("anthropic"),
+            ),
+            (
+                "anthropic/claude-haiku-5-5",
+                Some("anthropic/claude-haiku-5-5"),
+                None,
+                "exact",
+                Some("anthropic"),
+            ),
+            (
+                "google/gemini-4-argon-high",
+                Some("google/gemini-4-argon"),
+                Some("high"),
+                "suffix",
+                Some("google"),
+            ),
+            (
+                "google/gemini-4-argon",
+                Some("google/gemini-4-argon"),
+                None,
+                "exact",
+                Some("google"),
+            ),
+            (
+                "muse/muse-wonder-full-1.0",
+                Some("muse/muse-wonder-full-1.0"),
+                None,
+                "exact",
+                Some("muse"),
+            ),
+            (
+                "muse-wonder-full-1.0",
+                Some("muse/muse-wonder-full-1.0"),
+                None,
+                "alias",
+                Some("muse"),
+            ),
+            (
+                "muse/muse-ember-1.0",
+                Some("muse/muse-ember-1.0"),
+                None,
+                "exact",
+                Some("muse"),
+            ),
+            (
+                "muse-ember-1.0",
+                Some("muse/muse-ember-1.0"),
+                None,
+                "alias",
+                Some("muse"),
+            ),
+            (
+                "muse-spark-1.3",
+                Some("muse/muse-spark-1.3-contributor"),
+                None,
+                "alias",
+                Some("muse"),
+            ),
             ("zai/glm-5.3", Some("zai/glm-5.3"), None, "exact", Some("zai")),
             ("glm-5.3", Some("zai/glm-5.3"), None, "alias", Some("zai")),
-            ("builtin:zai-coding-plan\\GLM-5.3", Some("zai/glm-5.3"), None, "alias", Some("zai")),
+            (
+                "builtin:zai-coding-plan\\GLM-5.3",
+                Some("zai/glm-5.3"),
+                None,
+                "alias",
+                Some("zai"),
+            ),
             ("zcode/glm-5.3", Some("zai/glm-5.3"), None, "alias", Some("zai")),
-            ("builtin:bigmodel-coding-plan\\GLM-5.3", Some("zai/glm-5.3"), None, "alias", Some("zai")),
-            ("alibaba/qwen4-max-preview", Some("alibaba/qwen4-max-preview"), None, "exact", Some("qwen")),
-            ("alibaba-token-plan/qwen3.8-max", Some("alibaba/qwen3.8-max"), None, "alias", Some("qwen")),
-            ("opencode-go/deepseek-v4.1-flash", Some("deepseek/deepseek-v4.1-flash"), None, "alias", Some("deepseek")),
-            ("deepseek-v4.1-flash", Some("deepseek/deepseek-v4.1-flash"), None, "alias", Some("deepseek")),
+            (
+                "builtin:bigmodel-coding-plan\\GLM-5.3",
+                Some("zai/glm-5.3"),
+                None,
+                "alias",
+                Some("zai"),
+            ),
+            (
+                "alibaba/qwen4-max-preview",
+                Some("alibaba/qwen4-max-preview"),
+                None,
+                "exact",
+                Some("qwen"),
+            ),
+            (
+                "alibaba-token-plan/qwen3.8-max",
+                Some("alibaba/qwen3.8-max"),
+                None,
+                "alias",
+                Some("qwen"),
+            ),
+            (
+                "opencode-go/deepseek-v4.1-flash",
+                Some("deepseek/deepseek-v4.1-flash"),
+                None,
+                "alias",
+                Some("deepseek"),
+            ),
+            (
+                "deepseek-v4.1-flash",
+                Some("deepseek/deepseek-v4.1-flash"),
+                None,
+                "alias",
+                Some("deepseek"),
+            ),
             ("xai/grok-4.7", Some("xai/grok-4.7"), None, "exact", Some("xai")),
             ("grok-4.7", Some("xai/grok-4.7"), None, "alias", Some("xai")),
             ("cursor/grok-4.7", Some("xai/grok-4.7"), None, "alias", Some("xai")),
@@ -697,7 +948,13 @@ mod tests {
             ("qwen3.8-max", Some("alibaba/qwen3.8-max"), None, "alias", Some("qwen")),
         ];
         for (written, model, effort, source, family) in table {
-            let identity = identify(&packaged, &Written { model: Some(written.into()), ..Written::default() });
+            let identity = identify(
+                &packaged,
+                &Written {
+                    model: Some(written.into()),
+                    ..Written::default()
+                },
+            );
             assert_eq!(identity.model_id.as_deref(), model, "{written}");
             assert_eq!(identity.effort.as_deref(), effort, "{written}");
             assert_eq!(identity.model_source, source, "{written}");
@@ -714,4 +971,3 @@ mod tests {
         assert_eq!(a.len(), 64);
     }
 }
-

@@ -173,7 +173,11 @@ fn one_of(v: Option<&Json>, field: &str, allowed: &[&str]) -> R<String> {
 
 fn digits(s: &str, at: usize, n: usize) -> Option<u32> {
     let part = s.get(at..at + n)?;
-    if part.bytes().all(|b| b.is_ascii_digit()) { part.parse().ok() } else { None }
+    if part.bytes().all(|b| b.is_ascii_digit()) {
+        part.parse().ok()
+    } else {
+        None
+    }
 }
 
 /// The reader's ISO rule plus `realTimestamp` (a real calendar moment, offset within +-14:00).
@@ -253,7 +257,11 @@ pub fn iso_ms(s: &str) -> Option<i64> {
         second = n(at + 1, 2)?;
         at += 3;
         if b.get(at) == Some(&b'.') {
-            let frac: String = b[at + 1..].iter().take_while(|c| c.is_ascii_digit()).map(|c| *c as char).collect();
+            let frac: String = b[at + 1..]
+                .iter()
+                .take_while(|c| c.is_ascii_digit())
+                .map(|c| *c as char)
+                .collect();
             let three: String = frac.chars().chain(std::iter::repeat('0')).take(3).collect();
             millis = three.parse().ok()?;
             at += 1 + frac.len();
@@ -291,7 +299,11 @@ fn opt_iso(v: Option<&Json>, field: &str) -> R<Option<String>> {
 }
 
 fn opt_obj(v: Option<&Json>, field: &str, read: impl FnOnce(&Map<String, Json>) -> R<Json>) -> R<Json> {
-    if absent(v) { Ok(Json::Null) } else { read(obj(v, field)?) }
+    if absent(v) {
+        Ok(Json::Null)
+    } else {
+        read(obj(v, field)?)
+    }
 }
 
 fn list(v: Option<&Json>, field: &str, max: usize, mut each: impl FnMut(&Json, &str) -> R<Json>) -> R<Json> {
@@ -338,7 +350,11 @@ fn quota(v: Option<&Json>, field: &str) -> R<Json> {
 
 /// Whether `name` is a run file name the reader reads: printable ASCII, at most 200 characters.
 pub fn run_file_name_readable(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 200 && name.bytes().all(|b| (0x21..=0x7e).contains(&b)) && !name.contains('/') && !name.contains('\\')
+    !name.is_empty()
+        && name.len() <= 200
+        && name.bytes().all(|b| (0x21..=0x7e).contains(&b))
+        && !name.contains('/')
+        && !name.contains('\\')
 }
 
 /// `<machine>.<name>`: lowercase, at most 64 characters, a known machine, no `--`.
@@ -347,11 +363,15 @@ pub fn is_writer_name(value: &str, machines: &[&str]) -> bool {
     let Some(dot) = value.find('.') else { return false };
     let head_ok = dot > 0
         && b[0].is_ascii_lowercase() | b[0].is_ascii_digit()
-        && b[..dot].iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-');
+        && b[..dot]
+            .iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-');
     let tail = &b[dot + 1..];
     let tail_ok = !tail.is_empty()
         && (tail[0].is_ascii_lowercase() || tail[0].is_ascii_digit())
-        && tail.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'.' || *c == b'-');
+        && tail
+            .iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'.' || *c == b'-');
     value.len() <= 64 && head_ok && tail_ok && machines.contains(&&value[..dot]) && !value.contains("--")
 }
 
@@ -364,7 +384,9 @@ fn id_problem(value: Option<&Json>, writer: &str) -> Option<String> {
     }
     let prefix = format!("{writer}--");
     if !id.starts_with(&prefix) {
-        return Some(format!("id does not name its writer: it must start with \"{writer}--\""));
+        return Some(format!(
+            "id does not name its writer: it must start with \"{writer}--\""
+        ));
     }
     let local = &id[prefix.len()..];
     if local.is_empty() {
@@ -388,7 +410,10 @@ fn id_problem(value: Option<&Json>, writer: &str) -> Option<String> {
 
 fn metric_name(name: &str) -> bool {
     let b = name.as_bytes();
-    !b.is_empty() && b.len() <= 64 && b[0].is_ascii_alphabetic() && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+    !b.is_empty()
+        && b.len() <= 64
+        && b[0].is_ascii_alphabetic()
+        && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
 }
 
 /// The run projection of a parsed document, or the reader's refusal. `writer` is the folder's
@@ -598,7 +623,10 @@ mod tests {
     fn refusals_read_as_the_typescript_reader_words() {
         let mut d = minimal();
         d["writer"] = json!("vm.other");
-        assert_eq!(project_run(&d, "vm.lead").unwrap_err().0, "writer does not match its folder");
+        assert_eq!(
+            project_run(&d, "vm.lead").unwrap_err().0,
+            "writer does not match its folder"
+        );
         let mut d = minimal();
         d["id"] = json!("vm.other--x");
         assert_eq!(
@@ -612,20 +640,36 @@ mod tests {
             "task.id is too long: 513 characters, over the 512 allowed"
         );
         let mut d = minimal();
-        d["review"] = json!({ "of": "x", "verdict": "pass", "findings": { "high": 0, "medium": 0 }, "overturned": false });
-        assert_eq!(project_run(&d, "vm.lead").unwrap_err().0, "review.findings.low is missing or not valid");
+        d["review"] =
+            json!({ "of": "x", "verdict": "pass", "findings": { "high": 0, "medium": 0 }, "overturned": false });
+        assert_eq!(
+            project_run(&d, "vm.lead").unwrap_err().0,
+            "review.findings.low is missing or not valid"
+        );
         let mut d = minimal();
         d["review"] = json!({ "of": "x", "verdict": "pass", "findings": { "high": 0, "medium": 0, "low": null } });
-        assert_eq!(project_run(&d, "vm.lead").unwrap_err().0, "review.overturned is missing or not valid");
+        assert_eq!(
+            project_run(&d, "vm.lead").unwrap_err().0,
+            "review.overturned is missing or not valid"
+        );
         let mut d = minimal();
         d["wallSeconds"] = json!(-1);
-        assert_eq!(project_run(&d, "vm.lead").unwrap_err().0, "wallSeconds is missing or not valid");
+        assert_eq!(
+            project_run(&d, "vm.lead").unwrap_err().0,
+            "wallSeconds is missing or not valid"
+        );
         let mut d = minimal();
         d["task"]["title"] = json!("bad\u{202e}title");
-        assert_eq!(project_run(&d, "vm.lead").unwrap_err().0, "task.title is missing or not valid");
+        assert_eq!(
+            project_run(&d, "vm.lead").unwrap_err().0,
+            "task.title is missing or not valid"
+        );
         let mut d = minimal();
         d["flags"] = json!([{ "kind": "lazy", "detail": "d", "evidence": "e" }]);
-        assert_eq!(project_run(&d, "vm.lead").unwrap_err().0, "flags[0].kind is missing or not valid");
+        assert_eq!(
+            project_run(&d, "vm.lead").unwrap_err().0,
+            "flags[0].kind is missing or not valid"
+        );
     }
 
     #[test]

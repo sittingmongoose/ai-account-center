@@ -767,7 +767,12 @@ fn every_matrix_row_has_its_family_order_and_sort_keys() {
         assert_eq!(keys.len(), section.models.len(), "{}", section.id);
         for model in &section.models {
             let k = &keys[&model.key];
-            let verdicts = model.cells.values().flatten().filter(|c| c.verdict != "not-enough-data").count() as i64;
+            let verdicts = model
+                .cells
+                .values()
+                .flatten()
+                .filter(|c| c.verdict != "not-enough-data")
+                .count() as i64;
             assert_eq!(k.verdicts.iter().sum::<i64>(), verdicts, "{}", model.key);
             assert_eq!(k.runs, model.runs, "{}", model.key);
             if let (Some(passed), Some(decided)) = (k.passed, k.decided) {
@@ -790,7 +795,11 @@ fn every_matrix_row_has_its_family_order_and_sort_keys() {
 fn without_identity_every_row_is_unplaced_and_the_call_still_answers() {
     let groups = aac_status::scoreboard::group_keys(&golden_view()).unwrap();
     assert_eq!(groups.families.len(), 1);
-    assert!(groups.views["pipeline"].values().all(|k| k.family == "none" && k.model_order == 10_000));
+    assert!(
+        groups.views["pipeline"]
+            .values()
+            .all(|k| k.family == "none" && k.model_order == 10_000)
+    );
     let answer = ops::dispatch("composeGroups", &fixture("scoreboard-view.json")).unwrap();
     assert!(answer.contains("\"views\""));
 }

@@ -57,7 +57,12 @@ fn main() {
     );
     let t = Instant::now();
     let scan = call(&engine, "runsScan", json!({ "root": share }));
-    println!("idle quick pass: listed {} folders {} in {:?}", scan["listed"], scan["folders"], t.elapsed());
+    println!(
+        "idle quick pass: listed {} folders {} in {:?}",
+        scan["listed"],
+        scan["folders"],
+        t.elapsed()
+    );
     let t = Instant::now();
     let mut runs = Vec::new();
     let mut cursor = Json::Null;

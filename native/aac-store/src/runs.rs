@@ -289,7 +289,13 @@ impl Head {
         out.push(self.verdict);
         out.extend_from_slice(&self.revisions.to_be_bytes());
         out.extend_from_slice(&self.seq.to_be_bytes());
-        for v in [self.written_ms, self.ingested_ms, self.started_ms, self.ended_ms, self.wall_ms] {
+        for v in [
+            self.written_ms,
+            self.ingested_ms,
+            self.started_ms,
+            self.ended_ms,
+            self.wall_ms,
+        ] {
             out.extend_from_slice(&v.to_be_bytes());
         }
         out.extend_from_slice(&self.sha);
@@ -535,8 +541,17 @@ fn append_doc(txn: &WriteTransaction, day: u32, doc: &[u8]) -> Result<Loc> {
             docs.push(doc.to_vec());
             let slot = (docs.len() - 1) as u16;
             let full = docs.len() == BLOCK_DOCS as usize;
-            put(txn, RUN_PAYLOAD, Key::new().u32(day).u32(*block).as_slice(), &block_encode(&docs, full)?)?;
-            return Ok(Loc { day, block: *block, slot });
+            put(
+                txn,
+                RUN_PAYLOAD,
+                Key::new().u32(day).u32(*block).as_slice(),
+                &block_encode(&docs, full)?,
+            )?;
+            return Ok(Loc {
+                day,
+                block: *block,
+                slot,
+            });
         }
     }
     let block = last.as_ref().map(|(b, _)| b + 1).unwrap_or(0);
@@ -825,7 +840,9 @@ fn project_recorded(txn: &WriteTransaction, p: &RecordedPayload, event_seq: u64)
         }
         .encode(),
     )?;
-    let held = get(txn, RUN_HEAD, &Key::new().u32(r).0)?.map(|b| Head::decode(&b)).transpose()?;
+    let held = get(txn, RUN_HEAD, &Key::new().u32(r).0)?
+        .map(|b| Head::decode(&b))
+        .transpose()?;
     let mut dict_paths: HashMap<u32, String> = HashMap::new();
     if let Some(h) = &held {
         let table = txn.open_table(RUN_DICT)?;
@@ -956,14 +973,19 @@ fn project_refused(txn: &WriteTransaction, p: &RefusedPayload) -> Result<()> {
 // Computers (the package's registry; never a caller's alias)
 
 static COMPUTERS: LazyLock<Json> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../../../web-dashboard/public/computers.json")).expect("packaged computer registry")
+    serde_json::from_str(include_str!("../../../web-dashboard/public/computers.json"))
+        .expect("packaged computer registry")
 });
 
 /// Machine ids a writer name may start with.
 pub fn machine_ids() -> Vec<String> {
     COMPUTERS
         .as_object()
-        .map(|m| m.values().filter_map(|r| r["machineId"].as_str().map(str::to_string)).collect())
+        .map(|m| {
+            m.values()
+                .filter_map(|r| r["machineId"].as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1004,7 +1026,9 @@ fn is_date_folder(name: &str) -> bool {
     b.len() == 10
         && b[4] == b'-'
         && b[7] == b'-'
-        && b.iter().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }
 
 fn read_capped(path: &Path, cap: u64) -> std::result::Result<String, &'static str> {
@@ -1032,8 +1056,14 @@ pub fn scan(engine: &Engine, args: &ScanArgs) -> Result<Json> {
     let entries = match fs::read_dir(&writers_dir) {
         Ok(e) => e,
         Err(e) => {
-            let state = if e.kind() == std::io::ErrorKind::NotFound { "missing" } else { "error" };
-            return Ok(json!({ "state": state, "files": [], "refused": [], "threads": {}, "catalog": catalog_texts(&root), "listed": 0, "unchanged": 0, "more": false, "problems": [] }));
+            let state = if e.kind() == std::io::ErrorKind::NotFound {
+                "missing"
+            } else {
+                "error"
+            };
+            return Ok(
+                json!({ "state": state, "files": [], "refused": [], "threads": {}, "catalog": catalog_texts(&root), "listed": 0, "unchanged": 0, "more": false, "problems": [] }),
+            );
         }
     };
     let mut writers: Vec<String> = entries
@@ -1079,7 +1109,10 @@ pub fn scan(engine: &Engine, args: &ScanArgs) -> Result<Json> {
             folders.insert(dir.clone(), mtime);
             for file in files.flatten() {
                 let file_name = file.file_name().to_string_lossy().into_owned();
-                if file_name.starts_with('.') || !file_name.ends_with(".json") || !run_schema::run_file_name_readable(&file_name) {
+                if file_name.starts_with('.')
+                    || !file_name.ends_with(".json")
+                    || !run_schema::run_file_name_readable(&file_name)
+                {
                     continue;
                 }
                 let Ok(meta) = file.metadata() else { continue };
@@ -1222,12 +1255,17 @@ fn current_catalog(engine: &Engine) -> Result<Option<Catalog>> {
     engine.with_db(|db| {
         let read = db.begin_read()?;
         let meta = read.open_table(RUN_META)?;
-        let Some(hash) = meta.get("catalog")?.map(|v| String::from_utf8_lossy(v.value()).into_owned()) else {
+        let Some(hash) = meta
+            .get("catalog")?
+            .map(|v| String::from_utf8_lossy(v.value()).into_owned())
+        else {
             return Ok(None);
         };
         let Some(key) = unhex32(&hash) else { return Ok(None) };
         let table = read.open_table(RUN_CATALOG)?;
-        let Some(value) = table.get(&key[..16])? else { return Ok(None) };
+        let Some(value) = table.get(&key[..16])? else {
+            return Ok(None);
+        };
         let bytes = value.value();
         if bytes.first() != Some(&1) || bytes.len() < 9 {
             return Ok(None);
@@ -1241,8 +1279,14 @@ fn current_catalog(engine: &Engine) -> Result<Option<Catalog>> {
 /// version, so a damaged write never re-keys history.
 fn choose_catalog(engine: &Engine, given: &CatalogIn) -> Result<Catalog> {
     let stored = current_catalog(engine)?;
-    let models_ok = given.models.as_deref().is_some_and(|t| run_identity::parse_models(t).is_some());
-    let aliases_ok = given.aliases.as_deref().is_some_and(|t| run_identity::parse_aliases(t).is_some());
+    let models_ok = given
+        .models
+        .as_deref()
+        .is_some_and(|t| run_identity::parse_models(t).is_some());
+    let aliases_ok = given
+        .aliases
+        .as_deref()
+        .is_some_and(|t| run_identity::parse_aliases(t).is_some());
     let models = if models_ok {
         given.models.clone()
     } else {
@@ -1319,7 +1363,9 @@ fn run_ids(run: &Json, thread: &ThreadFacts) -> RunIds {
         event_at_ms: ms(&run["endedAt"]).unwrap_or(0),
         observed_at_ms: ms(&run["writtenAt"]).unwrap_or(0),
         started_at_ms: ms(&run["startedAt"]),
-        wall_ms: run["wallSeconds"].as_f64().map(|s| (s * 1000.0).round().max(0.0) as u64),
+        wall_ms: run["wallSeconds"]
+            .as_f64()
+            .map(|s| (s * 1000.0).round().max(0.0) as u64),
         seq: run["seq"].as_u64().unwrap_or(0),
         outcome: run["outcome"].as_str().unwrap_or("").to_string(),
         source: run["source"].as_str().unwrap_or("observed").to_string(),
@@ -1352,7 +1398,9 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
     let current = engine.with_db(|db| {
         let read = db.begin_read()?;
         let meta = read.open_table(RUN_META)?;
-        Ok(meta.get("catalog")?.map(|v| String::from_utf8_lossy(v.value()).into_owned()))
+        Ok(meta
+            .get("catalog")?
+            .map(|v| String::from_utf8_lossy(v.value()).into_owned()))
     })?;
     let catalog_changed = current.as_deref() != Some(catalog.hash.as_str());
     let mut events: Vec<Event> = Vec::new();
@@ -1405,28 +1453,28 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
     let (mut recorded, mut known, mut refused) = (0usize, 0usize, 0usize);
     // (path, size, mtime, sha, state): a stat refresh of content already on record.
     let mut touch: Vec<(String, u64, u64, [u8; 32], u8)> = Vec::new();
-    let refuse = |events: &mut Vec<Event>, path: &str, size: u64, mtime: u64, sha: Option<String>, reason: &str| -> Result<()> {
-        let key = format!("run.refused:{path}:{}:{reason}", sha.clone().unwrap_or_default());
-        events.push(event(
-            "run.refused",
-            args.now_ms,
-            key,
-            &RefusedPayload {
-                path: path.to_string(),
-                size,
-                mtime_ms: mtime,
-                sha256: sha,
-                reason: reason.to_string(),
-                ingested_at_ms: args.now_ms,
-            },
-        )?);
-        Ok(())
-    };
+    let refuse =
+        |events: &mut Vec<Event>, path: &str, size: u64, mtime: u64, sha: Option<String>, reason: &str| -> Result<()> {
+            let key = format!("run.refused:{path}:{}:{reason}", sha.clone().unwrap_or_default());
+            events.push(event(
+                "run.refused",
+                args.now_ms,
+                key,
+                &RefusedPayload {
+                    path: path.to_string(),
+                    size,
+                    mtime_ms: mtime,
+                    sha256: sha,
+                    reason: reason.to_string(),
+                    ingested_at_ms: args.now_ms,
+                },
+            )?);
+            Ok(())
+        };
     for r in &args.refused {
         // A refusal already on record for this exact content is not recorded again.
-        let same = file_state(&r.path)?.is_some_and(|row| {
-            row.state == 2 && r.sha256.as_deref().and_then(unhex32).is_none_or(|s| s == row.sha)
-        });
+        let same = file_state(&r.path)?
+            .is_some_and(|row| row.state == 2 && r.sha256.as_deref().and_then(unhex32).is_none_or(|s| s == row.sha));
         if same {
             let sha = r.sha256.as_deref().and_then(unhex32).unwrap_or([0; 32]);
             touch.push((r.path.clone(), r.size, r.mtime_ms, sha, 2));
@@ -1440,7 +1488,14 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
         let sha = sha256(f.text.as_bytes());
         let sha_hex = hex(&sha);
         let Some(writer) = writer_of_path(&f.path) else {
-            refuse(&mut events, &f.path, f.size, f.mtime_ms, Some(sha_hex), "is not under a writer's runs folder")?;
+            refuse(
+                &mut events,
+                &f.path,
+                f.size,
+                f.mtime_ms,
+                Some(sha_hex),
+                "is not under a writer's runs folder",
+            )?;
             refused += 1;
             continue;
         };
@@ -1460,7 +1515,14 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
         };
         // The store's own rule for persisted text (docs/store.md 2.2), on top of the filter.
         if crate::secret::looks_secret(&f.text) {
-            refuse(&mut events, &f.path, f.size, f.mtime_ms, Some(sha_hex), "refused: it contains what looks like a credential")?;
+            refuse(
+                &mut events,
+                &f.path,
+                f.size,
+                f.mtime_ms,
+                Some(sha_hex),
+                "refused: it contains what looks like a credential",
+            )?;
             refused += 1;
             continue;
         }
@@ -1530,7 +1592,9 @@ pub fn record(engine: &Engine, args: RecordArgs) -> Result<Json> {
     let rekeyed_for = engine.with_db(|db| {
         let read = db.begin_read()?;
         let meta = read.open_table(RUN_META)?;
-        Ok(meta.get("rekeyed")?.map(|v| String::from_utf8_lossy(v.value()).into_owned()))
+        Ok(meta
+            .get("rekeyed")?
+            .map(|v| String::from_utf8_lossy(v.value()).into_owned()))
     })?;
     let rekeyed = if rekeyed_for.as_deref() != Some(catalog.hash.as_str()) {
         let n = rekey(engine, &catalog, args.now_ms)?;
@@ -1569,7 +1633,11 @@ fn rekey(engine: &Engine, catalog: &Catalog, now: u64) -> Result<usize> {
             let (k, v) = item?;
             let r = be_u32(k.value(), 0);
             let head = &Head::decode(v.value())?;
-            let triple = (head.id(at::MODEL_RAW), head.id(at::EFFORT_RAW), head.id(at::HARNESS_RAW));
+            let triple = (
+                head.id(at::MODEL_RAW),
+                head.id(at::EFFORT_RAW),
+                head.id(at::HARNESS_RAW),
+            );
             let identity = match memo.get(&triple) {
                 Some(i) => i.clone(),
                 None => {
@@ -1671,7 +1739,11 @@ fn identity_json<T: ReadableTable<&'static [u8], &'static [u8]>>(dict: &mut Dict
 }
 
 /// The correlation ids of a head row (DATA-ARCHITECTURE section 2 names).
-fn ids_json<T: ReadableTable<&'static [u8], &'static [u8]>>(dict: &mut Dict<'_, T>, r: u32, head: &Head) -> Result<Json> {
+fn ids_json<T: ReadableTable<&'static [u8], &'static [u8]>>(
+    dict: &mut Dict<'_, T>,
+    r: u32,
+    head: &Head,
+) -> Result<Json> {
     let project = dict.field(head, at::PROJECT)?;
     let stream = dict.field(head, at::STREAM)?;
     let t3_thread = dict.field(head, at::T3_THREAD)?;
@@ -1737,7 +1809,9 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
         for item in by_time.range(lo.as_slice()..=hi.as_slice())? {
             let (k, _) = item?;
             let (ended, r) = (be_u64(k.value(), 0), be_u32(k.value(), 8));
-            let Some(value) = heads.get(Key::new().u32(r).as_slice())? else { continue };
+            let Some(value) = heads.get(Key::new().u32(r).as_slice())? else {
+                continue;
+            };
             let head = Head::decode(value.value())?;
             let benchmark = head.flags & F_BENCHMARK != 0;
             match args.source.as_deref() {
@@ -1756,12 +1830,12 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
                 break;
             }
             let block_key = (head.loc.day, head.loc.block);
-            if !blocks.contains_key(&block_key) {
+            if let std::collections::hash_map::Entry::Vacant(slot) = blocks.entry(block_key) {
                 let Some(bytes) = payloads.get(Key::new().u32(head.loc.day).u32(head.loc.block).as_slice())? else {
                     skipped += 1;
                     continue;
                 };
-                blocks.insert(block_key, block_decode(bytes.value())?.1);
+                slot.insert(block_decode(bytes.value())?.1);
             }
             let Some(doc) = blocks[&block_key].get(head.loc.slot as usize) else {
                 skipped += 1;
@@ -1775,7 +1849,10 @@ pub fn query(engine: &Engine, args: &QueryArgs) -> Result<Json> {
                 continue;
             };
             let identity = identity_json(&mut dict, &head)?;
-            let shown = identity["modelId"].as_str().or(identity["modelRaw"].as_str()).map(str::to_string);
+            let shown = identity["modelId"]
+                .as_str()
+                .or(identity["modelRaw"].as_str())
+                .map(str::to_string);
             run["model"]["id"] = opt_json(shown);
             run["model"]["effort"] = identity["effort"].clone();
             run["model"]["harness"] = identity["harness"].clone();

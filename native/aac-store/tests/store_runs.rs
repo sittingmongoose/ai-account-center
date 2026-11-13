@@ -31,7 +31,12 @@ fn iso(ms: u64) -> String {
     let days = (secs / 86_400) as i64;
     let (y, m, d) = aac_store::engine::civil_from_days(days);
     let rem = secs % 86_400;
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 fn models_json() -> String {
@@ -88,7 +93,18 @@ impl Share {
     }
 
     /// Writes one run file and returns its relative path.
-    fn run(&self, writer: &str, local: &str, seq: u64, ended: u64, model: &str, effort: Option<&str>, harness: Option<&str>, task_type: Option<&str>) -> String {
+    #[allow(clippy::too_many_arguments)]
+    fn run(
+        &self,
+        writer: &str,
+        local: &str,
+        seq: u64,
+        ended: u64,
+        model: &str,
+        effort: Option<&str>,
+        harness: Option<&str>,
+        task_type: Option<&str>,
+    ) -> String {
         let day = &iso(ended)[..10];
         let dir = self.root.join("v1/writers").join(writer).join("runs").join(day);
         fs::create_dir_all(&dir).unwrap();
@@ -109,7 +125,11 @@ impl Share {
 
 /// One ingest pass as the TypeScript service makes it (its secret filter accepts all here).
 fn pass(engine: &Engine, share: &Share, now: u64, budget: usize, full: bool) -> (Json, Json) {
-    let scan = call(engine, "runsScan", json!({ "root": share.root, "budget": budget, "full": full }));
+    let scan = call(
+        engine,
+        "runsScan",
+        json!({ "root": share.root, "budget": budget, "full": full }),
+    );
     let record = call(
         engine,
         "runsRecord",
@@ -126,7 +146,9 @@ fn query(engine: &Engine, args: Json) -> Vec<Json> {
 }
 
 fn ledger_last(engine: &Engine) -> u64 {
-    call(engine, "status", json!({}))["logs"]["ledger"]["lastSequence"].as_u64().unwrap_or(0)
+    call(engine, "status", json!({}))["logs"]["ledger"]["lastSequence"]
+        .as_u64()
+        .unwrap_or(0)
 }
 
 /// Every row of the run tables, for equality checks.
@@ -161,9 +183,27 @@ fn dump(engine: &Engine) -> Vec<(String, Vec<u8>, Vec<u8>)> {
 fn a_pass_stores_every_run_with_ids_identity_and_the_original_text() {
     let share = Share::new("runs-basic");
     share.thread("vm.lead", "thread:delegated-task:command%3Amcp%3Aabc");
-    let path = share.run("vm.lead", "r1", 1, T0 + DAY, "gpt-6.1-sol", Some("X-High"), Some("claude-code"), Some("review"));
+    let path = share.run(
+        "vm.lead",
+        "r1",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("X-High"),
+        Some("claude-code"),
+        Some("review"),
+    );
     share.run("vm.lead", "r2", 1, T0 + 2 * DAY, "qwen3.8-max", None, Some("omp"), None);
-    share.run("windows.solo", "r3", 1, T0 + 3 * DAY, "google/gemini-4-argon-high", None, None, Some("build"));
+    share.run(
+        "windows.solo",
+        "r3",
+        1,
+        T0 + 3 * DAY,
+        "google/gemini-4-argon-high",
+        None,
+        None,
+        Some("build"),
+    );
     let store = temp_dir("runs-basic-store");
     let engine = open(&store);
     let (scan, record) = pass(&engine, &share, T0 + 10 * DAY, 100, false);
@@ -183,10 +223,19 @@ fn a_pass_stores_every_run_with_ids_identity_and_the_original_text() {
     assert_eq!(sol["identity"]["modelFamily"], json!("openai"));
     assert_eq!(sol["ids"]["computer"], json!("ubuntu"));
     assert_eq!(sol["ids"]["machine"], json!("vm"));
-    assert_eq!(sol["ids"]["t3ThreadId"]["value"], json!("thread:delegated-task:command%3Amcp%3Aabc"));
+    assert_eq!(
+        sol["ids"]["t3ThreadId"]["value"],
+        json!("thread:delegated-task:command%3Amcp%3Aabc")
+    );
     assert_eq!(sol["ids"]["t3ThreadId"]["confidence"], json!("inferred"));
-    assert_eq!(sol["ids"]["t3TaskId"]["value"], json!("node:delegated-task:command%3Ar1"));
-    assert_eq!(sol["ids"]["projectId"], json!({ "source": "agent-report", "id": "proj" }));
+    assert_eq!(
+        sol["ids"]["t3TaskId"]["value"],
+        json!("node:delegated-task:command%3Ar1")
+    );
+    assert_eq!(
+        sol["ids"]["projectId"],
+        json!({ "source": "agent-report", "id": "proj" })
+    );
     assert_eq!(sol["ids"]["accountKey"], Json::Null);
     // The -max name is not split.
     let qwen = &all[1];
@@ -199,7 +248,10 @@ fn a_pass_stores_every_run_with_ids_identity_and_the_original_text() {
     assert_eq!(gemini["ids"]["computer"], json!("windows"));
     // The original document comes back byte for byte.
     let original = call(&engine, "runOriginal", json!({ "runId": "vm.lead--r1" }));
-    assert_eq!(original.as_str().unwrap(), fs::read_to_string(share.root.join("v1").join(&path)).unwrap());
+    assert_eq!(
+        original.as_str().unwrap(),
+        fs::read_to_string(share.root.join("v1").join(&path)).unwrap()
+    );
     let status = call(&engine, "runsStatus", json!({}));
     assert_eq!(status["runs"], json!(3));
     assert!(status["catalogHash"].as_str().unwrap().len() == 64);
@@ -208,7 +260,16 @@ fn a_pass_stores_every_run_with_ids_identity_and_the_original_text() {
 #[test]
 fn ingest_is_idempotent_and_dedupes_by_run_id_and_content() {
     let share = Share::new("runs-idem");
-    share.run("vm.lead", "r1", 1, T0 + DAY, "gpt-6.1-sol", Some("max"), Some("codex"), Some("build"));
+    share.run(
+        "vm.lead",
+        "r1",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
     let store = temp_dir("runs-idem-store");
     let engine = open(&store);
     pass(&engine, &share, T0 + 10 * DAY, 100, false);
@@ -216,23 +277,42 @@ fn ingest_is_idempotent_and_dedupes_by_run_id_and_content() {
     let tables = dump(&engine);
     // Same files again, full pass: nothing read changes, nothing appended.
     let (scan, record) = pass(&engine, &share, T0 + 11 * DAY, 100, true);
-    assert_eq!(scan["files"].as_array().unwrap().len(), 0, "unchanged files are not read again");
+    assert_eq!(
+        scan["files"].as_array().unwrap().len(),
+        0,
+        "unchanged files are not read again"
+    );
     assert_eq!(record["recorded"], json!(0));
     assert_eq!(ledger_last(&engine), after_first);
     assert_eq!(dump(&engine), tables);
     // The same bytes handed in twice (a crash between scan and record, a repeated call).
-    let text = fs::read_to_string(share.root.join("v1/writers/vm.lead/runs").join(&iso(T0 + DAY)[..10]).join("vm.lead--r1.json")).unwrap();
+    let text = fs::read_to_string(
+        share
+            .root
+            .join("v1/writers/vm.lead/runs")
+            .join(&iso(T0 + DAY)[..10])
+            .join("vm.lead--r1.json"),
+    )
+    .unwrap();
     let path = format!("writers/vm.lead/runs/{}/vm.lead--r1.json", &iso(T0 + DAY)[..10]);
-    let twice = call(&engine, "runsRecord", json!({ "files": [
+    let twice = call(
+        &engine,
+        "runsRecord",
+        json!({ "files": [
         { "path": path, "text": text, "size": text.len(), "mtimeMs": 1 },
         { "path": path, "text": text, "size": text.len(), "mtimeMs": 1 },
-    ], "nowMs": T0 + 12 * DAY }));
+    ], "nowMs": T0 + 12 * DAY }),
+    );
     assert_eq!(twice["recorded"], json!(0));
     assert_eq!(twice["known"], json!(2));
     assert_eq!(ledger_last(&engine), after_first);
     // The same content under a second path (a copy) is one revision, and its path is remembered.
     let copy = format!("writers/vm.lead/runs/{}/vm.lead--r1.json", &iso(T0 + 2 * DAY)[..10]);
-    let copied = call(&engine, "runsRecord", json!({ "files": [{ "path": copy, "text": text, "size": text.len(), "mtimeMs": 2 }], "nowMs": T0 + 12 * DAY }));
+    let copied = call(
+        &engine,
+        "runsRecord",
+        json!({ "files": [{ "path": copy, "text": text, "size": text.len(), "mtimeMs": 2 }], "nowMs": T0 + 12 * DAY }),
+    );
     assert_eq!(copied["recorded"], json!(0));
     assert_eq!(call(&engine, "runsStatus", json!({}))["revisions"], json!(1));
     assert_eq!(call(&engine, "runsStatus", json!({}))["files"], json!(2));
@@ -241,12 +321,30 @@ fn ingest_is_idempotent_and_dedupes_by_run_id_and_content() {
 #[test]
 fn a_newer_seq_wins_across_day_folders_and_every_revision_is_kept() {
     let share = Share::new("runs-seq");
-    share.run("vm.lead", "r1", 1, T0 + DAY, "gpt-6.1-sol", Some("high"), Some("codex"), Some("build"));
+    share.run(
+        "vm.lead",
+        "r1",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("high"),
+        Some("codex"),
+        Some("build"),
+    );
     let store = temp_dir("runs-seq-store");
     let engine = open(&store);
     pass(&engine, &share, T0 + 10 * DAY, 100, false);
     // A correction with a higher seq, written into the next day's folder.
-    share.run("vm.lead", "r1", 2, T0 + 2 * DAY, "gpt-6.1-sol", Some("max"), Some("codex"), Some("build"));
+    share.run(
+        "vm.lead",
+        "r1",
+        2,
+        T0 + 2 * DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
     pass(&engine, &share, T0 + 11 * DAY, 100, false);
     let all = query(&engine, json!({}));
     assert_eq!(all.len(), 1);
@@ -270,7 +368,16 @@ fn backfill_reads_everything_in_passes_with_no_cap() {
     let n = 2_000u64;
     for i in 0..n {
         let writer = format!("vm.w{}", i % 37);
-        share.run(&writer, &format!("r{i}"), 1, T0 + (i % 40) * DAY + i, "claude-opus-5-5", Some("xhigh"), Some("claude-code"), Some("build"));
+        share.run(
+            &writer,
+            &format!("r{i}"),
+            1,
+            T0 + (i % 40) * DAY + i,
+            "claude-opus-5-5",
+            Some("xhigh"),
+            Some("claude-code"),
+            Some("build"),
+        );
     }
     let store = temp_dir("runs-backfill-store");
     let engine = open(&store);
@@ -306,7 +413,16 @@ fn backfill_reads_everything_in_passes_with_no_cap() {
 fn runs_are_kept_forever_and_a_rebuild_gives_the_same_tables() {
     let share = Share::new("runs-forever");
     for i in 0..70u64 {
-        share.run("vm.lead", &format!("r{i}"), 1, T0 + i * 3_600_000, "gpt-6.1-sol", Some("max"), Some("codex"), Some("review"));
+        share.run(
+            "vm.lead",
+            &format!("r{i}"),
+            1,
+            T0 + i * 3_600_000,
+            "gpt-6.1-sol",
+            Some("max"),
+            Some("codex"),
+            Some("review"),
+        );
     }
     let store = temp_dir("runs-forever-store");
     let tables;
@@ -314,7 +430,11 @@ fn runs_are_kept_forever_and_a_rebuild_gives_the_same_tables() {
         let engine = open(&store);
         pass(&engine, &share, T0 + DAY, 1000, false);
         // Ten years later, with pruning, retirement and compaction.
-        call(&engine, "maintain", json!({ "nowMs": T0 + 3650 * DAY, "compact": true }));
+        call(
+            &engine,
+            "maintain",
+            json!({ "nowMs": T0 + 3650 * DAY, "compact": true }),
+        );
         assert_eq!(call(&engine, "runsStatus", json!({}))["runs"], json!(70));
         assert_eq!(query(&engine, json!({})).len(), 70);
         tables = dump(&engine);
@@ -329,8 +449,26 @@ fn runs_are_kept_forever_and_a_rebuild_gives_the_same_tables() {
 #[test]
 fn a_new_alias_rekeys_only_the_affected_runs_and_keeps_the_earlier_identity() {
     let share = Share::new("runs-rekey");
-    share.run("vm.lead", "r1", 1, T0 + DAY, "gpt-6.1-sol", Some("max"), Some("codex"), Some("build"));
-    share.run("vm.lead", "r2", 1, T0 + 2 * DAY, "sol-preview", Some("high"), Some("codex"), Some("build"));
+    share.run(
+        "vm.lead",
+        "r1",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    share.run(
+        "vm.lead",
+        "r2",
+        1,
+        T0 + 2 * DAY,
+        "sol-preview",
+        Some("high"),
+        Some("codex"),
+        Some("build"),
+    );
     let store = temp_dir("runs-rekey-store");
     let engine = open(&store);
     let (_, first) = pass(&engine, &share, T0 + 10 * DAY, 100, false);
@@ -356,38 +494,104 @@ fn a_new_alias_rekeys_only_the_affected_runs_and_keeps_the_earlier_identity() {
     drop(engine);
     fs::remove_file(store.join("aac.redb")).unwrap();
     let engine = open(&store);
-    assert_eq!(query(&engine, json!({}))[1]["doc"]["model"]["id"], json!("openai/gpt-6.1-sol"));
+    assert_eq!(
+        query(&engine, json!({}))[1]["doc"]["model"]["id"],
+        json!("openai/gpt-6.1-sol")
+    );
 }
 
 #[test]
 fn queries_filter_by_date_source_and_task_type() {
     let share = Share::new("runs-filter");
-    share.run("vm.lead", "a", 1, T0 + DAY, "gpt-6.1-sol", Some("max"), Some("codex"), Some("build"));
-    share.run("vm.lead", "b", 1, T0 + 5 * DAY, "gpt-6.1-sol", Some("max"), Some("codex"), Some("review"));
-    share.run("vm.lead", "c", 1, T0 + 9 * DAY, "gpt-6.1-sol", Some("max"), Some("codex"), Some("review"));
+    share.run(
+        "vm.lead",
+        "a",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("build"),
+    );
+    share.run(
+        "vm.lead",
+        "b",
+        1,
+        T0 + 5 * DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("review"),
+    );
+    share.run(
+        "vm.lead",
+        "c",
+        1,
+        T0 + 9 * DAY,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("review"),
+    );
     // A benchmark run.
-    let path = share.run("vm.lead", "d", 1, T0 + 9 * DAY + 1, "gpt-6.1-sol", Some("max"), Some("codex"), Some("review"));
+    let path = share.run(
+        "vm.lead",
+        "d",
+        1,
+        T0 + 9 * DAY + 1,
+        "gpt-6.1-sol",
+        Some("max"),
+        Some("codex"),
+        Some("review"),
+    );
     let file = share.root.join("v1").join(&path);
-    let text = fs::read_to_string(&file).unwrap().replace("\"observed\"", "\"benchmark\"");
+    let text = fs::read_to_string(&file)
+        .unwrap()
+        .replace("\"observed\"", "\"benchmark\"");
     fs::write(&file, text).unwrap();
     let store = temp_dir("runs-filter-store");
     let engine = open(&store);
     pass(&engine, &share, T0 + 20 * DAY, 100, false);
     let ids = |args: Json| -> Vec<String> {
-        query(&engine, args).iter().map(|r| r["doc"]["id"].as_str().unwrap().to_string()).collect()
+        query(&engine, args)
+            .iter()
+            .map(|r| r["doc"]["id"].as_str().unwrap().to_string())
+            .collect()
     };
-    assert_eq!(ids(json!({ "fromMs": T0 + 2 * DAY, "toMs": T0 + 8 * DAY })), vec!["vm.lead--b"]);
-    assert_eq!(ids(json!({ "taskType": "review", "source": "observed" })), vec!["vm.lead--b", "vm.lead--c"]);
+    assert_eq!(
+        ids(json!({ "fromMs": T0 + 2 * DAY, "toMs": T0 + 8 * DAY })),
+        vec!["vm.lead--b"]
+    );
+    assert_eq!(
+        ids(json!({ "taskType": "review", "source": "observed" })),
+        vec!["vm.lead--b", "vm.lead--c"]
+    );
     assert_eq!(ids(json!({ "source": "benchmark" })), vec!["vm.lead--d"]);
     assert_eq!(ids(json!({ "taskType": "no-such-type" })), Vec::<String>::new());
-    assert_eq!(ids(json!({ "fromMs": T0 + 30 * DAY, "toMs": T0 })), Vec::<String>::new());
-    assert_eq!(ids(json!({ "reviewsOnly": true })), Vec::<String>::new(), "no run here has a review block");
+    assert_eq!(
+        ids(json!({ "fromMs": T0 + 30 * DAY, "toMs": T0 })),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ids(json!({ "reviewsOnly": true })),
+        Vec::<String>::new(),
+        "no run here has a review block"
+    );
 }
 
 #[test]
 fn refused_files_are_recorded_once_and_named() {
     let share = Share::new("runs-refused");
-    share.run("vm.lead", "ok", 1, T0 + DAY, "gpt-6.1-sol", None, Some("codex"), Some("build"));
+    share.run(
+        "vm.lead",
+        "ok",
+        1,
+        T0 + DAY,
+        "gpt-6.1-sol",
+        None,
+        Some("codex"),
+        Some("build"),
+    );
     let dir = share.root.join("v1/writers/vm.lead/runs").join(&iso(T0 + DAY)[..10]);
     fs::write(dir.join("vm.lead--bad.json"), "{\"schema\":\"agent-reports/run@1\"}").unwrap();
     fs::write(dir.join("vm.lead--big.json"), "x".repeat(40 * 1024)).unwrap();
@@ -397,12 +601,21 @@ fn refused_files_are_recorded_once_and_named() {
     assert_eq!(record["recorded"], json!(1));
     assert_eq!(record["refused"], json!(2));
     let refused = call(&engine, "runsRefused", json!({}));
-    let reasons: Vec<&str> = refused.as_array().unwrap().iter().map(|r| r["reason"].as_str().unwrap()).collect();
+    let reasons: Vec<&str> = refused
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["reason"].as_str().unwrap())
+        .collect();
     assert!(reasons.contains(&"larger than the 32 KB cap"));
     assert!(reasons.contains(&"writer does not match its folder"));
     let before = ledger_last(&engine);
     let (scan, again) = pass(&engine, &share, T0 + 11 * DAY, 100, true);
-    assert_eq!(scan["files"].as_array().unwrap().len(), 0, "a refused file is not read again until it changes");
+    assert_eq!(
+        scan["files"].as_array().unwrap().len(),
+        0,
+        "a refused file is not read again until it changes"
+    );
     assert_eq!(again["refused"], json!(0));
     assert_eq!(ledger_last(&engine), before);
 }
@@ -414,7 +627,12 @@ fn identity_table_orders_families_and_efforts() {
     let engine = open(&store);
     pass(&engine, &share, T0, 100, false);
     let table = call(&engine, "runsIdentity", json!({}));
-    let families: Vec<&str> = table["families"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    let families: Vec<&str> = table["families"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap())
+        .collect();
     assert_eq!(families, vec!["anthropic", "openai", "google", "qwen"]);
     assert_eq!(table["models"]["openai/gpt-6.1-sol"]["family"], json!("openai"));
     assert_eq!(table["efforts"][5], json!("xhigh"));
