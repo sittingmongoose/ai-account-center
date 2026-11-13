@@ -128,6 +128,8 @@ pub struct Collector {
     pub search_limits: HashMap<String, (usize, Option<usize>)>,
     /// Network or FUSE mounts that did not answer their probe this scan.
     pub unanswered_mounts: usize,
+    /// Roots their probe found absent: never touched again this scan (the report included).
+    pub absent_roots: HashSet<(String, PathBuf)>,
 }
 
 /// Kinds whose reads resume where the deadline cut them (DESIGN 16.1): Codex, whose largest logs
@@ -183,6 +185,7 @@ impl Collector {
             unreadable_folders: HashMap::new(),
             search_limits: HashMap::new(),
             unanswered_mounts: 0,
+            absent_roots: HashSet::new(),
         }
     }
 
@@ -731,7 +734,9 @@ impl Collector {
         for (path, probe) in probes {
             match probe {
                 crate::fsx::Probe::Readable(_) => found.push(path),
-                crate::fsx::Probe::Absent => {}
+                crate::fsx::Probe::Absent => {
+                    self.absent_roots.insert((kind.to_string(), path.clone()));
+                }
                 crate::fsx::Probe::Failed { state, cause } => self.root_failure(kind, &path, state, cause),
             }
         }
@@ -743,7 +748,9 @@ impl Collector {
         for (path, probe) in probes {
             match probe {
                 crate::fsx::Probe::Readable(real) => found.push(real),
-                crate::fsx::Probe::Absent => {}
+                crate::fsx::Probe::Absent => {
+                    self.absent_roots.insert((kind.to_string(), path.clone()));
+                }
                 crate::fsx::Probe::Failed { state, cause } => self.root_failure(kind, &path, state, cause),
             }
         }

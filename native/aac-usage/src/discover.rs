@@ -714,6 +714,11 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
             }
             continue;
         }
+        // A root its probe found absent is not resolved or stat'ed again: past a link, that could be
+        // a mount that does not answer (FIX-ROUND-BIG 9).
+        if collector.absent_roots.contains(&(kind.to_string(), path.clone())) {
+            continue;
+        }
         let real = realpath(&path);
         if !fsx::exists(&real) || !seen.insert(real.clone()) {
             continue;
