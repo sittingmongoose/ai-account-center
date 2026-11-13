@@ -66,7 +66,9 @@ function intensity(ms, rand) {
 
 export function analyticsFixture({ range = '7d', now = Date.now(), accounts = [], days = null } = {}) {
 	// with the history store: 90D, All (everything kept, here 120 days) and longer custom ranges
-	const span = range === '24h' ? D : range === '30d' || range === 'custom' ? 30 * D : range === '90d' ? 90 * D : range === 'all' ? 120 * D : 7 * D;
+	// a custom range answers the days it asked for (the history store keeps them)
+	const customFrom = range === 'custom' && days?.from ? Date.parse(`${days.from}T00:00:00Z`) : NaN;
+	const span = range === '24h' ? D : range === '30d' ? 30 * D : range === 'custom' ? (Number.isFinite(customFrom) ? Math.max(D, now - customFrom + D) : 30 * D) : range === '90d' ? 90 * D : range === 'all' ? 120 * D : 7 * D;
 	const to = Math.floor(now / H) * H + H;
 	const from = to - span;
 	const rand = seeded(Math.floor(now / D));
