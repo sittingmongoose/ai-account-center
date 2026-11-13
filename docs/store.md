@@ -888,6 +888,10 @@ computer, tool, session, route, model, effort and account; that tuple is its ded
 row is keyed by tool and session key; a mirrored log is one session. `loggedCostUsd` (what the tool
 logged) is kept apart from `costUsd` and `fallbackCostUsd` (computed by the server). Per-message
 records (`messages[]`) are reserved and refused with `not_supported` until their table is built.
+Roots are diagnostics: a root names its `origin` (`default`, `env`, `tool_config`, `t3_instance`,
+`ccs_instance`, `extra`, or the usage scanner's `signature` and `experiment`) and its state, which for a
+root alone may be `link_unreadable` or `link_unreachable`. `newestMtime` is an ISO UTC time or epoch
+milliseconds; a session's folder is at most 1,024 characters, home written as `~`.
 Every label a report carries (model, route, account, target, folder) is checked with the shared AAC
 secret policy (`aac_store::secret_policy`, [secret-policy.md](secret-policy.md)): a report holding a
 credential or an email address is refused whole, before anything reaches the log.
