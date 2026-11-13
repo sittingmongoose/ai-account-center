@@ -516,6 +516,10 @@
         "from",
         "at"
       ]
+    },
+    "unknownModel": {
+      "description": "True when the writer found model.id missing from catalog/models.json (agent-report 1.6). Optional; absent means false. The run is still read and counted.",
+      "type": "boolean"
     }
   },
   "required": [

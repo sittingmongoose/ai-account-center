@@ -108,6 +108,12 @@ export interface RunDoc extends DocHead {
   /** Task-specific numbers read by catalog measures; unknown stays null. */
   metrics: Record<string, number | null>;
   imported: { from: string; at: string } | null;
+  /**
+   * The writer marked the model id as one the catalog does not know (agent-report 1.6). Absent reads
+   * as false. Informational: the run is read and counted like any other, and the Scoreboard names a
+   * model the catalog lacks in its catalog Source whether or not the writer marked it.
+   */
+  unknownModel: boolean;
 }
 
 function num(value: unknown, field: string): number | null {
@@ -272,5 +278,6 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
       from: text(i.from, 'imported.from', 300),
       at: iso(i.at, 'imported.at'),
     })),
+    unknownModel: bool(doc.unknownModel, 'unknownModel', false),
   };
 }
