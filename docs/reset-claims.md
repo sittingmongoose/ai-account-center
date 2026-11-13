@@ -191,6 +191,8 @@ web session for inventory, verifying its account, email and organization before
 reading grants. A web/OAuth account, email or organization mismatch fails closed
 as `identity-unconfirmed`: public rows remain list-only, even if OAuth inventory
 would work. A missing or unavailable web session can still use the OAuth fallback.
+Normal usage collection retains its verified saved-cookie fallback when Desktop
+last selected another organization; reset reads and claims fail closed instead.
 Cookies and tokens stay on Windows; exact-grant confirmation and the
 OAuth claim transport are unchanged. A throttled inventory stays unavailable and
 shows a rate-limit explanation, including when no public reset rows are present.

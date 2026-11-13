@@ -1115,7 +1115,7 @@ class WebClient:
                 pass
 
 
-def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, expected_email=None, profile_root=None):
+def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, expected_email=None, profile_root=None, fail_closed=False):
     """The profile's existing web session, bound to the same OAuth account and org.
 
     Cookies stay on Windows. Private reset reads need the full provider inventory,
@@ -1128,7 +1128,11 @@ def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, 
         try:
             cookies = live_session_cookies(profile_root, organization_uuid)
         except WebIdentityMismatch:
-            raise
+            if fail_closed:
+                raise
+            # Normal usage keeps its verified capsule fallback when Desktop
+            # last selected another org. Reset execution must reject instead.
+            cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
         except UsageUnavailable:
             cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
     else:
@@ -1359,7 +1363,7 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 # OAuth token used for an explicitly confirmed claim.
                 verify_login()
                 try:
-                    web = verified_web_client(profile_id, account_uuid, organization["uuid"], home, expected, profile_root)
+                    web = verified_web_client(profile_id, account_uuid, organization["uuid"], home, expected, profile_root, fail_closed=True)
                     usage = web.get("/api/organizations/" + organization["uuid"] + "/usage?cedar_ember=1")
                 except WebIdentityMismatch:
                     # The owner's policy is fail closed on any web/OAuth

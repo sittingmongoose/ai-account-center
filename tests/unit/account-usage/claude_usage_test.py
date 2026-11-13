@@ -888,6 +888,38 @@ class WindowTests(unittest.TestCase):
 
 
 class WebExtraTests(unittest.TestCase):
+    def test_live_org_selection_conflict_keeps_usage_fallback_but_blocks_reset(self):
+        for private in (False, True):
+            with self.subTest(private_reset=private):
+                saved = (ACCOUNT, cache())
+                oauth = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+                web = mock.Mock()
+                web.get.side_effect = [self.web_account(), ResetReadIdentityTests().payload(),
+                                       {"amount": 0, "currency": "USD"}]
+                with mock.patch.object(usage.sys, "platform", "win32"), \
+                        mock.patch.object(usage, "resolve_profile_path", return_value=Path("fixture-root")), \
+                        mock.patch.object(usage, "decrypt_cache", return_value=saved), \
+                        mock.patch.object(usage, "Client", return_value=oauth), \
+                        mock.patch.object(usage, "live_session_cookies", side_effect=usage.WebIdentityMismatch()), \
+                        mock.patch.object(usage, "capsule_cookies", return_value=self.capsule()["cookies"]) as capsule, \
+                        mock.patch.object(usage, "WebClient", return_value=web):
+                    if private:
+                        result = usage.reset_host({"action": "read", "profile": "fixture",
+                                                   "expectedEmail": EMAIL, "host": "windows:fixture"})
+                    else:
+                        result = usage.collect("fixture", "windows", expected_email=EMAIL)
+                if private:
+                    self.assertEqual(result, {"unavailable": True, "reason": "identity-unconfirmed"})
+                    capsule.assert_not_called()
+                    web.get.assert_not_called()
+                    self.assertEqual([route for route, _ in oauth.calls], ["/api/oauth/profile"])
+                else:
+                    self.assertEqual(result["status"], "ok")
+                    self.assertEqual(result["optionalExtras"]["resetCredits"], "ok")
+                    self.assertEqual(next(w for w in result["windows"] if w["key"] == "reset_credits_available")["remaining"], 1)
+                    capsule.assert_called_once()
+                    self.assertEqual(web.get.call_count, 3)
+
     def capsule(self, **overrides):
         return {"schemaVersion": 1, "profileId": "gmail", "email": EMAIL,
                 "accountUuid": ACCOUNT, "capturedAt": "2020-01-01T00:00:00Z", "cookies": [
