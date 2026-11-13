@@ -188,8 +188,10 @@ server read before prepare; a cached observation alone cannot open a confirmatio
 The private inventory is read even if the public usage reading has no reset rows.
 Claude uses the saved Windows OAuth identity and prefers that profile's existing
 web session for inventory, verifying its account, email and organization before
-reading grants. If the web session is unavailable, the OAuth inventory remains the
-fallback. Cookies and tokens stay on Windows; exact-grant confirmation and the
+reading grants. A web/OAuth account, email or organization mismatch fails closed
+as `identity-unconfirmed`: public rows remain list-only, even if OAuth inventory
+would work. A missing or unavailable web session can still use the OAuth fallback.
+Cookies and tokens stay on Windows; exact-grant confirmation and the
 OAuth claim transport are unchanged. A throttled inventory stays unavailable and
 shows a rate-limit explanation, including when no public reset rows are present.
 Reset verification uses the same normalized usage windows as the dashboard.

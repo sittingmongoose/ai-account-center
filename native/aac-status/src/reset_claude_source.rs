@@ -138,6 +138,7 @@ pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Va
         match raw["reason"].as_str() {
             Some("rate-limited") => return Err("rate-limited"),
             Some("signed-out") => return Err("signed-out"),
+            Some("identity-unconfirmed") => return Err("identity-unconfirmed"),
             _ => {}
         }
     }

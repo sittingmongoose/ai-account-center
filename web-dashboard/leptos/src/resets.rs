@@ -836,6 +836,32 @@ mod inventory_read_note_tests {
     use super::*;
 
     #[test]
+    fn unconfirmed_web_identity_keeps_public_rows_list_only_and_explains_why() {
+        let load = Load::Ready(Inventory {
+            status: "unavailable".into(),
+            reason: "identity-unconfirmed".into(),
+            ..Default::default()
+        });
+        let (text, bad) = inventory_read_note(&load, "claude").unwrap();
+        assert!(bad && text.contains("AAC couldn't confirm which account this is"));
+        let rows = rows_from_reading(
+            &[ReadingRow {
+                key: "fixture".into(),
+                state: "ready".into(),
+                left: 2,
+                count: 2,
+                ..Default::default()
+            }],
+            0.,
+        );
+        assert!(!rows.is_empty());
+        assert!(
+            rows.iter()
+                .all(|row| !row.claimable && row.grant_key.is_none())
+        );
+    }
+
+    #[test]
     fn empty_unavailable_inventory_explains_the_claude_rate_limit() {
         let load = Load::Ready(Inventory {
             status: "unavailable".into(),

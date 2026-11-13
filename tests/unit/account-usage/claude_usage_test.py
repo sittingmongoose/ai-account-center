@@ -1814,7 +1814,7 @@ class ResetWebInventoryTests(unittest.TestCase):
                 self.web.get.side_effect = [wrong, self.payload]
                 self.oauth.responses = [profile(), usage.UsageUnavailable("rate_limited", 1800)]
                 result = usage.reset_host(self.request)
-                self.assertEqual(result, {"unavailable": True, "reason": "rate-limited"})
+                self.assertEqual(result, {"unavailable": True, "reason": "identity-unconfirmed"})
                 self.assertEqual(self.web.get.call_count, 1)
 
     def test_web_unavailable_keeps_the_verified_oauth_only_path(self):
@@ -1824,6 +1824,43 @@ class ResetWebInventoryTests(unittest.TestCase):
         self.assertEqual(result["raw"], self.payload["cedar_ember"])
         self.assertEqual([route for route, _ in self.oauth.calls],
                          ["/api/oauth/profile", "/api/oauth/usage?cedar_ember=1"])
+
+    def test_web_identity_mismatch_blocks_even_valid_oauth_inventory(self):
+        for wrong in ({**self.web_account, "uuid": OTHER}, {**self.web_account, "email_address": OTHER_EMAIL},
+                      {**self.web_account, "memberships": [{"organization": {"uuid": OTHER}}]}):
+            with self.subTest(mismatch=wrong):
+                self.oauth.calls.clear()
+                self.oauth.responses = [profile(), self.payload]
+                self.web.get.side_effect = [wrong]
+                result = usage.reset_host(self.request)
+                self.assertEqual(result, {"unavailable": True, "reason": "identity-unconfirmed"})
+                self.assertEqual([route for route, _ in self.oauth.calls], ["/api/oauth/profile"])
+
+    def test_web_identity_mismatch_blocks_claim_even_with_valid_oauth_inventory(self):
+        for wrong in ({**self.web_account, "uuid": OTHER},
+                      {**self.web_account, "memberships": [{"organization": {"uuid": OTHER}}]}):
+            with self.subTest(mismatch=wrong):
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                self.oauth.responses = [profile(), self.payload]
+                self.web.get.side_effect = [wrong]
+                self.oauth.opener = mock.Mock()
+                response = mock.MagicMock()
+                response.__enter__.return_value = response
+                response.read.return_value = b'{"result":"reset"}'
+                self.oauth.opener.open.return_value = response
+                self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+                self.oauth.opener.open.assert_not_called()
+
+    def test_conflicting_live_cookie_identity_does_not_try_capsule_or_oauth_usage(self):
+        with mock.patch.object(usage, "live_session_cookies", side_effect=usage.WebIdentityMismatch()), \
+                mock.patch.object(usage, "capsule_cookies") as capsule:
+            self.oauth.responses = [profile(), self.payload]
+            result = usage.reset_host(self.request)
+        self.assertEqual(result, {"unavailable": True, "reason": "identity-unconfirmed"})
+        capsule.assert_not_called()
+        self.assertEqual([route for route, _ in self.oauth.calls], ["/api/oauth/profile"])
 
     def test_dynamic_fable_usage_verifies_the_grants_legacy_refill_bucket(self):
         self.payload["limits"] = [WindowTests().fable(percent=37)]

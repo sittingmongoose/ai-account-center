@@ -66,6 +66,12 @@ class UsageUnavailable(Exception):
                             not isinstance(retry_after, bool) and math.isfinite(retry_after) and retry_after >= 0 else None)
 
 
+class WebIdentityMismatch(UsageUnavailable):
+    """A conflicting web identity must never become an OAuth-only claim."""
+    def __init__(self):
+        super().__init__("identity_unconfirmed")
+
+
 def retry_after_seconds(value):
     """Only a bounded provider delay leaves the HTTP boundary, never its body."""
     if not isinstance(value, str) or len(value) > 128:
@@ -755,7 +761,7 @@ def _validate_cookie_rows(rows, organization_uuid):
         if name == "sessionKey" and not (cookie.get("is_secure") == 1 and cookie.get("is_httponly") == 1):
             raise UsageUnavailable()
         if name == "lastActiveOrg" and token != organization_uuid:
-            raise UsageUnavailable()
+            raise WebIdentityMismatch()
         if name in seen:
             # Native bootstrap can retain a Safari-imported org cookie and
             # create its own variant. Only duplicate public org selectors
@@ -784,10 +790,12 @@ def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None, expe
         raise UsageUnavailable()
     capsule = json.loads(unprotect(raw, expected_length=None))
     if (not isinstance(capsule, dict) or capsule.get("schemaVersion") != 1 or
-        capsule.get("profileId") != profile_id or capsule.get("email") != expected or
-        capsule.get("accountUuid") != account_uuid or not isinstance(capsule.get("cookies"), list) or
+        not isinstance(capsule.get("cookies"), list) or
         len(capsule["cookies"]) > 20):
         raise UsageUnavailable()
+    if (capsule.get("profileId") != profile_id or capsule.get("email") != expected or
+            capsule.get("accountUuid") != account_uuid):
+        raise WebIdentityMismatch()
     return _validate_cookie_rows(capsule["cookies"], organization_uuid)
 
 
@@ -1119,6 +1127,8 @@ def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, 
     if profile_root is not None:
         try:
             cookies = live_session_cookies(profile_root, organization_uuid)
+        except WebIdentityMismatch:
+            raise
         except UsageUnavailable:
             cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
     else:
@@ -1126,14 +1136,15 @@ def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, 
     client = WebClient(cookies, organization_uuid)
     account = client.get("/api/account")
     if account.get("uuid") != account_uuid or account.get("email_address") != expected:
-        raise UsageUnavailable()
+        raise WebIdentityMismatch()
     memberships = account.get("memberships")
     if not isinstance(memberships, list) or len(memberships) > 128:
-        raise UsageUnavailable()
-    organizations = {membership["organization"].get("uuid") for membership in memberships
-        if isinstance(membership, dict) and isinstance(membership.get("organization"), dict)}
+        raise WebIdentityMismatch()
+    organizations = {membership["organization"]["uuid"] for membership in memberships
+        if isinstance(membership, dict) and isinstance(membership.get("organization"), dict)
+        and isinstance(membership["organization"].get("uuid"), str)}
     if organization_uuid not in organizations:
-        raise UsageUnavailable()
+        raise WebIdentityMismatch()
     return client
 
 
@@ -1350,6 +1361,10 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 try:
                     web = verified_web_client(profile_id, account_uuid, organization["uuid"], home, expected, profile_root)
                     usage = web.get("/api/organizations/" + organization["uuid"] + "/usage?cedar_ember=1")
+                except WebIdentityMismatch:
+                    # The owner's policy is fail closed on any web/OAuth
+                    # identity disagreement, even if OAuth inventory works.
+                    raise
                 except Exception:
                     # OAuth-only sign-ins retain their original read path.
                     pass
@@ -1406,7 +1421,10 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             return result
         raise UsageUnavailable("needs_sign_in")
     except UsageUnavailable as error:
-        result["status"] = "error" if error.status == "rate_limited" else error.status
+        result["status"] = ("error" if error.status == "rate_limited" else
+                            "unavailable" if error.status == "identity_unconfirmed" else error.status)
+        if error.status == "identity_unconfirmed":
+            result["resetReason"] = "identity-unconfirmed"
         if error.status == "rate_limited":
             cooldown["failureCode"] = "rate_limited"
             if error.retry_after is not None:
@@ -1445,6 +1463,8 @@ def _reset_host(request, dispatch):
                          private_reset_sink=captured.append, expected_saved_binding=request.get("expectedSavedBinding"),
                          expected_saved_organization=request.get("expectedSavedOrganization"))
         if result.get("status") != "ok" or len(captured) != 1:
+            if result.get("resetReason") == "identity-unconfirmed":
+                return {"unavailable": True, "reason": "identity-unconfirmed"}
             if result.get("failureCode") == "rate_limited":
                 return {"unavailable": True, "reason": "rate-limited"}
             if result.get("status") == "needs_sign_in":
