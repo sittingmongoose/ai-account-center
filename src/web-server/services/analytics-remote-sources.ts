@@ -13,12 +13,20 @@ import {
   ANALYTICS_SCAN_FAILURE_CAUSES,
   AnalyticsHelperIntegrityError,
   AnalyticsRemoteTransportError,
+  NO_READER_TOOLS,
   REMOTE_ANALYTICS_HOSTS,
+  parseAnalyticsDiscovery,
+  parseAnalyticsSessions,
+  runAnalyticsRemoteScan,
   fixedAnalyticsRemoteAliases,
   hasClaudeReplacementMetadata,
-  runAnalyticsRemoteHelper,
   resolveAnalyticsRemoteHosts,
+  type AnalyticsDiscoveryKind,
+  type AnalyticsNoReaderTool,
+  type AnalyticsPresenceTool,
+  type AnalyticsReader,
   type AnalyticsRemoteAliases,
+  type AnalyticsRemoteDiscovery,
   type AnalyticsRemoteFingerprint,
   type AnalyticsRemoteHost,
   type AnalyticsRemoteKind,
@@ -28,14 +36,16 @@ import {
   type AnalyticsRemoteRow,
   type AnalyticsRemoteSessionRow,
   type AnalyticsScanFailureCause,
+  type AnalyticsSessionEvidence,
 } from './analytics-remote-transport';
+import { readAnalyticsCaptureSettings } from './analytics-capture-settings';
 import { readDashboardPreferences } from './dashboard-preferences';
 import { runBounded } from '../usage/collector-concurrency';
 import { localClaudeLogNames, type ClaudeLogNames } from './analytics-claude-log-names';
 import { cellsFromCompact } from '../usage/activity-cells';
 import type { AccountAnalyticsActivityProvider } from './account-analytics-types';
 
-export type AnalyticsSourceTool = AnalyticsTool;
+export type AnalyticsSourceTool = AnalyticsTool | AnalyticsNoReaderTool;
 export type AnalyticsSourceState =
   | 'ok'
   | 'cached'
@@ -48,7 +58,21 @@ export type AnalyticsSourceState =
   /** Its logs were found and could not be read; nothing read earlier is kept (`cause`). */
   | 'unreadable'
   /** The computer's scan failed and nothing read earlier is kept (`cause`). */
-  | 'scan_failed';
+  | 'scan_failed'
+  /** The tool is installed here (its home, program or a T3 instance) but no log of it exists yet. */
+  | 'installed_no_logs'
+  /** The tool is here and Analytics has no usage reader for it (`cause` says why). */
+  | 'no_reader';
+
+/** What discovery found for one tool on one computer. */
+export interface AnalyticsSourceCounts {
+  roots: number;
+  filesFound: number;
+  filesRead: number;
+  filesFailed: number;
+  /** ISO time of the newest log found, null when none. */
+  newestMtime: string | null;
+}
 
 export interface AnalyticsRemoteSourceState {
   tool: AnalyticsSourceTool;
@@ -59,6 +83,85 @@ export interface AnalyticsRemoteSourceState {
   detail: string | null;
   /** One fixed word: why this source is not read now (a scan failure cause, `read_failed`). */
   cause?: string | null;
+  /** Discovery's counts, and files found per root origin (no paths). */
+  counts?: AnalyticsSourceCounts;
+  origins?: Array<{ origin: string; files: number }>;
+  /** `python-fallback` with its cause when the Rust scanner did not read this computer. */
+  reader?: string | null;
+}
+
+function sourceCounts(kind: AnalyticsDiscoveryKind | undefined): {
+  counts?: AnalyticsSourceCounts;
+  origins?: Array<{ origin: string; files: number }>;
+} {
+  if (!kind) return {};
+  const origins = new Map<string, number>();
+  for (const root of kind.roots)
+    origins.set(root.origin, (origins.get(root.origin) ?? 0) + root.counts.filesFound);
+  return {
+    counts: {
+      ...kind.counts,
+      newestMtime:
+        kind.counts.newestMtime === null ? null : new Date(kind.counts.newestMtime).toISOString(),
+    },
+    origins: [...origins].map(([origin, files]) => ({ origin, files })),
+  };
+}
+
+const NO_READER_LABELS: Record<AnalyticsNoReaderTool, string> = {
+  cursor: 'Cursor',
+  'gemini-cli': 'Gemini CLI',
+  opencode: 'OpenCode',
+  qwen: 'Qwen Code',
+  kimi: 'Kimi Code',
+  grok: 'Grok CLI',
+  kiro: 'Kiro CLI',
+  pi: 'Pi',
+  fx: 'fx',
+};
+
+/** The tools without a usage reader that the computer's last presence read found, as `no_reader`. */
+export function noReaderStates(
+  host: AnalyticsRemoteHost,
+  tools: AnalyticsRemoteDiscovery['tools'],
+  at: string | null
+): AnalyticsRemoteSourceState[] {
+  const states: AnalyticsRemoteSourceState[] = [];
+  for (const tool of NO_READER_TOOLS) {
+    const entry: AnalyticsPresenceTool | undefined = tools?.[tool];
+    if (!entry?.installed) continue;
+    const label = NO_READER_LABELS[tool];
+    states.push({
+      tool,
+      host,
+      state: 'no_reader',
+      lastScanAt: at,
+      rowCount: 0,
+      detail:
+        entry.cause === 'no_local_usage_records'
+          ? `${label} keeps its chats on this computer without token counts; its usage is kept by ${label}, and its quota shows on Home`
+          : `${label} is on this computer${entry.counts.filesFound ? ` with ${entry.counts.filesFound} session files` : ''}; Analytics has no usage reader for it yet`,
+      cause: entry.cause,
+      counts: {
+        roots: 0,
+        filesFound: entry.counts.filesFound,
+        filesRead: 0,
+        filesFailed: 0,
+        newestMtime:
+          entry.counts.newestMtime === null
+            ? null
+            : new Date(entry.counts.newestMtime).toISOString(),
+      },
+    });
+  }
+  return states;
+}
+
+/** The label a fallback answer carries into every cell of its computer. */
+function readerLabel(reader: AnalyticsReader | undefined): string | null {
+  return reader?.name === 'python-fallback'
+    ? `python-fallback:${reader.cause ?? 'binary_failed'}`
+    : null;
 }
 
 /** A host's last failed scan: its fixed cause, the helper's exit code and when it happened. */
@@ -180,6 +283,14 @@ interface RemoteCache {
    * after a restart) until a scan answers again, which clears it.
    */
   lastFailure?: AnalyticsHostFailure;
+  /** Where each kind's logs were found, and the tools without a reader this host has. */
+  discovery?: AnalyticsRemoteDiscovery;
+  /** When `discovery.tools` was read. */
+  toolsAt?: string;
+  /** Identity evidence per session key (full hash, reported cwd), bounded. */
+  sessions?: Record<string, AnalyticsSessionEvidence>;
+  /** Which reader answered last (`python-fallback:<cause>` when the scanner did not). */
+  reader?: string | null;
 }
 
 function cacheFile(cacheDir: string, host: AnalyticsRemoteHost): string {
@@ -210,6 +321,17 @@ function loadCache(file: string): RemoteCache {
       (value.settled !== undefined && typeof value.settled !== 'boolean')
     )
       return blankCache();
+    // Discovery, evidence and the reader label are diagnostics: damaged entries are dropped.
+    value.discovery = parseAnalyticsDiscovery(value.discovery);
+    value.sessions = parseAnalyticsSessions(value.sessions);
+    if (value.toolsAt !== undefined && !Number.isFinite(Date.parse(String(value.toolsAt))))
+      value.toolsAt = undefined;
+    if (
+      value.reader !== undefined &&
+      value.reader !== null &&
+      !(typeof value.reader === 'string' && /^python-fallback:[a-z_:]{1,40}$/.test(value.reader))
+    )
+      value.reader = undefined;
     // The last failure is a diagnostic: a damaged one is dropped, never trusted.
     const failure = value.lastFailure as Partial<AnalyticsHostFailure> | undefined;
     value.lastFailure =
@@ -403,6 +525,7 @@ const READ_WORDS: Partial<Record<AnalyticsSourceState, string>> = {
   ok: 'usage',
   no_usage: 'no usage in range',
   not_installed: 'no usage logs',
+  installed_no_logs: 'the tool but no logs yet',
 };
 
 /**
@@ -436,10 +559,10 @@ function cachedHostSources(
   detail: string,
   failure?: AnalyticsHostFailure
 ): {
-  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
+  results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 } {
-  const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
+  const results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
   for (const tool of REMOTE_TARGETS[host]) {
     const kept = cached.rows.filter((row) => row.k === tool && inWindow(row, minDateMs));
@@ -449,6 +572,7 @@ function cachedHostSources(
     const read = cached.kinds?.[tool];
     const failed = standingFailure(cached, tool, failure);
     const why = failed ? `${scanFailureText(failed.cause)} (${failed.at})` : detail;
+    const found = { ...sourceCounts(cached.discovery?.kinds[tool]), reader: cached.reader ?? null };
     if (kept.length || keptSessions.length) {
       results.push({ tool, data: toWorkerResult(kept, keptSessions, tool, host) });
       states.push({
@@ -459,6 +583,7 @@ function cachedHostSources(
         rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
         detail: `${why}; showing previously read aggregates`,
         ...(failed ? { cause: failed.cause } : {}),
+        ...found,
       });
     } else if (failed) {
       const words = read ? READ_WORDS[read.state] : undefined;
@@ -473,20 +598,22 @@ function cachedHostSources(
             ? `${why}; the last scan that worked (${read.lastScanAt}) found ${words}`
             : why,
         cause: failed.cause,
+        ...found,
       });
     } else {
       states.push({
         tool,
         host,
         state:
-          read?.state === 'no_usage'
-            ? 'no_usage'
-            : read?.state === 'not_installed'
-              ? 'not_installed'
-              : 'unavailable',
+          read?.state === 'no_usage' ||
+          read?.state === 'not_installed' ||
+          read?.state === 'installed_no_logs'
+            ? read.state
+            : 'unavailable',
         lastScanAt: read?.lastScanAt ?? null,
         rowCount: 0,
         detail,
+        ...found,
       });
     }
   }
@@ -498,7 +625,7 @@ type HostRows = Pick<RemoteCache, 'rows' | 'srows' | 'fingerprints'>;
 /** Local workers may finish after the remote scan; re-elect before publishing. */
 function mirrorReconciler(
   parts: Map<AnalyticsRemoteHost, HostRows>,
-  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>,
+  results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>,
   states: AnalyticsRemoteSourceState[],
   inventory: () => ClaudeLogNames
 ): () => void {
@@ -519,7 +646,7 @@ function mirrorReconciler(
  */
 function selectClaudeMirrors(
   parts: Map<AnalyticsRemoteHost, HostRows>,
-  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>,
+  results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>,
   states: AnalyticsRemoteSourceState[],
   local: ClaudeLogNames
 ): void {
@@ -583,11 +710,11 @@ export function loadAnalyticsRemoteCachedSources(
 ): {
   fetchedAt: string | undefined;
   reconcileClaudeMirrors: () => void;
-  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
+  results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 } {
   const cacheDir = deps.cacheDir ?? path.join(getCcsDir(), 'cache');
-  const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
+  const results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
   let fetchedAt: string | undefined;
   const parts = new Map<AnalyticsRemoteHost, HostRows>();
@@ -603,6 +730,7 @@ export function loadAnalyticsRemoteCachedSources(
     const part = cachedHostSources(host, cached, minDateMs, 'remote scan timed out');
     results.push(...part.results);
     states.push(...part.states);
+    states.push(...noReaderStates(host, cached.discovery?.tools, cached.toolsAt ?? null));
   }
   const reconcileClaudeMirrors = mirrorReconciler(
     parts,
@@ -702,7 +830,8 @@ async function scanHost(
   cached: RemoteCache,
   extraRoots: Partial<Record<AnalyticsRemoteKind, string[]>>,
   minDateMs: number,
-  failure: ScanFailure
+  failure: ScanFailure,
+  captureCwd = true
 ): Promise<{
   response: AnalyticsRemoteResponse;
   cutKinds: Set<AnalyticsRemoteKind>;
@@ -718,7 +847,15 @@ async function scanHost(
     try {
       answers.set(
         group,
-        await runHelper(alias, host, { kinds: group, minDateMs, fingerprints, extraRoots })
+        await runHelper(alias, host, {
+          kinds: group,
+          minDateMs,
+          fingerprints,
+          extraRoots,
+          // One call per scan also says which tools without a reader the computer has.
+          ...(group === groups[0] ? { presence: true } : {}),
+          ...(captureCwd ? {} : { cwd: false }),
+        })
       );
     } catch (error) {
       if (error instanceof AnalyticsHelperIntegrityError) failure.damaged = true;
@@ -737,6 +874,8 @@ async function scanHost(
     kinds: {} as AnalyticsRemoteResponse['kinds'],
     rows: [],
     srows: [],
+    discovery: { kinds: {} },
+    sessions: {},
   };
   const cutKinds = new Set<AnalyticsRemoteKind>();
   const failedKinds = new Set<AnalyticsRemoteKind>();
@@ -758,6 +897,14 @@ async function scanHost(
         merged.truncated = true;
       }
       if (kind === 'omp' && answer.discoveryTruncated === true) merged.discoveryTruncated = true;
+      const found = answer.discovery?.kinds[kind];
+      if (found && merged.discovery) merged.discovery.kinds[kind] = found;
+      if (answer.discovery?.tools && merged.discovery)
+        merged.discovery.tools = answer.discovery.tools;
+      if (answer.sessions) Object.assign(merged.sessions ?? {}, answer.sessions);
+      // One fallback answer labels the computer: its other kinds are read the older way too.
+      if (answer.reader && (!merged.reader || answer.reader.name === 'python-fallback'))
+        merged.reader = answer.reader;
       merged.rows.push(...answer.rows.filter((row) => row.k === kind));
       merged.srows.push(...(answer.srows ?? []).filter((row) => row.k === kind));
     }
@@ -773,7 +920,7 @@ export async function loadAnalyticsRemoteSources(
 ): Promise<{
   fetchedAt: string;
   reconcileClaudeMirrors: () => void;
-  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
+  results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 }> {
   const now = deps.now ?? Date.now;
@@ -781,8 +928,14 @@ export async function loadAnalyticsRemoteSources(
   const hosts = await (deps.hosts ?? resolveAnalyticsRemoteHosts)().catch(() =>
     fixedAnalyticsRemoteAliases()
   );
-  const runHelper = deps.runHelper ?? runAnalyticsRemoteHelper;
-  const results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }> = [];
+  const runHelper = deps.runHelper ?? runAnalyticsRemoteScan;
+  let captureCwd = true;
+  try {
+    captureCwd = readAnalyticsCaptureSettings().cwd;
+  } catch {
+    /* Unreadable settings keep the default. */
+  }
+  const results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }> = [];
   const states: AnalyticsRemoteSourceState[] = [];
   const jobs: Array<Promise<void>> = [];
   const parts = new Map<AnalyticsRemoteHost, HostRows>();
@@ -800,7 +953,7 @@ export async function loadAnalyticsRemoteSources(
           return (
             !deps.force &&
             read &&
-            ['ok', 'no_usage', 'not_installed'].includes(read.state) &&
+            ['ok', 'no_usage', 'not_installed', 'installed_no_logs'].includes(read.state) &&
             age >= 0 &&
             age < 5 * 60_000
           );
@@ -813,7 +966,7 @@ export async function loadAnalyticsRemoteSources(
         );
         states.push(
           ...cachedHostSources(host, cached, minDateMs, 'cached remote scan').states.filter(
-            (source) => recentKinds.includes(source.tool)
+            (source) => recentKinds.includes(source.tool as AnalyticsRemoteKind)
           )
         );
         if (kinds.length === 0) {
@@ -822,6 +975,7 @@ export async function loadAnalyticsRemoteSources(
             rows: cached.rows.filter((row) => inWindow(row, minDateMs)),
             srows: cached.srows.filter((row) => sessionInWindow(row, minDateMs)),
           });
+          states.push(...noReaderStates(host, cached.discovery?.tools, cached.toolsAt ?? null));
           return;
         }
         const alias = hosts[host];
@@ -848,7 +1002,8 @@ export async function loadAnalyticsRemoteSources(
           cached,
           remoteExtraRoots(host, kinds),
           minDateMs,
-          failure
+          failure,
+          captureCwd
         );
         if (!scan) {
           parts.set(host, {
@@ -881,7 +1036,12 @@ export async function loadAnalyticsRemoteSources(
             failure.damaged ? undefined : lastFailure
           );
           results.push(...part.results.filter((source) => !recentKinds.includes(source.tool)));
-          states.push(...part.states.filter((source) => !recentKinds.includes(source.tool)));
+          states.push(
+            ...part.states.filter(
+              (source) => !recentKinds.includes(source.tool as AnalyticsRemoteKind)
+            )
+          );
+          states.push(...noReaderStates(host, cached.discovery?.tools, cached.toolsAt ?? null));
           return;
         }
         const { response, cutKinds, failedKinds, olderClaude } = scan;
@@ -958,12 +1118,29 @@ export async function loadAnalyticsRemoteSources(
             state: partial
               ? 'cached'
               : kind.state === 'not_installed'
-                ? 'not_installed'
+                ? response.discovery?.kinds[tool]?.installed === true
+                  ? 'installed_no_logs'
+                  : 'not_installed'
                 : merged.some((row) => row.k === tool)
                   ? 'ok'
                   : 'no_usage',
           };
         }
+        // Discovery of the kinds this scan visited replaces theirs; the rest keep their last.
+        const discovery: AnalyticsRemoteDiscovery = {
+          kinds: { ...cached.discovery?.kinds },
+          ...(cached.discovery?.tools ? { tools: cached.discovery.tools } : {}),
+        };
+        for (const tool of kinds) {
+          const found = response.discovery?.kinds[tool];
+          if (found) discovery.kinds[tool] = found;
+        }
+        let toolsAt = cached.toolsAt;
+        if (response.discovery?.tools) {
+          discovery.tools = response.discovery.tools;
+          toolsAt = scannedAt;
+        }
+        const reader = readerLabel(response.reader);
         const prints: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {
           ...freshPrints,
         };
@@ -982,6 +1159,12 @@ export async function loadAnalyticsRemoteSources(
         }
         await yieldTurn();
         parts.set(host, { rows: merged, srows: mergedSessions, fingerprints: prints });
+        // Identity evidence of the sessions still kept, newest answer first, bounded like the rows.
+        const keptKeys = new Set(mergedSessions.map((row) => row.s));
+        const sessions: Record<string, AnalyticsSessionEvidence> = {};
+        for (const source of [response.sessions ?? {}, cached.sessions ?? {}])
+          for (const [key, evidence] of Object.entries(source))
+            if (keptKeys.has(key) && !(key in sessions)) sessions[key] = evidence;
         try {
           saveCache(file, {
             version: CACHE_VERSION,
@@ -990,6 +1173,10 @@ export async function loadAnalyticsRemoteSources(
             srows: mergedSessions,
             lastScanAt: scannedAt,
             kinds: kindReads,
+            discovery,
+            ...(toolsAt ? { toolsAt } : {}),
+            sessions,
+            reader,
             // A kind whose call failed keeps the failure on record; a full answer clears it.
             ...(failedKinds.size
               ? {
@@ -1016,12 +1203,14 @@ export async function loadAnalyticsRemoteSources(
         } catch {
           /* Cache writes are best-effort; the rows are still served. */
         }
+        const firstState = states.length;
         for (const tool of kinds) {
           await yieldTurn();
           const rows = merged.filter((row) => row.k === tool);
           const srows = mergedSessions.filter((row) => row.k === tool);
           const kind = response.kinds[tool];
           const kindState = kind?.state ?? 'error';
+          const found = { ...sourceCounts(discovery.kinds[tool]), reader };
           if (tool === 'claude' && olderClaude) {
             if (rows.length || srows.length)
               results.push({ tool, data: toWorkerResult(rows, srows, tool, host) });
@@ -1039,13 +1228,17 @@ export async function loadAnalyticsRemoteSources(
             continue;
           }
           if (kindState === 'not_installed') {
+            const installed = response.discovery?.kinds[tool]?.installed === true;
             states.push({
               tool,
               host,
-              state: 'not_installed',
+              state: installed ? 'installed_no_logs' : 'not_installed',
               lastScanAt: scannedAt,
               rowCount: 0,
-              detail: 'no usage logs found on this host',
+              detail: installed
+                ? 'the tool is on this computer, but no log of it was found'
+                : 'no usage logs found on this host',
+              ...found,
             });
             continue;
           }
@@ -1140,6 +1333,13 @@ export async function loadAnalyticsRemoteSources(
                         : 'no usage recorded in the last 31 days',
           });
         }
+        // Every cell of this computer carries what discovery found for its tool, and the reader.
+        for (const entry of states.slice(firstState))
+          if (entry.host === host && !entry.counts)
+            Object.assign(entry, sourceCounts(discovery.kinds[entry.tool as AnalyticsRemoteKind]), {
+              reader,
+            });
+        states.push(...noReaderStates(host, discovery.tools, toolsAt ?? null));
         onHostScan?.(host, 'done');
       })()
     );

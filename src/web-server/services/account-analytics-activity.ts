@@ -23,9 +23,12 @@ import {
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
   type AnalyticsRemoteSourceState,
-  type AnalyticsSourceTool,
 } from './analytics-remote-sources';
-import { REMOTE_ANALYTICS_HOSTS, type AnalyticsRemoteHost } from './analytics-remote-transport';
+import {
+  REMOTE_ANALYTICS_HOSTS,
+  type AnalyticsRemoteHost,
+  type AnalyticsRemoteKind,
+} from './analytics-remote-transport';
 import { DASHBOARD_HOSTS, HOST_LABELS } from './dashboard-hosts';
 import {
   defaultAccountAnalyticsPricing,
@@ -113,7 +116,7 @@ type RemoteAnswer = {
   /** Re-elect mirrors against the inventory at publication, after local workers settle. */
   reconcileClaudeMirrors?: () => void;
   fetchedAt?: string;
-  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
+  results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
 };
 
@@ -212,6 +215,14 @@ const SOURCE_TOOL_ORDER = [
   'jsonl',
   'antigravity',
   'cursor',
+  'gemini-cli',
+  'opencode',
+  'qwen',
+  'kimi',
+  'grok',
+  'kiro',
+  'pi',
+  'fx',
 ];
 const SOURCE_HOST_ORDER: readonly string[] = DASHBOARD_HOSTS;
 function sortSourceEntries(entries: AccountAnalyticsSource[]): AccountAnalyticsSource[] {
@@ -1803,7 +1814,17 @@ export class AccountAnalyticsActivityService {
         }
       }
     }
-    entries.push(...fixedAnalyticsSourceEntries());
+    // Cursor's fixed "no local usage log" row stands in only where the scanner has not measured the
+    // computer; where it has, the computer's own presence answer says whether Cursor is there.
+    const measured = new Set(entries.filter((entry) => entry.counts).map((entry) => entry.host));
+    entries.push(
+      ...fixedAnalyticsSourceEntries().filter(
+        (fixed) =>
+          fixed.host === 'ubuntu' ||
+          (!measured.has(fixed.host) &&
+            !entries.some((entry) => entry.tool === fixed.tool && entry.host === fixed.host))
+      )
+    );
     return sortSourceEntries(entries);
   }
 

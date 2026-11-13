@@ -1319,8 +1319,12 @@ export function calendarView(A, R, now, monthGrid = true) {
 }
 
 // ---------------------------------------------------------------- included usage (activity.sources)
-const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor']];
-const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage', 'unreadable', 'scan_failed'];
+const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor'], ['gemini-cli', 'Gemini CLI'], ['opencode', 'OpenCode'], ['qwen', 'Qwen Code'], ['kimi', 'Kimi Code'], ['grok', 'Grok CLI'], ['kiro', 'Kiro CLI'], ['pi', 'Pi'], ['fx', 'fx']];
+/** Tools Analytics has no usage reader for: a row only where a computer reports them present. */
+const NO_READER_TOOLS = new Set(['cursor', 'gemini-cli', 'opencode', 'qwen', 'kimi', 'grok', 'kiro', 'pi', 'fx']);
+/** Where discovery found a tool's logs, in plain words (DESIGN 2's origins). */
+const ORIGIN_WORDS = { default: 'default folder', env: 'env var', tool_config: "the tool's config", t3_instance: 'T3 instance', ccs_instance: 'AAC profile', signature: 'other home', extra: 'saved extra' };
+const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage', 'unreadable', 'scan_failed', 'installed_no_logs', 'no_reader'];
 const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 const noLocalLog = r => r.state === 'unavailable' && /no local usage log/i.test(text(r.detail));
 const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
@@ -1353,20 +1357,46 @@ export function includedView(payload, now = Date.now()) {
       ? `${nologNames[0]} doesn't keep a local usage log; its quota readings still show on Home.`
       : `${andList(nologNames)} don't keep local usage logs; their quota readings still show on Home.`
     : `${andList(nologNames)} keep${nolog.length === 1 ? 's' : ''} no local usage log of ${nolog.length === 1 ? 'its' : 'their'} own; usage another tool routes through ${nolog.length === 1 ? 'it' : 'them'} still counts under ${nolog.length === 1 ? 'it' : 'them'}.`;
+  // Tools a computer has that Analytics cannot count: said in words, never left out.
+  const noRecords = tools.filter(([t]) => list.some(r => r.tool === t && r.state === 'no_reader' && r.cause === 'no_local_usage_records')).map(([, l]) => l);
+  const noReader = tools.filter(([t]) => list.some(r => r.tool === t && r.state === 'no_reader' && r.cause !== 'no_local_usage_records')).map(([, l]) => l);
+  const readerLine = [
+    noRecords.length ? `${andList(noRecords)} keep${noRecords.length === 1 ? 's' : ''} no local usage records; quota readings still show on Home.` : '',
+    noReader.length ? `${andList(noReader)} ${noReader.length === 1 ? 'is' : 'are'} installed, with no usage reader yet: ${noReader.length === 1 ? 'its' : 'their'} usage is not counted here.` : '',
+  ].filter(Boolean).join(' ');
   const line = [
     included.length ? `Includes ${andList(included)}${hosts.length ? ` on ${andList(hosts)}` : ''}.` : 'No usage log could be read yet.',
     nologLine,
+    readerLine,
   ].filter(Boolean).join(' ');
   const when = r => Date.parse(text(r.lastScanAt));
+  // "1,234 files in 3 folders (default folder 900, other home 334)"; the older reader says so.
+  const found = r => {
+    const c = r.counts;
+    const origins = Array.isArray(r.origins) ? r.origins.filter(o => o && ORIGIN_WORDS[o.origin] && Number.isInteger(o.files)) : [];
+    const parts = [];
+    if (c && Number.isInteger(c.filesFound)) {
+      const where = origins.length ? ` (${origins.map(o => `${ORIGIN_WORDS[o.origin]} ${nf0.format(o.files)}`).join(', ')})` : '';
+      parts.push(`${nf0.format(c.filesFound)} files found${Number.isInteger(c.roots) && c.roots > 0 ? ` in ${c.roots} folder${c.roots === 1 ? '' : 's'}` : ''}${where}.`);
+      if (Number.isInteger(c.filesFailed) && c.filesFailed > 0) parts.push(`${nf0.format(c.filesFailed)} could not be read.`);
+    }
+    if (typeof r.reader === 'string' && r.reader.startsWith('python-fallback')) parts.push('Read with the older Python reader: default folders and T3 homes only.');
+    return parts.join(' ');
+  };
   const events = r => Number.isInteger(r.rowCount) && r.rowCount >= 0 ? `${nf0.format(r.rowCount)} usage events kept` : '';
-  const cell = (r, id) => {
+  const cell = (r, id, tool) => {
+    if (!r && NO_READER_TOOLS.has(tool)) return { id, text: 'Not found', tone: 'quiet', tip: 'No sign of this tool on this computer, or the computer was read by the older reader.' };
     if (!r) return { id, text: 'Not read', tone: 'quiet', tip: 'This computer is not read for this tool.' };
     const t = when(r), last = finite(t) ? `Last scan ${timeTxt(t)}.` : 'Never scanned.';
     const why = text(r.detail) ? `${capFirst(r.detail)}. ` : '';
     if (r.state === 'scanning') return { id, text: 'Scanning…', tone: 'scanning', tip: `${why}${last}` };
-    if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: 'ok', tip: [events(r), last].filter(Boolean).join(' · ') };
+    if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: 'ok', tip: [events(r), found(r), last].filter(Boolean).join(' · ') };
     if (r.state === 'cached') return { id, text: finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Earlier records are shown until a scan finishes. ${last}` };
-    if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: `${why}${last}` };
+    if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
+    if (r.state === 'installed_no_logs') return { id, text: 'Installed, no logs yet', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
+    if (r.state === 'no_reader') return r.cause === 'no_local_usage_records'
+      ? { id, text: 'No local usage records', tone: 'quiet', tip: `${why}${found(r)}` }
+      : { id, text: 'No usage reader yet', tone: 'quiet', tip: `${why}${found(r)}` };
     if (r.state === 'scan_failed') return { id, text: 'Scan failed', tone: 'unavailable', tip: `${why}${last}` };
     if (r.state === 'unreadable') return { id, text: "Can't read", tone: 'unavailable', tip: `${why}${last}` };
     if (noLocalLog(r)) return { id, text: 'No usage log', tone: 'quiet', tip: 'This tool keeps no local usage log to read.' };
@@ -1374,7 +1404,7 @@ export function includedView(payload, now = Date.now()) {
     return { id, text: 'Unavailable', tone: 'unavailable', tip: `${why}${last}` };
   };
   const quiet = new Set(nolog.map(([t]) => t));
-  const rows = tools.filter(([t]) => !quiet.has(t)).map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h), h)) }));
+  const rows = tools.filter(([t]) => !quiet.has(t)).map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h), h, t)) }));
   const scanning = list.filter(r => r.state === 'scanning').length;
   const cached = list.filter(r => r.state === 'cached').length, down = list.filter(r => r.state === 'unavailable' && !noLocalLog(r)).length;
   const failed = list.filter(r => r.state === 'scan_failed').length, unreadable = list.filter(r => r.state === 'unreadable').length;

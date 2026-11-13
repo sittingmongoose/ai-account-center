@@ -298,6 +298,28 @@ test('a failed scan and unreadable logs say so with their cause, never a zero or
   assert.equal(hostProgress(payload({ sources: failed })).find(h => h.key === 'alexis').detail, 'unavailable');
 });
 
+test('discovery cells: installed without logs, no reader, what was found where, and the older reader named', () => {
+  const sources = [
+    { tool: 'codex', host: 'windows', state: 'ok', lastScanAt: at(1), rowCount: 9, detail: null, counts: { roots: 14, filesFound: 3552, filesRead: 3552, filesFailed: 0, newestMtime: at(1) }, origins: [{ origin: 'default', files: 1898 }, { origin: 'signature', files: 1654 }], reader: null },
+    { tool: 'claude', host: 'alexis', state: 'installed_no_logs', lastScanAt: at(1), rowCount: 0, detail: 'the tool is on this computer, but no log of it was found', reader: 'python-fallback:binary_not_built' },
+    { tool: 'cursor', host: 'windows', state: 'no_reader', cause: 'no_local_usage_records', lastScanAt: at(1), rowCount: 0, detail: 'Cursor keeps its chats on this computer without token counts', counts: { roots: 0, filesFound: 74, filesRead: 0, filesFailed: 0, newestMtime: null } },
+    { tool: 'gemini-cli', host: 'mac', state: 'no_reader', cause: 'no_reader_yet', lastScanAt: at(1), rowCount: 0, detail: 'Gemini CLI is on this computer with 3 session files', counts: { roots: 0, filesFound: 3, filesRead: 0, filesFailed: 0, newestMtime: null } },
+  ];
+  const inc = includedView(payload({ sources }), now);
+  const by = tool => Object.fromEntries(inc.rows.find(r => r.tool === tool).cells.map(c => [c.id, c]));
+  assert.equal(by('Claude Code').alexis.text, 'Installed, no logs yet');
+  assert.match(by('Claude Code').alexis.tip, /older Python reader/);
+  assert.match(by('Codex').windows.tip, /3,552 files found in 14 folders \(default folder 1,898, other home 1,654\)/);
+  assert.equal(by('Cursor').windows.text, 'No local usage records');
+  assert.equal(by('Cursor').mac.text, 'Not found');
+  assert.equal(by('Gemini CLI').mac.text, 'No usage reader yet');
+  // said in words, never left out of the numbers silently
+  assert.match(inc.line, /Cursor keeps no local usage records/);
+  assert.match(inc.line, /Gemini CLI is installed, with no usage reader yet/);
+  // neither is a failure flag
+  assert.doesNotMatch(inc.label, /failed|unavailable/);
+});
+
 test('hostProgress never calls a host whose every tool failed "read"', () => {
   const failed = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map(tool => ({ tool, host: 'windows', state: 'unavailable', lastScanAt: null, rowCount: 0, detail: 'remote scan failed' }));
   const mac = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map((tool, i) => ({ tool, host: 'mac', state: i < 2 ? 'ok' : 'scanning', lastScanAt: at(1), rowCount: i < 2 ? 5 : 0, detail: i < 2 ? null : 'the first scan is running' }));

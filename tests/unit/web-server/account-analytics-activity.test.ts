@@ -2638,10 +2638,60 @@ describe('native local analytics activity', () => {
     expect(
       cold.sources.filter((source) => source.tool === 'antigravity' && source.state === 'scanning')
     ).toHaveLength(DASHBOARD_HOSTS.length);
-    expect(cold.sources.filter((source) => source.tool === 'cursor')).toHaveLength(DASHBOARD_HOSTS.length);
+    expect(cold.sources.filter((source) => source.tool === 'cursor')).toHaveLength(
+      DASHBOARD_HOSTS.length
+    );
     gate.resolve([]);
     remote.resolve({ results: [], states: [] });
     await settled(service);
+  });
+
+  it('keeps the fixed Cursor row only for computers the scanner has not measured', async () => {
+    const measured = { roots: 1, filesFound: 3, filesRead: 3, filesFailed: 0, newestMtime: null };
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => ({
+        results: [],
+        states: [
+          // Nas1 was read by the scanner: its own answer says whether Cursor is there.
+          {
+            tool: 'codex',
+            host: 'nas1',
+            state: 'ok',
+            lastScanAt: null,
+            rowCount: 1,
+            detail: null,
+            counts: measured,
+          },
+          {
+            tool: 'cursor',
+            host: 'windows',
+            state: 'no_reader',
+            lastScanAt: null,
+            rowCount: 0,
+            detail: 'x',
+            cause: 'no_local_usage_records',
+            counts: measured,
+          },
+          // The Mac was read by the older reader: no measurement, the fixed row stands in.
+          { tool: 'codex', host: 'mac', state: 'ok', lastScanAt: null, rowCount: 1, detail: null },
+        ],
+      }),
+      requests: () => [],
+      loadWorker: async () => data('gpt-5.4', 10, 0),
+      now: () => NOW,
+      responseBudgetMs: 2000,
+      scope: () => '/fixture-measured-cursor',
+    });
+    await service.get(QUERY, FROM, NOW);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const answer = await service.get(QUERY, FROM, NOW);
+    const cursor = answer.sources.filter((entry) => entry.tool === 'cursor');
+    expect(cursor.map((entry) => `${entry.host}:${entry.state}`).sort()).toEqual([
+      'alexis:unavailable',
+      'mac:unavailable',
+      'ubuntu:unavailable',
+      'windows:no_reader',
+    ]);
   });
 
   it('lists the fixed Cursor row on every computer, Nas1 included', () => {

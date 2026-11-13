@@ -125,10 +125,18 @@ export type AccountAnalyticsSourceState =
   /** Its logs were found and could not be read; nothing read earlier is kept (`cause`). */
   | 'unreadable'
   /** The computer's scan failed and nothing read earlier is kept (`cause`). */
-  | 'scan_failed';
+  | 'scan_failed'
+  /** The tool is installed (its home, program or a T3 instance) but no log of it exists yet. */
+  | 'installed_no_logs'
+  /** The tool is here and Analytics has no usage reader for it (`cause`). */
+  | 'no_reader';
+
+/** Tools without a usage reader that a computer can report as present. */
+export type AccountAnalyticsNoReaderTool =
+  'cursor' | 'gemini-cli' | 'opencode' | 'qwen' | 'kimi' | 'grok' | 'kiro' | 'pi' | 'fx';
 
 export interface AccountAnalyticsSource {
-  tool: AccountAnalyticsActivityProvider | 'cursor';
+  tool: AccountAnalyticsActivityProvider | AccountAnalyticsNoReaderTool;
   host: DashboardHost;
   state: AccountAnalyticsSourceState;
   /** Last successful scan, null when never scanned. */
@@ -139,10 +147,23 @@ export interface AccountAnalyticsSource {
   detail: string | null;
   /**
    * One fixed word, when the source is not read now: a scan failure cause (`ssh_unreachable`,
-   * `ssh_auth`, `ssh_host_key`, `runtime_missing`, `runtime_missing:store_alias`, `helper_failed`, `timeout`,
-   * `bad_response`, `helper_damaged`) or `read_failed`.
+   * `ssh_auth`, `ssh_host_key`, `runtime_missing`, `runtime_missing:store_alias`, `helper_failed`,
+   * `timeout`, `bad_response`, `helper_damaged`) or `read_failed`; for a tool without a reader,
+   * `no_local_usage_records` or `no_reader_yet`.
    */
   cause?: string | null;
+  /** What discovery found: roots, files found, read and failed, and the newest log's time. */
+  counts?: {
+    roots: number;
+    filesFound: number;
+    filesRead: number;
+    filesFailed: number;
+    newestMtime: string | null;
+  };
+  /** Files found per root origin (default, env, tool_config, t3_instance, ccs_instance, signature, extra). */
+  origins?: Array<{ origin: string; files: number }>;
+  /** `python-fallback:<cause>` when the Rust scanner did not read this computer. */
+  reader?: string | null;
 }
 
 export interface AccountAnalyticsSessionRow extends AccountAnalyticsActivityTotals {
