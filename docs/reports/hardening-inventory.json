@@ -1,9 +1,9 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1230,
+    "totalOccurrences": 1233,
     "filesAffected": 119,
-    "hotpathOccurrences": 538,
+    "hotpathOccurrences": 541,
     "hotpathFilesAffected": 60,
     "topHotpathFiles": [
       {
@@ -355,7 +355,7 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 177,
+    "totalMarkers": 180,
     "filesAffected": 62,
     "topFiles": [
       {
@@ -459,6 +459,20 @@
         ]
       },
       {
+        "file": "src/web-server/services/account-analytics-activity.ts",
+        "count": 7,
+        "calls": [],
+        "markers": [
+          "* Unlike legacy merged caches, each worker keeps the native tool dimension. `key` names the logs",
+          "/** Unpublished Claude/legacy replacements survive capped passes, but never a later failed read. */",
+          "// An unplanned legacy share has no safe request-to-request replacement.",
+          "// Stage replacements until their legacy unit or Claude mirror election can advance.",
+          "const legacy = path.join(scope, 'cache', 'codex-native-usage-v1.json');",
+          "const result = await store.activityImportCodexV1(legacy, 'ubuntu').catch(() => null);",
+          "if (path.isAbsolute(scope) && fs.existsSync(legacy)) {"
+        ]
+      },
+      {
         "file": "src/codex-auth/commands/import-default-command.ts",
         "count": 5,
         "calls": [],
@@ -501,17 +515,6 @@
           "* Disabled by default for backward compatibility.",
           "/** A legacy `session_timeout_hours` value maps to the nearest offered lifetime. */",
           "/** Session timeout in hours (default: 24; legacy mirror of session_lifetime_days) */"
-        ]
-      },
-      {
-        "file": "src/utils/profile-compat.ts",
-        "count": 4,
-        "calls": [],
-        "markers": [
-          "* - `kimi` remains as legacy API profile name in existing user configs",
-          "* Check whether a resolved profile name came from a legacy alias.",
-          "* Order: exact input -> lowercase form (if different) -> legacy aliases.",
-          "* Resolve a legacy alias to its canonical profile name."
         ]
       }
     ],
@@ -605,9 +608,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 44,
-      "totalSourceFiles": 465,
-      "coverageRatio": 0.0946,
+      "filesWithCreateLogger": 45,
+      "totalSourceFiles": 471,
+      "coverageRatio": 0.0955,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "auth",
@@ -633,8 +636,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 232,
-          "withLogger": 29
+          "count": 233,
+          "withLogger": 30
         },
         {
           "subdomain": "antigravity",
@@ -667,6 +670,11 @@
           "withLogger": 1
         },
         {
+          "subdomain": "store",
+          "count": 10,
+          "withLogger": 1
+        },
+        {
           "subdomain": "cliproxy/accounts",
           "count": 9,
           "withLogger": 0
@@ -674,11 +682,6 @@
         {
           "subdomain": "types",
           "count": 7,
-          "withLogger": 0
-        },
-        {
-          "subdomain": "cliproxy/config",
-          "count": 5,
           "withLogger": 0
         }
       ]
@@ -748,16 +751,16 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 64,
+      "countOver400": 66,
       "countOver600": 29,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 3906
+          "loc": 3922
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 1795
+          "loc": 2198
         },
         {
           "file": "src/web-server/status/answers.ts",
@@ -769,11 +772,15 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 1134
+          "loc": 1156
         },
         {
           "file": "src/antigravity/registry.ts",
           "loc": 1104
+        },
+        {
+          "file": "src/web-server/services/account-analytics-service.ts",
+          "loc": 1028
         },
         {
           "file": "src/web-server/model-pricing-data.ts",
@@ -790,10 +797,6 @@
         {
           "file": "src/web-server/status/status-collectors.ts",
           "loc": 986
-        },
-        {
-          "file": "src/web-server/services/account-analytics-service.ts",
-          "loc": 956
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
