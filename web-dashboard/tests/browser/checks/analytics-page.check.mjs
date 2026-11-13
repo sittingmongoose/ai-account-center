@@ -309,7 +309,7 @@ export const tests = {
 		});
 		await t.step('90D reads its own answer and draws daily buckets', async () => {
 			await t.page.locator('.ax-tools-row .seg button:has-text("90D")').click();
-			await t.equal('the controller holds 90D', (await viewState(t))?.range, '90d');
+			await t.until('the controller holds 90D', () => window.__aacLastAnalytics?.state?.range === '90d', null, { timeout: 10000 });
 			await t.until('the 90-day answer is drawn', () => /Daily buckets/.test(document.querySelector('.trend-card')?.textContent || ''), null, { timeout: 15000 });
 		});
 		await t.step('a custom range across months, from the month grid', async () => {
@@ -324,9 +324,10 @@ export const tests = {
 			await t.page.click('.cal-day:not([disabled]) >> text="1"');
 			await t.page.click('.cal-acts .btn.primary');
 			await t.until('custom range drawn', () => document.querySelector('.date-btn .on') !== null, null, { timeout: 15000 });
-			const state = await viewState(t);
-			await t.equal('the controller holds a custom range', state?.range, 'custom');
-			await t.equal('it starts in last month', new Date(state.from).getUTCDate(), 10);
+			await t.until('the controller holds a custom range', () => window.__aacLastAnalytics?.state?.range === 'custom', null, { timeout: 10000 });
+			// the range runs from the 10th of last month to the 1st of this one
+			const date = await t.page.evaluate(() => window.__aacLastAnalytics?.usage?.head?.date ?? document.querySelector('.date-btn .tnum')?.textContent ?? '');
+			await t.check('the range spans two months', /^\w{3} 10 to \w{3} 1$/.test(date.trim()), date);
 		});
 		await t.step('a quota row opens its focus chart, laid out in its own box', async () => {
 			await t.page.click('button.qh-row >> nth=0');

@@ -125,6 +125,14 @@ fn IncludedPanel(included: Memo<Included>) -> impl IntoView {
     }
 }
 
+/// The days from cell `l` to cell `h`, not counting the blank cells that start each month's grid.
+fn days_in(c: &Calendar, l: i32, h: i32) -> i32 {
+    c.cells
+        .iter()
+        .filter(|d| !d.pad && d.n >= l && d.n <= h)
+        .count() as i32
+}
+
 /// The month of cell `n` (the grid that shows it), or the last month.
 fn month_of(c: &Calendar, n: i32) -> i32 {
     c.cells
@@ -194,7 +202,7 @@ fn DateButton() -> impl IntoView {
         } else if h < 0 {
             format!("{} · pick a last day, or apply one day", long(l))
         } else {
-            let n = h - l + 1;
+            let n = cal.with(|c| days_in(c, l, h));
             format!(
                 "{} to {} · {n} day{}",
                 long(l),
@@ -359,5 +367,7 @@ mod tests {
         assert_eq!(month_of(&cal, -1), 1);
         assert!(cal.cells[0].pad);
         assert_eq!(cal.quick[0].hi, 2);
+        // a range across months counts days, not the blank cells between them
+        assert_eq!(days_in(&cal, 0, 2), 2);
     }
 }
