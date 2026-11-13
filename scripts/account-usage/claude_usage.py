@@ -361,6 +361,8 @@ class Client:
                     raise UsageUnavailable("error")
                 return value
         except urllib.error.HTTPError as error:
+            if error.code == 429:
+                raise UsageUnavailable("rate_limited", retry_after_seconds(error.headers.get("Retry-After")))
             raise UsageUnavailable("needs_sign_in" if error.code in (401, 403) else "error")
         except (OSError, ValueError, UnicodeError, urllib.error.URLError):
             raise UsageUnavailable("error")
@@ -1105,6 +1107,36 @@ class WebClient:
                 pass
 
 
+def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, expected_email=None, profile_root=None):
+    """The profile's existing web session, bound to the same OAuth account and org.
+
+    Cookies stay on Windows. Private reset reads need the full provider inventory,
+    while the public collector publishes only its normalized, ID-free windows.
+    """
+    expected = resolve_expected_email(expected_email)
+    if expected is None:
+        raise UsageUnavailable()
+    if profile_root is not None:
+        try:
+            cookies = live_session_cookies(profile_root, organization_uuid)
+        except UsageUnavailable:
+            cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
+    else:
+        cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
+    client = WebClient(cookies, organization_uuid)
+    account = client.get("/api/account")
+    if account.get("uuid") != account_uuid or account.get("email_address") != expected:
+        raise UsageUnavailable()
+    memberships = account.get("memberships")
+    if not isinstance(memberships, list) or len(memberships) > 128:
+        raise UsageUnavailable()
+    organizations = {membership["organization"].get("uuid") for membership in memberships
+        if isinstance(membership, dict) and isinstance(membership.get("organization"), dict)}
+    if organization_uuid not in organizations:
+        raise UsageUnavailable()
+    return client
+
+
 def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None, expected_email=None, cooldown=None, profile_root=None):
     # Optional balances never turn valid native OAuth quota into a sign-in
     # request or an unreadable balance into zero. Existing callers keep a list;
@@ -1121,29 +1153,8 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
                 cooldown["retryAfterSeconds"] = error.retry_after
         return True
 
-    expected = resolve_expected_email(expected_email)
-    if expected is None:
-        return []
     try:
-        cookies = None
-        if profile_root is not None:
-            try:
-                cookies = live_session_cookies(profile_root, organization_uuid)
-            except UsageUnavailable:
-                cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
-        else:
-            cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
-        client = WebClient(cookies, organization_uuid)
-        account = client.get("/api/account")
-        if account.get("uuid") != account_uuid or account.get("email_address") != expected:
-            return []
-        memberships = account.get("memberships")
-        if not isinstance(memberships, list) or len(memberships) > 128:
-            return []
-        organizations = {membership["organization"].get("uuid") for membership in memberships
-            if isinstance(membership, dict) and isinstance(membership.get("organization"), dict)}
-        if organization_uuid not in organizations:
-            return []
+        client = verified_web_client(profile_id, account_uuid, organization_uuid, home, expected_email, profile_root)
     except Exception as error:
         rate_limited(error)
         return []
@@ -1329,7 +1340,22 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 continue
             verify_root()
             identity_verified_ms = int(time.time() * 1000)
-            usage = client.get("/api/oauth/usage?cedar_ember=1", token)
+            usage = None
+            if private_reset_sink is not None:
+                # The OAuth usage endpoint can throttle while the existing web
+                # session still serves grants. Prefer that identity-verified
+                # inventory without exporting its cookies or changing the
+                # OAuth token used for an explicitly confirmed claim.
+                verify_login()
+                try:
+                    web = verified_web_client(profile_id, account_uuid, organization["uuid"], home, expected, profile_root)
+                    usage = web.get("/api/organizations/" + organization["uuid"] + "/usage?cedar_ember=1")
+                except Exception:
+                    # OAuth-only sign-ins retain their original read path.
+                    pass
+                verify_login()
+            if usage is None:
+                usage = client.get("/api/oauth/usage?cedar_ember=1", token)
             verify_root()
             if private_reset_sink is not None:
                 verify_login()
@@ -1380,7 +1406,11 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             return result
         raise UsageUnavailable("needs_sign_in")
     except UsageUnavailable as error:
-        result["status"] = error.status
+        result["status"] = "error" if error.status == "rate_limited" else error.status
+        if error.status == "rate_limited":
+            cooldown["failureCode"] = "rate_limited"
+            if error.retry_after is not None:
+                cooldown["retryAfterSeconds"] = error.retry_after
     except Exception:
         # Includes missing optional cryptography module and native decode errors.
         # No native exception text, paths or decrypted data are printed.
@@ -1405,6 +1435,8 @@ def reset_host(request):
                          private_reset_sink=captured.append, expected_saved_binding=request.get("expectedSavedBinding"),
                          expected_saved_organization=request.get("expectedSavedOrganization"))
         if result.get("status") != "ok" or len(captured) != 1:
+            if result.get("failureCode") == "rate_limited":
+                return {"unavailable": True, "reason": "rate-limited"}
             return {"unavailable": True}
         private = captured[0]
         cedar = private["usage"].get("cedar_ember")
@@ -1413,9 +1445,13 @@ def reset_host(request):
         identity = {"provider": "claude", "account": private["account"],
                     "organization": private["organization"], "profile": profile_id, "host": request["host"]}
         binding = hashlib.sha256(json.dumps([identity, cedar], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        windows = {key: value.get("utilization") for key, value in private["usage"].items()
-                   if isinstance(value, dict) and isinstance(value.get("utilization"), (int, float))
-                   and not isinstance(value.get("utilization"), bool)}
+        windows = {window["key"]: window["usedPercent"] for window in normalize_windows(private["usage"])
+                   if window["kind"] == "rate_limit"}
+        # Grants retain the provider's legacy Fable bucket ID, while current
+        # usage names that quota in limits[]. Use only the exact, unscoped
+        # Fable window; an absent or conflicting reading stays unconfirmed.
+        if "seven_day_overage_included" not in windows and "seven_day_fable" in windows:
+            windows["seven_day_overage_included"] = windows["seven_day_fable"]
         expiries = []
         for grant in cedar["grants"]:
             raw = grant.get("ends_at") if isinstance(grant, dict) else None

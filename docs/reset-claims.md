@@ -185,6 +185,16 @@ not acknowledge local sends.
 
 Opening reset details always re-reads inventory. Use reset performs another current
 server read before prepare; a cached observation alone cannot open a confirmation.
+The private inventory is read even if the public usage reading has no reset rows.
+Claude uses the saved Windows OAuth identity and prefers that profile's existing
+web session for inventory, verifying its account, email and organization before
+reading grants. If the web session is unavailable, the OAuth inventory remains the
+fallback. Cookies and tokens stay on Windows; exact-grant confirmation and the
+OAuth claim transport are unchanged. A throttled inventory stays unavailable and
+shows a rate-limit explanation, including when no public reset rows are present.
+Reset verification uses the same normalized usage windows as the dashboard.
+The provider's legacy Fable reset bucket is matched only to the exact unscoped
+Fable quota; missing or conflicting quota readings never enable a claim.
 
 A native refusal includes its current recovery `evidence` when storage can be read;
 otherwise it includes null. The same revision rules apply to these snapshots.

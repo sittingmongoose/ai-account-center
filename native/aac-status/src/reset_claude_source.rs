@@ -134,6 +134,9 @@ pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Va
     read_request["expectedSavedBinding"] = json!(capture.saved_login_binding);
     read_request["expectedSavedOrganization"] = json!(capture.organization);
     let mut raw = helper(command, read_request, Duration::from_secs(12))?;
+    if raw["unavailable"] == true && raw["reason"] == "rate-limited" {
+        return Err("rate-limited");
+    }
     if raw["savedLoginBinding"] != capture.saved_login_binding
         || raw["identity"]["account"] != capture.account
         || raw["identity"]["organization"] != capture.organization
