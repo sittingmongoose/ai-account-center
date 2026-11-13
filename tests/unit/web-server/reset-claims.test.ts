@@ -553,3 +553,26 @@ test('storage failure preserves truthful no-send proof instead of an unanswered-
   expect(response.status).toBe(409);
   expect((await response.json()).sent).toBe(false);
 });
+
+test('non-Claude not-sent stays unconfirmed and requires a verification read', async () => {
+  let reads = 0;
+  const source: ResetSource = {
+    async read() {
+      reads++;
+      return {};
+    },
+    async send() {
+      return { outcome: 'not-sent' };
+    },
+  };
+  const served = await serve('session', source);
+  const response = await fetch(`${served.url}/accounts/codex%3Asynthetic/reset-claims`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: served.url },
+    body: JSON.stringify({ grantKey, confirmationToken: 'c'.repeat(64) }),
+  });
+  expect(response.status).toBe(200);
+  expect(reads).toBe(2);
+  expect(served.finishes[0].outcome).toBe('ambiguous');
+  expect((await response.json()).outcome).toBe('claimed-unconfirmed');
+});
