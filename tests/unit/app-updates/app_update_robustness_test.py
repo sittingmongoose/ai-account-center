@@ -147,7 +147,7 @@ class CursorWindowsRegressions(Home):
         update = next(argv for argv in fake.runs if argv[-1] == "update")
         self.assertEqual(update[:7], ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
                                       str(self.root / "AppData/Local/cursor-agent/cursor-agent.ps1")])
-        self.assertEqual(row["diagnostics"]["command"], "cursor-agent update")
+        self.assertEqual(row["diagnostics"]["tool"], "cursor-agent")
 
     def test_group_policy_that_overrides_bypass_is_reported_as_policy_blocked_after_a_direct_try(self):
         self.layout()
@@ -177,7 +177,9 @@ class CursorWindowsRegressions(Home):
         install, row = self.run_row(fake)
         self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "cursor_signin_needed", True))
         self.assertEqual((row["diagnostics"]["cause"], row["diagnostics"]["exitCode"]), ("auth_required", 1))
-        self.assertIn("<line removed: may contain a credential>", row["diagnostics"]["tail"])
+        # Classified as sign-in from the output in memory; the output is not kept (owner decision U13).
+        self.assertNotIn("tail", row["diagnostics"])
+        self.assertNotIn("unauthenticated", json.dumps(row))
         # Every user folder in the row is the placeholder, never an account name.
         self.assertTrue(set(re.findall(r"Users(?:\\\\|\\|/)+([^\\/\"]+)", json.dumps(row))).issubset({"<user>"}))
 
@@ -214,10 +216,9 @@ class DiagnosticsRecordTests(unittest.TestCase):
             with mock.patch.object(common, "_run_bounded", side_effect=self.fake(0, stdout=b"0.84.2\n")):
                 common.command(["/opt/homebrew/bin/zcode-acp-server", "--version"], capture=True)
             exported = record.export({"status": "failed", "messageCode": "update_failed"})
-        self.assertEqual((exported["cause"], exported["command"], exported["exitCode"]),
-                         ("installer_failed", "npm install -g zcode-acp-server@latest", 1))
-        self.assertIn("npm error code E401", exported["tail"])
-        self.assertNotIn("abc", exported["tail"])
+        self.assertEqual((exported["cause"], exported["tool"], exported["exitCode"]), ("installer_failed", "npm", 1))
+        self.assertNotIn("tail", exported)
+        self.assertNotIn("E401", json.dumps(exported))
 
     def test_launches_that_hand_off_an_app_keep_stderr_on_the_null_device(self):
         sinks = []
@@ -227,13 +228,15 @@ class DiagnosticsRecordTests(unittest.TestCase):
         self.assertEqual((sinks[0], sinks[1]), (None, []))
 
     @unittest.skipIf(os.name == "nt", "a POSIX shell child")
-    def test_real_stderr_reaches_the_tail_through_a_temporary_file(self):
+    def test_real_stderr_is_classified_in_memory_and_never_kept(self):
         with common.row_diagnostics() as record:
             with self.assertRaises(common.UpdateFailure) as raised:
                 common.command(["/bin/sh", "-c", "echo out; echo 'npm error EACCES /home/someone/.npm' >&2; exit 243"])
             exported = record.export({"status": "failed", "messageCode": "update_failed"})
         self.assertEqual((raised.exception.exit_code, exported["exitCode"]), (243, 243))
-        self.assertEqual(exported["tail"], "npm error EACCES /home/<user>/.npm")
+        self.assertIn("npm error EACCES", raised.exception.output)
+        self.assertNotIn("tail", exported)
+        self.assertNotIn("EACCES", json.dumps(exported))
 
 
 class CursorOwnershipTests(Home):

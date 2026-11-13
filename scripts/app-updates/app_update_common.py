@@ -73,6 +73,21 @@ TAIL_LINES, TAIL_LINE_CHARS, TAIL_CHARS = 12, 200, 1200
 # below is bounded, so scrubbing stays linear in the text (an unbroken 64 KiB run included).
 SCRUB_LINES, SCRUB_LINE_CHARS = 48, 600
 _ANSI = re.compile(r"\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?")
+# One definition of what marks a credential, shared by the whole-line pass and the token pass below,
+# and mirrored in src/web-server/services/app-update-diagnostics.ts (a test keeps the two equal).
+# Every flag the token pass redacts is also a whole-line marker, so a quoted value cannot keep a tail.
+CREDENTIAL_FLAGS = ("password", "passwd", "pass", "token", "api-?key", "auth(?:-?token)?", "secret",
+                    "access-?token", "otp")
+CREDENTIAL_FLAG = r"--?(?:" + "|".join(CREDENTIAL_FLAGS) + r")\b"
+# code= is an OAuth code, except the integer in "exit code=1".
+_CODE_KEY = r"\bcode=(?!(?<=exit code=)\d{1,10}\b)"
+# A credential flag, or -p given a quoted or '=' value: its line and the rest of the output go.
+CREDENTIAL_FLAG_FORMS = (r"(?<![\w-])-p(?:\s*=|\s*[\"'])", CREDENTIAL_FLAG)
+CREDENTIAL_MARKERS = ("auth", "token", "passw(?:or)?d", "passphrase", "pwd", "secret", "cookie", "bearer",
+                      "api[_-]?key", "credential", "session", r"private[\s_-]?key",
+                      # The other keys the token pass recognises.
+                      r"access[_-]?key", r"\bbasic\s+[A-Za-z0-9._~+/=-]", _CODE_KEY,
+                      r"one[- ]time (?:code|password)") + CREDENTIAL_FLAG_FORMS
 _CREDENTIAL_WORD = (r"(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential"
                     r"|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)")
 _SECRET_PATTERNS = (
@@ -86,8 +101,8 @@ _SECRET_PATTERNS = (
     (re.compile(r"(?im)([\"']?\b[a-z0-9_.-]{0,40}" + _CREDENTIAL_WORD + r"[a-z0-9_.-]{0,40}[\"']?\s*[:=]\s*)\S.{0,600}$"), r"\1<redacted>"),
     (re.compile(r"(?im)(\bpass(?:word|wd|phrase)\b[^:=\n]{0,40}[:=]\s*)\S.{0,600}$"), r"\1<redacted>"),
     # Command-line flag forms: --password value, --token=value.
-    (re.compile(r"(?i)(--?(?:password|passwd|pass|token|api-?key|auth(?:-?token)?|secret|access-?token|otp)\b)(?:\s+|=)(?!-)\S{1,600}"), r"\1 <redacted>"),
-    (re.compile(r"(?i)\bcode=\S{1,600}"), "code=<redacted>"),
+    (re.compile(r"(?i)(" + CREDENTIAL_FLAG + r")(?:\s+|=)(?!-)\S{1,600}"), r"\1 <redacted>"),
+    (re.compile("(?i)" + _CODE_KEY + r"\S{1,600}"), "code=<redacted>"),
     (re.compile(r"(?i)(one[- ]time (?:code|password)\D{0,20})\d{4,10}"), r"\1<redacted>"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,600}\.[A-Za-z0-9_-]{8,600}(?:\.[A-Za-z0-9_-]{1,600})?"), "<redacted>"),
     (re.compile(r"(?i)\b(?:npm_|ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abpr]-|aiza)[A-Za-z0-9_-]{8,600}"), "<redacted>"),
@@ -103,21 +118,37 @@ _SECRET_PATTERNS = (
 # A line naming any credential marker goes whole, with the lines that continue it (indented, or
 # after a line ending in a separator), before any cut: no partial redaction can keep a tail.
 CREDENTIAL_LINE = "<line removed: may contain a credential>"
-_CREDENTIAL_MARKER = re.compile(r"(?i)auth|token|passw(?:or)?d|passphrase|pwd|secret|cookie|bearer|api[_-]?key"
-                                r"|credential|session|private[\s_-]?key")
+CREDENTIAL_REST = "<rest of output removed: may contain a credential>"
+_CREDENTIAL_REST = re.compile("(?i)" + "|".join(CREDENTIAL_FLAG_FORMS))
+_QUOTE = re.compile(r"[\"']")
+_CREDENTIAL_MARKER = re.compile("(?i)" + "|".join(CREDENTIAL_MARKERS))
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _INDENTED = re.compile(r"[\s\x00-\x1f\x7f-\x9f]")
 _CONTINUES = ("\\", ",", ";", ":", "=", "{", "[", "(")
 
 
 def _drop_credential_lines(lines):
-    """Drop credential carriers and continuations before taking any diagnostic tail."""
+    """Drop credential carriers and continuations before taking any diagnostic tail.
+
+    No quoting is parsed. A line with a credential flag (CREDENTIAL_FLAG_FORMS), or a removed line
+    with a quote after its marker, ends the kept output: a value may hold a literal newline.
+    """
     kept = []
     removing = carry = False
-    for line in lines:
-        probe = _CONTROL.sub("", line)
+    for raw in lines:
+        # The original line is checked too: removing an ANSI title (OSC) can delete a flag.
+        line = _ANSI.sub("", raw)
+        probe, raw_probe = _CONTROL.sub("", line), _CONTROL.sub("", raw)
         continued = removing and (carry or bool(_INDENTED.match(line)))
-        if continued or _CREDENTIAL_MARKER.search(probe):
+        marker = _CREDENTIAL_MARKER.search(probe) or _CREDENTIAL_MARKER.search(raw_probe)
+        if marker and not _CREDENTIAL_MARKER.search(probe):
+            probe = raw_probe
+        # The note itself (text scrubbed twice) also ends the output, so it stays as written.
+        quoted = (continued or marker) and _QUOTE.search(probe, 0 if continued else marker.start())
+        if probe.strip() == CREDENTIAL_REST or _CREDENTIAL_REST.search(probe) or _CREDENTIAL_REST.search(raw_probe) or quoted:
+            kept.append(CREDENTIAL_REST)
+            break
+        if continued or marker:
             if not removing:
                 kept.append(CREDENTIAL_LINE)
             removing = True
@@ -156,16 +187,26 @@ def _scrub_paths(text):
     return re.sub(r"(/home/)[^/\s\"']{1,128}", r"\1<user>", text)
 
 
+def _credential_flag(text):
+    """Whether complete text holds a recognised credential flag, before any shortening of it."""
+    # Both views: removing an ANSI title (OSC) can delete a flag, and colour codes can split one.
+    return any(_CREDENTIAL_REST.search(_CONTROL.sub("", view)) for view in (text, _ANSI.sub("", text)))
+
+
 def display_path(path):
     """A path with the home folder as ~ and any other user's folder as <user>; bounded."""
-    return _scrub_paths(str(path)[-1024:])[-160:]
+    text = str(path)
+    # Shortening below keeps the last characters, which would remove a flag at the start.
+    if _credential_flag(re.sub(r"[\r\n]", " ", text)):
+        return CREDENTIAL_REST
+    return _scrub_paths(text[-1024:])[-160:]
 
 
 def scrub(text, lines=TAIL_LINES):
     """The bounded tail of command output with credentials, people and private paths removed."""
     if not isinstance(text, str) or not text:
         return ""
-    raw = (_ANSI.sub("", line) for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+    raw = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     candidates = [line[:SCRUB_LINE_CHARS] for line in _drop_credential_lines(raw) if line.strip()]
     text = "\n".join(candidates[-SCRUB_LINES:])
     text = "".join(char if char in "\n\t" or 32 <= ord(char) < 127 or ord(char) > 159 else " " for char in text)
@@ -177,29 +218,30 @@ def scrub(text, lines=TAIL_LINES):
     return "\n".join(kept)[-TAIL_CHARS:]
 
 
-def command_display(argv, label=None):
-    """What ran, for a row: the program's own name and its fixed arguments, never a script body."""
+# Owner decision U13: installer output and argv are never saved, only which tool ran, as one
+# fixed word from this list (the label's first word, else the program's own name), or "unlisted".
+TOOLS = ("agy", "antigravity", "apt", "apt-cache", "apt-get", "bun", "claude", "codesign", "codex", "cursor",
+         "cursor-agent", "ditto", "dpkg", "dpkg-query", "hdiutil", "launchctl", "lsof", "msiexec", "muse", "node",
+         "npm", "npx", "omp", "open", "pnpm", "powershell", "ps", "pwsh", "python", "spctl", "sudo", "systemctl",
+         "systemd-run", "t3", "winget", "wt", "zcode")
+
+
+def tool_id(argv, label=None):
+    """Which tool a run used: one word from TOOLS, never its arguments or output."""
     if label:
-        return scrub(label, 1)[:160]
-    words = []
-    skip = False
-    for index, arg in enumerate(str(item) for item in argv):
-        if skip:
-            words.append("<script>")
-            skip = False
-            continue
-        if index == 0 or ("/" in arg or "\\" in arg) and len(arg) > 3:
-            arg = re.split(r"[\\/]", arg)[-1] if index == 0 else display_path(arg)
-        if arg.lower() in ("-encodedcommand", "-command", "-c") and index > 0:
-            skip = True
-        words.append(arg if len(arg) <= 60 else arg[:57] + "...")
-    return scrub(" ".join(words), 1)[:160]
+        word = (str(label).split() or [""])[0]
+    else:
+        word = re.split(r"[\\/]", str(argv[0]))[-1] if argv else ""
+    word = re.sub(r"[\d.]+$", "", re.sub(r"(?i)\.(?:exe|cmd|bat|ps1|app)$", "", word)).lower()
+    return word if word in TOOLS else "unlisted"
 
 
 class Diagnostics:
     """One row's record. Helpers write to the recorder of the row their thread runs.
 
-    Every recorded command is kept (bounded); the row shows the one that decided it:
+    Owner decision U13: a run's output and argv are read in memory to classify it and then
+    discarded. A run keeps only its tool (tool_id), exit code and whether it failed.
+    Every recorded run is kept (bounded); the row shows the one that decided it:
     for a row that finished cleanly the last command that succeeded (a fallback that
     worked, not the attempt it replaced), otherwise the last command that failed.
     Read-only probes run quiet and are never "what ran"."""
@@ -224,9 +266,10 @@ class Diagnostics:
         self._phase = (name, now) if name else None
 
     def ran(self, argv, exit_code=None, output="", label=None, failed=None):
+        # output is accepted for older call sites and dropped here, unread.
+        del output
         failed = exit_code not in (None, 0) if failed is None else failed
-        self.runs.append({"command": command_display(argv, label), "exitCode": exit_code,
-                          "tail": scrub(output) if failed else "", "failed": failed})
+        self.runs.append({"tool": tool_id(argv, label), "exitCode": exit_code, "failed": failed})
         del self.runs[:-self.RUNS]
 
     def deciding(self, success):
@@ -238,9 +281,9 @@ class Diagnostics:
 
     # Older call sites and tests read these.
     @property
-    def command(self):
+    def tool(self):
         run = self.deciding(False)
-        return run["command"] if run else None
+        return run["tool"] if run else None
 
     @property
     def exit_code(self):
@@ -269,7 +312,7 @@ class Diagnostics:
         if reason:
             value["reason"] = reason
         if run:
-            value["command"] = run["command"]
+            value["tool"] = run["tool"]
             if isinstance(run["exitCode"], int) and -2 ** 31 <= run["exitCode"] < 2 ** 32:
                 value["exitCode"] = run["exitCode"]
         phases = {name: max(0, min(ms, 86400000)) for name, ms in list(self.phases.items())[:8] if REASON.fullmatch(name)}
@@ -279,8 +322,6 @@ class Diagnostics:
             value["owner"] = self.owner
         if self.notes:
             value["notes"] = list(self.notes)
-        if run and run["tail"] and cause != "none":
-            value["tail"] = run["tail"]
         return value
 
 
@@ -888,9 +929,8 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
     merged with its stdout, in the exception's output for in-memory classification only.
     kill_tree opts this one call into whole-tree cleanup; only the muse warm sets it.
 
-    Every run is recorded in the row's diagnostics: what ran (label, or the program's
-    own name and fixed arguments), its exit code, and for a failure the scrubbed tail
-    of its stderr. Without errors the failure's output is that stderr too, still in
+    Every run is recorded in the row's diagnostics: which tool ran (tool_id: one fixed word)
+    and its exit code. Its output and argv are never recorded (owner decision U13). Without errors the failure's output is that stderr too, still in
     memory only, so callers can classify a refusal (sign-in, policy) by its words.
     stderr_tail=False keeps stderr on the null device: for commands that hand off a
     long-lived app (open -a, wt.exe, systemd-run), whose output must not land anywhere.

@@ -2562,7 +2562,7 @@ test('unavailable removal checks show a disabled action with an honest retry rea
   assert.match(remove.tip, /Could not check/);
 });
 
-test('update rows name their cause instead of "Failed" and show what ran, which copy and its output', () => {
+test('update rows name their cause instead of "Failed" and show which tool ran and which copy, never its output', () => {
   const now = Date.parse('2026-11-13T05:00:00.000Z');
   const row = (platform, appId, appLabel, status, diagnostics, extra = {}) => ({
     appId, appLabel, platform, status, previousVersion: '1.0.0', version: '1.0.0', message: 'Fixed words.', diagnostics, ...extra,
@@ -2571,7 +2571,10 @@ test('update rows name their cause instead of "Failed" and show what ran, which 
     state: 'completed', startedAt: '2026-11-13T04:55:00.000Z', finishedAt: '2026-11-13T04:58:00.000Z', activePlatform: null,
     results: [
       row('windows', 'cursor-cli', 'Cursor CLI', 'action_required',
-        { cause: 'auth_required', reason: 'http_401', command: 'cursor-agent update', exitCode: 1, phases: { update: 650 }, tail: 'Update failed: [unauthenticated] Error\nsecond line' }),
+        { cause: 'auth_required', reason: 'http_401', tool: 'cursor-agent', exitCode: 1, phases: { update: 650 } }),
+      // A row as an older helper sent it: its command and output tail are never shown (owner decision U13).
+      row('ubuntu', 'cursor-cli', 'Cursor CLI', 'failed',
+        { cause: 'installer_failed', command: 'cursor-agent update --token zebraWitness', exitCode: 2, tail: 'horse battery staple' }),
       row('mac', 't3-acp-adapters', 'T3 ACP adapters', 'failed', {
         cause: 'wrong_prefix', reason: 'owner_unchanged',
         owner: { packages: [{ package: 'zcode-acp-server', manager: 'npm', prefix: '/opt/homebrew', source: 't3-config', version: '0.84.2' }],
@@ -2589,7 +2592,10 @@ test('update rows name their cause instead of "Failed" and show what ran, which 
   const item = (host, app) => view.hosts.find((h) => h.id === host).items.find((i) => i.app === app);
   const cursor = item('windows', 'Cursor CLI');
   assert.deepEqual([cursor.result, cursor.tone], ['Sign-in needed', 'warn']);
-  assert.match(cursor.tip, /Cause: the app refused its sign-in \(http_401\) · ran cursor-agent update \(exit 1\) · update 650ms · output: Update failed: \[unauthenticated\] Error \| second line$/);
+  assert.match(cursor.tip, /Cause: the app refused its sign-in \(http_401\) · ran cursor-agent · update 650ms · Installer output isn't saved; cause: the app refused its sign-in, exit code 1$/);
+  const older = item('ubuntu', 'Cursor CLI');
+  assert.match(older.tip, /Installer output isn't saved; cause: its installer failed, exit code 2$/);
+  assert.doesNotMatch(older.tip, /zebraWitness|horse|battery|staple|--token|cursor-agent update/);
   const adapters = item('mac', 'T3 ACP adapters');
   assert.deepEqual([adapters.result, adapters.tone], ['Updated the wrong copy', 'crit']);
   assert.match(adapters.tip, /zcode-acp-server in \/opt\/homebrew \(what T3 runs\) · another zcode-acp-server in ~\/\.local\/opt\/node-v26\.13\.1-darwin-arm64 is 0\.84\.3/);

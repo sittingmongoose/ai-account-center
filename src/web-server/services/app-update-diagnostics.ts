@@ -1,8 +1,12 @@
 /**
- * Why an Update apps row ended as it did: a fixed cause class, plus what ran (command, exit code,
- * phase times), which copy it used (install owner) and a short stderr tail. The helper already
- * scrubs all of it; this boundary keeps only known fields with bounded shapes and scrubs text again,
- * so a credential, an email or another user's folder never reaches the page or a saved job.
+ * Why an Update apps row ended as it did: a fixed cause class, plus which tool ran (one fixed
+ * word), its exit code, phase times and which copy it used (install owner).
+ *
+ * Owner decision U13: installer output and argv are never saved. The helper classifies its
+ * output in memory and discards it; this boundary drops any `tail` or `command` field a row
+ * still carries (older helpers, saved jobs), keeps only known fields with bounded shapes and
+ * scrubs the remaining text again, so a credential, an email or another user's folder never
+ * reaches the page or a saved job.
  */
 import { record, safeVersion } from './app-update-values';
 
@@ -24,6 +28,48 @@ export const APP_UPDATE_CAUSES = [
   'unknown',
 ] as const;
 export type AppUpdateCause = (typeof APP_UPDATE_CAUSES)[number];
+/** The tools a run may name, equal to TOOLS in scripts/app-updates/app_update_common.py. */
+export const APP_UPDATE_TOOLS = [
+  'agy',
+  'antigravity',
+  'apt',
+  'apt-cache',
+  'apt-get',
+  'bun',
+  'claude',
+  'codesign',
+  'codex',
+  'cursor',
+  'cursor-agent',
+  'ditto',
+  'dpkg',
+  'dpkg-query',
+  'hdiutil',
+  'launchctl',
+  'lsof',
+  'msiexec',
+  'muse',
+  'node',
+  'npm',
+  'npx',
+  'omp',
+  'open',
+  'pnpm',
+  'powershell',
+  'ps',
+  'pwsh',
+  'python',
+  'spctl',
+  'sudo',
+  'systemctl',
+  'systemd-run',
+  't3',
+  'winget',
+  'wt',
+  'zcode',
+  'unlisted',
+] as const;
+export type AppUpdateTool = (typeof APP_UPDATE_TOOLS)[number];
 
 export interface AppUpdateOwnerPackage {
   package: 'muse-acp' | 'zcode-acp-server';
@@ -55,15 +101,13 @@ export interface AppUpdateDiagnostics {
   cause: AppUpdateCause;
   /** One fixed word naming the step or the refusal (no_enabled_instance, http_401, previous_server). */
   reason?: string;
-  /** What ran: the program's own name and its fixed arguments, never a script body. */
-  command?: string;
+  /** Which tool ran: one word from APP_UPDATE_TOOLS, never its arguments. */
+  tool?: AppUpdateTool;
   exitCode?: number;
   /** Milliseconds per step (t3_ready, offer, install, verify, refresh_models, update, ...). */
   phases?: Record<string, number>;
   owner?: AppUpdateOwner;
   notes?: string[];
-  /** The last lines of a failed command's stderr, scrubbed. */
-  tail?: string;
 }
 
 /** Codes that name a cause, each allowed on one app and status (and Windows only for policy refusals). */
@@ -114,6 +158,49 @@ const PATH_CHARS = 160;
 // SCRUB_LINES lines cut to SCRUB_LINE_CHARS, and every repeat is bounded, so this stays linear.
 const SCRUB_LINES = 48;
 const SCRUB_LINE_CHARS = 600;
+// One definition of what marks a credential, shared by the whole-line pass and the token pass,
+// and equal to CREDENTIAL_FLAGS/CREDENTIAL_MARKERS in scripts/app-updates/app_update_common.py
+// (a test compares them). Every flag the token pass redacts also removes its whole line.
+export const CREDENTIAL_FLAGS = [
+  'password',
+  'passwd',
+  'pass',
+  'token',
+  'api-?key',
+  'auth(?:-?token)?',
+  'secret',
+  'access-?token',
+  'otp',
+] as const;
+const CREDENTIAL_FLAG = String.raw`--?(?:${CREDENTIAL_FLAGS.join('|')})\b`;
+// code= is an OAuth code, except the integer in "exit code=1".
+const CODE_KEY = String.raw`\bcode=(?!(?<=exit code=)\d{1,10}\b)`;
+// A credential flag, or -p given a quoted or '=' value: its line and the rest of the output go.
+export const CREDENTIAL_FLAG_FORMS = [String.raw`(?<![\w-])-p(?:\s*=|\s*[\"'])`, CREDENTIAL_FLAG];
+export const CREDENTIAL_MARKERS = [
+  'auth',
+  'token',
+  'passw(?:or)?d',
+  'passphrase',
+  'pwd',
+  'secret',
+  'cookie',
+  'bearer',
+  'api[_-]?key',
+  'credential',
+  'session',
+  String.raw`private[\s_-]?key`,
+  // The other keys the token pass recognises.
+  'access[_-]?key',
+  String.raw`\bbasic\s+[A-Za-z0-9._~+/=-]`,
+  CODE_KEY,
+  'one[- ]time (?:code|password)',
+  ...CREDENTIAL_FLAG_FORMS,
+];
+const CREDENTIAL_MARKER = new RegExp(CREDENTIAL_MARKERS.join('|'), 'i');
+const CREDENTIAL_REST = new RegExp(CREDENTIAL_FLAG_FORMS.join('|'), 'i');
+const CREDENTIAL_LINE = '<line removed: may contain a credential>';
+const CREDENTIAL_REST_NOTE = '<rest of output removed: may contain a credential>';
 const CREDENTIAL_WORD =
   '(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential' +
   '|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)';
@@ -134,11 +221,8 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
     '$1<redacted>',
   ],
   [/(\bpass(?:word|wd|phrase)\b[^:=\n]{0,40}[:=]\s*)\S.{0,600}$/gim, '$1<redacted>'],
-  [
-    /(--?(?:password|passwd|pass|token|api-?key|auth(?:-?token)?|secret|access-?token|otp)\b)(?:\s+|=)(?!-)\S{1,600}/gi,
-    '$1 <redacted>',
-  ],
-  [/\bcode=\S{1,600}/gi, 'code=<redacted>'],
+  [new RegExp(`(${CREDENTIAL_FLAG})(?:\\s+|=)(?!-)\\S{1,600}`, 'gi'), '$1 <redacted>'],
+  [new RegExp(`${CODE_KEY}\\S{1,600}`, 'gi'), 'code=<redacted>'],
   [/(one[- ]time (?:code|password)\D{0,20})\d{4,10}/gi, '$1<redacted>'],
   [/\beyJ[A-Za-z0-9_-]{8,600}\.[A-Za-z0-9_-]{8,600}(?:\.[A-Za-z0-9_-]{1,600})?/g, '<redacted>'],
   [
@@ -182,14 +266,26 @@ export function scrubText(value: string, lines = TAIL_LINES): string {
       /\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g,
       ''
     );
-    const probe = line.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+    // The original line is checked too: removing an ANSI title (OSC) can delete a flag.
+    const rawProbe = raw.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+    const cleanProbe = line.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+    const probe = CREDENTIAL_MARKER.test(cleanProbe) ? cleanProbe : rawProbe;
+    // No quoting is parsed: a credential flag, or a removed line with a quote after its marker,
+    // ends the kept output, since a value may hold a literal newline.
+    const continued = removing && (carry || /^[\s\x00-\x1f\x7f-\x9f]/.test(line));
+    const marker = probe.search(CREDENTIAL_MARKER);
+    // The note itself (text scrubbed twice) also ends the output, so it stays as written.
     if (
-      (removing && (carry || /^[\s\x00-\x1f\x7f-\x9f]/.test(line))) ||
-      /auth|token|passw(?:or)?d|passphrase|pwd|secret|cookie|bearer|api[_-]?key|credential|session|private[\s_-]?key/i.test(
-        probe
-      )
+      probe.trim() === CREDENTIAL_REST_NOTE ||
+      CREDENTIAL_REST.test(cleanProbe) ||
+      CREDENTIAL_REST.test(rawProbe) ||
+      ((continued || marker >= 0) && /["']/.test(probe.slice(continued ? 0 : marker)))
     ) {
-      if (!removing) candidates.push('<line removed: may contain a credential>');
+      candidates.push(CREDENTIAL_REST_NOTE);
+      break;
+    }
+    if (continued || marker >= 0) {
+      if (!removing) candidates.push(CREDENTIAL_LINE);
       removing = true;
       carry = /[\\,;:={\[(]$/.test(probe.trimEnd());
       continue;
@@ -219,8 +315,23 @@ function word(value: unknown): string | undefined {
   return typeof value === 'string' && WORD.test(value) ? value : undefined;
 }
 
+/** Whether complete text holds a recognised credential flag, before any shortening of it. */
+function hasCredentialFlag(value: string): boolean {
+  // Both views: removing an ANSI title (OSC) can delete a flag, and colour codes can split one.
+  const stripped = value.replace(
+    /\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g,
+    ''
+  );
+  return [value, stripped].some((view) =>
+    CREDENTIAL_REST.test(view.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ''))
+  );
+}
+
 function displayPath(value: unknown): string | undefined {
-  if (typeof value !== 'string' || !value || value.length > 1024) return undefined;
+  if (typeof value !== 'string' || !value) return undefined;
+  // Shortening below keeps the last characters, which would remove a flag at the start.
+  if (hasCredentialFlag(value.replace(/[\r\n]/g, ' '))) return CREDENTIAL_REST_NOTE;
+  if (value.length > 1024) return undefined;
   const text = scrubText(value, 1).slice(-PATH_CHARS);
   return text || undefined;
 }
@@ -290,10 +401,9 @@ export function normalizeDiagnostics(value: unknown): AppUpdateDiagnostics | und
   const result: AppUpdateDiagnostics = { cause: raw.cause as AppUpdateCause };
   const reason = word(raw.reason);
   if (reason) result.reason = reason;
-  if (typeof raw.command === 'string' && raw.command.length <= 1024) {
-    const command = scrubText(raw.command, 1).slice(0, PATH_CHARS);
-    if (command) result.command = command;
-  }
+  // Owner decision U13: no command text or output tail is kept, whatever the row carries.
+  const tool = APP_UPDATE_TOOLS.find((name) => name === raw.tool);
+  if (tool) result.tool = tool;
   if (
     typeof raw.exitCode === 'number' &&
     Number.isSafeInteger(raw.exitCode) &&
@@ -315,10 +425,6 @@ export function normalizeDiagnostics(value: unknown): AppUpdateDiagnostics | und
   if (Array.isArray(raw.notes)) {
     const notes = raw.notes.slice(0, 6).flatMap((note) => word(note) ?? []);
     if (notes.length) result.notes = notes;
-  }
-  if (typeof raw.tail === 'string' && raw.tail && result.cause !== 'none') {
-    const tail = scrubText(raw.tail);
-    if (tail) result.tail = tail;
   }
   return result;
 }
