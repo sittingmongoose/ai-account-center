@@ -152,6 +152,17 @@ for (const c of cases)
           { id: 'seven_day', usedPercent: c.week },
         ]);
         expect(sent()).toEqual([]);
+        // A busy account: usage moves while the dialog is open. That never refuses the claim.
+        writeFileSync(
+          join(home, 'fixture-state.json'),
+          JSON.stringify({
+            five: c.five + 3,
+            week: c.week + 2,
+            spent: false,
+            outcome: c.outcome,
+            refill: c.refill,
+          })
+        );
         const claim = await post('', {
           grantKey: key,
           confirmationToken: prep.body.confirmationToken,
@@ -161,6 +172,11 @@ for (const c of cases)
         expect(claim.body.pending).toBe(false);
         expect(claim.body.verification).toBe(c.result === 'claimed' ? 'confirmed' : 'unconfirmed');
         expect(claim.body.windows).toEqual(c.windows);
+        // The result names the usage the claim was sent at, not what the dialog showed.
+        expect(claim.body.sentUsage).toEqual([
+          { id: 'five_hour', usedPercent: c.five + 3 },
+          { id: 'seven_day', usedPercent: c.week + 2 },
+        ]);
         // Exactly one consume, for the exact chosen credit and this attempt's key.
         expect(sent()).toEqual([{ creditId: 'credit-a', idempotencyKey: claim.body.attemptKey }]);
         const after = await get();

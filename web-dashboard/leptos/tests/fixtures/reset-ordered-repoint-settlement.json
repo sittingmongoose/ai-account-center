@@ -13,6 +13,12 @@
       "outcome": "claimed",
       "pending": false,
       "providerSuccess": true,
+      "sentUsage": [
+        {
+          "id": "primary",
+          "usedPercent": 100.0
+        }
+      ],
       "verification": "confirmed",
       "windows": [
         {
@@ -27,6 +33,12 @@
   "outcome": "claimed",
   "pending": false,
   "providerSuccess": true,
+  "sentUsage": [
+    {
+      "id": "primary",
+      "usedPercent": 100.0
+    }
+  ],
   "verification": "confirmed",
   "windows": [
     {

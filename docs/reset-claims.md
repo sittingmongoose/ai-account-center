@@ -32,7 +32,9 @@ the attempt's original profile, host and source binding to confirm settlement; a
 evidence leaves it unconfirmed. A confirmed claim or check answers `windows`:
 each refilled window's id and used percent from the verification read (empty unless confirmed; for Codex, only
 the windows whose used percent fell). Prepare also answers `usage`: the id and used percent of each window the
-grant targets, from the same fresh read the confirmation is bound to. A refused prepare
+grant targets, from prepare's own fresh read (display only). Every attempt result, including `latestAttempt`,
+answers `sentUsage`: the same windows' used percent in the read the claim was reserved on, just before the send.
+A Codex result line says it ("When sent: Weekly 52% used, 5-hour 3% used."). A refused prepare
 or claim answers 409 `{code, action, reason, sent, evidence}`: `reason` is one of a fixed allowlist of native codes (never an
 identity) or null, and `sent` says whether the provider write was reached, in which case the UI blocks another
 spend until Check again settles it.
@@ -107,7 +109,12 @@ route's authority. The old timestamp fence is retired on upgrade. Unticketed or
 admission-only old in-flight inventories fail closed, while retained targets and attempts stay
 readable. A new ticketed read can verify an attempt from before the upgrade.
 Ticket metadata is excluded from the confirmation fingerprint: a new read of
-unchanged account/grant state still matches its confirmation.
+unchanged account/grant state still matches its confirmation. The fingerprint binds
+the identity, the exact grant (id, kind, the window keys it refills, count, expiry,
+availability), the executor, the saved-source binding and the account label. Live
+usage percentages are display-only and excluded, so ordinary use while the dialog
+is open never refuses a claim; begin still re-checks the exact grant's availability
+and expiry and the identity on its own fresh read.
 
 Verification also orders ticketed before/after reads by sequence. Observation
 wall times remain display/freshness data, not an identity or verification-order

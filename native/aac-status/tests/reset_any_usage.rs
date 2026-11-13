@@ -382,11 +382,14 @@ fn claude_keeps_its_scopes_and_its_window_proof() {
         assert_eq!(prepared["usage"], json!([{"id":"seven_day","usedPercent":50.0}]));
         let token = prepared["confirmationToken"].as_str().unwrap();
         let attempt = nonce(3);
-        let mut fresh = snap.clone();
+        // Usage moves while the dialog is open (50% -> 52% weekly, 10% -> 12% 5-hour); the claim is not refused.
+        let mut fresh = claude(52.0);
+        fresh.windows.insert("five_hour".into(), 12.0);
         fresh.read_ticket = Some(s.captured_ticket("route").unwrap());
         s.begin("route", key, &caller(), token, &fresh, NOW, &attempt).unwrap();
-        // Claude still needs its refilled window to fall: a spent grant alone stays unconfirmed.
-        let mut after = snap.clone();
+        // Claude still needs its refilled window to fall below the sent reading: a spent grant alone stays
+        // unconfirmed.
+        let mut after = fresh.clone();
         after.observed_at_ms += 1;
         after.grants[0].left = 1;
         if fell {
@@ -397,5 +400,124 @@ fn claude_keeps_its_scopes_and_its_window_proof() {
             .unwrap();
         assert_eq!(r["outcome"], outcome);
         assert_eq!(r["windows"], windows);
+        assert_eq!(r["sentUsage"], json!([{"id":"seven_day","usedPercent":52.0}]));
+    }
+}
+
+/// Two Codex credits at weekly 60% / 5-hour 2%, as the source names them.
+fn codex(five: f64, week: f64) -> Snapshot {
+    let credit = |id: &str| Grant {
+        id: Some(id.into()),
+        kind: "banked".into(),
+        clears: vec!["five_hour".into(), "seven_day".into()],
+        left: 1,
+        expires_at_ms: Some(NOW + 10_000),
+        usable: true,
+        words: None,
+    };
+    Snapshot {
+        read_ticket: None,
+        identity: Identity {
+            provider: "codex".into(),
+            account: "synthetic-account".into(),
+            organization: String::new(),
+            profile: "synthetic-profile".into(),
+            host: "fixture-host".into(),
+        },
+        observed_at_ms: NOW,
+        grants: vec![credit("credit_a"), credit("credit_b")],
+        windows: std::collections::BTreeMap::from([("five_hour".into(), five), ("seven_day".into(), week)]),
+        executor_ready: true,
+        source_binding: "synthetic-binding".into(),
+        account_label: "synthetic-principal".into(),
+    }
+}
+
+#[test]
+fn usage_moving_while_the_dialog_is_open_never_refuses_but_spend_safety_still_does() {
+    for case in [
+        "usage moved",
+        "other grant",
+        "grant spent",
+        "grant expired",
+        "identity changed",
+        "refill keys changed",
+        "binding changed",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut s = Store::open(&dir.path().join("claims.sqlite")).unwrap();
+        let shown = codex(2.0, 60.0);
+        let inv = s.read_inventory("route", &shown, NOW, &nonce(1)).unwrap();
+        let (a, b) = (
+            inv["grants"][0]["grantKey"].as_str().unwrap(),
+            inv["grants"][1]["grantKey"].as_str().unwrap(),
+        );
+        let prepared = s.prepare("route", b, &caller(), &shown, NOW, &nonce(2)).unwrap();
+        let token = prepared["confirmationToken"].as_str().unwrap();
+        // Every case also has usage moving: it must never be what decides.
+        let mut fresh = codex(5.0, 62.0);
+        let mut key = b;
+        let mut now = NOW;
+        let refusal = match case {
+            "usage moved" => None,
+            "other grant" => {
+                key = a;
+                Some("confirmation-invalid")
+            }
+            "grant spent" => {
+                fresh.grants[1].left = 0;
+                fresh.grants[1].usable = false;
+                Some("grant-changed")
+            }
+            "grant expired" => {
+                now = NOW + 10_000;
+                fresh.observed_at_ms = now;
+                Some("grant-unavailable")
+            }
+            "identity changed" => {
+                fresh.identity.account = "other-account".into();
+                Some("identity-changed")
+            }
+            "refill keys changed" => {
+                fresh.windows.remove("five_hour");
+                for g in &mut fresh.grants {
+                    g.clears = vec!["seven_day".into()];
+                }
+                Some("grant-changed")
+            }
+            _ => {
+                fresh.source_binding = "re-saved-login".into();
+                Some("grant-changed")
+            }
+        };
+        let attempt = nonce(3);
+        let begun = s.begin("route", key, &caller(), token, &fresh, now, &attempt);
+        match refusal {
+            Some(reason) => {
+                assert_eq!(begun.unwrap_err(), reason, "{case}");
+                assert_eq!(s.pending("route", now).unwrap()["attemptKey"], Value::Null, "{case}");
+            }
+            None => {
+                let write = begun.unwrap();
+                assert_eq!(write.body["creditId"], "credit_b");
+                // The result says what usage the claim was sent at, not what the dialog showed.
+                let r = s
+                    .read_finish("route", &attempt, Outcome::Nothing, Some(&fresh), NOW + 1, None)
+                    .unwrap();
+                assert_eq!(r["outcome"], "nothing-to-reset");
+                assert_eq!(
+                    r["sentUsage"],
+                    json!([{"id":"five_hour","usedPercent":5.0},{"id":"seven_day","usedPercent":62.0}])
+                );
+            }
+        }
+        // Either way the confirmation was one-shot: it cannot be used again.
+        assert_eq!(
+            s.begin("route", b, &caller(), token, &fresh, now, &nonce(4))
+                .unwrap_err(),
+            "confirmation-invalid",
+            "{case}"
+        );
     }
 }

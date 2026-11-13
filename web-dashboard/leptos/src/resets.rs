@@ -109,6 +109,9 @@ pub struct ClaimResult {
     pub provider_success: bool,
     #[serde(deserialize_with = "nullable")]
     pub windows: Vec<Refilled>,
+    /// The target limits' usage in the read the claim was sent on (history, never current usage).
+    #[serde(deserialize_with = "nullable")]
+    pub sent_usage: Vec<Refilled>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -560,6 +563,21 @@ pub struct Said {
 }
 
 pub fn result_said(r: &ClaimResult, provider: &str) -> Said {
+    let mut said = result_words(r, provider);
+    // Codex usage can move while the dialog is open; a sent claim says the numbers it was sent at.
+    if provider == "codex"
+        && matches!(
+            r.outcome.as_str(),
+            "claimed" | "claimed-unconfirmed" | "nothing-to-reset"
+        )
+        && let Some(sent) = used_now(&r.sent_usage)
+    {
+        said.text = format!("{} When sent: {sent}", said.text);
+    }
+    said
+}
+
+fn result_words(r: &ClaimResult, provider: &str) -> Said {
     let plain = |text: &str| Said {
         text: text.into(),
         bad: false,
@@ -2265,6 +2283,49 @@ mod tests {
         assert_eq!(
             OPENAI_CHOOSES,
             "OpenAI chooses which limits refill. If nothing refills, nothing is spent."
+        );
+    }
+
+    #[test]
+    fn a_sent_codex_claim_says_the_usage_it_was_sent_at() {
+        // Usage moved while the dialog was open: the result names the numbers the claim was sent at.
+        let sent = r#"[{"id":"five_hour","usedPercent":3},{"id":"seven_day","usedPercent":52}]"#;
+        let result = |outcome: &str| -> ClaimResult {
+            serde_json::from_str(&format!(
+                r#"{{"attemptKey":"a","outcome":"{outcome}","providerSuccess":true,"sentUsage":{sent}}}"#
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            result_said(&result("claimed"), "codex").text,
+            "Reset applied and confirmed. When sent: Weekly 52% used, 5-hour 3% used."
+        );
+        assert_eq!(
+            result_said(&result("nothing-to-reset"), "codex").text,
+            "Nothing to reset right now. Nothing was spent. When sent: Weekly 52% used, 5-hour 3% used."
+        );
+        let unconfirmed = result_said(&result("claimed-unconfirmed"), "codex");
+        assert!(
+            unconfirmed
+                .text
+                .ends_with("Check again. When sent: Weekly 52% used, 5-hour 3% used.")
+        );
+        assert!(unconfirmed.check && unconfirmed.bad);
+        // Outcomes that didn't act on usage, Claude, and results without the field keep their words.
+        assert_eq!(
+            result_said(&result("no-credit"), "codex").text,
+            "That reset is no longer there. Nothing was spent."
+        );
+        assert_eq!(
+            result_said(&result("claimed"), "claude").text,
+            "Reset applied and confirmed."
+        );
+        let old: ClaimResult =
+            serde_json::from_str(r#"{"attemptKey":"a","outcome":"claimed","sentUsage":null}"#)
+                .unwrap();
+        assert_eq!(
+            result_said(&old, "codex").text,
+            "Reset applied and confirmed."
         );
     }
 

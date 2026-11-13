@@ -147,11 +147,12 @@ fn usage(s: &Snapshot, g: &Grant) -> Vec<Value> {
         .collect()
 }
 fn fingerprint(s: &Snapshot, g: &Grant) -> Result<String> {
-    // Sample timestamp deliberately excluded: a fresh read of unchanged state must match.
+    // Binds what decides spend safety: the identity, the exact grant (id, kind, the window keys it refills, count,
+    // expiry, availability), the executor and the saved-source binding. Sample timestamp and live usage percentages
+    // are deliberately excluded: they are display-only, so ordinary use while the dialog is open cannot refuse.
     Ok(hash(&encode(&(
         s.identity.clone(),
         g.clone(),
-        &s.windows,
         s.executor_ready,
         &s.source_binding,
         &s.account_label,
@@ -822,11 +823,12 @@ impl Store {
         reserved
     }
     fn attempt_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
-        let (g, stored, previous_success, order, pending): (String, String, bool, i64, bool) = sql(tx.query_row(
-            "SELECT grant_json,outcome,provider_success,rowid,pending FROM attempts WHERE key=? AND account=?",
-            params![attempt, account],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        ))?;
+        let (g, stored, previous_success, order, pending, before): (String, String, bool, i64, bool, String) =
+            sql(tx.query_row(
+                "SELECT grant_json,outcome,provider_success,rowid,pending,before_json FROM attempts WHERE key=? AND account=?",
+                params![attempt, account],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            ))?;
         let details: Option<String> = sql(tx
             .query_row(
                 "SELECT details FROM history WHERE event='verification' AND target_hash=? ORDER BY seq DESC LIMIT 1",
@@ -838,6 +840,14 @@ impl Store {
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or(Value::Null);
         let grant: Grant = serde_json::from_str(&g).map_err(|_| "shape")?;
+        // The target windows' usage in the read the claim was reserved on, just before the send. It is history,
+        // never current usage; usage may have moved since the confirmation was shown.
+        let before: Value = serde_json::from_str(&before).unwrap_or(Value::Null);
+        let sent_usage: Vec<Value> = grant
+            .clears
+            .iter()
+            .filter_map(|k| before["windows"][k].as_f64().map(|v| json!({"id":k,"usedPercent":v})))
+            .collect();
         // A Codex claim is confirmed by the credit alone, so its receipt names only the limits that fell.
         let fell_only = details["provider"] == "codex";
         let windows: Vec<Value> = if stored == "claimed" {
@@ -860,7 +870,7 @@ impl Store {
             vec![]
         };
         Ok(
-            json!({"attemptKey":attempt,"attemptOrder":order.to_string(),"pending":pending,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows}),
+            json!({"attemptKey":attempt,"attemptOrder":order.to_string(),"pending":pending,"outcome":stored,"verification":if stored=="claimed"{"confirmed"}else{"unconfirmed"},"providerSuccess":previous_success,"windows":windows,"sentUsage":sent_usage}),
         )
     }
     fn committed_result(tx: &Connection, account: &str, attempt: &str) -> Result<Value> {
