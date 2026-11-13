@@ -2,7 +2,8 @@
 
 Use `AccountConfirmationStore` in `src/web-server/services/account-confirmations.ts`
 for every new guarded action. Extend its action union and use the existing
-review/consume pattern in `account-lifecycle-routes.ts`. Do not add another issuer.
+review/consume pattern in `src/web-server/services/account-lifecycle-removal.ts`.
+The routes derive the session key and shape the requests. Do not add another issuer.
 
 Bind each offer to the action, exact subject (account, trash entry or other target), authenticated session key and a
 fingerprint of the state shown in the review. Recompute the binding before the
@@ -20,10 +21,12 @@ Existing guarded actions keep their issuers and tests:
 
 | Mechanism | Existing responsibility |
 | --- | --- |
-| `AccountConfirmationStore` | Account removal, trash restore/purge and active sign-in replacement |
+| `AccountConfirmationStore` | Account removal and trash restore/purge |
 | `codex-activation-confirmation.ts` | Target profile, auth hash and reviewed process identities; 60-second one-use offer |
 | `antigravity/confirmation.ts` | Existing Antigravity activation offer and process review |
 | `ConfirmationBindings` | Caller overlay for existing activation routes; strict Codex binding and the existing Antigravity pass-through |
+
+`signin-again-active` is reserved in the action union; no current caller issues it.
 
 The overlay's ten-minute retention does not extend an issuer's lifetime: the
 issuer still validates expiry and target/state. Do not migrate existing tokens or

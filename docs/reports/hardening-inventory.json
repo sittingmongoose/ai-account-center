@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1188,
+    "totalOccurrences": 1207,
     "filesAffected": 119,
     "hotpathOccurrences": 535,
     "hotpathFilesAffected": 60,
@@ -336,20 +336,17 @@
         "markers": []
       },
       {
-        "file": "src/antigravity/signin-sandbox.ts",
-        "count": 21,
+        "file": "src/config/loader/io-locks.ts",
+        "count": 25,
         "calls": [
-          "accessSync",
-          "chmodSync",
           "closeSync",
-          "fstatSync",
-          "lstatSync",
+          "existsSync",
+          "fsyncSync",
           "mkdirSync",
           "openSync",
-          "readdirSync",
           "readFileSync",
-          "rmSync",
-          "statSync",
+          "renameSync",
+          "unlinkSync",
           "writeFileSync"
         ],
         "markers": []
@@ -526,11 +523,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 725,
-      "typedThrows": 208,
+      "totalThrows": 727,
+      "typedThrows": 210,
       "plainThrows": 56,
       "otherThrows": 461,
-      "adoptionRatio": 0.2869,
+      "adoptionRatio": 0.2889,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -563,16 +560,16 @@
           "plain": 10
         },
         {
+          "subdomain": "config",
+          "count": 8,
+          "typed": 3,
+          "plain": 5
+        },
+        {
           "subdomain": "cliproxy/accounts",
           "count": 7,
           "typed": 0,
           "plain": 7
-        },
-        {
-          "subdomain": "config",
-          "count": 6,
-          "typed": 1,
-          "plain": 5
         },
         {
           "subdomain": "cliproxy/auth",

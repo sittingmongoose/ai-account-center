@@ -108,6 +108,12 @@ export interface CodexPartitionFileResult {
   largeCodexRead?: LargeCodexReadSpec;
 }
 
+/**
+ * `experimentRoots` / `experimentDbs` (experiment-usage-roots.ts) and `homeRoots`
+ * (t3-usage-roots.ts) make a separate request that reads only those roots, deduplicated record
+ * by record; the default root then serves only as the reference copies are checked against
+ * (see collectExperimentActivity).
+ */
 interface UsageWorkerPayloads {
   claude: {
     projectsDir: string;
@@ -142,6 +148,10 @@ interface UsageWorkerPayloads {
     experimentDbs?: string[];
     activity?: AccountActivityScanOptions;
   };
+  /**
+   * Antigravity's conversation databases, read by the packaged helper on this host
+   * (antigravity-native-usage-collector.ts), which finds the roots itself.
+   */
   antigravity: { activity?: AccountActivityScanOptions };
 }
 export type UsageWorkerRequest =
@@ -152,6 +162,7 @@ export type UsageWorkerRequest =
       mapping: JsonlFieldMapping;
       activity?: AccountActivityScanOptions;
     }
+  /** One slice of the experiment-root walk (experiment-usage-roots.ts); returns no usage. */
   | { kind: 'experiment-roots'; cacheDir: string };
 
 export interface UsageWorkerResult {

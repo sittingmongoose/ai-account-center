@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -68,5 +68,88 @@ describe('retired launcher config', () => {
     const parsed = yaml.load(saved) as Record<string, unknown>;
     expect(parsed.future_section).toEqual({ untouched: true });
     expect(loadOrCreateUnifiedConfig().dashboard_auth?.session_lifetime_days).toBe(30);
+  });
+  it.each([
+    ['document end', '', '...\n'],
+    ['document start', '---\n', ''],
+  ])('keeps a %s marker from breaking an unrelated save', (_name, start, end) => {
+    const dir = getCcsDir();
+    fs.mkdirSync(dir);
+    const file = path.join(dir, 'config.yaml');
+    fs.writeFileSync(
+      file,
+      start + 'version: 14\naccounts: {}\nprofiles: {}\ncursor: {enabled: true}\n' + end
+    );
+    mutateConfig((config) => {
+      config.default = 'work';
+    });
+    const saved = fs.readFileSync(file, 'utf8');
+    expect(yaml.load(saved)).toMatchObject({ default: 'work', cursor: { enabled: true } });
+    expect(loadOrCreateUnifiedConfig().cursor).toEqual({ enabled: true });
+    expect(fs.readdirSync(dir).filter((name) => name.startsWith('config.yaml.retired-'))).toEqual(
+      []
+    );
+  });
+  it('preserves document-marker text inside an opaque scalar', () => {
+    const dir = getCcsDir();
+    fs.mkdirSync(dir);
+    fs.writeFileSync(
+      path.join(dir, 'config.yaml'),
+      'version: 14\ncursor:\n  markers: |\n    ---\n    ...\n'
+    );
+    mutateConfig((config) => {
+      config.default = 'work';
+    });
+    expect(loadOrCreateUnifiedConfig().cursor).toEqual({ markers: '---\n...\n' });
+  });
+  it('backs up the original once before omitting an unencodable retired alias cycle', () => {
+    const dir = getCcsDir();
+    fs.mkdirSync(dir);
+    const file = path.join(dir, 'config.yaml');
+    const original = 'version: 14\ncursor: &retired\n  self: *retired\n';
+    fs.writeFileSync(file, original);
+    mutateConfig((config) => {
+      config.default = 'work';
+    });
+    const backups = () =>
+      fs.readdirSync(dir).filter((name) => name.startsWith('config.yaml.retired-'));
+    expect(backups()).toHaveLength(1);
+    const backup = path.join(dir, backups()[0]);
+    expect(fs.readFileSync(backup, 'utf8')).toBe(original);
+    expect(fs.statSync(backup).mode & 0o777).toBe(0o600);
+    expect(loadOrCreateUnifiedConfig().cursor).toBeUndefined();
+    expect(loadOrCreateUnifiedConfig().default).toBe('work');
+    mutateConfig((config) => {
+      config.default = 'other';
+    });
+    expect(backups()).toHaveLength(1);
+    expect(loadOrCreateUnifiedConfig().default).toBe('other');
+  });
+  it('leaves the original unchanged when the required recovery backup cannot be created', () => {
+    const dir = getCcsDir();
+    fs.mkdirSync(dir);
+    const file = path.join(dir, 'config.yaml');
+    const original = 'version: 14\ncursor: &retired\n  self: *retired\n';
+    fs.writeFileSync(file, original);
+    const open = fs.openSync;
+    const fault = spyOn(fs, 'openSync').mockImplementation(
+      (...args: Parameters<typeof fs.openSync>) => {
+        if (String(args[0]).startsWith(`${file}.retired-`)) {
+          throw Object.assign(new Error('backup refused'), { code: 'EACCES' });
+        }
+        return open(...args);
+      }
+    );
+    try {
+      expect(() =>
+        mutateConfig((config) => {
+          config.default = 'work';
+        })
+      ).toThrow('backup refused');
+      expect(fs.readFileSync(file, 'utf8')).toBe(original);
+      expect(fs.readdirSync(dir)).toEqual(['config.yaml']);
+    } finally {
+      fault.mockRestore();
+    }
   });
 });

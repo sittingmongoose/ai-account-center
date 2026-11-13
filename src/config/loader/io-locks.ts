@@ -17,6 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as yaml from 'js-yaml';
+import { ConfigError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
 import {
   isUnifiedConfig,
@@ -257,7 +258,11 @@ export function loadUnifiedConfigWithLockHeld(
 export function writeUnifiedConfigWithLockHeld(
   config: UnifiedConfig,
   generateYamlHeader: () => string,
-  generateYamlWithComments: (config: UnifiedConfig, existing?: string) => string
+  generateYamlWithComments: (
+    config: UnifiedConfig,
+    existing?: string,
+    preserveOriginal?: () => void
+  ) => string
 ): void {
   const yamlPath = getConfigYamlPath();
   const dir = path.dirname(yamlPath);
@@ -272,7 +277,17 @@ export function writeUnifiedConfigWithLockHeld(
 
   // Generate YAML with section comments
   const existing = fs.existsSync(yamlPath) ? fs.readFileSync(yamlPath, 'utf8') : '';
-  const yamlContent = generateYamlWithComments(config, existing);
+  const yamlContent = generateYamlWithComments(config, existing, () => {
+    if (!existing) throw new ConfigError('Cannot back up an absent original configuration.');
+    const backup = `${yamlPath}.retired-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
+    const descriptor = fs.openSync(backup, 'wx', 0o600);
+    try {
+      fs.writeFileSync(descriptor, existing, 'utf8');
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  });
   const content = generateYamlHeader() + yamlContent;
 
   // Atomic write: write to temp file, then rename

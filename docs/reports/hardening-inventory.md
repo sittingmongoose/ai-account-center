@@ -6,7 +6,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1188 |
+| Sync fs occurrences (all) | 1207 |
 | Sync fs files affected (all) | 119 |
 | Sync fs occurrences (runtime hotpaths) | 535 |
 | Sync fs files affected (runtime hotpaths) | 60 |
@@ -53,7 +53,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 28.7% (208/725) |
+| typed-error adoption (typed/total throws) | 28.9% (210/727) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (3/3), target 40% |
 | hotpath console.error/warn occurrences | 57 (226 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 14 |
