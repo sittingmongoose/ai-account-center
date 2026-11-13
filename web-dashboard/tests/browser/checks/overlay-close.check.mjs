@@ -173,30 +173,6 @@ export const tests = {
 		}
 	},
 
-	async 'overlay-close: the Scoreboard runs-not-scored list closes in every pose'(t) {
-		for (const p of POSES) {
-			await t.step(p.name, async () => {
-				await poseContext(t, p);
-				await openBoard(t, p.safe);
-				const label = `${p.name} runs not scored`;
-				await t.page.click('.sb-unscored-btn');
-				await t.page.waitForSelector('.pop .sb-unscored-pop', { timeout: 5000 });
-				await t.page.waitForTimeout(300);
-				const sheet = await t.page.evaluate(() => !(document.querySelector('.pop').getAttribute('style') || '').includes('left'));
-				await assertClose(t, label, '.pop', '.pop', p.safe, 'escape', { skipBottom: sheet });
-				// A tap beside the list, on the page's plain intro line (the scrim over it on a phone), closes it too.
-				await t.page.click('.sb-unscored-btn');
-				await t.page.waitForSelector('.pop', { timeout: 5000 });
-				const beside = await t.page.evaluate(() => {
-					const r = document.querySelector('.sb-head .page-sub').getBoundingClientRect();
-					return { x: Math.round(r.left + Math.min(r.width / 2, 40)), y: Math.round(r.top + r.height / 2) };
-				});
-				await t.page.mouse.click(beside.x, beside.y);
-				await t.until(`${label}: a tap beside it closes`, () => !document.querySelector('.pop'), null, { timeout: 5000 });
-			});
-		}
-	},
-
 	async 'overlay-close: the Analytics popover closes in every pose'(t) {
 		for (const p of POSES) {
 			await t.step(p.name, async () => {

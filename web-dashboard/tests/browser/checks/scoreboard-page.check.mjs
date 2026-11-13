@@ -33,7 +33,15 @@ async function openBoard(t, query = '', change) {
 
 // The fixture's runs not scored (leptos/fixtures/scoreboard-view.json `unscored`): 12 + 23 + 6.
 const UNSCORED_LINE = '41 runs not scored: 12 unknown model, 23 no task type, 6 no model';
-const lineText = (t) => t.page.evaluate(() => document.querySelector('.sb-unscored')?.textContent.replace(/\s+/g, ' ').trim() ?? null);
+const lineText = (t) => t.page.evaluate(() => document.querySelector('.sb-unscored > summary')?.textContent.replace(/\s+/g, ' ').trim() ?? null);
+/** The list under the line: whether it shows, floats (a hover) or sits in the flow (open), and its box. */
+const listState = (t) => t.page.evaluate(() => {
+	const list = document.querySelector('.sb-unscored .sbu-list');
+	const cs = getComputedStyle(list);
+	const r = list.getBoundingClientRect();
+	return { shown: cs.display !== 'none', floating: cs.position === 'absolute', open: list.parentElement.open, left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+});
+const stackTop = (t) => t.page.evaluate(() => document.querySelector('.sb-stack').getBoundingClientRect().top);
 
 export const tests = {
 	// Against the real server's view, which has no byModel yet: an honest line, nothing guessed.
@@ -114,59 +122,61 @@ export const tests = {
 		await openBoard(t);
 		await t.equal('the note names every reason with its runs', await lineText(t), UNSCORED_LINE);
 		await t.check('the note sits under the head', await t.page.evaluate(() => {
-			const head = document.querySelector('.sb-head');
 			const note = document.querySelector('.sb-unscored');
 			const sub = document.querySelector('.sb-head .page-sub').getBoundingClientRect();
-			return head.contains(note) && note.getBoundingClientRect().top >= sub.bottom - 1;
+			return document.querySelector('.sb-head').contains(note) && note.getBoundingClientRect().top >= sub.bottom - 1;
 		}));
-		await t.check('the note is one line on a desktop', await t.page.evaluate(() => document.querySelector('.sb-unscored-btn').getBoundingClientRect().height < 30));
+		await t.check('the note is one line on a desktop', await t.page.evaluate(() => {
+			const note = document.querySelector('.sb-unscored');
+			return note.getBoundingClientRect().height < parseFloat(getComputedStyle(note).lineHeight) * 1.5;
+		}));
+		await t.check('the line is a control at least 24 px tall', await t.page.evaluate(() => document.querySelector('.sb-unscored > summary').getBoundingClientRect().height >= 24));
 		await t.check('the note carries no state colour', await t.page.evaluate(() => {
-			const ink = (sel) => getComputedStyle(document.querySelector(sel)).color;
 			const probe = document.createElement('span');
-			probe.style.color = 'var(--ink-3)';
 			document.body.append(probe);
-			const ink3 = getComputedStyle(probe).color;
-			probe.style.color = 'var(--ink-2)';
-			const ink2 = getComputedStyle(probe).color;
+			const tone = (v) => { probe.style.color = `var(${v})`; return getComputedStyle(probe).color; };
+			const [ink3, ink2] = [tone('--ink-3'), tone('--ink-2')];
 			probe.remove();
-			return ink('.sb-unscored') === ink3 && ink('.sb-unscored-btn b') === ink2;
+			return getComputedStyle(document.querySelector('.sb-unscored > summary')).color === ink3 && getComputedStyle(document.querySelector('.sb-unscored > summary b')).color === ink2;
 		}));
-		// Closed: an open list (not modal on a desktop) covers controls by design, so the audit runs before it opens.
+		await t.equal('the list is closed at first', (await listState(t)).shown, false);
 		await t.audit('scoreboard runs not scored');
-		// A mouse hover opens the list under the line; it goes when the pointer leaves.
-		const box = await t.page.locator('.sb-unscored-btn').boundingBox();
+		const before = await stackTop(t);
+		// A mouse hover shows the list floating under the line, over the page; it goes when the pointer leaves.
+		const box = await t.page.locator('.sb-unscored > summary').boundingBox();
 		await t.page.mouse.move(box.x + 20, box.y + box.height / 2);
-		await t.page.waitForSelector('.pop .sb-unscored-pop', { timeout: 3000 });
-		await t.text('.pop h3', '41 runs not scored');
-		await t.count('.pop .sbu-why dt', 3);
-		await t.text('.pop .sbu-why', /Unknown model\s*12 runs/);
-		await t.text('.pop .sbu-why', /No task type\s*23 runs/);
-		await t.text('.pop .sbu-why', /No model\s*6 runs/);
-		await t.count('.pop .sbu-ids:not(.sbu-runs) li', 2);
-		await t.text('.pop .sbu-ids li:first-child', /example-vendor\/example-model-9-preview\s*7 runs/);
-		await t.text('.pop .sbu-ids li:nth-child(2)', /builtin:example-coding-plan\\Example-4\.2\s*3 runs/);
-		await t.text('.pop .sbu-more', '2 more runs under other ids.');
-		await t.check('the list hangs under the line', await t.page.evaluate(() => {
-			const btn = document.querySelector('.sb-unscored-btn').getBoundingClientRect();
-			const pop = document.querySelector('.pop').getBoundingClientRect();
-			return pop.top >= btn.bottom && pop.top - btn.bottom < 16 && pop.right <= innerWidth;
-		}));
-		await t.page.click('.pop .sbu-newest .disclosure');
-		await t.count('.pop .sbu-runs li', 3);
-		await t.text('.pop .sbu-runs', /mac\.example-worker--no-model\s*no model/);
-		await t.text('.pop .sbu-runs', /unknown model example-vendor\/example-model-9-preview/);
-		await t.shot('scoreboard-unscored-desktop', 'runs not scored at 1440 px: the line under the head and its open list');
-		await t.page.mouse.move(box.x + box.width / 2, 860);
-		await t.page.waitForSelector('.pop', { state: 'detached', timeout: 3000 });
-		// A click keeps it open after the pointer leaves; Escape closes it.
-		await t.page.click('.sb-unscored-btn');
-		await t.page.waitForSelector('.pop .sb-unscored-pop', { timeout: 3000 });
-		await t.page.mouse.move(box.x + box.width / 2, 860);
-		await t.page.waitForTimeout(600);
-		await t.count('.pop', 1);
-		await t.equal('the line says it is open', await t.page.getAttribute('.sb-unscored-btn', 'aria-expanded'), 'true');
-		await t.page.keyboard.press('Escape');
-		await t.page.waitForSelector('.pop', { state: 'detached', timeout: 3000 });
+		await t.until('a hover shows the list', () => getComputedStyle(document.querySelector('.sbu-list')).display !== 'none', null, { timeout: 3000 });
+		let list = await listState(t);
+		await t.check('the hovered list floats and moves nothing', list.floating && (await stackTop(t)) === before);
+		await t.check('the hovered list hangs under the line, inside the window', list.top >= box.y + box.height - 8 && list.top - (box.y + box.height) < 16 && list.right <= 1440);
+		await t.text('.sbu-list .sbu-head', '41 runs not scored');
+		const lines = (sel) => t.page.$$eval(sel, (l) => l.map((e) => e.textContent.trim()));
+		const why = await lines('.sbu-list .sbu-why');
+		await t.equal('three reasons, each with its runs', why.map((w) => w.split(' · ')[0]), ['Unknown model: 12 runs', 'No task type: 23 runs', 'No model: 6 runs']);
+		await t.equal('the unknown ids with their runs', await lines('.sbu-list .sbu-id'), [
+			'example-vendor/example-model-9-preview7 runs',
+			'builtin:example-coding-plan\\Example-4.23 runs',
+		]);
+		await t.text('.sbu-list .sbu-more', '2 more runs under other ids.');
+		// The pointer may move onto the list without it going.
+		const hovered = await t.page.locator('.sbu-list').boundingBox();
+		await t.page.mouse.move(hovered.x + 10, hovered.y + hovered.height - 10, { steps: 4 });
+		await t.equal('the list stays under the pointer', (await listState(t)).shown, true);
+		await t.shot('scoreboard-unscored-desktop', 'runs not scored at 1440 px: the line under the head and its list on a hover');
+		await t.page.mouse.move(box.x + box.width / 2, 880);
+		await t.until('the list goes when the pointer leaves', () => getComputedStyle(document.querySelector('.sbu-list')).display === 'none', null, { timeout: 3000 });
+		// A click keeps it open, in the flow under the line, after the pointer leaves; another click closes it.
+		await t.page.click('.sb-unscored > summary');
+		await t.page.mouse.move(box.x + box.width / 2, 880);
+		list = await listState(t);
+		await t.check('a click keeps the list open in the flow', list.open && list.shown && !list.floating && (await stackTop(t)) > before);
+		await t.page.click('.sb-unscored > summary');
+		await t.equal('another click closes it', (await listState(t)).shown, false);
+		// The keyboard opens it too.
+		await t.page.focus('.sb-unscored > summary');
+		await t.page.keyboard.press('Enter');
+		await t.equal('Enter opens it', (await listState(t)).open, true);
+		await t.page.keyboard.press('Enter');
 
 		// None not scored, or an older server without the field: no line at all.
 		for (const [name, change] of [
@@ -175,8 +185,8 @@ export const tests = {
 		]) {
 			await t.newContext({ viewport: { width: 1440, height: 900 } });
 			await openBoard(t, '', change);
-			await t.count('.sb-unscored', 0);
 			await t.check(`${name}: no line under the head`, (await lineText(t)) === null);
+			await t.count('.sb-unscored', 0);
 		}
 	},
 
@@ -186,30 +196,37 @@ export const tests = {
 			await openBoard(t, `?safe=${f.safe}`);
 			await t.equal(`${f.name}: the line`, await lineText(t), UNSCORED_LINE);
 			const shape = await t.page.evaluate(() => {
-				const btn = document.querySelector('.sb-unscored-btn');
-				const lh = parseFloat(getComputedStyle(btn).lineHeight);
-				const pieces = [...btn.querySelectorAll('.nw')].map((n) => n.getBoundingClientRect());
+				const summary = document.querySelector('.sb-unscored > summary');
+				const note = document.querySelector('.sb-unscored');
+				const lh = parseFloat(getComputedStyle(note).lineHeight);
+				// Each count (b) and its words (the span after it) sit on one line: one box each, at one height.
+				const whole = [...summary.querySelectorAll('b')].every((b) => {
+					const words = b.nextElementSibling.getClientRects();
+					return b.getClientRects().length === 1 && words.length === 1 && Math.abs(words[0].top - b.getClientRects()[0].top) < 2;
+				});
 				const head = document.querySelector('.sb-head').getBoundingClientRect();
-				const b = btn.getBoundingClientRect();
-				return { lines: Math.round((b.height - 4) / lh), whole: pieces.every((r) => r.height <= lh + 1), inside: b.left >= head.left - 1 && b.right <= head.right + 1, h: b.height };
+				const n = note.getBoundingClientRect();
+				return { lines: Math.round(n.height / lh), whole, inside: n.left >= head.left - 1 && n.right <= head.right + 1, h: n.height };
 			});
-			await t.check(`${f.name}: each piece stays on one line`, shape.whole);
+			await t.check(`${f.name}: each count stays with its words`, shape.whole);
 			await t.check(`${f.name}: two lines at most`, shape.lines <= 2, `${shape.lines} lines (${shape.h} px)`);
 			await t.check(`${f.name}: inside the head`, shape.inside);
-			await t.check(`${f.name}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 			await t.audit(`${f.name} runs not scored`);
-			await t.page.click('.sb-unscored-btn');
-			await t.page.waitForSelector('.pop .sb-unscored-pop', { timeout: 3000 });
-			await t.page.waitForTimeout(300);
-			await t.check(`${f.name}: the open list stays inside the window`, await t.page.evaluate(() => {
-				const r = document.querySelector('.pop').getBoundingClientRect();
-				return r.left >= -0.5 && r.right <= innerWidth + 0.5 && r.top >= -0.5;
-			}));
-			await t.count('.pop .sbu-ids li', 2);
-			await t.text('.pop .sbu-why', /Unknown model\s*12 runs/);
-			if (f.name === 'iphone' || f.name === 'duo-landscape') await t.shot(`scoreboard-unscored-${f.name}`, `runs not scored on ${f.name} (${f.w}x${f.h}): the list open`);
-			await t.page.keyboard.press('Escape');
-			await t.page.waitForSelector('.pop', { state: 'detached', timeout: 3000 });
+			// A tap opens the list in the flow under the line, inside the content; another tap closes it.
+			await t.page.click('.sb-unscored > summary');
+			const list = await listState(t);
+			const content = await t.page.evaluate(() => {
+				const r = document.querySelector('.sb-head').getBoundingClientRect();
+				return { left: r.left, right: r.right };
+			});
+			await t.check(`${f.name}: a tap opens the list in the flow`, list.open && list.shown && !list.floating);
+			await t.check(`${f.name}: the open list stays inside the content`, list.left >= content.left - 1 && list.right <= content.right + 1, `${Math.round(list.left)}-${Math.round(list.right)} in ${Math.round(content.left)}-${Math.round(content.right)}`);
+			await t.check(`${f.name}: no sideways scroll with it open`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+			await t.count('.sbu-list .sbu-id', 2);
+			await t.text('.sbu-list .sbu-why', /^Unknown model: 12 runs · /);
+			if (f.name === 'iphone' || f.name === 'duo-landscape') await t.shot(`scoreboard-unscored-${f.name}`, `runs not scored on ${f.name} (${f.w}x${f.h}): the list open under the line`);
+			await t.page.click('.sb-unscored > summary');
+			await t.equal(`${f.name}: another tap closes it`, (await listState(t)).shown, false);
 		}
 	},
 
