@@ -470,3 +470,31 @@ test('analytics-page: actions', () => {
   assert.ok(!p.open.has('a'), 'a second focus closes it');
   assert.deepEqual(applyAnalyticsAction(p, 'analytics-group', 'nope'), {});
 });
+
+// Post-landing fix (Astra/Sol max M1, the same class): the frame's controllers stay in the window after sign-out, so a
+// read queued behind a side read must not go out with the next session's cookie once the controller has stopped.
+test('a refresh still waiting on its side reads at stop sends no analytics read afterwards', async () => {
+  let hold = false;
+  let release;
+  const routes = defaultRoutes({
+    '/api/accounts/dashboard': async () => {
+      if (hold) {
+        hold = false;
+        await new Promise((resolve) => { release = resolve; });
+      }
+      return { status: 200, body: dashboard() };
+    },
+  });
+  const { controller, server } = make(routes);
+  controller.show();
+  for (let i = 0; i < 6; i++) await settle();
+  hold = true;
+  assert.equal(controller.act('analytics-refresh', ''), true);
+  for (let i = 0; i < 4; i++) await settle();
+  assert.ok(release, 'the forced refresh waits on its dashboard read');
+  controller.stop();
+  const before = server.calls.length;
+  release();
+  for (let i = 0; i < 8; i++) await settle();
+  assert.deepEqual(server.calls.slice(before), [], 'no GET /api/accounts/analytics?refresh=true with the next session');
+});

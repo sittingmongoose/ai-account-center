@@ -710,3 +710,217 @@ test('each install numbers its controller and stops the one before, so a page dr
   second.stop();
   assert.equal((listeners.get('popstate') || []).length, 0);
 });
+
+// ---------------------------------------------------------------- post-landing fix (Astra max M1)
+// A stopped controller (signed out, its page gone) stays in the top window, unlike the old iframe, which went with its
+// work. Nothing it queued, awaited or scheduled may reach the network after stop() (the browser would send it with the
+// next session's cookie), nor touch the next session's views or the shared state.
+
+test('M1: a queued write is never sent after stop, even when the reply it waited for lands in the next session', async () => {
+  let release;
+  let session = 1;
+  const patches = [];
+  const { server: base } = fixtureServer();
+  const server = async (method, path, body) => {
+    if (method === 'PATCH' && path === '/api/accounts/visibility') {
+      patches.push({ session, body });
+      if (patches.length === 1) await new Promise((resolve) => { release = resolve; });
+      return { payload: { hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: ['claude'] } };
+    }
+    return base(method, path, body);
+  };
+  const ctl = await loadController(server, { page: 'accounts' });
+  // Show in tray off for Claude (its reply is held), then Show on dashboard off for Codex: queued behind it
+  await ctl.act('accounts-tray', 'claude:hide');
+  await ctl.act('accounts-show', 'codex:hide');
+  assert.equal(patches.length, 1, 'the second save waits for the first');
+  assert.deepEqual(await ctl.c.signOut(), { ok: true });
+  ctl.c.stop();
+  // a new session starts; then the old reply arrives
+  session = 2;
+  const out = ctl.emitted.length;
+  release();
+  await flush(24);
+  assert.deepEqual(patches.map((p) => p.session), [1], 'the queued Codex save is dropped, never sent');
+  assert.equal(ctl.emitted.length, out, 'and the old controller draws and says nothing');
+});
+
+test('M1: a reply that lands after stop starts nothing: no sign-in polling, no request, no timer', async () => {
+  let hold = false;
+  let release;
+  const calls = [];
+  const timers = [];
+  const { server: base } = fixtureServer();
+  const job = { id: 'job_aaaaaaaaaaaaaaaa', provider: 'codex', kind: 'device-code', mode: 'add', state: 'waiting', profileName: 'pending', verification: { userCode: 'ABCD-1234', url: 'https://example.test' } };
+  const c = createFrameDashboard({
+    fetch: async (path, options = {}) => {
+      calls.push(path);
+      if (hold && path === '/api/accounts/registry') {
+        hold = false;
+        await new Promise((resolve) => { release = resolve; });
+        return respond({ payload: { providers: [], accounts: [], trash: [], jobs: [job] } });
+      }
+      if (path.includes('/api/accounts/signin-jobs/')) return respond({ payload: job });
+      return respond(await base(options.method || 'GET', path, options.body ? JSON.parse(options.body) : null));
+    },
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+  });
+  await c.start({ check: (await base('GET', '/api/auth/check')).payload });
+  await flush();
+  hold = true;
+  c.page('accounts');
+  await flush();
+  c.stop();
+  const before = calls.length;
+  const scheduled = timers.length;
+  release();
+  await flush(16);
+  for (const timer of timers.splice(0)) timer.fn();
+  await flush(16);
+  assert.equal(calls.length, before, 'no request after stop');
+  assert.equal(timers.length, 0, `no timer scheduled after stop (had ${scheduled} before)`);
+});
+
+test('M1: a switch request queued behind a session rotation is never sent once the controller stops', async () => {
+  let finishRevoke;
+  const { s, server: base } = fixtureServer();
+  const server = async (method, path, body) => {
+    if (method === 'POST' && path === '/api/auth/sessions/revoke-others') {
+      await new Promise((resolve) => { finishRevoke = resolve; });
+      return { payload: { signedOutBrowsers: 1 } };
+    }
+    return base(method, path, body);
+  };
+  const ctl = await loadController(server, { page: 'accounts' });
+  // "Sign out other browsers" rotates the session: requests made meanwhile wait for the new cookie (bridge.js send).
+  // While a switch approval waits, the rotation itself is held, so the switch's first ask is what can queue behind it.
+  assert.equal(ctl.c.act('others-out', ''), true);
+  await flush();
+  assert.ok(finishRevoke, 'the rotation is in flight');
+  assert.equal(ctl.c.act('activate', 'other'), true);
+  await flush();
+  assert.equal(s.attempts, 0, 'the switch request waits behind the rotation');
+  // the session ends (here: signed out elsewhere) and the frame stops the controller
+  ctl.c.stop();
+  const [calls, out] = [ctl.calls.length, ctl.emitted.length];
+  finishRevoke();
+  await flush(24);
+  assert.equal(s.attempts, 0, 'the switch request is never sent with the next session');
+  assert.equal(ctl.calls.length, calls, 'nothing else is sent either');
+  assert.equal(ctl.emitted.length, out, 'and nothing is drawn');
+});
+
+test('M1: a switch confirmation in flight at stop is aborted and its answer acts on nothing', async () => {
+  let answer;
+  const signals = [];
+  const { s, server: base } = fixtureServer();
+  const server = async (method, path, body) => {
+    if (method === 'POST' && path === '/api/codex/profiles/other/activate' && body?.confirmationToken) {
+      s.attempts++;
+      await new Promise((resolve) => { answer = resolve; });
+      return { payload: { name: 'other', email: 'other@example.test' } };
+    }
+    return base(method, path, body);
+  };
+  const calls = [];
+  const emitted = [];
+  const c = createFrameDashboard({
+    fetch: async (path, options = {}) => {
+      const method = options.method || 'GET';
+      const body = options.body ? JSON.parse(options.body) : null;
+      calls.push({ method, path, body });
+      signals.push(options.signal);
+      return respond(await server(method, path, body));
+    },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    emit: (key, json) => emitted.push({ key, json }),
+  });
+  await c.start({ check: (await base('GET', '/api/auth/check')).payload });
+  await flush(16);
+  assert.equal(c.act('activate', 'other'), true);
+  await flush(16);
+  assert.equal(c.act('activation-confirm', ''), true);
+  await flush(16);
+  assert.equal(s.attempts, 2, 'the confirmation is on its way');
+  const confirmSignal = signals.at(-1);
+  assert.ok(confirmSignal && confirmSignal.aborted === false, 'every request carries the controller\'s abort signal');
+  c.stop();
+  assert.equal(confirmSignal.aborted, true, 'stop aborts what is in flight');
+  const [n, out] = [calls.length, emitted.length];
+  // the server's answer still arrives (a fetch that ignores the abort): the stopped controller acts on none of it
+  answer();
+  await flush(24);
+  assert.equal(calls.length, n, 'no refresh or other read follows with the next session');
+  assert.equal(emitted.length, out, 'no "Codex account switched" toast, no view');
+});
+
+test('M1 (Sol): a logout queued behind a session rotation never signs out the next session', async () => {
+  // Sol max M1's sequence: a held dashboard read; Sign out other browsers waits for it (it rotates the session); Sign
+  // out waits behind that rotation; the session ends elsewhere and the frame stops the controller; a new session signs
+  // in; then the old read is answered.
+  let holdRead = false;
+  let releaseRead;
+  let session = 1;
+  const sent = [];
+  const { s, server: base } = fixtureServer();
+  const server = async (method, path, body) => {
+    if (method !== 'GET') sent.push({ session, method, path });
+    if (method === 'POST' && path === '/api/auth/logout') { s.signedIn = false; return { payload: { success: true } }; }
+    if (method === 'POST' && path === '/api/auth/sessions/revoke-others') return { payload: { signedOutBrowsers: 1 } };
+    if (holdRead && method === 'GET' && path.startsWith('/api/accounts/dashboard?')) {
+      holdRead = false;
+      await new Promise((resolve) => { releaseRead = resolve; });
+    }
+    return base(method, path, body);
+  };
+  const ctl = await loadController(server, { page: 'accounts' });
+  holdRead = true;
+  assert.equal(ctl.c.command('refresh'), true);
+  await flush();
+  assert.ok(releaseRead, 'a dashboard read is held');
+  assert.equal(ctl.c.act('others-out', ''), true);
+  await flush();
+  const signingOut = ctl.c.signOut();
+  await flush();
+  assert.deepEqual(sent, [], 'the rotation waits for the read, and the logout for the rotation');
+  // the session ends elsewhere: the frame stops the controller; then a new session signs in
+  ctl.c.stop();
+  session = 2;
+  s.signedIn = true;
+  releaseRead();
+  await flush(32);
+  assert.deepEqual(sent, [], 'neither the rotation nor the logout is ever sent with the new session');
+  assert.equal(s.signedIn, true, 'the new session stays signed in');
+  assert.deepEqual(await signingOut, { ok: false }, 'the old Sign out ends without effect');
+});
+
+test('M1 (Sol): a Claude Add that already started sends no follow-up Open after stop', async () => {
+  let releaseAdd;
+  const sent = [];
+  const { server: base } = fixtureServer();
+  const server = async (method, path, body) => {
+    if (method !== 'GET') sent.push(`${method} ${path}`);
+    if (method === 'POST' && path === '/api/accounts/add') {
+      await new Promise((resolve) => { releaseAdd = resolve; });
+      return { payload: { success: true } };
+    }
+    if (method === 'POST' && /\/api\/claude\/desktop-profiles\/[^/]+\/open$/.test(path)) return { status: 202, payload: { operation: { state: 'opening' } } };
+    return base(method, path, body);
+  };
+  const ctl = await loadController(server, { page: 'accounts' });
+  await ctl.act('add', 'claude');
+  await ctl.act('flow-submit', 'claude\nfixture-two');
+  await ctl.act('flow-submit', 'claude\nfixture.two@example.test');
+  await ctl.act('claude-host', 'claude:mac');
+  assert.deepEqual(sent, ['POST /api/accounts/add'], 'the profile is being created');
+  ctl.c.stop();
+  const out = ctl.emitted.length;
+  releaseAdd();
+  await flush(32);
+  assert.deepEqual(sent, ['POST /api/accounts/add'], 'its Open never follows once the page has gone');
+  assert.equal(ctl.emitted.length, out, 'and nothing is drawn or said');
+});

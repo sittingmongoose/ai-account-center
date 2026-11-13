@@ -22,11 +22,12 @@ body::before {
   height: max(env(safe-area-inset-top, 0px), var(--safe-top, 0px));
   background: var(--system-status-bg);
 }
-/* Before the frame starts, the Duo's side strip may already contain its clock and signal ring. The classic
-   canvas also leaves these safe side insets empty. The frame replaces this conservative height with its
-   measured reserve, and paints only its chosen rail side, including transient zero-inset readings. */
+/* Before the frame starts, the Duo's side strip may already contain its clock and signal ring, under a Live
+   Activity when one is running (down to 242 pt folded). The classic canvas also leaves these safe side insets
+   empty. The frame replaces this conservative height with its measured reserve (device.rs rail_reserve), and
+   paints only its chosen rail side, including transient zero-inset readings. */
 body::after {
-  height: 184px;
+  height: 252px;
   border-style: solid;
   border-color: var(--system-status-bg);
   border-width: 0 env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);

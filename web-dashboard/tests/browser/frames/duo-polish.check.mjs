@@ -12,9 +12,9 @@ const SCREEN = { width: 466, height: 678 };
 const RADIUS = 55;
 const MARGIN = 12;
 const RAIL_POSES = [
-  { name: 'open landscape, strip right', w: 951, h: 669, safe: '0,84,34,0', side: 'right', reserve: 136 },
-  { name: 'open landscape, strip left', w: 951, h: 669, safe: '0,0,34,84', side: 'left', reserve: 136 },
-  { name: 'folded upright', w: 466, h: 678, safe: '0,84,34,0', side: 'right', reserve: 184 },
+  { name: 'open landscape, strip right', w: 951, h: 669, safe: '0,84,34,0', side: 'right', reserve: 216 },
+  { name: 'open landscape, strip left', w: 951, h: 669, safe: '0,0,34,84', side: 'left', reserve: 216 },
+  { name: 'folded upright', w: 466, h: 678, safe: '0,84,34,0', side: 'right', reserve: 252 },
   { name: 'folded on its side, strip right', w: 678, h: 466, safe: '0,84,34,0', side: 'right', reserve: 12 },
   { name: 'folded on its side, strip left', w: 678, h: 466, safe: '0,0,34,84', side: 'left', reserve: 12 },
 ];
@@ -192,7 +192,7 @@ for (const pose of RAIL_POSES)
       if (theme === 'dark' && pose.side === 'right' && pose.w > 900)
         await t.shot(
           'rail-open-landscape-right-dark',
-          'Open landscape, strip right (the owner pose): the rail is one column from the top edge; the 136 pt above Home is the rail itself.'
+          'Open landscape, strip right (the owner pose): the rail is one column from the top edge; the 216 pt above Home (room for a Live Activity) is the rail itself.'
         );
       if (theme === 'light' && pose.side === 'left' && pose.w > 900)
         await t.shot(

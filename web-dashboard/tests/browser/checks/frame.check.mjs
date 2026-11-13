@@ -139,7 +139,7 @@ export const tests = {
 		const poses = [
 			{ name: 'folded on its side, strip on the left', width: 678, height: 466, safe: '0,0,34,84', side: 'left', reserve: 12 },
 			{ name: 'folded on its side, strip on the right', width: 678, height: 466, safe: '0,84,34,0', side: 'right', reserve: 12 },
-			{ name: 'folded upright', width: 466, height: 678, safe: '0,84,34,0', side: 'right', reserve: 184 },
+			{ name: 'folded upright', width: 466, height: 678, safe: '0,84,34,0', side: 'right', reserve: 252 },
 		];
 		for (const p of poses) {
 			await t.step(p.name, async () => {

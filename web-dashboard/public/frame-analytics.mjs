@@ -80,17 +80,27 @@ export function createFrameAnalytics({
     return true;
   };
 
+  // The controller's lifetime (G5 post-landing fix, as frame-dashboard.mjs): it stays in the window after its page has
+  // gone, so once stopped it sends no read (the browser would send it with the next session's cookie), aborts what is in
+  // flight and acts on no late answer.
+  const lifetime = typeof AbortController === 'function' ? new AbortController() : null;
+  const dropped = () => Object.assign(new Error('This page has signed out.'), { dropped: true, status: 0, payload: null });
+
   /** One GET, as bridge.js's sendNow: the payload, or a thrown error with status and payload (`network` offline). */
   async function read(path) {
+    if (stopped) throw dropped();
     let response;
     try {
-      response = await fetchImpl(path, { credentials: 'same-origin' });
-      online = true;
+      response = await fetchImpl(path, { credentials: 'same-origin', ...(lifetime ? { signal: lifetime.signal } : {}) });
     } catch (cause) {
+      if (stopped) throw dropped();
       online = false;
       throw Object.assign(new Error('The dashboard did not answer.'), { network: true, status: 0, payload: null, cause });
     }
+    if (stopped) throw dropped();
+    online = true;
     const body = response.status === 204 ? null : await response.json().catch(() => null);
+    if (stopped) throw dropped();
     if (!response.ok) {
       // a 401 about the session ends it (signed out elsewhere, a password change); the frame's sign-in says why
       const code = body?.code;
@@ -355,6 +365,7 @@ export function createFrameAnalytics({
     /** Signed out (the page is gone): nothing more is read or sent. */
     stop() {
       stopped = true;
+      lifetime?.abort();
       generation++;
       shown = false;
       for (const name of Object.keys(timers)) clear(name);

@@ -342,6 +342,15 @@ textarea.note::placeholder { color: var(--ink-4); }
 .rail a.on { background: var(--nav-active); color: var(--nav-active-fg); }
 .rail .rail-tools { margin-top: auto; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .rail .icon-btn { width: 44px; height: 44px; border-radius: 12px; }
+/* Folded upright the Duo's rail is the only one that is taller than wide, and its tabs start 252 pt down, below the
+   status area with a Live Activity in it (device.rs rail_reserve). Its eight controls keep their 44 pt but close up
+   (2 pt between tabs, 6 between tools), so all of them fit above the home indicator, the tools about 20 pt below the
+   tabs, with no scrolling. */
+@media (orientation: portrait) {
+  :root[data-chrome='rail'] .rail { gap: 2px; }
+  :root[data-chrome='rail'] .rail a { min-height: 44px; }
+  :root[data-chrome='rail'] .rail .rail-tools { gap: 6px; }
+}
 /* A short screen (an iPhone on its side, 402 pt) fits every tab and button without scrolling the rail. */
 @media (max-height: 430px) {
   :root[data-chrome='rail'] .rail { gap: 2px; }
