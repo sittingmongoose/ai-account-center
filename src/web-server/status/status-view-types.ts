@@ -176,6 +176,57 @@ export interface HeadlineRun {
   tone?: Tone;
 }
 
+/** The page section that explains a strip count; the page scrolls to it on a tap. */
+export type StripSection = 'questions' | 'pinned' | 'machines' | 'phones' | 'spend';
+
+/**
+ * One count in the Status summary strip: the headline as scannable counts instead of a
+ * sentence (owner, 2026-11-12). Every word and number is decided here; the page only lays
+ * them out. A zero problem count is left out; a count that cannot be known is "–", never 0.
+ */
+export interface StripItem {
+  key:
+    | 'questions'
+    | 'decisions'
+    | 'pinned'
+    | 'looping'
+    | 'waiting'
+    | 'blocked'
+    | 'budgets'
+    | 'done'
+    | 'sources';
+  /** The number as drawn: "2", "51/83", or "–" when it is unknown. */
+  value: string;
+  /** The words beside the number on a wide screen ("questions for you") and a narrow one ("questions"). */
+  label: string;
+  short: string;
+  /** `warn` and `bad` colour the number, null leaves it in ink, `quiet` is a zero or an unknown. */
+  tone: Tone | 'quiet' | null;
+  /** Where the page explains it; null when no one section does (the page shows `detail` instead). */
+  section: StripSection | null;
+  /** The whole fact as one sentence: the hover text, the screen-reader label, the tap text. */
+  detail: string;
+}
+
+/** The worst pinned thread, named in one line (PINNED-THREADS.md section 2): looping first, then waiting on you. */
+export interface StripWorst {
+  state: 'looping' | 'waiting';
+  /** "Looping" or "Waiting on you". */
+  word: string;
+  tone: Tone;
+  threadId: string;
+  title: string;
+  /** The looping item's id when the loop rule found one; null otherwise (never guessed). */
+  task: string | null;
+  /** The composer's own sentence for that state: its looping answer or its blocker. */
+  detail: string;
+}
+
+export interface HeadlineStrip {
+  items: StripItem[];
+  worst: StripWorst | null;
+}
+
 /** A media item with where the page loads it: `/api/status/files/<writer>/<path>` (session only). */
 export type MediaView = CardMedia & { url: string; posterUrl: string | null };
 
@@ -445,6 +496,8 @@ export interface StatusView {
       loopingPinned: number;
       waitingPinned: number;
     };
+    /** The same facts as counts for the page's summary strip (status-view-strip.ts). */
+    strip: HeadlineStrip;
   };
   sources: Source[];
   cards: {

@@ -29,6 +29,64 @@
    "blockedItems": 2,
    "workingThreads": 5,
    "staleSources": 0
+  },
+  "strip": {
+   "items": [
+    {
+     "key": "questions",
+     "section": "questions",
+     "value": "3",
+     "label": "questions for you",
+     "short": "questions",
+     "tone": "warn",
+     "detail": "3 questions for you."
+    },
+    {
+     "key": "looping",
+     "value": "1",
+     "label": "thread looping",
+     "short": "looping",
+     "tone": "bad",
+     "section": "pinned",
+     "detail": "1 pinned thread is looping: Build PMConcept7 and Background Activity (task F-07)."
+    },
+    {
+     "key": "waiting",
+     "value": "2",
+     "label": "waiting on you",
+     "short": "wait on you",
+     "tone": "warn",
+     "section": "pinned",
+     "detail": "2 pinned threads wait on you: Build PMConcept7 and Background Activity, Build two new tabs in AI Account Center."
+    },
+    {
+     "key": "blocked",
+     "value": "2",
+     "label": "blocked",
+     "short": "blocked",
+     "tone": "warn",
+     "section": null,
+     "detail": "2 items are blocked."
+    },
+    {
+     "key": "done",
+     "value": "42/66",
+     "label": "items done",
+     "short": "done",
+     "tone": null,
+     "section": null,
+     "detail": "42 of 66 items landed or done (dropped items are not counted)."
+    }
+   ],
+   "worst": {
+    "state": "looping",
+    "word": "Looping",
+    "tone": "bad",
+    "threadId": "Build PMConcept7 and Background Activity",
+    "title": "Build PMConcept7 and Background Activity",
+    "task": "F-07",
+    "detail": "Yes. F-07 has gone back for fixes 5 times; every review finds the tray icon blurry at 125% scale."
+   }
   }
  },
  "sources": [
@@ -701,7 +759,9 @@
     },
     "looping": {
      "answer": "yes",
-     "text": "Yes. F-07 has gone back for fixes 5 times; every review finds the tray icon blurry at 125% scale."
+     "text": "Yes. F-07 has gone back for fixes 5 times; every review finds the tray icon blurry at 125% scale.",
+     "task": "F-07",
+     "rounds": 5
     },
     "left": [
      {

@@ -33,6 +33,65 @@
       "blockedItems": 2,
       "workingThreads": 9,
       "staleSources": 1
+    },
+    "strip": {
+      "items": [
+        {
+          "key": "questions",
+          "section": "questions",
+          "value": "5",
+          "label": "questions for you",
+          "short": "questions",
+          "tone": "warn",
+          "detail": "5 questions for you."
+        },
+        {
+          "key": "decisions",
+          "value": "1",
+          "label": "decision to look at",
+          "short": "decision",
+          "tone": "warn",
+          "section": "questions",
+          "detail": "1 decision to look at."
+        },
+        {
+          "key": "pinned",
+          "value": "–",
+          "label": "pinned threads",
+          "short": "pinned",
+          "tone": "quiet",
+          "section": "pinned",
+          "detail": "Pinned threads are unavailable: this server doesn't send them yet."
+        },
+        {
+          "key": "blocked",
+          "value": "2",
+          "label": "blocked",
+          "short": "blocked",
+          "tone": "warn",
+          "section": null,
+          "detail": "Blocked: FO-33 Lines chart end label overlaps, 18 Agent reporter."
+        },
+        {
+          "key": "done",
+          "value": "62/105",
+          "label": "items done",
+          "short": "done",
+          "tone": null,
+          "section": null,
+          "detail": "62 of 105 items landed or done (dropped items are not counted)."
+        },
+        {
+          "key": "sources",
+          "value": "1",
+          "label": "source not current",
+          "short": "not current",
+          "tone": "warn",
+          "section": null,
+          "detail": "Not current: Simlock: simlock status timed out at 4:24 PM; showing the 4:21 PM reading."
+        }
+      ],
+      "worst": null
     }
   },
   "sources": [

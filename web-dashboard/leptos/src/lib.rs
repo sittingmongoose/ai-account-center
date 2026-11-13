@@ -27,6 +27,7 @@ mod roster;
 mod scoreboard;
 mod session;
 mod status;
+mod summary;
 mod ui;
 
 use leptos::prelude::*;
