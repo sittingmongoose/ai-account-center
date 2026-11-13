@@ -93,8 +93,11 @@ export function createFrameAnalytics({
   let restored = false;
   // an analytics read is out
   let fetching = false;
-  // the last analytics read failed (not offline): what it said; null after a good one
+  // the last analytics read failed (not offline): what it said, and for which range; null after a good one
   let readError = null;
+  let readErrorRange = '';
+  // a read is out for a range the answer on screen was not read for (a range change): the strip says "Updating"
+  let rangeRead = false;
   let lastSaved = -Infinity;
   const timers = { poll: 0, layout: 0, tick: 0, interval: 0, side: 0, save: 0 };
   const pushed = new Map();
@@ -200,7 +203,7 @@ export function createFrameAnalytics({
     const act = restored ? {} : payload.activity || {};
     const scanning = restored ? [] : hostProgress(payload).filter((p) => p.scanning > 0);
     const collecting = !restored && (payload.refreshing === true || act.refreshing === true || act.status === 'loading' || scanning.length > 0);
-    const updating = online && failure === null && ((restored && fetching) || (payload.stale === true && payload.refreshing !== false) || collecting);
+    const updating = online && failure === null && ((restored && fetching) || rangeRead || (payload.stale === true && payload.refreshing !== false) || collecting);
     const remote = restored ? [] : remoteNames(act.refreshingRemote);
     const tools = scanning.length
       ? `${scanning.reduce((n, p) => n + p.done, 0)} of ${scanning.reduce((n, p) => n + p.total, 0)} tools`
@@ -345,12 +348,16 @@ export function createFrameAnalytics({
     const quiet = silent && !force;
     const gen = ++generation;
     if (!quiet) loading(true, '');
-    const query = new URLSearchParams({ platform, range: apiRangeFor(page, now()), provider: 'all', account: 'all' });
+    const range = apiRangeFor(page, now());
+    // another range's read failed: this range's read is under way, so the strip says "Updating", not that failure
+    if (!quiet && readError !== null && readErrorRange !== range) readError = null;
+    const query = new URLSearchParams({ platform, range, provider: 'all', account: 'all' });
     if (force) query.set('refresh', 'true');
     const analytics = () => {
       fetching = true;
+      rangeRead = !quiet && !!payload && payload.range?.preset !== range;
       renderFresh();
-      return read(`/api/accounts/analytics?${query}`).then((r) => ({ r }), (error) => ({ error })).finally(() => { fetching = false; });
+      return read(`/api/accounts/analytics?${query}`).then((r) => ({ r }), (error) => ({ error })).finally(() => { fetching = false; rangeRead = false; });
     };
     let result;
     if (force) {
@@ -381,7 +388,10 @@ export function createFrameAnalytics({
     }
     pollFails = 0;
     const message = error?.message || 'Unable to load account analytics.';
-    if (!error?.network) readError = message;
+    if (!error?.network) {
+      readError = message;
+      readErrorRange = range;
+    }
     renderFresh();
     // numbers on screen: the strip says it could not update (one message); with nothing on screen, the banner does
     loading(false, payload ? '' : message);

@@ -633,13 +633,20 @@ test('current numbers while the server reads new log lines: the strip says so, t
   assert.match(state.tip, /^Updating: new log lines are being read\./);
 });
 
-test('the server could not compute newer numbers: the strip says so once, and polls go back to the usual pace', async () => {
-  const failing = (url) => {
-    const body = analyticsFixture({ range: url.searchParams.get('range') || '7d', now: NOW - 25 * 60_000, accounts: dashboard().accounts });
+test('the server could not compute newer numbers: the strip says so once, reads again in 15 s, and a recovery clears it', async () => {
+  let recovered = false;
+  const answer = (url) => {
+    const range = url.searchParams.get('range') || '7d';
+    if (recovered) {
+      const body = analyticsFixture({ range, now: NOW + 15_000, accounts: dashboard().accounts });
+      body.activity = { ...body.activity, refreshing: false, sources: (body.activity.sources || []).map((r) => ({ ...r, state: r.state === 'scanning' ? 'ok' : r.state })) };
+      return { status: 200, body: { ...body, asOf: body.updatedAt, stale: false, refreshing: false } };
+    }
+    const body = analyticsFixture({ range, now: NOW - 25 * 60_000, accounts: dashboard().accounts });
     body.activity = { ...body.activity, refreshing: false, sources: (body.activity.sources || []).map((r) => ({ ...r, state: r.state === 'scanning' ? 'ok' : r.state })) };
     return { status: 200, body: { ...body, asOf: body.updatedAt, stale: true, refreshing: false, refreshError: 'The newest numbers could not be computed; the last ones are shown.' } };
   };
-  const { controller, sent, c } = make(defaultRoutes({ '/api/accounts/analytics': failing }));
+  const { controller, sent, c, server } = make(defaultRoutes({ '/api/accounts/analytics': answer }));
   controller.show();
   await settle();
   await settle();
@@ -648,9 +655,61 @@ test('the server could not compute newer numbers: the strip says so once, and po
   assert.equal(state.updating, false);
   assert.equal(state.note, "Couldn't update · data from 25m ago");
   assert.match(state.tip, /could not be computed/);
-  // no quick polls: the next read is the refresh interval's
-  assert.ok(!c.pending().some((ms) => ms > 0 && ms <= 10_000), JSON.stringify(c.pending()));
-  assert.equal(analyticsPollDelay({ stale: true, refreshing: false, refreshError: 'x', activity: { status: 'ok' } }), 0);
+  // a calm read is armed in 15 s (never the 2/5/10 s steps, never only the refresh interval)
+  assert.ok(c.pending().includes(15_000), JSON.stringify(c.pending()));
+  assert.ok(!c.pending().some((ms) => ms > 0 && ms < 15_000), JSON.stringify(c.pending()));
+  assert.equal(analyticsPollDelay({ stale: true, refreshing: false, refreshError: 'x', activity: { status: 'ok' } }), 15_000);
+  // a failure that lasts: the next read is again 15 s on
+  const reads = () => server.calls.filter((p) => p.startsWith('/api/accounts/analytics')).length;
+  const before = reads();
+  await c.run(15_000);
+  assert.equal(reads(), before + 1);
+  assert.equal(fresh(sent).failed, true);
+  // the server recovers: the next short poll brings the newer numbers and the strip goes
+  recovered = true;
+  await c.run(15_000);
+  await settle();
+  assert.equal(reads(), before + 2);
+  const after = fresh(sent);
+  assert.equal(after.failed, false);
+  assert.equal(after.shown, false);
+});
+
+test('after a failed read, another range says "Updating" while its read runs, not the old failure', async () => {
+  let failing = true;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const routes = defaultRoutes({
+    '/api/accounts/analytics': (url) => {
+      const range = url.searchParams.get('range') || '7d';
+      if (range === '30d') return held.then(() => ({ status: 200, body: analyticsFixture({ range, now: NOW, accounts: dashboard().accounts }) }));
+      if (failing && url.searchParams.get('refresh') === 'true') return { status: 500, body: { error: 'Analytics failed on the server.' } };
+      const body = analyticsFixture({ range, now: NOW, accounts: dashboard().accounts });
+      body.activity = { ...body.activity, refreshing: false, sources: (body.activity.sources || []).map((r) => ({ ...r, state: r.state === 'scanning' ? 'ok' : r.state })) };
+      return { status: 200, body };
+    },
+  });
+  const { controller, sent } = make(routes);
+  controller.show();
+  await settle();
+  await settle();
+  // Refresh fails: one message, the failure
+  controller.act('analytics-refresh', '');
+  for (let i = 0; i < 6; i++) await settle();
+  assert.equal(fresh(sent).failed, true);
+  // another range: its read is held; meanwhile the strip says it is updating
+  controller.act('analytics-range', '30d');
+  for (let i = 0; i < 4; i++) await settle();
+  const during = fresh(sent);
+  assert.equal(during.failed, false);
+  assert.equal(during.updating, true);
+  assert.match(during.note, /^Updating/);
+  release();
+  for (let i = 0; i < 6; i++) await settle();
+  const after = fresh(sent);
+  assert.equal(after.failed, false);
+  assert.equal(after.updating, false);
+  failing = false;
 });
 
 test('an answer timed ahead of this clock is from an earlier read, never "a moment ago"', async () => {

@@ -45,12 +45,18 @@ export function analyticsCovers(payload, page, now = Date.now()) {
  * poll stays calm - except at the start: `waitedMs` (how long the page has waited for its first numbers; bridge.js
  * passes none) reads again after 2 s for the first 10 s and 5 s until 30 s, since the first totals usually land within
  * seconds of that first answer. An answer the server kept from before the read (`stale`, while it computes the next)
- * is read again on the same steps.
+ * is read again on the same steps; one it could not update (`refreshError`) after FAILED_RETRY_MS.
  */
+/** How soon a page holding an answer the server could not update reads again. */
+export const FAILED_RETRY_MS = 15_000;
+
 export function analyticsPollDelay(payload, waitedMs = Infinity) {
   // an answer the server kept from before this read (`stale`): it is computing the next one, which lands in seconds
-  // (one sent with refreshError has nothing newer on its way: the usual pace below)
-  if (payload?.stale === true && !payload.refreshError) return waitedMs < 10_000 ? 2000 : waitedMs < 30_000 ? 5000 : 10000;
+  // One sent with refreshError: the server's last computation failed. Nothing newer is known to be on its way, but the
+  // read itself started another computation, so a calm read in 15 s shows a recovery without waiting a whole refresh
+  // interval (up to an hour), and a lasting failure costs one computation per 15 s, never the quick steps.
+  if (payload?.stale === true && payload.refreshError) return FAILED_RETRY_MS;
+  if (payload?.stale === true) return waitedMs < 10_000 ? 2000 : waitedMs < 30_000 ? 5000 : 10000;
   const act = payload?.activity;
   const busyNow = act?.status === 'loading' || act?.refreshing === true;
   const converging = Array.isArray(act?.sources) && act.sources.some(r => r?.state === 'scanning');
