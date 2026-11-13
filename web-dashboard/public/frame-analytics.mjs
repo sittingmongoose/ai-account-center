@@ -101,11 +101,14 @@ export function createFrameAnalytics({
   /**
    * What the page reads beside the analytics: the dashboard (hidden accounts and providers, the switch thresholds, the
    * refresh interval and the chrome line), Antigravity's automatic switching (its threshold) and the display time zone.
-   * A failed read keeps what was read before.
+   * A failed read keeps what was read before. `announce`: a real refresh (the refresh interval, Refresh), which the
+   * header says ("Refreshing", as bridge.js says it); the first read and a return to the tab say nothing.
    */
-  async function readSide(force) {
-    reading = true;
-    renderChrome();
+  async function readSide(force, announce = false) {
+    if (announce) {
+      reading = true;
+      renderChrome();
+    }
     const [next, auto, prefs] = await Promise.all([
       read(`/api/accounts/dashboard?platform=${platform}&refresh=${force}`).catch(() => null),
       read('/api/antigravity/auto-switch').catch(() => null),
@@ -195,24 +198,26 @@ export function createFrameAnalytics({
 
   /**
    * Reads the analytics (and beside it the dashboard). A refresh (`force`) asks every provider first, as bridge.js's
-   * Refresh does, then reads the analytics afresh. `silent`: a background poll; one failed read keeps the page's words.
+   * Refresh does, then reads the analytics afresh. `silent`: a background poll, which reads the analytics only (as
+   * bridge.js's poll does) and keeps the header as it is; one failed poll keeps the page's words. `side: false` reads
+   * the analytics only (a range change). `announce`: the header says "Refreshing" (the refresh interval, Refresh).
    */
-  async function refresh(force = false, mode = 'static', { silent = false } = {}) {
+  async function refresh(force = false, mode = 'static', { silent = false, side = !silent, announce = force } = {}) {
     if (stopped) return;
     const quiet = silent && !force;
     const gen = ++generation;
     if (!quiet) loading(true, '');
     const query = new URLSearchParams({ platform, range: apiRangeFor(page, now()), provider: 'all', account: 'all' });
     if (force) query.set('refresh', 'true');
+    const analytics = () => read(`/api/accounts/analytics?${query}`).then((r) => ({ r }), (error) => ({ error }));
     let result;
     if (force) {
-      await readSide(true);
-      result = await read(`/api/accounts/analytics?${query}`).then((r) => ({ r }), (error) => ({ error }));
+      await readSide(true, true);
+      result = await analytics();
+    } else if (side) {
+      [result] = await Promise.all([analytics(), readSide(false, announce)]);
     } else {
-      [result] = await Promise.all([
-        read(`/api/accounts/analytics?${query}`).then((r) => ({ r }), (error) => ({ error })),
-        readSide(false),
-      ]);
+      result = await analytics();
     }
     if (gen !== generation || stopped) return;
     armInterval();
@@ -252,7 +257,7 @@ export function createFrameAnalytics({
   async function changeRange() {
     const covered = !!payload && analyticsCovers(payload, page, now());
     if (covered) render('morph');
-    if (!payload || payload.range?.preset !== apiRangeFor(page, now())) await refresh(false, covered ? 'static' : 'morph');
+    if (!payload || payload.range?.preset !== apiRangeFor(page, now())) await refresh(false, covered ? 'static' : 'morph', { side: false });
   }
 
   function armTick() {
@@ -272,7 +277,7 @@ export function createFrameAnalytics({
     if (!shown) return;
     timers.interval = later(() => {
       timers.interval = 0;
-      if (shown && visible()) void refresh(false, 'morph');
+      if (shown && visible()) void refresh(false, 'morph', { announce: true });
       else armInterval();
     }, intervalSeconds * 1000);
   }

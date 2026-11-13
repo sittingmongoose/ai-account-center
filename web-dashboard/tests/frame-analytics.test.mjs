@@ -98,10 +98,8 @@ const last = (sent, key) => [...sent].reverse().find(([k]) => k === key)?.[1];
 test('shown, it reads its own data and draws a version 7 view; a loading state first, never zeros', async () => {
   const { controller, server, sent, views } = make();
   controller.show();
-  // before any answer: the loading state (and the chrome line saying it refreshes, as bridge.js says it), no view
-  assert.deepEqual(sent[0], ['analytics-loading', JSON.stringify({ loading: true, error: '' })]);
-  assert.deepEqual(keys(sent).filter((k) => k.startsWith('analytics')), ['analytics-loading']);
-  assert.equal(JSON.parse(last(sent, 'chrome')).statusLead, 'Refreshing');
+  // before any answer: only the loading state; no view, and the header says nothing until there is a reading
+  assert.deepEqual(sent, [['analytics-loading', JSON.stringify({ loading: true, error: '' })]]);
   await settle();
   await settle();
   assert.ok(server.calls.some((p) => p.startsWith('/api/accounts/analytics?platform=mac&range=7d')));
@@ -251,6 +249,47 @@ test('a server that just started answers loading first: the page reads again aft
   await settle();
   assert.equal(reads, 2);
   assert.ok(JSON.parse(last(sent, 'analytics')).usage.ready, 'the numbers land on the second read');
+});
+
+/** An answer from a server still reading its logs: no totals yet. */
+const stillLoading = () => ({ status: 200, body: { schemaVersion: 1, accounts: [], range: { preset: '7d', from: new Date(NOW - 7 * D).toISOString() }, activity: { status: 'loading', refreshing: true } } });
+
+test('a background poll reads the analytics only, and the header never says Refreshing for it (review L1)', async () => {
+  const { controller, server, c, sent } = make(defaultRoutes({ '/api/accounts/analytics': stillLoading }));
+  controller.show();
+  await settle();
+  await settle();
+  const calls = server.calls.length;
+  const said = sent.length;
+  for (let i = 0; i < 5; i++) {
+    await c.run(2000);
+    await settle();
+    await settle();
+  }
+  const polled = server.calls.slice(calls);
+  assert.ok(polled.length >= 4, `the page kept polling: ${JSON.stringify(polled)}`);
+  assert.ok(polled.every((p) => p.startsWith('/api/accounts/analytics?')), `a poll reads the analytics only: ${JSON.stringify(polled)}`);
+  const lines = sent.slice(said).filter(([k]) => k === 'chrome').map(([, j]) => JSON.parse(j).statusLead);
+  assert.ok(!lines.includes('Refreshing'), `the header stays put while polling: ${JSON.stringify(lines)}`);
+});
+
+test('the refresh interval and Refresh say Refreshing in the header while they read the dashboard', async () => {
+  const { controller, c, sent } = make();
+  controller.show();
+  await settle();
+  await settle();
+  const leads = (from) => sent.slice(from).filter(([k]) => k === 'chrome').map(([, j]) => JSON.parse(j).statusLead);
+  let from = sent.length;
+  await c.run(120_000);
+  for (let i = 0; i < 4; i++) await settle();
+  // (the 15 s header ticks before it say Updated too)
+  let l = leads(from);
+  assert.ok(l.includes('Refreshing') && l.at(-1) === 'Updated', `the refresh interval: ${JSON.stringify(l)}`);
+  from = sent.length;
+  controller.act('analytics-refresh', '');
+  for (let i = 0; i < 4; i++) await settle();
+  l = leads(from);
+  assert.ok(l[0] === 'Refreshing' && l.at(-1) === 'Updated', `Refresh: ${JSON.stringify(l)}`);
 });
 
 test('hidden, nothing is read and no timer runs; shown again with a young answer, it draws without a read', async () => {
