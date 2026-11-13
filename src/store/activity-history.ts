@@ -1,5 +1,10 @@
 /** Analytics usage history (docs/store.md section 12): the TypeScript side, which only forwards. */
-export { ActivityIngestor, buildActivityReports, rowsReport } from './activity-reports';
+export {
+  ActivityIngestor,
+  buildActivityReports,
+  rowsReport,
+  SCANNER_ONLY_TOOLS,
+} from './activity-reports';
 export {
   HOURLY_RANGE_MS,
   localDayStarts,

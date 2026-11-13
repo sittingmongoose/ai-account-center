@@ -888,6 +888,11 @@ computer, tool, session, route, model, effort and account; that tuple is its ded
 row is keyed by tool and session key; a mirrored log is one session. `loggedCostUsd` (what the tool
 logged) is kept apart from `costUsd` and `fallbackCostUsd` (computed by the server). Per-message
 records (`messages[]`) are reserved and refused with `not_supported` until their table is built.
+On the dashboard's computer the usage scanner (`aac-usage-scan`) owns some tools, and their reports
+are built from its rows alone, never the collector's as well: Cursor and Devin always (the collector has
+no reader for them, so an empty scanner answer is their measured state), and Codex and the others once
+the scanner takes them over (its answer's `local.owned`, or rows it sent); before that the collector
+reads them (`buildActivityReports`).
 Roots are diagnostics: a root names its `origin` (`default`, `env`, `tool_config`, `t3_instance`,
 `ccs_instance`, `extra`, or the usage scanner's `signature` and `experiment`) and its state, which for a
 root alone may be `link_unreadable` or `link_unreachable`. `newestMtime` is an ISO UTC time or epoch

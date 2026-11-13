@@ -18,6 +18,11 @@ import type {
 } from '../web-server/services/account-analytics-types';
 
 const HOUR = 3_600_000;
+/**
+ * Tools only the usage scanner (`aac-usage-scan`) reads on the dashboard's computer: the collector
+ * has no reader for them, so rows it holds under their names are never theirs and never stored.
+ */
+export const SCANNER_ONLY_TOOLS: ReadonlySet<string> = new Set(['cursor', 'devin']);
 const DAY = 86_400_000;
 const SESSION_KEY = /^[0-9a-f]{16}$/;
 
@@ -192,11 +197,15 @@ export function buildActivityReports(args: {
     const scannerRows = args.remote
       .filter((entry) => entry.tool === tool && hostOf(entry) === source.host)
       .map((entry) => entry.data);
-    // On this computer a tool the scanner owns (Cursor and Devin always; Codex and others once it
-    // takes them over) is read from the scanner's rows alone, never the collector's as well, so
-    // nothing counts twice (discovery DESIGN 16.0 B). Its read is finished like a remote one.
+    // On this computer a tool the scanner owns is read from the scanner's rows alone, never the
+    // collector's as well, so nothing counts twice (discovery DESIGN 16.0 B), and its finished read
+    // is complete like a remote one. Cursor and Devin are the scanner's whatever `scannerOwned` says,
+    // with or without rows: an empty scanner answer is their measured state, never a reason to fall
+    // back to the collector. Codex and the others are the scanner's once it takes them over (they
+    // are in `scannerOwned`, or the scanner sent rows for them); before that the collector reads them.
     const scannerHere =
-      source.host === 'ubuntu' && (scannerRows.length > 0 || !!args.scannerOwned?.has(tool));
+      source.host === 'ubuntu' &&
+      (SCANNER_ONLY_TOOLS.has(tool) || scannerRows.length > 0 || !!args.scannerOwned?.has(tool));
     const data =
       source.host !== 'ubuntu' || scannerHere
         ? scannerRows
@@ -230,7 +239,7 @@ export function buildActivityReports(args: {
       !derived &&
       (source.host !== 'ubuntu' ||
         scannerHere ||
-        (tool !== 'cursor' && args.localComplete(tool as AccountAnalyticsActivityProvider)));
+        args.localComplete(tool as AccountAnalyticsActivityProvider));
     reports.push({
       schema: USAGE_REPORT_SCHEMA,
       computer: source.host,

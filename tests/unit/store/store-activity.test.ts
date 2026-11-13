@@ -9,7 +9,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
-import { ActivityIngestor, rowsReport } from '../../../src/store/activity-history';
+import {
+  ActivityIngestor,
+  buildActivityReports,
+  rowsReport,
+} from '../../../src/store/activity-history';
 import {
   AccountAnalyticsActivityService,
   type AccountAnalyticsActivityRequest,
@@ -469,5 +473,49 @@ maybe('analytics usage history', () => {
     expect(fs.existsSync(checkpoints)).toBe(false);
     await store.close();
   });
-});
 
+  it('stores no collector usage for a tool only the scanner reads, and keeps its honest state (recheck 2 M1)', async () => {
+    const store = await openStore('scanner-only');
+    // the reviewer's input: 999 collector tokens under the tool's name, an empty scanner answer
+    for (const tool of ['cursor', 'devin'] as const)
+      for (const owned of [undefined, new Set<string>()]) {
+        const reports = buildActivityReports({
+          local: new Map([
+            [
+              tool as unknown as AccountAnalyticsActivityProvider,
+              [worker('codex', [{ at: NOW - 10 * 60_000, session: sessions.a, model: 'gpt-6', input: 999 }])],
+            ],
+          ]),
+          remote: [],
+          states: [
+            {
+              tool: tool as 'cursor',
+              host: 'ubuntu',
+              state: 'no_usage',
+              rowCount: 0,
+              lastScanAt: new Date(NOW).toISOString(),
+              detail: null,
+            },
+          ],
+          windowFromMs: NOW - DAY,
+          now: NOW,
+          localComplete: () => false,
+          ...(owned ? { scannerOwned: owned } : {}),
+        });
+        const result = await store.activityIngest(reports);
+        expect(result.refused).toEqual([]);
+        expect(result.put).toBe(0);
+      }
+    const range = await store.activityRange({ fromMs: NOW - DAY, toMs: NOW });
+    expect(range.rows).toEqual([]);
+    const sources = await store.activitySources({ fromMs: NOW - DAY, toMs: NOW });
+    for (const tool of ['cursor', 'devin']) {
+      const source = sources.sources.find((s) => s.computer === 'ubuntu' && s.tool === tool);
+      expect(source?.state).toBe('no_usage');
+      expect(source?.complete).toBe(true);
+    }
+    // the hours the scanner read count as read: no usage, not a gap
+    expect(sources.computers.find((c) => c.computer === 'ubuntu')?.gaps).toEqual([]);
+    await store.close();
+  });
+});

@@ -9,6 +9,7 @@ import {
   buildActivityReports,
   rangeToSources,
   rowsReport,
+  SCANNER_ONLY_TOOLS,
 } from '../../../src/store/activity-history';
 import { FUTURE_SLACK_MS, type ActivityRange } from '../../../src/store/usage-report';
 import { cellsFromCompact } from '../../../src/web-server/usage/activity-cells';
@@ -16,7 +17,11 @@ import { aggregateRows } from '../../../src/web-server/usage/account-activity-co
 import { projectAccountAnalyticsActivity } from '../../../src/web-server/services/account-analytics-projection';
 import type { CompactEntry } from '../../../src/web-server/usage/types';
 import type { UsageWorkerResult } from '../../../src/web-server/usage/worker-client';
-import type { AccountAnalyticsQuery } from '../../../src/web-server/services/account-analytics-types';
+import type {
+  AccountAnalyticsActivityProvider,
+  AccountAnalyticsQuery,
+  AccountAnalyticsSource,
+} from '../../../src/web-server/services/account-analytics-types';
 
 const H = 3_600_000;
 const DAY = 86_400_000;
@@ -324,5 +329,93 @@ describe('reads of the usage scanner (aac-usage-scan) on this computer (Stage 1 
     const claude = reports.find((r) => r.tool === 'claude')!;
     expect(input(claude)).toBe(5);
     expect(claude.complete).toBe(true);
+  });
+});
+
+/**
+ * Recheck 2 M1: the reviewer's synthetic input. The collector holds 999 input tokens under a tool
+ * only the scanner reads; the scanner answered with no rows and says the tool has no usage.
+ */
+function reviewerInput(
+  tool: 'cursor' | 'devin' | 'codex',
+  opts: {
+    scannerOwned?: ReadonlySet<string>;
+    state?: 'no_usage' | 'ok';
+    now?: number;
+    localComplete?: boolean;
+  } = {}
+) {
+  const now = opts.now ?? NOW;
+  return buildActivityReports({
+    local: new Map([
+      [
+        tool as unknown as AccountAnalyticsActivityProvider,
+        [worker([{ at: now - 10 * 60_000, input: 999 }])],
+      ],
+    ]),
+    remote: [],
+    states: [
+      {
+        tool: tool as AccountAnalyticsSource['tool'],
+        host: 'ubuntu',
+        state: opts.state ?? 'no_usage',
+        rowCount: 0,
+        lastScanAt: new Date(now).toISOString(),
+        detail: null,
+      },
+    ],
+    windowFromMs: now - DAY,
+    now,
+    localComplete: () => opts.localComplete ?? false,
+    ...(opts.scannerOwned ? { scannerOwned: opts.scannerOwned } : {}),
+  });
+}
+
+describe('tools only the usage scanner reads (recheck 2 M1)', () => {
+  it('are Cursor and Devin', () => {
+    expect([...SCANNER_ONLY_TOOLS].sort()).toEqual(['cursor', 'devin']);
+  });
+
+  for (const tool of ['cursor', 'devin'] as const)
+    for (const [label, owned] of [
+      ['absent', undefined],
+      ['an empty set', new Set<string>()],
+    ] as const)
+      it(`${tool}: an empty scanner answer is no usage, never the collector rows (scannerOwned ${label})`, () => {
+        const [report] = reviewerInput(tool, { scannerOwned: owned });
+        expect(report.computer).toBe('ubuntu');
+        expect(report.cells).toEqual([]);
+        expect(report.sessions).toEqual([]);
+        // the scanner's own measured state, complete, never turned into ok or partial by collector cells
+        expect(report.state).toBe('no_usage');
+        expect(report.complete).toBe(true);
+        // even a collector that says it finished does not bring its rows back
+        expect(reviewerInput(tool, { scannerOwned: owned, localComplete: true })[0].cells).toEqual(
+          []
+        );
+      });
+
+  it('Codex keeps the collector before the scanner takes it over, and only the scanner after', () => {
+    const tokens = (r: { cells: Array<{ inputTokens: number }> }) =>
+      r.cells.reduce((n, c) => n + c.inputTokens, 0);
+    // before take-over (ownership absent or empty, no scanner rows): the collector's read
+    for (const owned of [undefined, new Set<string>()]) {
+      const [unfinished] = reviewerInput('codex', { scannerOwned: owned, state: 'ok' });
+      expect(tokens(unfinished)).toBe(999);
+      expect(unfinished.state).toBe('partial');
+      expect(unfinished.complete).toBe(false);
+      const [finished] = reviewerInput('codex', {
+        scannerOwned: owned,
+        state: 'ok',
+        localComplete: true,
+      });
+      expect(tokens(finished)).toBe(999);
+      expect(finished.complete).toBe(true);
+    }
+    // after take-over with an empty answer: no collector rows, the scanner's no usage
+    const [after] = reviewerInput('codex', { scannerOwned: new Set(['codex']) });
+    expect(after.cells).toEqual([]);
+    expect(after.state).toBe('no_usage');
+    expect(after.complete).toBe(true);
   });
 });
