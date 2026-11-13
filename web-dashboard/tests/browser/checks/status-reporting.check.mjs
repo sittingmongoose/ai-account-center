@@ -22,6 +22,9 @@ const FORMATS = [
 const OWNER_WAIT = 'Open the preview and answer card SM-0 and the design questions SM-1 to SM-8';
 const SUMMARY = 'The review said READY; the press test is paused until the browsers are free.';
 const DOING = "Reading the scout's notes for batch 3 of the onboarding review.";
+// pm7-build's real shape on 2026-11-13: the hook rewrote thread.json 20 min ago and carries this doing line; the status
+// (and these words) is 2 h old. Wave 8 kept the words but dropped from the roster that the thread was active.
+const ALIVE_DOING = 'Morning: PM7 12a is on main and the dialog fix waits on card Q7; batch 2 is fixing one review finding.';
 
 /** Three open cards as agents label them: a plain label, a label unlike its id, and one that stored none. */
 function cards() {
@@ -68,8 +71,8 @@ function pins() {
   const iso = (ago) => new Date(now - ago * 1000).toISOString();
   return {
     asOfMs: now,
-    head: '4 pinned in T3 · 1 looping · 1 waiting on you',
-    counts: { pinned: 4, looping: 1, waitingOnYou: 1 },
+    head: '6 pinned in T3 · 1 looping · 1 waiting on you',
+    counts: { pinned: 6, looping: 1, waitingOnYou: 1 },
     machineProblems: [],
     statusProblems: [],
     updates: [
@@ -125,7 +128,22 @@ function pins() {
         updated: { text: 'Updated 2 days ago', at: iso(2 * 86400 + 600), ageSeconds: 2 * 86400 + 600 },
         heartbeat: { text: 'Active 2 days ago', at: iso(2 * 86400 + 600), ageSeconds: 2 * 86400 + 600 },
         looping: { answer: 'cantTell', text: "Can't tell." },
+        // Its last task list, from the same 2-day-old report: a quiet sheet still shows it, with its age.
+        percent: { text: '50%', done: 1, of: 2 },
+        left: [{ id: 'SCOUT-3', title: 'Scout batch 3', state: 'working' }],
+        done: [{ id: 'SCOUT-2', title: 'Scout batch 2', state: 'done' }],
         reported: { state: 'idle', writer: 'vm.scout' },
+      }),
+      update({
+        id: 'pin-gone',
+        title: 'Old notes',
+        who: 'notes · Opus 5.5',
+        reportState: 'stale',
+        staleNote: 'No status update for 3 days. If it is finished, unpin it in T3.',
+        now: 'Filed the last notes.',
+        updated: { text: 'Updated 3 days ago', at: iso(3 * 86400), ageSeconds: 3 * 86400 },
+        heartbeat: { text: 'Active 3 days ago', at: iso(3 * 86400), ageSeconds: 3 * 86400 },
+        reported: { state: 'idle', writer: 'vm.notes' },
       }),
       update({
         id: 'pin-split',
@@ -149,6 +167,37 @@ function pins() {
         board: { writer: 'vm.projects-lead', project: 'puppet-master', stream: 'P', projectLabel: null, streamLabel: 'Projects', shared: true },
         reported: { state: 'working', writer: 'vm.split-worker' },
       }),
+      update({
+        id: 'pin-alive',
+        title: 'Background build',
+        who: 'Puppet Master · background-build · Opus 5.5 xhigh',
+        now: ALIVE_DOING,
+        summary: ALIVE_DOING,
+        percent: { text: '50%', done: 2, of: 4 },
+        blocked: { text: 'None.', waitingOnYou: false },
+        left: [
+          { id: 'BG-3', title: 'Background activity sweep', state: 'review' },
+          { id: 'BG-4', title: 'Land batch 2', state: 'todo' },
+        ],
+        done: [
+          { id: 'BG-1', title: 'Idle timer', state: 'done' },
+          { id: 'BG-2', title: 'Wake on focus', state: 'done' },
+        ],
+        updated: { text: 'Updated 20 min ago', at: iso(1200), ageSeconds: 1200 },
+        statusUpdated: { text: 'Updated 2 hours ago', at: iso(7200), ageSeconds: 7200 },
+        heartbeat: { text: 'Active 20 min ago', at: iso(1200), ageSeconds: 1200 },
+        reported: {
+          state: 'working',
+          // not vm.pm7-build: that writer has an open card here, which would make it wait on the owner
+          writer: 'vm.background-build',
+          next: 'Land batch 2 once its review passes.',
+          stages: [
+            { label: 'Build', state: 'done' },
+            { label: 'Review', state: 'now', round: 2 },
+            { label: 'Land', state: 'next' },
+          ],
+        },
+      }),
     ],
   };
 }
@@ -164,6 +213,26 @@ function view() {
     spendByStream: fixture('spend-by-stream.json'),
     cards: { ...base.cards, open: cards(), answered, batches: [] },
     pinned: pins(),
+    // The Projects lead's board that Split v3 works on: its items and the list's own time (20 h old).
+    projects: [
+      ...(base.projects ?? []),
+      {
+        id: 'puppet-master-p',
+        label: 'Puppet Master',
+        streams: [
+          {
+            id: 'P',
+            label: 'Projects',
+            owner: 'vm.projects-lead',
+            goal: 'Projects page',
+            source: 'tasks',
+            asOf: new Date(Date.now() - 20 * 3600 * 1000).toISOString(),
+            stale: false,
+            items: [{ id: 'P-BATCH2', title: 'Batch 2', state: 'fixing', reviews: [] }],
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -339,6 +408,19 @@ export const tests = {
       await t.page.waitForSelector(`${sheet} .c2-quiet`);
       await t.text(`${sheet} .c2-quiet`, /No status update for 2 days\./);
       await t.text(`${sheet} .c2-quiet`, new RegExp(`Its last doing line, 2 d ago: ${DOING.replace(/[.']/g, '.')}`));
+      // Quiet hides nothing it reported (2026-11-13): its tasks and progress stay under the note, the doing line once.
+      const tasks = await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Tasks' }).last().innerText().catch(() => '');
+      await t.check(`${format.name}: a quiet sheet still lists its tasks`, tasks.includes('Scout batch 3'), tasks);
+      await t.check(`${format.name}: a quiet sheet still shows its progress`, (await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Stages' }).innerText().catch(() => '')).includes('1 of 2 tasks done'));
+      const said = await t.page.locator(sheet).innerText();
+      await t.equal(`${format.name}: the doing line shows once`, said.split("Reading the scout's notes").length - 1, 1);
+      if (format.mobile) await t.page.keyboard.press('Escape');
+      // A quiet thread that reported nothing but words keeps its note alone, not three "nothing reported" sections.
+      await t.page.locator('.c2-row', { hasText: 'Old notes' }).click();
+      await t.page.waitForFunction((s) => document.querySelector(`${s} .c2-name`)?.textContent === 'Old notes', sheet);
+      await t.text(`${sheet} .c2-quiet`, /No status update for 3 days\..*Its last doing line, 3 d ago: Filed the last notes\./);
+      await t.count(`${sheet} .c2-sec`, 0, `${format.name}: a quiet thread with only words shows its note alone`);
+      if (format.mobile) await t.page.keyboard.press('Escape');
     }
   },
 
@@ -381,5 +463,86 @@ export const tests = {
     await t.page.waitForSelector('.c2-pane .c2-sheet');
     await t.text('.c2-pane .c2-sec-end[data-board="shared"]', 'Shared Projects board, kept by vm.projects-lead');
     await t.text('.c2-pane .c2-prob', /On the shared Projects board kept by vm\.projects-lead, P-BATCH2/);
+  },
+
+  // 2026-11-13 regression (owner: "even less data on threads that were decent before"). On the owner's real pins wave 8
+  // dropped: the roster's activity age, a shared-board worker's task-list time and the task and rounds of its loop line,
+  // and on a phone each wait's time. Every other line stayed; these checks keep all of it.
+  async 'status a live thread with an older summary keeps everything it showed'(t) {
+    for (const format of [FORMATS[2], FORMATS[0]]) {
+      await openStatus(t, format, view());
+      const sheet = format.mobile ? '.c2-sheet-host .c2-sheet' : '.c2-pane .c2-sheet';
+      const row = t.page.locator('.c2-row', { hasText: 'Background build' });
+      // The roster: the words' age, and under it that the thread was active 20 min ago (the old corner's news).
+      await t.equal(`${format.name}: the corner says the words' age`, (await row.locator('.c2-age').textContent()).trim(), '2 h');
+      await t.equal(`${format.name}: the corner says when it was last active`, (await row.locator('.c2-active').textContent().catch(() => '')).trim(), 'active 20 min');
+      await t.check(`${format.name}: the row leads with its doing line`, (await row.locator('.c2-l2').textContent()).includes('Morning: PM7 12a is on main'));
+      await t.check(`${format.name}: the row shows its stage progress`, /2 of 3/.test(await row.locator('.c2-stage').textContent()));
+      await row.click();
+      await t.page.waitForFunction((s) => document.querySelector(`${s} .c2-name`)?.textContent === 'Background build', sheet);
+      const facts = await t.page.$$eval(`${sheet} .fx > *`, (els) => els.map((e) => e.textContent.trim()));
+      const at = (label, k = 1) => facts[facts.indexOf(label) + k] ?? '';
+      await t.equal(`${format.name}: Now keeps the doing line`, at('Now'), ALIVE_DOING);
+      await t.equal(`${format.name}: Now says how old the words are`, at('Now', 2), 'as of 2 h ago');
+      await t.equal(`${format.name}: Next is shown`, at('Next'), 'Land batch 2 once its review passes.');
+      await t.equal(`${format.name}: Updated says both ages`, at('Updated'), 'updated 2 h ago · active 20 min ago');
+      const stages = await t.page.$$eval(`${sheet} .c2-stages .lab`, (l) => l.map((x) => x.textContent.trim()));
+      await t.check(`${format.name}: every stage is drawn`, JSON.stringify(stages) === JSON.stringify(['Build', 'Review, round 2', 'Land']), JSON.stringify(stages));
+      const tasks = await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Tasks' }).last().innerText();
+      for (const title of ['Background activity sweep', 'Land batch 2'])
+        await t.check(`${format.name}: Tasks lists ${title}`, tasks.includes(title), tasks);
+      await t.check(`${format.name}: the task list says how old it is`, /as of .*, 2 h old/.test(tasks), tasks);
+      if (format.mobile) await t.page.keyboard.press('Escape');
+      // A thread with no stages still shows its progress in the row (Settings managers: 14 of 15 tasks done).
+      const settings = t.page.locator('.c2-row', { hasText: 'Settings managers' });
+      await t.check(`${format.name}: a row without stages shows its task progress`, /14 of 15 tasks done/.test(await settings.locator('.c2-stage').textContent()));
+      await t.equal(`${format.name}: Settings managers says it was active 2 min ago`, (await settings.locator('.c2-active').textContent().catch(() => '')).trim(), 'active 2 min');
+      if (!format.mobile) await t.shot('regression-alive-desktop', 'desktop: a live thread with a 2 h old summary: corner 2 h over active 20 min, Now dated, stages and tasks');
+    }
+  },
+
+  async 'status a worker on a shared board keeps its tasks, their time and its loop'(t) {
+    for (const format of [FORMATS[2], FORMATS[0]]) {
+      await openStatus(t, format, view());
+      const sheet = format.mobile ? '.c2-sheet-host .c2-sheet' : '.c2-pane .c2-sheet';
+      const row = t.page.locator('.c2-row', { hasText: 'Split v3' });
+      const problem = (await row.locator('.c2-prob').textContent()).trim();
+      await t.check(`${format.name}: the row's loop line keeps the task and its rounds`, problem.includes('P-BATCH2') && problem.includes('4 times') && /shared board/.test(problem), problem);
+      await t.check(`${format.name}: the row shows the worker's task progress`, /0 of 1 tasks done/.test(await row.locator('.c2-stage').textContent()));
+      await row.click();
+      await t.page.waitForFunction((s) => document.querySelector(`${s} .c2-name`)?.textContent === 'Split v3', sheet);
+      const head = (await t.page.locator(`${sheet} .c2-sec-end[data-board="shared"]`).innerText()).replace(/\s+/g, ' ').trim();
+      await t.check(`${format.name}: the Tasks head names the board's keeper`, head.includes('Shared Projects board, kept by vm.projects-lead'), head);
+      await t.check(`${format.name}: the Tasks head keeps the list's own time`, /as of .*20 h old/.test(head), head);
+      const tasks = await t.page.locator(`${sheet} .c2-sec`, { hasText: 'Tasks' }).last().innerText();
+      await t.check(`${format.name}: the worker still lists its tasks`, tasks.includes('Batch 2'), tasks);
+      await t.text(`${sheet} .c2-prob`, /On the shared Projects board kept by vm\.projects-lead, P-BATCH2 has gone back for fixes 4 times/);
+      if (format.mobile) await t.shot('regression-shared-phone', 'phone: a worker on a shared board: its loop, its tasks, the keeper and the list time');
+    }
+  },
+
+  async 'status each wait keeps its own time'(t) {
+    for (const format of [FORMATS[2], FORMATS[0], FORMATS[3]]) {
+      await openStatus(t, format, view());
+      const sheet = format.mobile ? '.c2-sheet-host .c2-sheet' : '.c2-pane .c2-sheet';
+      await t.page.locator('.c2-row', { hasText: 'Settings managers' }).click();
+      await t.page.waitForSelector(`${sheet} .fx`);
+      const got = await t.page.evaluate((s) => {
+        const dt = [...document.querySelectorAll(`${s} .fx dt`)].find((d) => d.textContent.trim() === 'Waiting on');
+        const main = dt?.nextElementSibling;
+        const right = main?.nextElementSibling;
+        const sweep = [...(main?.querySelectorAll('p') ?? [])].find((p) => p.textContent.includes('(SWEEP)'));
+        const time = sweep?.querySelector('.fx-when');
+        const top = (el) => el.getBoundingClientRect().top;
+        return {
+          sweepTime: time?.textContent.trim() ?? null,
+          // drawn inside its own wait, under its words, not beside another wait
+          inside: !!time && top(time) >= top(sweep) && time.getBoundingClientRect().bottom <= sweep.getBoundingClientRect().bottom + 0.5,
+          right: right?.textContent.trim() ?? null,
+        };
+      }, sheet);
+      await t.check(`${format.name}: the SWEEP wait carries its own time`, /^was due /.test(got.sweepTime ?? '') && got.inside, JSON.stringify(got));
+      await t.equal(`${format.name}: no times stacked apart from their waits`, got.right, '');
+    }
   },
 };

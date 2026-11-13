@@ -27,6 +27,17 @@ browser-check run web-dashboard/tests/browser/checks --set home=/tmp/fixture-hom
 
 `checks/accounts-clicks.check.mjs` clicks every account row and header toggle at ten widths and on a phone, and asserts nothing is pushed off the page.
 
+**Status on the real pins (opt-in).** `checks/status-real-pins.check.mjs` writes every pinned thread's roster row and sheet, plus the page's words, to `real-pins-<format>.json` in the run folder. Two builds can then be compared line by line, for example the tree in `--set repo=<other tree>` against this one:
+
+```sh
+browser-check run web-dashboard/tests/browser/checks --grep 'status real pins' \
+  --set realPins=1 --set reports=<copy of the reports share> --set registry=<copy of the pm-mail registry> [--set shoot=<title>]
+```
+
+- **The reports.** `reports=` and `registry=` are copied into the run's temporary home, because the server writes reader receipts beside the reports. Pass a copy, never the share itself.
+- **The pins.** `realPins=1` reads this machine's T3 pins read-only (`AAC_T3_STATE_DB`). It links the real `~/.ssh` into the temporary home, so ssh's `Include ~/...` lines resolve for the other machines' pins. Teardown unlinks it before removing the home.
+- **Nothing else is real.** HOME and every other home-like variable stay temporary, the doorbell is off, and nothing is answered.
+
 `checks/status-page.check.mjs` and `checks/scoreboard-page.check.mjs` cover the Leptos pages: deck flows, the layout in each format (with `?safe=t,r,b,l` giving the measured Duo insets), the iframe drawing no chrome, and honest words when `spendByStream` or `byModel` are missing. `frames/` (its own config) shoots whole-page images for review: `browser-check run web-dashboard/tests/browser/frames --set out=<folder>`, needing only `web-dashboard/leptos/pkg` built.
 
 Frames that aren't listed are saved as snaps for `browser-check diff <base run> <candidate run>`.
