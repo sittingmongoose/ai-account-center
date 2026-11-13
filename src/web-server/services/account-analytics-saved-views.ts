@@ -62,6 +62,8 @@ export class AnalyticsSavedViews {
   private readonly views = new Map<string, AccountAnalytics>();
   /** Selections whose answer came from the file and has not been computed again since. */
   private readonly loadedFromFile = new Set<string>();
+  /** When each held answer's computation started (the service's own counter), never a clock time. */
+  private readonly started = new Map<string, number>();
   private loaded = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private lastSave = -Infinity;
@@ -117,18 +119,25 @@ export class AnalyticsSavedViews {
     return this.loadedFromFile.has(key);
   }
 
-  /** Keeps `answer` unless the one held is newer (two computations can finish out of order). */
-  set(key: string, answer: AccountAnalytics): void {
+  /**
+   * Keeps `answer` unless the one held came from a computation that started later (two computations can finish out
+   * of order). `sequence` orders computations by when they started, so a wall clock stepped back never makes a new
+   * answer look older than the held one; an answer read from the file is replaced by any computation.
+   */
+  set(key: string, answer: AccountAnalytics, sequence: number): void {
     this.load();
+    const held = this.started.get(key);
+    if (held !== undefined && held > sequence) return;
     this.loadedFromFile.delete(key);
-    const held = this.views.get(key);
-    if (held && Date.parse(held.updatedAt) > Date.parse(answer.updatedAt)) return;
+    this.started.set(key, sequence);
     this.views.delete(key);
     this.views.set(key, answer);
     while (this.views.size > MAX_SAVED_VIEWS) {
       const oldest = this.views.keys().next().value;
       if (oldest === undefined) break;
       this.views.delete(oldest);
+      this.started.delete(oldest);
+      this.loadedFromFile.delete(oldest);
     }
     this.dirty = true;
     this.schedule();

@@ -91,6 +91,8 @@ export interface AccountAnalyticsDeps {
   elapsedMs?: () => number;
 }
 
+/** Said with a saved answer when the newest computation of its selection failed (never the error itself). */
+export const REFRESH_ERROR = 'The newest numbers could not be computed; the last ones are shown.';
 /** A computation slower than this is logged with its phases (`analytics.read_timing`). */
 const SLOW_READ_MS = 1_000;
 
@@ -334,6 +336,10 @@ export class AccountAnalyticsService {
   private readonly flights = new Map<string, Promise<AccountAnalytics>>();
   /** How long each selection's last computation took. */
   private readonly computeMs = new Map<string, number>();
+  /** How each selection's newest finished computation ended, by its start order. */
+  private readonly outcomes = new Map<string, { sequence: number; failed: boolean }>();
+  /** Computations in the order they started. */
+  private sequence = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingSample: Promise<void> | null = null;
   private running = false;
@@ -532,18 +538,21 @@ export class AccountAnalyticsService {
       const elapsed = this.deps.elapsedMs ?? (() => performance.now());
       const started = new Promise<void>((resolve) => setImmediate(resolve)).then(() => {
         const begin = elapsed();
-        return this.compute(query, scope, tz).then((answer) => {
-          this.computeMs.set(flightKey, elapsed() - begin);
-          while (this.computeMs.size > 64) {
-            const oldest = this.computeMs.keys().next();
-            if (oldest.done) break;
-            this.computeMs.delete(oldest.value);
+        const sequence = ++this.sequence;
+        return this.compute(query, scope, tz).then(
+          (answer) => {
+            this.computeMs.set(flightKey, elapsed() - begin);
+            this.settle(flightKey, sequence, false);
+            // kept without the per-read memo fields: a kept answer is described by its own `asOf`
+            const { cached: _cached, cacheAgeSeconds: _age, ...kept } = answer;
+            views.set(key, kept, sequence);
+            return answer;
+          },
+          (error: unknown) => {
+            this.settle(flightKey, sequence, true);
+            throw error;
           }
-          // kept without the per-read memo fields: a kept answer is described by its own `asOf`
-          const { cached: _cached, cacheAgeSeconds: _age, ...kept } = answer;
-          views.set(key, kept);
-          return answer;
-        });
+        );
       });
       flight = started.finally(() => {
         if (this.flights.get(flightKey) === flight) this.flights.delete(flightKey);
@@ -566,11 +575,36 @@ export class AccountAnalyticsService {
       ]).finally(() => clearTimeout(timer));
       if (answer) return answer;
     }
+    // The newest finished computation failed: the saved answer is older than this read and nothing newer is on its
+    // way, so it is never said to be refreshing (the page says it could not update and polls at its normal pace).
+    if (this.outcomes.get(flightKey)?.failed === true)
+      return {
+        ...saved,
+        asOf: saved.updatedAt,
+        stale: true,
+        refreshing: false,
+        refreshError: REFRESH_ERROR,
+      };
     // The saved answer is current while it is younger than the refresh interval (plus a poll's slack) and was
-    // computed by this server; otherwise it is said to be older than this read, and the page reads again shortly.
+    // computed by this server; otherwise (or with its time ahead of the clock) it is said to be older than this read,
+    // and the page reads again shortly.
     const age = (this.deps.now ?? Date.now)() - Date.parse(saved.updatedAt);
     if (!views.fromDisk(key) && age >= 0 && age < this.currentForMs()) return fresh(saved);
     return { ...saved, asOf: saved.updatedAt, stale: true, refreshing: true };
+  }
+
+  /** Records how a selection's computation ended, when it started after the last one recorded. */
+  private settle(flightKey: string, sequence: number, failed: boolean): void {
+    const held = this.outcomes.get(flightKey);
+    if (held && held.sequence > sequence) return;
+    this.outcomes.delete(flightKey);
+    this.outcomes.set(flightKey, { sequence, failed });
+    for (const map of [this.outcomes, this.computeMs])
+      while (map.size > 64) {
+        const oldest = map.keys().next();
+        if (oldest.done) break;
+        map.delete(oldest.value);
+      }
   }
 
   /** How long a saved answer counts as current: the refresh interval and 30 s for the page's poll to arrive. */

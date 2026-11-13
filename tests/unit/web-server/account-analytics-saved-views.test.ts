@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { AccountAnalyticsService } from '../../../src/web-server/services/account-analytics-service';
+import {
+  AccountAnalyticsService,
+  REFRESH_ERROR,
+} from '../../../src/web-server/services/account-analytics-service';
 import {
   AnalyticsSavedViews,
   MAX_SAVED_VIEWS,
@@ -217,13 +220,67 @@ describe('analytics saved views', () => {
     const answer = await service.get(QUERY);
     expect(answer.stale).toBe(false);
     expect(events(answer)).toBe(1);
-    // a later failure keeps the saved answer on screen, said to be older than this read once it is
+    // the next computation fails
     fail = true;
-    expect((await service.get(QUERY)).stale).toBe(false);
-    now += 5 * 60_000;
-    const kept = await service.get(QUERY);
-    expect(kept.stale).toBe(true);
-    expect(events(kept)).toBe(1);
+    await service.get(QUERY);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // every later read: the saved answer, said to be older, with the failure and never "refreshing", read after read
+    for (let i = 0; i < 6; i++) {
+      now += 5 * 60_000;
+      const kept = await service.get(QUERY);
+      expect(kept.stale).toBe(true);
+      expect(kept.refreshing).toBe(false);
+      expect(kept.refreshError).toBe(REFRESH_ERROR);
+      expect(events(kept)).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // the dashboard answers again: the next computation clears the failure
+    fail = false;
+    await service.get(QUERY);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const back = await service.get(QUERY);
+    expect(back.stale).toBe(false);
+    expect(back.refreshError).toBeUndefined();
+  });
+
+  it('a clock stepped back never freezes a selection on the answer computed before the step', async () => {
+    let now = NOW + 3_600_000;
+    const logs = gated();
+    // each computation outlasts the budget, so reads are answered from the saved view
+    const service = new AccountAnalyticsService({
+      getDashboard: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        return board;
+      },
+      getActivity: () => logs.getActivity(),
+      createHistoryStore: memory,
+      now: () => now,
+      freshBudgetMs: 1,
+      samplingIntervalMs: () => 60_000,
+    });
+    // computed while the clock was an hour ahead
+    logs.set(1);
+    expect(events(await service.get(QUERY))).toBe(1);
+    // the clock steps back an hour; the next computation is still running
+    now = NOW;
+    logs.set(10);
+    logs.hold();
+    const ahead = await service.get(QUERY);
+    expect(events(ahead)).toBe(1);
+    expect(ahead.stale).toBe(true);
+    logs.release();
+    // the logs keep changing: each newer computation replaces the one from before the step
+    for (let i = 1; i <= 4; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      now += 60_000;
+      logs.set(10 + i);
+      await service.get(QUERY);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const latest = await service.get(QUERY);
+    expect(events(latest)).toBeGreaterThanOrEqual(13);
+    expect(Date.parse(latest.asOf as string)).toBeLessThanOrEqual(now);
+    expect(latest.stale).toBe(false);
   });
 
   it('a restarted server answers its first read from the saved file, then computes afresh', async () => {
@@ -301,13 +358,17 @@ describe('the saved views file', () => {
       providers: [],
     }) as unknown as AccountAnalytics;
 
-  it('keeps the newer answer when two computations finish out of order, and bounds the selections', () => {
+  it('keeps the answer of the later-started computation, whatever the clock said, and bounds the selections', () => {
     const views = new AnalyticsSavedViews('relative-scope', false);
-    views.set('a', answer('2026-11-13T10:01:00Z'));
-    views.set('a', answer('2026-11-13T10:00:00Z'));
+    views.set('a', answer('2026-11-13T10:01:00Z'), 2);
+    // started earlier, finished later: not kept
+    views.set('a', answer('2026-11-13T10:00:00Z'), 1);
     expect(views.get('a')?.updatedAt).toBe('2026-11-13T10:01:00Z');
+    // started later with the clock stepped back: kept
+    views.set('a', answer('2026-11-13T09:00:00Z'), 3);
+    expect(views.get('a')?.updatedAt).toBe('2026-11-13T09:00:00Z');
     for (let i = 0; i < MAX_SAVED_VIEWS + 3; i++)
-      views.set(`k${i}`, answer('2026-11-13T10:00:00Z'));
+      views.set(`k${i}`, answer('2026-11-13T10:00:00Z'), 10 + i);
     expect(views.get('a')).toBeUndefined();
     expect(views.get(`k${MAX_SAVED_VIEWS + 2}`)).toBeDefined();
   });

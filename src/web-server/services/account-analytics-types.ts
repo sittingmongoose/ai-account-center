@@ -269,6 +269,8 @@ export interface AccountAnalytics {
   asOf?: string;
   stale?: boolean;
   refreshing?: boolean;
+  /** With a saved answer: the newest computation of the selection failed, so nothing newer is on its way. */
+  refreshError?: string;
   schemaVersion: 1;
   updatedAt: string;
   range: {
