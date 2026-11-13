@@ -25,14 +25,95 @@ export {
   analyticsHelperPath,
 } from './analytics-remote-helper';
 
+/**
+ * Why a computer's scan failed, as one fixed word (the usage-report contract's `cause`):
+ * - `ssh_unreachable`: ssh could not connect (exit 255 without an authentication refusal);
+ * - `ssh_auth`: the computer refused this account's key;
+ * - `ssh_host_key`: this side refused the computer: its host key is unknown or changed (known_hosts);
+ * - `runtime_missing`: no Python 3.9 or later; `runtime_missing:store_alias` when the only
+ *   `python3.exe`/`python.exe` found is the Microsoft Store alias stub;
+ * - `helper_failed`: the helper exited non-zero for another reason (its exit code is kept);
+ * - `timeout`: the ssh call outlived its timeout;
+ * - `bad_response`: the answer was not the helper's bounded JSON.
+ */
+export type AnalyticsScanFailureCause =
+  | 'ssh_unreachable'
+  | 'ssh_auth'
+  | 'ssh_host_key'
+  | 'runtime_missing'
+  | 'runtime_missing:store_alias'
+  | 'helper_failed'
+  | 'timeout'
+  | 'bad_response';
+
+export const ANALYTICS_SCAN_FAILURE_CAUSES: readonly AnalyticsScanFailureCause[] = [
+  'ssh_unreachable',
+  'ssh_auth',
+  'ssh_host_key',
+  'runtime_missing',
+  'runtime_missing:store_alias',
+  'helper_failed',
+  'timeout',
+  'bad_response',
+];
+
 export class AnalyticsRemoteTransportError extends NetworkError {
   readonly timedOut: boolean;
+  readonly cause: AnalyticsScanFailureCause;
+  readonly exitCode: number | null;
 
-  constructor(timedOut = false) {
+  constructor(
+    timedOut = false,
+    cause: AnalyticsScanFailureCause = timedOut ? 'timeout' : 'bad_response',
+    exitCode: number | null = null
+  ) {
     super(timedOut ? 'Analytics remote request timed out.' : 'Analytics remote request failed.');
     this.name = 'AnalyticsRemoteTransportError';
     this.timedOut = timedOut;
+    this.cause = cause;
+    this.exitCode = exitCode;
   }
+}
+
+/** The launcher's exit code when it found no working Python (analyticsHelperCommand). */
+export const HELPER_RUNTIME_MISSING_EXIT = 86;
+
+/**
+ * The fixed cause of a failed ssh helper call, from its exit code and stderr. Only fixed markers
+ * are matched; stderr itself is never kept, logged or shown.
+ */
+export function classifyAnalyticsScanFailure(failure: {
+  exitCode: number | null;
+  killed?: boolean;
+  signal?: string | null;
+  stderr?: string;
+}): AnalyticsScanFailureCause {
+  const stderr = failure.stderr ?? '';
+  if (failure.killed === true && failure.signal === 'SIGTERM') return 'timeout';
+  if (stderr.includes('aac-helper: runtime_missing:store_alias'))
+    return 'runtime_missing:store_alias';
+  if (
+    failure.exitCode === HELPER_RUNTIME_MISSING_EXIT ||
+    stderr.includes('aac-helper: runtime_missing')
+  )
+    return 'runtime_missing';
+  // The Store alias stub itself ("Python was not found; ... App execution aliases"): exit 9009 from
+  // cmd, 49 started directly. An older launcher still meets it.
+  if (/Python was not found/i.test(stderr) || failure.exitCode === 9009)
+    return 'runtime_missing:store_alias';
+  if (failure.exitCode === 255) {
+    // known_hosts refusing the computer is not the computer refusing this account's key.
+    if (
+      /Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED|No .* host key is known/i.test(
+        stderr
+      )
+    )
+      return 'ssh_host_key';
+    return /Permission denied|Too many authentication failures/i.test(stderr)
+      ? 'ssh_auth'
+      : 'ssh_unreachable';
+  }
+  return 'helper_failed';
 }
 
 const SSH_TIMEOUT_MS = 30_000;
@@ -397,30 +478,82 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
   };
 }
 
+/** Where the POSIX launcher looks for Python, in order ("" when `python3` is not on PATH). */
+export const POSIX_PYTHON_CANDIDATES = [
+  '/usr/bin/python3',
+  '/opt/homebrew/bin/python3',
+  '/usr/local/bin/python3',
+  '"$(command -v python3 2>/dev/null)"',
+] as const;
+
+/** Exits 0 under Python 3.9 or later; the launcher's probe, which never reads stdin. */
+export const PYTHON_PROBE = 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 3)';
+
 /**
  * The fixed ssh command that runs the packaged helper on a host. Only this process's helper source,
  * streamed on stdin with the request, is executed; aggregates travel back on stdout without
- * temporary files. Python reads the request from stdin itself on every host; every POSIX computer
- * (the Mac and Nas1, by OS kind) runs `/usr/bin/python3` directly. On Windows, PowerShell
- * only finds Python and starts it: when PowerShell read a request of the helper's size from stdin
- * (`[Console]::In.ReadToEnd()`) over Windows OpenSSH, about half the reads never saw the end of
- * the input and hung until the ssh timeout (measured 2026-10-06: 4 of 8 80 KB reads hung, against
- * 12 of 12 that completed when Python read the same input). Reading the bytes directly also keeps
- * them UTF-8, where PowerShell's pipe re-encoded them.
+ * temporary files. Python reads the request from stdin itself on every host.
+ *
+ * The launcher finds a working Python 3.9 or later instead of trusting the first name on PATH:
+ * each candidate runs PYTHON_PROBE (which never reads stdin) and the first that exits 0 runs the
+ * helper. Without one, it exits HELPER_RUNTIME_MISSING_EXIT with a fixed marker on stderr.
+ *
+ * - POSIX (the Mac, Nas1 and other Linux computers, by OS kind): `/usr/bin/python3`, Homebrew's,
+ *   `/usr/local`'s, then `python3` on PATH. A Mac without the Command Line Tools has a
+ *   `/usr/bin/python3` stub that now fails the probe instead of the scan.
+ * - Windows: PowerShell only finds Python and starts it. Candidates are `py.exe -3` (the Python
+ *   launcher, which starts only a real install), then every `python.exe` and `python3.exe` on PATH
+ *   (`Get-Command -All`), in PATH order. The Microsoft Store's App Execution Alias stub in
+ *   `%LOCALAPPDATA%\Microsoft\WindowsApps` prints "Python was not found" and exits 9009: it fails
+ *   the probe and is skipped (Alexis PC, 2026-11-13: it was first on PATH, so every scan failed),
+ *   while a real Store install there passes (the owner's other PC). When every candidate failed and one was
+ *   such a stub, the marker says `store_alias`. The probe loop runs under 'Continue': Windows
+ *   PowerShell 5.1 turns a redirected native stderr line into a terminating error under 'Stop'.
+ *   When PowerShell read a request of the helper's size from stdin (`[Console]::In.ReadToEnd()`)
+ *   over Windows OpenSSH, about half the reads never saw the end of the input and hung until the
+ *   ssh timeout (measured 2026-10-06), so Python reads the bytes itself, which keeps them UTF-8.
  */
-export function analyticsHelperCommand(platform: AnalyticsRemoteHost): string {
+export function analyticsHelperCommand(
+  platform: AnalyticsRemoteHost,
+  /** POSIX candidates in order; only tests pass their own (stubs in a temporary folder). */
+  posixCandidates: readonly string[] = POSIX_PYTHON_CANDIDATES
+): string {
   const code =
     "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));_s=_p['helperSource'];sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(_p['request']).encode('utf-8')),encoding='utf-8');exec(compile(_s,'managed-analytics-helper','exec'))";
-  if (HOST_OS[platform] !== 'windows') return `/usr/bin/python3 -c ${quoteShell(code)}`;
+  if (HOST_OS[platform] !== 'windows') {
+    const script = [
+      `probe=${quoteShell(PYTHON_PROBE)}`,
+      `for p in ${posixCandidates.join(' ')}; do`,
+      '  if [ -n "$p" ] && [ -x "$p" ] && "$p" -c "$probe" </dev/null >/dev/null 2>&1; then',
+      `    exec "$p" -c ${quoteShell(code)}`,
+      '  fi',
+      'done',
+      "echo 'aac-helper: runtime_missing' >&2",
+      `exit ${HELPER_RUNTIME_MISSING_EXIT}`,
+    ].join('\n');
+    return `/bin/sh -c ${quoteShell(script)}`;
+  }
   const script = [
-    "$ErrorActionPreference = 'Stop'",
+    "$ErrorActionPreference = 'Continue'",
     "$ProgressPreference = 'SilentlyContinue'",
     "$env:PYTHONIOENCODING = 'utf-8'",
     "$env:PYTHONUTF8 = '1'",
-    '$python = (Get-Command python3.exe,python.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source',
-    'if (-not $python) { exit 1 }',
+    `$probe = '${PYTHON_PROBE.replace(/'/g, "''")}'`,
+    '$candidates = @()',
+    '$launcher = Get-Command py.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1',
+    "if ($launcher) { $candidates += ,@($launcher.Source, '-3') }",
+    'foreach ($c in @(Get-Command python.exe,python3.exe -All -CommandType Application -ErrorAction SilentlyContinue)) { $candidates += ,@($c.Source) }',
+    '$python = $null',
+    '$prefix = @()',
+    '$stub = $false',
+    'foreach ($c in $candidates) {',
+    '  $out = & $c[0] @($c | Select-Object -Skip 1) -c $probe 2>&1 | Out-String',
+    '  if ($LASTEXITCODE -eq 0) { $python = $c[0]; $prefix = @($c | Select-Object -Skip 1); break }',
+    "  if ($out -match 'Python was not found' -or $c[0] -like '*\\WindowsApps\\*') { $stub = $true }",
+    '}',
+    `if (-not $python) { if ($stub) { [Console]::Error.WriteLine('aac-helper: runtime_missing:store_alias') } else { [Console]::Error.WriteLine('aac-helper: runtime_missing') }; exit ${HELPER_RUNTIME_MISSING_EXIT} }`,
     // No pipeline input: Python inherits the ssh session's stdin and reads the request itself.
-    `& $python -c '${code.replace(/'/g, "''")}'`,
+    `& $python @prefix -c '${code.replace(/'/g, "''")}'`,
     'exit $LASTEXITCODE',
   ].join('; ');
   return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
@@ -494,14 +627,25 @@ export async function runAnalyticsRemoteHelper(
         maxBuffer: MAX_RESPONSE_BYTES,
         windowsHide: true,
       },
-      (error, result) => {
+      (error, result, stderr) => {
         if (error) {
-          reject(
-            new AnalyticsRemoteTransportError(
-              error.killed === true &&
-                (error as NodeJS.ErrnoException & { signal?: string }).signal === 'SIGTERM'
-            )
-          );
+          const failure = error as NodeJS.ErrnoException & {
+            signal?: string | null;
+            code?: number | string;
+          };
+          const timedOut = error.killed === true && failure.signal === 'SIGTERM';
+          const exitCode = typeof failure.code === 'number' ? failure.code : null;
+          // A maxBuffer overflow is an answer too large to be the helper's, never a crash.
+          const cause =
+            failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+              ? 'bad_response'
+              : classifyAnalyticsScanFailure({
+                  exitCode,
+                  killed: error.killed,
+                  signal: failure.signal ?? null,
+                  stderr: typeof stderr === 'string' ? stderr.slice(-4096) : '',
+                });
+          reject(new AnalyticsRemoteTransportError(timedOut, cause, exitCode));
           return;
         }
         if (typeof result !== 'string') {

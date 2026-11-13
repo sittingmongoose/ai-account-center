@@ -1076,7 +1076,7 @@ export function calendarView(A, R, now, apiAll) {
 
 // ---------------------------------------------------------------- included usage (activity.sources)
 const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor']];
-const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage'];
+const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage', 'unreadable', 'scan_failed'];
 const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 const noLocalLog = r => r.state === 'unavailable' && /no local usage log/i.test(text(r.detail));
 const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
@@ -1086,7 +1086,9 @@ const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
  * Tools with no local log on any host (Cursor; Antigravity from a server older than its reader) get the note only,
  * never a grid row of "No usage log" cells. It describes where the numbers come from; it never divides them (models stay the only division).
  * States: ok, no_usage, cached (with its age), scanning (a scan is working on the tool or has not reached it
- * yet), not_installed, unavailable (a real failure, with its reason in the tip).
+ * yet), not_installed, unavailable (a real failure, with its reason in the tip), scan_failed (the computer's
+ * scan failed and nothing earlier is kept: "Scan failed", its cause in the tip) and unreadable (logs found
+ * that could not be read: "Can't read"). A failing source never reads as a zero.
  * tone: ok | cached | unavailable | scanning | quiet.
  */
 export function includedView(payload, now = Date.now()) {
@@ -1121,6 +1123,8 @@ export function includedView(payload, now = Date.now()) {
     if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: 'ok', tip: [events(r), last].filter(Boolean).join(' · ') };
     if (r.state === 'cached') return { id, text: finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Earlier records are shown until a scan finishes. ${last}` };
     if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: `${why}${last}` };
+    if (r.state === 'scan_failed') return { id, text: 'Scan failed', tone: 'unavailable', tip: `${why}${last}` };
+    if (r.state === 'unreadable') return { id, text: "Can't read", tone: 'unavailable', tip: `${why}${last}` };
     if (noLocalLog(r)) return { id, text: 'No usage log', tone: 'quiet', tip: 'This tool keeps no local usage log to read.' };
     if (r.state === 'not_installed') return { id, text: 'Not installed', tone: 'quiet', tip: why || 'No usage logs for this tool were found on this computer.' };
     return { id, text: 'Unavailable', tone: 'unavailable', tip: `${why}${last}` };
@@ -1129,11 +1133,12 @@ export function includedView(payload, now = Date.now()) {
   const rows = tools.filter(([t]) => !quiet.has(t)).map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h), h)) }));
   const scanning = list.filter(r => r.state === 'scanning').length;
   const cached = list.filter(r => r.state === 'cached').length, down = list.filter(r => r.state === 'unavailable' && !noLocalLog(r)).length;
-  const flags = [scanning ? `${scanning} scanning` : '', cached ? `${cached} cached` : '', down ? `${down} unavailable` : ''].filter(Boolean).join(', ');
+  const failed = list.filter(r => r.state === 'scan_failed').length, unreadable = list.filter(r => r.state === 'unreadable').length;
+  const flags = [scanning ? `${scanning} scanning` : '', cached ? `${cached} cached` : '', failed ? `${failed} scan failed` : '', unreadable ? `${unreadable} can't read` : '', down ? `${down} unavailable` : ''].filter(Boolean).join(', ');
   return {
     shown: true, label: `Included usage${flags ? ` · ${flags}` : ''}`, line,
     hosts: SOURCE_HOSTS.map(([, l]) => l.toUpperCase()), rows,
-    foot: 'Usage from every computer is merged, grouped by the provider that served it (the route each log records; a route no provider claims is under Other) and divided by model. A tool a scan has not finished says Scanning until one does; a source that cannot be read keeps its last scan (cached) or shows as unavailable with the reason. A missing reading is never counted as zero.',
+    foot: 'Usage from every computer is merged, grouped by the provider that served it (the route each log records; a route no provider claims is under Other) and divided by model. A tool a scan has not finished says Scanning until one does; a source that cannot be read keeps its last scan (cached), or says Scan failed, Can\'t read or Unavailable with the reason in its tip. A missing reading is never counted as zero.',
   };
 }
 
@@ -1160,7 +1165,7 @@ export function hostProgress(payload) {
     const live = h === 'ubuntu' ? act.refreshing === true : pending.has(h) || (running && !cells.length);
     // A host whose every tool failed to read is not "read": the loading screen says unavailable,
     // and the page shows the real reasons (the grid cells and their tips) as soon as it arms.
-    const failed = cells.length > 0 && cells.every(r => r.state === 'unavailable' && !noLocalLog(r));
+    const failed = cells.length > 0 && cells.every(r => (r.state === 'unavailable' && !noLocalLog(r)) || r.state === 'scan_failed');
     const detail = scanning === 0
       ? failed ? 'unavailable' : cells.length || !running ? 'read' : 'queued'
       : live ? `${done} of ${total} tools · scanning now`

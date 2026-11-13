@@ -146,7 +146,9 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
       expect(destination).toBe('nas1-agent');
       expect(rest).toEqual([]);
       expect(command).toBe(analyticsHelperCommand('nas1'));
-      expect(command).toStartWith("/usr/bin/python3 -c 'import sys,json,io;");
+      // The fixed launcher: it probes the usual python3 locations and runs the helper with the first
+      // that is Python 3.9 or later; nothing else.
+      expect(command).toStartWith('/bin/sh -c ');
       // The options are the fixed non-interactive set, never forwarding, a proxy or a local command.
       const options = call.args.slice(0, separator);
       expect(options[0]).toBe('-T');

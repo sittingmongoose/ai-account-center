@@ -33,7 +33,6 @@ import { withLfLineEndings } from '../../../src/utils/packaged-source';
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 import { localClaudeLogNames } from '../../../src/web-server/services/analytics-claude-log-names';
 
-
 // Scan-behaviour fixtures advance beyond the authoritative cache between reads.
 let fixtureClock = Date.now();
 function loadAnalyticsRemoteSources(...args: Parameters<typeof readRemoteSources>) {
@@ -231,14 +230,15 @@ describe('analytics remote transport', () => {
     // Windows OpenSSH; with no pipeline input, Python inherits stdin and reads it.
     expect(script).not.toContain('[Console]::In');
     expect(script).not.toContain('$request |');
-    expect(script).toContain("& $python -c 'import sys,json,io;");
+    expect(script).toContain("& $python @prefix -c 'import sys,json,io;");
     expect(script).toContain('sys.stdin.buffer.read()');
-    expect(analyticsHelperCommand('mac')).toStartWith("/usr/bin/python3 -c 'import sys,json,io;");
+    expect(analyticsHelperCommand('mac')).toStartWith('/bin/sh -c ');
   });
 
   it('runs the helper with python3 directly on Nas1, the same command as the Mac', () => {
     const command = analyticsHelperCommand('nas1');
-    expect(command).toStartWith("/usr/bin/python3 -c 'import sys,json,io;");
+    expect(command).toStartWith('/bin/sh -c ');
+    expect(command).toContain('for p in /usr/bin/python3 ');
     // Nas1 is a second Ubuntu computer: any POSIX computer takes the python3 form, only Windows
     // goes through PowerShell.
     expect(command).toBe(analyticsHelperCommand('mac'));
@@ -392,7 +392,12 @@ describe('analytics remote sources', () => {
     let pass = 0;
     const deps = {
       cacheDir: cache,
-      hosts: async () => ({ mac: 'fixture', windows: 'fixture', nas1: 'fixture', alexis: 'fixture' }),
+      hosts: async () => ({
+        mac: 'fixture',
+        windows: 'fixture',
+        nas1: 'fixture',
+        alexis: 'fixture',
+      }),
       claudeLogNames: () => ({ originals: new Set<string>(), complete: true }),
       now: () => started + pass * 360_000,
       runHelper: async () => {
@@ -825,9 +830,10 @@ describe('analytics remote sources', () => {
     expect(next.states.find((entry) => entry.host === 'mac' && entry.tool === 'omp')).toMatchObject(
       { state: 'scanning', lastScanAt: first, rowCount: 2 }
     );
+    // Logs the host found and could not read, with nothing kept: "can't read", never a zero.
     expect(
       next.states.find((entry) => entry.host === 'mac' && entry.tool === 'muse')
-    ).toMatchObject({ state: 'unavailable', lastScanAt: first });
+    ).toMatchObject({ state: 'unreadable', lastScanAt: first, cause: 'read_failed' });
     const cached = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
     expect(
       cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'omp')
@@ -959,7 +965,12 @@ describe('analytics remote sources', () => {
     expect(saved.fingerprints.antigravity).toEqual({ [FILE_1]: { size: 10, mtimeMs: 20 } });
   });
 
-  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias', alexis: 'alexis-alias' });
+  const hosts = async () => ({
+    mac: 'mac-alias',
+    windows: 'win-alias',
+    nas1: 'nas1-alias',
+    alexis: 'alexis-alias',
+  });
 
   it('names skipped oversized usage lines in the partial cell state', async () => {
     const answer = await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -1152,7 +1163,8 @@ describe('analytics remote sources', () => {
     expect(Object.fromEntries(aliases)).toEqual({
       mac: 'mac-alias',
       windows: 'win-alias',
-      nas1: 'nas1-alias', alexis: 'alexis-alias',
+      nas1: 'nas1-alias',
+      alexis: 'alexis-alias',
     });
     for (const host of REMOTE_ANALYTICS_HOSTS)
       expect(fs.existsSync(path.join(cache, 'analytics-remote-v1', `${host}.json`))).toBe(true);
@@ -1176,8 +1188,10 @@ describe('analytics remote sources', () => {
       onlyNas1Fails.states.find((entry) => entry.tool === 'omp' && entry.host === host)?.state;
     expect(state('mac')).toBe('ok');
     expect(state('windows')).toBe('ok');
-    expect(state('nas1')).toBe('unavailable');
-    expect(onlyNas1Fails.results.filter((entry) => entry.tool === 'omp')).toHaveLength(REMOTE_HOSTS.length - 1);
+    expect(state('nas1')).toBe('scan_failed');
+    expect(onlyNas1Fails.results.filter((entry) => entry.tool === 'omp')).toHaveLength(
+      REMOTE_HOSTS.length - 1
+    );
     // The other way round: only Nas1 answers, and the Mac and Windows fall back to what they read
     // before, marked cached.
     const failsEverywhereButNas1 = await loadAnalyticsRemoteSources(MIN_DATE, {
@@ -1208,9 +1222,9 @@ describe('analytics remote sources', () => {
         return parseAnalyticsRemoteResponse(JSON.stringify(response()));
       },
     });
-    expect([...new Set(calls)]).toEqual(REMOTE_HOSTS.map(host => `${host}:${SSH_ALIASES[host]}`));
+    expect([...new Set(calls)]).toEqual(REMOTE_HOSTS.map((host) => `${host}:${SSH_ALIASES[host]}`));
     expect(states).toHaveLength(REMOTE_HOSTS.length * 6);
-    expect(states.every(entry => entry.detail !== 'remote host is not configured')).toBe(true);
+    expect(states.every((entry) => entry.detail !== 'remote host is not configured')).toBe(true);
   });
 
   it('converts session aggregates to worker sessions without doubling hourly tokens', async () => {
@@ -1395,7 +1409,9 @@ describe('analytics remote sources', () => {
       runHelper: failing,
     });
     expect(results).toEqual([]);
-    expect(states.every((entry) => entry.state === 'unavailable')).toBe(true);
+    // Every call failed and nothing was read before: each cell says the scan failed, and why.
+    expect(states.every((entry) => entry.state === 'scan_failed')).toBe(true);
+    expect(states.every((entry) => entry.cause === 'helper_failed')).toBe(true);
     const unconfigured = await loadAnalyticsRemoteSources(MIN_DATE, {
       hosts: async () => ({ mac: null, windows: null, nas1: null }),
       cacheDir: cache,
@@ -1526,7 +1542,8 @@ describe('analytics remote sources', () => {
     expect(results.find((entry) => entry.tool === 'zcode')?.data.hourly[0].inputTokens).toBe(40);
     const zcode = states.find((entry) => entry.tool === 'zcode' && entry.host === 'mac');
     expect(zcode?.state).toBe('cached');
-    expect(zcode?.detail).toContain('read failed');
+    expect(zcode?.detail).toContain('could not be read');
+    expect(zcode?.cause).toBe('read_failed');
   });
 
   it('replaces zcode rows when only its write-ahead log changed', async () => {
@@ -1630,7 +1647,12 @@ describe('analytics remote sources', () => {
 });
 
 describe('analytics remote scans per kind', () => {
-  const hosts = async () => ({ mac: 'mac-alias', windows: 'win-alias', nas1: 'nas1-alias', alexis: 'alexis-alias' });
+  const hosts = async () => ({
+    mac: 'mac-alias',
+    windows: 'win-alias',
+    nas1: 'nas1-alias',
+    alexis: 'alexis-alias',
+  });
   const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
   const FILE_2 = 'a2'.repeat(32);
   /** A clean answer for exactly the kinds asked, with an OMP row when OMP is asked. */
@@ -1656,17 +1678,29 @@ describe('analytics remote scans per kind', () => {
   it('retains authoritative kinds for five minutes and scans only an expired kind', async () => {
     const now = Date.now();
     const calls: Array<{ host: string; kinds: string[] }> = [];
-    const options = { hosts, cacheDir: cache, now: () => now,
-      runHelper: async (_alias: string, host: AnalyticsRemoteHost, request: { kinds: string[] }) => {
+    const options = {
+      hosts,
+      cacheDir: cache,
+      now: () => now,
+      runHelper: async (
+        _alias: string,
+        host: AnalyticsRemoteHost,
+        request: { kinds: string[] }
+      ) => {
         calls.push({ host, kinds: request.kinds });
         return answer(request.kinds);
-      } };
+      },
+    };
     await readRemoteSources(MIN_DATE, options);
     calls.length = 0;
     const warm = await readRemoteSources(MIN_DATE, options);
     expect(calls).toHaveLength(0);
-    expect(warm.results.filter((result) => result.tool === 'omp')).toHaveLength(REMOTE_HOSTS.length);
-    expect(warm.states.find((source) => source.host === 'mac' && source.tool === 'omp')?.state).toBe('cached');
+    expect(warm.results.filter((result) => result.tool === 'omp')).toHaveLength(
+      REMOTE_HOSTS.length
+    );
+    expect(
+      warm.states.find((source) => source.host === 'mac' && source.tool === 'omp')?.state
+    ).toBe('cached');
     const file = path.join(cache, 'analytics-remote-v1', 'mac.json');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
     saved.kinds.omp.lastScanAt = new Date(now - 300_000).toISOString();
@@ -1709,7 +1743,13 @@ describe('analytics remote scans per kind', () => {
     expect(states.filter((entry) => entry.state === 'ok')).toHaveLength(REMOTE_HOSTS.length);
     // A recent settled answer causes no helper calls.
     calls.length = 0;
-    await readRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper: async () => { throw new Error('recent cache must skip helper'); } });
+    await readRemoteSources(MIN_DATE, {
+      hosts,
+      cacheDir: cache,
+      runHelper: async () => {
+        throw new Error('recent cache must skip helper');
+      },
+    });
     // After five minutes, the next scan is one call for every kind.
     const later = Date.now() + 300_001;
     await readRemoteSources(MIN_DATE, {
@@ -1797,7 +1837,10 @@ describe('analytics remote scans per kind', () => {
     });
     const omp = fresh.states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(omp).toMatchObject({ state: 'cached', rowCount: 2 });
-    expect(omp?.detail).toBe('remote scan failed; showing previously read aggregates');
+    expect(omp?.detail).toBe(
+      'the usage reader stopped with an error on this computer; showing previously read aggregates'
+    );
+    expect(omp?.cause).toBe('helper_failed');
     expect(fresh.results.filter((entry) => entry.tool === 'omp')).toHaveLength(REMOTE_HOSTS.length);
     expect(
       fresh.states.find((entry) => entry.tool === 'claude' && entry.host === 'mac')?.state
