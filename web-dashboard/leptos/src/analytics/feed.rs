@@ -26,6 +26,9 @@ pub struct Feed {
     pub head: RwSignal<String>,
     /// `{"loading": bool, "error": "..."}`.
     pub loading: RwSignal<String>,
+    /// `{"shown", "updating", "stale", "asOf", "note"}`: whether the numbers on screen are current and whether newer ones
+    /// are on their way (the page's updating strip).
+    pub fresh: RwSignal<String>,
     /// The frame header's line for this tab (`{statusLead, statusStrong, statusMore}`, as the dashboard words it).
     pub chrome: RwSignal<String>,
     /// The id of the controller this page installed; 0 until then.
@@ -55,6 +58,7 @@ impl Feed {
             motion: RwSignal::new(String::new()),
             head: RwSignal::new(String::new()),
             loading: RwSignal::new(String::new()),
+            fresh: RwSignal::new(String::new()),
             chrome: RwSignal::new(String::new()),
             controller: RwSignal::new(0),
         }
@@ -68,6 +72,7 @@ impl Feed {
                 "analytics-motion" => self.motion.try_set(json),
                 "analytics-head" => self.head.try_set(json),
                 "analytics-loading" => self.loading.try_set(json),
+                "analytics-fresh" => self.fresh.try_set(json),
                 "chrome" => self.chrome.try_set(json),
                 _ => None,
             };
@@ -281,8 +286,10 @@ mod tests {
             "{\"statusLead\":\"Updated\",\"statusStrong\":\"1m ago\",\"statusMore\":\"live\"}"
                 .into(),
         );
+        feed.receive("analytics-fresh", "{\"shown\":true}".into());
         feed.receive("unknown", "x".into());
         assert_eq!(feed.analytics.get_untracked(), "{\"version\":7}");
+        assert_eq!(feed.fresh.get_untracked(), "{\"shown\":true}");
         assert_eq!(feed.motion.get_untracked(), "morph");
         assert!(feed.head.get_untracked().is_empty());
         let line = feed.chrome_line();

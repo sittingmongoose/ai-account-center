@@ -103,6 +103,19 @@ export function getCachedModelsDevRegistry(
   }
 }
 
+/**
+ * The identity of the saved price list (size, change time and inode of its file), or 'none'. Aggregates priced from
+ * it stay valid while it is the same (account-activity-collector.ts reuses an unchanged pass's priced rows).
+ */
+export function modelsDevRegistryIdentity(): string {
+  try {
+    const stats = fs.statSync(getCacheFilePath());
+    return `${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}:${stats.ino}`;
+  } catch {
+    return 'none';
+  }
+}
+
 export function setCachedModelsDevRegistry(
   providers: ModelsDevRegistry,
   fetchedAt = Date.now()

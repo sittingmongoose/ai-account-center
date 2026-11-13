@@ -50,11 +50,8 @@ pub fn Header() -> impl IntoView {
                 <p class="headline ax-scope">
                     <span>{move || head.with(|h| h.scope.trim_end().to_string())}</span>" "
                     <b class="tnum" data-tip=move || head.with(|h| h.read_tip.clone())>{move || head.with(|h| h.read.clone())}</b>
-                    {move || head.with(|h| h.updating).then(|| view! {
-                        <span class="sep">"·"</span>
-                        <span class="q3">{move || head.with(|h| if h.update_note.is_empty() { "Updating…".to_string() } else { h.update_note.clone() })}</span>
-                    })}
-                                    </p>
+                    // whether it is updating is said by the strip under the header (mod.rs FreshStrip), not here
+                </p>
                 <div class="ax-discl">
                     <button class="disclosure" class:open=move || panel.get() == Panel::Scope aria-expanded=move || (panel.get() == Panel::Scope).to_string()
                         on:click=move |_| toggle(Panel::Scope)><Icon name="chev-right"/>"What this page covers"</button>

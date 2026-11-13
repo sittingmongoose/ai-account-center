@@ -29,6 +29,8 @@ pub struct Ax {
     /// The page has had a useful answer (numbers, or a settled failure): sticky until the view is cleared.
     pub ready: Memo<bool>,
     pub load: Memo<LoadState>,
+    /// Whether the numbers on screen are current, and whether newer ones are on their way (the updating strip).
+    pub fresh: Memo<Fresh>,
     /// The header: the view's, then each `analytics-head` between refreshes.
     pub head: RwSignal<Head>,
 }
@@ -70,6 +72,10 @@ fn start(feed: Feed) -> Ax {
         let json = feed.loading.get();
         serde_json::from_str::<LoadState>(&json).unwrap_or_default()
     });
+    let fresh = Memo::new(move |_| {
+        let json = feed.fresh.get();
+        serde_json::from_str::<Fresh>(&json).unwrap_or_default()
+    });
     let head = RwSignal::new(Head::default());
     Effect::new(move |_| {
         if let Some(h) = view.with(|v| v.as_ref().map(|v| v.usage.head.clone())) {
@@ -87,6 +93,7 @@ fn start(feed: Feed) -> Ax {
         view,
         ready,
         load,
+        fresh,
         head,
     }
 }
@@ -189,10 +196,13 @@ pub fn AnalyticsPage() -> impl IntoView {
     provide_context(ax);
     models::provide_detail();
     let error = Memo::new(move |_| ax.load.with(|l| l.error.clone()));
+    // numbers older than this visit's newest answer are dimmed until current ones land, never shown as current
+    let stale = Memo::new(move |_| ax.ready.get() && ax.fresh.with(|f| f.shown && f.stale));
     view! {
         <TipLayer>
-            <div class="page ax-page" aria-busy=move || ax.load.with(|l| l.loading).to_string()>
+            <div class="page ax-page" class:ax-stale=move || stale.get() aria-busy=move || ax.load.with(|l| l.loading).to_string()>
                 <head::Header/>
+                <FreshStrip/>
                 <p class="banner" role="status" hidden=move || error.with(|e| e.is_empty())>{move || error.get()}</p>
                 // a failed first read is explained by the line above; the placeholders are for a read under way
                 <Show when=move || ax.ready.get() fallback=move || error.with(|e| e.is_empty()).then(|| view! { <LoadingCards/> })>
@@ -213,6 +223,35 @@ pub fn AnalyticsPage() -> impl IntoView {
                 </Show>
             </div>
         </TipLayer>
+    }
+}
+
+/// The updating strip under the header: while newer numbers are on their way, or the ones on screen are older than
+/// this visit's newest answer, one compact line says so ("Updating · data from 2m ago") over a running bar; when they
+/// could not be updated, it says that instead ("Couldn't update · data from 25m ago"). Always one line (an ellipsis
+/// past its width); the whole sentence is its tip. Gone once the numbers are current and nothing is being read.
+#[component]
+fn FreshStrip() -> impl IntoView {
+    let ax = expect_context::<Ax>();
+    let fresh = ax.fresh;
+    let shown = Memo::new(move |_| ax.ready.get() && fresh.with(|f| f.shown && !f.note.is_empty()));
+    view! {
+        <Show when=move || shown.get()>
+            <div class="ax-fresh" role="status" aria-live="polite"
+                data-tip=move || fresh.with(|f| (!f.tip.is_empty()).then(|| f.tip.clone()))
+                aria-label=move || fresh.with(|f| if f.tip.is_empty() { f.note.clone() } else { f.tip.clone() })
+                data-state=move || fresh.with(|f| if f.failed { "failed" } else if f.updating { "updating" } else if f.stale { "stale" } else { "current" })>
+                <span class="ax-fresh-ic" aria-hidden="true">
+                    {move || match fresh.with(|f| (f.failed, f.updating)) {
+                        (true, _) => view! { <Icon name="alert-circle"/> }.into_any(),
+                        (false, true) => view! { <span class="ax-fresh-spin"></span> }.into_any(),
+                        _ => view! { <Icon name="clock"/> }.into_any(),
+                    }}
+                </span>
+                <span class="ax-fresh-note">{move || fresh.with(|f| f.note.clone())}</span>
+                <span class="ax-fresh-bar" aria-hidden="true" hidden=move || !fresh.with(|f| f.updating)></span>
+            </div>
+        </Show>
     }
 }
 
@@ -338,6 +377,26 @@ mod tests {
         let v = parse("{\"version\":7,\"usage\":{\"kpis\":null,\"head\":{\"read\":null}},\"agenda\":{\"a\":null}}")
             .expect("nulls tolerated");
         assert!(v.usage.kpis.is_empty() && v.usage.head.read.is_empty() && v.agenda.a.is_empty());
+    }
+
+    #[test]
+    fn the_fresh_state_reads_whole_and_tolerates_nulls() {
+        let f: Fresh = serde_json::from_str(
+            r#"{"shown":true,"updating":true,"stale":true,"failed":false,"asOf":1763028000000,"note":"Updating · data from 2m ago","tip":"Updating."}"#,
+        )
+        .expect("fresh state");
+        assert!(f.shown && f.updating && f.stale && !f.failed);
+        assert_eq!(f.as_of, Some(1763028000000.0));
+        assert_eq!(f.note, "Updating · data from 2m ago");
+        assert_eq!(f.tip, "Updating.");
+        let none: Fresh =
+            serde_json::from_str(r#"{"shown":false,"asOf":null,"note":null,"tip":null}"#)
+                .expect("nulls");
+        assert!(!none.shown && none.as_of.is_none() && none.note.is_empty() && none.tip.is_empty());
+        assert_eq!(
+            serde_json::from_str::<Fresh>("not json").unwrap_or_default(),
+            Fresh::default()
+        );
     }
 
     #[test]

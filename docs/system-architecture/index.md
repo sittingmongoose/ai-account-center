@@ -84,6 +84,28 @@ range with hashed keys and whole-session totals, and the original CCS anomaly
 rules. The provider filter is validated against the server's provider table;
 errors carry a stable `code`.
 
+A read is answered with the newest numbers at once. It starts (or joins) the
+computation of a new answer, which runs after the read's turn of the event loop.
+When that selection's last computation took at most 250 ms, the read waits for
+this one that long; otherwise, or when nothing was computed since the server
+started, it gets the selection's last answer, kept in memory and saved under
+`account-analytics/analytics-views-v1.json` (atomic, owner-only, versioned, the
+eight most recent selections), and the computation finishes behind it. A kept
+answer older than the refresh interval plus 30 s, or one from before a restart,
+is sent with `stale: true` and `refreshing: true` (the page reads again in 2 s).
+While the selection's newest finished computation failed, the kept answer is sent
+with `stale: true`, `refreshing: false` and `refreshError` instead, and the page
+says it could not update and keeps its usual pace. Kept answers are ordered by when
+their computation started, never by clock time, so a clock stepped back cannot
+freeze a selection on an older answer. Every answer carries `asOf`, when its numbers
+were computed; a restarted server answers its first read from the saved file. Only a
+selection with nothing saved waits for its first answer. A computation slower than
+a second is logged by phase (`analytics.read_timing`). The app frame keeps the last
+answers in the browser too (cleared at sign-out) and draws them at once on the next
+visit under a one-line updating strip ("Updating · data from 2m ago", "Updating · 3 of
+11 tools", "Couldn't update · data from 25m ago"; the full sentence is its tip) with
+the numbers dimmed until current ones land.
+
 Usage activity covers Claude Code, Codex, OMP, Muse, zcode and Antigravity
 (`scope: 'multi-host-cli'`), grouped under the dashboard provider that served
 each call ([attribution](../../src/web-server/services/account-analytics-attribution.ts)):
@@ -91,7 +113,11 @@ Claude Code, Codex, the Muse CLI and Antigravity are their own provider, OMP and
 record a route per call (Qwen, Z.ai, Kimi Code, OpenCode Go, Cursor, Muse Code,
 Antigravity), and a route no provider claims is `other`. Every model with usage
 is published. Ubuntu logs are parsed in bounded worker
-scans with per-file checkpoints; the Mac, Windows and Nas1 contribute per-model,
+scans with per-file checkpoints (each log is read from where the last pass
+stopped; a truncated, rotated or rewritten log is read again from its start).
+A source whose logs, request and price list are all unchanged since its last
+clean pass returns that pass's result without loading a checkpoint or
+aggregating again (`cache/account-activity-passes-v1/`); the Mac, Windows and Nas1 contribute per-model,
 per-hour aggregates through one packaged Python helper streamed over the
 existing ssh channel ([remote transport](../../src/web-server/services/analytics-remote-transport.ts)),
 never raw events. Nas1, a second Ubuntu computer, is scanned the same way: the
