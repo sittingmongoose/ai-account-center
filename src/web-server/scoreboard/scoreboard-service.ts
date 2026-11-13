@@ -275,7 +275,8 @@ export class ScoreboardService {
         sources: hit.view.sources.map((source) => ({
           ...source,
           state: source.state === 'ok' ? 'stale' : source.state,
-          ageSeconds: source.ageSeconds === null ? null : source.ageSeconds + age,
+          // Whole seconds, as every other age: the page reads them as integers.
+          ageSeconds: source.ageSeconds === null ? null : Math.round(source.ageSeconds + age),
           detail: `${source.detail} Cached view; rescan running.`,
         })),
       };

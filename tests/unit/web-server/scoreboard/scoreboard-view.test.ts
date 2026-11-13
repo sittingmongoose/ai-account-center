@@ -859,6 +859,10 @@ describe('service', () => {
     const second = await service.view();
     expect(second.generatedAt).toBe(first.generatedAt);
     expect(second.sources.some((source) => source.detail.includes('Cached view'))).toBe(true);
+    // A stale-served age is whole seconds, as the page reads it (a fraction made the page refuse the view).
+    now += 1_234;
+    const third = await service.view();
+    expect(third.sources.every((source) => source.ageSeconds === null || Number.isInteger(source.ageSeconds))).toBe(true);
     // One build in flight per filter set (Scoreboard v2); wait for this one.
     await Promise.all(
       (service as unknown as { building: Map<string, Promise<unknown>> }).building.values()
