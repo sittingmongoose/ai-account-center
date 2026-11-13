@@ -132,6 +132,7 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
                 "budgetExceeded": bytes >= 2u64 << 30,
                 "automaticDeletion": false,
                 "projectedYearBytes": null,
+                "quotaTemporaries": crate::storage_health::quota_temporaries(&engine.dir),
             });
             status
         }

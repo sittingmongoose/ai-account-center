@@ -12,6 +12,8 @@ use std::sync::OnceLock;
 struct Policy {
     patterns: Vec<Pattern>,
     credential_key: String,
+    refused_key: String,
+    authorization: Authorization,
     credential_min: usize,
     embedded_budget: usize,
     embedded_failures: usize,
@@ -39,11 +41,30 @@ struct Jwt {
     prefix: String,
     min: usize,
     char: String,
+    signature_min: usize,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Authorization {
+    pattern: String,
+    legacy_min: usize,
+    opaque_min: usize,
+    basic_min: usize,
+    digit: String,
+    upper: String,
+    lower: String,
+    base64: String,
 }
 struct Rules {
     policy: Policy,
     patterns: Vec<Regex>,
     credential_key: Regex,
+    refused_key: Regex,
+    authorization: Regex,
+    auth_digit: Regex,
+    auth_upper: Regex,
+    auth_lower: Regex,
+    auth_base64: Regex,
     credential_key_text: Regex,
     email_local: Regex,
     email_domain: Regex,
@@ -71,10 +92,11 @@ fn rules() -> &'static Rules {
             .map(|pattern| {
                 let source = if pattern.scan.as_deref() == Some("jwt") {
                     format!(
-                        r"\b{p}{c}{{{n},}}\.{p}{c}{{{n},}}\.{c}{{{n},}}",
+                        r"\b{p}{c}{{{n},}}\.{p}{c}{{{n},}}\.{c}{{{sig},}}",
                         p = regex::escape(&policy.jwt.prefix),
                         c = policy.jwt.char,
-                        n = policy.jwt.min
+                        n = policy.jwt.min,
+                        sig = policy.jwt.signature_min
                     )
                 } else {
                     pattern.pattern.clone().unwrap_or_default()
@@ -83,6 +105,12 @@ fn rules() -> &'static Rules {
             })
             .collect();
         Rules {
+            refused_key: regex(&format!("^{}$", policy.refused_key), true, &policy.whitespace),
+            authorization: regex(&policy.authorization.pattern, true, &policy.whitespace),
+            auth_digit: regex(&policy.authorization.digit, false, &policy.whitespace),
+            auth_upper: regex(&policy.authorization.upper, false, &policy.whitespace),
+            auth_lower: regex(&policy.authorization.lower, false, &policy.whitespace),
+            auth_base64: regex(&policy.authorization.base64, false, &policy.whitespace),
             credential_key: regex(&format!("^{}$", policy.credential_key), true, &policy.whitespace),
             credential_key_text: regex(&format!("\"{}\"", policy.credential_key), true, &policy.whitespace),
             email_local: regex(&policy.email.local_char, false, &policy.whitespace),
@@ -140,6 +168,8 @@ pub fn find_secret(text: &str) -> Option<&'static str> {
                     .map_or(domain.len(), |(index, _)| index);
                 rules.email_domain.is_match(&domain[..end])
             })
+        } else if pattern.scan.as_deref() == Some("authorization") {
+            has_authorization(&text, rules)
         } else {
             matcher.is_match(&text)
         };
@@ -148,6 +178,50 @@ pub fn find_secret(text: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Test canonical Base64 without retaining or logging decoded credential material.
+fn basic_has_colon(value: &str) -> bool {
+    let value = value.trim_end_matches('=');
+    if value.len() % 4 == 1 {
+        return false;
+    }
+    let mut bits = 0u16;
+    let mut pending = 0;
+    let mut colon = false;
+    for c in value.bytes() {
+        let digit = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return false,
+        };
+        bits = (bits << 6) | u16::from(digit);
+        pending += 6;
+        if pending >= 8 {
+            pending -= 8;
+            colon |= ((bits >> pending) & 255) == 0x3a;
+        }
+        bits &= (1 << pending) - 1;
+    }
+    colon && bits == 0
+}
+
+fn has_authorization(text: &str, rules: &Rules) -> bool {
+    let policy = &rules.policy.authorization;
+    rules.authorization.captures_iter(text).any(|captures| {
+        let value = &captures[2];
+        value.len() >= policy.opaque_min
+            || (value.len() >= policy.legacy_min
+                && (rules.auth_digit.is_match(value)
+                    || (rules.auth_upper.is_match(value) && rules.auth_lower.is_match(value))))
+            || (captures[1].eq_ignore_ascii_case("basic")
+                && value.len() >= policy.basic_min
+                && rules.auth_base64.is_match(value)
+                && basic_has_colon(value))
+    })
 }
 
 /// Same three-pass unescape of text as the reader, including repeated backslashes and Unicode
@@ -277,6 +351,9 @@ pub fn find_secret_in(source: &str, value: &Json) -> Option<&'static str> {
             Json::Array(values) => stack.extend(values.into_iter().map(|value| (value, credential))),
             Json::Object(values) => {
                 for (key, value) in values {
+                    if rules.refused_key.is_match(&regex_text(&key)) {
+                        return Some("a credential field");
+                    }
                     if let Some(found) = find_secret(&key) {
                         return Some(found);
                     }

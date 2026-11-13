@@ -18,6 +18,7 @@ pub mod ops;
 pub mod pack;
 pub mod report_secret;
 pub mod secret;
+pub mod storage_health;
 pub mod usage;
 
 #[cfg(feature = "node")]

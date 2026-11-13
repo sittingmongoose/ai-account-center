@@ -124,6 +124,21 @@ fn report_reader_secret_parity_refuses_before_any_persistence() {
             .collect::<Vec<_>>()
     };
     capture::record(&engine, vec![report(0, "working")]).unwrap();
+    let content = || {
+        use redb::{ReadableDatabase, ReadableTable};
+        engine
+            .with_db(|database| {
+                let read = database.begin_read()?;
+                let table = read.open_table(capture::CONTENT)?;
+                let mut rows = Vec::new();
+                for row in table.iter()? {
+                    let (key, value) = row?;
+                    rows.push((key.value().to_vec(), value.value().to_vec()));
+                }
+                Ok(rows)
+            })
+            .unwrap()
+    };
     let mut seq = 1;
     for case in cases {
         let fields = &case["doc"];
@@ -141,18 +156,21 @@ fn report_reader_secret_parity_refuses_before_any_persistence() {
                 "ledger snapshot must inspect actual segment bytes"
             );
             let before_health = capture::health(&engine).unwrap();
+            let before_content = content();
             let before_history = history(&engine);
             // A valid report preceding the bad report in a batch must not append either.
             assert!(capture::record(&engine, vec![report(seq + 1, "done"), candidate]).is_err());
             assert_eq!(ledger(), before_log, "{}: ledger untouched", case["name"]);
             assert_eq!(capture::health(&engine).unwrap(), before_health, "content untouched");
             assert_eq!(history(&engine), before_history, "no rejected history");
+            assert_eq!(content(), before_content, "compressed content table untouched");
             let mut secret_ids = report(seq, "done");
             secret_ids.ids = fields.clone();
             assert!(capture::record(&engine, vec![secret_ids]).is_err());
             assert_eq!(ledger(), before_log, "ids are checked before append too");
             assert_eq!(capture::health(&engine).unwrap(), before_health);
             assert_eq!(history(&engine), before_history);
+            assert_eq!(content(), before_content);
         } else {
             assert_eq!(capture::record(&engine, vec![candidate]).unwrap()["stored"], 1);
         }
@@ -170,4 +188,45 @@ fn report_reader_secret_parity_refuses_before_any_persistence() {
     );
     engine.close().unwrap();
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn shared_policy_keeps_the_legacy_native_credential_shapes() {
+    let mut recognized = 0;
+    for prefix in [
+        "aacd_",
+        "sk-ant-",
+        "sk-",
+        "glpat-",
+        "github_pat_",
+        "ghp_",
+        "gho_",
+        "ghs_",
+        "ghu_",
+        "AIza",
+        "AKIA",
+        "xoxb-",
+        "Bearer ",
+        "Basic ",
+        "Token ",
+        "api_key=",
+        "api-key%3D",
+        "access_token=",
+        "refresh-token=",
+        "secret%3D",
+    ] {
+        for length in 0..=48 {
+            for tail in ["A".repeat(length), "a".repeat(length), "Ab9".repeat(length)] {
+                let text = format!("prefix: {prefix}{tail}");
+                if aac_store::secret::looks_secret(&text) {
+                    recognized += 1;
+                    assert!(
+                        aac_store::report_secret::find_secret(&text).is_some(),
+                        "legacy credential shape was lost: {prefix}, length {length}"
+                    );
+                }
+            }
+        }
+    }
+    assert!(recognized > 1000, "union check must exercise legacy-positive shapes");
 }

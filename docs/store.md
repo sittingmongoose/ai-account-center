@@ -66,6 +66,19 @@ Source JSON and archives remain intact for rollback.
 Report readers and native capture share `src/web-server/status/report-secret-policy.json`: refusal
 patterns, credential keys and embedded-text work budgets. Native batch preflight rejects decoded
 keys/strings and embedded JSON before ledger append; its replay projector checks the same policy.
+The policy is a union of the reader and legacy native protections: authorization-family keys,
+Basic/Token/Digest credentials, URL userinfo (including hosts without dots), dashboard tokens,
+credential assignments and the legacy token thresholds are preserved. Basic credentials with a
+short Base64-encoded `user:password` are refused while ordinary prose remains allowed. The shared
+fixture suite and a generated legacy-shape check prevent losing native-only protections.
+
+Storage status also reports `storageHealth.quotaTemporaries`: matching regular UUID temporary-file
+count and apparent bytes, scan completeness/errors and an offline-maintenance diagnostic. All ages
+are included, since age cannot distinguish a live suspended writer from an orphan. Metadata-only
+observation neither reads file contents nor changes/deletes files; links are excluded. An incomplete
+scan reports only the observed lower bound with a warning. Stop every writer using that CCS_HOME
+before offline removal of confirmed orphan files.
+
 The policy is packaged as a build input and emitted with the TS reader. Native build fingerprints
 include it, so policy changes require rebuilding the module. Native parse limits fail closed.
 

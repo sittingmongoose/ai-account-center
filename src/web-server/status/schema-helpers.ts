@@ -88,6 +88,7 @@ const SECRET_PATTERNS: ReadonlyArray<readonly [string, (text: string) => boolean
   secretPolicy.patterns.map((entry) => {
     if (entry.scan === 'jwt') return [entry.kind, hasJsonWebToken] as const;
     if (entry.scan === 'email') return [entry.kind, hasEmailAddress] as const;
+    if (entry.scan === 'authorization') return [entry.kind, hasAuthorization] as const;
     if (typeof entry.pattern !== 'string')
       throw new ValidationError('Invalid report secret policy');
     const pattern = new RegExp(entry.pattern, entry.flags);
@@ -114,7 +115,10 @@ function hasEmailAddress(text: string): boolean {
   return false;
 }
 
-const JWT_TAIL = new RegExp(secretPolicy.jwt.tail, 'y');
+const JWT_TAIL = new RegExp(
+  `\\.${secretPolicy.jwt.prefix}${secretPolicy.jwt.char}{${secretPolicy.jwt.min},}\\.${secretPolicy.jwt.char}{${secretPolicy.jwt.signatureMin},}`,
+  'y'
+);
 const JWT_CHAR = new RegExp(secretPolicy.jwt.char);
 const WORD_CHAR = new RegExp(secretPolicy.jwt.wordChar);
 const JWT_HEAD_MIN = secretPolicy.jwt.min;
@@ -135,6 +139,39 @@ function hasJsonWebToken(text: string): boolean {
     while (head !== -1 && head + secretPolicy.jwt.prefix.length + JWT_HEAD_MIN <= dot) {
       if (head === 0 || !WORD_CHAR.test(text[head - 1])) return true;
       head = text.indexOf(secretPolicy.jwt.prefix, head + 1);
+    }
+  }
+  return false;
+}
+
+const AUTHORIZATION = new RegExp(secretPolicy.authorization.pattern, 'gi');
+const AUTH_DIGIT = new RegExp(secretPolicy.authorization.digit);
+const AUTH_UPPER = new RegExp(secretPolicy.authorization.upper);
+const AUTH_LOWER = new RegExp(secretPolicy.authorization.lower);
+const AUTH_BASE64 = new RegExp(secretPolicy.authorization.base64);
+
+/** Preserve legacy credential shapes and recognize even short Basic user:password values. */
+function hasAuthorization(text: string): boolean {
+  AUTHORIZATION.lastIndex = 0;
+  for (let match = AUTHORIZATION.exec(text); match; match = AUTHORIZATION.exec(text)) {
+    const value = match[2];
+    if (value.length >= secretPolicy.authorization.opaqueMin) return true;
+    if (
+      value.length >= secretPolicy.authorization.legacyMin &&
+      (AUTH_DIGIT.test(value) || (AUTH_UPPER.test(value) && AUTH_LOWER.test(value)))
+    )
+      return true;
+    if (
+      match[1].toLowerCase() === 'basic' &&
+      value.length >= secretPolicy.authorization.basicMin &&
+      AUTH_BASE64.test(value)
+    ) {
+      const decoded = Buffer.from(value, 'base64');
+      if (
+        decoded.includes(0x3a) &&
+        decoded.toString('base64').replace(/=+$/, '') === value.replace(/=+$/, '')
+      )
+        return true;
     }
   }
   return false;
@@ -182,6 +219,7 @@ export function jsonFromBytes(bytes: Buffer, capBytes: number): Parsed<unknown> 
 
 /** A key that names a credential, whose string value is refused (decoded, so `"pass\u0077ord"` counts). */
 const CREDENTIAL_KEY = new RegExp(`^${secretPolicy.credentialKey}$`, 'i');
+const REFUSED_KEY = new RegExp(`^${secretPolicy.refusedKey}$`, 'i');
 
 /**
  * The secret check for a parsed JSON file: over the text as written, then over every decoded key and string of the
@@ -214,6 +252,7 @@ export function findSecretIn(source: string, value: unknown): string | null {
       for (const item of node) stack.push([item, credential]);
     } else if (node && typeof node === 'object') {
       for (const [key, item] of Object.entries(node as Record<string, unknown>)) {
+        if (REFUSED_KEY.test(key)) return 'a credential field';
         const found = findSecret(key);
         if (found) return found;
         stack.push([item, credential || CREDENTIAL_KEY.test(key)]);
