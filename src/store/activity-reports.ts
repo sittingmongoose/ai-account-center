@@ -9,7 +9,7 @@
 import { createHash } from 'crypto';
 import type { AacStore } from './store-service';
 import type { UsageCell, UsageReport, UsageReportState, UsageSession } from './usage-report';
-import { USAGE_REPORT_SCHEMA } from './usage-report';
+import { FUTURE_SLACK_MS, USAGE_REPORT_SCHEMA } from './usage-report';
 import type { UsageWorkerResult } from '../web-server/usage/worker-client';
 import type { HourlyUsage, SessionUsage } from '../web-server/usage/types';
 import type {
@@ -62,11 +62,29 @@ function cellsFromHourly(hourly: readonly HourlyUsage[]): UsageCell[] {
   return cells;
 }
 
-function sessionsOf(rows: readonly SessionUsage[]): UsageSession[] {
+/**
+ * Cells dated after `limit` (now plus `FUTURE_SLACK_MS`) are left out and counted: one such cell
+ * would move the store's 72-hour settle line past now and stop every live write after it.
+ */
+function pastCells(
+  cells: readonly UsageCell[],
+  limit: number
+): { cells: UsageCell[]; future: number } {
+  const kept: UsageCell[] = [];
+  let future = 0;
+  for (const cell of cells) {
+    if (Date.parse(cell.hour) > limit) future += Math.max(1, Math.floor(cell.events ?? 0));
+    else kept.push(cell);
+  }
+  return { cells: kept, future };
+}
+
+/** Sessions as the contract's; one that starts after `limit` is left out, a later end is cut to it. */
+function sessionsOf(rows: readonly SessionUsage[], limit: number): UsageSession[] {
   const out = new Map<string, UsageSession>();
   for (const row of rows) {
     if (!SESSION_KEY.test(row.sessionId)) continue;
-    const last = Date.parse(row.lastActivity);
+    const last = Math.min(Date.parse(row.lastActivity), limit);
     const first = Date.parse(row.firstActivity ?? row.lastActivity);
     if (!Number.isFinite(last) || !Number.isFinite(first) || first > last) continue;
     const parts = (Array.isArray(row.modelBreakdowns) ? row.modelBreakdowns : [])
@@ -160,6 +178,7 @@ export function buildActivityReports(args: {
 }): UsageReport[] {
   const reports: UsageReport[] = [];
   const coverFrom = Math.ceil(args.windowFromMs / HOUR) * HOUR;
+  const limit = args.now + FUTURE_SLACK_MS;
   for (const source of args.states) {
     const tool = source.tool;
     const data =
@@ -171,20 +190,29 @@ export function buildActivityReports(args: {
             .filter((entry) => entry.tool === tool && entry.data.host === source.host)
             .map((entry) => entry.data);
     let derived = false;
-    const cells: UsageCell[] = [];
+    const read: UsageCell[] = [];
     const sessionRows: SessionUsage[] = [];
+    let futureDated = 0;
     for (const entry of data) {
-      if (Array.isArray(entry.cells)) cells.push(...entry.cells);
+      if (Array.isArray(entry.cells)) read.push(...entry.cells);
       else if (entry.hourly.length) {
         derived = true;
-        cells.push(...cellsFromHourly(entry.hourly));
+        read.push(...cellsFromHourly(entry.hourly));
       }
       sessionRows.push(...entry.session);
+      futureDated += Math.max(0, Math.floor(entry.futureDated ?? 0));
     }
+    const past = pastCells(read, limit);
+    const cells = past.cells;
+    futureDated += past.future;
     const { state, cause } = reportState(source, cells.length > 0);
     const newestCell = cells.reduce((max, c) => Math.max(max, Date.parse(c.hour)), 0);
     const scanned = Date.parse(source.lastScanAt ?? '');
-    const readAt = Math.max(Number.isFinite(scanned) ? scanned : args.now, newestCell);
+    // never after now: the store's settle line follows the read time
+    const readAt = Math.min(
+      args.now,
+      Math.max(Number.isFinite(scanned) ? scanned : args.now, newestCell)
+    );
     const complete =
       (state === 'ok' || state === 'no_usage') &&
       !derived &&
@@ -199,8 +227,9 @@ export function buildActivityReports(args: {
       complete,
       coverFrom: complete ? iso(Math.min(coverFrom, Math.floor(readAt / HOUR) * HOUR)) : null,
       cause,
+      ...(futureDated > 0 ? { counts: { futureDated } } : {}),
       cells: state === 'ok' || state === 'partial' ? cells : [],
-      sessions: sessionsOf(sessionRows),
+      sessions: sessionsOf(sessionRows, limit),
     });
   }
   return reports;
@@ -218,16 +247,25 @@ export function rowsReport(args: {
   readAt: number;
   complete: boolean;
   cause?: string | null;
+  /** The clock (tests); read times never pass it and later records are counted, not sent. */
+  now?: number;
 }): UsageReport {
-  const cells: UsageCell[] = [];
+  const now = args.now ?? Date.now();
+  const limit = now + FUTURE_SLACK_MS;
+  const read: UsageCell[] = [];
   const sessions: SessionUsage[] = [];
+  let futureDated = 0;
   for (const entry of args.data) {
-    if (Array.isArray(entry.cells)) cells.push(...entry.cells);
-    else cells.push(...cellsFromHourly(entry.hourly));
+    if (Array.isArray(entry.cells)) read.push(...entry.cells);
+    else read.push(...cellsFromHourly(entry.hourly));
     sessions.push(...entry.session);
+    futureDated += Math.max(0, Math.floor(entry.futureDated ?? 0));
   }
+  const past = pastCells(read, limit);
+  const cells = past.cells;
+  futureDated += past.future;
   const newest = cells.reduce((max, c) => Math.max(max, Date.parse(c.hour)), 0);
-  const readAt = Math.max(args.readAt, newest);
+  const readAt = Math.min(now, Math.max(args.readAt, newest));
   const oldest = cells.reduce((min, c) => Math.min(min, Date.parse(c.hour)), readAt);
   const complete = args.complete && args.kind === 'backfill';
   return {
@@ -239,8 +277,9 @@ export function rowsReport(args: {
     complete,
     coverFrom: complete ? iso(Math.floor(oldest / HOUR) * HOUR) : null,
     cause: args.cause ?? null,
+    ...(futureDated > 0 ? { counts: { futureDated } } : {}),
     cells,
-    sessions: sessionsOf(sessions),
+    sessions: sessionsOf(sessions, limit),
     kind: args.kind,
   };
 }

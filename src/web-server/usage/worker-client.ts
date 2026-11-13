@@ -176,6 +176,8 @@ export interface UsageWorkerResult {
    * the history store. Absent from results saved before the store kept them.
    */
   cells?: UsageCell[];
+  /** Records left out of `cells` as dated more than five minutes after the read (`FUTURE_SLACK_MS`). */
+  futureDated?: number;
   /** The computer a remote result was read on (`DashboardHost`); absent for local results. */
   host?: string;
   monthly: MonthlyUsage[];

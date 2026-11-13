@@ -4,7 +4,7 @@ import { normalizeUsageProvider } from './model-identity';
 import { analyticsSessionKey } from './analytics-session-key';
 import type { AccountAnalyticsActivityProvider } from '../services/account-analytics-types';
 import type { CompactEntry } from './types';
-import type { UsageCell } from '../../store/usage-report';
+import { FUTURE_SLACK_MS, type UsageCell } from '../../store/usage-report';
 
 const SESSION_KEY_SHAPE = /^[0-9a-f]{16}$/;
 const MAX_ROUTE = 64;
@@ -32,12 +32,15 @@ function label(value: string, max: number): string {
  * logged cost wins, the rest is priced at list rates, and the part priced at the unknown-model
  * fallback is kept apart. `keyed`: the rows' session ids are already published keys (the remote
  * helper hashes on the host it reads); otherwise each raw id is hashed here, so no id leaves.
+ * A record dated more than `FUTURE_SLACK_MS` after `now` is left out and counted in `future`.
  */
 export function cellsFromCompact(
   rows: readonly CompactEntry[],
   tool: AccountAnalyticsActivityProvider,
-  keyed = false
+  keyed = false,
+  opts: { now?: number; future?: { count: number } } = {}
 ): UsageCell[] {
+  const limit = (opts.now ?? Date.now()) + FUTURE_SLACK_MS;
   interface Slot {
     cell: UsageCell;
     logged: number;
@@ -48,6 +51,10 @@ export function cellsFromCompact(
     const entry = row.entry;
     const at = Date.parse(entry.timestamp);
     if (!Number.isFinite(at)) continue;
+    if (at > limit) {
+      if (opts.future) opts.future.count += Math.max(1, Math.floor(row.events || 0));
+      continue;
+    }
     const hour = new Date(Math.floor(at / 3_600_000) * 3_600_000).toISOString();
     const route = label(
       normalizeUsageProvider(entry.provider ?? entry.target) ?? '',

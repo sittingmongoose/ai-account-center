@@ -1402,6 +1402,8 @@ export class AccountAnalyticsActivityService {
   private backfillAt = -Infinity;
   private backfillBusy = false;
   private backfillFinished = false;
+  /** The old caches were tried this run; a failed import waits for the next start. */
+  private importTried = false;
 
   /**
    * One bounded pass of the one-time backfill (design 5): first the old caches (the saved activity
@@ -1417,16 +1419,20 @@ export class AccountAnalyticsActivityService {
     if (!store) return 'idle';
     this.backfillBusy = true;
     try {
-      if ((await store.getMeta('ts:activity_backfill')) === 'done') {
-        this.backfillFinished = true;
-        return 'done';
-      }
+      const finished = (await store.getMeta('ts:activity_backfill')) === 'done';
+      // A stop between marking it done and deleting the deep-read checkpoints left them behind.
+      if (finished && path.isAbsolute(scope))
+        fs.rmSync(path.join(scope, 'cache', 'analytics-backfill-v1'), {
+          recursive: true,
+          force: true,
+        });
       const now = (this.deps.now ?? Date.now)();
       const write = async (reports: UsageReport[]) => {
         for (let i = 0; i < reports.length; i += 8)
           await store.activityIngest(reports.slice(i, i + 8));
       };
-      if ((await store.getMeta('ts:activity_import')) !== 'done') {
+      if (!this.importTried && (await store.getMeta('ts:activity_import')) !== 'done') {
+        this.importTried = true;
         const reports: UsageReport[] = [];
         const persisted = path.isAbsolute(scope) ? loadPersistedSnapshot(scope) : null;
         const local = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
@@ -1463,10 +1469,20 @@ export class AccountAnalyticsActivityService {
             );
         await write(reports);
         // The retired Codex cache: the only copy of Codex usage whose rollout files are gone.
+        // The file is kept: it is the only copy. Done only once the store has committed it (now or
+        // before, by its SHA-256); a failed or refused import is tried again on the next start.
         const legacy = path.join(scope, 'cache', 'codex-native-usage-v1.json');
-        if (path.isAbsolute(scope) && fs.existsSync(legacy))
-          await store.activityImportCodexV1(legacy, 'ubuntu').catch(() => undefined);
-        await store.setMeta('activity_import', 'done');
+        let imported = true;
+        if (path.isAbsolute(scope) && fs.existsSync(legacy)) {
+          const result = await store.activityImportCodexV1(legacy, 'ubuntu').catch(() => null);
+          imported =
+            result !== null && (result.imported === true || result.reason === 'already imported');
+        }
+        if (imported) await store.setMeta('activity_import', 'done');
+      }
+      if (finished) {
+        this.backfillFinished = true;
+        return 'done';
       }
       const passes = Number((await store.getMeta('ts:activity_backfill_passes')) ?? 0) + 1;
       await store.setMeta('activity_backfill_passes', String(passes));

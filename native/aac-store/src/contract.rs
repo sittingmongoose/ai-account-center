@@ -37,6 +37,14 @@ pub const MAX_PARTS: usize = 32;
 pub const HOUR_MS: u64 = 3_600_000;
 /// 2000-01-01T00:00:00Z: nothing older is a usage log of these tools.
 pub const EARLIEST_MS: u64 = 946_684_800_000;
+/// A record dated more than this after the store's clock is not written: a clock running ahead or a
+/// bad log line would otherwise move the 72-hour settle line past now and freeze every live write.
+pub const FUTURE_SLACK_MS: u64 = 5 * 60_000;
+/// Cell quality flags (`quality` on the wire), kept with the cell for good.
+pub const QUALITY_FLAGS: [&str; 1] = ["outputIncludesReasoningTwice"];
+/// Bit of `QUALITY_FLAGS[0]`: the output count holds the reasoning tokens twice (the retired Codex
+/// cache, docs/store.md 12.8). An upper bound, never split; input and cached input are exact.
+pub const Q_OUTPUT_INCLUDES_REASONING_TWICE: u32 = 1;
 const MAX_TOKENS: u64 = 1_000_000_000_000_000;
 const MAX_USD: f64 = 1.0e9;
 
@@ -53,6 +61,10 @@ pub struct Counts {
     pub files_failed: Option<u64>,
     #[serde(default)]
     pub newest_mtime: Option<String>,
+    /// Records the reader left out because they were dated more than `FUTURE_SLACK_MS` after the
+    /// time it read them. The store adds the cells it leaves out for the same reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub future_dated: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -117,6 +129,31 @@ pub struct Cell {
     /// Usage events in the cell; null when the reader cannot split its count.
     #[serde(default)]
     pub events: Option<u64>,
+    /// Known flaws of the counts, from `QUALITY_FLAGS`; kept with the cell for good.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quality: Vec<String>,
+}
+
+impl Cell {
+    /// The cell's quality flags as bits; None when one is unknown.
+    pub fn quality_bits(&self) -> Option<u32> {
+        let mut bits = 0;
+        for flag in &self.quality {
+            let i = QUALITY_FLAGS.iter().position(|f| f == flag)?;
+            bits |= 1 << i;
+        }
+        Some(bits)
+    }
+}
+
+/// Quality bits back to their flag words.
+pub fn quality_words(bits: u32) -> Vec<String> {
+    QUALITY_FLAGS
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| bits & (1 << i) != 0)
+        .map(|(_, f)| f.to_string())
+        .collect()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -162,6 +199,19 @@ pub struct Session {
     /// projects and streams arrive as `aac.session-binding.v1` records, never on a session row.
     #[serde(default)]
     pub cwd: Option<Cwd>,
+    /// Known flaws of the parts' counts, from `QUALITY_FLAGS`; kept with the session for good.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quality: Vec<String>,
+}
+
+impl Session {
+    pub fn quality_bits(&self) -> Option<u32> {
+        let mut bits = 0;
+        for flag in &self.quality {
+            bits |= 1 << QUALITY_FLAGS.iter().position(|f| f == flag)?;
+        }
+        Some(bits)
+    }
 }
 
 /// Reserved (section 1.4a of the design): per-message records. Refused until the store keeps them.
@@ -327,7 +377,7 @@ pub fn nano(usd: f64) -> u64 {
 }
 
 fn counts_ok(c: &Counts) -> bool {
-    [c.roots, c.files_found, c.files_read, c.files_failed]
+    [c.roots, c.files_found, c.files_read, c.files_failed, c.future_dated]
         .iter()
         .all(|v| v.map(|n| n <= 100_000_000).unwrap_or(true))
         && c.newest_mtime
@@ -339,26 +389,42 @@ fn counts_ok(c: &Counts) -> bool {
 /// A report checked whole, with its times as milliseconds.
 pub struct Checked<'a> {
     pub report: &'a Report,
+    /// The read time, never later than the store's clock.
     pub read_at_ms: u64,
     pub cover_from_ms: Option<u64>,
     pub kind: &'static str,
-    /// Each cell's hour start in ms, in the order of `report.cells`.
-    pub cell_hours: Vec<u64>,
-    pub session_spans: Vec<(u64, u64)>,
+    /// Each cell's hour start in ms, in the order of `report.cells`; None for a cell dated more
+    /// than `FUTURE_SLACK_MS` after the store's clock, which is not written.
+    pub cell_hours: Vec<Option<u64>>,
+    /// Each cell's quality bits, in the same order.
+    pub cell_quality: Vec<u32>,
+    /// Each session's first and last ms, the last no later than the clock plus the slack; None
+    /// for a session that starts after that.
+    pub session_spans: Vec<Option<(u64, u64)>>,
+    /// The reader's future-dated count plus the records of the cells left out here.
+    pub future_dated: u64,
 }
 
 impl Report {
-    /// Checks the whole report; any failure refuses all of it.
+    /// Checks the whole report against the store's clock; any failure refuses all of it.
     pub fn check(&self) -> Result<Checked<'_>> {
+        self.check_at(crate::engine::now_ms())
+    }
+
+    /// Checks the whole report against `now_ms`: the read time is clamped to it, and cells and
+    /// sessions dated more than `FUTURE_SLACK_MS` after it are left out and counted.
+    pub fn check_at(&self, now_ms: u64) -> Result<Checked<'_>> {
+        let limit = now_ms.saturating_add(FUTURE_SLACK_MS);
         if self.schema != REPORT_SCHEMA {
             fail!("invalid", "the report schema is not {REPORT_SCHEMA}");
         }
         if !ident_ok(&self.computer) || !ident_ok(&self.tool) {
             fail!("invalid", "computer and tool are lower-case identifiers");
         }
-        let Some(read_at_ms) = parse_iso(&self.read_at) else {
+        let Some(sent_at_ms) = parse_iso(&self.read_at) else {
             fail!("invalid", "readAt is not an ISO UTC time");
         };
+        let read_at_ms = sent_at_ms.min(now_ms);
         if read_at_ms < EARLIEST_MS {
             fail!("invalid", "readAt is too old");
         }
@@ -410,7 +476,8 @@ impl Report {
         }
         let cover_from_ms = match &self.cover_from {
             Some(t) => match parse_iso(t) {
-                Some(ms) if ms % HOUR_MS == 0 && ms <= read_at_ms => Some(ms),
+                // a read time clamped to now pulls a later coverFrom back to its hour
+                Some(ms) if ms % HOUR_MS == 0 && ms <= sent_at_ms => Some(ms.min(read_at_ms - read_at_ms % HOUR_MS)),
                 _ => fail!("invalid", "coverFrom is not an hour start at or before readAt"),
             },
             None => None,
@@ -418,13 +485,22 @@ impl Report {
         if self.complete && cover_from_ms.is_none() {
             fail!("invalid", "a complete read names the hours it covers (coverFrom)");
         }
+        let mut future_dated = self.counts.as_ref().and_then(|c| c.future_dated).unwrap_or(0);
         let mut cell_hours = Vec::with_capacity(self.cells.len());
+        let mut cell_quality = Vec::with_capacity(self.cells.len());
         for c in &self.cells {
             let Some(h) = parse_iso(&c.hour).filter(|h| h % HOUR_MS == 0) else {
                 fail!("invalid", "a cell hour is not a UTC hour start");
             };
-            if h < EARLIEST_MS || h > read_at_ms + HOUR_MS {
+            // a cell after the store's clock is left out below; one after its own read is refused
+            if h < EARLIEST_MS || (h <= limit && h > sent_at_ms + HOUR_MS) {
                 fail!("invalid", "a cell hour is outside the read");
+            }
+            let Some(quality) = c.quality_bits().filter(|_| c.quality.len() <= QUALITY_FLAGS.len()) else {
+                fail!("invalid", "a cell names an unknown quality flag");
+            };
+            if quality & Q_OUTPUT_INCLUDES_REASONING_TWICE != 0 && c.reasoning_output_tokens.is_some() {
+                fail!("invalid", "output that counts reasoning twice has no reasoning split");
             }
             if c.session_key.as_deref().map(|s| !hex16_ok(s)).unwrap_or(false)
                 || c.session_hash
@@ -459,7 +535,14 @@ impl Report {
             {
                 fail!("invalid", "a cell's counts or costs are out of range");
             }
-            cell_hours.push(h);
+            cell_quality.push(quality);
+            if h > limit {
+                // every record of the cell is dated after the slack: left out, and counted
+                future_dated = future_dated.saturating_add(c.events.unwrap_or(1).max(1));
+                cell_hours.push(None);
+            } else {
+                cell_hours.push(Some(h));
+            }
         }
         let mut session_spans = Vec::with_capacity(self.sessions.len());
         for s in &self.sessions {
@@ -474,6 +557,8 @@ impl Report {
                 || first > last
                 || first < EARLIEST_MS
                 || s.parts.len() > MAX_PARTS
+                || s.quality.len() > QUALITY_FLAGS.len()
+                || s.quality_bits().is_none()
             {
                 fail!("invalid", "a session is malformed");
             }
@@ -503,7 +588,11 @@ impl Report {
             {
                 fail!("invalid", "a session's target or folder is malformed");
             }
-            session_spans.push((first, last));
+            session_spans.push(if first > limit {
+                None
+            } else {
+                Some((first, last.min(limit)))
+            });
         }
         if self.same_days.len() > 4000 {
             fail!("invalid", "too many unchanged days");
@@ -514,7 +603,9 @@ impl Report {
             cover_from_ms,
             kind,
             cell_hours,
+            cell_quality,
             session_spans,
+            future_dated,
         })
     }
 }

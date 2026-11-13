@@ -19,6 +19,29 @@ const B: f64 = 34.0;
 
 const TYPES: [&str; 4] = ["in", "out", "cw", "cr"];
 
+/// An x label's width: 11 px mono at 87.5% stretch (`.ax-t`), as the view builder measures it (`axisLabelW`).
+fn label_w(label: &str) -> f64 {
+    label.chars().count() as f64 * 6.2
+}
+
+/// Which x labels to draw at the horizontal scale `sx`. The view lays its labels out so none touch at the width it
+/// last saw; until it lays them out again for this box they are squeezed, so a label that would touch the kept one
+/// before it is left out, never drawn over it.
+fn kept_labels(ticks: &[XTick], sx: f64) -> Vec<bool> {
+    let mut last: Option<(f64, f64)> = None;
+    ticks
+        .iter()
+        .map(|k| {
+            let (x, w) = (k.x * sx, label_w(&k.label));
+            let ok = last.is_none_or(|(lx, lw)| x - lx >= (w + lw) / 2.0 + 12.0);
+            if ok {
+                last = Some((x, w));
+            }
+            ok
+        })
+        .collect()
+}
+
 #[component]
 pub fn TrendCard() -> impl IntoView {
     let ax = expect_context::<Ax>();
@@ -282,11 +305,14 @@ fn TrendChart(
                 <text x=L + pw + 10.0 y=yy + 4.0 class="ax-t ink2">{k.right.clone()}</text>
             }
         }).collect_view();
-        let x = t.x_ticks.iter().map(|k| {
+        let kept = kept_labels(&t.x_ticks, sx);
+        let x = t.x_ticks.iter().zip(kept).map(|(k, kept)| {
             let xx = L + k.x * sx;
             view! {
                 {k.major.then(|| view! { <line x1=xx x2=xx y1=T y2=T + ph class="ax-gl"/> })}
-                <text x=xx y=T + ph + 21.0 text-anchor="middle" class=if k.major { "ax-t ink2" } else { "ax-t" }>{k.label.clone()}</text>
+                {kept.then(|| view! {
+                    <text x=xx y=T + ph + 21.0 text-anchor="middle" class=if k.major { "ax-t ink2" } else { "ax-t" }>{k.label.clone()}</text>
+                })}
             }
         }).collect_view();
         let tail = (t.tail_x >= 0.0).then(|| {
@@ -467,7 +493,8 @@ fn ReadoutBar(
             {move || match bucket.get() {
                 None => view! { <span class="q3">{if coarse { "Tap the chart for a reading" } else { "Point at the chart for a reading" }}</span> }.into_any(),
                 Some(b) => {
-                    let extra = if !b.foot.is_empty() || !b.foot2.is_empty() || !b.by_provider.is_empty() {
+                    // a gap reads like any bucket: each series with "Not read" as its value
+                    let extra = if !b.gap && (!b.foot.is_empty() || !b.foot2.is_empty() || !b.by_provider.is_empty()) {
                         let first = if b.foot.is_empty() { b.by_provider.clone() } else { b.foot.clone() };
                         let text = if b.foot2.is_empty() { first } else { format!("{first} · {}", b.foot2) };
                         view! { <span class="ro-l2 q3">{text}</span> }.into_any()
@@ -484,7 +511,7 @@ fn ReadoutBar(
                     view! {
                         <span class="ro-l1">
                             <span class="ro-time">{b.time.clone()}</span>
-                            <span class="ro-v tnum"><Swatch color=key_color("tok")/>"All "{b.all.clone()}</span>
+                            <span class="ro-v tnum"><Swatch color=key_color("tok")/>{(!b.gap).then_some("All ")}{b.all.clone()}</span>
                             <span class="ro-v tnum"><Swatch color=key_color("cost") shape="line"/>{b.cost.clone()}</span>
                         </span>
                         {extra}
@@ -500,6 +527,36 @@ fn ReadoutBar(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn squeezed_axis_labels_are_dropped_never_drawn_over_each_other() {
+        // 12-hour ticks laid out for a 1188 px plot, drawn in a 508 px one
+        let ticks: Vec<XTick> = (0..14)
+            .map(|i| XTick {
+                x: 40.0 + i as f64 * 84.0,
+                label: if i % 2 == 0 {
+                    format!("Tue {}", 10 + i / 2)
+                } else {
+                    "12 PM".into()
+                },
+                major: i % 2 == 0,
+            })
+            .collect();
+        assert!(kept_labels(&ticks, 1.0).iter().all(|k| *k));
+        let sx = 508.0 / 1188.0;
+        let kept = kept_labels(&ticks, sx);
+        let shown: Vec<&XTick> = ticks
+            .iter()
+            .zip(&kept)
+            .filter(|(_, k)| **k)
+            .map(|(t, _)| t)
+            .collect();
+        assert!(shown.len() >= 2 && shown.len() < ticks.len());
+        for pair in shown.windows(2) {
+            let gap = (pair[1].x - pair[0].x) * sx;
+            assert!(gap >= (label_w(&pair[0].label) + label_w(&pair[1].label)) / 2.0 + 12.0);
+        }
+    }
 
     #[test]
     fn the_frame_trace_counts_slow_frames() {

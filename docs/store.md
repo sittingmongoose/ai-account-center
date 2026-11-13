@@ -891,6 +891,22 @@ records (`messages[]`) are reserved and refused with `not_supported` until their
 Today's TypeScript collectors are adapted on the TypeScript side (`src/store/activity-reports.ts`,
 `src/web-server/usage/activity-cells.ts`).
 
+**Nothing after now.** The store clamps a report's `readAt` to its own clock, and a cell or session
+dated more than five minutes after that clock (`FUTURE_SLACK_MS`) is not written; a session that
+started before then ends there. Such records are counted, with the reader's own count
+(`counts.futureDated`), in the read's scan state (`futureDated` per source), and the page says how
+many. The TypeScript side drops and counts them before sending (`cellsFromCompact`,
+`buildActivityReports`, `rowsReport`). Without this, one record dated ahead (a clock running fast, a
+remote host's clock, a bad log line) moved the source's settle line past now and froze every live
+write for that source.
+
+**Quality flags.** A cell or session may carry `quality` words from `QUALITY_FLAGS`, kept with it for
+good (cell value format 2; format 1 values read as clean). `outputIncludesReasoningTwice`: the output
+count holds the reasoning tokens twice and cannot be split (12.8); input and cached input are exact.
+`activityRange` returns the bits as a last row column (rows never mix flagged and clean cells) and
+`quality` spans per tool. The page keeps such usage in its totals, leaves it out of Cost by model, the
+model share, the model detail and the cost anomalies, and says so in one line for the range.
+
 ### 12.2 Tables and events
 
 Tables `act_dict`, `act_dict_rev`, `act_hour` (one packed value per UTC day, computer and tool),
@@ -956,15 +972,31 @@ holds every Codex usage record the old collector read: on the dashboard VM 491,3
 2026-01-29 to 2026-10-01, and 5,150 of its 5,153 rollout files are gone, so it is the only copy. The
 backfill's first step imports it once (`activityImportCodexV1`, `src/legacy.rs`): read as a stream one
 rollout file at a time, folded into session-hour cells and sessions, raw ids hashed, paths dropped.
-Its `inputTokens` include the cached input (in every one of the 490,042 records with cache reads,
-input is at least the cache reads; the parser stopped counting them twice on 2026-10-01), so uncached
-input is `inputTokens - cacheReadTokens - cacheCreationTokens`. Every record has `target: codex` and no
-route, and the cache excluded proxy sessions, so all of it is Codex-subscription usage (route empty,
-provider Codex). It carries no cost: the cells hold none and the page prices them at today's rates. The
-import is recorded in the scan history as an `import` read with cause `retired_cache` and the cache's
-file count, and the store marks the file's SHA-256 (`ts:activity_import_codex_v1:<first 32 hex>` holds
-the record count) so a cleanup can retire the file once that marker exists. Measured on a copy: 4.6 s, 95 MB process memory,
-9,056 cells over 159 days, 4,891 sessions; a second run imports nothing. The file is left in place.
+The version 1 parser counted two categories twice (fixed and the cache bumped to version 2 at
+`6298e60ad`, 2026-10-01):
+
+- **Input** included the cached input (in every one of the 490,042 records with cache reads, input is
+  at least the cache reads), so uncached input is `inputTokens - cacheReadTokens - cacheCreationTokens`.
+  Exact.
+- **Output** is `output_tokens + reasoning_output_tokens`, although Codex's `output_tokens` already
+  holds the reasoning: every reasoning token is counted twice. The cache keeps only the sum, so the
+  split cannot be recovered (the three surviving rollout files hold no token events). Output is
+  imported as it is, an upper bound, with no reasoning split, and every imported cell and session
+  carries the quality flag `outputIncludesReasoningTwice` for good (12.1). The page notes "Codex output
+  before Oct 2 counts reasoning twice (old cache)" for any range holding such hours and leaves them out
+  of per-model cost and efficiency comparisons.
+
+Every record has `target: codex` and no route, and the cache excluded proxy sessions, so all of it is
+Codex-subscription usage (route empty, provider Codex). It carries no cost: the cells hold none and the
+page prices them at today's rates, so their output cost is an upper bound too. The import is recorded
+in the scan history as an `import` read with cause `retired_cache` and the cache's file count, and the
+store marks the file's SHA-256 (`ts:activity_import_codex_v1:<first 32 hex>` holds the record count) so
+the same file is never imported twice. The import is marked done only after the store committed it;
+a failed or refused import is tried again on the next start. Measured on a copy: 4.6 s, 95 MB process
+memory, 9,056 cells over 159 days, 4,891 sessions; a second run imports nothing.
+
+**The file is kept.** It is the only copy of that history; nothing in AAC deletes it (not the import,
+not the store's maintenance, not the DB audit's cleanup), and it must not be retired.
 
 ## Notes for the lead
 

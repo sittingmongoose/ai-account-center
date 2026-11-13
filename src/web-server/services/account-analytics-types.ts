@@ -284,6 +284,8 @@ export interface AccountAnalyticsHistoryCoverage {
     lastReadAt: string | null;
     badSince: string | null;
     oldestAt: string | null;
+    /** Records the current read left out as dated more than five minutes after it. */
+    futureDated: number | null;
   }>;
   backfill: {
     running: boolean;
@@ -295,6 +297,11 @@ export interface AccountAnalyticsHistoryCoverage {
       filesTotal: number | null;
     }>;
   };
+  /**
+   * Usage in the range whose counts have a known flaw (store/usage-report.ts flags), per tool: the
+   * first and last flagged hour. `outputIncludesReasoningTwice`: the retired Codex cache's output.
+   */
+  quality: Array<{ tool: string; flags: string[]; from: string; to: string }>;
 }
 
 /** Internal facts the activity reader passes to the analytics service; never serialised. */

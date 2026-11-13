@@ -77,10 +77,12 @@ export function coverageOf(sources: ActivitySources): StoreActivityCoverage {
       lastReadAt: at(s.lastReadMs),
       badSince: at(s.badSinceMs),
       oldestAt: at(s.oldestMs),
+      futureDated: typeof s.futureDated === 'number' && s.futureDated > 0 ? s.futureDated : null,
     })),
     backfill: {
       running: backfill.some((b) => b.state === 'pending' || b.state === 'running'),
       sources: backfill,
     },
+    quality: [],
   };
 }

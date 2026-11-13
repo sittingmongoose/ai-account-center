@@ -31,13 +31,13 @@ const FORMATS = [
 	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
 ];
 
-async function stubData(t) {
+async function stubData(t, { keptDays = 120, gapAll = false } = {}) {
 	await t.app.stub('/api/accounts/dashboard', DASHBOARD);
 	await t.page.route((u) => new URL(u).pathname === '/api/accounts/analytics', (r) => {
 		const url = new URL(r.request().url());
 		const range = url.searchParams.get('range') || '7d';
 		const days = url.searchParams.get('from') ? { from: url.searchParams.get('from'), to: url.searchParams.get('to') } : null;
-		return r.fulfill({ json: analyticsFixture({ range, days, accounts: ACCOUNTS }) });
+		return r.fulfill({ json: analyticsFixture({ range, days, accounts: ACCOUNTS, keptDays, gapAll }) });
 	});
 }
 
@@ -348,12 +348,32 @@ export const tests = {
 		});
 	},
 
+	async 'analytics: a time no computer was read reads "Not read" in every series on the folded Duo'(t) {
+		const f = FORMATS.find((x) => x.name === 'duo-folded');
+		await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+		await t.app.signIn();
+		await stubData(t, { gapAll: true });
+		await openAnalytics(t, f.safe);
+		await t.until('the gap is marked', () => !!document.querySelector('.trend-card rect.ax-gap'), null, { timeout: 15000 });
+		// the trend sits below the fold on the folded Duo
+		await t.page.locator('.trend-hit').scrollIntoViewIfNeeded();
+		const band = await t.page.locator('.trend-card rect.ax-gap').first().boundingBox();
+		const hit = await t.page.locator('.trend-hit').boundingBox();
+		await t.page.touchscreen.tap(band.x + band.width / 2, hit.y + hit.height / 2);
+		await t.until('a reading is shown', () => /\d/.test(document.querySelector('.trend-card .ro-bar .ro-time')?.textContent || ''), null, { timeout: 5000 });
+		const bar = (await t.page.textContent('.trend-card .ro-bar')).replace(/\s+/g, ' ');
+		await t.check('every series reads "Not read"', (bar.match(/Not read/g) || []).length === 6, bar);
+		await t.check('no stray "All" before it', !/All Not read/.test(bar), bar);
+		await t.check('no made-up $0.00', !/\$0\.00/.test(bar), bar);
+	},
+
 	async 'analytics: each format lays the page out with nothing sideways and no overlapping labels'(t) {
 		for (const f of FORMATS) {
 			await t.step(f.name, async () => {
 				await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, serviceWorkers: 'block' });
 				await t.app.signIn();
-				await stubData(t);
+				// two years kept, so "All" has weekly buckets over two years
+				await stubData(t, { keptDays: 730 });
 				await openAnalytics(t, f.safe);
 				await t.until('charts laid out in their boxes', () => {
 					const svg = document.querySelector('.trend-card svg.axes');
@@ -364,6 +384,14 @@ export const tests = {
 				await t.equal(`${f.name}: no sideways scroll`, wide, 0);
 				await t.equal(`${f.name}: no chart label overlaps another`, await overlaps(t), []);
 				await t.audit(`analytics ${f.name}`);
+				// the long ranges: 90 days (month starts on a phone) and All over two years (weekly buckets)
+				for (const [button, sub] of [['90D', /Daily buckets/], ['All', /Weekly buckets/]]) {
+					await t.page.locator(`.ax-tools-row .seg button:has-text("${button}")`).click();
+					await t.until(`${button} drawn`, (re) => new RegExp(re).test(document.querySelector('.trend-card')?.textContent || ''), sub.source, { timeout: 20000 });
+					await t.until(`${button} axis laid out`, () => document.querySelectorAll('.trend-card svg.axes text').length > 3, null, { timeout: 10000 });
+					await t.equal(`${f.name} ${button}: no chart label overlaps another`, await overlaps(t), []);
+					await t.equal(`${f.name} ${button}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 0);
+				}
 			});
 		}
 	},

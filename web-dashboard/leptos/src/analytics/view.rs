@@ -290,6 +290,8 @@ pub struct Bucket {
     pub foot: String,
     #[serde(deserialize_with = "nullable")]
     pub foot2: String,
+    /// No computer's logs cover the bucket: every value reads "Not read".
+    pub gap: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

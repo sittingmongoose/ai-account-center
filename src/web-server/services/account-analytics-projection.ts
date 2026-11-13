@@ -223,6 +223,8 @@ interface PricedBreakdowns {
     values: Record<TotalField, number>;
     parts: Record<PartField, number> | null;
     rates: AccountAnalyticsModelRates | null;
+    /** Counts with a known flaw (`ModelBreakdown.quality`): in totals, not in model comparisons. */
+    flagged: boolean;
   }>;
 }
 
@@ -256,7 +258,7 @@ function priceBreakdowns(
           cacheRead: (values.cacheReadTokens / 1_000_000) * listRate.cacheReadPerMillion,
         }
       : null;
-    models.push({ name, values, parts, rates });
+    models.push({ name, values, parts, rates, flagged: (breakdown.quality ?? 0) !== 0 });
     if (!parts) known = false;
     else for (const field of PART_FIELDS) sum[field] += parts[field];
   }
@@ -343,6 +345,8 @@ interface DayModelRow {
   provider: Provider;
   model: string | null;
   totals: Accumulator;
+  /** Usage with flawed counts: kept in the day's breakdown, never compared for anomalies. */
+  flagged?: boolean;
 }
 
 export function projectAccountAnalyticsActivity(
@@ -450,10 +454,11 @@ export function projectAccountAnalyticsActivity(
     provider: Provider,
     model: string | null,
     values: Record<TotalField, number>,
-    parts: Record<PartField, number> | null
+    parts: Record<PartField, number> | null,
+    flagged = false
   ): void => {
-    const key = `${date}\0${provider}\0${model ?? ''}\0${model === null ? 'unnamed' : 'named'}`;
-    const row = dayModels.get(key) ?? { date, provider, model, totals: accumulator() };
+    const key = `${date}\0${provider}\0${model ?? ''}\0${model === null ? 'unnamed' : 'named'}\0${flagged ? 'flagged' : ''}`;
+    const row = dayModels.get(key) ?? { date, provider, model, totals: accumulator(), flagged };
     addValues(row.totals, values);
     addParts(row.totals, parts);
     dayModels.set(key, row);
@@ -496,8 +501,9 @@ export function projectAccountAnalyticsActivity(
         hourBuckets.set(hourKey, bucket);
         usageEvents += finite(hour.requestCount);
         for (const model of priced.models) {
-          addDayModel(date, source.provider, model.name, model.values, model.parts);
-          if (model.name === null) continue;
+          addDayModel(date, source.provider, model.name, model.values, model.parts, model.flagged);
+          // flawed counts (the retired Codex cache's output) are never compared model to model
+          if (model.name === null || model.flagged) continue;
           const key = `${source.provider}:${model.name}`;
           const existing = modelBuckets.get(key) ?? {
             model: model.name,
@@ -660,7 +666,7 @@ export function projectAccountAnalyticsActivity(
         [...dayModels.values()]
           .filter(
             (row): row is DayModelRow & { model: string } =>
-              row.model !== null && row.model.length > 0
+              row.model !== null && row.model.length > 0 && !row.flagged
           )
           .sort(
             (a, b) =>

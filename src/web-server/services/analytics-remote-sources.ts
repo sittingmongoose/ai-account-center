@@ -354,13 +354,16 @@ function toWorkerResult(
   // session rows (the helper keyed it on the host it read).
   const sessionOf = new Map<string, string>();
   for (const row of srows) if (row.f && row.s) sessionOf.set(row.f, row.s);
+  // a host whose clock runs ahead: its records dated after this clock are counted, not written
+  const future = { count: 0 };
   const cells = cellsFromCompact(
     toCompact(rows).map((entry, index) => ({
       ...entry,
       entry: { ...entry.entry, sessionId: sessionOf.get(rows[index].f) ?? '' },
     })),
     kind,
-    true
+    true,
+    { future }
   );
   // Sessions aggregate from the session rows alone: the hourly rows already
   // carry the same tokens, so the two must never be aggregated together.
@@ -370,6 +373,7 @@ function toWorkerResult(
     monthly: [],
     hourly,
     cells,
+    ...(future.count > 0 ? { futureDated: future.count } : {}),
     host,
     session,
     eventCount: rows.reduce((sum, row) => sum + Math.floor(row.n), 0),

@@ -360,5 +360,114 @@ maybe('analytics usage history', () => {
     expect(deepReads).toBe(1);
     await store.close();
   });
+
+  it('a record dated after now never stops live writes (the review probe, through the module)', async () => {
+    const store = await openStore('future');
+    const now = Date.now();
+    const hour = Math.floor(now / H) * H;
+    const ahead = hour + 10 * DAY;
+    const report = (readAt: number, cells: Array<[number, number]>) => ({
+      schema: 'aac.usage-report.v1' as const,
+      computer: 'ubuntu',
+      tool: 'codex',
+      readAt: new Date(readAt).toISOString(),
+      state: 'ok' as const,
+      complete: true,
+      coverFrom: new Date(Math.floor((readAt - 31 * DAY) / H) * H).toISOString(),
+      cells: cells.map(([at, input]) => ({
+        hour: new Date(at).toISOString(),
+        sessionKey: '0123456789abcdef',
+        route: '',
+        modelRaw: 'gpt-6',
+        inputTokens: input,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        costUsd: 0,
+        fallbackCostUsd: 0,
+        events: 1,
+      })),
+      sessions: [],
+    });
+    // a sender that does not filter: the store leaves the record out itself
+    expect((await store.activityIngest([report(ahead, [[ahead, 5]])])).put).toBe(0);
+    expect((await store.activityIngest([report(now, [[hour, 100]])])).put).toBe(1);
+    const range = await store.activityRange({ fromMs: hour - H, toMs: hour + H });
+    expect(range.rows.reduce((n, r) => n + r[5], 0)).toBe(100);
+    const sources = await store.activitySources({ fromMs: hour - DAY, toMs: hour });
+    expect(sources.sources[0].lastReadMs).toBeLessThanOrEqual(Date.now());
+    await store.close();
+  });
+
+  it('imports the retired Codex cache only once it commits, flags its output and keeps it out of model comparisons', async () => {
+    const store = await openStore('legacy');
+    const scope = path.join(sandbox, 'legacy-scope');
+    const cacheDir = path.join(scope, 'cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const legacy = path.join(cacheDir, 'codex-native-usage-v1.json');
+    const at = Date.parse('2026-09-20T10:00:00Z');
+    const service = () =>
+      new AccountAnalyticsActivityService({
+        scope: () => scope,
+        now: () => NOW,
+        requests: () => [],
+        loadWorker: async () => worker('codex', []),
+        remote: async () => ({ results: [], states: [] }),
+        historyStore: async () => store,
+      });
+    // a broken file: not marked done, and not read again until the next start
+    fs.writeFileSync(legacy, '{"version":1,"files":{');
+    const first = service();
+    await first.backfillPass(scope);
+    expect(await store.getMeta('ts:activity_import')).not.toBe('done');
+    // the next start, with the file whole: imported, marked done, and the file kept
+    fs.writeFileSync(
+      legacy,
+      JSON.stringify({
+        version: 1,
+        files: {
+          '/gone/rollout.jsonl': {
+            entries: [
+              { inputTokens: 1000, outputTokens: 120, cacheCreationTokens: 0, cacheReadTokens: 900, model: 'gpt-5.6-sol', sessionId: 'raw-a', timestamp: new Date(at).toISOString() },
+            ],
+          },
+        },
+      })
+    );
+    await service().backfillPass(scope);
+    expect(await store.getMeta('ts:activity_import')).toBe('done');
+    expect(fs.existsSync(legacy)).toBe(true);
+    // the page: in the totals, out of Cost by model, and said so
+    const answer = (await service().get(QUERY, at - DAY, at + DAY, { tz: 'UTC' })) as AccountAnalyticsActivity & {
+      history?: { quality: Array<{ tool: string; flags: string[]; from: string; to: string }> };
+    };
+    expect(answer.totals?.outputTokens).toBe(120);
+    expect(answer.totals?.inputTokens).toBe(100);
+    expect(answer.models.some((m) => m.model === 'gpt-5.6-sol')).toBe(false);
+    expect(answer.history?.quality).toEqual([
+      { tool: 'codex', flags: ['outputIncludesReasoningTwice'], from: '2026-09-20T10:00:00.000Z', to: '2026-09-20T11:00:00.000Z' },
+    ]);
+    await store.close();
+  });
+
+  it('removes deep-read checkpoints left behind by a stop after the backfill finished', async () => {
+    const store = await openStore('leftover');
+    const scope = path.join(sandbox, 'leftover-scope');
+    const checkpoints = path.join(scope, 'cache', 'analytics-backfill-v1');
+    fs.mkdirSync(checkpoints, { recursive: true });
+    fs.writeFileSync(path.join(checkpoints, 'codex.json'), '{}');
+    await store.setMeta('activity_backfill', 'done');
+    const service = new AccountAnalyticsActivityService({
+      scope: () => scope,
+      now: () => NOW,
+      requests: () => [],
+      loadWorker: async () => worker('codex', []),
+      remote: async () => ({ results: [], states: [] }),
+      historyStore: async () => store,
+    });
+    expect(await service.backfillPass(scope)).toBe('done');
+    expect(fs.existsSync(checkpoints)).toBe(false);
+    await store.close();
+  });
 });
 

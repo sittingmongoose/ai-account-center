@@ -13,8 +13,9 @@ use std::path::Path;
 
 const H: u64 = 3_600_000;
 const D: u64 = 86_400_000;
-/// 2026-08-01T00:00:00Z
-const T0: u64 = 1_785_542_400_000;
+/// 2025-08-01T00:00:00Z: every read below is in the past, as the store clamps read times to its
+/// clock and leaves out what is dated after it.
+const T0: u64 = 1_754_006_400_000;
 const SESSION_A: &str = "0123456789abcdef";
 const SESSION_B: &str = "fedcba9876543210";
 
@@ -579,6 +580,22 @@ fn the_retired_codex_cache_is_imported_once_with_cached_input_taken_out() {
         .map(|r| (r[0].as_u64().unwrap(), r[5].as_u64().unwrap(), r[8].as_u64().unwrap()))
         .collect();
     assert_eq!(rows, vec![(T0 + 3 * H, 200, 1200), (T0 + 30 * H, 70, 0)]);
+    // output is imported as it is (it counts reasoning twice) and every cell keeps the flag
+    let flags: Vec<u64> = range["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r[13].as_u64().unwrap())
+        .collect();
+    assert_eq!(flags, vec![1, 1]);
+    assert_eq!(range["rows"][0][6], 60);
+    assert_eq!(
+        range["quality"],
+        json!([{ "tool": "codex", "flags": ["outputIncludesReasoningTwice"], "fromMs": T0 + 3 * H, "toMs": T0 + 31 * H }])
+    );
+    for s in range["sessions"]["sample"].as_array().unwrap() {
+        assert_eq!(s["quality"], json!(["outputIncludesReasoningTwice"]));
+    }
     assert!(
         range["rows"][0][10].is_null(),
         "no cost is invented; the server prices it"
@@ -611,4 +628,74 @@ fn the_retired_codex_cache_is_imported_once_with_cached_input_taken_out() {
         )
         .is_err()
     );
+}
+
+fn wall_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[test]
+fn a_future_dated_record_never_freezes_live_writes() {
+    // The review's probe: a complete read dated ten days ahead carrying one 5-token cell, then a
+    // normal complete read with 100 tokens in the last hour.
+    let dir = temp_dir("act-future");
+    let engine = open(&dir);
+    let now = wall_now();
+    let hour = now / H * H;
+    let ahead = hour + 10 * D;
+    let probe = ingest(
+        &engine,
+        vec![complete(
+            "ubuntu",
+            ahead,
+            vec![cell(ahead, Some(SESSION_A), "gpt-6", 5)],
+        )],
+    );
+    assert_eq!(probe["put"], 0, "a record dated after now is not written: {probe}");
+    let normal = ingest(
+        &engine,
+        vec![complete("ubuntu", now, vec![cell(hour, Some(SESSION_A), "gpt-6", 100)])],
+    );
+    assert_eq!(normal["put"], 1, "{normal}");
+    assert_eq!(
+        tokens_in(&engine, hour - H, hour + H),
+        100,
+        "the settle line stayed behind now"
+    );
+    // a later read with the future record still in the log: the rest is written, the record is
+    // left out and counted with the reader's own count, never refused whole
+    let mut mixed = complete(
+        "ubuntu",
+        now,
+        vec![
+            cell(hour, Some(SESSION_A), "gpt-6", 120),
+            cell(ahead, Some(SESSION_B), "gpt-6", 5),
+        ],
+    );
+    mixed["counts"] = json!({ "futureDated": 2 });
+    mixed["sessions"] = json!([
+        { "sessionKey": SESSION_B, "first": iso(ahead), "last": iso(ahead + H), "parts": [] },
+        { "sessionKey": SESSION_A, "first": iso(hour), "last": iso(ahead), "parts": [] }
+    ]);
+    let third = ingest(&engine, vec![mixed]);
+    assert!(third["refused"].as_array().unwrap().is_empty(), "{third}");
+    assert_eq!(tokens_in(&engine, hour - H, hour + H), 120);
+    assert_eq!(tokens_in(&engine, hour, ahead + D), 120, "nothing stored after now");
+    let sources = call(&engine, "activitySources", json!({ "fromMs": hour - D, "toMs": hour }));
+    let src = &sources["sources"][0];
+    assert_eq!(src["futureDated"], 3, "{sources}");
+    assert!(src["lastReadMs"].as_u64().unwrap() <= wall_now());
+    // the session that starts in the future is left out; the other one ends at the slack
+    let range = call(
+        &engine,
+        "activityRange",
+        json!({ "fromMs": hour - D, "toMs": wall_now() }),
+    );
+    let sample = range["sessions"]["sample"].as_array().unwrap();
+    assert_eq!(sample.len(), 1, "{range}");
+    assert_eq!(sample[0]["sessionKey"], SESSION_A);
+    assert!(sample[0]["lastMs"].as_u64().unwrap() <= wall_now() + 5 * 60_000);
 }

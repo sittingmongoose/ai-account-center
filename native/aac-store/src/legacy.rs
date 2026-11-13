@@ -2,11 +2,16 @@
 //!
 //! `cache/codex-native-usage-v1.json` (version 1, written until 2026-10-01) kept every Codex usage
 //! record the old collector read, per rollout file. Most of those rollout files are gone, so it is the
-//! only copy of that history. Its `inputTokens` include the cached input (the old parser did not
-//! subtract `cached_input_tokens`), so uncached input is `inputTokens - cacheReadTokens -
-//! cacheCreationTokens`. The file is read as a stream, one rollout file's records at a time, and
-//! folded into session-hour cells; nothing but the cells is kept in memory. It holds no cost: the
-//! cells carry none and the server prices them when it answers (contract `costUsd` null).
+//! only copy of that history, and it is kept: nothing here or in the store deletes it. Its
+//! `inputTokens` include the cached input (the old parser did not subtract `cached_input_tokens`),
+//! so uncached input is `inputTokens - cacheReadTokens - cacheCreationTokens`. Its `outputTokens`
+//! hold `output_tokens + reasoning_output_tokens`, although Codex's `output_tokens` already includes
+//! the reasoning: the reasoning is counted twice and the split is not in the file. Output is imported
+//! as it is, an upper bound, and every imported cell and session carries the quality flag
+//! `outputIncludesReasoningTwice` for good; no reasoning split is made up. The file is read as a
+//! stream, one rollout file's records at a time, and folded into session-hour cells; nothing but the
+//! cells is kept in memory. It holds no cost: the cells carry none and the server prices them when it
+//! answers (contract `costUsd` null).
 
 use crate::activity;
 use crate::contract::{self, Report, Session, SessionPart};
@@ -232,6 +237,8 @@ pub fn import_codex_v1(engine: &Engine, file: &Path, computer: &str) -> Result<J
             cache_creation_tokens: t.cw,
             cache_read_tokens: t.cr,
             events: Some(t.events),
+            // the old parser added the reasoning to an output that already held it
+            quality: vec![contract::QUALITY_FLAGS[0].to_string()],
             ..Default::default()
         });
     }
@@ -258,6 +265,7 @@ pub fn import_codex_v1(engine: &Engine, file: &Path, computer: &str) -> Result<J
                 .collect(),
             target: Some("codex".to_string()),
             cwd: None,
+            quality: vec![contract::QUALITY_FLAGS[0].to_string()],
         })
         .collect();
     // within the contract's bounds per report

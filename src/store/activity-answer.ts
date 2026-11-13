@@ -94,6 +94,8 @@ export function rangeToSources(
   const knownCounts = new Map<string, boolean>();
   for (const row of range.rows) {
     const [bucket, , ti, ri, mi, i, o, cw, cr, loggedNano, costNano, fallbackNano, events] = row;
+    // flawed counts (the retired Codex cache's output): in the totals, out of model comparisons
+    const quality = typeof row[13] === 'number' ? row[13] : 0;
     const tool = range.tools[ti];
     const route = range.routes[ri] ?? '';
     const model = range.models[mi] ?? 'unknown';
@@ -136,10 +138,11 @@ export function rangeToSources(
       cost,
       ...(fallback > 0 ? { fallbackCost: fallback } : {}),
       ...(events !== null ? { requestCount: events } : {}),
+      ...(quality ? { quality } : {}),
     };
-    // one model may come in several rows (one per computer): fold it
+    // one model may come in several rows (one per computer): fold it, flawed counts apart
     const prior = hour.modelBreakdowns.find(
-      (b) => b.modelName === model && (b.provider ?? '') === route
+      (b) => b.modelName === model && (b.provider ?? '') === route && (b.quality ?? 0) === quality
     );
     if (prior) {
       prior.inputTokens += i;
@@ -331,8 +334,19 @@ export async function storeActivityAnswer(
     (min, c) => (c.oldestMs === null ? min : min === null ? c.oldestMs : Math.min(min, c.oldestMs)),
     null
   );
+  // usage in the range whose counts have a known flaw, for the page's note
+  const quality = (range.quality ?? []).map((q) => ({
+    tool: q.tool,
+    flags: [...q.flags],
+    from: iso(q.fromMs),
+    to: iso(q.toMs),
+  }));
   return {
-    activity: { ...projected, history: coverage, resolution: daily ? 'day' : 'hour' },
+    activity: {
+      ...projected,
+      history: { ...coverage, quality },
+      resolution: daily ? 'day' : 'hour',
+    },
     oldestHourAt: oldest,
     providersWithActivity: projected.providers
       .map((p) => p.provider)

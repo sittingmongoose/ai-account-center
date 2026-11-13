@@ -7,6 +7,18 @@
 
 export const USAGE_REPORT_SCHEMA = 'aac.usage-report.v1';
 
+/**
+ * A record dated more than this after the clock is not written to cells (contract
+ * `FUTURE_SLACK_MS`): a clock running ahead or a bad log line would otherwise move the 72-hour
+ * settle line past now and stop every live write. It is counted as `futureDated` instead.
+ */
+export const FUTURE_SLACK_MS = 5 * 60_000;
+
+/** Known flaws of a cell's counts (contract `QUALITY_FLAGS`), kept with the cell for good. */
+export type UsageQualityFlag = 'outputIncludesReasoningTwice';
+/** Bit of `outputIncludesReasoningTwice` in a range row's quality column. */
+export const Q_OUTPUT_INCLUDES_REASONING_TWICE = 1;
+
 export type UsageReportState =
   | 'ok'
   | 'no_usage'
@@ -25,6 +37,8 @@ export interface UsageCounts {
   filesRead?: number;
   filesFailed?: number;
   newestMtime?: string | null;
+  /** Records left out because they were dated more than `FUTURE_SLACK_MS` after the read. */
+  futureDated?: number;
 }
 
 /** Absolute totals of one UTC hour for one session, route, model, effort and account. */
@@ -49,6 +63,7 @@ export interface UsageCell {
   costUsd?: number | null;
   fallbackCostUsd?: number | null;
   events?: number | null;
+  quality?: UsageQualityFlag[];
 }
 
 export interface UsageSessionPart {
@@ -71,6 +86,7 @@ export interface UsageSession {
   parts: UsageSessionPart[];
   target?: string | null;
   cwd?: { key: string; path: string } | null;
+  quality?: UsageQualityFlag[];
 }
 
 export interface UsageReport {
@@ -115,6 +131,8 @@ export type ActivityRangeRow = [
   costNano: number | null,
   fallbackCostNano: number | null,
   events: number | null,
+  /** Quality bits (`Q_OUTPUT_INCLUDES_REASONING_TWICE`); rows never mix flagged and clean cells. */
+  quality: number,
 ];
 
 export interface ActivityRangeSession {
@@ -125,6 +143,7 @@ export interface ActivityRangeSession {
   lastMs: number;
   target: string | null;
   parts: UsageSessionPart[];
+  quality?: UsageQualityFlag[];
 }
 
 export interface ActivityRange {
@@ -134,6 +153,8 @@ export interface ActivityRange {
   routes: string[];
   models: string[];
   rows: ActivityRangeRow[];
+  /** Per tool and flag set: the first and last flagged hour in the range (`toMs` ends it). */
+  quality?: Array<{ tool: string; flags: UsageQualityFlag[]; fromMs: number; toMs: number }>;
   sessions: {
     total: number;
     signatures: Array<{ tool: string; pairs: Array<[string, string]>; count: number }>;
@@ -153,6 +174,8 @@ export interface ActivitySourceState {
   cause: string | null;
   complete: boolean | null;
   badSinceMs: number | null;
+  /** Records the current read left out as dated after it. */
+  futureDated?: number | null;
   backfill: {
     state: string;
     files_read?: number;

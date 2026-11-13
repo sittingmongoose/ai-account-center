@@ -124,6 +124,12 @@ test('a time no computer was read for is a gap, never a zero; a partly read one 
   const gapBuckets = view.trend.buckets.filter(b => b.all === 'Not read');
   assert.equal(gapBuckets.length, 18);
   assert.ok(gapBuckets.every(b => b.yTok === -1 && b.yCost === -1));
+  // the readout reads like any bucket: every series says "Not read", and no $0.00 split is made up
+  for (const b of gapBuckets) {
+    assert.equal(b.gap, true);
+    assert.deepEqual([b.vin, b.vout, b.vcw, b.vcr, b.all, b.cost], Array(6).fill('Not read'));
+    assert.doesNotMatch(`${b.foot} ${b.foot2}`, /\$0\.00/);
+  }
   // the scope says what is kept and since when
   assert.match(view.scope.find(l => l.icon === 'database').text, /since Oct 1, 2026\. Hours a computer could not be read show as gaps, never as zero/);
 });
@@ -133,4 +139,53 @@ test('a backfill in progress says so', () => {
   const view = usageView(p, state({ range: '90d' }), { now });
   assert.match(view.scope.find(l => l.icon === 'download').text, /Importing older usage from the logs: Ubuntu Codex 40%/);
   assert.match(view.calendar.note, /Older usage is still being imported/);
+});
+
+test('trend axis labels never overlap: 90D and All over years, at phone, folded-Duo and desktop widths', () => {
+  const { xTicks, axisLabelsFit } = U;
+  const WEEK = 7 * D;
+  const spans = [
+    ['24h', { a2: now - D, b: now, step: H }],
+    ['7d', { a2: now - 7 * D, b: now, step: 4 * H }],
+    ['30d', { a2: now - 30 * D, b: now, step: D }],
+    ['90d', { a2: now - 90 * D, b: now, step: D }],
+    ['all, two years', { a2: now - 730 * D, b: now, step: WEEK }],
+    ['all, fifteen years', { a2: now - 15 * 365 * D, b: now, step: WEEK }],
+  ];
+  for (const [name, R] of spans) {
+    for (let pw = 120; pw <= 1400; pw += 23) {
+      const ticks = xTicks(R, pw);
+      assert.ok(axisLabelsFit(ticks), `${name} at ${pw} px: ${ticks.map(t => `${t.label}@${Math.round(t.x)}`).join(' ')}`);
+      if (pw >= 180) assert.ok(ticks.length >= 2, `${name} at ${pw} px has ${ticks.length} labels`);
+    }
+  }
+  // the plot on an iPhone (402 px) and a folded Duo (466 px) is about 230 to 270 px: month starts at 90D
+  for (const pw of [230, 270]) {
+    assert.deepEqual(xTicks(spans[3][1], pw).map(t => t.label), ['Sep', 'Oct', 'Nov'], `${pw} px`);
+    const years = xTicks(spans[4][1], pw).map(t => t.label);
+    assert.ok(years.includes('2026') && years.length >= 3, years.join(' '));
+  }
+  // desktop keeps its weekly dates at 90D
+  assert.match(xTicks(spans[3][1], 1188)[0].label, /^Aug \d+$/);
+});
+
+test('history notes: output that counts reasoning twice, and records dated after their read', () => {
+  const p = payload({
+    preset: 'all', from: Date.parse('2026-01-29T00:00:00Z'), resolution: 'day', rows: [row('2026-09-30T00:00:00Z', 'codex', 100, 1)],
+    history: {
+      computers: [{ host: 'ubuntu', oldestAt: '2026-01-29T00:00:00Z', lastReadAt: new Date(now).toISOString(), gaps: [] }],
+      sources: [{ host: 'ubuntu', tool: 'codex', futureDated: 3 }, { host: 'mac', tool: 'claude', futureDated: null }],
+      backfill: { running: false, sources: [] },
+      quality: [{ tool: 'codex', flags: ['outputIncludesReasoningTwice'], from: '2026-01-29T10:00:00Z', to: '2026-10-01T22:00:00Z' }],
+    },
+  });
+  const view = usageView(p, state({ range: 'all' }), { now });
+  const lines = view.scope.map(l => l.text);
+  assert.ok(lines.includes('Codex output before Oct 2 counts reasoning twice (old cache). Input and cached input are exact; those hours are left out of Cost by model.'), lines.join('\n'));
+  assert.match(view.cbm.note, /Codex output before Oct 2 counts reasoning twice \(old cache\); those hours are left out here\./);
+  assert.ok(lines.some(l => /^3 usage records are dated after they were read and not counted: Ubuntu Codex 3\./.test(l)), lines.join('\n'));
+  // nothing flagged in range: no note
+  const clean = usageView(payload({ history: history([]) }), state({ range: '90d' }), { now });
+  assert.ok(!clean.scope.some(l => /reasoning twice|dated after/.test(l.text)));
+  assert.equal(U.doubleReasoningNote({ history: null }), '');
 });

@@ -176,6 +176,8 @@ pub struct Cell {
     pub cost: Option<u64>,
     pub fallback: Option<u64>,
     pub events: Option<u64>,
+    /// Quality bits (`contract::QUALITY_FLAGS`).
+    pub quality: u32,
 }
 
 type CellId = (u8, [u8; 8], u32, u32, u32, u32);
@@ -226,7 +228,8 @@ fn read_opt(c: &mut Cursor<'_>) -> Result<Option<u64>> {
     Ok(if v == 0 { None } else { Some(v - 1) })
 }
 
-const CELLS_VERSION: u8 = 1;
+/// 2 adds each cell's quality bits after its events; 1 is read as quality 0.
+const CELLS_VERSION: u8 = 2;
 
 /// Packed day value (3.2): version, count, then each cell in identity order.
 pub fn encode_cells(cells: &[Cell]) -> Vec<u8> {
@@ -247,13 +250,15 @@ pub fn encode_cells(cells: &[Cell]) -> Vec<u8> {
         for v in [c.reasoning, c.logged, c.cost, c.fallback, c.events] {
             put_opt(&mut out, v);
         }
+        put_varint(&mut out, c.quality as u64);
     }
     out
 }
 
 pub fn decode_cells(bytes: &[u8]) -> Result<Vec<Cell>> {
     let mut c = Cursor::new(bytes);
-    if c.u8()? != CELLS_VERSION {
+    let version = c.u8()?;
+    if version != 1 && version != CELLS_VERSION {
         fail!("unsupported", "activity day value version");
     }
     let n = c.varint()? as usize;
@@ -292,6 +297,15 @@ pub fn decode_cells(bytes: &[u8]) -> Result<Vec<Cell>> {
             cost: read_opt(&mut c)?,
             fallback: read_opt(&mut c)?,
             events: read_opt(&mut c)?,
+            quality: if version >= 2 {
+                let q = c.varint()?;
+                if q > u32::MAX as u64 {
+                    fail!("corrupt", "activity cell quality");
+                }
+                q as u32
+            } else {
+                0
+            },
         });
     }
     c.finish()?;
@@ -328,6 +342,10 @@ fn is_zero(v: &u64) -> bool {
     *v == 0
 }
 
+fn is_zero32(v: &u32) -> bool {
+    *v == 0
+}
+
 /// A cell as it travels in the logs: text, never dictionary ids; the hour as an absolute index.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct CellEv {
@@ -359,6 +377,9 @@ pub struct CellEv {
     pub fb: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ev: Option<u64>,
+    /// Quality bits (`contract::QUALITY_FLAGS`).
+    #[serde(default, skip_serializing_if = "is_zero32")]
+    pub q: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -414,6 +435,9 @@ pub struct SessEv {
     pub cwk: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwp: Option<String>,
+    /// Quality bits of the parts (`contract::QUALITY_FLAGS`).
+    #[serde(default, skip_serializing_if = "is_zero32")]
+    pub q: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -440,6 +464,9 @@ pub struct CountsRow {
     pub failed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub newest_ms: Option<u64>,
+    /// Records dated after the read was made, left out (`contract::FUTURE_SLACK_MS`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub future_dated: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -476,8 +503,13 @@ pub struct ReadRow {
 
 impl ReadRow {
     /// The parts that make a scan-history row worth keeping when they change.
-    fn signature(&self) -> (String, Option<String>, bool) {
-        (self.state.clone(), self.cause.clone(), self.complete)
+    fn signature(&self) -> (String, Option<String>, bool, bool) {
+        (
+            self.state.clone(),
+            self.cause.clone(),
+            self.complete,
+            self.counts.as_ref().and_then(|c| c.future_dated).is_some(),
+        )
     }
 }
 
@@ -561,6 +593,9 @@ struct SessionRow {
     cwk: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cwp: Option<String>,
+    /// Quality bits of `p`.
+    #[serde(default, skip_serializing_if = "is_zero32")]
+    q: u32,
 }
 
 impl SessionRow {
@@ -703,6 +738,7 @@ fn cell_from_ev(txn: &WriteTransaction, ev: &CellEv) -> Result<(u32, Cell)> {
             cost: ev.cn,
             fallback: ev.fb,
             events: ev.ev,
+            quality: ev.q,
         },
     ))
 }
@@ -795,6 +831,7 @@ fn merged_session(stored: Option<&SessionRow>, incoming: &SessionRow) -> Session
     if rank(incoming) > rank(old) || old.c == 0 {
         out.p = incoming.p.clone();
         out.c = incoming.c;
+        out.q = incoming.q;
     }
     out.hs = old.hs.clone().max(incoming.hs.clone());
     out.tg = old.tg.clone().max(incoming.tg.clone());
@@ -816,6 +853,7 @@ fn session_row(txn: &WriteTransaction, s: &SessEv) -> Result<SessionRow> {
         tg: s.tg.clone(),
         cwk: s.cwk.clone(),
         cwp: s.cwp.clone(),
+        q: s.q,
     })
 }
 
@@ -986,7 +1024,14 @@ fn prepare(report: &Report) -> Result<Prepared<'_>> {
     let checked = report.check()?;
     let mut hours: BTreeMap<u32, BTreeMap<(Option<String>, String, String, Option<String>, Option<String>), CellEv>> =
         BTreeMap::new();
-    for (cell, hour_ms) in report.cells.iter().zip(checked.cell_hours.iter()) {
+    for ((cell, hour_ms), quality) in report
+        .cells
+        .iter()
+        .zip(checked.cell_hours.iter())
+        .zip(checked.cell_quality.iter())
+    {
+        // dated after the store's clock: left out (counted in `checked.future_dated`)
+        let Some(hour_ms) = hour_ms else { continue };
         let tokens = cell.input_tokens + cell.output_tokens + cell.cache_creation_tokens + cell.cache_read_tokens;
         let cost = cell.cost_usd.unwrap_or(0.0) + cell.logged_cost_usd.unwrap_or(0.0);
         if tokens == 0 && cost == 0.0 {
@@ -1009,6 +1054,7 @@ fn prepare(report: &Report) -> Result<Prepared<'_>> {
             cn: nano_opt(cell.cost_usd),
             fb: nano_opt(cell.fallback_cost_usd),
             ev: cell.events,
+            q: *quality,
         };
         let id = (ev.s.clone(), ev.r.clone(), ev.m.clone(), ev.e.clone(), ev.a.clone());
         let slot = hours.entry(h).or_default();
@@ -1031,6 +1077,7 @@ fn prepare(report: &Report) -> Result<Prepared<'_>> {
                 existing.cn = sum(existing.cn, ev.cn);
                 existing.fb = sum(existing.fb, ev.fb);
                 existing.ev = sum(existing.ev, ev.ev);
+                existing.q |= ev.q;
             }
             None => {
                 slot.insert(id, ev);
@@ -1044,9 +1091,7 @@ fn prepare(report: &Report) -> Result<Prepared<'_>> {
     })
 }
 
-fn sess_ev(s: &contract::Session, computer: &str) -> SessEv {
-    let f = contract::parse_iso(&s.first).unwrap_or(0);
-    let l = contract::parse_iso(&s.last).unwrap_or(f);
+fn sess_ev(s: &contract::Session, computer: &str, (f, l): (u64, u64)) -> SessEv {
     SessEv {
         k: s.session_key.clone(),
         hs: s.session_hash.clone(),
@@ -1070,6 +1115,7 @@ fn sess_ev(s: &contract::Session, computer: &str) -> SessEv {
         tg: s.target.clone(),
         cwk: s.cwd.as_ref().map(|c| c.key.clone()),
         cwp: s.cwd.as_ref().map(|c| c.path.clone()),
+        q: s.quality_bits().unwrap_or(0),
     }
 }
 
@@ -1098,6 +1144,7 @@ fn ev_from_cell(names: &mut dyn FnMut(u8, u32) -> Result<Option<String>>, day: u
         cn: c.cost,
         fb: c.fallback,
         ev: c.events,
+        q: c.quality,
     })
 }
 
@@ -1206,8 +1253,10 @@ fn decide(
         }
     }
     let mut sessions = Vec::new();
-    for s in &r.sessions {
-        let ev = sess_ev(s, &r.computer);
+    for (s, span) in r.sessions.iter().zip(p.checked.session_spans.iter()) {
+        // a session that starts after the store's clock is left out with its cells
+        let Some(span) = span else { continue };
+        let ev = sess_ev(s, &r.computer, *span);
         if !wanted((ev.l / DAY_MS) as u32) {
             continue;
         }
@@ -1260,6 +1309,7 @@ fn counts_row(c: &contract::Counts) -> CountsRow {
         read: c.files_read,
         failed: c.files_failed,
         newest_ms: c.newest_mtime.as_deref().and_then(contract::parse_iso),
+        future_dated: c.future_dated.filter(|n| *n > 0),
     }
 }
 
@@ -1288,7 +1338,13 @@ fn read_row(p: &Prepared<'_>) -> ReadRow {
         complete: r.complete,
         cover_from_h,
         cover_to_h,
-        counts: r.counts.as_ref().map(counts_row),
+        counts: match (r.counts.as_ref().map(counts_row), p.checked.future_dated) {
+            (counts, 0) => counts,
+            (counts, n) => Some(CountsRow {
+                future_dated: Some(n),
+                ..counts.unwrap_or_default()
+            }),
+        },
         roots: r
             .roots
             .iter()
@@ -1614,6 +1670,7 @@ fn session_ev_from_row(txn: &WriteTransaction, key: &[u8; 8], row: &SessionRow) 
         tg: row.tg.clone(),
         cwk: row.cwk.clone(),
         cwp: row.cwp.clone(),
+        q: row.q,
     })
 }
 
@@ -1836,7 +1893,9 @@ pub fn range(engine: &Engine, q: &RangeQuery) -> Result<Json> {
         let (mut tools_m, mut routes_m, mut models_m, mut comps_m) =
             (BTreeMap::new(), BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         let (mut tools, mut routes, mut models, mut comps) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-        let mut sums: BTreeMap<(u64, u32, u32, u32, u32), Sum> = BTreeMap::new();
+        let mut sums: BTreeMap<(u64, u32, u32, u32, u32, u32), Sum> = BTreeMap::new();
+        // per tool and quality bits: the first and last flagged hour in the range
+        let mut flagged: BTreeMap<(u32, u32), (u64, u64)> = BTreeMap::new();
         let lo = Key::new().u32((q.from_ms / DAY_MS) as u32);
         let hi = Key::new().u32((q.to_ms / DAY_MS) as u32).u32(u32::MAX).u32(u32::MAX);
         for item in hours.range(lo.as_slice()..=hi.as_slice())? {
@@ -1857,15 +1916,27 @@ pub fn range(engine: &Engine, q: &RangeQuery) -> Result<Json> {
                 } else {
                     at
                 };
-                let key = (bucket, if q.by_computer { c } else { 0 }, t, cell.route, cell.model);
+                let key = (
+                    bucket,
+                    if q.by_computer { c } else { 0 },
+                    t,
+                    cell.route,
+                    cell.model,
+                    cell.quality,
+                );
                 sums.entry(key).or_default().add(&cell);
+                if cell.quality != 0 {
+                    let span = flagged.entry((t, cell.quality)).or_insert((at, at));
+                    span.0 = span.0.min(at);
+                    span.1 = span.1.max(at);
+                }
                 if sums.len() > MAX_ROWS {
                     fail!("too_large", "the range holds too many rows; ask for day buckets");
                 }
             }
         }
         let mut rows = Vec::with_capacity(sums.len());
-        for ((bucket, c, t, r, m), s) in sums {
+        for ((bucket, c, t, r, m, quality), s) in sums {
             let ci = if q.by_computer {
                 json!(names_list(&mut comps_m, &mut comps, names.get(K_COMPUTER, c)?))
             } else {
@@ -1887,8 +1958,16 @@ pub fn range(engine: &Engine, q: &RangeQuery) -> Result<Json> {
                 opt_json(s.logged),
                 Sum::known(s.cost, s.cost_missing),
                 Sum::known(s.fallback, s.fallback_missing),
-                Sum::known(s.events, s.events_missing)
+                Sum::known(s.events, s.events_missing),
+                quality
             ]));
+        }
+        let mut quality_out = Vec::with_capacity(flagged.len());
+        for ((t, bits), (first, last)) in flagged {
+            quality_out.push(json!({
+                "tool": names.get(K_TOOL, t)?, "flags": contract::quality_words(bits),
+                "fromMs": first, "toMs": last + HOUR_MS,
+            }));
         }
         // Sessions active in the range, from the covering index alone: `last >= from` by the key,
         // `first <= to` and the signature from its value. Only the newest `limit` rows are read.
@@ -1933,6 +2012,7 @@ pub fn range(engine: &Engine, q: &RangeQuery) -> Result<Json> {
                 sample.push(json!({
                     "tool": names.get(K_TOOL, t)?, "sessionKey": session_hex(&key), "computer": names.opt(K_COMPUTER, row.c)?,
                     "firstMs": row.f, "lastMs": row.l, "target": row.tg, "parts": parts,
+                    "quality": contract::quality_words(row.q),
                 }));
             }
         }
@@ -1950,8 +2030,10 @@ pub fn range(engine: &Engine, q: &RangeQuery) -> Result<Json> {
         }
         Ok(json!({
             "columns": ["bucketMs", "computer", "tool", "route", "modelRaw", "inputTokens", "outputTokens",
-                        "cacheCreationTokens", "cacheReadTokens", "loggedCostNano", "costNano", "fallbackCostNano", "events"],
+                        "cacheCreationTokens", "cacheReadTokens", "loggedCostNano", "costNano", "fallbackCostNano", "events",
+                        "quality"],
             "computers": comps, "tools": tools, "routes": routes, "models": models, "rows": rows,
+            "quality": quality_out,
             "sessions": { "total": total, "signatures": sig_out, "sample": sample, "truncated": total > sample.len() as u64 },
         }))
     })
@@ -2021,6 +2103,7 @@ pub fn sources(engine: &Engine, q: &SourcesQuery) -> Result<Json> {
                 "complete": current.as_ref().map(|r| r.complete), "counts": current.as_ref().and_then(|r| r.counts.clone()),
                 "roots": current.as_ref().map(|r| r.roots.clone()).unwrap_or_default(),
                 "badSinceMs": src.bad_since, "backfill": backfill,
+                "futureDated": current.as_ref().and_then(|r| r.counts.as_ref()).and_then(|c| c.future_dated),
                 "covered": covers.iter().map(|(a, b)| json!([*a as u64 * HOUR_MS, *b as u64 * HOUR_MS])).collect::<Vec<_>>(),
             }));
         }
@@ -2039,6 +2122,7 @@ pub fn sources(engine: &Engine, q: &SourcesQuery) -> Result<Json> {
             out.push(json!({
                 "computer": cn, "tool": tn, "oldestMs": null, "newestMs": null, "lastReadMs": live.at,
                 "lastCompleteMs": null, "state": live.state, "cause": live.cause, "complete": live.complete,
+                "futureDated": live.counts.as_ref().and_then(|c| c.future_dated),
                 "counts": live.counts, "roots": live.roots, "badSinceMs": null, "backfill": null, "covered": [],
             }));
         }
@@ -2197,6 +2281,7 @@ mod tests {
                 cost: Some(1234),
                 fallback: None,
                 events: Some(3),
+                quality: 0,
             },
             Cell {
                 hour: 0,
@@ -2214,6 +2299,7 @@ mod tests {
                 cost: None,
                 fallback: Some(9),
                 events: None,
+                quality: 1,
             },
         ];
         let bytes = encode_cells(&cells);
@@ -2223,5 +2309,31 @@ mod tests {
         want.sort_by_key(|c| c.id());
         assert_eq!(back, want);
         assert!(decode_cells(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn version_one_values_read_as_quality_zero() {
+        let cell = Cell {
+            hour: 1,
+            session: NO_SESSION,
+            route: 0,
+            model: 1,
+            effort: 0,
+            account: 0,
+            i: 1,
+            o: 2,
+            cw: 0,
+            cr: 0,
+            reasoning: None,
+            logged: None,
+            cost: None,
+            fallback: None,
+            events: None,
+            quality: 0,
+        };
+        let mut v1 = encode_cells(std::slice::from_ref(&cell));
+        v1[0] = 1;
+        v1.pop(); // version 1 has no quality varint
+        assert_eq!(decode_cells(&v1).unwrap(), vec![cell]);
     }
 }
