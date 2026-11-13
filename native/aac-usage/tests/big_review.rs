@@ -8,7 +8,6 @@ use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 const AT: &str = "2026-11-11T21:33:15.765Z";
 const MIN_DATE: u64 = 1_780_000_000_000;
@@ -560,7 +559,7 @@ fn a_fifo_settings_file_never_holds_up_the_scan() {
         let _ = sender.send(scan(&path, &["codex"], None));
     });
     let answer = receiver
-        .recv_timeout(Duration::from_secs(20))
+        .recv_timeout(std::time::Duration::from_secs(20))
         .expect("the scan answered");
     assert_eq!(sums(&answer, "codex")[0], 100);
 }
@@ -614,13 +613,13 @@ fn a_percent_sequence_in_a_zcode_path_reads_that_path() {
 /// of the verbatim prefix survives the URI's encoding.
 #[test]
 fn sqlite_uris_encode_percent_and_keep_verbatim_paths() {
-    use aac_usage::read::sqlite::{uri, verbatim};
+    use aac_usage::read::sqlite::verbatim;
     assert_eq!(verbatim(r"C:\Users\u\x.db"), r"\\?\C:\Users\u\x.db");
     assert_eq!(verbatim(r"\\server\share\x.db"), r"\\?\UNC\server\share\x.db");
     assert_eq!(verbatim(r"\\?\C:\x.db"), r"\\?\C:\x.db");
     #[cfg(unix)]
     assert_eq!(
-        uri(Path::new("/h/a%20b/x?.db#1"), true),
+        aac_usage::read::sqlite::uri(Path::new("/h/a%20b/x?.db#1"), true),
         "file:/h/a%2520b/x%3F.db%231?mode=ro&immutable=1"
     );
 }
@@ -629,10 +628,18 @@ fn sqlite_uris_encode_percent_and_keep_verbatim_paths() {
 #[cfg(windows)]
 #[test]
 fn sqlite_databases_past_260_characters_are_read() {
+    // The fixture database is made at a short path, then copied (std writes long paths).
+    let short = tempfile::tempdir().unwrap();
+    let made = cursor_db(short.path(), "p", "s1", &[("run-1", RUN)]);
     let home = tempfile::tempdir().unwrap();
     let h = home.path();
-    let project = "p".repeat(200);
-    cursor_db(h, &project, "s1", &[("run-1", RUN)]);
+    let db = h
+        .join(".cursor/projects")
+        .join("p".repeat(200))
+        .join("sdk-agent-store/s1/index.db");
+    assert!(db.to_string_lossy().len() > 260);
+    fs::create_dir_all(db.parent().unwrap()).unwrap();
+    fs::copy(&made, &db).unwrap();
     let answer = scan(h, &["cursor"], None);
     assert_eq!(answer["kinds"]["cursor"]["state"], "ok");
     assert_eq!(sums(&answer, "cursor")[0], 300);

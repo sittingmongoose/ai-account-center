@@ -1,5 +1,7 @@
 //! FIX-ROUND-BIG 10, on its own (its own process, so no other test's memory counts): Antigravity's
-//! write-ahead-log check reads a database's 20-byte header, never the database.
+//! write-ahead-log check reads a database's 20-byte header, never the database. Linux only: peak
+//! memory is read from /proc.
+#![cfg(target_os = "linux")]
 
 use aac_usage::protocol;
 use serde_json::json;
@@ -7,7 +9,6 @@ use std::fs;
 
 /// Wonder M3, Sol L5, Astra L6: a 600 MB database (sparse) is checked by its 20-byte header. Peak
 /// memory stays far below its size. b09066667 read it whole into memory first.
-#[cfg(target_os = "linux")]
 #[test]
 fn the_antigravity_header_check_reads_twenty_bytes() {
     let peak = || -> u64 {
