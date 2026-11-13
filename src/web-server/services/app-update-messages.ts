@@ -57,7 +57,55 @@ export const MESSAGES = {
   zcode_release_unavailable:
     'The official ZCode release could not be checked; no update was attempted. Try Update apps again.',
   model_catalog_unrefreshed:
-    'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.',
+    'Muse did not refresh its model catalog; the new models are not registered yet. Check Muse sign-in on this computer, then run Update apps again.',
+  mac_keychain_locked:
+    'The app could not access the login Keychain even in the Mac GUI session. Unlock the login Keychain or approve its access on the Mac, then run Update apps again.',
+  mac_gui_unavailable:
+    'The Mac login session is unavailable. Sign in to the Mac desktop, then run Update apps again.',
+  mac_gui_cleanup_failed:
+    'The Mac GUI update worker could not be stopped. Check the Mac before running Update apps again.',
+  cursor_updated:
+    'Updated Cursor CLI. Running agents keep their version until they are started again.',
+  cursor_update_staged:
+    'Cursor staged its update while an agent is running. Let the agent finish, then run Update apps again.',
+  antigravity_acp_updated:
+    'T3 installed and activated its pinned Antigravity ACP runtime. Existing sessions keep their version; new sessions use the update.',
+  antigravity_acp_newer_kept:
+    "Newer kept: T3's active Antigravity ACP runtime is newer than its pin.",
+  antigravity_acp_activation_unsettled:
+    "T3's Antigravity ACP activation kept changing. Update apps could not verify a stable newest runtime; run it again.",
+  antigravity_acp_staged:
+    'An earlier update staged Antigravity ACP. Run Update apps again with T3 running so T3 can install and activate its pin.',
+  t3_unreachable:
+    'Action required: the local T3 server or bundled CLI is unavailable. Start T3 and run Update apps again. AAC did not write its active runtime pointer.',
+  t3_auth_failed:
+    'Action required: T3 could not issue, authorize, or revoke the temporary update session. Check local T3 access, then run Update apps again.',
+  t3_session_issue_unknown:
+    'No T3 session in time; no install started. One session may stay valid up to 15 minutes. Check T3.',
+  t3_issuer_protection_failed:
+    'T3 session issuer could not be protected against helper termination. No install started. Check the local T3 installation and process permissions.',
+  t3_install_state_unknown: 'Install state unknown, check T3.',
+  t3_session_revoke_failed:
+    'T3 session revocation could not be confirmed; the session expires within 15 minutes. Check T3.',
+  t3_install_timeout:
+    'T3 installation timed out. Its installer may still be running. Check T3 before retrying.',
+  't3_install_failed:protocol':
+    'T3 returned an unsupported installation response. Update T3 and retry.',
+  't3_install_failed:rpc':
+    'T3 rejected the installation request. Check the provider installation in T3.',
+  't3_install_failed:provider_unavailable':
+    'No Antigravity provider supports managed installation in the local T3 server. Check its provider settings.',
+  't3_install_failed:server_outdated':
+    'The running T3 server pins an older Antigravity runtime than AAC. Update and restart T3 before retrying.',
+  't3_install_failed:readiness_unknown':
+    'The active T3 Antigravity runtime could not be verified. Check its installation in T3.',
+  't3_install_failed:operation_changed':
+    'The T3 installation operation changed while AAC was observing it. Check its status in T3.',
+  't3_install_failed:installer':
+    'T3 could not install Antigravity ACP. See the provider installation error in T3.',
+  't3_install_failed:cancelled': 'The T3 Antigravity installation was cancelled.',
+  't3_install_failed:verification':
+    'T3 reported completion, but its active Antigravity runtime did not verify at or above its pin.',
   // Older helpers and saved rows: winget's answer, which never saw this package.
   store_no_newer:
     'Already current from the Microsoft Store: the Store offers no newer build to this computer yet.',
@@ -74,6 +122,8 @@ export type MessageCode = keyof typeof MESSAGES;
 
 /** Fixed older wording remains readable in saved jobs. Never emitted for new results. */
 export const LEGACY_MESSAGES: Partial<Record<MessageCode, string>> = {
+  model_catalog_unrefreshed:
+    'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.',
   updated_unreviewed:
     'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
   runtime_paused_blocked:

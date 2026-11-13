@@ -167,7 +167,7 @@ Details: [agent usage snapshot](docs/agent-usage-snapshot.md).
 ### ⬆️ Update every AI app at once
 
 - **One button** in the header starts one job for every computer.
-- **10 apps:** Claude Code, Claude Desktop, Codex CLI, Codex Desktop, T3 Code and its ACP adapters, Antigravity CLI, Muse Code, OMP and ZCode.
+- **12 apps:** Claude Code, Claude Desktop, Codex CLI, Codex Desktop, Cursor CLI, T3 Code and its ACP adapters, Antigravity CLI, Antigravity ACP (T3), Muse Code, OMP and ZCode.
 - **Parallel:** each computer updates its own apps while the others run, with live progress per computer.
 - **Safe restarts:** only CLI sessions running in a terminal are stopped and reopened. Background agents are never killed.
 - **Nothing automatic:** updates run only when you press the button. Cancel skips whatever hasn't started.

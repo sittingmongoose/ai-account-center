@@ -234,14 +234,16 @@ class UpdaterTests(unittest.TestCase):
         def cli(install, deadline, phase=None, **_kwargs):
             return common.result(install.app_id, 'ubuntu', 'current', '1.0.0', '1.0.0', 'native', attempted=True)
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(directory)), mock.patch.object(updater, 'detect', return_value=installations), mock.patch.object(updater, 'check_readiness', side_effect=gate), mock.patch.object(updater, 'update_cli', side_effect=cli) as update, mock.patch.object(updater, 'update_desktop', side_effect=cli) as desktop_update, mock.patch.object(updater, 'update_t3', side_effect=cli) as t3_update, mock.patch.object(updater, 'antigravity_plan', return_value=(None, True)), \
-                mock.patch.object(updater, 'latest_claude_version', return_value=None), mock.patch.object(updater, 'update_zcode', side_effect=cli) as zcode_update, mock.patch.object(updater, 'update_adapters', side_effect=cli) as adapters_update:
+                mock.patch.object(updater, 'latest_claude_version', return_value=None), mock.patch.object(updater, 'update_zcode', side_effect=cli) as zcode_update, mock.patch.object(updater, 'update_adapters', side_effect=cli) as adapters_update, \
+                mock.patch.object(updater, 'update_cursor', side_effect=cli) as cursor_update, \
+                mock.patch.object(updater, 'update_antigravity_acp', side_effect=cli) as acp_update:
             value = updater.run_apply('ubuntu')
         rows = {item['appId']: item for item in value['results']}
         self.assertEqual(len(value['results']), len(common.APP_LABELS))
         self.assertEqual(rows['muse-code']['status'], 'failed')
         self.assertEqual(rows['muse-code']['messageCode'], 'unsupported')
         self.assertFalse(rows['muse-code']['updateAttempted'])
-        attempted = {call.args[0].app_id for mocked in (update, desktop_update, t3_update, zcode_update, adapters_update) for call in mocked.call_args_list}
+        attempted = {call.args[0].app_id for mocked in (update, desktop_update, t3_update, zcode_update, adapters_update, cursor_update, acp_update) for call in mocked.call_args_list}
         self.assertNotIn('muse-code', attempted)
         self.assertEqual(len(attempted), len(common.APP_LABELS) - 1)
 
@@ -989,7 +991,13 @@ class MuseCatalogWarmTests(unittest.TestCase):
 
     def _warmed(self):
         """A catalog entry refreshed by the warm session."""
-        return _fixture_file(self.catalog / 'deadbeef.json', '{"source": "provider_catalog"}')
+        path = _fixture_file(self.catalog / 'deadbeef.json', '{"source": "provider_catalog"}')
+        # Kernel-assigned mtimes can lag the userspace clock by one tick. A
+        # mocked warm takes less than that tick; set its simulated refresh time
+        # explicitly so the fixture says precisely when the warm completed.
+        stamp = time.time()
+        os.utime(path, (stamp, stamp))
+        return path
 
     def _update(self, refreshed, command_side_effect=None, perform_side_effect=None):
         with mock.patch.object(updater, 'scan', return_value=[]), mock.patch.object(updater, 'cli_contexts', return_value=([], [])), \

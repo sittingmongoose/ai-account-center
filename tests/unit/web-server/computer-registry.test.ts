@@ -40,7 +40,7 @@ describe('package-owned computer registry', () => {
     expect(helperPlatform('nas1')).toBe('ubuntu');
     expect(COMPUTERS.alexis.label).toBe('Alexis PC');
     expect(PLATFORMS).toEqual(DASHBOARD_HOSTS);
-    expect(EXPECTED_RESULTS).toBe(50);
+    expect(EXPECTED_RESULTS).toBe(60);
     expect(Object.isFrozen(COMPUTERS.alexis)).toBe(true);
   });
   it('uses only the fixed Alexis SSH alias and a Windows helper command', () => {

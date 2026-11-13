@@ -22,8 +22,23 @@ export const UPDATE_APP_LABELS = {
   zcode: 'ZCode',
   't3-acp-adapters': 'T3 ACP adapters',
   't3-code': 'T3 Code',
+  'cursor-cli': 'Cursor CLI',
+  'antigravity-acp': 'Antigravity ACP (T3)',
 } as const;
 export type UpdateAppId = keyof typeof UPDATE_APP_LABELS;
+/** Frozen rollback view: older packages know exactly these ten app IDs. */
+export const LEGACY_STORAGE_APPS: readonly UpdateAppId[] = [
+  'antigravity-cli',
+  'muse-code',
+  'omp',
+  'codex-cli',
+  'codex-desktop',
+  'claude-code',
+  'claude-desktop',
+  'zcode',
+  't3-acp-adapters',
+  't3-code',
+];
 /** The fixed computers Update apps reaches; Nas1 is a second Ubuntu with its own id. */
 export type UpdatePlatform = DashboardHost;
 export type UpdateResultStatus =
@@ -383,6 +398,32 @@ export function normalizeAppUpdateRow(
     // warm failed); both say the catalog did not refresh.
     (code === 'model_catalog_unrefreshed' &&
       (appId !== 'muse-code' || (row.status !== 'restart_failed' && row.status !== 'failed'))) ||
+    (code === 'cursor_updated' && (appId !== 'cursor-cli' || row.status !== 'updated')) ||
+    (code === 'cursor_update_staged' &&
+      (appId !== 'cursor-cli' ||
+        HOST_OS[platform] !== 'windows' ||
+        row.status !== 'action_required')) ||
+    (code === 'antigravity_acp_updated' &&
+      (appId !== 'antigravity-acp' || row.status !== 'updated')) ||
+    (code === 'antigravity_acp_newer_kept' &&
+      (appId !== 'antigravity-acp' || row.status !== 'current')) ||
+    (code === 'antigravity_acp_activation_unsettled' &&
+      (appId !== 'antigravity-acp' || row.status !== 'failed')) ||
+    (code === 'antigravity_acp_staged' &&
+      (appId !== 'antigravity-acp' || row.status !== 'action_required')) ||
+    ((code === 't3_unreachable' || code === 't3_auth_failed') &&
+      (appId !== 'antigravity-acp' || row.status !== 'action_required')) ||
+    ((code === 't3_install_timeout' ||
+      code === 't3_install_state_unknown' ||
+      code === 't3_session_revoke_failed' ||
+      code === 't3_session_issue_unknown' ||
+      code === 't3_issuer_protection_failed' ||
+      code.startsWith('t3_install_failed:')) &&
+      (appId !== 'antigravity-acp' || row.status !== 'failed')) ||
+    (['mac_keychain_locked', 'mac_gui_unavailable', 'mac_gui_cleanup_failed'].includes(code) &&
+      (HOST_OS[platform] !== 'mac' ||
+        !['muse-code', 'cursor-cli'].includes(appId) ||
+        !['failed', 'restart_failed'].includes(row.status as string))) ||
     ((code === 'codex_sessions_stopped' || code === 'codex_force_failed') &&
       (appId !== 'codex-cli' ||
         platform !== 'windows' ||

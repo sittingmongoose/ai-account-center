@@ -10,9 +10,7 @@ import { isAccountAnalyticsTimeZone } from '../../src/web-server/services/accoun
 import {
   MESSAGES,
   MAX_OUTPUT,
-  UPDATE_APP_LABELS,
   record,
-  isUpdateAppId,
   normalizeAppUpdateResults,
   rowMessage,
   APP_UPDATE_PHASES,
@@ -28,6 +26,17 @@ import { LEGACY_MESSAGES } from '../../src/web-server/services/app-update-messag
 
 const PLATFORMS: UpdatePlatform[] = ['ubuntu', 'mac', 'windows', 'nas1'];
 const EXPECTED_RESULTS = 40;
+// The row decoder is shared, but both persisted app allowlists must stay frozen.
+const UPDATE_APP_LABELS = {
+  'antigravity-cli': 'Antigravity CLI', 'muse-code': 'Muse Code', omp: 'OMP',
+  'codex-cli': 'Codex CLI', 'codex-desktop': 'Codex Desktop',
+  'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop', zcode: 'ZCode',
+  't3-acp-adapters': 'T3 ACP adapters', 't3-code': 'T3 Code',
+};
+function isUpdateAppId(value: unknown): value is UpdateAppId {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(UPDATE_APP_LABELS, value);
+}
+
 export const DEFAULT_DASHBOARD_TIME_ZONE = 'America/New_York';
 export const MAX_USAGE_LOG_SOURCES = 64;
 

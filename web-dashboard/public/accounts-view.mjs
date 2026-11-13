@@ -749,6 +749,7 @@ const UPDATE_APP_NAMES = {
   'antigravity-cli': 'Antigravity CLI', 'muse-code': 'Muse Code', omp: 'OMP', 'codex-cli': 'Codex CLI',
   'codex-desktop': 'Codex Desktop', 'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop', zcode: 'ZCode',
   't3-acp-adapters': 'T3 ACP adapters', 't3-code': 'T3 Code',
+  'cursor-cli': 'Cursor CLI', 'antigravity-acp': 'Antigravity ACP (T3)',
 };
 const RESULT = {
   updated: ['Updated', 'good'], current: ['Already current', ''], not_installed: ['Not installed', ''],

@@ -43,6 +43,7 @@ import { resetDeviceStoreForTests } from '../../../src/web-server/services/dashb
 import { resetSetupCodeForTests } from '../../../src/web-server/services/dashboard-setup-code';
 import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
+import * as accountDashboard from '../../../src/web-server/services/account-dashboard-service';
 
 interface RawResponse {
   status: number;
@@ -279,6 +280,23 @@ beforeEach(async () => {
 
   spyOn(CodexAutoSwitchService.prototype, 'start').mockImplementation(() => {});
   spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {});
+  // Compression needs stable synthetic bytes. The real dashboard collector can
+  // read shared quota snapshots even with CCS_HOME isolated, and cache aging
+  // between these two requests changes the payload independently of compression.
+  spyOn(accountDashboard, 'getAccountDashboard').mockResolvedValue({
+    schemaVersion: 1,
+    updatedAt: '2026-11-01T00:00:00.000Z',
+    accounts: [],
+    codexAutoSwitch: {
+      enabled: false,
+      thresholdPercent: 5,
+      thresholdUsedPercent: 95,
+      pollIntervalSeconds: 60,
+      outcome: 'disabled',
+      message: 'Fixture account usage. '.repeat(200),
+      activationInProgress: false,
+    },
+  });
   instance = await startServer({ port: 0, host: '127.0.0.1', staticDir });
   port = (instance.server.address() as AddressInfo).port;
   for (const key of RATE_LIMIT_KEYS) loginRateLimiter.resetKey(key);

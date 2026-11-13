@@ -12,6 +12,7 @@ import {
   PLATFORMS,
   MAX_OUTPUT,
   UPDATE_APP_LABELS,
+  LEGACY_STORAGE_APPS,
   record,
   failure,
   skipped,
@@ -494,9 +495,35 @@ export class AppUpdateService {
     const legacyJob = job
       ? {
           ...job,
-          results: job.results.filter((row) => LEGACY_STORAGE_HOSTS.includes(row.platform)),
+          results: job.results
+            .filter(
+              (row) =>
+                LEGACY_STORAGE_HOSTS.includes(row.platform) &&
+                LEGACY_STORAGE_APPS.includes(row.appId)
+            )
+            .map((row) =>
+              row.appId === 'muse-code' &&
+              [
+                MESSAGES.model_catalog_unrefreshed,
+                MESSAGES.mac_keychain_locked,
+                MESSAGES.mac_gui_unavailable,
+                MESSAGES.mac_gui_cleanup_failed,
+              ].some((message) => message === row.message)
+                ? { ...row, message: LEGACY_MESSAGES.model_catalog_unrefreshed }
+                : row
+            ),
           hosts: hosts
-            ? Object.fromEntries(LEGACY_STORAGE_HOSTS.map((host) => [host, hosts[host]]))
+            ? Object.fromEntries(
+                LEGACY_STORAGE_HOSTS.map((host) => {
+                  const progress = hosts[host];
+                  return [
+                    host,
+                    progress.currentApp && !LEGACY_STORAGE_APPS.includes(progress.currentApp)
+                      ? { ...progress, currentApp: null, phase: null, phaseSince: null }
+                      : progress,
+                  ];
+                })
+              )
             : null,
           activePlatform:
             job.activePlatform && LEGACY_STORAGE_HOSTS.includes(job.activePlatform)
@@ -507,7 +534,7 @@ export class AppUpdateService {
               ? null
               : Math.min(
                   job.expectedResults,
-                  LEGACY_STORAGE_HOSTS.length * Object.keys(UPDATE_APP_LABELS).length
+                  LEGACY_STORAGE_HOSTS.length * LEGACY_STORAGE_APPS.length
                 ),
         }
       : null;
