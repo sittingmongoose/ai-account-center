@@ -339,10 +339,24 @@ describe('compiled Node usage workers', () => {
         console.log('RESULT ' + JSON.stringify({ keys: Object.keys(data).sort(), text: JSON.stringify(data) }));
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `)) as { keys: string[]; text: string };
-    expect(result.keys).toEqual(['daily', 'eventCount', 'hourly', 'monthly', 'scan', 'session']);
+    expect(result.keys).toEqual([
+      'cells',
+      'daily',
+      'eventCount',
+      'hourly',
+      'monthly',
+      'scan',
+      'session',
+    ]);
     expect(JSON.parse(result.text).eventCount).toBe(1);
     expect(result.text).not.toContain(tempRoot);
     expect(result.text).not.toContain('token_count');
+    // the history store's session-hour cells: hashed session keys, never the raw id or the folder
+    const cells = JSON.parse(result.text).cells as Array<{ sessionKey: string | null }>;
+    expect(cells.length).toBeGreaterThan(0);
+    expect(cells.every((c) => /^[0-9a-f]{16}$/.test(c.sessionKey ?? ''))).toBe(true);
+    expect(JSON.stringify(cells)).not.toContain('worker-session');
+    expect(JSON.stringify(cells)).not.toContain('/fixture/project');
   });
 
   it('rejects collection errors, startup failures and premature worker exits', async () => {

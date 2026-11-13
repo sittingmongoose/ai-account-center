@@ -1,33 +1,38 @@
 /**
  * Analytics ranges and local-day bucketing.
  *
- * Quota history and local CLI activity are both retained for about a month,
- * so every range, including a custom one, stays inside that window. Days are
- * bucketed in an IANA time zone the client names; hourly buckets remain UTC
- * instants that clients format locally.
+ * With the history store (docs/store.md section 12) a range reaches back to the oldest stored
+ * usage: "All" is everything stored and a custom range can span months. Without it, local CLI
+ * activity is read for 31 days only, so every range stays inside that window. Days are bucketed in
+ * an IANA time zone the client names; hourly buckets remain UTC instants that clients format
+ * locally.
  */
 
-export type AccountAnalyticsRangePreset = '24h' | '7d' | '30d' | 'month' | 'all' | 'custom';
+export type AccountAnalyticsRangePreset = '24h' | '7d' | '30d' | '90d' | 'month' | 'all' | 'custom';
 
 export const ACCOUNT_ANALYTICS_RANGE_PRESETS: readonly AccountAnalyticsRangePreset[] = [
   '24h',
   '7d',
   '30d',
+  '90d',
   'month',
   'all',
   'custom',
 ];
 
-/** Local activity is kept for 31 days; quota history for 30. Ranges never reach further back. */
+/** Without the history store, local activity is read for 31 days; ranges never reach further back. */
 export const ACCOUNT_ANALYTICS_RETAINED_MS = 31 * 86_400_000;
 export const ACCOUNT_ANALYTICS_MAX_CUSTOM_DAYS = 31;
+/** The longest custom range the store can be asked for (100 years of days). */
+const MAX_STORED_CUSTOM_DAYS = 36_525;
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
-const FIXED_RANGE_MS: Record<'24h' | '7d' | '30d', number> = {
+const FIXED_RANGE_MS: Record<'24h' | '7d' | '30d' | '90d', number> = {
   '24h': DAY_MS,
   '7d': 7 * DAY_MS,
   '30d': 30 * DAY_MS,
+  '90d': 90 * DAY_MS,
 };
 
 export type AccountAnalyticsQueryErrorCode =
@@ -47,7 +52,7 @@ export class AccountAnalyticsQueryError extends Error {
 export const ANALYTICS_QUERY_ERRORS: Record<AccountAnalyticsQueryErrorCode, string> = {
   invalid_query: 'Select a valid platform, time range, provider, account, and refresh flag.',
   invalid_range:
-    'Select a range of up to 31 retained days, with the start date on or before the end date.',
+    'Select whole days from the oldest stored day through today, with the start date on or before the end date.',
   invalid_tz: 'Select a valid IANA time zone.',
   invalid_provider: 'Select a provider that this server reports.',
 };
@@ -256,11 +261,15 @@ export interface ResolvedAccountAnalyticsRange {
   bucketMinutes: number;
 }
 
-/** Quota points keep today's resolution: 10 minutes for a day, hourly for a week, 3 hours beyond. */
+/**
+ * Quota points keep today's resolution: 10 minutes for a day, hourly for a week, 3 hours to a
+ * month; longer ranges (with the history store) are daily.
+ */
 export function analyticsBucketMinutes(spanMs: number): number {
   if (spanMs <= DAY_MS + 2 * HOUR_MS) return 10;
   if (spanMs <= 7 * DAY_MS + 2 * HOUR_MS) return 60;
-  return 180;
+  if (spanMs <= 31 * DAY_MS + 2 * HOUR_MS) return 180;
+  return 1440;
 }
 
 /** Checks the parts of a range that do not depend on the clock. */
@@ -273,7 +282,7 @@ export function validateAccountAnalyticsRangeShape(request: AccountAnalyticsRang
     if (!isCalendarDate(request.from) || !isCalendarDate(request.to))
       throw analyticsQueryError('invalid_range');
     if (request.from > request.to) throw analyticsQueryError('invalid_range');
-    if (dayNumber(request.to) - dayNumber(request.from) + 1 > ACCOUNT_ANALYTICS_MAX_CUSTOM_DAYS)
+    if (dayNumber(request.to) - dayNumber(request.from) + 1 > MAX_STORED_CUSTOM_DAYS)
       throw analyticsQueryError('invalid_range');
   } else if (request.from !== undefined || request.to !== undefined) {
     throw analyticsQueryError('invalid_range');
@@ -283,33 +292,40 @@ export function validateAccountAnalyticsRangeShape(request: AccountAnalyticsRang
 /**
  * Resolve a range to instants. `availableFrom` is the oldest retained quota
  * sample or activity hour (already bounded to the retained window); `all`
- * starts there.
+ * starts there. `stored`: the history store answers, so ranges reach back to
+ * `stored.oldest` (the oldest stored usage) with no 31-day bound.
  */
 export function resolveAccountAnalyticsRange(
   request: AccountAnalyticsRangeRequest,
   now: number,
-  availableFrom: number
+  availableFrom: number,
+  stored?: { oldest: number }
 ): ResolvedAccountAnalyticsRange {
   validateAccountAnalyticsRangeShape(request);
   const tz = request.tz ?? 'UTC';
+  const retainedFrom = stored ? Math.min(now, stored.oldest) : now - ACCOUNT_ANALYTICS_RETAINED_MS;
   let from: number;
   let to = now;
   switch (request.range) {
     case '24h':
     case '7d':
     case '30d':
+    case '90d':
       from = now - FIXED_RANGE_MS[request.range];
+      // Without the store a 90-day range shows the retained window; the page says where it starts.
+      if (request.range === '90d' && !stored) from = Math.max(from, retainedFrom);
       break;
     case 'month':
       from = localMidnight(`${localDate(now, tz).slice(0, 7)}-01`, tz);
       break;
     case 'all':
-      from = Math.min(now, Math.max(now - ACCOUNT_ANALYTICS_RETAINED_MS, availableFrom));
+      from = Math.min(now, Math.max(retainedFrom, availableFrom));
       break;
     case 'custom': {
       const first = request.from as string;
       const last = request.to as string;
-      const retainedFrom = now - ACCOUNT_ANALYTICS_RETAINED_MS;
+      if (!stored && dayNumber(last) - dayNumber(first) + 1 > ACCOUNT_ANALYTICS_MAX_CUSTOM_DAYS)
+        throw analyticsQueryError('invalid_range');
       if (last > localDate(now, tz) || first < localDate(retainedFrom, tz))
         throw analyticsQueryError('invalid_range');
       // The oldest retained local day usually began before the retained

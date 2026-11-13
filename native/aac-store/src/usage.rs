@@ -1773,15 +1773,22 @@ pub fn retire_segments(engine: &Engine, now: u64, backed_up_through: Option<u64>
     let (consumed, closed_through) = engine.with_db(|db| {
         let read = db.begin_read()?;
         let table = read.open_table(db::CHECKPOINT)?;
-        let cp = db::read_checkpoint(&table, "usage/readings")?
-            .map(|c| c.last_sequence_id)
-            .unwrap_or(0);
+        // Every projector of the readings log must have consumed a segment before it goes.
+        let mut cp = u64::MAX;
+        for name in ["usage/readings", "activity/readings"] {
+            let seq = db::read_checkpoint(&table, name)?
+                .map(|c| c.last_sequence_id)
+                .unwrap_or(0);
+            cp = cp.min(seq);
+        }
         let meta = read.open_table(db::META)?;
         let closed: Option<u64> = meta
             .get("closed_through_day")?
             .and_then(|v| String::from_utf8_lossy(v.value()).parse().ok());
         Ok((cp, closed))
     })?;
+    // Analytics usage history: a segment may hold raw changes of a day not yet closed in the ledger.
+    let activity_open = crate::activity::oldest_open_day(engine)?;
     let mut logs = engine.lock_logs();
     let log = logs.get(LogId::Readings);
     let mut through = None;
@@ -1789,6 +1796,7 @@ pub fn retire_segments(engine: &Engine, now: u64, backed_up_through: Option<u64>
         let ok = s.end_ms < cutoff
             && s.end_seq <= consumed
             && closed_through.map(|d| s.end_ms / DAY_MS <= d).unwrap_or(false)
+            && activity_open.map(|d| s.end_ms / DAY_MS < d as u64).unwrap_or(true)
             && backed_up_through.map(|b| s.end_seq <= b).unwrap_or(true);
         if !ok {
             break;

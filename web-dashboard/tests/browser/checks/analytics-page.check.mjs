@@ -31,11 +31,13 @@ const FORMATS = [
 	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true },
 ];
 
-async function stubData(t) {
+async function stubData(t, { keptDays = 120, gapAll = false } = {}) {
 	await t.app.stub('/api/accounts/dashboard', DASHBOARD);
 	await t.page.route((u) => new URL(u).pathname === '/api/accounts/analytics', (r) => {
-		const range = new URL(r.request().url()).searchParams.get('range') || '7d';
-		return r.fulfill({ json: analyticsFixture({ range, accounts: ACCOUNTS }) });
+		const url = new URL(r.request().url());
+		const range = url.searchParams.get('range') || '7d';
+		const days = url.searchParams.get('from') ? { from: url.searchParams.get('from'), to: url.searchParams.get('to') } : null;
+		return r.fulfill({ json: analyticsFixture({ range, days, accounts: ACCOUNTS, keptDays, gapAll }) });
 	});
 }
 
@@ -300,10 +302,32 @@ export const tests = {
 		await t.step('a custom range from the calendar', async () => {
 			await t.page.click('.date-btn');
 			await t.visible('.cal', 'calendar open');
-			await t.page.click('.cal-quick button:has-text("Last 3 days")');
+			await t.page.click('.cal-quick button:has-text("7 days")');
 			await t.page.click('.cal-acts .btn.primary');
 			await t.until('custom range drawn', () => document.querySelector('.date-btn .on') !== null, null, { timeout: 15000 });
 			await t.equal('the controller holds a custom range', (await viewState(t))?.range, 'custom');
+		});
+		await t.step('90D reads its own answer and draws daily buckets', async () => {
+			await t.page.locator('.ax-tools-row .seg button:has-text("90D")').click();
+			await t.until('the controller holds 90D', () => window.__aacLastAnalytics?.state?.range === '90d', null, { timeout: 10000 });
+			await t.until('the 90-day answer is drawn', () => /Daily buckets/.test(document.querySelector('.trend-card')?.textContent || ''), null, { timeout: 15000 });
+		});
+		await t.step('a custom range across months, from the month grid', async () => {
+			await t.page.click('.date-btn');
+			await t.visible('.cal', 'calendar open');
+			const thisMonth = await t.page.textContent('.cal-month');
+			await t.page.click('.cal-nav button[aria-label="Previous month"]');
+			await t.until('the previous month is shown', (m) => document.querySelector('.cal-month')?.textContent !== m, thisMonth, { timeout: 5000 });
+			// the 10th of last month, then the 1st of this month
+			await t.page.click('.cal-day:not([disabled]) >> text="10"');
+			await t.page.click('.cal-nav button[aria-label="Next month"]');
+			await t.page.click('.cal-day:not([disabled]) >> text="1"');
+			await t.page.click('.cal-acts .btn.primary');
+			await t.until('custom range drawn', () => document.querySelector('.date-btn .on') !== null, null, { timeout: 15000 });
+			await t.until('the controller holds a custom range', () => window.__aacLastAnalytics?.state?.range === 'custom', null, { timeout: 10000 });
+			// the range runs from the 10th of last month to the 1st of this one
+			const date = await t.page.evaluate(() => window.__aacLastAnalytics?.usage?.head?.date ?? document.querySelector('.date-btn .tnum')?.textContent ?? '');
+			await t.check('the range spans two months', /^\w{3} 10 to \w{3} 1$/.test(date.trim()), date);
 		});
 		await t.step('a quota row opens its focus chart, laid out in its own box', async () => {
 			await t.page.click('button.qh-row >> nth=0');
@@ -324,22 +348,65 @@ export const tests = {
 		});
 	},
 
+	async 'analytics: a time no computer was read reads "Not read" in every series on the folded Duo'(t) {
+		const f = FORMATS.find((x) => x.name === 'duo-folded');
+		await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+		await t.app.signIn();
+		await stubData(t, { gapAll: true });
+		await openAnalytics(t, f.safe);
+		await t.until('the gap is marked', () => !!document.querySelector('.trend-card rect.ax-gap'), null, { timeout: 15000 });
+		// the trend sits below the fold on the folded Duo
+		await t.page.locator('.trend-hit').scrollIntoViewIfNeeded();
+		const band = await t.page.locator('.trend-card rect.ax-gap').first().boundingBox();
+		const hit = await t.page.locator('.trend-hit').boundingBox();
+		await t.page.touchscreen.tap(band.x + band.width / 2, hit.y + hit.height / 2);
+		await t.until('a reading is shown', () => /\d/.test(document.querySelector('.trend-card .ro-bar .ro-time')?.textContent || ''), null, { timeout: 5000 });
+		const bar = (await t.page.textContent('.trend-card .ro-bar')).replace(/\s+/g, ' ');
+		await t.check('every series reads "Not read"', (bar.match(/Not read/g) || []).length === 6, bar);
+		await t.check('no stray "All" before it', !/All Not read/.test(bar), bar);
+		await t.check('no made-up $0.00', !/\$0\.00/.test(bar), bar);
+	},
+
 	async 'analytics: each format lays the page out with nothing sideways and no overlapping labels'(t) {
 		for (const f of FORMATS) {
 			await t.step(f.name, async () => {
 				await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: f.mobile, hasTouch: f.mobile, serviceWorkers: 'block' });
 				await t.app.signIn();
-				await stubData(t);
+				// two years kept, so "All" has weekly buckets over two years; and no computer read from five to three
+				// days ago, so the 7D trend carries a gap band whose caption shares a line with "Logs read"
+				await stubData(t, { keptDays: 730, gapAll: true });
 				await openAnalytics(t, f.safe);
 				await t.until('charts laid out in their boxes', () => {
 					const svg = document.querySelector('.trend-card svg.axes');
 					const box = document.querySelector('.trend-box');
 					return !!svg && !!box && Math.abs(svg.getBoundingClientRect().width - box.getBoundingClientRect().width) < 2;
 				}, null, { timeout: 15000 });
+				await t.until('the gap is marked', () => !!document.querySelector('.trend-card rect.ax-gap'), null, { timeout: 15000 });
 				const wide = await t.page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 				await t.equal(`${f.name}: no sideways scroll`, wide, 0);
 				await t.equal(`${f.name}: no chart label overlaps another`, await overlaps(t), []);
 				await t.audit(`analytics ${f.name}`);
+				// the long ranges: 90 days (month starts on a phone) and All over two years (weekly buckets)
+				for (const [button, sub] of [['90D', /Daily buckets/], ['All', /Weekly buckets/]]) {
+					await t.page.locator(`.ax-tools-row .seg button:has-text("${button}")`).click();
+					await t.until(`${button} drawn`, (re) => new RegExp(re).test(document.querySelector('.trend-card')?.textContent || ''), sub.source, { timeout: 20000 });
+					await t.until(`${button} axis laid out`, () => document.querySelectorAll('.trend-card svg.axes text').length > 3, null, { timeout: 10000 });
+					await t.equal(`${f.name} ${button}: no chart label overlaps another`, await overlaps(t), []);
+					if (button === 'All') {
+						// two years kept: the range label names both years, whole, inside the window
+						const d = await t.page.evaluate(() => {
+							const b = document.querySelector('.date-btn');
+							return { text: b?.querySelector('.tnum')?.textContent.trim() ?? '', cut: !b || b.scrollWidth > b.clientWidth + 1 || b.getBoundingClientRect().right > innerWidth };
+						});
+						await t.check(`${f.name} All: the range label names both years`, /^\w{3} \d{1,2}, \d{4} to \w{3} \d{1,2}, \d{4}$/.test(d.text), d.text);
+						await t.check(`${f.name} All: the range label is not cut`, !d.cut, JSON.stringify(d));
+						if (f.mobile && ['iphone', 'duo-folded'].includes(f.name)) {
+							await t.page.locator('.date-btn').scrollIntoViewIfNeeded();
+							await t.crop(`analytics-all-years-${f.name}`, await t.page.evaluate(() => { const r = document.querySelector('.date-btn').getBoundingClientRect(); return { x: 0, y: Math.max(0, r.y - 50), width: innerWidth, height: r.height + 100 }; }), `${f.name}: All over two years, the range label with both years`);
+						}
+					}
+					await t.equal(`${f.name} ${button}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 0);
+				}
 			});
 		}
 	},

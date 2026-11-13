@@ -71,6 +71,8 @@ pub struct Config {
     pub integrity_max_bytes: u64,
     /// Zero keeps raw history forever; a positive value is an explicit legacy retention policy.
     pub retention_days: u64,
+    /// Analytics usage history: kept for good unless an explicit retention is set (docs/store.md 12).
+    pub activity_retention_days: Option<u64>,
 }
 
 impl Default for Config {
@@ -79,6 +81,7 @@ impl Default for Config {
             cache_bytes: 32 << 20,
             integrity_max_bytes: 512 << 20,
             retention_days: 0,
+            activity_retention_days: None,
         }
     }
 }

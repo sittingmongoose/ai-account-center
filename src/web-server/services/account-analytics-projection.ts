@@ -6,6 +6,7 @@ import {
   type AccountAnalyticsPricingLookup,
 } from './account-analytics-pricing';
 import type { UsageWorkerResult } from '../usage/worker-client';
+import { qualityWords } from '../../store/usage-report';
 import type { ModelBreakdown, SessionUsage } from '../usage/types';
 import { publishedSessionKey } from '../usage/analytics-session-key';
 import { attributeActivitySources, type AttributedSource } from './account-analytics-attribution';
@@ -223,6 +224,8 @@ interface PricedBreakdowns {
     values: Record<TotalField, number>;
     parts: Record<PartField, number> | null;
     rates: AccountAnalyticsModelRates | null;
+    /** Quality bits of counts with a known flaw (`ModelBreakdown.quality`): in totals, not in model comparisons. */
+    quality: number;
   }>;
 }
 
@@ -256,7 +259,7 @@ function priceBreakdowns(
           cacheRead: (values.cacheReadTokens / 1_000_000) * listRate.cacheReadPerMillion,
         }
       : null;
-    models.push({ name, values, parts, rates });
+    models.push({ name, values, parts, rates, quality: breakdown.quality ?? 0 });
     if (!parts) known = false;
     else for (const field of PART_FIELDS) sum[field] += parts[field];
   }
@@ -343,6 +346,8 @@ interface DayModelRow {
   provider: Provider;
   model: string | null;
   totals: Accumulator;
+  /** Quality bits of flawed counts: kept apart in the day's breakdown and marked, never compared. */
+  quality?: number;
 }
 
 export function projectAccountAnalyticsActivity(
@@ -450,10 +455,11 @@ export function projectAccountAnalyticsActivity(
     provider: Provider,
     model: string | null,
     values: Record<TotalField, number>,
-    parts: Record<PartField, number> | null
+    parts: Record<PartField, number> | null,
+    quality = 0
   ): void => {
-    const key = `${date}\0${provider}\0${model ?? ''}\0${model === null ? 'unnamed' : 'named'}`;
-    const row = dayModels.get(key) ?? { date, provider, model, totals: accumulator() };
+    const key = `${date}\0${provider}\0${model ?? ''}\0${model === null ? 'unnamed' : 'named'}\0${quality}`;
+    const row = dayModels.get(key) ?? { date, provider, model, totals: accumulator(), quality };
     addValues(row.totals, values);
     addParts(row.totals, parts);
     dayModels.set(key, row);
@@ -496,8 +502,9 @@ export function projectAccountAnalyticsActivity(
         hourBuckets.set(hourKey, bucket);
         usageEvents += finite(hour.requestCount);
         for (const model of priced.models) {
-          addDayModel(date, source.provider, model.name, model.values, model.parts);
-          if (model.name === null) continue;
+          addDayModel(date, source.provider, model.name, model.values, model.parts, model.quality);
+          // flawed counts (the retired Codex cache's output) are never compared model to model
+          if (model.name === null || model.quality) continue;
           const key = `${source.provider}:${model.name}`;
           const existing = modelBuckets.get(key) ?? {
             model: model.name,
@@ -567,7 +574,7 @@ export function projectAccountAnalyticsActivity(
   // Per-day model rows: the twelve costliest named models keep their name.
   const modelCost = new Map<string, number>();
   for (const row of dayModels.values())
-    if (row.model !== null && row.model !== OTHER_MODELS) {
+    if (row.model !== null && row.model !== OTHER_MODELS && !row.quality) {
       const key = `${row.provider}\0${row.model}`;
       modelCost.set(key, (modelCost.get(key) ?? 0) + row.totals.estimatedCostUsd);
     }
@@ -581,12 +588,14 @@ export function projectAccountAnalyticsActivity(
   for (const row of dayModels.values()) {
     const model =
       row.model !== null && named.has(`${row.provider}\0${row.model}`) ? row.model : OTHER_MODELS;
-    const key = `${row.date}\0${row.provider}\0${model}`;
+    // flawed counts stay apart from clean ones of the same model, and say so
+    const key = `${row.date}\0${row.provider}\0${model}\0${row.quality ?? 0}`;
     const target = folded.get(key) ?? {
       date: row.date,
       provider: row.provider,
       model,
       totals: accumulator(),
+      quality: row.quality ?? 0,
     };
     merge(target.totals, row.totals);
     folded.set(key, target);
@@ -604,6 +613,7 @@ export function projectAccountAnalyticsActivity(
       provider: row.provider,
       model: row.model,
       ...publish(row.totals),
+      ...(row.quality ? { quality: qualityWords(row.quality) } : {}),
     }));
 
   const usable = status === 'ok' || status === 'cached';
@@ -651,16 +661,22 @@ export function projectAccountAnalyticsActivity(
   if (usable && sample.length > 0)
     base.message = `${base.message} Session rows show each session's whole retained totals, which can include activity outside this range.`;
 
+  // A day holding flawed counts (the retired Codex cache's output) is left out of the day-level
+  // cost spike: its total keeps the inflated output cost and would distort the daily average.
+  const flawedDays = new Set(
+    [...dayModels.values()].filter((row) => row.quality).map((row) => row.date)
+  );
   const dayCosts = new Map<string, number>();
   for (const row of byDay)
-    dayCosts.set(row.date, (dayCosts.get(row.date) ?? 0) + row.estimatedCostUsd);
+    if (!flawedDays.has(row.date))
+      dayCosts.set(row.date, (dayCosts.get(row.date) ?? 0) + row.estimatedCostUsd);
   const anomalies = usable
     ? detectAccountAnalyticsAnomalies(
         [...dayCosts.entries()].map(([date, cost]) => ({ date, cost })),
         [...dayModels.values()]
           .filter(
             (row): row is DayModelRow & { model: string } =>
-              row.model !== null && row.model.length > 0
+              row.model !== null && row.model.length > 0 && !row.quality
           )
           .sort(
             (a, b) =>

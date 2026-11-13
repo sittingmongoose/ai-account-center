@@ -19,6 +19,54 @@ const B: f64 = 34.0;
 
 const TYPES: [&str; 4] = ["in", "out", "cw", "cr"];
 
+/// An x label's width: 11 px mono at 87.5% stretch (`.ax-t`), as the view builder measures it (`axisLabelW`).
+fn label_w(label: &str) -> f64 {
+    label.chars().count() as f64 * 6.2
+}
+
+/// A caption's width on the plot's top line: `.ax-t` with the caption's 0.06em letter spacing.
+fn cap_w(text: &str) -> f64 {
+    text.chars().count() as f64 * 6.9
+}
+
+/// Which gap captions ("NOT READ") to draw: one fits inside its band and keeps 8 px from every caption already on
+/// that line ("LOGS READ ...", "LOGS START ...") and from the gap captions kept before it. `gaps` are the bands'
+/// box x spans; `taken` the other captions' spans.
+fn kept_gap_captions(gaps: &[(f64, f64, f64)], mut taken: Vec<(f64, f64)>) -> Vec<bool> {
+    gaps.iter()
+        .map(|&(x0, x1, w)| {
+            let mid = (x0 + x1) / 2.0;
+            let span = (mid - w / 2.0, mid + w / 2.0);
+            let ok = x1 - x0 >= w + 8.0
+                && taken
+                    .iter()
+                    .all(|&(a, b)| span.1 + 8.0 <= a || span.0 >= b + 8.0);
+            if ok {
+                taken.push(span);
+            }
+            ok
+        })
+        .collect()
+}
+
+/// Which x labels to draw at the horizontal scale `sx`. The view lays its labels out so none touch at the width it
+/// last saw; until it lays them out again for this box they are squeezed, so a label that would touch the kept one
+/// before it is left out, never drawn over it.
+fn kept_labels(ticks: &[XTick], sx: f64) -> Vec<bool> {
+    let mut last: Option<(f64, f64)> = None;
+    ticks
+        .iter()
+        .map(|k| {
+            let (x, w) = (k.x * sx, label_w(&k.label));
+            let ok = last.is_none_or(|(lx, lw)| x - lx >= (w + lw) / 2.0 + 12.0);
+            if ok {
+                last = Some((x, w));
+            }
+            ok
+        })
+        .collect()
+}
+
 #[component]
 pub fn TrendCard() -> impl IntoView {
     let ax = expect_context::<Ax>();
@@ -267,6 +315,7 @@ fn TrendChart(
             hatch: t.hatch.clone(),
             clip_note: t.clip_note.clone(),
             cost_shown: t.cost_shown,
+            gaps: t.gaps.clone(),
             ..Default::default()
         })
     });
@@ -281,13 +330,31 @@ fn TrendChart(
                 <text x=L + pw + 10.0 y=yy + 4.0 class="ax-t ink2">{k.right.clone()}</text>
             }
         }).collect_view();
-        let x = t.x_ticks.iter().map(|k| {
+        let kept = kept_labels(&t.x_ticks, sx);
+        let x = t.x_ticks.iter().zip(kept).map(|(k, kept)| {
             let xx = L + k.x * sx;
             view! {
                 {k.major.then(|| view! { <line x1=xx x2=xx y1=T y2=T + ph class="ax-gl"/> })}
-                <text x=xx y=T + ph + 21.0 text-anchor="middle" class=if k.major { "ax-t ink2" } else { "ax-t" }>{k.label.clone()}</text>
+                {kept.then(|| view! {
+                    <text x=xx y=T + ph + 21.0 text-anchor="middle" class=if k.major { "ax-t ink2" } else { "ax-t" }>{k.label.clone()}</text>
+                })}
             }
         }).collect_view();
+        // the captions on the plot's top line, so a gap's caption never lands on them
+        let mut taken = Vec::new();
+        if t.tail_x >= 0.0 {
+            let tx = L + t.tail_x * sx;
+            taken.push((tx - 6.0 - cap_w(&t.tail_label), tx - 6.0));
+        }
+        if !t.clip_note.is_empty() {
+            taken.push((L + 6.0, L + 6.0 + cap_w(&t.clip_note)));
+        }
+        let bands: Vec<(f64, f64, f64)> = t
+            .gaps
+            .iter()
+            .map(|g| (L + g.x0 * sx, L + g.x1 * sx, cap_w(&g.label)))
+            .collect();
+        let captions = kept_gap_captions(&bands, taken);
         let tail = (t.tail_x >= 0.0).then(|| {
             let tx = L + t.tail_x * sx;
             view! {
@@ -305,6 +372,14 @@ fn TrendChart(
                 {t.cost_shown.then(|| view! { <text x=L + pw + 10.0 y=14 class="ax-t ax-cap">"USD"</text> })}
                 <path d=t.minor.clone() transform=format!("translate({L} {T}) scale({sx:.4} {sy:.4})") class="ax-gl" vector-effect="non-scaling-stroke"/>
                 {tail}
+                // spans no computer was read for: marked, never drawn as zero; a caption only where it has room
+                {t.gaps.iter().zip(captions).map(|(g, caption)| {
+                    let (x0, x1) = (L + g.x0 * sx, L + g.x1 * sx);
+                    view! {
+                        <rect x=x0 y=T width=(x1 - x0).max(1.0) height=ph class="ax-gap"/>
+                        {caption.then(|| view! { <text x=(x0 + x1) / 2.0 y=T + 14.0 text-anchor="middle" class="ax-t ax-cap">{g.label.clone()}</text> })}
+                    }
+                }).collect_view()}
                 {(!t.clip_note.is_empty()).then(|| view! { <text x=L + 6.0 y=T + 14.0 class="ax-t ax-cap">{t.clip_note.clone()}</text> })}
             </g>
         }
@@ -458,7 +533,8 @@ fn ReadoutBar(
             {move || match bucket.get() {
                 None => view! { <span class="q3">{if coarse { "Tap the chart for a reading" } else { "Point at the chart for a reading" }}</span> }.into_any(),
                 Some(b) => {
-                    let extra = if !b.foot.is_empty() || !b.foot2.is_empty() || !b.by_provider.is_empty() {
+                    // a gap reads like any bucket: each series with "Not read" as its value
+                    let extra = if !b.gap && (!b.foot.is_empty() || !b.foot2.is_empty() || !b.by_provider.is_empty()) {
                         let first = if b.foot.is_empty() { b.by_provider.clone() } else { b.foot.clone() };
                         let text = if b.foot2.is_empty() { first } else { format!("{first} · {}", b.foot2) };
                         view! { <span class="ro-l2 q3">{text}</span> }.into_any()
@@ -475,7 +551,7 @@ fn ReadoutBar(
                     view! {
                         <span class="ro-l1">
                             <span class="ro-time">{b.time.clone()}</span>
-                            <span class="ro-v tnum"><Swatch color=key_color("tok")/>"All "{b.all.clone()}</span>
+                            <span class="ro-v tnum"><Swatch color=key_color("tok")/>{(!b.gap).then_some("All ")}{b.all.clone()}</span>
                             <span class="ro-v tnum"><Swatch color=key_color("cost") shape="line"/>{b.cost.clone()}</span>
                         </span>
                         {extra}
@@ -491,6 +567,64 @@ fn ReadoutBar(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gap_caption_is_left_out_where_it_would_touch_the_logs_read_caption() {
+        let read = "LOGS READ 1:50 PM";
+        // a 7D trend on a phone: the gap band right before the "LOGS READ" caption's end
+        let tx = 300.0;
+        let taken = vec![(tx - 6.0 - cap_w(read), tx - 6.0)];
+        let w = cap_w("NOT READ");
+        assert_eq!(
+            kept_gap_captions(&[(200.0, 270.0, w)], taken.clone()),
+            vec![false]
+        );
+        // a wide band clear of it keeps its caption; a narrow one never has one
+        assert_eq!(
+            kept_gap_captions(&[(10.0, 120.0, w)], taken.clone()),
+            vec![true]
+        );
+        assert_eq!(kept_gap_captions(&[(10.0, 40.0, w)], taken), vec![false]);
+        // two gaps side by side never share the line
+        assert_eq!(
+            kept_gap_captions(&[(0.0, 90.0, w), (95.0, 185.0, w)], vec![]),
+            vec![true, true]
+        );
+        assert_eq!(
+            kept_gap_captions(&[(0.0, 80.0, w), (60.0, 140.0, w)], vec![]),
+            vec![true, false]
+        );
+    }
+
+    #[test]
+    fn squeezed_axis_labels_are_dropped_never_drawn_over_each_other() {
+        // 12-hour ticks laid out for a 1188 px plot, drawn in a 508 px one
+        let ticks: Vec<XTick> = (0..14)
+            .map(|i| XTick {
+                x: 40.0 + i as f64 * 84.0,
+                label: if i % 2 == 0 {
+                    format!("Tue {}", 10 + i / 2)
+                } else {
+                    "12 PM".into()
+                },
+                major: i % 2 == 0,
+            })
+            .collect();
+        assert!(kept_labels(&ticks, 1.0).iter().all(|k| *k));
+        let sx = 508.0 / 1188.0;
+        let kept = kept_labels(&ticks, sx);
+        let shown: Vec<&XTick> = ticks
+            .iter()
+            .zip(&kept)
+            .filter(|(_, k)| **k)
+            .map(|(t, _)| t)
+            .collect();
+        assert!(shown.len() >= 2 && shown.len() < ticks.len());
+        for pair in shown.windows(2) {
+            let gap = (pair[1].x - pair[0].x) * sx;
+            assert!(gap >= (label_w(&pair[0].label) + label_w(&pair[1].label)) / 2.0 + 12.0);
+        }
+    }
 
     #[test]
     fn the_frame_trace_counts_slow_frames() {

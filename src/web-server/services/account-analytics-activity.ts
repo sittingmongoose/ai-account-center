@@ -42,6 +42,17 @@ import {
   type LargeCodexReader,
   type LargeCodexReadSpec,
 } from '../usage/worker-client';
+import type { AacStore } from '../../store/store-service';
+import {
+  ActivityIngestor,
+  buildActivityReports,
+  gridFromStore,
+  rowsReport,
+  storeActivityAnswer,
+} from '../../store/activity-history';
+import type { UsageReport } from '../../store/usage-report';
+import { createLogger } from '../../services/logging';
+import { openAacStore } from '../../store/store-service';
 import type {
   AccountAnalyticsActivity,
   AccountAnalyticsActivityCoverage,
@@ -287,6 +298,12 @@ export interface AccountAnalyticsActivityDeps {
   refreshIntervalSeconds?: () => number;
   pricing?: AccountAnalyticsPricingLookup;
   /**
+   * The history store (docs/store.md section 12). Set: every published pass is handed to it as
+   * usage reports, and answers come from it, so a page never waits for a scan and ranges reach
+   * back to the oldest stored hour. Unset (tests, ad-hoc readers): the 31-day in-memory answer.
+   */
+  historyStore?: () => Promise<AacStore | null>;
+  /**
    * Persist the published snapshot under the scope's cache dir and serve it after a restart.
    * Default false (tests and ad-hoc readers never touch disk); the live singleton enables it.
    */
@@ -308,6 +325,11 @@ const PLAN_READY_DEADLINE_MS = 15_000;
 /** The OMP marker scan is bounded at 30 s; this leaves time to start the thread and answer. */
 const PLAN_LATER_DEADLINE_MS = 40_000;
 const MAX_COLLECTION_TIME_MS = 60_000;
+/** The backfill reads back to 2000-01-01 (the contract's earliest hour). */
+const contractEarliest = Date.UTC(2000, 0, 1);
+const BACKFILL_EVERY_MS = 120_000;
+/** After this many passes a source still not finished is recorded as done with `pass_limit`. */
+const MAX_BACKFILL_PASSES = 60;
 /** Retained sessions per published source; more than this marks the local collection incomplete. */
 const MAX_RETAINED_SESSIONS = 10_000;
 /**
@@ -438,11 +460,16 @@ function savePersistedSnapshot(scope: string, state: ActivityState): void {
   try {
     const file = snapshotFile(scope);
     if (!file) return;
+    // Session-hour cells live in the history store; the snapshot keeps the hourly rows it serves.
+    const withoutCells = (source: SourceData): SourceData => ({
+      ...source,
+      data: source.data.map(({ cells: _cells, ...data }) => data),
+    });
     const body = JSON.stringify({
       version: SNAPSHOT_VERSION,
       fetchedAt: state.fetchedAt,
       partial: state.partial,
-      sources: state.sources,
+      sources: state.sources.map(withoutCells),
       sourceStates: state.sourceStates,
       remote: state.remote
         ? {
@@ -451,6 +478,7 @@ function savePersistedSnapshot(scope: string, state: ActivityState): void {
               ...entry,
               data: {
                 ...entry.data,
+                cells: undefined,
                 daily: [],
                 monthly: [],
                 session: retainedSessions(entry.data.session, state.fetchedAt - 31 * 86_400_000),
@@ -458,7 +486,7 @@ function savePersistedSnapshot(scope: string, state: ActivityState): void {
             })),
           }
         : null,
-      local: [...state.local],
+      local: [...state.local].map(([key, source]) => [key, withoutCells(source)]),
       identities: [...state.identities].filter(([key]) => state.local.has(key)),
     } satisfies PersistedActivitySnapshot);
     if (Buffer.byteLength(body, 'utf8') > MAX_SNAPSHOT_BYTES) return;
@@ -1325,6 +1353,277 @@ export class AccountAnalyticsActivityService {
     state.fetchedAt = now;
     state.needsLocalRefresh = false;
     if (this.deps.persistSnapshot === true) savePersistedSnapshot(scope, state);
+    if (this.deps.historyStore) {
+      // While the remote scan is still out, only the local reads are final for this pass.
+      const reports = buildActivityReports({
+        local: collected,
+        remote: answer?.results ?? [],
+        states: remotePending
+          ? state.sourceStates.filter((source) => source.host === 'ubuntu')
+          : state.sourceStates,
+        windowFromMs: cutoff,
+        now,
+        localComplete: (tool) => discoveryComplete && succeeded.has(tool) && !unfinished.has(tool),
+      });
+      void this.ingestor().submit(reports);
+    }
+  }
+
+  private ingestorInstance: ActivityIngestor | undefined;
+  private ingestor(): ActivityIngestor {
+    this.ingestorInstance ??= new ActivityIngestor(
+      () => this.deps.historyStore?.() ?? Promise.resolve(null),
+      (error) => {
+        try {
+          activityLogger.warn(
+            'analytics.history_ingest_failed',
+            'Usage history was not saved this pass',
+            {
+              code:
+                /^([a-z_]+): /.exec(error instanceof Error ? error.message : String(error))?.[1] ??
+                'unknown',
+            }
+          );
+        } catch {
+          /* Logging never stops a collection. */
+        }
+      }
+    );
+    return this.ingestorInstance;
+  }
+
+  private backfillAt = -Infinity;
+  private backfillBusy = false;
+  private backfillFinished = false;
+  /** The old caches were tried this run; a failed import waits for the next start. */
+  private importTried = false;
+
+  /**
+   * One bounded pass of the one-time backfill (design 5): first the old caches (the saved activity
+   * snapshot and every remote host's cache), then the logs as far back as they go, read by the same
+   * collectors with their own checkpoint folder (`cache/analytics-backfill-v1`, never the live
+   * checkpoints). Each pass resumes from those checkpoints; the store adds and raises only.
+   */
+  async backfillPass(
+    scope: string = (this.deps.scope ?? getCcsDir)()
+  ): Promise<'done' | 'continue' | 'idle'> {
+    if (this.backfillBusy || this.backfillFinished) return this.backfillFinished ? 'done' : 'idle';
+    const store = this.deps.historyStore ? await this.deps.historyStore().catch(() => null) : null;
+    if (!store) return 'idle';
+    this.backfillBusy = true;
+    try {
+      const finished = (await store.getMeta('ts:activity_backfill')) === 'done';
+      // A stop between marking it done and deleting the deep-read checkpoints left them behind.
+      if (finished && path.isAbsolute(scope))
+        fs.rmSync(path.join(scope, 'cache', 'analytics-backfill-v1'), {
+          recursive: true,
+          force: true,
+        });
+      const now = (this.deps.now ?? Date.now)();
+      const write = async (reports: UsageReport[]) => {
+        for (let i = 0; i < reports.length; i += 8)
+          await store.activityIngest(reports.slice(i, i + 8));
+      };
+      if (!this.importTried && (await store.getMeta('ts:activity_import')) !== 'done') {
+        this.importTried = true;
+        const reports: UsageReport[] = [];
+        const persisted = path.isAbsolute(scope) ? loadPersistedSnapshot(scope) : null;
+        const local = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
+        for (const [, source] of persisted?.local ?? [])
+          local.set(source.provider, [...(local.get(source.provider) ?? []), ...source.data]);
+        for (const [tool, data] of local)
+          reports.push(
+            rowsReport({
+              computer: 'ubuntu',
+              tool,
+              data,
+              kind: 'import',
+              readAt: persisted?.fetchedAt ?? now,
+              complete: false,
+            })
+          );
+        const cached =
+          this.deps.remote === undefined && path.isAbsolute(scope)
+            ? loadAnalyticsRemoteCachedSources(contractEarliest, {
+                cacheDir: path.join(scope, 'cache'),
+              })
+            : null;
+        for (const entry of cached?.results ?? [])
+          if (entry.data.host)
+            reports.push(
+              rowsReport({
+                computer: entry.data.host,
+                tool: entry.tool,
+                data: [entry.data],
+                kind: 'import',
+                readAt: Date.parse(cached?.fetchedAt ?? '') || now,
+                complete: false,
+              })
+            );
+        await write(reports);
+        // The retired Codex cache: the only copy of Codex usage whose rollout files are gone.
+        // The file is kept: it is the only copy. Done only once the store has committed it (now or
+        // before, by its SHA-256); a failed or refused import is tried again on the next start.
+        const legacy = path.join(scope, 'cache', 'codex-native-usage-v1.json');
+        let imported = true;
+        if (path.isAbsolute(scope) && fs.existsSync(legacy)) {
+          const result = await store.activityImportCodexV1(legacy, 'ubuntu').catch(() => null);
+          imported =
+            result !== null && (result.imported === true || result.reason === 'already imported');
+        }
+        if (imported) await store.setMeta('activity_import', 'done');
+      }
+      if (finished) {
+        this.backfillFinished = true;
+        return 'done';
+      }
+      const passes = Number((await store.getMeta('ts:activity_backfill_passes')) ?? 0) + 1;
+      await store.setMeta('activity_backfill_passes', String(passes));
+      const started = Number((await store.getMeta('ts:activity_backfill_started')) ?? 0) || now;
+      if (passes === 1) await store.setMeta('activity_backfill_started', String(started));
+      const cacheDir = path.join(scope, 'cache', 'analytics-backfill-v1');
+      const deep = { minDate: contractEarliest, cacheDir };
+      const deadline = Date.now() + MAX_COLLECTION_TIME_MS;
+      // Local logs: the same plan and collectors as a live pass, one request at a time.
+      const requests: AccountAnalyticsActivityRequest[] = [];
+      if (this.deps.requests) requests.push(...injectedRequestPlan(this.deps.requests).ready);
+      else {
+        const runPlan = this.deps.planThread ?? runPlanThread;
+        const ready = await runPlan(
+          { part: 'ready', activity: deep },
+          PLAN_READY_DEADLINE_MS,
+          `backfill-ready:${scope}`
+        );
+        if (ready?.ok === true && ready.ready) {
+          requests.push(...ready.ready.requests);
+          const later = await runPlan(
+            { part: 'later', activity: deep, scanned: ready.ready.scanned },
+            PLAN_LATER_DEADLINE_MS,
+            `backfill-later:${scope}`
+          );
+          if (later?.ok === true && later.later) requests.push(...later.later);
+        }
+      }
+      const byTool = new Map<
+        AccountAnalyticsActivityProvider,
+        { data: UsageWorkerResult[]; complete: boolean; read: number; total: number }
+      >();
+      for (const request of requests) {
+        const entry = byTool.get(request.provider) ?? {
+          data: [],
+          complete: true,
+          read: 0,
+          total: 0,
+        };
+        byTool.set(request.provider, entry);
+        if (Date.now() >= deadline) {
+          entry.complete = false;
+          continue;
+        }
+        try {
+          const budget = Math.max(15_000, Math.min(MAX_WORKER_TIME_MS, deadline - Date.now()));
+          const data = await (this.deps.loadWorker
+            ? this.deps.loadWorker(request.request, budget)
+            : loadAccountAnalyticsWorker(
+                request.request,
+                budget,
+                `backfill:${localRequestKey(request)}`
+              ));
+          entry.data.push(data);
+          entry.complete &&= data.scan?.complete !== false;
+          entry.read += data.scan?.completedFiles ?? 0;
+          entry.total += data.scan?.totalFiles ?? 0;
+        } catch {
+          entry.complete = false;
+        }
+      }
+      const last = passes >= MAX_BACKFILL_PASSES;
+      const reports: UsageReport[] = [];
+      const marks: Array<{
+        computer: string;
+        tool: string;
+        done: boolean;
+        read?: number;
+        total?: number;
+      }> = [];
+      for (const [tool, entry] of byTool) {
+        reports.push(
+          rowsReport({
+            computer: 'ubuntu',
+            tool,
+            data: entry.data,
+            kind: 'backfill',
+            readAt: now,
+            complete: entry.complete,
+          })
+        );
+        marks.push({
+          computer: 'ubuntu',
+          tool,
+          done: entry.complete || last,
+          read: entry.read,
+          total: entry.total,
+        });
+      }
+      // Remote computers: the same helper, reading back to the oldest log, with the backfill cache.
+      if (Date.now() < deadline) {
+        const remote = await (
+          this.deps.remote
+            ? this.deps.remote(contractEarliest)
+            : loadAnalyticsRemoteSources(contractEarliest, { cacheDir })
+        ).catch(() => null);
+        for (const state of remote?.states ?? []) {
+          const data = (remote?.results ?? [])
+            .filter((r) => r.tool === state.tool && r.data.host === state.host)
+            .map((r) => r.data);
+          const complete = ['ok', 'no_usage', 'not_installed'].includes(state.state);
+          if (state.state !== 'not_installed')
+            reports.push(
+              rowsReport({
+                computer: state.host,
+                tool: state.tool,
+                data,
+                kind: 'backfill',
+                readAt: now,
+                complete,
+              })
+            );
+          marks.push({ computer: state.host, tool: state.tool, done: complete || last });
+        }
+        if (!remote) marks.push({ computer: 'remote', tool: 'all', done: last });
+      } else marks.push({ computer: 'remote', tool: 'all', done: last });
+      await write(reports);
+      for (const mark of marks) {
+        if (mark.computer === 'remote') continue;
+        await store
+          .activityBackfill({
+            computer: mark.computer,
+            tool: mark.tool,
+            state: mark.done ? 'done' : 'running',
+            at: now,
+            started,
+            ...(mark.read !== undefined ? { files_read: mark.read } : {}),
+            ...(mark.total !== undefined ? { files_total: mark.total } : {}),
+            ...(mark.done && last ? { cause: 'pass_limit' } : {}),
+          })
+          .catch(() => undefined);
+      }
+      if (marks.every((mark) => mark.done)) {
+        await store.setMeta('activity_backfill', 'done');
+        this.backfillFinished = true;
+        // The deep-read checkpoints are only needed to resume the backfill.
+        fs.rmSync(cacheDir, { recursive: true, force: true });
+        return 'done';
+      }
+      return 'continue';
+    } finally {
+      this.backfillBusy = false;
+    }
+  }
+
+  /** Waits until every handed-over pass is in the store (tests and shutdown). */
+  async historyIdle(): Promise<void> {
+    await this.ingestorInstance?.idle();
   }
 
   private buildSourceStates(
@@ -1541,6 +1840,11 @@ export class AccountAnalyticsActivityService {
   ): Promise<AccountAnalyticsActivityResult> {
     const tz = options.tz ?? 'UTC';
     const scope = (this.deps.scope ?? getCcsDir)();
+    const state = this.stateFor(scope);
+    return this.answer(state, scope, query, from, to, tz);
+  }
+
+  private stateFor(scope: string): ActivityState {
     let state = this.states.get(scope);
     if (!state) {
       state = {
@@ -1587,6 +1891,70 @@ export class AccountAnalyticsActivityService {
         this.states.delete(oldest);
       }
     }
+    return state;
+  }
+
+  /** Starts a collection when one is due: the refresh interval, or the shorter converge cadence. */
+  private startIfDue(state: ActivityState): void {
+    if (state.pending) return;
+    const now = (this.deps.now ?? Date.now)();
+    const converging =
+      state.scanningSince !== null && now - state.scanningSince < CONVERGE_WINDOW_MS;
+    const interval = converging
+      ? Math.min(this.refreshIntervalMs(), CONVERGE_INTERVAL_MS)
+      : this.refreshIntervalMs();
+    if (state.needsLocalRefresh || now - state.fetchedAt >= interval) {
+      state.generation++;
+      this.startCollection(state);
+    }
+  }
+
+  private backgroundTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Collects on the refresh interval whether or not a page is open (design 4.3), so history keeps
+   * growing and every remote host's cache is saved. The first check runs `firstMs` after start.
+   */
+  startBackground(firstMs = 20_000, everyMs = 15_000): void {
+    if (this.backgroundTimer || this.closed) return;
+    const tick = (): void => {
+      this.backgroundTimer = undefined;
+      if (this.closed) return;
+      try {
+        const state = this.stateFor((this.deps.scope ?? getCcsDir)());
+        this.startIfDue(state);
+        // The backfill runs only between live passes, at most every two minutes.
+        const now = Date.now();
+        if (
+          !state.pending &&
+          !this.backfillFinished &&
+          now - this.backfillAt >= BACKFILL_EVERY_MS
+        ) {
+          this.backfillAt = now;
+          void this.backfillPass().catch(() => undefined);
+        }
+      } catch {
+        /* A failed start is retried at the next tick. */
+      }
+      this.backgroundTimer = setTimeout(tick, everyMs);
+      this.backgroundTimer.unref?.();
+    };
+    this.backgroundTimer = setTimeout(tick, firstMs);
+    this.backgroundTimer.unref?.();
+  }
+
+  stopBackground(): void {
+    if (this.backgroundTimer) clearTimeout(this.backgroundTimer);
+    this.backgroundTimer = undefined;
+  }
+
+  private async answer(
+    state: ActivityState,
+    scope: string,
+    query: AccountAnalyticsQuery,
+    from: number,
+    to: number,
+    tz: string
+  ): Promise<AccountAnalyticsActivityResult> {
     // The filter names the provider that served the usage (post-attribution),
     // so every usage provider selects, not just the tools' own providers.
     const activityFilters: readonly string[] = ['all', ...USAGE_PROVIDER_ORDER];
@@ -1617,16 +1985,34 @@ export class AccountAnalyticsActivityService {
       state.generation++;
       state.manualRefreshPending = true;
       if (!state.pending) this.startCollection(state);
-    } else if (!state.pending) {
-      const now = (this.deps.now ?? Date.now)();
-      const converging =
-        state.scanningSince !== null && now - state.scanningSince < CONVERGE_WINDOW_MS;
-      const interval = converging
-        ? Math.min(this.refreshIntervalMs(), CONVERGE_INTERVAL_MS)
-        : this.refreshIntervalMs();
-      if (state.needsLocalRefresh || now - state.fetchedAt >= interval) {
-        state.generation++;
-        this.startCollection(state);
+    } else this.startIfDue(state);
+    // With the history store the answer is read from it at once: a page never waits for a scan.
+    const store = this.deps.historyStore ? await this.deps.historyStore().catch(() => null) : null;
+    if (store) {
+      try {
+        const sourcesNow =
+          state.sourceStates.length === 0 && state.pending
+            ? coldScanningSourceStates()
+            : state.sourceStates;
+        const answered = await storeActivityAnswer(store, query, from, to, {
+          tz,
+          pricing: state.pricing,
+          sources: sourcesNow,
+          refreshing: state.pending !== null,
+          refreshingRemote: [...state.remotePending],
+        });
+        // Before the first pass of this run the grid comes from the store's last reads.
+        if (sourcesNow.length === 0)
+          answered.activity.sources = gridFromStore(answered.activity.history);
+        return {
+          ...answered.activity,
+          coverage: {
+            oldestHourAt: answered.oldestHourAt,
+            providersWithActivity: answered.providersWithActivity,
+          },
+        };
+      } catch {
+        /* The store could not answer: the in-memory snapshot below does. */
       }
     }
     const budget = this.deps.responseBudgetMs ?? 1500;
@@ -1780,6 +2166,8 @@ export class AccountAnalyticsActivityService {
   }
 }
 
+const activityLogger = createLogger('analytics');
+
 let service: AccountAnalyticsActivityService | undefined;
 export function getAccountAnalyticsActivity(
   query: AccountAnalyticsQuery,
@@ -1787,9 +2175,24 @@ export function getAccountAnalyticsActivity(
   to: number,
   options: { tz?: string } = {}
 ): Promise<AccountAnalyticsActivityResult> {
+  return activityService().get(query, from, to, options);
+}
+
+function activityService(): AccountAnalyticsActivityService {
   service ??= new AccountAnalyticsActivityService({
     persistSnapshot: true,
     refreshPricing: startModelsDevRegistryRefresh,
+    // The store lives under the default CCS folder only.
+    historyStore: async () => (await openAacStore()).store,
   });
-  return service.get(query, from, to, options);
+  return service;
+}
+
+/** Starts background collection into the history store (with the analytics sampler). */
+export function startAccountAnalyticsActivityBackground(): void {
+  activityService().startBackground();
+}
+
+export function stopAccountAnalyticsActivityBackground(): void {
+  service?.stopBackground();
 }

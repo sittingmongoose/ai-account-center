@@ -37,6 +37,12 @@ export interface ModelBreakdown {
    * Code and Codex rows keep their exact shape.
    */
   requestCount?: number;
+  /**
+   * Quality bits from the history store (store/usage-report.ts `Q_*`): set on usage whose counts
+   * have a known flaw, such as the retired Codex cache's output that counts reasoning twice. Such
+   * usage stays in the totals and is left out of per-model comparisons. Absent when clean.
+   */
+  quality?: number;
 }
 
 // ============================================================================

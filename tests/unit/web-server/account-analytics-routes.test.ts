@@ -178,7 +178,8 @@ describe('account analytics route: contract additions', () => {
     ['?range=24h&to=2026-09-20', 'invalid_range'],
     ['?range=custom&from=2026-09-20', 'invalid_range'],
     ['?range=custom&from=2026-09-26&to=2026-09-20', 'invalid_range'],
-    ['?range=custom&from=2026-08-01&to=2026-09-20', 'invalid_range'],
+    // a long custom range is no longer a shape error: the service checks it against the stored history
+    ['?range=custom&from=1969-12-31&to=2026-09-20', 'invalid_range'],
     ['?range=custom&from=2026-02-30&to=2026-03-01', 'invalid_range'],
     ['?range=year', 'invalid_range'],
     ['?provider=cliproxy', 'invalid_provider'],

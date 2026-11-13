@@ -1,6 +1,8 @@
 //! JSON method dispatch shared by the Node binding and the tests: one method name and a JSON
 //! argument in, one JSON answer out. No method takes or returns a secret.
 
+use crate::activity;
+use crate::contract::Report;
 use crate::engine::{self, Config, Engine};
 use crate::error::Result;
 use crate::fail;
@@ -21,6 +23,7 @@ struct OpenArgs {
     dir: String,
     cache_bytes: Option<usize>,
     retention_days: Option<u64>,
+    activity_retention_days: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +64,16 @@ fn parse<T: serde::de::DeserializeOwned>(args: &str) -> Result<T> {
 }
 
 pub fn open_engine(dir: &str, cache_bytes: Option<usize>, retention_days: Option<u64>) -> Result<Engine> {
+    open_engine_with(dir, cache_bytes, retention_days, None)
+}
+
+/// As `open_engine`, with an explicit (opt-in) retention for Analytics usage history.
+pub fn open_engine_with(
+    dir: &str,
+    cache_bytes: Option<usize>,
+    retention_days: Option<u64>,
+    activity_retention_days: Option<u64>,
+) -> Result<Engine> {
     let mut config = Config::default();
     if let Some(bytes) = cache_bytes {
         config.cache_bytes = bytes.clamp(8 << 20, 256 << 20);
@@ -68,10 +81,16 @@ pub fn open_engine(dir: &str, cache_bytes: Option<usize>, retention_days: Option
     if let Some(days) = retention_days {
         config.retention_days = if days == 0 { 0 } else { days.clamp(7, 3650) };
     }
+    config.activity_retention_days = activity_retention_days.map(|d| d.clamp(90, 36_500));
+    // Each projector owns its tables: quota readings, report captures, Analytics usage history.
     Engine::open(
         &PathBuf::from(dir),
         config,
-        vec![Box::new(usage::UsageProjector), Box::new(capture::CaptureProjector)],
+        vec![
+            Box::new(usage::UsageProjector),
+            Box::new(capture::CaptureProjector),
+            Box::new(activity::ActivityProjector),
+        ],
     )
 }
 
@@ -83,7 +102,7 @@ pub fn dispatch(slot: &Slot, method: &str, args: &str) -> Result<String> {
             if guard.is_some() {
                 fail!("already_open", "the store is already open");
             }
-            let engine = open_engine(&a.dir, a.cache_bytes, a.retention_days)?;
+            let engine = open_engine_with(&a.dir, a.cache_bytes, a.retention_days, a.activity_retention_days)?;
             let status = engine.status()?;
             *guard = Some(Arc::new(engine));
             status
@@ -167,6 +186,59 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
             result
         }
         "historyRecords" => usage::history_records(engine, &parse(args)?)?,
+        "activityIngest" => {
+            #[derive(Deserialize)]
+            struct IngestArgs {
+                reports: Vec<Json>,
+            }
+            let a: IngestArgs = parse(args)?;
+            // A report that does not even parse is refused alone, like one that fails its checks.
+            let mut reports = Vec::with_capacity(a.reports.len());
+            let mut unparsed = Vec::new();
+            for (index, value) in a.reports.into_iter().enumerate() {
+                match serde_json::from_value::<Report>(value) {
+                    Ok(r) => reports.push((index, r)),
+                    Err(e) => unparsed.push(json!({ "index": index, "code": "invalid", "message": e.to_string() })),
+                }
+            }
+            let list: Vec<Report> = reports.iter().map(|(_, r)| r.clone()).collect();
+            let mut result = serde_json::to_value(activity::ingest(engine, &list)?)?;
+            // Indexes in refusals name the caller's list.
+            if let Some(refused) = result["refused"].as_array_mut() {
+                for r in refused.iter_mut() {
+                    if let Some(i) = r["index"].as_u64() {
+                        r["index"] = json!(reports[i as usize].0);
+                    }
+                }
+                refused.extend(unparsed);
+            }
+            result
+        }
+        "activityRange" => activity::range(engine, &parse(args)?)?,
+        "activityImportCodexV1" => {
+            #[derive(Deserialize)]
+            struct ImportArgs {
+                path: String,
+                computer: String,
+            }
+            let a: ImportArgs = parse(args)?;
+            crate::legacy::import_codex_v1(engine, std::path::Path::new(&a.path), &a.computer)?
+        }
+        "activitySources" => activity::sources(engine, &parse(args)?)?,
+        "activityOldest" => activity::oldest(engine)?,
+        "activityCounts" => activity::counts(engine)?,
+        "activityBackfill" => {
+            #[derive(Deserialize)]
+            struct BackfillArgs {
+                computer: String,
+                tool: String,
+                #[serde(flatten)]
+                row: activity::BackfillRow,
+            }
+            let a: BackfillArgs = parse(args)?;
+            activity::backfill_mark(engine, &a.computer, &a.tool, a.row)?;
+            json!({ "ok": true })
+        }
         "oldest" => usage::oldest(engine)?,
         "burnLong" => {
             let a: BurnArgs = parse(args)?;
@@ -190,8 +262,10 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
             let now = a.now_ms.unwrap_or_else(engine::now_ms);
             let sealed = engine.seal_and_compress(now)?;
             let closed = usage::close_days(engine, now)?;
+            let activity_closed = activity::close_days(engine, now)?;
             let pruned = usage::prune(engine, now)?;
             let migrated = usage::migrate_account_states(engine, false)?;
+            let activity_pruned = activity::prune(engine, now, engine.config.activity_retention_days)?;
             let backed: Option<u64> = engine.get_meta("backup_readings_seq")?.and_then(|v| v.parse().ok());
             let retired = usage::retire_segments(engine, now, Some(backed.unwrap_or(0)))?;
             let verified = if a.verify.unwrap_or(false) {
@@ -204,7 +278,8 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
             } else {
                 Json::Null
             };
-            json!({ "sealed": sealed, "closed": closed, "pruned": pruned, "migrated": migrated, "retired": retired, "verified": verified, "compacted": compacted })
+            json!({ "sealed": sealed, "closed": closed, "pruned": pruned, "migrated": migrated, "retired": retired, "verified": verified, "compacted": compacted,
+                    "activity": { "closed": activity_closed, "pruned": activity_pruned } })
         }
         "backup" => {
             let a: BackupArgs = parse(args)?;

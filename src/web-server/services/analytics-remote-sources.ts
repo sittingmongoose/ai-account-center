@@ -32,6 +32,8 @@ import {
 import { readDashboardPreferences } from './dashboard-preferences';
 import { runBounded } from '../usage/collector-concurrency';
 import { localClaudeLogNames, type ClaudeLogNames } from './analytics-claude-log-names';
+import { cellsFromCompact } from '../usage/activity-cells';
+import type { AccountAnalyticsActivityProvider } from './account-analytics-types';
 
 export type AnalyticsSourceTool = AnalyticsTool;
 export type AnalyticsSourceState =
@@ -343,9 +345,26 @@ function toSessionAggregates(srows: AnalyticsRemoteSessionRow[]): SessionAggrega
 function toWorkerResult(
   rows: AnalyticsRemoteRow[],
   srows: AnalyticsRemoteSessionRow[],
-  kind: AnalyticsRemoteKind
+  kind: AnalyticsRemoteKind,
+  // the computer read: a remote host, or this one when the usage scanner read it
+  host: AnalyticsRemoteHost | 'ubuntu'
 ): UsageWorkerResult {
   const { hourly } = aggregateRows(toCompact(rows), `${kind}-remote`, kind);
+  // Session-hour cells for the history store: a row's file names its session through the
+  // session rows (the helper keyed it on the host it read).
+  const sessionOf = new Map<string, string>();
+  for (const row of srows) if (row.f && row.s) sessionOf.set(row.f, row.s);
+  // a host whose clock runs ahead: its records dated after this clock are counted, not written
+  const future = { count: 0 };
+  const cells = cellsFromCompact(
+    toCompact(rows).map((entry, index) => ({
+      ...entry,
+      entry: { ...entry.entry, sessionId: sessionOf.get(rows[index].f) ?? '' },
+    })),
+    kind as AccountAnalyticsActivityProvider,
+    true,
+    { future }
+  );
   // Sessions aggregate from the session rows alone: the hourly rows already
   // carry the same tokens, so the two must never be aggregated together.
   const { session } = aggregateSessionAggregates(toSessionAggregates(srows), `${kind}-remote`);
@@ -353,6 +372,9 @@ function toWorkerResult(
     daily: [],
     monthly: [],
     hourly,
+    cells,
+    ...(future.count > 0 ? { futureDated: future.count } : {}),
+    host,
     session,
     eventCount: rows.reduce((sum, row) => sum + Math.floor(row.n), 0),
     scan: {
@@ -428,7 +450,7 @@ function cachedHostSources(
     const failed = standingFailure(cached, tool, failure);
     const why = failed ? `${scanFailureText(failed.cause)} (${failed.at})` : detail;
     if (kept.length || keptSessions.length) {
-      results.push({ tool, data: toWorkerResult(kept, keptSessions, tool) });
+      results.push({ tool, data: toWorkerResult(kept, keptSessions, tool, host) });
       states.push({
         tool,
         host,
@@ -530,7 +552,7 @@ function selectClaudeMirrors(
     const rows = part.rows.filter((row) => row.k === 'claude' && keep(row));
     const srows = part.srows.filter((row) => row.k === 'claude' && keep(row));
     if (rows.length || srows.length)
-      results.push({ tool: 'claude', data: toWorkerResult(rows, srows, 'claude') });
+      results.push({ tool: 'claude', data: toWorkerResult(rows, srows, 'claude', host) });
     const state = states.find((state) => state.host === host && state.tool === 'claude');
     if (!state) continue;
     state.rowCount = rows.reduce((sum, row) => sum + Math.floor(row.n), 0);
@@ -1002,7 +1024,7 @@ export async function loadAnalyticsRemoteSources(
           const kindState = kind?.state ?? 'error';
           if (tool === 'claude' && olderClaude) {
             if (rows.length || srows.length)
-              results.push({ tool, data: toWorkerResult(rows, srows, tool) });
+              results.push({ tool, data: toWorkerResult(rows, srows, tool, host) });
             states.push({
               tool,
               host,
@@ -1028,7 +1050,7 @@ export async function loadAnalyticsRemoteSources(
             continue;
           }
           if (rows.length || srows.length)
-            results.push({ tool, data: toWorkerResult(rows, srows, tool) });
+            results.push({ tool, data: toWorkerResult(rows, srows, tool, host) });
           const events = rows.reduce((sum, row) => sum + Math.floor(row.n), 0);
           const kept = rows.length > 0;
           if (kindState === 'pending') {

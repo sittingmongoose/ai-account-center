@@ -1631,7 +1631,8 @@ body { min-height: 100dvh; }
 .date-btn .tnum { font-family: var(--font); }
 .cal { display: grid; gap: 8px; }
 .cal-note { font-size: 12px; }
-.cal-quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.cal-quick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.cal-quick .btn { padding: 0 6px; white-space: nowrap; justify-content: center; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
 .cal-wd { text-align: center; padding: 4px 0; }
 .cal-day { height: 38px; border: 0; background: none; border-radius: 8px; font-size: 13px; color: var(--ink); display: grid; place-content: center; line-height: 1.05; }
@@ -1643,6 +1644,9 @@ body { min-height: 100dvh; }
 .cal-day.in.first { border-radius: 8px 0 0 8px; } .cal-day.in.last { border-radius: 0 8px 8px 0; } .cal-day.in.first.last { border-radius: 8px; }
 .cal-day.end { background: var(--accent); color: var(--accent-ink); font-weight: 640; font-variation-settings: 'wght' 640; }
 .cal-day.end small { color: inherit; opacity: .8; }
+.cal-nav { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.cal-month { font-size: 13px; font-weight: 620; font-variation-settings: 'wght' 620; }
+.cal-pad { height: 38px; }
 .cal-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; border-top: 1px solid var(--rule-2); font-size: 12px; }
 .cal-foot > span { flex: 1 1 160px; }
 .cal-acts { display: flex; gap: 6px; margin-left: auto; }
@@ -1771,6 +1775,8 @@ body { min-height: 100dvh; }
 .ax-base { stroke: var(--rule-strong); stroke-width: 1px; }
 .ax-hatch { stroke: var(--grid-strong); stroke-width: 1.2px; fill: none; }
 .ax-tail { stroke: var(--ink-3); stroke-width: 1px; stroke-dasharray: 3 3; }
+/* a span no computer was read for: a gap, never a zero */
+.ax-gap { fill: var(--paper-3); opacity: .7; stroke: var(--grid-strong); stroke-width: 1px; stroke-dasharray: 3 3; }
 .ax-layer { animation: ax-fade 380ms cubic-bezier(.65, 0, .35, 1); }
 @keyframes ax-fade { from { opacity: 0; } to { opacity: 1; } }
 .trend-hit, .donut-hit { position: absolute; inset: 0; touch-action: pan-y; }
@@ -1955,6 +1961,9 @@ body { min-height: 100dvh; }
   animation: bar-up 700ms cubic-bezier(.2, .8, .2, 1) 200ms both; transition: height 520ms cubic-bezier(.2, .8, .2, 1); }
 .db-stack i { min-height: 0; }
 .db.dim .db-stack { opacity: .55; }
+/* a bar no computer was read for: an outlined placeholder, never a $0 bar */
+.db.gap::before { content: ''; position: absolute; left: 50%; bottom: 18px; width: min(100%, 34px); height: 30%; transform: translateX(-50%);
+  border: 1px dashed var(--grid-strong); border-bottom: 0; border-radius: 2px 2px 0 0; }
 .db.hot .db-stack { filter: brightness(1.05); }
 .db-l { position: absolute; top: calc(100% + 9px); white-space: nowrap; }
 @keyframes bar-up { from { transform: scaleY(0); } to { transform: none; } }

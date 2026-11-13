@@ -245,6 +245,11 @@ export interface AccountAnalyticsActivity {
       date: string;
       provider: AccountAnalyticsUsageProvider;
       model: string;
+      /**
+       * Present on usage whose counts have a known flaw, kept apart from the model's clean usage
+       * that day (`outputIncludesReasoningTwice`: the retired Codex cache's output).
+       */
+      quality?: string[];
     }
   >;
   /** Sessions active in range, without paths, ids or project names. Null unless status is ok or cached. */
@@ -257,6 +262,51 @@ export interface AccountAnalyticsActivity {
   anomalies: AccountAnalyticsAnomalies | null;
   /** One row per tool and host, in tool/host order; fixed entries explain missing tools. */
   sources: AccountAnalyticsSource[];
+  /**
+   * With the history store: `hour` rows up to 92 days, else `day` rows (each `byHour` row is then
+   * one local day, stamped at its first whole hour). Absent without the store (hourly).
+   */
+  resolution?: 'hour' | 'day';
+  /** With the history store: what it holds per computer, its gaps, last reads and the backfill. */
+  history?: AccountAnalyticsHistoryCoverage;
+}
+
+/** The history store's coverage (docs/store.md section 12). Times are ISO UTC. */
+export interface AccountAnalyticsHistoryCoverage {
+  /** Per computer: oldest and newest stored hour, last read, and the spans no complete read covered. */
+  computers: Array<{
+    host: string;
+    oldestAt: string | null;
+    newestAt: string | null;
+    lastReadAt: string | null;
+    gaps: Array<[string, string]>;
+  }>;
+  sources: Array<{
+    host: string;
+    tool: string;
+    state: string | null;
+    cause: string | null;
+    lastReadAt: string | null;
+    badSince: string | null;
+    oldestAt: string | null;
+    /** Records the current read left out as dated more than five minutes after it. */
+    futureDated: number | null;
+  }>;
+  backfill: {
+    running: boolean;
+    sources: Array<{
+      host: string;
+      tool: string;
+      state: string;
+      filesRead: number | null;
+      filesTotal: number | null;
+    }>;
+  };
+  /**
+   * Usage in the range whose counts have a known flaw (store/usage-report.ts flags), per tool: the
+   * first and last flagged hour. `outputIncludesReasoningTwice`: the retired Codex cache's output.
+   */
+  quality: Array<{ tool: string; flags: string[]; from: string; to: string }>;
 }
 
 /** Internal facts the activity reader passes to the analytics service; never serialised. */
@@ -292,8 +342,15 @@ export interface AccountAnalytics {
     tz: string;
     /** The zone used for day buckets; equals `tz`. */
     dayBucketTz: string;
-    /** Oldest retained quota sample or activity hour, at most 31 days back; bounds the custom picker. */
+    /**
+     * Oldest stored quota sample or activity hour; bounds "All" and the custom picker. At most 31
+     * days back without the history store.
+     */
     availableFrom: string;
+    /** `day` when activity comes in local days (ranges over 92 days with the history store). */
+    resolution?: 'hour' | 'day';
+    /** A custom range's whole local days as asked for; the page keys its answer by them. */
+    days?: { from: string; to: string };
   };
   filters: Pick<AccountAnalyticsQuery, 'platform' | 'provider' | 'account'>;
   history: {

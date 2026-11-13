@@ -120,7 +120,8 @@ test('ranges: 24H is hourly, 7D four-hourly, 30D daily, Month from the 1st, cust
   assert.equal(usageView(payload(), state(), { now }).cbm.note, '');
   assert.equal(apiRangeFor(state({ range: 'month' }), now), '24h');
   assert.equal(apiRangeFor(state({ range: 'month' }), Date.parse('2026-10-20T12:00:00Z')), '30d');
-  assert.equal(apiRangeFor(state({ range: 'all' }), now), '30d');
+  // All is everything the server keeps: its own answer (the history store reaches back years)
+  assert.equal(apiRangeFor(state({ range: 'all' }), now), 'all');
   assert.equal(apiRangeFor(state({ range: 'custom', from: now - 3 * 86400e3 }), now), '7d');
 });
 

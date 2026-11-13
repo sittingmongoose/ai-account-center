@@ -1,7 +1,8 @@
 # AAC store: design
 
 Status: **phases 0 and 1 built** (usage readings; section 11 records what changed from the design and
-what was measured); phases 2 to 5 are design. This document is the contract for the store. Code that
+what was measured), and **Analytics usage history built** (section 12); the rest of phases 2 to 5 is
+design. This document is the contract for the store. Code that
 disagrees with it is a bug in one of the two; fix whichever is wrong and update this document in the same
 change.
 
@@ -870,6 +871,144 @@ dashboard keeps its JSON history.
 
 Not yet run on Linux: the Rust suites, the kill test, folder fsync, and the first backfill of the VM's
 real history and archive.
+
+## 12. Analytics usage history (built)
+
+Analytics' token and cost activity is kept in the store as well, beside the quota readings, by a second
+projector, `activity` (`src/activity.rs`), with its own checkpoints and its own dictionary tables. This
+replaces the phase 2 "activity hours" row of 1.1 and the `activity.hour` sketch of 2.2: the readers'
+finest grain is kept (session-hour cells), not hourly totals per tool. Design, measurements and the
+owner's direction: `share/ai-account-center/2026-11-13-analytics-history/DESIGN.md`.
+
+### 12.1 The usage record contract
+
+`src/contract.rs` (`aac.usage-report.v1`) is the one shape readers hand the store, also for a failed
+read (a state and no cells, never zero rows). A **cell** is the absolute totals of one UTC hour for one
+computer, tool, session, route, model, effort and account; that tuple is its dedupe key. A **session**
+row is keyed by tool and session key; a mirrored log is one session. `loggedCostUsd` (what the tool
+logged) is kept apart from `costUsd` and `fallbackCostUsd` (computed by the server). Per-message
+records (`messages[]`) are reserved and refused with `not_supported` until their table is built.
+On the dashboard's computer the usage scanner (`aac-usage-scan`) owns some tools, and their reports
+are built from its rows alone, never the collector's as well: Cursor and Devin always (the collector has
+no reader for them, so an empty scanner answer is their measured state), and Codex and the others once
+the scanner takes them over (its answer's `local.owned`, or rows it sent); before that the collector
+reads them (`buildActivityReports`).
+Roots are diagnostics: a root names its `origin` (`default`, `env`, `tool_config`, `t3_instance`,
+`ccs_instance`, `extra`, or the usage scanner's `signature` and `experiment`) and its state, which for a
+root alone may be `link_unreadable` or `link_unreachable`. `newestMtime` is an ISO UTC time or epoch
+milliseconds; a session's folder is at most 1,024 characters, home written as `~`.
+Every label a report carries (model, route, account, target, folder) is checked with the shared AAC
+secret policy (`aac_store::secret_policy`, [secret-policy.md](secret-policy.md)): a report holding a
+credential or an email address is refused whole, before anything reaches the log.
+Today's TypeScript collectors are adapted on the TypeScript side (`src/store/activity-reports.ts`,
+`src/web-server/usage/activity-cells.ts`).
+
+**Nothing after now.** The store clamps a report's `readAt` to its own clock, and a cell or session
+dated more than five minutes after that clock (`FUTURE_SLACK_MS`) is not written; a session that
+started before then ends there. Such records are counted, with the reader's own count
+(`counts.futureDated`), in the read's scan state (`futureDated` per source), and the page says how
+many. The TypeScript side drops and counts them before sending (`cellsFromCompact`,
+`buildActivityReports`, `rowsReport`). Without this, one record dated ahead (a clock running fast, a
+remote host's clock, a bad log line) moved the source's settle line past now and froze every live
+write for that source.
+
+**Quality flags.** A cell or session may carry `quality` words from `QUALITY_FLAGS`, kept with it for
+good (cell value format 2; format 1 values read as clean). `outputIncludesReasoningTwice`: the output
+count holds the reasoning tokens twice and cannot be split (12.8); input and cached input are exact.
+`activityRange` returns the bits as a last row column (rows never mix flagged and clean cells) and
+`quality` spans per tool. The page keeps such usage in its totals, leaves it out of Cost by model, the
+model share, the model detail and the cost anomalies, and says so in one line for the range.
+
+### 12.2 Tables and events
+
+Tables `act_dict`, `act_dict_rev`, `act_hour` (one packed value per UTC day, computer and tool),
+`act_session`, `act_session_by_last` (a covering index: first and last time and an interned
+signature, so a range's sessions are counted without reading a row), `act_cover`, `act_source`,
+`act_day_closed`, `act_scan`, `act_backfill`, and the volatile `act_live` (minute-precision last read,
+written without a log event). Events `activity.cells` (readings, or ledger for a closed day),
+`activity.read` (ledger, scan history), `activity.day_closed` (ledger, the whole truth of a UTC day,
+74 hours after it ends) and `activity.backfill` (ledger). `registry.json` has every key and value.
+
+### 12.3 Ingest rules
+
+Per computer, tool and UTC hour, decided inside the write transaction:
+
+| Hour | Report | Action |
+|---|---|---|
+| newer than the source's settle line (72 h before its last complete read), inside a complete report's `[coverFrom, readAt]` | live | **replace**: the hour's cells become exactly the report's (cells it no longer has are removed) |
+| unsettled, otherwise | live partial, or any backfill or import | **raise**: the report's hour wins only with more tokens (or as many tied to more sessions); nothing is removed |
+| behind the settle line | live | **leave**: a tool that deletes old logs never erases history |
+| behind the settle line | backfill or import | raise |
+
+Only changed cells are written. The same report twice writes nothing. The TypeScript ingest queue
+leaves out days and sessions it already sent unchanged (`sameDays`). A complete read adds
+`[coverFrom, readAt]` to `act_cover`; hours no complete read covered are gaps, shown as such.
+
+### 12.4 Replay
+
+Before a day closes only readings events touch it; its close replaces the whole day; later changes
+to it are ledger events after the close. Replay (readings, then ledger) therefore rebuilds the same
+tables; session merges are commutative. `retire_segments` also waits for the activity projector's
+readings checkpoint and for the oldest open activity day.
+
+### 12.5 Retention
+
+Kept for good by default (DATA-ARCHITECTURE section 4, and the store's raw policy above: with
+`retentionDays: 0` readings segments never retire, so the raw `activity.cells` changes stay too).
+`AAC_ANALYTICS_RETENTION_DAYS` (90 to 36,500) is an explicit, opt-in retention: maintenance then deletes
+day values, sessions (with their index rows), cover spans and scan rows before the cutoff. The ledger
+keeps the closed days either way. The `activity` projector owns only `act_*` tables and its own
+dictionaries; it shares nothing with `usage` or `capture`.
+
+### 12.6 Queries
+
+`activityRange` (cells summed per bucket, tool, route and model: hourly up to 92 days, else in the
+caller's local days; session counts by signature and the newest sessions), `activitySources` (per
+computer and tool: stored span, last read, state, backfill, covered spans; per computer the gaps in
+the range), `activityOldest`, `activityCounts`, `activityIngest`, `activityBackfill`. The page's
+numbers come from the existing projection fed with these rows, so they equal the in-memory answer
+on the same data (`tests/unit/store/store-activity.test.ts`).
+
+### 12.7 Measured (two years of real data shape)
+
+The real 31 days in the copied caches (7,396 session-hour cells, 8,873 sessions across 30 computer
+and tool results) repeated back to 756 days: 87,600 cells, 106,416 sessions. Store: redb 33.7 MB,
+ledger 2.5 MB compressed. Activity part of an Analytics answer (store query plus projection), median
+of 5 on the VM: 24H 11 ms, 7D 25 ms, 30D 49 ms, 90D 107 ms, two years 184 ms (store query 49 ms).
+A minute pass with ten changed cells: 2.4 ms. Reopen: 0.5 s.
+
+### 12.8 The retired Codex cache
+
+`cache/codex-native-usage-v1.json` (version 1, last written 2026-10-01, no longer read by the code)
+holds every Codex usage record the old collector read: on the dashboard VM 491,361 records from
+2026-01-29 to 2026-10-01, and 5,150 of its 5,153 rollout files are gone, so it is the only copy. The
+backfill's first step imports it once (`activityImportCodexV1`, `src/legacy.rs`): read as a stream one
+rollout file at a time, folded into session-hour cells and sessions, raw ids hashed, paths dropped.
+The version 1 parser counted two categories twice (fixed and the cache bumped to version 2 at
+`6298e60ad`, 2026-10-01):
+
+- **Input** included the cached input (in every one of the 490,042 records with cache reads, input is
+  at least the cache reads), so uncached input is `inputTokens - cacheReadTokens - cacheCreationTokens`.
+  Exact.
+- **Output** is `output_tokens + reasoning_output_tokens`, although Codex's `output_tokens` already
+  holds the reasoning: every reasoning token is counted twice. The cache keeps only the sum, so the
+  split cannot be recovered (the three surviving rollout files hold no token events). Output is
+  imported as it is, an upper bound, with no reasoning split, and every imported cell and session
+  carries the quality flag `outputIncludesReasoningTwice` for good (12.1). The page notes "Codex output
+  before Oct 2 counts reasoning twice (old cache)" for any range holding such hours and leaves them out
+  of per-model cost and efficiency comparisons.
+
+Every record has `target: codex` and no route, and the cache excluded proxy sessions, so all of it is
+Codex-subscription usage (route empty, provider Codex). It carries no cost: the cells hold none and the
+page prices them at today's rates, so their output cost is an upper bound too. The import is recorded
+in the scan history as an `import` read with cause `retired_cache` and the cache's file count, and the
+store marks the file's SHA-256 (`ts:activity_import_codex_v1:<first 32 hex>` holds the record count) so
+the same file is never imported twice. The import is marked done only after the store committed it;
+a failed or refused import is tried again on the next start. Measured on a copy: 4.6 s, 95 MB process
+memory, 9,056 cells over 159 days, 4,891 sessions; a second run imports nothing.
+
+**The file is kept.** It is the only copy of that history; nothing in AAC deletes it (not the import,
+not the store's maintenance, not the DB audit's cleanup), and it must not be retired.
 
 ## Notes for the lead
 

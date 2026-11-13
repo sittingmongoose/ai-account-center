@@ -7,6 +7,8 @@ import { readDashboardPreferences } from './dashboard-preferences';
 import {
   fixedAnalyticsSourceEntries,
   getAccountAnalyticsActivity,
+  startAccountAnalyticsActivityBackground,
+  stopAccountAnalyticsActivityBackground,
   type AccountAnalyticsActivityResult,
 } from './account-analytics-activity';
 import {
@@ -58,6 +60,13 @@ const logger = createLogger('web-server:analytics');
 
 export interface AccountAnalyticsDeps {
   getDashboard?: typeof getAccountDashboard;
+  /**
+   * The history store's oldest activity hour and quota sample (docs/store.md 12); null without the
+   * store. Unset: the store's own answer, or none when `getActivity` is injected (tests).
+   */
+  storedHistory?: (
+    scope: string
+  ) => Promise<{ activity: number | null; quota: number | null } | null>;
   getActivity?: (
     query: AccountAnalyticsQuery,
     from: number,
@@ -513,7 +522,13 @@ export class AccountAnalyticsService {
     // quota snapshot. The range is resolved again after the snapshot, whose
     // sample times must not fall after `to`.
     const checkedAt = clock();
-    resolveAccountAnalyticsRange(query, checkedAt, checkedAt - ACCOUNT_ANALYTICS_RETAINED_MS);
+    const stored = await this.storedBounds(scope, checkedAt);
+    resolveAccountAnalyticsRange(
+      query,
+      checkedAt,
+      checkedAt - ACCOUNT_ANALYTICS_RETAINED_MS,
+      stored ?? undefined
+    );
     const { refresh: _refresh, ...selection } = query;
     const key = JSON.stringify([
       selection.platform,
@@ -590,6 +605,50 @@ export class AccountAnalyticsService {
     const age = (this.deps.now ?? Date.now)() - Date.parse(saved.updatedAt);
     if (!views.fromDisk(key) && age >= 0 && age < this.currentForMs()) return fresh(saved);
     return { ...saved, asOf: saved.updatedAt, stale: true, refreshing: true };
+  }
+
+  private readonly bounds = new Map<string, { at: number; value: { oldest: number } | null }>();
+  /**
+   * With the history store: the oldest stored usage (activity hour or quota sample), never later
+   * than the 31 days the live readers always read. Null without the store. Kept for a minute.
+   */
+  private async storedBounds(scope: string, now: number): Promise<{ oldest: number } | null> {
+    const held = this.bounds.get(scope);
+    if (held && now - held.at < 60_000 && now >= held.at) return held.value;
+    const read =
+      this.deps.storedHistory ??
+      (this.deps.getActivity
+        ? async () => null
+        : async (at: string) => {
+            const store = await defaultUsageStore(at);
+            if (!store) return null;
+            const [activity, quota] = await Promise.all([
+              store.activityOldest().catch(() => null),
+              store.oldest().catch(() => null),
+            ]);
+            return { activity, quota };
+          });
+    let value: { oldest: number } | null = null;
+    try {
+      const found = await read(scope);
+      if (found) {
+        const candidates = [
+          found.activity,
+          found.quota,
+          now - ACCOUNT_ANALYTICS_RETAINED_MS,
+        ].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+        value = { oldest: Math.min(...candidates) };
+      }
+    } catch {
+      value = null;
+    }
+    this.bounds.set(scope, { at: now, value });
+    while (this.bounds.size > 8) {
+      const oldest = this.bounds.keys().next();
+      if (oldest.done) break;
+      this.bounds.delete(oldest.value);
+    }
+    return value;
   }
 
   /** Records how a selection's computation ended, when it started after the last one recorded. */
@@ -673,10 +732,12 @@ export class AccountAnalyticsService {
     }
     lap('historyOpenMs');
     const now = clock();
-    const retainedFrom = now - ACCOUNT_ANALYTICS_RETAINED_MS;
+    // With the history store ranges reach back to the oldest stored usage (docs/store.md 12).
+    const bounds = await this.storedBounds(scope, now);
+    const retainedFrom = bounds ? bounds.oldest : now - ACCOUNT_ANALYTICS_RETAINED_MS;
     // Every range except `all` resolves without the data; `all` reads the
     // whole retained window and then starts at the oldest retained point.
-    const provisional = resolveAccountAnalyticsRange(query, now, retainedFrom);
+    const provisional = resolveAccountAnalyticsRange(query, now, retainedFrom, bounds ?? undefined);
     const activityResult = await (this.deps.getActivity ?? getAccountAnalyticsActivity)(
       query,
       provisional.from,
@@ -727,10 +788,14 @@ export class AccountAnalyticsService {
       ? Math.min(now, Math.max(retainedFrom, oldest))
       : Math.max(retainedFrom, localMidnight(localDate(now, tz), tz));
     const range =
-      query.range === 'all' ? resolveAccountAnalyticsRange(query, now, availableFrom) : provisional;
+      query.range === 'all'
+        ? resolveAccountAnalyticsRange(query, now, availableFrom, bounds ?? undefined)
+        : provisional;
     const { from, to } = range;
     lap('oldestMs');
-    const history = await this.historyFor(state, from, to, now, range.bucketMinutes * 60_000);
+    // Quota readings are kept for 90 days; a longer range reads only those days of them.
+    const quotaFrom = bounds ? Math.max(from, now - STORE_RETENTION_DAYS * 86_400_000) : from;
+    const history = await this.historyFor(state, quotaFrom, to, now, range.bucketMinutes * 60_000);
     lap('historyMs');
     const stored = state.usageStore !== null;
 
@@ -784,6 +849,10 @@ export class AccountAnalyticsService {
         tz,
         dayBucketTz: tz,
         availableFrom: new Date(availableFrom).toISOString(),
+        resolution: activity.resolution ?? 'hour',
+        ...(query.range === 'custom' && query.from && query.to
+          ? { days: { from: query.from, to: query.to } }
+          : {}),
       },
       filters: { platform: query.platform, provider: query.provider, account: query.account },
       history: {
@@ -946,8 +1015,11 @@ export function getAccountAnalytics(query: AccountAnalyticsQuery): Promise<Accou
 }
 export function startAccountAnalyticsSampling(): void {
   singleton().start();
+  // Usage history is collected in the background too, so it grows while no page is open.
+  startAccountAnalyticsActivityBackground();
 }
 export function stopAccountAnalyticsSampling(): void {
+  stopAccountAnalyticsActivityBackground();
   service?.stop();
   service?.flushSavedViews();
 }

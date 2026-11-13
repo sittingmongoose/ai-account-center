@@ -2,7 +2,7 @@
 // fetches and builds the page itself): the page state, which ranges a response covers, how often a page still being
 // read polls, the switch thresholds the quota charts mark, and what each page action changes. Pure; the view itself is
 // built by analytics-usage.mjs, analytics-quota.mjs and analytics-data.mjs (tests/analytics-page.test.mjs).
-import { RANGES, parseIsoDay, addDays, H, D } from './analytics-usage.mjs';
+import { RANGES, parseIsoDay, addDays, dayStart, apiRangeFor, payloadViewKey, H, D } from './analytics-usage.mjs';
 import { QUOTA_PROVIDERS } from './analytics-quota.mjs';
 import { zonedMonthStart } from './time-format.mjs';
 
@@ -31,8 +31,15 @@ export function analyticsCovers(payload, page, now = Date.now()) {
   const from = Date.parse(payload?.range?.from);
   if (!Number.isFinite(from)) return false;
   const { range } = page;
-  if (range === 'all') return payload.range?.preset === '30d';
+  const key = payloadViewKey(payload);
+  if (range === 'all') return key === 'all';
+  // a custom range longer than the last 30 days is drawn from its own answer
+  const want = apiRangeFor(page, now);
+  if (want.startsWith('custom:')) return key === want;
+  // day rows (an answer over 92 days) cannot draw a range that needs hours
+  if (payload?.range?.resolution === 'day') return false;
   const start = range === '24h' ? now - D : range === '7d' ? now - 7 * D : range === '30d' ? now - 30 * D
+    : range === '90d' ? now - 90 * D
     : range === 'month' ? zonedMonthStart(now)
     : Number.isFinite(page.from) ? page.from : now - 30 * D;
   return from <= start + H;
@@ -73,7 +80,7 @@ const toggleIn = (set, value) => { if (set.has(value)) set.delete(value); else s
  * or changing nothing, `{ range: true }` when the range changed (draw what the response covers, read when it doesn't),
  * or `{ render: 'morph' | 'static' }`. `known(id)` says whether an account id is on the page.
  */
-export function applyAnalyticsAction(page, action, value, { known = () => false, now = Date.now() } = {}) {
+export function applyAnalyticsAction(page, action, value, { known = () => false, now = Date.now(), oldest = NaN } = {}) {
   switch (action) {
     case 'analytics-range':
       if (!RANGES.some(([id]) => id === value) || page.range === value) return {};
@@ -81,7 +88,9 @@ export function applyAnalyticsAction(page, action, value, { known = () => false,
       return { range: true };
     case 'analytics-custom': {
       const [first, last] = String(value).split(',').map(parseIsoDay);
-      if (!Number.isFinite(first) || !Number.isFinite(last) || last < first || first < now - 31 * D || first > now) return {};
+      // the picker reaches back to the oldest stored day (the last 31 days without the history store)
+      const floor = dayStart(Number.isFinite(oldest) ? Math.min(oldest, now - 31 * D) : now - 31 * D);
+      if (!Number.isFinite(first) || !Number.isFinite(last) || last < first || first < floor || first > now) return {};
       page.range = 'custom'; page.from = first; page.to = addDays(last, 1);
       return { range: true };
     }

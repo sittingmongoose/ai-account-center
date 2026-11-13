@@ -9,7 +9,7 @@ import { createActivationConfirmation } from './activation-confirmation.mjs';
 import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from './antigravity-data.mjs';
 import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
 import { analyticsView, analyticsChoiceId, analyticsSlintModel } from './analytics-data.mjs';
-import { usageView, usageHead, apiRangeFor, trendPaths, mixGeo } from './analytics-usage.mjs';
+import { usageView, usageHead, apiRangeFor, apiQueryFor, payloadViewKey, trendPaths, mixGeo } from './analytics-usage.mjs';
 import { quotaView, agendaView } from './analytics-quota.mjs';
 import { createAnalyticsPage, analyticsThresholds, analyticsCovers as coversRange, analyticsPollDelay, applyAnalyticsAction, applyAnalyticsLayout } from './analytics-page.mjs';
 import { requireWebGL, WEBGL_REQUIRED_MESSAGE, startSlintDashboard } from './renderer.mjs';
@@ -559,7 +559,7 @@ function choiceLists() {
 function renderAnalytics(mode = 'static') {
   if (!analyticsPayload) return;
   const now = Date.now();
-  const usage = usageView(analyticsPayload, analyticsPage, { now, sizes: analyticsPage.sizes });
+  const usage = usageView(analyticsPayload, analyticsPage, { now, sizes: analyticsPage.sizes, calendarMonths: false });
   const ctx = analyticsContext(now);
   // quota and agenda times read at minute precision ("in 3h 25m"), so they run on a minute clock: identical
   // re-renders within the minute build identical models, and the agenda updates only when its data changes
@@ -617,7 +617,7 @@ async function refreshAnalytics(force = false, mode = 'static', opts = {}) {
   const generation = ++analyticsGeneration;
   if (!silent) analyticsLoading(true, '');
   // the backend accepts 24h, 7d and 30d: Month, All and custom ranges read the covering window and are cut here
-  const query = new URLSearchParams({ platform, range: apiRangeFor(analyticsPage, Date.now()), provider: 'all', account: 'all' });
+  const query = new URLSearchParams({ platform, ...apiQueryFor(apiRangeFor(analyticsPage, Date.now())), provider: 'all', account: 'all' });
   if (force) query.set('refresh', 'true');
   try {
     const result = await request(`/api/accounts/analytics?${query}`);
@@ -649,7 +649,7 @@ function enterAnalytics() {
 async function changeAnalyticsRange() {
   const covered = analyticsPayload && analyticsCovers(analyticsPayload);
   if (covered) renderAnalytics('morph');
-  if (!analyticsPayload || analyticsPayload.range?.preset !== apiRangeFor(analyticsPage, Date.now())) await refreshAnalytics(false, covered ? 'static' : 'morph');
+  if (!analyticsPayload || payloadViewKey(analyticsPayload) !== apiRangeFor(analyticsPage, Date.now())) await refreshAnalytics(false, covered ? 'static' : 'morph');
 }
 /** A chart box's size ("kind,w,h" or "heat-cell,w"): the charts are laid out in those pixels. */
 function analyticsLayout(value) {
