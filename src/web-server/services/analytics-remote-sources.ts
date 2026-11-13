@@ -9,7 +9,9 @@ import {
 } from '../usage/account-activity-collector';
 import type { UsageWorkerResult } from '../usage/worker-client';
 import {
+  ANALYTICS_SCAN_FAILURE_CAUSES,
   AnalyticsHelperIntegrityError,
+  AnalyticsRemoteTransportError,
   REMOTE_ANALYTICS_HOSTS,
   fixedAnalyticsRemoteAliases,
   hasClaudeReplacementMetadata,
@@ -24,6 +26,7 @@ import {
   type AnalyticsRemoteResponse,
   type AnalyticsRemoteRow,
   type AnalyticsRemoteSessionRow,
+  type AnalyticsScanFailureCause,
 } from './analytics-remote-transport';
 import { readDashboardPreferences } from './dashboard-preferences';
 import { runBounded } from '../usage/collector-concurrency';
@@ -38,7 +41,11 @@ export type AnalyticsSourceState =
   /** The scan is still working on this tool: it is running now, or ran out of time before it finished. */
   | 'scanning'
   /** The tool was scanned and its logs hold no usage inside the 31-day window. */
-  | 'no_usage';
+  | 'no_usage'
+  /** Its logs were found and could not be read; nothing read earlier is kept (`cause`). */
+  | 'unreadable'
+  /** The computer's scan failed and nothing read earlier is kept (`cause`). */
+  | 'scan_failed';
 
 export interface AnalyticsRemoteSourceState {
   tool: AnalyticsSourceTool;
@@ -47,6 +54,44 @@ export interface AnalyticsRemoteSourceState {
   lastScanAt: string | null;
   rowCount: number;
   detail: string | null;
+  /** One fixed word: why this source is not read now (a scan failure cause, `read_failed`). */
+  cause?: string | null;
+}
+
+/** A host's last failed scan: its fixed cause, the helper's exit code and when it happened. */
+export interface AnalyticsHostFailure {
+  cause: AnalyticsScanFailureCause | 'helper_damaged';
+  exitCode: number | null;
+  at: string;
+}
+
+const HOST_FAILURE_CAUSES: ReadonlySet<string> = new Set([
+  ...ANALYTICS_SCAN_FAILURE_CAUSES,
+  'helper_damaged',
+]);
+
+/** The sentence a cell's detail gives for a failure cause. */
+export function scanFailureText(cause: string | null | undefined): string {
+  switch (cause) {
+    case 'ssh_unreachable':
+      return 'the computer did not answer over ssh';
+    case 'ssh_auth':
+      return "the computer refused this account's ssh key";
+    case 'runtime_missing:store_alias':
+      return 'no working Python 3.9 or later on this computer (only the Microsoft Store alias, which is not Python)';
+    case 'runtime_missing':
+      return 'no working Python 3.9 or later on this computer';
+    case 'helper_failed':
+      return 'the usage reader stopped with an error on this computer';
+    case 'timeout':
+      return 'the scan took longer than its time limit';
+    case 'bad_response':
+      return "the computer's answer was not a usage report";
+    case 'helper_damaged':
+      return 'the packaged analytics helper failed its integrity check, so no computer was scanned; reinstall AI Account Center';
+    default:
+      return 'the scan failed';
+  }
 }
 
 export interface AnalyticsRemoteSourceDeps {
@@ -113,6 +158,11 @@ interface RemoteCache {
    * older caches, which therefore start with a call per kind.
    */
   settled?: boolean;
+  /**
+   * The host's last failed scan, saved without touching rows or prints: the page names it (also
+   * after a restart) until a scan answers again, which clears it.
+   */
+  lastFailure?: AnalyticsHostFailure;
 }
 
 function cacheFile(cacheDir: string, host: AnalyticsRemoteHost): string {
@@ -143,6 +193,21 @@ function loadCache(file: string): RemoteCache {
       (value.settled !== undefined && typeof value.settled !== 'boolean')
     )
       return blankCache();
+    // The last failure is a diagnostic: a damaged one is dropped, never trusted.
+    const failure = value.lastFailure as Partial<AnalyticsHostFailure> | undefined;
+    value.lastFailure =
+      failure &&
+      typeof failure.cause === 'string' &&
+      HOST_FAILURE_CAUSES.has(failure.cause) &&
+      (failure.exitCode === null || Number.isSafeInteger(failure.exitCode)) &&
+      typeof failure.at === 'string' &&
+      Number.isFinite(Date.parse(failure.at))
+        ? {
+            cause: failure.cause as AnalyticsHostFailure['cause'],
+            exitCode: failure.exitCode ?? null,
+            at: failure.at,
+          }
+        : undefined;
     if (value.version !== CACHE_VERSION) {
       // Versions 3-5 share the non-Claude row/session/fingerprint formats.
       // Claude's response semantics and copy ownership changed in 4-6: its
@@ -292,12 +357,38 @@ function sessionInWindow(row: AnalyticsRemoteSessionRow, minDateMs: number): boo
   return Number.isFinite(row.z) && row.z >= minDateMs;
 }
 
-/** Previously read aggregates of one host, marked `cached`, or `unavailable` when none. */
+const READ_WORDS: Partial<Record<AnalyticsSourceState, string>> = {
+  ok: 'usage',
+  no_usage: 'no usage in range',
+  not_installed: 'no usage logs',
+};
+
+/**
+ * The failure that stands for a kind: this attempt's, else the host's saved last failure when it
+ * is newer than the kind's last read, so a restarted server still says the scan is failing.
+ */
+function standingFailure(
+  cached: RemoteCache,
+  tool: AnalyticsRemoteKind,
+  failure: AnalyticsHostFailure | undefined
+): AnalyticsHostFailure | undefined {
+  if (failure) return failure;
+  const last = cached.lastFailure;
+  const read = cached.kinds?.[tool]?.lastScanAt;
+  return last && (!read || Date.parse(last.at) > Date.parse(read)) ? last : undefined;
+}
+
+/**
+ * Previously read aggregates of one host, marked `cached`. A kind with nothing kept is `scan_failed`
+ * while a failure stands (with its cause, and what the last read that worked found), never that
+ * read's "no usage" or "not installed" as if it were current; without a failure, its last state.
+ */
 function cachedHostSources(
   host: AnalyticsRemoteHost,
   cached: RemoteCache,
   minDateMs: number,
-  detail: string
+  detail: string,
+  failure?: AnalyticsHostFailure
 ): {
   results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
@@ -309,27 +400,45 @@ function cachedHostSources(
     const keptSessions = cached.srows.filter(
       (row) => row.k === tool && sessionInWindow(row, minDateMs)
     );
+    const read = cached.kinds?.[tool];
+    const failed = standingFailure(cached, tool, failure);
+    const why = failed ? `${scanFailureText(failed.cause)} (${failed.at})` : detail;
     if (kept.length || keptSessions.length) {
       results.push({ tool, data: toWorkerResult(kept, keptSessions, tool) });
       states.push({
         tool,
         host,
         state: 'cached',
-        lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
+        lastScanAt: read?.lastScanAt ?? null,
         rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
-        detail: `${detail}; showing previously read aggregates`,
+        detail: `${why}; showing previously read aggregates`,
+        ...(failed ? { cause: failed.cause } : {}),
+      });
+    } else if (failed) {
+      const words = read ? READ_WORDS[read.state] : undefined;
+      states.push({
+        tool,
+        host,
+        state: 'scan_failed',
+        lastScanAt: read?.lastScanAt ?? null,
+        rowCount: 0,
+        detail:
+          words && read?.lastScanAt
+            ? `${why}; the last scan that worked (${read.lastScanAt}) found ${words}`
+            : why,
+        cause: failed.cause,
       });
     } else {
       states.push({
         tool,
         host,
         state:
-          cached.kinds?.[tool]?.state === 'no_usage'
+          read?.state === 'no_usage'
             ? 'no_usage'
-            : cached.kinds?.[tool]?.state === 'not_installed'
+            : read?.state === 'not_installed'
               ? 'not_installed'
               : 'unavailable',
-        lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
+        lastScanAt: read?.lastScanAt ?? null,
         rowCount: 0,
         detail,
       });
@@ -512,6 +621,14 @@ const REMOTE_KIND_CONCURRENCY = 6;
 
 type RemoteHelper = NonNullable<AnalyticsRemoteSourceDeps['runHelper']>;
 
+/** What one host's helper calls said when they failed: the first cause, and each failed kind's. */
+interface ScanFailure {
+  damaged: boolean;
+  cause?: AnalyticsScanFailureCause;
+  exitCode?: number | null;
+  byKind: Map<AnalyticsRemoteKind, AnalyticsScanFailureCause>;
+}
+
 /**
  * Why a host's helper calls failed, when every one did. A damaged packaged helper fails before any
  * ssh session, on every host alike, so it is named instead of reading as a host that did not answer.
@@ -539,7 +656,7 @@ async function scanHost(
   cached: RemoteCache,
   extraRoots: Partial<Record<AnalyticsRemoteKind, string[]>>,
   minDateMs: number,
-  failure: { damaged: boolean }
+  failure: ScanFailure
 ): Promise<{
   response: AnalyticsRemoteResponse;
   cutKinds: Set<AnalyticsRemoteKind>;
@@ -559,6 +676,12 @@ async function scanHost(
       );
     } catch (error) {
       if (error instanceof AnalyticsHelperIntegrityError) failure.damaged = true;
+      const cause: AnalyticsScanFailureCause =
+        error instanceof AnalyticsRemoteTransportError ? error.cause : 'helper_failed';
+      failure.cause ??= cause;
+      if (failure.exitCode === undefined)
+        failure.exitCode = error instanceof AnalyticsRemoteTransportError ? error.exitCode : null;
+      for (const kind of group) failure.byKind.set(kind, cause);
       answers.set(group, null);
     }
   });
@@ -670,7 +793,7 @@ export async function loadAnalyticsRemoteSources(
         }
         const onHostScan = deps.onHostScan;
         onHostScan?.(host, 'start');
-        const failure = { damaged: false };
+        const failure: ScanFailure = { damaged: false, byKind: new Map() };
         const scan = await scanHost(
           runHelper,
           alias,
@@ -688,12 +811,27 @@ export async function loadAnalyticsRemoteSources(
             srows: cached.srows.filter((row) => sessionInWindow(row, minDateMs)),
           });
           onHostScan?.(host, 'done');
+          const lastFailure: AnalyticsHostFailure = {
+            cause: failure.damaged ? 'helper_damaged' : (failure.cause ?? 'helper_failed'),
+            exitCode: failure.exitCode ?? null,
+            at: new Date(now()).toISOString(),
+          };
+          // Saved with the host, rows and prints untouched, so the failure is named until a scan
+          // answers again, also after a restart. A damaged package fails every host alike and is
+          // named by the page without touching any host's cache.
+          if (!failure.damaged)
+            try {
+              saveCache(file, { ...cached, lastFailure });
+            } catch {
+              /* Cache writes are best-effort. */
+            }
           // Previous aggregates stay available; nothing remote fails the page.
           const part = cachedHostSources(
             host,
             cached,
             minDateMs,
-            failure.damaged ? HELPER_DAMAGED : 'remote scan failed'
+            failure.damaged ? HELPER_DAMAGED : 'remote scan failed',
+            failure.damaged ? undefined : lastFailure
           );
           results.push(...part.results.filter((source) => !recentKinds.includes(source.tool)));
           states.push(...part.states.filter((source) => !recentKinds.includes(source.tool)));
@@ -805,6 +943,16 @@ export async function loadAnalyticsRemoteSources(
             srows: mergedSessions,
             lastScanAt: scannedAt,
             kinds: kindReads,
+            // A kind whose call failed keeps the failure on record; a full answer clears it.
+            ...(failedKinds.size
+              ? {
+                  lastFailure: {
+                    cause: failure.cause ?? 'helper_failed',
+                    exitCode: failure.exitCode ?? null,
+                    at: scannedAt,
+                  },
+                }
+              : {}),
             settled:
               !olderClaude &&
               cutKinds.size === 0 &&
@@ -874,21 +1022,23 @@ export async function loadAnalyticsRemoteSources(
             continue;
           }
           if (kindState === 'error') {
+            const scanFailed = failedKinds.has(tool);
+            const cause = scanFailed
+              ? (failure.byKind.get(tool) ?? 'helper_failed')
+              : 'read_failed';
+            const why = scanFailed
+              ? scanFailureText(cause)
+              : 'its logs were found but could not be read';
             states.push({
               tool,
               host,
-              // A read that failed with earlier records in hand is a cached
-              // result; with nothing to show it is a real failure.
-              state: kept ? 'cached' : 'unavailable',
+              // A read that failed with earlier records in hand is a cached result; with nothing to
+              // show it is a scan that failed, or logs found and not readable. Never a zero.
+              state: kept ? 'cached' : scanFailed ? 'scan_failed' : 'unreadable',
               lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
               rowCount: events,
-              detail: failedKinds.has(tool)
-                ? kept
-                  ? 'remote scan failed; showing previously read aggregates'
-                  : 'remote scan failed'
-                : kept
-                  ? 'remote read failed; showing previously read aggregates'
-                  : 'remote read failed',
+              detail: kept ? `${why}; showing previously read aggregates` : why,
+              cause,
             });
             continue;
           }

@@ -278,6 +278,26 @@ test('no usage in range and not installed read as themselves, never unavailable'
   assert.match(inc.line, /^Includes Muse Code on Mac\./);
 });
 
+test('a failed scan and unreadable logs say so with their cause, never a zero or an old "no usage" (Alexis PC)', () => {
+  const sources = [
+    { tool: 'codex', host: 'alexis', state: 'scan_failed', cause: 'runtime_missing:store_alias', lastScanAt: at(12), rowCount: 0, detail: 'no working Python 3.9 or later on this computer (only the Microsoft Store alias, which is not Python) (2026-10-01T11:00:00.000Z); the last scan that worked (x) found no usage in range' },
+    { tool: 'codex', host: 'mac', state: 'unreadable', cause: 'read_failed', lastScanAt: at(1), rowCount: 0, detail: 'its logs were found but could not be read' },
+    { tool: 'codex', host: 'windows', state: 'ok', lastScanAt: at(1), rowCount: 9, detail: null },
+  ];
+  const inc = includedView(payload({ sources }), now);
+  const cells = inc.rows.find(r => r.tool === 'Codex').cells;
+  const by = Object.fromEntries(cells.map(c => [c.id, c]));
+  assert.deepEqual([by.alexis.text, by.alexis.tone], ['Scan failed', 'unavailable']);
+  assert.match(by.alexis.tip, /Microsoft Store alias/);
+  assert.deepEqual([by.mac.text, by.mac.tone], ["Can't read", 'unavailable']);
+  assert.match(by.mac.tip, /could not be read/);
+  assert.match(inc.label, /1 scan failed/);
+  assert.match(inc.label, /1 can't read/);
+  // a host whose every tool's scan failed is never "read"
+  const failed = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map(tool => ({ tool, host: 'alexis', state: 'scan_failed', cause: 'ssh_unreachable', lastScanAt: null, rowCount: 0, detail: 'the computer did not answer over ssh' }));
+  assert.equal(hostProgress(payload({ sources: failed })).find(h => h.key === 'alexis').detail, 'unavailable');
+});
+
 test('hostProgress never calls a host whose every tool failed "read"', () => {
   const failed = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map(tool => ({ tool, host: 'windows', state: 'unavailable', lastScanAt: null, rowCount: 0, detail: 'remote scan failed' }));
   const mac = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'].map((tool, i) => ({ tool, host: 'mac', state: i < 2 ? 'ok' : 'scanning', lastScanAt: at(1), rowCount: i < 2 ? 5 : 0, detail: i < 2 ? null : 'the first scan is running' }));

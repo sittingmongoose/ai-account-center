@@ -121,7 +121,11 @@ export type AccountAnalyticsSourceState =
   /** The scan is still working on this tool: it is running now, or ran out of time before it finished. */
   | 'scanning'
   /** The tool was scanned and its logs hold no usage inside the 31-day window. */
-  | 'no_usage';
+  | 'no_usage'
+  /** Its logs were found and could not be read; nothing read earlier is kept (`cause`). */
+  | 'unreadable'
+  /** The computer's scan failed and nothing read earlier is kept (`cause`). */
+  | 'scan_failed';
 
 export interface AccountAnalyticsSource {
   tool: AccountAnalyticsActivityProvider | 'cursor';
@@ -133,6 +137,12 @@ export interface AccountAnalyticsSource {
   rowCount: number;
   /** Fixed reason, e.g. why a tool has no local usage log. */
   detail: string | null;
+  /**
+   * One fixed word, when the source is not read now: a scan failure cause (`ssh_unreachable`,
+   * `ssh_auth`, `runtime_missing`, `runtime_missing:store_alias`, `helper_failed`, `timeout`,
+   * `bad_response`, `helper_damaged`) or `read_failed`.
+   */
+  cause?: string | null;
 }
 
 export interface AccountAnalyticsSessionRow extends AccountAnalyticsActivityTotals {
