@@ -27,6 +27,17 @@ import { byFile, ShareFiles, type ShareFile } from './share-files';
 const DATE_FOLDER = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * A run file's name, `<run id>.json`: printable ASCII and up to 200 characters, so every run id the
+ * run schema accepts (RUN_ID_MAX, 194) has a readable file. Longer than the 100 the Status reader
+ * shows for other names: a run file past that was skipped without a word (2026-11-13).
+ */
+const RUN_FILE_NAME = /^[\x21-\x7e]{1,200}$/;
+
+export function runFileNameReadable(name: string): boolean {
+  return RUN_FILE_NAME.test(name) && !name.includes('/') && !name.includes('\\');
+}
+
+/**
  * What one scan reads (docs/scoreboard.md), so the share cannot grow the server without bound. More
  * writers than the Status reader's: an old writer's runs are still history. Past a limit the rest
  * is named in the runs Source.
@@ -172,7 +183,7 @@ export class RunsReader {
         const dateDir = path.join(writersDir, name, 'runs', date.name);
         for (const file of (await listing(dateDir, dateRel)) ?? []) {
           if (file.name.startsWith('.') || !file.name.endsWith('.json')) continue;
-          if (!showable(file.name)) continue;
+          if (!runFileNameReadable(file.name)) continue;
           if (!file.isFile()) {
             folderProblem(`${dateRel}/${file.name}`, 'is not a regular file');
             continue;

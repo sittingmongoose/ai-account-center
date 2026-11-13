@@ -53,6 +53,28 @@ export function isCardId(value: unknown): value is string {
   return at > 0 && isWriterName(value.slice(0, at)) && LOCAL_ID.test(value.slice(at + 2));
 }
 
+/** A card's local id: 64 characters at most (the `LOCAL_ID` rule). */
+export const CARD_LOCAL_ID_MAX = 64;
+const LOCAL_ID_GRAMMAR = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Which rule a `<writer>--<local id>` id breaks, in fixed words, or null when it keeps them all: the
+ * writer prefix (this folder's writer and `--`), then the local id's length, then its grammar. Each
+ * refusal names its rule so a writer can fix the right thing; the id itself is never echoed.
+ */
+export function idProblem(value: unknown, writer: string, localMax: number): string | null {
+  if (typeof value !== 'string' || value.length === 0) return 'id is missing or not valid';
+  if (!value.startsWith(`${writer}--`))
+    return `id does not name its writer: it must start with "${writer}--"`;
+  const local = value.slice(writer.length + 2);
+  if (local.length === 0) return 'id has no local part after its writer and "--"';
+  if (local.length > localMax)
+    return `id is too long: the part after "${writer}--" is ${local.length} characters, over the ${localMax} allowed`;
+  if (!LOCAL_ID_GRAMMAR.test(local))
+    return 'id is not valid: the part after its writer and "--" must start with a letter or digit and hold only letters, digits, ".", "_" and "-"';
+  return null;
+}
+
 /**
  * Secret patterns: a file that matches one is refused whole (the format says no secrets). Each
  * entry names the kind it found; the matched text is never shown.
@@ -414,12 +436,25 @@ export interface ReportLink {
   path: string;
 }
 
-export function link(value: unknown, field: string): ReportLink {
+/** A link's label: 120 characters, unless a document kind publishes another bound (run evidence: 300). */
+export const LINK_LABEL_MAX = 120;
+
+export function link(value: unknown, field: string, labelMax: number = LINK_LABEL_MAX): ReportLink {
   const item = obj(value, field);
   return {
-    label: text(item.label, `${field}.label`, 120),
+    label: boundedText(item.label, `${field}.label`, labelMax),
     path: text(item.path, `${field}.path`, 600),
   };
+}
+
+/**
+ * `text`, with a refusal that says the length rule when that is the one broken (a published
+ * `maxLength`), so a writer knows to shorten it rather than look for a wrong character.
+ */
+export function boundedText(value: unknown, field: string, max: number): string {
+  if (typeof value === 'string' && value.length > max)
+    throw new Invalid(`${field} is too long: ${value.length} characters, over the ${max} allowed`);
+  return text(value, field, max);
 }
 
 /** A relative path inside a writer's folder: plain segments, no `..`, no absolute or Windows paths. */

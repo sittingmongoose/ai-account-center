@@ -143,6 +143,9 @@
         "additionalProperties": false,
         "properties": {
           "label": {
+            "description": "One line naming the evidence. At most 300 characters, kept exactly as written.",
+            "maxLength": 300,
+            "minLength": 1,
             "type": "string"
           },
           "path": {
@@ -194,7 +197,8 @@
       "type": "array"
     },
     "id": {
-      "description": "Run id: <writer>--<local id>.",
+      "description": "Run id: <writer>--<local id>. The local id starts with a letter or digit, holds only letters, digits, '.', '_' and '-', and is at most 128 characters, so the whole id is at most 194 (a 64-character writer, '--' and 128) and fits review.of. Kept exactly as written.",
+      "maxLength": 194,
       "type": "string"
     },
     "model": {
@@ -390,6 +394,9 @@
       "description": "Task worked on. New task types are data in catalog/, never schema changes.",
       "properties": {
         "id": {
+          "description": "The task or handle worked on, kept exactly as written (an opaque T3 delegated-task handle runs to about 272 characters). At most 512 characters.",
+          "maxLength": 512,
+          "minLength": 1,
           "type": "string"
         },
         "size": {
