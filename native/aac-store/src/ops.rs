@@ -4,7 +4,7 @@
 use crate::engine::{self, Config, Engine};
 use crate::error::Result;
 use crate::fail;
-use crate::{capture, usage};
+use crate::{capture, runs, usage};
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 use std::path::PathBuf;
@@ -71,7 +71,11 @@ pub fn open_engine(dir: &str, cache_bytes: Option<usize>, retention_days: Option
     Engine::open(
         &PathBuf::from(dir),
         config,
-        vec![Box::new(usage::UsageProjector), Box::new(capture::CaptureProjector)],
+        vec![
+            Box::new(usage::UsageProjector),
+            Box::new(capture::CaptureProjector),
+            Box::new(runs::RunsProjector),
+        ],
     )
 }
 
@@ -240,6 +244,28 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
                 key: String,
             }
             json!(engine.get_meta(&parse::<MetaKey>(args)?.key)?)
+        }
+        // Agent-report runs (Scoreboard v2): scan, record, queries.
+        "runsScan" => runs::scan(engine, &parse(args)?)?,
+        "runsRecord" => runs::record(engine, parse(args)?)?,
+        "runsQuery" => runs::query(engine, &parse(args)?)?,
+        "runsIdentity" => runs::identity_table(engine)?,
+        "runsAudit" => runs::audit(engine)?,
+        "runsStatus" => runs::status(engine)?,
+        "runsRefused" => runs::refused(engine)?,
+        "runOriginal" | "runHistory" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct RunArgs {
+                run_id: String,
+                sha256: Option<String>,
+            }
+            let a: RunArgs = parse(args)?;
+            if method == "runOriginal" {
+                runs::original(engine, &a.run_id, a.sha256.as_deref())?
+            } else {
+                runs::history(engine, &a.run_id)?
+            }
         }
         _ => fail!("invalid", "unknown method {method}"),
     })
