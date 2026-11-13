@@ -278,5 +278,52 @@ describe('incremental analytics passes', () => {
     expect(summary.newestChangeAt).toBeGreaterThanOrEqual(summary.walkedAt - 2_000);
     // the summary holds rows and counts only, never a project path
     expect(JSON.stringify(summary.result)).not.toContain('/work');
+    // and the next pass, with nothing changed, is a full one: a damaged checkpoint is read again from the log's start
+    damageCheckpoints(cacheDir);
+    const next = await collectAccountActivity(request, options);
+    expect(next.scan?.readBytes).toBeGreaterThan(0);
+    // once the log has been quiet for longer than the window, the same pass is reused (nothing read)
+    await collectAccountActivity(request, options, { racyMs: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    damageCheckpoints(cacheDir);
+    const settledPass = await collectAccountActivity(request, options, { racyMs: 0 });
+    expect(settledPass.scan?.readBytes).toBe(0);
+  });
+
+  it('a window moved back (a clock stepped back) is never answered from the narrower pass', async () => {
+    const base = path.join(root, 'backward');
+    const logs = path.join(base, 'projects', '-work');
+    fs.mkdirSync(logs, { recursive: true });
+    // one log with records from 15 days ago to now, so both windows list it and the manifest is the same
+    const file = path.join(logs, '00000000-0000-4000-8000-000000000002.jsonl');
+    const now = Date.now();
+    fs.writeFileSync(file, claudeLines('b1', now - 15 * DAY, 3) + claudeLines('b1', now - DAY, 3));
+    const cacheDir = path.join(base, 'cache');
+    const request = { kind: 'claude' as const, projectsDir: path.join(base, 'projects') };
+    await sleep(5);
+    const narrow = await collectAccountActivity(
+      request,
+      { minDate: now - 10 * DAY, cacheDir },
+      { racyMs: 0 }
+    );
+    expect(narrow.eventCount).toBe(3);
+    // the window moves back past the older records: a full pass, which counts them
+    damageCheckpoints(cacheDir);
+    const wide = await collectAccountActivity(
+      request,
+      { minDate: now - 20 * DAY, cacheDir },
+      { racyMs: 0 }
+    );
+    expect(wide.scan?.readBytes).toBeGreaterThan(0);
+    expect(wide.eventCount).toBe(6);
   });
 });
+
+/** Damages every checkpoint of every source under `cacheDir`: a pass that loads one reads its log from the start. */
+function damageCheckpoints(cacheDir: string): void {
+  const dir = path.join(cacheDir, 'account-activity-v1');
+  for (const source of fs.readdirSync(dir))
+    for (const entry of fs.readdirSync(path.join(dir, source)))
+      if (/^[a-f0-9]{64}\.json$/.test(entry))
+        fs.writeFileSync(path.join(dir, source, entry), '{"damaged":');
+}
