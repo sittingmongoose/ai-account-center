@@ -52,6 +52,7 @@ class UpdateFailure(Exception):
 
 CAUSES = (
     "none",                # the row finished as it says (updated, current, not installed, skipped)
+    "shadowed",            # another copy comes first on PATH, so the one updated is not the one that runs
     "auth_required",       # the app's own updater was refused for its sign-in (Cursor's HTTP 401)
     "signin_needed",       # the update needs, or left, a sign-in only the user can give
     "policy_blocked",      # an execution policy refused the app's launcher
@@ -68,18 +69,47 @@ CAUSES = (
 )
 REASON = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,63}$")
 TAIL_LINES, TAIL_LINE_CHARS, TAIL_CHARS = 12, 200, 1200
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
+# Every pattern runs on at most SCRUB_LINES lines cut to SCRUB_LINE_CHARS, and every repeat
+# below is bounded, so scrubbing stays linear in the text (an unbroken 64 KiB run included).
+SCRUB_LINES, SCRUB_LINE_CHARS = 48, 600
+_ANSI = re.compile(r"\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?")
+_CREDENTIAL_WORD = (r"(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential"
+                    r"|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)")
 _SECRET_PATTERNS = (
-    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"), r"\1 <redacted>"),
-    # key=value and key: value forms, JSON included, for anything credential-like.
-    (re.compile(r'(?i)(["\']?(?:[a-z0-9_-]*(?:token|secret|password|passwd|apikey|api[_-]key|authorization|cookie|credential|session[_-]?id|bearer)[a-z0-9_-]*)["\']?\s*[:=]\s*)("[^"]*"|\'[^\']*\'|[^\s,;}&]+)'), r"\1<redacted>"),
-    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?"), "<redacted>"),
-    (re.compile(r"(?i)\b(?:npm_|ghp_|gho_|github_pat_|sk-|xox[abpr]-|aiza)[A-Za-z0-9_-]{8,}"), "<redacted>"),
-    (re.compile(r"(?i)\b(https?|wss?)://[^/\s@]+@"), r"\1://"),
-    (re.compile(r"(?i)\b((?:https?|wss?)://[^\s?#\"']+)[?#][^\s\"']*"), r"\1"),
-    (re.compile(r"[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b"), "<email>"),
-    (re.compile(r"[A-Za-z0-9+_=-]{40,}"), "<redacted>"),
+    # Whole credential-carrying headers and config lines: everything after the marker goes,
+    # so a value with ';', spaces or several cookies cannot keep a tail.
+    (re.compile(r"(?im)\b((?:set-)?cookie|(?:proxy-)?authorization|x-api-key|x-auth-token|private-token)\s*:.{0,600}$"), r"\1: <redacted>"),
+    (re.compile(r"(?im)((?://[^\s=]{0,200}?:)?_(?:auth|authtoken|password)\b)\s*=.{0,600}$"), r"\1=<redacted>"),
+    (re.compile(r"(?im)^.{0,600}PRIVATE KEY.{0,600}$"), "<redacted>"),
+    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{1,600}"), r"\1 <redacted>"),
+    # key=value and key: value forms, JSON included: the rest of the line goes.
+    (re.compile(r"(?im)([\"']?\b[a-z0-9_.-]{0,40}" + _CREDENTIAL_WORD + r"[a-z0-9_.-]{0,40}[\"']?\s*[:=]\s*)\S.{0,600}$"), r"\1<redacted>"),
+    (re.compile(r"(?im)(\bpass(?:word|wd|phrase)\b[^:=\n]{0,40}[:=]\s*)\S.{0,600}$"), r"\1<redacted>"),
+    # Command-line flag forms: --password value, --token=value.
+    (re.compile(r"(?i)(--?(?:password|passwd|pass|token|api-?key|auth(?:-?token)?|secret|access-?token|otp)\b)(?:\s+|=)(?!-)\S{1,600}"), r"\1 <redacted>"),
+    (re.compile(r"(?i)\bcode=\S{1,600}"), "code=<redacted>"),
+    (re.compile(r"(?i)(one[- ]time (?:code|password)\D{0,20})\d{4,10}"), r"\1<redacted>"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,600}\.[A-Za-z0-9_-]{8,600}(?:\.[A-Za-z0-9_-]{1,600})?"), "<redacted>"),
+    (re.compile(r"(?i)\b(?:npm_|ghp_|gho_|ghs_|ghu_|github_pat_|sk-|xox[abpr]-|aiza)[A-Za-z0-9_-]{8,600}"), "<redacted>"),
+    (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "<redacted>"),
+    (re.compile(r"(?i)\b(https?|wss?)://[^/\s@]{1,200}@"), r"\1://"),
+    (re.compile(r"(?i)\b((?:https?|wss?)://[^\s?#\"']{1,600})[?#][^\s\"']{0,600}"), r"\1"),
+    (re.compile(r"[\w.+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b"), "<email>"),
+    # user@host without a domain; npm's name@tag and @scope/name forms survive.
+    (re.compile(r"(?<![\w/@.-])[A-Za-z][\w.+-]{0,63}@(?!(?:latest|next|beta|alpha|canary|rc|stable|dev|legacy|lts|insiders|nightly)\b)[A-Za-z][\w-]{0,62}\b(?![./@])"), "<user>@<host>"),
+    (re.compile(r"\b[0-9a-fA-F]{32,600}\b"), "<redacted>"),
+    (re.compile(r"[A-Za-z0-9+_=-]{40,600}"), "<redacted>"),
 )
+# Runs with '/' (base64 secrets) are redacted only when they look random, never ordinary paths.
+_SLASHED = re.compile(r"(?<![\w/+=-])[A-Za-z0-9+/=_-]{32,600}(?![\w/+=-])")
+
+
+def _random_looking(match):
+    text = match.group(0)
+    upper = sum(char.isupper() for char in text)
+    if any(char.isdigit() for char in text) and any(char.islower() for char in text) and upper >= len(text) * 0.15:
+        return "<redacted>"
+    return text
 
 
 def _home_forms():
@@ -89,26 +119,32 @@ def _home_forms():
 
 
 def _scrub_paths(text):
+    # Case-insensitive (Windows tools print c:\users\... as often as C:\Users\...), and only a whole folder name.
     for form in _home_forms():
-        text = text.replace(form, "~")
-    text = re.sub(r"(?i)([A-Z]:(?:\\\\|\\|/)+Users(?:\\\\|\\|/)+)[^\\/\s\"']+", r"\1<user>", text)
-    return re.sub(r"(/(?:Users|home)/)[^/\s\"']+", r"\1<user>", text)
+        text = re.sub(re.escape(form) + r"(?=[\\/\s\"':;,)]|$)", "~", text, flags=re.IGNORECASE)
+    # Another user's folder: everything up to the next separator, so a name with a space goes whole.
+    text = re.sub(r"(?i)([A-Z]:(?:\\\\|\\|/){1,4}Users(?:\\\\|\\|/){1,4})[^\\/\"'\n]{1,128}", r"\1<user>", text)
+    text = re.sub(r"(/Users/)[^/\"'\n]{1,128}", r"\1<user>", text)
+    return re.sub(r"(/home/)[^/\s\"']{1,128}", r"\1<user>", text)
 
 
 def display_path(path):
     """A path with the home folder as ~ and any other user's folder as <user>; bounded."""
-    return _scrub_paths(str(path))[-160:]
+    return _scrub_paths(str(path)[-1024:])[-160:]
 
 
 def scrub(text, lines=TAIL_LINES):
     """The bounded tail of command output with credentials, people and private paths removed."""
     if not isinstance(text, str) or not text:
         return ""
-    text = _ANSI.sub("", text[-65536:]).replace("\r\n", "\n").replace("\r", "\n")
+    candidates = [line[:SCRUB_LINE_CHARS] for line in text[-65536:].replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
+    text = "\n".join(candidates[-SCRUB_LINES:])
+    text = _ANSI.sub("", text)
     text = "".join(char if char in "\n\t" or 32 <= ord(char) < 127 or ord(char) > 159 else " " for char in text)
     text = _scrub_paths(text)
     for pattern, replacement in _SECRET_PATTERNS:
         text = pattern.sub(replacement, text)
+    text = _SLASHED.sub(_random_looking, text)
     kept = [line.rstrip()[:TAIL_LINE_CHARS] for line in text.split("\n") if line.strip()][-lines:]
     return "\n".join(kept)[-TAIL_CHARS:]
 
@@ -133,20 +169,24 @@ def command_display(argv, label=None):
 
 
 class Diagnostics:
-    """One row's record. Helpers write to the recorder of the row their thread runs."""
+    """One row's record. Helpers write to the recorder of the row their thread runs.
+
+    Every recorded command is kept (bounded); the row shows the one that decided it:
+    for a row that finished cleanly the last command that succeeded (a fallback that
+    worked, not the attempt it replaced), otherwise the last command that failed.
+    Read-only probes run quiet and are never "what ran"."""
+
+    RUNS = 16
 
     def __init__(self):
         self.started = time.monotonic()
         self.phases = {}
         self._phase = None
-        self.command = None
-        self.exit_code = None
-        self.tail = ""
+        self.runs = []
         self.owner = None
         self.cause = None
         self.reason = None
         self.notes = []
-        self._failed = False
 
     def phase(self, name):
         now = time.monotonic()
@@ -156,15 +196,28 @@ class Diagnostics:
         self._phase = (name, now) if name else None
 
     def ran(self, argv, exit_code=None, output="", label=None, failed=None):
-        """Record one command. A failure stays the row's record: a later successful
-        command (the re-detection after a failed update) never replaces it."""
         failed = exit_code not in (None, 0) if failed is None else failed
-        if not failed and self._failed:
-            return
-        self._failed = self._failed or failed
-        self.command = command_display(argv, label)
-        self.exit_code = exit_code
-        self.tail = scrub(output) if failed else ""
+        self.runs.append({"command": command_display(argv, label), "exitCode": exit_code,
+                          "tail": scrub(output) if failed else "", "failed": failed})
+        del self.runs[:-self.RUNS]
+
+    def deciding(self, success):
+        """The run that decided a row: the last success for a clean row, else the last failure."""
+        for run in reversed(self.runs):
+            if run["failed"] != success:
+                return run
+        return self.runs[-1] if self.runs and not success else None
+
+    # Older call sites and tests read these.
+    @property
+    def command(self):
+        run = self.deciding(False)
+        return run["command"] if run else None
+
+    @property
+    def exit_code(self):
+        run = self.deciding(False)
+        return run["exitCode"] if run else None
 
     def blame(self, cause, reason=None):
         if cause in CAUSES:
@@ -179,16 +232,18 @@ class Diagnostics:
     def export(self, row):
         self.phase(None)
         cause, reason = self.cause, self.reason
+        failure = self.deciding(False)
         if cause is None:
-            cause, derived = cause_for(row, self.exit_code)
+            cause, derived = cause_for(row, failure["exitCode"] if failure and failure["failed"] else None)
             reason = reason or derived
+        run = self.deciding(cause == "none")
         value = {"cause": cause}
         if reason:
             value["reason"] = reason
-        if self.command:
-            value["command"] = self.command
-        if isinstance(self.exit_code, int) and -2 ** 31 <= self.exit_code < 2 ** 32:
-            value["exitCode"] = self.exit_code
+        if run:
+            value["command"] = run["command"]
+            if isinstance(run["exitCode"], int) and -2 ** 31 <= run["exitCode"] < 2 ** 32:
+                value["exitCode"] = run["exitCode"]
         phases = {name: max(0, min(ms, 86400000)) for name, ms in list(self.phases.items())[:8] if REASON.fullmatch(name)}
         if phases:
             value["phases"] = phases
@@ -196,8 +251,8 @@ class Diagnostics:
             value["owner"] = self.owner
         if self.notes:
             value["notes"] = list(self.notes)
-        if self.tail and cause not in ("none",):
-            value["tail"] = self.tail
+        if run and run["tail"] and cause != "none":
+            value["tail"] = run["tail"]
         return value
 
 
@@ -279,6 +334,8 @@ class Install:
     owner: dict = None
     # Antigravity ACP only: "harness" for a 1.3/1.4 runtime pair, "native" for the 1.5+ CLI.
     runtime_kind: str = None
+    # Cursor only: another copy that comes first on PATH and runs instead ({"path", "version"}).
+    shadow: dict = None
 
 
 def strip_dashboard_secrets(values):
@@ -767,7 +824,12 @@ def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False,
         options = {} if visible else {"creationflags": CREATE_NO_WINDOW}
     else:
         options = {"start_new_session": True}
-    sink = None if merge_errors or errors_sink is None else tempfile.TemporaryFile()
+    sink = None
+    if not merge_errors and errors_sink is not None:
+        try:
+            sink = tempfile.TemporaryFile()
+        except OSError:
+            sink = None  # no temp space: the command still runs, its stderr just goes unread
     try:
         process = subprocess.Popen(
             argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture or merge_errors else subprocess.DEVNULL,
@@ -792,7 +854,7 @@ def _run_bounded(argv, timeout, env, capture, visible=False, merge_errors=False,
             sink.close()
 
 
-def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False, cwd=None, kill_tree=False, label=None, stderr_tail=True):
+def command(argv, timeout=30, env=None, capture=False, preserve_env=False, capture_limit=65536, visible=False, errors=False, cwd=None, kill_tree=False, label=None, stderr_tail=True, quiet=False):
     """Run one fixed command; a non-zero exit raises UpdateFailure. errors keeps the run's stderr,
     merged with its stdout, in the exception's output for in-memory classification only.
     kill_tree opts this one call into whole-tree cleanup; only the muse warm sets it.
@@ -802,8 +864,10 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
     of its stderr. Without errors the failure's output is that stderr too, still in
     memory only, so callers can classify a refusal (sign-in, policy) by its words.
     stderr_tail=False keeps stderr on the null device: for commands that hand off a
-    long-lived app (open -a, wt.exe, systemd-run), whose output must not land anywhere."""
-    record = diagnostics()
+    long-lived app (open -a, wt.exe, systemd-run), whose output must not land anywhere.
+    quiet=True leaves the run out of the row's record: read-only probes (versions,
+    service states) never become "what ran"."""
+    record = _Silent() if quiet else diagnostics()
     stderr = []
     try:
         returncode, data = _run_bounded(
@@ -829,10 +893,16 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
     return data.decode("utf-8", "replace") if capture else ""
 
 
-def powershell(script, timeout=30, capture_limit=65536, label=None):
+# Windows PowerShell 5.1 writes to a pipe in the OEM code page (CP437, CP850, ...), which
+# command() would read as UTF-8: a "C:\\Users\\Ren\u00e9" path or a localized error came back as U+FFFD.
+POWERSHELL_UTF8 = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+
+
+def powershell(script, timeout=30, capture_limit=65536, label=None, quiet=False):
     import base64
-    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
-    return command(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], timeout, capture=True, capture_limit=capture_limit, label=label)
+    encoded = base64.b64encode((POWERSHELL_UTF8 + script).encode("utf-16le")).decode("ascii")
+    return command(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], timeout, capture=True,
+                   capture_limit=capture_limit, label=label, quiet=quiet)
 
 
 def ps_quote(value):
@@ -929,12 +999,12 @@ def resolve_npm(prefix):
     previous '"C:\\Program Files\\nodejs\\npm.cmd" install ...' line died with
     "not recognized" before npm ever started. Returns (node, cli) or None.
     """
-    roots = []
+    # The prefix's own Node first (nvm-windows, a portable Node that owns the prefix), then PATH's, then the default.
+    roots = [pathlib.Path(prefix)]
     located = shutil.which("npm.cmd")
     if located:
         roots.append(pathlib.Path(located).parent)
     roots.append(pathlib.Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "nodejs")
-    roots.append(prefix)
     for root in roots:
         node, cli = root / "node.exe", root / "node_modules/npm/bin/npm-cli.js"
         if node.is_file() and cli.is_file():
@@ -969,6 +1039,21 @@ def _posix_npm(prefix):
     return None
 
 
+def effective_path(host):
+    """PATH as ordinary processes see it: the helper's own, plus the Mac's system folders.
+    The helper arrives over ssh with a shorter PATH than launchd and Terminal give apps."""
+    folders = os.environ.get("PATH", "").split(os.pathsep)
+    if host == "mac":
+        with contextlib.suppress(OSError):
+            folders += pathlib.Path("/etc/paths").read_text(encoding="utf-8").split()
+        with contextlib.suppress(OSError):
+            for extra in sorted(pathlib.Path("/etc/paths.d").iterdir())[:32]:
+                with contextlib.suppress(OSError):
+                    folders += extra.read_text(encoding="utf-8").split()
+        folders += ["/opt/homebrew/bin", "/usr/local/bin"]
+    return [folder for folder in dict.fromkeys(folders) if folder]
+
+
 # Version probes run side by side now, so a busy host gets a little longer.
 VERSION_PROBE_TIMEOUT = 20
 
@@ -976,7 +1061,7 @@ VERSION_PROBE_TIMEOUT = 20
 def cli_probe(path, args=("--version",)):
     """(version or None, 'timeout' when the probe ran out of time, else None)."""
     try:
-        return version_text(command([path, *args], timeout=VERSION_PROBE_TIMEOUT, capture=True)), None
+        return version_text(command([path, *args], timeout=VERSION_PROBE_TIMEOUT, capture=True, quiet=True)), None
     except UpdateFailure as error:
         return None, ("timeout" if error.code == "timeout" else None)
 
