@@ -227,7 +227,7 @@ function collectRolloutFiles(
 
 /**
  * Default tail via bounded pure fs reads. Must work under BOTH node and bun: the
- * `ccs` CLI (and `ccs bar launch`) runs under node, where `Bun.spawn` is
+ * `ccs` CLI runs under node, where `Bun.spawn` is
  * undefined. Read from the end in chunks until enough lines are available, but
  * cap bytes per file so oversized rollout logs cannot exhaust server memory.
  */

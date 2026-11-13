@@ -1,3 +1,4 @@
+import { EXPERIMENT_ANALYTICS_TOOLS } from './analytics-tools';
 /**
  * Experiment usage roots: Claude Code, Codex, Muse Code and zcode logs that experiment harnesses
  * write under `~/PM-Experiments` in their own private tool homes, outside the default roots the
@@ -34,7 +35,7 @@ import {
 export type { ExperimentKind } from './experiment-usage-signatures';
 
 export type ExperimentRootSet = Record<ExperimentKind, string[]>;
-const KINDS: ExperimentKind[] = ['claude', 'codex', 'muse', 'zcode'];
+const KINDS = EXPERIMENT_ANALYTICS_TOOLS;
 
 /** Directories deeper than this below the base are never read (deepest real tool home: 13). */
 export const EXPERIMENT_SCAN_MAX_DEPTH = 14;

@@ -1,3 +1,4 @@
+import type { AnalyticsTool } from './analytics-tools';
 import * as path from 'path';
 import * as fs from 'fs';
 import { Worker } from 'worker_threads';
@@ -107,62 +108,50 @@ export interface CodexPartitionFileResult {
   largeCodexRead?: LargeCodexReadSpec;
 }
 
+interface UsageWorkerPayloads {
+  claude: {
+    projectsDir: string;
+    experimentRoots?: string[];
+    /**
+     * T3 Code account homes (t3-usage-roots.ts), read like experiment roots but in full depth
+     * and following their symlinks: each real file once, copies of default records dropped.
+     */
+    homeRoots?: string[];
+    /** Experiment requests: every default Claude root, whose responses' copies never count. */
+    referenceRoots?: string[];
+    activity?: AccountActivityScanOptions;
+  };
+  codex: {
+    codexHome: string;
+    cacheDir: string;
+    experimentRoots?: string[];
+    /** T3 Code shadow homes' `sessions` folders that are not links into the default root. */
+    homeRoots?: string[];
+    activity?: AccountActivityScanOptions;
+    partition?: CodexPartitionSpec;
+    largeRead?: { spec: LargeCodexReadSpec; deadline: number };
+  };
+  omp: { roots: string[]; activity?: AccountActivityScanOptions };
+  muse: {
+    sessionsDir: string;
+    experimentRoots?: string[];
+    activity?: AccountActivityScanOptions;
+  };
+  zcode: {
+    dbPath: string;
+    experimentDbs?: string[];
+    activity?: AccountActivityScanOptions;
+  };
+  antigravity: { activity?: AccountActivityScanOptions };
+}
 export type UsageWorkerRequest =
-  /**
-   * `experimentRoots` / `experimentDbs` (experiment-usage-roots.ts) and `homeRoots`
-   * (t3-usage-roots.ts) make a separate request that reads only those roots, deduplicated record
-   * by record; the default root then serves only as the reference copies are checked against
-   * (see collectExperimentActivity).
-   */
-  | {
-      kind: 'claude';
-      projectsDir: string;
-      experimentRoots?: string[];
-      /**
-       * T3 Code account homes (t3-usage-roots.ts), read like experiment roots but in full depth
-       * and following their symlinks: each real file once, copies of default records dropped.
-       */
-      homeRoots?: string[];
-      /** Experiment requests: every default Claude root, whose responses' copies never count. */
-      referenceRoots?: string[];
-      activity?: AccountActivityScanOptions;
-    }
-  | {
-      kind: 'codex';
-      codexHome: string;
-      cacheDir: string;
-      experimentRoots?: string[];
-      /** T3 Code shadow homes' `sessions` folders that are not links into the default root. */
-      homeRoots?: string[];
-      activity?: AccountActivityScanOptions;
-      partition?: CodexPartitionSpec;
-      largeRead?: { spec: LargeCodexReadSpec; deadline: number };
-    }
-  | { kind: 'omp'; roots: string[]; activity?: AccountActivityScanOptions }
-  | {
-      kind: 'muse';
-      sessionsDir: string;
-      experimentRoots?: string[];
-      activity?: AccountActivityScanOptions;
-    }
-  | {
-      kind: 'zcode';
-      dbPath: string;
-      experimentDbs?: string[];
-      activity?: AccountActivityScanOptions;
-    }
+  | { [Tool in AnalyticsTool]: { kind: Tool } & UsageWorkerPayloads[Tool] }[AnalyticsTool]
   | {
       kind: 'jsonl';
       roots: string[];
       mapping: JsonlFieldMapping;
       activity?: AccountActivityScanOptions;
     }
-  /**
-   * Antigravity's conversation databases, read by the packaged helper on this host
-   * (antigravity-native-usage-collector.ts), which finds the roots itself.
-   */
-  | { kind: 'antigravity'; activity?: AccountActivityScanOptions }
-  /** One slice of the experiment-root walk (experiment-usage-roots.ts); returns no usage. */
   | { kind: 'experiment-roots'; cacheDir: string };
 
 export interface UsageWorkerResult {

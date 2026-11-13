@@ -257,7 +257,7 @@ export function loadUnifiedConfigWithLockHeld(
 export function writeUnifiedConfigWithLockHeld(
   config: UnifiedConfig,
   generateYamlHeader: () => string,
-  generateYamlWithComments: (config: UnifiedConfig) => string
+  generateYamlWithComments: (config: UnifiedConfig, existing?: string) => string
 ): void {
   const yamlPath = getConfigYamlPath();
   const dir = path.dirname(yamlPath);
@@ -271,7 +271,8 @@ export function writeUnifiedConfigWithLockHeld(
   config.version = UNIFIED_CONFIG_VERSION;
 
   // Generate YAML with section comments
-  const yamlContent = generateYamlWithComments(config);
+  const existing = fs.existsSync(yamlPath) ? fs.readFileSync(yamlPath, 'utf8') : '';
+  const yamlContent = generateYamlWithComments(config, existing);
   const content = generateYamlHeader() + yamlContent;
 
   // Atomic write: write to temp file, then rename

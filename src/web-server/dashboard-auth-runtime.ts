@@ -77,7 +77,7 @@ function setupCodeLocation(): string {
 
 /**
  * Printed once to the terminal that started the server, and never to a log
- * file: when stdout is not a terminal (`bar launch` sends it to
+ * file: when stdout is not a terminal (a service redirects it to
  * ~/.ccs/bar/serve.log, a service manager to its journal), only the file's
  * location is printed, not the code.
  */

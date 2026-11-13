@@ -1,3 +1,4 @@
+import { ANALYTICS_TOOLS, type AnalyticsTool } from '../usage/analytics-tools';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getCcsDir } from '../../utils/config-manager';
@@ -32,7 +33,7 @@ import { readDashboardPreferences } from './dashboard-preferences';
 import { runBounded } from '../usage/collector-concurrency';
 import { localClaudeLogNames, type ClaudeLogNames } from './analytics-claude-log-names';
 
-export type AnalyticsSourceTool = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'antigravity';
+export type AnalyticsSourceTool = AnalyticsTool;
 export type AnalyticsSourceState =
   | 'ok'
   | 'cached'
@@ -137,10 +138,7 @@ export interface AnalyticsRemoteSourceDeps {
  * not have reports `not_installed`; the states are measured by the scan, never assumed.
  */
 const REMOTE_TARGETS = Object.fromEntries(
-  REMOTE_ANALYTICS_HOSTS.map((host) => [
-    host,
-    ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'],
-  ])
+  REMOTE_ANALYTICS_HOSTS.map((host) => [host, ANALYTICS_TOOLS])
 ) as Record<AnalyticsRemoteHost, AnalyticsRemoteKind[]>;
 
 /** The kinds scanned on one remote host, for states when no scan answered. */

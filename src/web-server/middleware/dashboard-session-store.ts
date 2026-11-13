@@ -34,7 +34,7 @@ import { readPrivateJsonFile, writePrivateJsonFile } from '../services/private-j
  *
  * One dashboard writes the file; it claims that role with an exclusive create, so two dashboards
  * starting together cannot both win. Another dashboard process on the same `~/.ccs` (for example
- * `bar serve` beside `dashboard`) keeps its own sign-ins in memory only, as before this store, and
+ * two dashboard servers) keeps its own sign-ins in memory only, as before this store, and
  * does not honour the writer's: a sign-out on either can then never be undone by the other. When
  * the writer is gone, the other takes over the file.
  *

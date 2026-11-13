@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### Changed
+
+* **fork cleanup:** Removed the unused Claude session launcher, shared Claude-config linker, old profile registry, web-search/image hooks and local bar server mode. `ai-account-center bar` opens the paired native app; start `ai-account-center dashboard` or `ccs config` separately. Existing private files and retired-bin guidance stay. CLIProxy code, tests and paused-account handling are held for central-logins research.
+* **configuration:** Ten retired launcher sections are now ignored and preserved, with no read-time rewrite or new defaults. See [migration notes](docs/user-guide.md#existing-ccs-installations).
+* **maintenance:** Analytics tool types share one registry, and [approval tokens](docs/approval-tokens.md) names the existing store to use for new guarded actions. Existing approval behavior stays unchanged.
+
 ### Added
 
 * **nas1:** Nas1, a second Ubuntu computer reached over the fixed SSH alias `nas1-agent`, is the fourth computer AI Account Center reaches, beside the Ubuntu computer that runs the dashboard, the Mac and Windows. It takes part in Update all and Analytics only: it runs no dashboard and holds no account state, and no account switching, Codex or Antigravity activation, key storage, sign-in or Claude desktop flow targets it. The dashboard computer runs only these fixed commands there: the helper hash query, the helper extract, the update helper, the read-only analytics helper and, for a source saved for Nas1, the usage collectors.

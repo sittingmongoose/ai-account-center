@@ -46,41 +46,15 @@ import type {
   ManualQuotaConfig,
   QuotaManagementMode,
   QuotaManagementConfig,
-  ThinkingMode,
-  ThinkingTierDefaults,
-  ThinkingConfig,
-  OfficialChannelId,
-  OfficialChannelsConfig,
-  DuckDuckGoWebSearchConfig,
-  BraveWebSearchConfig,
-  ExaWebSearchConfig,
-  TavilyWebSearchConfig,
-  SearxngWebSearchConfig,
-  GeminiWebSearchConfig,
-  GrokWebSearchConfig,
-  OpenCodeWebSearchConfig,
-  WebSearchProvidersConfig,
-  WebSearchConfig,
-  BrowserToolPolicy,
-  BrowserEvalMode,
-  BrowserClaudeConfig,
-  BrowserCodexConfig,
-  BrowserConfig,
   LoggingLevel,
   LoggingConfig,
   PreferencesConfig,
-  CopilotAccountType,
-  CopilotConfig,
-  CursorConfig,
   ProxyRemoteConfig,
   ProxyFallbackConfig,
   ProxyLocalConfig,
   OpenAICompatProxyRoutingConfig,
   OpenAICompatProxyConfig,
   CliproxyServerConfig,
-  GlobalEnvConfig,
-  ContinuityConfig,
-  ImageAnalysisConfig,
 } from '../../unified-config-types';
 
 describe('config schemas backward compatibility', () => {
@@ -132,21 +106,13 @@ describe('config schemas backward compatibility', () => {
   const defaultConstants = [
     'DEFAULT_CLIPROXY_SAFETY_CONFIG',
     'DEFAULT_LOGGING_CONFIG',
-    'DEFAULT_OFFICIAL_CHANNELS_CONFIG',
-    'DEFAULT_BROWSER_CONFIG',
     'DEFAULT_DASHBOARD_AUTH_CONFIG',
     'DEFAULT_AUTO_QUOTA_CONFIG',
     'DEFAULT_MANUAL_QUOTA_CONFIG',
     'DEFAULT_RUNTIME_MONITOR_CONFIG',
     'DEFAULT_QUOTA_MANAGEMENT_CONFIG',
-    'DEFAULT_THINKING_TIER_DEFAULTS',
-    'DEFAULT_THINKING_CONFIG',
-    'DEFAULT_COPILOT_CONFIG',
-    'DEFAULT_CURSOR_CONFIG',
     'DEFAULT_CLIPROXY_SERVER_CONFIG',
     'DEFAULT_OPENAI_COMPAT_PROXY_CONFIG',
-    'DEFAULT_GLOBAL_ENV',
-    'DEFAULT_IMAGE_ANALYSIS_CONFIG',
   ] as const;
 
   for (const name of defaultConstants) {
@@ -172,16 +138,9 @@ describe('config schemas backward compatibility', () => {
     expect(config.cliproxy.variants).toEqual({});
     expect(config.logging).toBeDefined();
     expect(config.preferences).toBeDefined();
-    expect(config.browser).toBeDefined();
-    expect(config.image_analysis).toBeDefined();
     expect(config.quota_management).toBeDefined();
-    expect(config.thinking).toBeDefined();
-    expect(config.channels).toBeDefined();
     expect(config.dashboard_auth).toBeDefined();
-    expect(config.copilot).toBeDefined();
-    expect(config.cursor).toBeDefined();
     expect(config.cliproxy_server).toBeDefined();
-    expect(config.websearch).toBeDefined();
   });
 
   it('re-exports isUnifiedConfig', () => {
@@ -208,21 +167,13 @@ describe('config schemas backward compatibility', () => {
     'isUnifiedConfig',
     'DEFAULT_CLIPROXY_SAFETY_CONFIG',
     'DEFAULT_LOGGING_CONFIG',
-    'DEFAULT_OFFICIAL_CHANNELS_CONFIG',
-    'DEFAULT_BROWSER_CONFIG',
     'DEFAULT_DASHBOARD_AUTH_CONFIG',
     'DEFAULT_AUTO_QUOTA_CONFIG',
     'DEFAULT_MANUAL_QUOTA_CONFIG',
     'DEFAULT_RUNTIME_MONITOR_CONFIG',
     'DEFAULT_QUOTA_MANAGEMENT_CONFIG',
-    'DEFAULT_THINKING_TIER_DEFAULTS',
-    'DEFAULT_THINKING_CONFIG',
-    'DEFAULT_COPILOT_CONFIG',
-    'DEFAULT_CURSOR_CONFIG',
     'DEFAULT_CLIPROXY_SERVER_CONFIG',
     'DEFAULT_OPENAI_COMPAT_PROXY_CONFIG',
-    'DEFAULT_GLOBAL_ENV',
-    'DEFAULT_IMAGE_ANALYSIS_CONFIG',
   ] as const;
 
   for (const name of expectedRuntimeExports) {

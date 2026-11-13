@@ -350,7 +350,7 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 | `ai-account-center codex-auth activate <name>` | Guarded switch of the shared Codex login |
 | `ai-account-center antigravity signin <profile>` | Add or re-sign an Antigravity profile on Ubuntu |
 | `ai-account-center antigravity status` | Read-only check of what Antigravity switching needs |
-| `ai-account-center bar` | Mac: start the local dashboard and open the menu-bar app |
+| `ai-account-center bar` | Mac: open the paired menu-bar app |
 
 `ai-account-center help <command>` has every option. The older `ccs` command runs the same commands, and **`ccs config` still opens the dashboard**.
 
@@ -399,7 +399,7 @@ This is the continuing fork of [CCS](https://github.com/kaitranntt/ccs), now at
 Your data stays where it is: `~/.ccs/`, `CCS_HOME`, profile and provider IDs, session aliases
 and native messaging identities all keep working, and nothing needs renaming. The old
 runtime router (`ccsx`, `ccs-codex`, `ccsd`, `ccs-droid`, `ccsxp`) is retired; those commands now
-print migration guidance. Details: [user guide](docs/user-guide.md#existing-ccs-installations).
+print migration guidance. Unused launcher, hook and shared Claude-config linker code has been removed; existing files stay in place. The trays connect to a dashboard you run separately. Details: [user guide](docs/user-guide.md#existing-ccs-installations).
 
 ## 🙏 Attribution and license
 

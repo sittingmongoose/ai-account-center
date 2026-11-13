@@ -173,9 +173,7 @@ export async function requiresRuntimeServices(args: string[]): Promise<boolean> 
     return (
       !hasAnyFlag(args, ['--help', '-h']) &&
       !args.some((arg) => ['help', 'version', '--version'].includes(arg)) &&
-      (!subcommand ||
-        subcommand.startsWith('-') ||
-        ['launch', 'serve', 'stop', 'status', 'install', 'uninstall'].includes(subcommand))
+      (!subcommand || ['install', 'uninstall'].includes(subcommand))
     );
   }
   return false;

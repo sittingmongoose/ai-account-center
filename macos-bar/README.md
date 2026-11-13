@@ -314,3 +314,5 @@ Provider marks are the official artwork listed with sources and SHA-256 in `Reso
 template, header mark and app icon come from the project's own logo export.
 All accounts models, authenticated client, grouped views, and user installer are
 the accounts-edition implementation.
+
+The installed app connects to its saved dashboard address and never starts a local server. `ai-account-center bar` opens the owned app; start the dashboard separately. The old `bar launch/serve/stop/status` CLI mode and local-server descriptors are retired; existing descriptor files are left untouched.

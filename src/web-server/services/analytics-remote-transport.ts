@@ -1,3 +1,4 @@
+import { ANALYTICS_TOOLS, type AnalyticsTool } from '../usage/analytics-tools';
 import { execFile } from 'child_process';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
@@ -13,10 +14,10 @@ export const REMOTE_ANALYTICS_HOSTS = REMOTE_HOSTS;
 export type AnalyticsRemoteHost = (typeof REMOTE_ANALYTICS_HOSTS)[number];
 /** The ssh alias to reach each remote host, or null when none is configured. */
 export type AnalyticsRemoteAliases = Record<AnalyticsRemoteHost, string | null>;
-export type AnalyticsRemoteKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'antigravity';
+export type AnalyticsRemoteKind = AnalyticsTool;
 
 /** Every kind the packaged helper reads. */
-const REMOTE_KIND_LIST = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
+const REMOTE_KIND_LIST = ANALYTICS_TOOLS;
 const REMOTE_KINDS: ReadonlySet<string> = new Set(REMOTE_KIND_LIST);
 
 export {

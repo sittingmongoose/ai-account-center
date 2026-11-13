@@ -599,6 +599,23 @@ longer prints shell exports. Use `codex-auth activate` for shared login selectio
 and a provider's own CLI for an AI session. Old routing/API-profile/proxy examples
 remain upstream history rather than current setup instructions.
 
+The unused Claude launcher, shared Claude-config linker, old profile registry,
+web-search/image hooks and local bar server commands have been removed.
+`ai-account-center bar` opens the owned Mac app using its saved connection;
+run `ai-account-center dashboard` (or `ccs config`) separately. The retired
+`bar launch/serve/stop/status` commands report migration guidance. Old
+`launch.json`, `bar.json`, `server.pid` and log files are left untouched and
+are no longer read by the CLI or trays.
+
+The following `config.yaml` sections are ignored and stay in existing files:
+`websearch`, `global_env`, `continuity`, `copilot`, `cursor`, `thinking`,
+`runtime`, `channels`, `browser`, `image_analysis`. Reads never rewrite an
+old config; unrelated saves preserve these values. Fresh configs omit them.
+CLIProxy code, tests, paused-account handling and the `cliproxy`, `proxy`,
+`cliproxy_server`, `quota_management` config sections are held for the
+central-logins research. This does not enable a proxy service or add CLI commands.
+The read-only T3 usage hub and the authenticated HTTP API remain available.
+
 ## Known limits
 
 - Cursor usage is not available locally: it is server-side only, and reads as

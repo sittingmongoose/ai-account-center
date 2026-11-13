@@ -1,3 +1,4 @@
+import type { ExperimentAnalyticsTool } from './analytics-tools';
 /**
  * Content signatures for experiment usage roots (experiment-usage-roots.ts): which tool wrote a
  * log, judged from a bounded head (or tail) of its records; whether a SQLite file is a zcode
@@ -10,7 +11,7 @@ import * as path from 'path';
 import { AAC_SANDBOX_MARKER } from './omp-native-usage-collector';
 import { codexZstdChunks } from './codex-rollout-files';
 
-export type ExperimentKind = 'claude' | 'codex' | 'muse' | 'zcode';
+export type ExperimentKind = ExperimentAnalyticsTool;
 /** Bytes read from the head (and, when the head is inconclusive, the tail) of a candidate. */
 const SNIFF_BYTES = 64 * 1024;
 const SNIFF_LINES = 40;

@@ -31,24 +31,12 @@ export {
   isUnifiedMode,
   getDefaultProfile,
   setDefaultProfile,
-  getWebSearchConfig,
-  getGlobalEnvConfig,
-  getOutputLimitsEnv,
-  getContinuityInheritanceMap,
-  getCliproxySafetyConfig,
-  getThinkingConfig,
-  getOfficialChannelsConfig,
   isDashboardAuthEnabled,
   getDashboardAuthConfig,
-  getBrowserConfig,
-  hasExplicitClaudeBrowserDevtoolsPort,
-  getImageAnalysisConfig,
   getLoggingConfig,
-  getCursorConfig,
 } from './unified-config-loader';
 
 // Re-export types from unified-config-loader
-export type { GeminiWebSearchInfo } from './unified-config-loader';
 
 // Re-export selected functions from config-manager
 export { loadSettings, loadConfigSafe, readConfig, getCcsDir } from '../utils/config-manager';

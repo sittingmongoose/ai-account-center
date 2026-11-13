@@ -1,3 +1,4 @@
+import type { ActivityKind } from '../usage/analytics-tools';
 import type {
   ClaudeDashboardPlatform,
   DashboardAccount,
@@ -97,8 +98,7 @@ export interface AccountAnalyticsModelRates {
 }
 
 /** A tool whose CLI usage logs the server reads (a collection source, not a provider). */
-export type AccountAnalyticsActivityProvider =
-  'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl' | 'antigravity';
+export type AccountAnalyticsActivityProvider = ActivityKind;
 
 /** One worker request the analytics activity service runs for a tool. */
 export type AccountAnalyticsActivityRequest = {

@@ -40,7 +40,7 @@ imports that file.
 |---|---|
 | `auth/*`, `.session-secret`, `account-usage/keys/*`, `status/answer-key.pem`, `account-usage/*` helper capsules | secrets or credential material; they stay in their private 0600 files and never enter the log |
 | `account-usage-accounts.json`, `account-visibility.json`, `account-refresh-settings.json`, `dashboard-preferences.json`, `codex-auto-switch.json`, `agent-usage-snapshot.json`, Claude profile stores | small configuration edited whole; the CLI and Python helpers read them; nothing to query |
-| `bar.json`, `bar/*` | read by the Swift and WPF bars |
+| `bar/accounts-connection.json`, native bar preferences and status | read by the Swift and WPF bars; old `bar.json`, `launch.json` and `server.pid` are ignored and left in place |
 | `deployed-build.json` | read by the package `postinstall` gate |
 | `app-updates/*` from the Python helpers, `codex-renewal-status.json`, `antigravity-switching/*` | live coordination state shared with Python or other processes; history from them is recorded as events (phase 5), the state files stay |
 | `cache/*`, `account-usage-failover/*`, `claude-desktop-live-cache/*`, `models-dev-registry-cache.json`, `opencode-console-wallet-*.json` | caches with TTLs, rebuilt from their sources; losing one costs a refresh, not history |
