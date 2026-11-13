@@ -239,7 +239,8 @@ class AcpTests(Fixtures):
                 if method == "server.refreshProviders":
                     owner.assertEqual(payload["refreshModels"], True)
                     if refresh:
-                        raise common.UpdateFailure("t3_install_failed:rpc", output="ProviderSetupError\n" + payload["instanceId"] + "\nrefresh-models\n" + refresh)
+                        # What Rpc.receive keeps of T3's failure: the error's tag and detail, never the instance name.
+                        raise common.UpdateFailure("t3_install_failed:rpc", output="ProviderSetupError\n" + refresh)
                     return {"providers": [{"instanceId": payload["instanceId"], "driver": "antigravity", "auth": {"status": "authenticated"}}]}
                 owner.assertEqual(payload, {"instanceId": "agy-custom-id"})
                 self.started = True
