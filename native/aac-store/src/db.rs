@@ -33,7 +33,7 @@ pub const DAY_CLOSED: Index = TableDefinition::new("day_closed");
 /// `{finding, ledgered}`.
 pub const FINDING: TableDefinition<'static, &'static str, &'static [u8]> = TableDefinition::new("finding");
 
-pub const STORE_SCHEMA_VERSION: u64 = 1;
+pub const STORE_SCHEMA_VERSION: u64 = 2;
 
 /// Dictionary kinds.
 pub const KIND_ACCOUNT: u8 = 1;

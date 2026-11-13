@@ -12,6 +12,12 @@
  * A change reaches `/ws` clients as `{ type: 'status-changed' }`, at most one every 5 seconds.
  */
 import { broadcastDashboardEvent } from '../dashboard-events';
+import {
+  getAacStore,
+  storeErrorCode,
+  type AacStore,
+  type StoreReportCapture,
+} from '../../store/store-service';
 import { buildSnapshotFiles } from '../agent-usage/agent-usage-snapshot';
 import { RecentReadings } from '../agent-usage/agent-usage-history';
 import {
@@ -101,6 +107,8 @@ function errorReason(error: unknown, fallback: string): string {
 
 export interface StatusServiceDeps {
   reader?: AgentReportsReader;
+  /** Accepted report revisions are retained independently of current page demand. */
+  historyStore?: () => Pick<AacStore, 'captureReports'> | null;
   quotaReader?: QuotaReportReader;
   registryReader?: PmMailRegistryReader;
   answers?: StatusAnswers;
@@ -140,6 +148,8 @@ export class StatusService {
   private readonly spendNative: NativeStatusHandle | null;
   /** The last composed spend-by-stream panel; starts as the contract's unavailable shape. */
   private spendByStream: SpendByStreamPanel = SPEND_BY_STREAM_UNAVAILABLE;
+  private readonly historyAccepted = new Map<string, string>();
+  private historyStore: Pick<AacStore, 'captureReports'> | null = null;
   private lastDemand = 0;
   private lastCollect = 0;
   private collecting: Promise<void> | null = null;
@@ -233,8 +243,105 @@ export class StatusService {
     } catch {
       /* The panel keeps its last composed view. */
     }
+    await this.captureReportHistory();
     // The spend-by-stream panel recomposes over the quota scan's latest accepted report.
     await this.composeSpendByStream();
+  }
+
+  /** Retry current accepted revisions after storage failures; the DB deduplicates across restarts. */
+  private async captureReportHistory(): Promise<void> {
+    const store = (this.deps.historyStore ?? getAacStore)();
+    if (!store) return;
+    if (store !== this.historyStore) {
+      this.historyAccepted.clear();
+      this.historyStore = store;
+    }
+    const reports = this.reader.snapshot();
+    const status = this.pinned.docs.snapshot();
+    const input = [
+      ...reports.threads.map((row) => ({ ...row, kind: 'thread' as const })),
+      ...reports.tasks.map((row) => ({ ...row, kind: 'tasks' as const })),
+      ...reports.cards.map((row) => ({ ...row, kind: 'card' as const })),
+      ...status.docs
+        .filter((row) => row.sha256 !== '')
+        .map((row) => ({ ...row, kind: 'status' as const })),
+    ];
+    const pending = input.filter((row) => {
+      const id = row.kind === 'card' ? (row.doc as { id: string }).id : row.writer;
+      return this.historyAccepted.get(JSON.stringify([row.kind, row.writer, id])) !== row.sha256;
+    });
+    const captures: StoreReportCapture[] = pending.map((row) => {
+      const doc = row.doc as unknown as Record<string, unknown>;
+      const agent = (doc.agent ?? {}) as Record<string, unknown>;
+      const machine = row.writer.split('.')[0];
+      return {
+        kind: row.kind,
+        writer: row.writer,
+        objectId: row.kind === 'card' ? String(doc.id) : row.writer,
+        seq: Number(doc.seq),
+        writtenAtMs: row.writtenAtMs,
+        observedAtMs: row.firstSeenAt,
+        sourceSha256: row.sha256,
+        ids: {
+          computer: machine === 'vm' ? 'ubuntu' : machine,
+          writer: row.writer,
+          t3ThreadId: doc.t3Thread ?? agent.t3Thread ?? null,
+          t3EnvironmentId: null,
+          t3TaskId: null,
+          runId: null,
+          cardId: row.kind === 'card' ? doc.id : null,
+          projectId: doc.project ? { source: 'agent-report', id: doc.project } : null,
+          streamId: doc.stream ? { source: 'agent-report', id: doc.stream } : null,
+          modelRaw: agent.model ?? null,
+          effort: agent.effort ?? null,
+          identitySource: 'reported',
+        },
+        doc: { ...doc, schema: `agent-reports/${row.kind}@1` },
+      };
+    });
+    const acknowledge = (rows: StoreReportCapture[]) => {
+      for (const row of rows)
+        this.historyAccepted.set(
+          JSON.stringify([row.kind, row.writer, row.objectId]),
+          row.sourceSha256
+        );
+    };
+    const warn = () =>
+      logger.warn(
+        'status.history_unavailable',
+        'A report revision could not be saved; unacknowledged revisions will be retried.'
+      );
+    for (let i = 0; i < captures.length; i += 4) {
+      const batch = captures.slice(i, i + 4);
+      try {
+        await store.captureReports(batch);
+        acknowledge(batch);
+      } catch (error) {
+        if (storeErrorCode(error) !== 'invalid') {
+          warn();
+          break; // A storage outage is different from a per-document policy refusal.
+        }
+        if (batch.length === 1) {
+          warn();
+          continue;
+        }
+        // Native policy can be stricter than the reader. Recover accepted neighbors and
+        // continue later batches; never acknowledge a refused revision.
+        for (const row of batch) {
+          try {
+            await store.captureReports([row]);
+            acknowledge([row]);
+          } catch {
+            warn();
+          }
+        }
+      }
+    }
+    while (this.historyAccepted.size > 5000) {
+      const oldest = this.historyAccepted.keys().next().value;
+      if (oldest === undefined) break;
+      this.historyAccepted.delete(oldest);
+    }
   }
 
   /** Recompose `spendByStream` over the SpendView the latest scan state builds. A failed

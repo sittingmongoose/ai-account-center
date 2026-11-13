@@ -301,3 +301,39 @@ describe('private bounded quota history', () => {
     expect(Buffer.byteLength(JSON.stringify(retained))).toBeLessThan(32 * 1024 * 1024);
   });
 });
+
+it('preserves a suspended open writer through a competing write and DB backfill', async () => {
+  const root = directory();
+  const store = new FileAccountAnalyticsHistoryStore(root);
+  const history = appendAccountAnalyticsSnapshot(null, [account()], NOW);
+  await store.write(history);
+  const destination = path.join(root, 'account-analytics', 'quota-history-v1.json');
+  const temporary = `${destination}.00000000-0000-4000-8000-000000000000.tmp`;
+  const handle = await fs.promises.open(temporary, 'wx', 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(history));
+    await handle.sync();
+    const suspendedAt = new Date(Date.now() - 25 * 3_600_000);
+    await handle.utimes(suspendedAt, suspendedAt);
+    await store.write(history);
+    const { backfillUsageHistory } = await import('../../../src/store/usage-backfill');
+    const target = {
+      getMeta: async () => null,
+      setMeta: async () => {},
+      record: async (rows: unknown[]) => ({
+        sampled: rows.length,
+        seen: 0,
+        skipped: 0,
+        rejected: 0,
+      }),
+    };
+    await backfillUsageHistory(target as Parameters<typeof backfillUsageHistory>[0], root);
+    expect(fs.existsSync(temporary)).toBe(true);
+    expect((await handle.stat()).size).toBe(Buffer.byteLength(JSON.stringify(history)));
+    await handle.close();
+    await fs.promises.rename(temporary, destination);
+    expect(await store.read()).toEqual(history);
+  } finally {
+    await handle.close().catch(() => {});
+  }
+});

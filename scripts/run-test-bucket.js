@@ -39,6 +39,7 @@ const slowTests = [
   'tests/unit/web-server/app-update-round2.test.ts',
   'tests/unit/app-updates/codex-update-runtime-bundle.test.ts',
   'tests/unit/web-server/status/status-routes.test.ts',
+  'tests/unit/web-server/status/status-server-review.test.ts',
 ];
 // CommonJS-heavy JS suites stay slow by default because many of them mutate
 // module cache or process state. Opt them into `test:fast` only after they are
@@ -48,6 +49,9 @@ const fastJsTests = new Set(['tests/unit/flag-parsing-simple.test.js']);
 const isolatedTests = new Set([
   'tests/unit/commands/bar-command.test.ts',
   'tests/unit/utils/fetch-proxy-setup.test.ts',
+  // Strict wall-clock fixtures must not share global mocks or a saturated worker pool.
+  'tests/unit/web-server/status/status-server-review.test.ts',
+  'tests/unit/web-server/account-dashboard-service.test.ts',
 ]);
 
 const filePattern = /(\.test\.(c|m)?[jt]s|\.spec\.(c|m)?[jt]s|-test\.(c|m)?[jt]s)$/;

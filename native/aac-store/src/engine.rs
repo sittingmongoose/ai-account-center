@@ -69,6 +69,7 @@ pub struct Config {
     pub cache_bytes: usize,
     /// redb `check_integrity()` runs at every start while the file is smaller than this.
     pub integrity_max_bytes: u64,
+    /// Zero keeps raw history forever; a positive value is an explicit legacy retention policy.
     pub retention_days: u64,
 }
 
@@ -77,7 +78,7 @@ impl Default for Config {
         Config {
             cache_bytes: 32 << 20,
             integrity_max_bytes: 512 << 20,
-            retention_days: 90,
+            retention_days: 0,
         }
     }
 }
@@ -270,8 +271,10 @@ impl Engine {
                     db::STORE_SCHEMA_VERSION
                 );
             }
-            if version == 0 {
+            if version < db::STORE_SCHEMA_VERSION {
                 db::set_meta(&txn, "store_schema_version", &db::STORE_SCHEMA_VERSION.to_string())?;
+            }
+            if version == 0 {
                 db::set_meta(&txn, "created_ms", &now_ms().to_string())?;
             }
             instance_id = match db::get_meta(&txn, "instance_id")? {

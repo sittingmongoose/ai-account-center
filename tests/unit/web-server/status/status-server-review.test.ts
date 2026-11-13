@@ -281,18 +281,26 @@ describe('secret search', () => {
     }
   });
 
-  it('legitimate notes with JSON-looking text read', () => {
+  it('legitimate notes with valid embedded JSON and ordinary prose read', () => {
     for (const note of [
       '"done"',
       '""',
       '"',
       '"[1,2]"',
-      '[link](url)',
-      '{not json}',
+      'See [link](url)',
+      'example {not json}',
       JSON.stringify({ result: JSON.stringify({ content: JSON.stringify([{ text: '[]' }]) }) }),
     ]) {
       const parsed = jsonFromBytes(Buffer.from(JSON.stringify({ note })), 64 * 1024);
       expect([note, parsed.ok]).toEqual([note, true]);
+    }
+  });
+
+  it('JSON-looking malformed notes fail closed, including leading Markdown brackets', () => {
+    for (const note of ['[link](url)', '{not json}', '  {', '\n[1,]']) {
+      expect(findSecretIn('', { note })).toBe('unparseable embedded JSON');
+      const parsed = jsonFromBytes(Buffer.from(JSON.stringify({ note })), 64 * 1024);
+      expect(parsed.ok).toBe(false);
     }
   });
 
@@ -901,16 +909,34 @@ describe('scan limits', () => {
       fs.utimesSync(file, new Date(NOW), new Date(NOW));
     }
     fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.a'), new Date(NOW), new Date(NOW));
-    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.b'), new Date(NOW + 1000), new Date(NOW + 1000));
-    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.c'), new Date(NOW + 2000), new Date(NOW + 2000));
-    const reader = new AgentReportsReader({ root: () => root, now: () => NOW, limits: { writers: 2 } });
+    fs.utimesSync(
+      path.join(root, 'v1', 'writers', 'vm.b'),
+      new Date(NOW + 1000),
+      new Date(NOW + 1000)
+    );
+    fs.utimesSync(
+      path.join(root, 'v1', 'writers', 'vm.c'),
+      new Date(NOW + 2000),
+      new Date(NOW + 2000)
+    );
+    const reader = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      limits: { writers: 2 },
+    });
     await reader.scan();
     const view = buildStatusView({
       now: NOW,
       timeZone: 'UTC',
       reports: reader.snapshot(),
       registry: { data: [], asOf: NOW, error: null },
-      machines: { vm: { data: null, asOf: null, error: null }, mac: { data: null, asOf: null, error: null }, windows: { data: null, asOf: null, error: null }, nas1: { data: null, asOf: null, error: null }, alexis: { data: null, asOf: null, error: null } } as never,
+      machines: {
+        vm: { data: null, asOf: null, error: null },
+        mac: { data: null, asOf: null, error: null },
+        windows: { data: null, asOf: null, error: null },
+        nas1: { data: null, asOf: null, error: null },
+        alexis: { data: null, asOf: null, error: null },
+      } as never,
       browsers: { data: null, asOf: null, error: null },
       simlock: { data: null, asOf: null, error: null },
       usage: null,
@@ -937,16 +963,34 @@ describe('scan limits', () => {
       Buffer.from('{"schema": "agent-')
     );
     fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.a'), new Date(NOW), new Date(NOW));
-    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.b'), new Date(NOW + 1000), new Date(NOW + 1000));
-    fs.utimesSync(path.join(root, 'v1', 'writers', 'vm.c'), new Date(NOW + 2000), new Date(NOW + 2000));
-    const reader = new AgentReportsReader({ root: () => root, now: () => NOW, limits: { writers: 2 } });
+    fs.utimesSync(
+      path.join(root, 'v1', 'writers', 'vm.b'),
+      new Date(NOW + 1000),
+      new Date(NOW + 1000)
+    );
+    fs.utimesSync(
+      path.join(root, 'v1', 'writers', 'vm.c'),
+      new Date(NOW + 2000),
+      new Date(NOW + 2000)
+    );
+    const reader = new AgentReportsReader({
+      root: () => root,
+      now: () => NOW,
+      limits: { writers: 2 },
+    });
     await reader.scan();
     const view = buildStatusView({
       now: NOW,
       timeZone: 'UTC',
       reports: reader.snapshot(),
       registry: { data: [], asOf: NOW, error: null },
-      machines: { vm: { data: null, asOf: null, error: null }, mac: { data: null, asOf: null, error: null }, windows: { data: null, asOf: null, error: null }, nas1: { data: null, asOf: null, error: null }, alexis: { data: null, asOf: null, error: null } } as never,
+      machines: {
+        vm: { data: null, asOf: null, error: null },
+        mac: { data: null, asOf: null, error: null },
+        windows: { data: null, asOf: null, error: null },
+        nas1: { data: null, asOf: null, error: null },
+        alexis: { data: null, asOf: null, error: null },
+      } as never,
       browsers: { data: null, asOf: null, error: null },
       simlock: { data: null, asOf: null, error: null },
       usage: null,
@@ -1000,10 +1044,7 @@ describe('lower seq on disk', () => {
         reports: reader.snapshot(),
         registry: { data: [], asOf: NOW, error: null },
         machines: Object.fromEntries(
-          MACHINE_IDS.map((id) => [
-            id,
-            { data: null, asOf: null, error: null },
-          ])
+          MACHINE_IDS.map((id) => [id, { data: null, asOf: null, error: null }])
         ) as never,
         browsers: { data: null, asOf: null, error: null },
         simlock: { data: null, asOf: null, error: null },
@@ -1541,7 +1582,9 @@ describe('the machine rows', () => {
     const row = (id: string) => rows.find((machine) => machine.id === id);
     expect(row('mac')?.cpu.cores).toBe(4);
     expect(row('vm')?.cpu?.cores ?? null).toBeNull();
-    expect([...new Set(remote)].sort()).toEqual(MACHINE_IDS.filter(id => id !== 'mac' && id !== 'vm').sort());
+    expect([...new Set(remote)].sort()).toEqual(
+      MACHINE_IDS.filter((id) => id !== 'mac' && id !== 'vm').sort()
+    );
   });
 });
 
@@ -2356,17 +2399,15 @@ describe('round three', () => {
     }));
     const send = async (i: number, note: string) =>
       (await answers.submitSet([entry(cards[i].id, cards[i].sha, { choice: [], note })], 'Mac'))[0];
-    for (const [i, note] of [
-      [0, 'password: hunter2isbad'],
-      [1, 'api_key=abcdef1234567890'],
-      [2, `use glpat-${'A1b2C3'.repeat(4)}`],
-      [3, `npm_${'a1B2c3D4e5'.repeat(4).slice(0, 36)}`],
+    for (const [i, note, expectedKind] of [
+      [0, 'password: hunter2isbad', 'a password or key'],
+      [1, 'api_key=abcdef1234567890', 'a credential assignment'],
+      [2, `use glpat-${'A1b2C3'.repeat(4)}`, 'a GitLab token'],
+      [3, `npm_${'a1B2c3D4e5'.repeat(4).slice(0, 36)}`, 'an npm token'],
     ] as const) {
       const result = await send(i, note);
       expect([note, result.code]).toEqual([note, 'note_secret']);
-      expect(result.error).toMatch(
-        /It looks like (a password or key|a GitLab token|an npm token)\./
-      );
+      expect(result.error).toContain(`It looks like ${expectedKind}.`);
     }
     for (const [i, note] of [
       [4, 'the token: refresh it later'],

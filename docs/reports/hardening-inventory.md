@@ -10,8 +10,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Sync fs files affected (all) | 119 |
 | Sync fs occurrences (runtime hotpaths) | 538 |
 | Sync fs files affected (runtime hotpaths) | 60 |
-| Legacy shim markers | 176 |
-| Legacy shim files affected | 61 |
+| Legacy shim markers | 177 |
+| Legacy shim files affected | 62 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -53,14 +53,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 29.0% (211/728) |
+| typed-error adoption (typed/total throws) | 29.1% (212/729) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (3/3), target 40% |
 | hotpath console.error/warn occurrences | 57 (226 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 14 |
-| files with createLogger | 44/464 |
+| files with createLogger | 44/465 |
 | subdomains with zero createLogger | 20 (antigravity, auth, bin, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, cursor, management, shared, status-native, targets, types, utils) |
-| files > 400 LOC | 65 |
-| files > 600 LOC | 28 |
+| files > 400 LOC | 64 |
+| files > 600 LOC | 29 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -95,7 +95,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/usage-failover-service.ts` | 999 |
 | `src/cliproxy/quota/quota-fetcher-codex.ts` | 990 |
 | `src/web-server/status/status-collectors.ts` | 986 |
-| `src/web-server/services/account-analytics-service.ts` | 957 |
+| `src/web-server/services/account-analytics-service.ts` | 956 |
 | `src/web-server/services/account-dashboard-service.ts` | 941 |
 | `src/cliproxy/model-catalog.ts` | 895 |
 | `src/cliproxy/accounts/registry.ts` | 871 |

@@ -38,7 +38,7 @@ fn obs_with(t: i64, used: f64, edit: impl FnOnce(&mut Json)) -> Json {
 }
 
 fn open(dir: &Path) -> Engine {
-    ops::open_engine(dir.to_str().unwrap(), None, None).unwrap()
+    ops::open_engine(dir.to_str().unwrap(), None, Some(90)).unwrap()
 }
 
 fn call(engine: &Engine, method: &str, args: Json) -> Json {

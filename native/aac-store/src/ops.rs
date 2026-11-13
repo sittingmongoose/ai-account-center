@@ -4,7 +4,7 @@
 use crate::engine::{self, Config, Engine};
 use crate::error::Result;
 use crate::fail;
-use crate::usage;
+use crate::{capture, usage};
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 use std::path::PathBuf;
@@ -66,9 +66,13 @@ pub fn open_engine(dir: &str, cache_bytes: Option<usize>, retention_days: Option
         config.cache_bytes = bytes.clamp(8 << 20, 256 << 20);
     }
     if let Some(days) = retention_days {
-        config.retention_days = days.clamp(7, 3650);
+        config.retention_days = if days == 0 { 0 } else { days.clamp(7, 3650) };
     }
-    Engine::open(&PathBuf::from(dir), config, vec![Box::new(usage::UsageProjector)])
+    Engine::open(
+        &PathBuf::from(dir),
+        config,
+        vec![Box::new(usage::UsageProjector), Box::new(capture::CaptureProjector)],
+    )
 }
 
 pub fn dispatch(slot: &Slot, method: &str, args: &str) -> Result<String> {
@@ -117,7 +121,32 @@ pub fn dispatch(slot: &Slot, method: &str, args: &str) -> Result<String> {
 
 pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
     Ok(match method {
-        "status" => engine.status()?,
+        "status" => {
+            let mut status = engine.status()?;
+            status["capture"] = capture::health(engine)?;
+            let bytes = status["redbBytes"].as_u64().unwrap_or(0);
+            status["storageHealth"] = json!({
+                "rawPolicy": if engine.config.retention_days == 0 { "forever" } else { "explicit_retention" },
+                "hotBytes": bytes, "hotBudgetBytes": 2u64 << 30,
+                "budgetWarning": bytes >= (2u64 << 30) * 4 / 5,
+                "budgetExceeded": bytes >= 2u64 << 30,
+                "automaticDeletion": false,
+                "projectedYearBytes": null,
+                "quotaTemporaries": crate::storage_health::quota_temporaries(&engine.dir),
+            });
+            status
+        }
+        "captureReports" => {
+            if args.len() > 8 * 1024 * 1024 {
+                fail!("invalid", "capture batch too large");
+            }
+            #[derive(Deserialize)]
+            struct CaptureArgs {
+                reports: Vec<capture::Report>,
+            }
+            capture::record(engine, parse::<CaptureArgs>(args)?.reports)?
+        }
+        "captureHistory" => capture::history(engine, parse(args)?)?,
         "counts" => usage::counts(engine)?,
         "record" => {
             #[derive(Deserialize)]
@@ -162,6 +191,7 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
             let sealed = engine.seal_and_compress(now)?;
             let closed = usage::close_days(engine, now)?;
             let pruned = usage::prune(engine, now)?;
+            let migrated = usage::migrate_account_states(engine, false)?;
             let backed: Option<u64> = engine.get_meta("backup_readings_seq")?.and_then(|v| v.parse().ok());
             let retired = usage::retire_segments(engine, now, Some(backed.unwrap_or(0)))?;
             let verified = if a.verify.unwrap_or(false) {
@@ -174,7 +204,7 @@ pub fn call(engine: &Engine, method: &str, args: &str) -> Result<Json> {
             } else {
                 Json::Null
             };
-            json!({ "sealed": sealed, "closed": closed, "pruned": pruned, "retired": retired, "verified": verified, "compacted": compacted })
+            json!({ "sealed": sealed, "closed": closed, "pruned": pruned, "migrated": migrated, "retired": retired, "verified": verified, "compacted": compacted })
         }
         "backup" => {
             let a: BackupArgs = parse(args)?;

@@ -19,7 +19,9 @@ import type { AccountAnalyticsObservation } from '../web-server/services/account
 
 const logger = createLogger('store');
 
+/** Current query/UI horizon; independent of permanent raw storage. */
 export const STORE_RETENTION_DAYS = 90;
+export const STORE_RAW_RETENTION_DAYS = 0;
 const MINUTE = 60_000;
 const DAY = 86_400_000;
 const MAINTAIN_EVERY_MS = 15 * MINUTE;
@@ -89,6 +91,19 @@ export interface StoreSeriesPoints {
   truncated: boolean;
 }
 
+/** An accepted, normalized report revision; credentials and raw transcripts never enter it. */
+export interface StoreReportCapture {
+  kind: 'thread' | 'status' | 'tasks' | 'card';
+  writer: string;
+  objectId: string;
+  seq: number;
+  writtenAtMs: number;
+  observedAtMs: number;
+  sourceSha256: string;
+  ids: Record<string, unknown>;
+  doc: Record<string, unknown>;
+}
+
 export class AacStore {
   constructor(
     private readonly handle: NativeStoreHandle,
@@ -99,6 +114,17 @@ export class AacStore {
     return JSON.parse(await this.handle.call(method, JSON.stringify(args))) as T;
   }
 
+  captureReports(reports: StoreReportCapture[]): Promise<{ stored: number; duplicates: number }> {
+    return this.call('captureReports', { reports });
+  }
+  captureHistory(query: {
+    kind: string;
+    writer: string;
+    objectId: string;
+    limit?: number;
+  }): Promise<Record<string, unknown>> {
+    return this.call('captureHistory', query);
+  }
   status(): Promise<Record<string, unknown>> {
     return this.call('status');
   }
@@ -209,7 +235,7 @@ export function openAacStore(
         'open',
         JSON.stringify({
           dir: directory,
-          retentionDays: STORE_RETENTION_DAYS,
+          retentionDays: STORE_RAW_RETENTION_DAYS,
           ...(Number.isFinite(cacheMb) && cacheMb > 0
             ? { cacheBytes: Math.round(cacheMb) * 1024 * 1024 }
             : {}),
