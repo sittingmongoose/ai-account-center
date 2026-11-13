@@ -278,7 +278,13 @@
       "providerWords": null,
       "refillsText": "Refills the eligible Codex usage windows.",
       "resetsLeft": 1
-    }
+    },
+    "usage": [
+      {
+        "id": "primary",
+        "usedPercent": 100.0
+      }
+    ]
   },
   "settled": {
     "attemptKey": "0000000000000000000000000000000000000000000000000000000000000386",

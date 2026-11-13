@@ -81,6 +81,9 @@ pub struct Prepared {
     pub confirmation_key: String,
     pub expires_at_ms: Option<f64>,
     pub grant: Grant,
+    /// How much of each limit the grant targets is used in prepare's fresh read.
+    #[serde(deserialize_with = "nullable")]
+    pub usage: Vec<Refilled>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -219,9 +222,46 @@ pub fn refill_words(kind: &str) -> Option<&'static str> {
         "weekly" => "Weekly limit",
         "full" => "5-hour and weekly limits",
         "fable" => "Fable weekly usage",
-        "banked" => "Codex limits that are used up",
+        "banked" => "Codex limits OpenAI chooses",
         _ => return None,
     })
+}
+
+/// A Codex credit can be used at any usage; OpenAI decides what it refills.
+pub const OPENAI_CHOOSES: &str =
+    "OpenAI chooses which limits refill. If nothing refills, nothing is spent.";
+
+/// What is used now on the limits a grant targets, from prepare's fresh read: "Weekly 60% used, 5-hour 2% used."
+/// Weekly comes first; a limit without a known length keeps its position name. None when nothing was read.
+pub fn used_now(usage: &[Refilled]) -> Option<String> {
+    let name = |id: &str| match id {
+        "seven_day" => Some((0, "Weekly")),
+        "five_hour" => Some((1, "5-hour")),
+        "primary" => Some((2, "Primary limit")),
+        "secondary" => Some((3, "Secondary limit")),
+        _ => None,
+    };
+    let mut parts: Vec<(u8, &str, f64)> = usage
+        .iter()
+        .filter_map(|w| {
+            let (order, label) = name(&w.id)?;
+            Some((order, label, w.used_percent.filter(|v| v.is_finite())?))
+        })
+        .collect();
+    parts.sort_by_key(|(order, _, _)| *order);
+    let words: Vec<String> = parts
+        .into_iter()
+        .enumerate()
+        .map(|(i, (_, label, used))| {
+            let label = if i == 0 {
+                label.to_string()
+            } else {
+                label.to_lowercase()
+            };
+            format!("{label} {} used", crate::fmt::pct(used))
+        })
+        .collect();
+    (!words.is_empty()).then(|| format!("{}.", words.join(", ")))
 }
 
 /// The reset's own name, for the dialog and the history.
@@ -255,7 +295,7 @@ pub fn why_not(reason: &str, provider: &str) -> String {
         }
         "grant-unavailable" => "The provider says this reset can't be used yet.".into(),
         "refill-windows-unconfirmed" if provider == "codex" => {
-            "None of your Codex limits is used up, so there is nothing to refill yet.".into()
+            "AAC can't read this account's Codex limits right now, so it won't use this reset.".into()
         }
         "refill-windows-unconfirmed" => "AAC can't confirm which limit this refills right now.".into(),
         "signed-out" if provider == "claude" => "Listed resets need a verified OAuth sign-in on Windows. Sign in again before using them.".into(),
@@ -532,6 +572,12 @@ pub fn result_said(r: &ClaimResult, provider: &str) -> Said {
     };
     match r.outcome.as_str() {
         "claimed" => plain("Reset applied and confirmed."),
+        // A Codex claim is confirmed by the exact credit being spent, not by any limit falling.
+        "claimed-unconfirmed" if r.provider_success && provider == "codex" => Said {
+            text: "Reset was applied, but AAC hasn't seen the credit spent yet. Check again.".into(),
+            bad: true,
+            check: true,
+        },
         "claimed-unconfirmed" if r.provider_success => Said {
             text: "Reset was applied, but AAC could not confirm the new limits. Check again.".into(),
             bad: true,
@@ -1758,6 +1804,9 @@ fn ResetConfirm(rc: ResetCtx) -> impl IntoView {
             "You have {}; this spends one and can't be undone.",
             plural(have, "reset", "resets")
         );
+        // A Codex credit can be used at any usage: say what is used now and that OpenAI picks what refills.
+        let banked = g.kind == "banked";
+        let used = banked.then(|| used_now(&prepared.usage)).flatten();
         let expired = move || !sending && now.get() >= deadline;
         let reopen = grant_key.clone();
         let confirmation_key = prepared.confirmation_key.clone();
@@ -1770,8 +1819,10 @@ fn ResetConfirm(rc: ResetCtx) -> impl IntoView {
                         <dt>"Account"</dt><dd data-probe="reset-dialog-account">{prepared.account.label.clone()}</dd>
                         <dt>"Reset"</dt><dd>{name.clone()}</dd>
                         <dt>"Refills"</dt><dd>{g.refills_text.clone()}</dd>
+                        {used.map(|used| view! { <dt>"Used now"</dt><dd data-probe="reset-dialog-usage">{used}</dd> })}
                         <dt>"Expires"</dt><dd>{expires.unwrap_or_else(|| "No expiry given".into())}</dd>
                     </dl>
+                    {banked.then(|| view! { <p class="a-warn" data-probe="reset-dialog-openai">{OPENAI_CHOOSES}</p> })}
                     <p class="a-warn">{cost}</p>
                     {move || if sending {
                         view! { <p class="a-status" role="status">"Using the reset and reading the account again\u{2026}"</p> }.into_any()
@@ -2129,6 +2180,92 @@ mod tests {
             "That reset was already used."
         );
         assert!(!result_said(&used, "claude").check);
+    }
+
+    #[test]
+    fn a_codex_credit_is_usable_at_any_usage_and_never_promises_a_refill() {
+        // The server, not the page, decides claimability; a part-used Codex account's credit is a Use reset row.
+        let mut g = grant("banked", 1, Some(18.0), true, None);
+        g["refillsText"] = "Refills the eligible Codex usage windows.".into();
+        let rows = rows_from_inventory(&inventory(vec![g]), "codex", NOW);
+        assert!(rows[0].claimable);
+        assert_eq!(rows[0].refills, "Codex limits OpenAI chooses");
+        assert!(!rows[0].refills.contains("used up"));
+        // The dead "nothing to refill" sentence is gone; a Codex account whose limits can't be read says that.
+        let none = why_not("refill-windows-unconfirmed", "codex");
+        assert!(
+            !none.contains("used up") && !none.contains("nothing to refill"),
+            "{none}"
+        );
+        assert!(none.contains("can't read"), "{none}");
+        assert_eq!(
+            why_not("refill-windows-unconfirmed", "claude"),
+            "AAC can't confirm which limit this refills right now."
+        );
+    }
+
+    #[test]
+    fn the_codex_confirmation_says_what_is_used_now() {
+        let prepared: Prepared = serde_json::from_str(
+            r#"{"account":{"label":"a"},"confirmationToken":"t","confirmationKey":"k","expiresAtMs":1,
+                "grant":{"grantKey":"g","kind":"banked","resetsLeft":1,"claimable":true},
+                "usage":[{"id":"five_hour","usedPercent":2},{"id":"seven_day","usedPercent":60}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            used_now(&prepared.usage).as_deref(),
+            Some("Weekly 60% used, 5-hour 2% used.")
+        );
+        // At 0% the line still reads plainly; positions without a known length keep their names.
+        let zero = [
+            Refilled {
+                id: "primary".into(),
+                used_percent: Some(0.0),
+            },
+            Refilled {
+                id: "secondary".into(),
+                used_percent: Some(50.0),
+            },
+        ];
+        assert_eq!(
+            used_now(&zero).as_deref(),
+            Some("Primary limit 0% used, secondary limit 50% used.")
+        );
+        // Nothing read, an unknown id or a missing value says nothing rather than inventing a number.
+        assert_eq!(used_now(&[]), None);
+        assert_eq!(
+            used_now(&[
+                Refilled {
+                    id: "seven_day_opus".into(),
+                    used_percent: Some(9.0)
+                },
+                Refilled {
+                    id: "five_hour".into(),
+                    used_percent: None
+                },
+            ]),
+            None
+        );
+        // A Codex spend AAC can't confirm yet names the credit, not the limits, and still offers Check again.
+        let lagging = ClaimResult {
+            outcome: "claimed-unconfirmed".into(),
+            provider_success: true,
+            ..Default::default()
+        };
+        let said = result_said(&lagging, "codex");
+        assert_eq!(
+            said.text,
+            "Reset was applied, but AAC hasn't seen the credit spent yet. Check again."
+        );
+        assert!(said.check && said.bad);
+        // An older server without the field still parses.
+        let old: Prepared =
+            serde_json::from_str(r#"{"grant":{"kind":"banked"},"usage":null}"#).unwrap();
+        assert!(old.usage.is_empty());
+        assert_eq!(
+            OPENAI_CHOOSES,
+            "OpenAI chooses which limits refill. If nothing refills, nothing is spent."
+        );
     }
 
     #[test]

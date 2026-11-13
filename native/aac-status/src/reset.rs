@@ -139,6 +139,13 @@ fn public(s: &Snapshot, g: &Grant, key: &str, now: i64) -> Value {
     let words = if known { None } else { g.words.as_deref() };
     json!({"grantKey":key,"kind":if known{g.kind.as_str()}else{"unknown"},"label":label,"refillsText":text,"providerWords":words,"resetsLeft":g.left,"expiresAtMs":g.expires_at_ms,"claimable":blocked(s,g,now).is_none(),"claimBlockedReason":blocked(s,g,now)})
 }
+/// How much of each limit the grant targets is used in this read: the same read its confirmation is bound to.
+fn usage(s: &Snapshot, g: &Grant) -> Vec<Value> {
+    g.clears
+        .iter()
+        .filter_map(|k| s.windows.get(k).map(|v| json!({"id":k,"usedPercent":v})))
+        .collect()
+}
 fn fingerprint(s: &Snapshot, g: &Grant) -> Result<String> {
     // Sample timestamp deliberately excluded: a fresh read of unchanged state must match.
     Ok(hash(&encode(&(
@@ -718,7 +725,7 @@ impl Store {
         let response = Self::with_evidence(
             &tx,
             &Self::canonical(fresh)?,
-            json!({"account":{"label":fresh.account_label},"confirmationToken":token,"confirmationKey":hash(token),"expiresAtMs":now+120_000,"grant":public(fresh,&g,key,now),"costText":"Spends one selected reset. This cannot be undone."}),
+            json!({"account":{"label":fresh.account_label},"confirmationToken":token,"confirmationKey":hash(token),"expiresAtMs":now+120_000,"grant":public(fresh,&g,key,now),"usage":usage(fresh,&g),"costText":"Spends one selected reset. This cannot be undone."}),
         )?;
         sql(tx.commit())?;
         Ok(response)
@@ -831,14 +838,22 @@ impl Store {
             .and_then(|v| serde_json::from_str(&v).ok())
             .unwrap_or(Value::Null);
         let grant: Grant = serde_json::from_str(&g).map_err(|_| "shape")?;
+        // A Codex claim is confirmed by the credit alone, so its receipt names only the limits that fell.
+        let fell_only = details["provider"] == "codex";
         let windows: Vec<Value> = if stored == "claimed" {
             grant
                 .clears
                 .iter()
                 .filter_map(|k| {
-                    details["afterWindows"][k]
-                        .as_f64()
-                        .map(|v| json!({"id":k,"usedPercent":v}))
+                    let after = details["afterWindows"][k].as_f64()?;
+                    if fell_only
+                        && !details["beforeWindows"][k]
+                            .as_f64()
+                            .is_some_and(|before| after < before)
+                    {
+                        return None;
+                    }
+                    Some(json!({"id":k,"usedPercent":after}))
                 })
                 .collect()
         } else {
@@ -1116,7 +1131,14 @@ fn verify(before: &Snapshot, g: &Grant, after: &Snapshot, now: i64) -> bool {
     let Some(new) = after.grants.iter().find(|n| n.id == g.id) else {
         return false;
     };
-    new.left.checked_add(1) == Some(g.left)
+    let spent = new.left.checked_add(1) == Some(g.left);
+    if before.identity.provider == "codex" {
+        // OpenAI chooses which limits a credit refills, and a credit can be used at any usage, so no window
+        // movement is required: the exact credit leaving the available set is the proof. Windows that fell are
+        // reported as evidence by the receipt.
+        return spent;
+    }
+    spent
         && !g.clears.is_empty()
         && g.clears
             .iter()

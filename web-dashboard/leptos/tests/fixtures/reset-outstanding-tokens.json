@@ -429,7 +429,13 @@
       "providerWords": null,
       "refillsText": "Refills the eligible Codex usage windows.",
       "resetsLeft": 1
-    }
+    },
+    "usage": [
+      {
+        "id": "primary",
+        "usedPercent": 100.0
+      }
+    ]
   },
   "recovery": {
     "attemptKey": null,
@@ -556,7 +562,13 @@
       "providerWords": null,
       "refillsText": "Refills the eligible Codex usage windows.",
       "resetsLeft": 1
-    }
+    },
+    "usage": [
+      {
+        "id": "primary",
+        "usedPercent": 100.0
+      }
+    ]
   },
   "settled": {
     "attemptKey": "000000000000000000000000000000000000000000000000000000000000012f",

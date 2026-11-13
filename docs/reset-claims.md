@@ -30,7 +30,9 @@ or null, so any signed-in session can Check again after a reload). Inventory als
 pending discovery, history and the UI's spend lock. Check again still requires evidence matching
 the attempt's original profile, host and source binding to confirm settlement; another alias's
 evidence leaves it unconfirmed. A confirmed claim or check answers `windows`:
-each refilled window's id and used percent from the verification read (empty unless confirmed). A refused prepare
+each refilled window's id and used percent from the verification read (empty unless confirmed; for Codex, only
+the windows whose used percent fell). Prepare also answers `usage`: the id and used percent of each window the
+grant targets, from the same fresh read the confirmation is bound to. A refused prepare
 or claim answers 409 `{code, action, reason, sent, evidence}`: `reason` is one of a fixed allowlist of native codes (never an
 identity) or null, and `sent` says whether the provider write was reached, in which case the UI blocks another
 spend until Check again settles it.
@@ -38,8 +40,10 @@ spend until Check again settles it.
 Tokens and target keys are 64 hex characters. Request objects have exact fields;
 raw provider grant IDs, host paths, organization IDs and executable names cannot
 be provided by the browser. Responses and errors never echo private input.
-`claimed` requires a fresh same-identity read with the exact grant decrement,
-no affected window increasing and at least one affected percentage falling.
+`claimed` requires a fresh same-identity read with the exact grant decrement.
+Claude also requires no affected window increasing and at least one affected
+percentage falling. Codex requires only the exact credit's decrement: OpenAI
+chooses which limits a credit refills, so window movement is evidence, not proof.
 The confirmation must render prepare's authoritative `account.label`, never a
 cached account card label. Provider `reset` without proof is
 `claimed-unconfirmed`; `providerSuccess` distinguishes this from a timeout.
@@ -62,6 +66,12 @@ Codex uses a short-lived `codex app-server` with `CODEX_HOME` set to the exact
 saved registry profile. It verifies the saved login, account/read identity and
 rate-limit response accountId. Missing account attribution or per-credit IDs
 makes the source unavailable. Only the pinned `codexRateLimits` kind is mapped.
+A usable, unexpired Codex credit can be claimed at any usage (owner, 2026-11-13):
+its target is every window the provider reports, never a promise that one of them
+refills. A window the provider says lasts 300 or 10080 minutes is named
+`five_hour` or `seven_day`; any other keeps its position name (`primary`,
+`secondary`). A Codex read with no windows blocks the credit as
+`refill-windows-unconfirmed`. `nothingToReset` spends nothing and settles at once.
 Both private provider readers recheck the saved login after their read finishes
 and immediately before accepting its snapshot. A changed or removed login makes
 the read unavailable. Its observation time belongs to the identity verification
@@ -145,7 +155,9 @@ Refills / Expires) with Use reset only on rows the server marks claimable, used 
 kinds in the provider's words with "AAC doesn't know what this refills yet; it can't be used from here". Opening
 the dialog calls only `prepare`; it shows prepare's `account.label`, the grant, what it refills, its expiry and
 "You have N; this spends one and can't be undone", and counts down the confirmation (ending 10 s early so the
-server's fresh read fits inside its 120 s). Only "Use this reset" calls the claim route. The result line belongs to
+server's fresh read fits inside its 120 s). For a Codex credit it also says what is used now from prepare's
+`usage` ("Weekly 60% used, 5-hour 2% used.") and "OpenAI chooses which limits refill. If nothing refills, nothing
+is spent." Only "Use this reset" calls the claim route. The result line belongs to
 the newest local account action; unresolved server claims provide status, while settled receipts appear in dated history.
 The group reads inventory again; current limits come from source readings. Z.ai
 cards are listed with "Use in Z.ai"; Qwen says its plan has none. Paired native bars never call these routes.
