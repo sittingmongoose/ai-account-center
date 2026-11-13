@@ -17,6 +17,50 @@ rule stay in TypeScript. The crate makes no network or provider calls. The TypeS
 stays; a new server piece is a native module like this one, and existing TypeScript is not ported
 unless the owner asks (AGENTS.md).
 
+## Current storage policy (2026-11-13)
+
+The owner's permanent-capture direction supersedes the earlier age-retention design below.
+Raw normalized quota observations and their authoritative event logs are kept forever by default:
+`retentionDays: 0` means unlimited. An explicitly positive value retains the legacy 7–3650-day
+policy. The dashboard's recent query horizon is independent of physical retention. Old data already
+pruned by an earlier installation cannot be recreated from rollups.
+
+Schema **2** adds a 30-byte `account_state` value: version byte 2; one status/platform/active byte;
+a big-endian source dictionary id (`KIND_SOURCE`); `observed_ms`, `last_seen`, `last_observed` as
+three signed big-endian i64 values. Existing v1 MessagePack states remain readable. Maintenance
+converts them in 1,000-row transactions, preserving keys and every field. Migration completion is
+recorded only after the last batch. Logs retain their previous event schemas. Older builds refuse
+schema 2 before opening redb for writing. Do not lower the admission marker without converting values.
+
+For rollback, first stop every store writer and preserve the entire store folder. On an offline
+copy, run the new crate's `state-format --rollback-v1 <offline-store-directory>` example. It converts
+v2 states back to v1 and changes the marker only after conversion completes; all other data and logs
+remain. Alternatively restore a complete pre-change store backup. Keep a copy of the upgraded
+store too. Additive projector data stays on disk if older software cannot display it.
+
+Accepted agent-report thread/status/tasks/card revisions now append `capture.report` to the permanent
+ledger. The independent `capture` projector owns `capture_head`, `capture_revision`, `capture_content`
+and `capture_by_time`; it does not share usage dictionaries. Document contents are canonical
+MessagePack, zstd level 3 only when smaller, with a declared length and verified SHA-256. Source sequence,
+source SHA, first observation, ingest time and known correlation identities are kept with each revision.
+Source object identity, revision identity and content identity are distinct. Repeated scans/restarts
+are idempotent; distinct revisions, including A→B→A, survive. The Status reader captures without page
+demand. Source versions overwritten between scans still require an immutable producer outbox; an AAC
+storage failure is logged and current revisions are retried. This is not a claim that every producer
+transition or the missing native-session binding is already captured.
+
+Native methods `captureReports`, `captureHistory` and `status.capture` support ingestion, inspection
+and byte/count/last-ingest health. `status.storageHealth` reports raw policy, hot file bytes, an advisory
+2 GiB budget and warning/exceeded flags. Crossing it never deletes data. Yearly growth is null until
+measured. Complete cold-tier automation, model/session/task bindings and other capture gaps remain
+separate work; `registry.json` describes the implemented families.
+
+History reconstruction now chooses surviving timestamps before constructing JSON and uses binary
+searches over sorted spans. This leaves queries and ordering unchanged while avoiding discarded
+serialization. Explicit retention drains all expired state batches, even if no reading-day batch is
+full. The legacy quota writer/importer cleans only owned regular UUID temporary files older than
+24 hours; source JSON and archives remain intact for rollback.
+
 ## 1. Scope
 
 ### 1.1 What moves in, in phase order

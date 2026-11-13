@@ -301,3 +301,33 @@ describe('private bounded quota history', () => {
     expect(Buffer.byteLength(JSON.stringify(retained))).toBeLessThan(32 * 1024 * 1024);
   });
 });
+
+it('reaps only old private UUID writer temporaries, including on the DB import path', async () => {
+  const root = directory();
+  const store = new FileAccountAnalyticsHistoryStore(root);
+  const history = appendAccountAnalyticsSnapshot(null, [account()], NOW);
+  await store.write(history);
+  const location = path.join(root, 'account-analytics');
+  const old = path.join(location, 'quota-history-v1.json.00000000-0000-4000-8000-000000000000.tmp');
+  const recent = path.join(
+    location,
+    'quota-history-v1.json.00000000-0000-4000-8000-000000000001.tmp'
+  );
+  const other = path.join(location, 'unrelated.tmp');
+  const linked = path.join(
+    location,
+    'quota-history-v1.json.00000000-0000-4000-8000-000000000002.tmp'
+  );
+  for (const file of [old, recent, other]) fs.writeFileSync(file, 'old-write', { mode: 0o600 });
+  for (const file of [old, other])
+    fs.utimesSync(file, new Date(NOW - 2 * 86_400_000), new Date(NOW - 2 * 86_400_000));
+  fs.utimesSync(recent, new Date(NOW), new Date(NOW));
+  fs.symlinkSync(other, linked);
+  expect(await store.cleanupTemporaries(NOW)).toBe(9);
+  expect(fs.existsSync(old)).toBe(false);
+  expect(fs.existsSync(recent)).toBe(true);
+  expect(fs.lstatSync(linked).isSymbolicLink()).toBe(true);
+  expect(fs.readFileSync(other, 'utf8')).toBe('old-write');
+  expect(await store.read()).toEqual(history);
+  expect(await store.cleanupTemporaries(NOW)).toBe(0);
+});

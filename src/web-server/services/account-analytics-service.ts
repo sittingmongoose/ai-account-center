@@ -119,7 +119,6 @@ export interface AccountAnalyticsSampleEvent {
 }
 
 const DAY_MS = 86_400_000;
-const STORE_RETENTION_MS = STORE_RETENTION_DAYS * DAY_MS;
 /** The 7-day rolling history the agent snapshot publishes. */
 const SNAPSHOT_HISTORY_MS = 7 * DAY_MS;
 
@@ -454,7 +453,7 @@ export class AccountAnalyticsService {
     }
     const now = (this.deps.now ?? Date.now)();
     const observations = accounts.slice(0, MAX_ACCOUNTS_PER_SAMPLE).flatMap((account) => {
-      const observation = storeObservationFromAccount(account, now, STORE_RETENTION_MS);
+      const observation = storeObservationFromAccount(account, now, Number.POSITIVE_INFINITY);
       return observation ? [observation] : [];
     });
     try {

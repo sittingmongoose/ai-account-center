@@ -249,6 +249,41 @@ export class FileAccountAnalyticsHistoryStore implements AccountAnalyticsHistory
     }
   }
 
+  /** A killed writer cannot run its finally block. Reap only its old UUID temporary files. */
+  async cleanupTemporaries(now = Date.now()): Promise<number> {
+    let removedBytes = 0;
+    try {
+      const directory = await fs.promises.lstat(this.directory);
+      if (
+        !directory.isDirectory() ||
+        directory.isSymbolicLink() ||
+        (process.getuid?.() !== undefined && directory.uid !== process.getuid?.())
+      )
+        return 0;
+      const prefix = `${path.basename(this.file)}.`;
+      for (const entry of await fs.promises.readdir(this.directory)) {
+        if (!entry.startsWith(prefix)) continue;
+        const suffix = entry.slice(prefix.length);
+        if (
+          !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/.test(suffix)
+        )
+          continue;
+        const temporary = path.join(this.directory, entry);
+        try {
+          const stat = await fs.promises.lstat(temporary);
+          if (!secureRegularFile(stat) || now - stat.mtimeMs < 24 * 60 * 60 * 1000) continue;
+          await fs.promises.unlink(temporary);
+          removedBytes += stat.size;
+        } catch {
+          // Another writer may have published or removed its own file meanwhile.
+        }
+      }
+    } catch {
+      // Cleanup never makes a valid history import or write fail.
+    }
+    return removedBytes;
+  }
+
   async write(data: AccountAnalyticsHistoryData): Promise<void> {
     await fs.promises.mkdir(this.directory, { recursive: true, mode: 0o700 });
     const directory = await fs.promises.lstat(this.directory);
@@ -265,6 +300,7 @@ export class FileAccountAnalyticsHistoryStore implements AccountAnalyticsHistory
     } catch (error) {
       if (!object(error) || error.code !== 'ENOENT') throw error;
     }
+    await this.cleanupTemporaries();
     const records = data.records.slice(-MAX_RECORDS);
     let payload = JSON.stringify({ ...data, records });
     while (Buffer.byteLength(payload) > MAX_HISTORY_BYTES && records.length > 1) {

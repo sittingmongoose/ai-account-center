@@ -144,6 +144,7 @@ export async function backfillUsageHistory(
   };
   const sources: SourceFile[] = [];
   const base = path.join(ccsDir, 'account-analytics');
+  await new FileAccountAnalyticsHistoryStore(ccsDir).cleanupTemporaries();
   for (const file of archiveFiles(path.join(base, 'archive'))) {
     const bytes = readArchiveFile(file);
     if (!bytes) {

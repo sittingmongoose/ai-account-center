@@ -44,7 +44,7 @@ fn obs_status(account: u32, t: i64, status: &str, windows: Vec<Json>) -> Json {
 }
 
 fn open(dir: &Path) -> Engine {
-    ops::open_engine(dir.to_str().unwrap(), None, None).unwrap()
+    ops::open_engine(dir.to_str().unwrap(), None, Some(90)).unwrap()
 }
 
 fn call(engine: &Engine, method: &str, args: Json) -> Json {
@@ -583,4 +583,190 @@ fn chrono_ms(iso: &str) -> i64 {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
     ((days * 24 + n(11, 13)) * 60 + n(14, 16)) * 60_000 + n(17, 19) * 1000 + n(20, 23)
+}
+
+#[test]
+fn account_state_v2_migrates_and_rolls_back_without_changing_queries() {
+    let dir = temp_dir("state-format");
+    let engine = open(&dir);
+    let t = now_ms() as i64 - 6 * HOUR;
+    let mut observations = Vec::new();
+    for minute in 0..300 {
+        for account in 1..=2 {
+            let mut sample = obs(
+                account,
+                t + minute * MIN,
+                vec![window("five", Some((minute % 100) as f64), Some(t + 8 * HOUR))],
+            );
+            sample["account"]["is_active"] = json!(minute % 2 == 0);
+            observations.push(sample);
+        }
+    }
+    record(&engine, observations);
+    let queries: Vec<_> = ["none", "history", "bucket"]
+        .into_iter()
+        .map(|kind| {
+            json!({ "fromMs": t, "toMs": t + 6 * HOUR, "nowMs": t + 6 * HOUR,
+            "thinning": if kind == "bucket" {json!({"kind":kind,"bucketMs":300_000})} else {json!({"kind":kind})} })
+        })
+        .collect();
+    let expected: Vec<_> = queries
+        .iter()
+        .map(|q| call(&engine, "historyRecords", q.clone()))
+        .collect();
+    let before = dump(&engine, &["account_state"]);
+    assert!(before.iter().all(|(_, _, value)| value.len() == 30 && value[0] == 2));
+    aac_store::usage::migrate_account_states(&engine, true).unwrap();
+    assert_eq!(engine.get_meta("store_schema_version").unwrap().as_deref(), Some("1"));
+    let legacy = dump(&engine, &["account_state"]);
+    assert!(legacy.iter().all(|(_, _, value)| value[0] == 1 && value.len() > 30));
+    for (query, answer) in queries.iter().zip(&expected) {
+        assert_eq!(call(&engine, "historyRecords", query.clone()), *answer);
+    }
+    engine.close().unwrap();
+    drop(engine);
+    let engine = open(&dir); // opens a genuine schema 1 file and retains every v1 value
+    assert_eq!(dump(&engine, &["account_state"]), legacy);
+    let legacy_pages = call(&engine, "counts", json!({}))["tableBytes"]["account_state"][3]
+        .as_u64()
+        .unwrap();
+    let migrated = aac_store::usage::migrate_account_states(&engine, false).unwrap();
+    assert_eq!(migrated["rewrittenStates"], legacy.len());
+    assert_eq!(migrated["repackedStates"], true);
+    let packed_pages = call(&engine, "counts", json!({}))["tableBytes"]["account_state"][3]
+        .as_u64()
+        .unwrap();
+    assert!(packed_pages < legacy_pages, "{packed_pages} vs {legacy_pages}");
+    assert_eq!(dump(&engine, &["account_state"]), before);
+    assert_eq!(
+        aac_store::usage::migrate_account_states(&engine, false).unwrap()["rewrittenStates"],
+        0
+    );
+    for (query, answer) in queries.iter().zip(&expected) {
+        assert_eq!(call(&engine, "historyRecords", query.clone()), *answer);
+    }
+    // A second rollback restores byte-for-byte legacy values (not just equivalent JSON).
+    aac_store::usage::migrate_account_states(&engine, true).unwrap();
+    assert_eq!(dump(&engine, &["account_state"]), legacy);
+    engine.close().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn pruning_drains_multiple_state_batches_and_keeps_the_current_span() {
+    let dir = temp_dir("prune-state-batches");
+    let engine = open(&dir);
+    let now = now_ms();
+    let t = now - 100 * DAY as u64;
+    engine
+        .with_db(|database| {
+            let txn = aac_store::engine::begin(database)?;
+            let state = aac_store::usage::AccountState {
+                status: "ok".into(),
+                is_active: true,
+                source: "test source".into(),
+                platform: "ubuntu".into(),
+                observed_ms: t as i64,
+                last_seen: t as i64,
+                last_observed: t as i64,
+            };
+            for i in 0..20_003 {
+                txn.open_table(db::ACCOUNT_STATE)?.insert(
+                    db::Key::new().u32(1).u64(t + i).as_slice(),
+                    db::pack(&state)?.as_slice(),
+                )?;
+            }
+            let latest = aac_store::usage::AccountLatest {
+                state_t: (t + 20_002) as i64,
+                ..Default::default()
+            };
+            txn.open_table(db::ACCOUNT_LATEST)?
+                .insert(db::Key::new().u32(1).as_slice(), db::pack(&latest)?.as_slice())?;
+            txn.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(aac_store::usage::prune(&engine, now).unwrap()["removedRows"], 20_002);
+    let kept = dump(&engine, &["account_state"]);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(db::be_u64(&kept[0].1, 4), t + 20_002);
+    assert_eq!(aac_store::usage::prune(&engine, now).unwrap()["removedRows"], 0);
+    engine.close().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn state_codec_round_trips_old_values_and_rejects_broken_dictionary_references() {
+    use aac_store::usage::AccountState;
+    let dir = temp_dir("state-codec");
+    let engine = open(&dir);
+    engine
+        .with_db(|database| {
+            let txn = aac_store::engine::begin(database)?;
+            for status in ["ok", "cached", "unavailable", "error", "needs_sign_in"] {
+                for platform in ["ubuntu", "mac", "windows"] {
+                    for is_active in [false, true] {
+                        let state = AccountState {
+                            status: status.into(),
+                            platform: platform.into(),
+                            is_active,
+                            source: "repeated source".into(),
+                            observed_ms: i64::MIN,
+                            last_seen: i64::MAX,
+                            last_observed: 0,
+                        };
+                        let old = db::pack(&state)?;
+                        let encoded = state.encode(&txn)?;
+                        let dict = txn.open_table(db::DICT)?;
+                        assert_eq!(AccountState::decode(&old, &dict)?, state);
+                        assert_eq!(AccountState::decode(&encoded, &dict)?, state);
+                        let mut missing = encoded.clone();
+                        missing[2..6].copy_from_slice(&u32::MAX.to_be_bytes());
+                        assert!(AccountState::decode(&missing, &dict).is_err());
+                        let mut flags = encoded.clone();
+                        flags[1] |= 0x80;
+                        assert!(AccountState::decode(&flags, &dict).is_err());
+                        assert!(AccountState::decode(&encoded[..29], &dict).is_err());
+                    }
+                }
+            }
+            txn.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    engine.close().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn default_retention_keeps_raw_readings_and_logs_forever() {
+    let dir = temp_dir("permanent-quota");
+    let engine = ops::open_engine(dir.to_str().unwrap(), None, None).unwrap();
+    assert_eq!(engine.config.retention_days, 0);
+    let old = now_ms() as i64 - 400 * DAY;
+    record(
+        &engine,
+        vec![
+            obs(1, old, vec![window("five", Some(10.0), Some(old + HOUR))]),
+            obs(1, old + MIN, vec![window("five", Some(11.0), Some(old + HOUR))]),
+        ],
+    );
+    let before = dump(&engine, &["reading_day", "account_state"]);
+    assert_eq!(aac_store::usage::prune(&engine, now_ms()).unwrap()["removedRows"], 0);
+    assert_eq!(
+        aac_store::usage::retire_segments(&engine, now_ms(), Some(u64::MAX)).unwrap()["retired"],
+        0
+    );
+    assert_eq!(dump(&engine, &["reading_day", "account_state"]), before);
+    let query = json!({"fromMs":old,"toMs":old + HOUR,"nowMs":now_ms(),"thinning":{"kind":"none"}});
+    let expected = call(&engine, "historyRecords", query.clone());
+    assert!(!expected.as_array().unwrap().is_empty());
+    engine.close().unwrap();
+    drop(engine);
+    // Raw history remains replayable after losing the derived DB, not just in an in-memory cache.
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let engine = ops::open_engine(dir.to_str().unwrap(), None, Some(0)).unwrap();
+    assert_eq!(call(&engine, "historyRecords", query), expected);
+    engine.close().unwrap();
+    fs::remove_dir_all(dir).unwrap();
 }

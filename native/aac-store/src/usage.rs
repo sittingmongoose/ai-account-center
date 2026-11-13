@@ -538,6 +538,147 @@ pub struct AccountState {
     pub last_observed: i64,
 }
 
+impl AccountState {
+    /// v2: version, status/platform/active flags, source dictionary id, three i64 times.
+    /// The log remains the authority; old MessagePack v1 rows can coexist during migration.
+    pub fn encode(&self, txn: &WriteTransaction) -> Result<Vec<u8>> {
+        let Some(status) = STATUSES.iter().position(|s| *s == self.status) else {
+            fail!("corrupt", "account state status");
+        };
+        let Some(platform) = PLATFORMS.iter().position(|p| *p == self.platform) else {
+            fail!("corrupt", "account state platform");
+        };
+        let source = db::intern(txn, db::KIND_SOURCE, &self.source)?;
+        let mut out = Vec::with_capacity(30);
+        out.extend_from_slice(&[
+            2,
+            status as u8 | ((platform as u8) << 3) | ((self.is_active as u8) << 5),
+        ]);
+        out.extend_from_slice(&source.to_be_bytes());
+        for time in [self.observed_ms, self.last_seen, self.last_observed] {
+            out.extend_from_slice(&time.to_be_bytes());
+        }
+        Ok(out)
+    }
+
+    pub fn decode<T: ReadableTable<&'static [u8], &'static [u8]>>(bytes: &[u8], dict: &T) -> Result<Self> {
+        if bytes.first() == Some(&1) {
+            return db::unpack(bytes);
+        }
+        if bytes.len() != 30 || bytes[0] != 2 || bytes[1] & 0xc0 != 0 {
+            fail!("corrupt", "account state encoding");
+        }
+        let Some(status) = STATUSES.get((bytes[1] & 7) as usize) else {
+            fail!("corrupt", "account state status");
+        };
+        let Some(platform) = PLATFORMS.get(((bytes[1] >> 3) & 3) as usize) else {
+            fail!("corrupt", "account state platform");
+        };
+        let Some(source) = db::lookup_text(dict, db::KIND_SOURCE, db::be_u32(bytes, 2))? else {
+            fail!("corrupt", "account state source dictionary entry missing");
+        };
+        let time = |at| i64::from_be_bytes(bytes[at..at + 8].try_into().unwrap());
+        Ok(Self {
+            status: (*status).into(),
+            platform: (*platform).into(),
+            source,
+            is_active: bytes[1] & 32 != 0,
+            observed_ms: time(6),
+            last_seen: time(14),
+            last_observed: time(22),
+        })
+    }
+}
+
+/// Bounded, resumable value migration. Keys and event logs never change. Rollback rewrites
+/// v2 states to their original v1 representation before lowering the schema admission marker.
+pub fn migrate_account_states(engine: &Engine, legacy: bool) -> Result<Json> {
+    if !legacy && engine.get_meta("account_state_format")?.as_deref() == Some("2") {
+        return Ok(json!({ "rewrittenStates": 0, "valueVersion": 2 }));
+    }
+    // Rollback is offline and excludes writers for the entire conversion, including the
+    // final marker change. Forward migration yields the writer between bounded batches.
+    let _rollback_lock = legacy.then(|| engine.lock_logs());
+    let mut rewritten = 0;
+    let mut repacked = false;
+    let mut after: Option<Vec<u8>> = None;
+    loop {
+        let _logs = if legacy { None } else { Some(engine.lock_logs()) };
+        let (last, count) = engine.with_db(|database| {
+            let txn = begin(database)?;
+            let mut pending = Vec::new();
+            let mut last = None;
+            {
+                let table = txn.open_table(db::ACCOUNT_STATE)?;
+                let dict = txn.open_table(db::DICT)?;
+                let low = after
+                    .as_deref()
+                    .map(std::ops::Bound::Excluded)
+                    .unwrap_or(std::ops::Bound::Unbounded);
+                for entry in table.range::<&[u8]>((low, std::ops::Bound::Unbounded))?.take(1000) {
+                    let (key, value) = entry?;
+                    last = Some(key.value().to_vec());
+                    if value.value().first() == Some(&if legacy { 2 } else { 1 }) {
+                        pending.push((key.value().to_vec(), AccountState::decode(value.value(), &dict)?));
+                    }
+                }
+            }
+            if !legacy && !pending.is_empty() {
+                db::set_meta(&txn, "store_schema_version", &db::STORE_SCHEMA_VERSION.to_string())?;
+            }
+            for (key, state) in &pending {
+                let value = if legacy { db::pack(state)? } else { state.encode(&txn)? };
+                txn.open_table(db::ACCOUNT_STATE)?
+                    .insert(key.as_slice(), value.as_slice())?;
+            }
+            // Only a finished rollback permits an older build to open this file.
+            if last.is_none() {
+                if !legacy {
+                    repacked = repack_account_states(&txn)?;
+                }
+                db::set_meta(&txn, "account_state_format", if legacy { "1" } else { "2" })?;
+                if legacy {
+                    db::set_meta(&txn, "store_schema_version", "1")?;
+                }
+            }
+            if !pending.is_empty() || last.is_none() {
+                txn.commit()?;
+            }
+            Ok((last, pending.len()))
+        })?;
+        rewritten += count;
+        after = last;
+        if after.is_none() {
+            break;
+        }
+    }
+    Ok(json!({ "rewrittenStates": rewritten, "repackedStates": repacked, "valueVersion": if legacy { 1 } else { 2 } }))
+}
+
+/// Replacing values leaves their old B-tree leaf allocation intact. Repack a small fragmented
+/// state table once, at migration completion, then let normal file compaction reclaim its pages.
+/// A single atomic rename preserves concurrent reader snapshots; the row cap bounds writer work.
+fn repack_account_states(txn: &WriteTransaction) -> Result<bool> {
+    const STAGED: Bytes = redb::TableDefinition::new("__capture_state_repack");
+    {
+        let table = txn.open_table(db::ACCOUNT_STATE)?;
+        let count = table.len()?;
+        let stats = table.stats()?;
+        if !(128..=100_000).contains(&count) || stats.fragmented_bytes() <= stats.stored_bytes() / 2 {
+            return Ok(false);
+        }
+        txn.delete_table(STAGED)?;
+        let mut staged = txn.open_table(STAGED)?;
+        for row in table.iter()? {
+            let (key, value) = row?;
+            staged.insert(key.value(), value.value())?;
+        }
+    }
+    txn.delete_table(db::ACCOUNT_STATE)?;
+    txn.rename_table(STAGED, db::ACCOUNT_STATE)?;
+    Ok(true)
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(default)]
 pub struct Period {
@@ -906,7 +1047,7 @@ fn project_sampled(txn: &WriteTransaction, s: &Sampled) -> Result<()> {
     if let Some(prev) = &previous {
         let key = Key::new().u32(a).u64(prev.state_t as u64);
         if let Some(b) = get(txn, db::ACCOUNT_STATE, key.as_slice())? {
-            let mut old: AccountState = db::unpack(&b)?;
+            let mut old = AccountState::decode(&b, &txn.open_table(db::DICT)?)?;
             let same = old.status == state.status
                 && old.is_active == state.is_active
                 && old.source == state.source
@@ -917,7 +1058,7 @@ fn project_sampled(txn: &WriteTransaction, s: &Sampled) -> Result<()> {
             if same && close && s.sampled_at_ms >= prev.state_t {
                 old.last_seen = old.last_seen.max(s.sampled_at_ms);
                 old.last_observed = s.observed_at_ms;
-                put(txn, db::ACCOUNT_STATE, key.as_slice(), &db::pack(&old)?)?;
+                put(txn, db::ACCOUNT_STATE, key.as_slice(), &old.encode(txn)?)?;
                 state_t = prev.state_t;
                 extended = true;
             }
@@ -929,7 +1070,7 @@ fn project_sampled(txn: &WriteTransaction, s: &Sampled) -> Result<()> {
             txn,
             db::ACCOUNT_STATE,
             Key::new().u32(a).u64(t).as_slice(),
-            &db::pack(&state)?,
+            &state.encode(txn)?,
         )?;
     }
 
@@ -1114,11 +1255,11 @@ fn project_seen(txn: &WriteTransaction, seen: &Seen) -> Result<()> {
     let closed = day_closed(txn, t)?;
     let state_key = Key::new().u32(a).u64(latest.state_t as u64);
     if let Some(b) = get(txn, db::ACCOUNT_STATE, state_key.as_slice())? {
-        let mut state: AccountState = db::unpack(&b)?;
+        let mut state = AccountState::decode(&b, &txn.open_table(db::DICT)?)?;
         if seen.sampled_at_ms - state.last_seen <= COVER_GAP_MS as i64 {
             state.last_seen = state.last_seen.max(seen.sampled_at_ms);
             state.last_observed = seen.observed_at_ms;
-            put(txn, db::ACCOUNT_STATE, state_key.as_slice(), &db::pack(&state)?)?;
+            put(txn, db::ACCOUNT_STATE, state_key.as_slice(), &state.encode(txn)?)?;
         } else {
             // After a gap the same state starts a new span, so the gap stays visible.
             state.observed_ms = seen.observed_at_ms;
@@ -1128,7 +1269,7 @@ fn project_seen(txn: &WriteTransaction, seen: &Seen) -> Result<()> {
                 txn,
                 db::ACCOUNT_STATE,
                 Key::new().u32(a).u64(t).as_slice(),
-                &db::pack(&state)?,
+                &state.encode(txn)?,
             )?;
             latest.state_t = seen.sampled_at_ms;
         }
@@ -1533,6 +1674,9 @@ fn series_close(txn: &WriteTransaction, (a, w): (u32, u32), day: u32) -> Result<
 /// Deletes readings and account states older than the retention (docs/store.md 5). Rollups,
 /// periods and each series' open span stay. Returns how many spans and states went.
 pub fn prune(engine: &Engine, now: u64) -> Result<Json> {
+    if engine.config.retention_days == 0 {
+        return Ok(json!({ "removedRows": 0, "cutoffMs": null, "policy": "forever" }));
+    }
     let cutoff = now.saturating_sub(engine.config.retention_days * DAY_MS);
     let mut removed = 0usize;
     loop {
@@ -1596,7 +1740,7 @@ pub fn prune(engine: &Engine, now: u64) -> Result<Json> {
                 for item in table.iter()? {
                     let (k, v) = item?;
                     let (a, t) = (db::be_u32(k.value(), 0), db::be_u64(k.value(), 4));
-                    let state: AccountState = db::unpack(v.value())?;
+                    let state = AccountState::decode(v.value(), &txn.open_table(db::DICT)?)?;
                     if (state.last_seen as u64) < cutoff && !current.contains(&(a, t)) {
                         states.push(k.value().to_vec());
                     }
@@ -1609,10 +1753,10 @@ pub fn prune(engine: &Engine, now: u64) -> Result<Json> {
                 txn.open_table(db::ACCOUNT_STATE)?.remove(key.as_slice())?;
             }
             txn.commit()?;
-            Ok((victims.len(), deleted + states.len()))
+            Ok((victims.len(), states.len(), deleted + states.len()))
         })?;
-        removed += n.1;
-        if n.0 < PRUNE_BATCH {
+        removed += n.2;
+        if n.0 < PRUNE_BATCH && n.1 < PRUNE_BATCH {
             break;
         }
     }
@@ -1622,6 +1766,9 @@ pub fn prune(engine: &Engine, now: u64) -> Result<Json> {
 /// Retires sealed readings segments past retention once every projector has consumed them, the
 /// days they hold are closed in the ledger, and (when backups run) a backup holds them.
 pub fn retire_segments(engine: &Engine, now: u64, backed_up_through: Option<u64>) -> Result<Json> {
+    if engine.config.retention_days == 0 {
+        return Ok(json!({ "retired": 0, "policy": "forever" }));
+    }
     let cutoff = now.saturating_sub(engine.config.retention_days * DAY_MS);
     let (consumed, closed_through) = engine.with_db(|db| {
         let read = db.begin_read()?;
@@ -2015,6 +2162,7 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
         let series_table = read.open_table(db::SERIES)?;
         let readings = read.open_table(db::READING_DAY)?;
         let states = read.open_table(db::ACCOUNT_STATE)?;
+        let dict = read.open_table(db::DICT)?;
         let latest_table = read.open_table(db::ACCOUNT_LATEST)?;
         let latest_rows = read.open_table(db::LATEST)?;
         let (from, to) = (query.from_ms, query.to_ms);
@@ -2047,7 +2195,7 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
             let at_from = Key::new().u32(a).u64(from);
             if let Some(item) = states.range(prefix.as_slice()..=at_from.as_slice())?.next_back() {
                 let (k, v) = item?;
-                let state: AccountState = db::unpack(v.value())?;
+                let state = AccountState::decode(v.value(), &dict)?;
                 if state.last_seen as u64 >= from {
                     spans.push((db::be_u64(k.value(), 4), state));
                 }
@@ -2057,7 +2205,7 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
             if from < u64::MAX && after.as_slice() < end.as_slice() {
                 for item in states.range(after.as_slice()..end.as_slice())? {
                     let (k, v) = item?;
-                    spans.push((db::be_u64(k.value(), 4), db::unpack(v.value())?));
+                    spans.push((db::be_u64(k.value(), 4), AccountState::decode(v.value(), &dict)?));
                 }
             }
             if spans.is_empty() {
@@ -2143,12 +2291,42 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
             times.retain(|t| *t >= from && *t <= to);
             times.sort_unstable();
             times.dedup();
-            let mut kept: Vec<(i64, Json)> = Vec::new();
+            // Pick the newest covered timestamp per bucket BEFORE constructing JSON. Span
+            // starts are sorted and non-overlapping, so each lookup is a binary search.
+            let mut buckets = std::collections::BTreeMap::new();
+            let mut i = 0;
             for tau in times {
-                let Some((state_t, state)) = spans.iter().rev().find(|(t, s)| *t <= tau && tau <= s.last_seen as u64)
+                let end = spans.partition_point(|(t, _)| *t <= tau);
+                let Some(state_index) = end
+                    .checked_sub(1)
+                    .filter(|index| tau <= spans[*index].1.last_seen as u64)
                 else {
                     continue;
                 };
+                let key = match query.thinning {
+                    Thinning::None => (0, i as i64),
+                    Thinning::Bucket { bucket_ms } => (bucket_ms, (tau as i64).div_euclid(bucket_ms.max(1) as i64)),
+                    Thinning::History => {
+                        let age = query.now_ms as i64 - tau as i64;
+                        let interval: i64 = if age <= HOUR_MS as i64 {
+                            0
+                        } else if age <= DAY_MS as i64 {
+                            BUCKET_MS as i64
+                        } else {
+                            HOUR_MS as i64
+                        };
+                        if interval == 0 {
+                            (0, i as i64)
+                        } else {
+                            (interval as u64, (tau as i64).div_euclid(interval))
+                        }
+                    }
+                };
+                buckets.insert(key, (tau, state_index));
+                i += 1;
+            }
+            for (tau, state_index) in buckets.into_values() {
+                let (state_t, state) = &spans[state_index];
                 // Inside a span only its first and last observation times are kept: a rebuilt
                 // reading takes the span's first offset from its sample time, within the two.
                 let observed = if *state_t == tau {
@@ -2165,11 +2343,16 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
                 };
                 let mut wins = Vec::new();
                 for (_, wmeta, smeta, rows) in &window_rows {
-                    if let Some((_, row)) = rows.iter().rev().find(|(t, r)| *t <= tau && tau <= r.last_seen) {
+                    let end = rows.partition_point(|(t, _)| *t <= tau);
+                    if let Some((_, row)) = end
+                        .checked_sub(1)
+                        .and_then(|i| rows.get(i))
+                        .filter(|(_, r)| tau <= r.last_seen)
+                    {
                         wins.push(window_json(wmeta, smeta, row));
                     }
                 }
-                kept.push((
+                records.push((
                     tau as i64,
                     json!({
                         "identity": meta.identity,
@@ -2184,31 +2367,6 @@ pub fn history_records(engine: &Engine, query: &HistoryQuery) -> Result<Json> {
                     }),
                 ));
             }
-            // Thinning, newest record per bucket wins.
-            let mut buckets: std::collections::BTreeMap<(u64, i64), (i64, Json)> = std::collections::BTreeMap::new();
-            for (i, (t, record)) in kept.into_iter().enumerate() {
-                let key = match query.thinning {
-                    Thinning::None => (0, i as i64),
-                    Thinning::Bucket { bucket_ms } => (bucket_ms, t.div_euclid(bucket_ms.max(1) as i64)),
-                    Thinning::History => {
-                        let age = query.now_ms as i64 - t;
-                        let interval: i64 = if age <= HOUR_MS as i64 {
-                            0
-                        } else if age <= DAY_MS as i64 {
-                            BUCKET_MS as i64
-                        } else {
-                            HOUR_MS as i64
-                        };
-                        if interval == 0 {
-                            (0, i as i64)
-                        } else {
-                            (interval as u64, t.div_euclid(interval))
-                        }
-                    }
-                };
-                buckets.insert(key, (t, record));
-            }
-            records.extend(buckets.into_values());
         }
         records.sort_by_key(|(t, _)| *t);
         Ok(Json::Array(records.into_iter().map(|(_, r)| r).collect()))

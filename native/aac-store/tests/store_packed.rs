@@ -42,7 +42,7 @@ fn obs(account: u32, t: i64, windows: Vec<Json>) -> Json {
 }
 
 fn open(dir: &Path) -> Engine {
-    ops::open_engine(dir.to_str().unwrap(), None, None).unwrap()
+    ops::open_engine(dir.to_str().unwrap(), None, Some(90)).unwrap()
 }
 
 fn call(engine: &Engine, method: &str, args: Json) -> Json {
