@@ -185,6 +185,36 @@ not acknowledge local sends.
 
 Opening reset details always re-reads inventory. Use reset performs another current
 server read before prepare; a cached observation alone cannot open a confirmation.
+The private inventory is read even if the public usage reading has no reset rows.
+Claude uses the saved Windows OAuth identity and prefers that profile's existing
+web session for inventory, verifying its account, email and organization before
+reading grants. A web/OAuth account, email or organization mismatch fails closed
+as `identity-unconfirmed`: public rows remain list-only, even if OAuth inventory
+would work. A missing or unavailable web session can still use the OAuth fallback.
+Normal usage collection retains its verified saved-cookie fallback when Desktop
+last selected another organization; reset reads and claims fail closed instead.
+Cookies and tokens stay on Windows; exact-grant confirmation and the
+OAuth claim transport are unchanged. A throttled inventory stays unavailable and
+shows a rate-limit explanation, including when no public reset rows are present.
+Reset verification uses the same normalized usage windows as the dashboard.
+The provider's legacy Fable reset bucket is matched only to the exact unscoped
+Fable quota; missing or conflicting quota readings never enable a claim.
+
+A web inventory read still requires an eligible saved OAuth token and a successful
+OAuth account/organization check. The private Windows process retains that token;
+the read response never contains it. Claiming repeats those checks, verifies the
+web session against the same account and organization, and uses the OAuth Bearer
+token for the exact selected reset. A cookie-only session cannot enable Use reset.
+OAuth usage throttling does not establish whether the separate claim endpoint is
+throttled. A claim rejection respects the provider's delay; a lost send response
+remains unconfirmed.
+
+Claude's internal `not-sent` outcome is proof that the helper never reached its
+provider opener, or that manifest/script setup failed before host dispatch. Native
+settlement records that outcome, releases that reservation, and the page says
+"AAC did not send this reset." Exceptions after the opener or a lost host response
+retain the existing unconfirmed lock. No-send proof cannot erase earlier provider
+success for the same attempt or acknowledge another page's unanswered send.
 
 A native refusal includes its current recovery `evidence` when storage can be read;
 otherwise it includes null. The same revision rules apply to these snapshots.

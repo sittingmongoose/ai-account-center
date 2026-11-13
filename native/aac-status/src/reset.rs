@@ -899,6 +899,8 @@ impl Store {
                 Outcome::SignedOut => ("signed-out", false),
                 Outcome::IdentityChanged => ("identity-changed", false),
                 Outcome::Unavailable => ("unavailable", false),
+                Outcome::NotSent if previous_success => ("claimed-unconfirmed", true),
+                Outcome::NotSent => ("not-sent", false),
             }
         };
         let provider_success = previous_success || matches!(outcome, Outcome::Reset | Outcome::PriorSuccess);
@@ -1035,6 +1037,7 @@ pub enum Outcome {
     SignedOut,
     IdentityChanged,
     Unavailable,
+    NotSent,
 }
 impl Outcome {
     fn word(self) -> &'static str {
@@ -1050,6 +1053,7 @@ impl Outcome {
             Self::SignedOut => "signed-out",
             Self::IdentityChanged => "identity-changed",
             Self::Unavailable => "unavailable",
+            Self::NotSent => "not-sent",
         }
     }
 }
@@ -1190,6 +1194,7 @@ pub fn dispatch(args: &str) -> Result<Value> {
                 Some("signed-out") => Outcome::SignedOut,
                 Some("identity-changed") => Outcome::IdentityChanged,
                 Some("unavailable") => Outcome::Unavailable,
+                Some("not-sent") => Outcome::NotSent,
                 _ => Outcome::Ambiguous,
             };
             s.finish(&a.account, &a.key, o, a.snapshot.as_ref(), now_ms, a.retry_after_ms)

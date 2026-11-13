@@ -3,7 +3,10 @@
 export interface ResetSource {
   /** Fresh identity-bound private Snapshot JSON; never include credentials or email. */
   read(account: string): Promise<unknown>;
-  /** Must target exactly request.identity and exact grant in request.body; no fallback. */
+  /** Must target exactly request.identity and exact grant in request.body; no fallback.
+   * Claude's `not-sent` is host proof that execution never reached the provider opener.
+   * A lost host response must throw or remain ambiguous, never return that proof word.
+   */
   send(request: ResetWrite): Promise<{ outcome: string; retryAfterMs?: number }>;
 }
 export interface ResetWrite {

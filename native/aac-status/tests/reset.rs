@@ -233,6 +233,46 @@ fn ambiguous_survives_restart_and_blocks_new_spend() {
         "check-again-required"
     );
 }
+
+#[test]
+fn proven_not_sent_settles_the_reservation_and_survives_restart() {
+    let (dir, mut s) = open();
+    let snap = snapshot("claude");
+    let (key, attempt) = begin(&mut s, &snap);
+    let result = s
+        .finish("route-account", &attempt, Outcome::NotSent, None, NOW, None)
+        .unwrap();
+    assert_eq!(result["outcome"], "not-sent");
+    assert_eq!(result["pending"], false);
+    assert_eq!(result["providerSuccess"], false);
+    assert_eq!(result["evidence"]["pendingAttempts"], json!([]));
+    drop(s);
+    let mut s = Store::open(&dir.path().join("reset.sqlite")).unwrap();
+    assert!(s.pending("route-account", NOW).unwrap()["pendingAttempt"].is_null());
+    s.prepare("route-account", &key, &caller(), &snap, NOW, &entropy(8))
+        .unwrap();
+    // A delayed ambiguous answer cannot undo a committed no-send receipt.
+    assert_eq!(
+        s.finish("route-account", &attempt, Outcome::Ambiguous, None, NOW, None)
+            .unwrap()["outcome"],
+        "not-sent"
+    );
+}
+
+#[test]
+fn a_later_no_send_cannot_erase_earlier_provider_success_for_the_same_attempt() {
+    let (_dir, mut s) = open();
+    let snap = snapshot("claude");
+    let (_, attempt) = begin(&mut s, &snap);
+    s.finish("route-account", &attempt, Outcome::Reset, None, NOW, None)
+        .unwrap();
+    let result = s
+        .finish("route-account", &attempt, Outcome::NotSent, None, NOW, None)
+        .unwrap();
+    assert_eq!(result["outcome"], "claimed-unconfirmed");
+    assert_eq!(result["pending"], true);
+    assert_eq!(result["providerSuccess"], true);
+}
 #[test]
 fn account_aliases_cannot_bypass_pending_lock() {
     let (_d, mut s) = open();

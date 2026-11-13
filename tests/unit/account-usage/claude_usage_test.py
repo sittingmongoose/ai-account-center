@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 import os
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 import re
 import sqlite3
@@ -565,6 +565,83 @@ class WindowsProfileRelocationTests(unittest.TestCase):
                     self.current.rmdir()
 
 
+class ResetWindowEvidenceTests(unittest.TestCase):
+    def test_only_known_unscoped_core_kinds_prove_global_windows(self):
+        for kind, group, key in (("session", "session", "five_hour"),
+                                 ("weekly_all", "weekly", "seven_day")):
+            for scope in (None, {}, {"model": None, "surface": None}):
+                with self.subTest(kind=kind, scope=scope):
+                    self.assertEqual(usage.reset_windows({"limits": [
+                        {"kind": kind, "group": group, "percent": 29, "scope": scope}]}), {key: 29})
+            for scope in ({"model": {"display_name": "Fable"}}, {"surface": "code"},
+                          {"surface": {}}, {"unknown": "scope"}, [], False):
+                with self.subTest(kind=kind, scope=scope):
+                    self.assertEqual(usage.reset_windows({"limits": [
+                        {"kind": kind, "group": group, "percent": 29, "scope": scope}]}), {})
+            for wrong_group in (None, "unknown", "weekly" if group == "session" else "session"):
+                with self.subTest(kind=kind, group=wrong_group):
+                    self.assertEqual(usage.reset_windows({"limits": [
+                        {"kind": kind, "group": wrong_group, "percent": 29}]}), {})
+
+    def test_display_collisions_cannot_establish_any_refill_id(self):
+        candidates = [{"kind": key, "group": "weekly", "percent": 37}
+                      for key in ("five_hour", "seven_day", "seven_day_overage_included", "seven_day_fable")]
+        candidates += [WindowTests().fable(kind="custom_scoped"),
+                       WindowTests().fable(scope={"model": {"display_name": "Overage Included"}}),
+                       WindowTests().fable(scope={"surface": "overage_included"}),
+                       WindowTests().fable(scope={"model": {"display_name": "Fable!"}})]
+        for candidate in candidates:
+            with self.subTest(candidate=candidate):
+                # These remain useful display rows, but prove no reset bucket.
+                self.assertTrue(usage.normalize_windows({"limits": [candidate]}))
+                self.assertEqual(usage.reset_windows({"limits": [candidate]}), {})
+
+    def test_fable_requires_exact_model_and_explicitly_absent_or_null_surface(self):
+        for scope in ({"model": {"display_name": "Fable"}},
+                      {"model": {"display_name": "Fable"}, "surface": None}):
+            self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable(scope=scope)]}),
+                             {"seven_day_overage_included": 0})
+        for surface in ("code", "Fable", {"unknown": "code"}, {}, [], False, ""):
+            with self.subTest(surface=surface):
+                self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable(scope={
+                    "model": {"display_name": "Fable"}, "surface": surface})]}), {})
+        for scope in ({"surface": "Fable"}, {"model": {"id": "Fable"}},
+                      {"model": "Fable"}, {"model": {"display_name": "Fable"}, "unknown": "code"}):
+            with self.subTest(scope=scope):
+                self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable(scope=scope)]}), {})
+
+    def test_only_explicit_unscoped_legacy_buckets_are_trusted(self):
+        for key in ("five_hour", "seven_day", "seven_day_overage_included"):
+            with self.subTest(key=key):
+                self.assertEqual(usage.reset_windows({key: {"utilization": 51}}), {key: 51})
+                self.assertEqual(usage.reset_windows({key: {
+                    "utilization": 51, "scope": {"surface": "code"}}}), {})
+        for key in ("seven_day_fable", "seven_day_opus", "seven_day_sonnet", "seven_day_oauth_apps",
+                    "seven_day_cowork", "seven_day_unknown", "extra_usage", "nimbus_quill"):
+            with self.subTest(key=key):
+                self.assertEqual(usage.reset_windows({key: {"utilization": 51}}), {})
+
+    def test_dynamic_conflicts_remain_unconfirmed_and_legacy_wins(self):
+        candidate = WindowTests().fable(percent=37)
+        for changed in (WindowTests().fable(percent=38),
+                        WindowTests().fable(percent=37, resets_at="2026-10-09T12:00:00Z")):
+            self.assertEqual(usage.reset_windows({"limits": [candidate, changed, candidate]}), {})
+        self.assertEqual(usage.reset_windows({"limits": [candidate, candidate]}),
+                         {"seven_day_overage_included": 37})
+        self.assertEqual(usage.reset_windows({"seven_day_overage_included": {"utilization": 51},
+                                             "limits": [candidate, WindowTests().fable(percent=38)]}),
+                         {"seven_day_overage_included": 51})
+
+    def test_dynamic_bounds_and_invalid_percent_do_not_invent_usage(self):
+        for value in (None, True, -1, float("nan"), float("inf"), "37"):
+            with self.subTest(value=value):
+                self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable(percent=value)]}), {})
+                self.assertEqual(usage.reset_windows({"seven_day_overage_included": {"utilization": value}}), {})
+        self.assertEqual(usage.reset_windows({"limits": [WindowTests().fable()] * 65}), {})
+        self.assertEqual(usage.reset_windows({"five_hour": {"utilization": 101},
+                                             "limits": [WindowTests().fable()] * 65}), {"five_hour": 101})
+
+
 class WindowTests(unittest.TestCase):
     def fable(self, **overrides):
         return {"kind": "weekly_scoped", "group": "weekly", "percent": 0,
@@ -888,6 +965,38 @@ class WindowTests(unittest.TestCase):
 
 
 class WebExtraTests(unittest.TestCase):
+    def test_live_org_selection_conflict_keeps_usage_fallback_but_blocks_reset(self):
+        for private in (False, True):
+            with self.subTest(private_reset=private):
+                saved = (ACCOUNT, cache())
+                oauth = FakeClient(profile(), {"five_hour": {"utilization": 7}})
+                web = mock.Mock()
+                web.get.side_effect = [self.web_account(), ResetReadIdentityTests().payload(),
+                                       {"amount": 0, "currency": "USD"}]
+                with mock.patch.object(usage.sys, "platform", "win32"), \
+                        mock.patch.object(usage, "resolve_profile_path", return_value=Path("fixture-root")), \
+                        mock.patch.object(usage, "decrypt_cache", return_value=saved), \
+                        mock.patch.object(usage, "Client", return_value=oauth), \
+                        mock.patch.object(usage, "live_session_cookies", side_effect=usage.WebIdentityMismatch()), \
+                        mock.patch.object(usage, "capsule_cookies", return_value=self.capsule()["cookies"]) as capsule, \
+                        mock.patch.object(usage, "WebClient", return_value=web):
+                    if private:
+                        result = usage.reset_host({"action": "read", "profile": "fixture",
+                                                   "expectedEmail": EMAIL, "host": "windows:fixture"})
+                    else:
+                        result = usage.collect("fixture", "windows", expected_email=EMAIL)
+                if private:
+                    self.assertEqual(result, {"unavailable": True, "reason": "identity-unconfirmed"})
+                    capsule.assert_not_called()
+                    web.get.assert_not_called()
+                    self.assertEqual([route for route, _ in oauth.calls], ["/api/oauth/profile"])
+                else:
+                    self.assertEqual(result["status"], "ok")
+                    self.assertEqual(result["optionalExtras"]["resetCredits"], "ok")
+                    self.assertEqual(next(w for w in result["windows"] if w["key"] == "reset_credits_available")["remaining"], 1)
+                    capsule.assert_called_once()
+                    self.assertEqual(web.get.call_count, 3)
+
     def capsule(self, **overrides):
         return {"schemaVersion": 1, "profileId": "gmail", "email": EMAIL,
                 "accountUuid": ACCOUNT, "capturedAt": "2020-01-01T00:00:00Z", "cookies": [
@@ -1237,6 +1346,19 @@ class WebExtraTests(unittest.TestCase):
 
 
 class HttpBoundaryTests(unittest.TestCase):
+    def test_oauth_rate_limit_preserves_only_bounded_delay_without_reading_body(self):
+        client = usage.Client()
+        error = urllib.error.HTTPError("https://api.anthropic.com/api/oauth/usage", 429,
+                                       "private-upstream-message", {"Retry-After": "1800"}, mock.Mock())
+        self.addCleanup(error.close)
+        with mock.patch.object(client.opener, "open", side_effect=error):
+            with self.assertRaises(usage.UsageUnavailable) as caught:
+                client.get("/api/oauth/usage?cedar_ember=1", TOKEN)
+        self.assertEqual(caught.exception.status, "rate_limited")
+        self.assertEqual(caught.exception.retry_after, 1800)
+        error.fp.read.assert_not_called()
+        self.assertNotIn("private", str(caught.exception))
+
     def test_redirect_handler_refuses_cross_origin(self):
         self.assertIsNone(usage.NoRedirect().redirect_request(None, None, 302, "", {}, "https://evil.invalid"))
 
@@ -1668,10 +1790,36 @@ class ResetHostOfflineTests(unittest.TestCase):
             write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"], "method": "claude.reset_rate_limits",
                      "body": {"program": "cedar_ember", "grant_id": "selected_grant", "request_id": "a" * 64}}
             with mock.patch.object(usage, "Client") as client:
-                self.assertEqual(usage.reset_host(dict(request, action="claim", write=write))["outcome"], "identity-changed")
+                self.assertEqual(usage.reset_host(dict(request, action="claim", write=write))["outcome"], "not-sent")
                 client.assert_not_called()
 
+    def test_missing_or_invalid_private_token_and_final_login_failure_are_not_sent(self):
+        for token in (None, "", "bad\nheader", "x" * 32769):
+            with self.subTest(token_kind=type(token).__name__):
+                private, collect, request = self.setup_host()
+                with mock.patch.object(usage, "collect", side_effect=collect), mock.patch.object(usage, "Client") as client:
+                    read = usage.reset_host(request)
+                    private["token"] = token
+                    write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"], "method": "claude.reset_rate_limits",
+                             "body": {"program": "cedar_ember", "grant_id": "selected_grant", "request_id": "a" * 64}}
+                    self.assertEqual(usage.reset_host(dict(request, action="claim", write=write)), {"outcome": "not-sent"})
+                    client.assert_not_called()
+        private, collect, request = self.setup_host()
+        with mock.patch.object(usage, "collect", side_effect=collect), mock.patch.object(usage, "Client") as client:
+            read = usage.reset_host(request)
+            private["verifyLogin"].side_effect = usage.UsageUnavailable()
+            write = {"identity": read["identity"], "sourceBinding": read["sourceBinding"], "method": "claude.reset_rate_limits",
+                     "body": {"program": "cedar_ember", "grant_id": "selected_grant", "request_id": "a" * 64}}
+            self.assertEqual(usage.reset_host(dict(request, action="claim", write=write)), {"outcome": "not-sent"})
+            client.assert_not_called()
+
 class ResetReadIdentityTests(unittest.TestCase):
+    def setUp(self):
+        # These OAuth-only fixtures must never inspect the machine's sessions.
+        patcher = mock.patch.object(usage, "verified_web_client", side_effect=usage.UsageUnavailable())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def payload(self):
         return {"five_hour": {"utilization": 100}, "cedar_ember": {
             "eligible": True, "grants": [{"id": "fixture_grant", "resets_left": 1,
@@ -1727,6 +1875,276 @@ class ResetReadIdentityTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(captured[0]["observedAtMs"], 1_700_000_000_000)
         self.assertLess(captured[0]["observedAtMs"], clock[0] * 1000)
+
+
+class ResetWebInventoryTests(unittest.TestCase):
+    def setUp(self):
+        self.saved = (ACCOUNT, cache())
+        self.current = self.saved
+        self.oauth = FakeClient(profile(), usage.UsageUnavailable("rate_limited", 1800))
+        self.payload = ResetReadIdentityTests().payload()
+        self.web_account = {"uuid": ACCOUNT, "email_address": EMAIL,
+                            "memberships": [{"organization": {"uuid": ORG}}]}
+        self.web = mock.Mock()
+        self.web.get.side_effect = [self.web_account, self.payload]
+        self.request = {"profile": "fixture", "expectedEmail": EMAIL, "host": "windows:fixture",
+                        "action": "read", "expectedSavedBinding": usage.reset_login_binding(*self.saved),
+                        "expectedSavedOrganization": ORG}
+        self.patches = ExitStack()
+        self.addCleanup(self.patches.close)
+        for patcher in (
+            mock.patch.object(usage.sys, "platform", "win32"),
+            mock.patch.object(usage, "resolve_profile_path", return_value=Path("fixture-root")),
+            mock.patch.object(usage, "decrypt_cache", side_effect=lambda _: self.current),
+            mock.patch.object(usage, "Client", return_value=self.oauth),
+            mock.patch.object(usage, "live_session_cookies", return_value=[{"name": "sessionKey", "value": "fixture-cookie"}]),
+            mock.patch.object(usage, "capsule_cookies", side_effect=usage.UsageUnavailable()),
+            mock.patch.object(usage, "WebClient", return_value=self.web),
+        ):
+            self.patches.enter_context(patcher)
+
+    def test_verified_web_grants_bypass_throttled_oauth_usage_and_stay_private(self):
+        result = usage.reset_host(self.request)
+        self.assertEqual(result["raw"], self.payload["cedar_ember"])
+        self.assertEqual(result["windows"], {"five_hour": 100})
+        self.assertEqual(result["savedLoginBinding"], self.request["expectedSavedBinding"])
+        self.assertEqual([route for route, _ in self.oauth.calls], ["/api/oauth/profile"])
+        self.assertEqual([call.args[0] for call in self.web.get.call_args_list],
+                         ["/api/account", "/api/organizations/" + ORG + "/usage?cedar_ember=1"])
+        for secret in (TOKEN, "fixture-private-refresh-token", "fixture-cookie"):
+            self.assertNotIn(secret, json.dumps(result))
+
+    def test_wrong_web_email_account_or_org_never_supplies_grants(self):
+        for wrong in ({**self.web_account, "email_address": OTHER_EMAIL},
+                      {**self.web_account, "uuid": OTHER},
+                      {**self.web_account, "memberships": [{"organization": {"uuid": OTHER}}]}):
+            with self.subTest(mismatch=wrong):
+                self.web.reset_mock()
+                self.web.get.side_effect = [wrong, self.payload]
+                self.oauth.responses = [profile(), usage.UsageUnavailable("rate_limited", 1800)]
+                result = usage.reset_host(self.request)
+                self.assertEqual(result, {"unavailable": True, "reason": "identity-unconfirmed"})
+                self.assertEqual(self.web.get.call_count, 1)
+
+    def test_web_unavailable_keeps_the_verified_oauth_only_path(self):
+        self.web.get.side_effect = usage.UsageUnavailable()
+        self.oauth.responses = [profile(), self.payload]
+        result = usage.reset_host(self.request)
+        self.assertEqual(result["raw"], self.payload["cedar_ember"])
+        self.assertEqual([route for route, _ in self.oauth.calls],
+                         ["/api/oauth/profile", "/api/oauth/usage?cedar_ember=1"])
+
+    def test_web_identity_mismatch_blocks_even_valid_oauth_inventory(self):
+        for wrong in ({**self.web_account, "uuid": OTHER}, {**self.web_account, "email_address": OTHER_EMAIL},
+                      {**self.web_account, "memberships": [{"organization": {"uuid": OTHER}}]}):
+            with self.subTest(mismatch=wrong):
+                self.oauth.calls.clear()
+                self.oauth.responses = [profile(), self.payload]
+                self.web.get.side_effect = [wrong]
+                result = usage.reset_host(self.request)
+                self.assertEqual(result, {"unavailable": True, "reason": "identity-unconfirmed"})
+                self.assertEqual([route for route, _ in self.oauth.calls], ["/api/oauth/profile"])
+
+    def test_web_identity_mismatch_blocks_claim_even_with_valid_oauth_inventory(self):
+        for wrong in ({**self.web_account, "uuid": OTHER},
+                      {**self.web_account, "memberships": [{"organization": {"uuid": OTHER}}]}):
+            with self.subTest(mismatch=wrong):
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                self.oauth.responses = [profile(), self.payload]
+                self.web.get.side_effect = [wrong]
+                self.oauth.opener = mock.Mock()
+                response = mock.MagicMock()
+                response.__enter__.return_value = response
+                response.read.return_value = b'{"result":"reset"}'
+                self.oauth.opener.open.return_value = response
+                self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+                self.oauth.opener.open.assert_not_called()
+
+    def test_conflicting_live_cookie_identity_does_not_try_capsule_or_oauth_usage(self):
+        with mock.patch.object(usage, "live_session_cookies", side_effect=usage.WebIdentityMismatch()), \
+                mock.patch.object(usage, "capsule_cookies") as capsule:
+            self.oauth.responses = [profile(), self.payload]
+            result = usage.reset_host(self.request)
+        self.assertEqual(result, {"unavailable": True, "reason": "identity-unconfirmed"})
+        capsule.assert_not_called()
+        self.assertEqual([route for route, _ in self.oauth.calls], ["/api/oauth/profile"])
+
+    def test_dynamic_fable_usage_verifies_the_grants_legacy_refill_bucket(self):
+        self.payload["limits"] = [WindowTests().fable(percent=37)]
+        self.payload["cedar_ember"]["grants"][0]["clears"] = ["five_hour", "seven_day_overage_included"]
+        result = usage.reset_host(self.request)
+        self.assertEqual(result["windows"]["seven_day_overage_included"], 37)
+        self.assertNotIn("seven_day_fable", result["windows"])
+        self.assertEqual(result["raw"]["grants"][0]["clears"], ["five_hour", "seven_day_overage_included"])
+
+    def check_astra_refill_scope(self, name):
+        cases = json.loads((HELPERS.parents[1] / "tests/fixtures/reset-source/claude-refill-scopes.json").read_text())
+        case = next(case for case in cases if case["name"] == name)
+        self.payload["limits"] = [case["limit"]]
+        self.payload["cedar_ember"]["grants"][0].update(
+            clears=["seven_day_overage_included"], gives_back_weekly=True)
+        result = usage.reset_host(self.request)
+        self.assertNotIn("unavailable", result)
+        self.assertEqual("seven_day_overage_included" in result["windows"], case["claimable"])
+        if case["claimable"]:
+            self.assertEqual(result["windows"]["seven_day_overage_included"], 37)
+
+    def test_astra_exact_model_control(self):
+        self.check_astra_refill_scope("exact-model")
+
+    def test_astra_known_surface_control(self):
+        self.check_astra_refill_scope("known-surface")
+
+    def test_astra_surface_only_is_not_fable_model(self):
+        self.check_astra_refill_scope("surface-only")
+
+    def test_astra_unknown_surface_is_not_unscoped(self):
+        self.check_astra_refill_scope("unknown-surface")
+
+    def test_missing_conflicting_and_surface_scoped_fable_windows_stay_unconfirmed(self):
+        shapes = [[], [WindowTests().fable(), WindowTests().fable(percent=37)],
+                  [WindowTests().fable(scope={"model": {"display_name": "Fable"}, "surface": "code"})]]
+        for limits in shapes:
+            with self.subTest(limits=limits):
+                self.payload["limits"] = limits
+                self.web.get.side_effect = [self.web_account, self.payload]
+                self.oauth.responses = [profile()]
+                result = usage.reset_host(self.request)
+                self.assertNotIn("seven_day_overage_included", result["windows"])
+
+    def test_explicit_legacy_fable_reading_wins_over_the_display_alias(self):
+        self.payload["seven_day_overage_included"] = {"utilization": 51}
+        self.payload["limits"] = [WindowTests().fable(percent=37)]
+        result = usage.reset_host(self.request)
+        self.assertEqual(result["windows"]["seven_day_overage_included"], 51)
+
+    def test_saved_login_rotation_during_web_read_refuses_inventory(self):
+        for replacement in [(OTHER, cache(key(account=OTHER))), (ACCOUNT, cache(token="rotated-token"))]:
+            with self.subTest(account=replacement[0]):
+                self.current = self.saved
+                def get(route):
+                    if route == "/api/account":
+                        return self.web_account
+                    self.current = replacement
+                    return self.payload
+                self.web.get.side_effect = get
+                self.oauth.responses = [profile()]
+                result = usage.reset_host(self.request)
+                self.assertTrue(result.get("unavailable"))
+                self.assertNotIn("identity", result)
+
+    def test_public_collection_never_publishes_private_grant_ids(self):
+        self.oauth.responses = [profile(), {"five_hour": {"utilization": 100}}]
+        self.web.get.side_effect = [self.web_account, self.payload, usage.UsageUnavailable()]
+        result = usage.collect("fixture", "windows", expected_email=EMAIL)
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(any(w["key"] == "reset_credits_available" for w in result["windows"]))
+        for secret in (TOKEN, "fixture-cookie", "fixture_grant", ACCOUNT, ORG):
+            self.assertNotIn(secret, json.dumps(result))
+
+    def test_rate_limited_collection_keeps_public_status_and_retry_after(self):
+        self.web.get.side_effect = usage.UsageUnavailable()
+        result = usage.collect("fixture", "windows", expected_email=EMAIL)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["failureCode"], "rate_limited")
+        self.assertEqual(result["retryAfterSeconds"], 1800)
+        self.assertEqual(result["windows"], [])
+
+    def claim_request(self):
+        read = usage.reset_host(self.request)
+        self.oauth.responses = [profile(), usage.UsageUnavailable("rate_limited", 1800)]
+        self.web.get.side_effect = [self.web_account, self.payload]
+        # The claim executor does a fresh OAuth identity check; its native
+        # write pins account/org and inventory, rather than an old access token.
+        return {"profile": "fixture", "expectedEmail": EMAIL, "host": "windows:fixture", "action": "claim",
+                "write": {"identity": read["identity"], "sourceBinding": read["sourceBinding"],
+                          "method": "claude.reset_rate_limits", "body": {"program": "cedar_ember",
+                          "grant_id": "fixture_grant", "request_id": "a" * 64}}}
+
+    def test_web_inventory_retains_the_verified_oauth_token_for_an_offline_claim(self):
+        request = self.claim_request()
+        opener = mock.Mock()
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b'{"result":"reset"}'
+        opener.open.return_value = response
+        self.oauth.opener = opener
+        result = usage.reset_host(request)
+        self.assertEqual(result, {"outcome": "reset"})
+        sent = opener.open.call_args.args[0]
+        self.assertEqual(sent.get_header("Authorization"), "Bearer " + TOKEN)
+        self.assertIsNone(sent.get_header("Cookie"))
+        self.assertEqual(sent.full_url, "https://api.anthropic.com/api/organizations/" + ORG + "/reset_rate_limits")
+        self.assertEqual(json.loads(sent.data), request["write"]["body"])
+        self.assertEqual([route for route, _ in self.oauth.calls], ["/api/oauth/profile", "/api/oauth/profile"])
+        opener.open.assert_called_once()
+        self.assertNotIn(TOKEN, json.dumps(result))
+
+    def test_claim_throttling_and_lost_answers_are_independent_of_usage_throttling(self):
+        for error, expected in [(urllib.error.HTTPError("fixture", 429, "synthetic", {"Retry-After": "1800"}, None),
+                                 {"outcome": "rate-limited", "retryAfterMs": 1800000}),
+                                (urllib.error.HTTPError("fixture", 401, "synthetic", {}, None), {"outcome": "signed-out"}),
+                                (urllib.error.HTTPError("fixture", 500, "synthetic", {}, None), {"outcome": "ambiguous"}),
+                                (urllib.error.URLError("synthetic lost response"), {"unavailable": True, "outcome": "ambiguous"})]:
+            with self.subTest(expected=expected):
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                self.oauth.opener = mock.Mock()
+                self.oauth.opener.open.side_effect = error
+                self.assertEqual(usage.reset_host(request), expected)
+                self.oauth.opener.open.assert_called_once()
+
+    def test_wrong_oauth_or_web_identity_never_reaches_the_offline_claim_opener(self):
+        for location in ("oauth-account", "oauth-org", "web-account", "web-org"):
+            with self.subTest(location=location):
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                self.oauth.opener = mock.Mock()
+                if location == "oauth-account":
+                    self.oauth.responses = [profile(account={"uuid": OTHER, "email": EMAIL})]
+                elif location == "oauth-org":
+                    self.oauth.responses = [profile(organization={"uuid": OTHER})]
+                else:
+                    wrong = {**self.web_account, "uuid": OTHER} if location == "web-account" else {
+                        **self.web_account, "memberships": [{"organization": {"uuid": OTHER}}]}
+                    self.web.get.side_effect = [wrong]
+                self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+                self.oauth.opener.open.assert_not_called()
+
+    def test_web_cookie_without_eligible_oauth_token_cannot_offer_or_claim(self):
+        request = self.claim_request()
+        self.current = (ACCOUNT, cache(token=""))
+        self.oauth.opener = mock.Mock()
+        self.web.reset_mock()
+        self.assertTrue(usage.reset_host(self.request).get("unavailable"))
+        self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+        self.web.get.assert_not_called()
+        self.oauth.opener.open.assert_not_called()
+
+    def test_rejected_oauth_profile_names_the_needed_signin_instead_of_stale_inventory(self):
+        self.oauth.responses = [usage.UsageUnavailable("needs_sign_in")]
+        self.assertEqual(usage.reset_host(self.request), {"unavailable": True, "reason": "signed-out"})
+        self.web.get.assert_not_called()
+
+    def test_cache_or_account_rotation_during_claim_web_read_is_not_sent(self):
+        for replacement in [(OTHER, cache(key(account=OTHER))), (ACCOUNT, cache(token="rotated-token"))]:
+            with self.subTest(account=replacement[0]):
+                self.current = self.saved
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                def get(route):
+                    if route == "/api/account": return self.web_account
+                    self.current = replacement
+                    return self.payload
+                self.web.get.side_effect = get
+                self.oauth.opener = mock.Mock()
+                self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+                self.oauth.opener.open.assert_not_called()
 
 
 class ResetCaptureTests(unittest.TestCase):

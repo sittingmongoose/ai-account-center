@@ -134,6 +134,14 @@ pub fn read(db_path: &Path, account: &str, command: &HelperCommand) -> Result<Va
     read_request["expectedSavedBinding"] = json!(capture.saved_login_binding);
     read_request["expectedSavedOrganization"] = json!(capture.organization);
     let mut raw = helper(command, read_request, Duration::from_secs(12))?;
+    if raw["unavailable"] == true {
+        match raw["reason"].as_str() {
+            Some("rate-limited") => return Err("rate-limited"),
+            Some("signed-out") => return Err("signed-out"),
+            Some("identity-unconfirmed") => return Err("identity-unconfirmed"),
+            _ => {}
+        }
+    }
     if raw["savedLoginBinding"] != capture.saved_login_binding
         || raw["identity"]["account"] != capture.account
         || raw["identity"]["organization"] != capture.organization

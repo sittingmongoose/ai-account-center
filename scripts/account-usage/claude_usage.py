@@ -66,6 +66,12 @@ class UsageUnavailable(Exception):
                             not isinstance(retry_after, bool) and math.isfinite(retry_after) and retry_after >= 0 else None)
 
 
+class WebIdentityMismatch(UsageUnavailable):
+    """A conflicting web identity must never become an OAuth-only claim."""
+    def __init__(self):
+        super().__init__("identity_unconfirmed")
+
+
 def retry_after_seconds(value):
     """Only a bounded provider delay leaves the HTTP boundary, never its body."""
     if not isinstance(value, str) or len(value) > 128:
@@ -361,6 +367,8 @@ class Client:
                     raise UsageUnavailable("error")
                 return value
         except urllib.error.HTTPError as error:
+            if error.code == 429:
+                raise UsageUnavailable("rate_limited", retry_after_seconds(error.headers.get("Retry-After")))
             raise UsageUnavailable("needs_sign_in" if error.code in (401, 403) else "error")
         except (OSError, ValueError, UnicodeError, urllib.error.URLError):
             raise UsageUnavailable("error")
@@ -753,7 +761,7 @@ def _validate_cookie_rows(rows, organization_uuid):
         if name == "sessionKey" and not (cookie.get("is_secure") == 1 and cookie.get("is_httponly") == 1):
             raise UsageUnavailable()
         if name == "lastActiveOrg" and token != organization_uuid:
-            raise UsageUnavailable()
+            raise WebIdentityMismatch()
         if name in seen:
             # Native bootstrap can retain a Safari-imported org cookie and
             # create its own variant. Only duplicate public org selectors
@@ -782,10 +790,12 @@ def capsule_cookies(profile_id, account_uuid, organization_uuid, home=None, expe
         raise UsageUnavailable()
     capsule = json.loads(unprotect(raw, expected_length=None))
     if (not isinstance(capsule, dict) or capsule.get("schemaVersion") != 1 or
-        capsule.get("profileId") != profile_id or capsule.get("email") != expected or
-        capsule.get("accountUuid") != account_uuid or not isinstance(capsule.get("cookies"), list) or
+        not isinstance(capsule.get("cookies"), list) or
         len(capsule["cookies"]) > 20):
         raise UsageUnavailable()
+    if (capsule.get("profileId") != profile_id or capsule.get("email") != expected or
+            capsule.get("accountUuid") != account_uuid):
+        raise WebIdentityMismatch()
     return _validate_cookie_rows(capsule["cookies"], organization_uuid)
 
 
@@ -1105,6 +1115,43 @@ class WebClient:
                 pass
 
 
+def verified_web_client(profile_id, account_uuid, organization_uuid, home=None, expected_email=None, profile_root=None, fail_closed=False):
+    """The profile's existing web session, bound to the same OAuth account and org.
+
+    Cookies stay on Windows. Private reset reads need the full provider inventory,
+    while the public collector publishes only its normalized, ID-free windows.
+    """
+    expected = resolve_expected_email(expected_email)
+    if expected is None:
+        raise UsageUnavailable()
+    if profile_root is not None:
+        try:
+            cookies = live_session_cookies(profile_root, organization_uuid)
+        except WebIdentityMismatch:
+            if fail_closed:
+                raise
+            # Normal usage keeps its verified capsule fallback when Desktop
+            # last selected another org. Reset execution must reject instead.
+            cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
+        except UsageUnavailable:
+            cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
+    else:
+        cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
+    client = WebClient(cookies, organization_uuid)
+    account = client.get("/api/account")
+    if account.get("uuid") != account_uuid or account.get("email_address") != expected:
+        raise WebIdentityMismatch()
+    memberships = account.get("memberships")
+    if not isinstance(memberships, list) or len(memberships) > 128:
+        raise WebIdentityMismatch()
+    organizations = {membership["organization"]["uuid"] for membership in memberships
+        if isinstance(membership, dict) and isinstance(membership.get("organization"), dict)
+        and isinstance(membership["organization"].get("uuid"), str)}
+    if organization_uuid not in organizations:
+        raise WebIdentityMismatch()
+    return client
+
+
 def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None, availability=None, expected_email=None, cooldown=None, profile_root=None):
     # Optional balances never turn valid native OAuth quota into a sign-in
     # request or an unreadable balance into zero. Existing callers keep a list;
@@ -1121,29 +1168,8 @@ def optional_web_windows(profile_id, account_uuid, organization_uuid, home=None,
                 cooldown["retryAfterSeconds"] = error.retry_after
         return True
 
-    expected = resolve_expected_email(expected_email)
-    if expected is None:
-        return []
     try:
-        cookies = None
-        if profile_root is not None:
-            try:
-                cookies = live_session_cookies(profile_root, organization_uuid)
-            except UsageUnavailable:
-                cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
-        else:
-            cookies = capsule_cookies(profile_id, account_uuid, organization_uuid, home, expected)
-        client = WebClient(cookies, organization_uuid)
-        account = client.get("/api/account")
-        if account.get("uuid") != account_uuid or account.get("email_address") != expected:
-            return []
-        memberships = account.get("memberships")
-        if not isinstance(memberships, list) or len(memberships) > 128:
-            return []
-        organizations = {membership["organization"].get("uuid") for membership in memberships
-            if isinstance(membership, dict) and isinstance(membership.get("organization"), dict)}
-        if organization_uuid not in organizations:
-            return []
+        client = verified_web_client(profile_id, account_uuid, organization_uuid, home, expected_email, profile_root)
     except Exception as error:
         rate_limited(error)
         return []
@@ -1329,7 +1355,26 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
                 continue
             verify_root()
             identity_verified_ms = int(time.time() * 1000)
-            usage = client.get("/api/oauth/usage?cedar_ember=1", token)
+            usage = None
+            if private_reset_sink is not None:
+                # The OAuth usage endpoint can throttle while the existing web
+                # session still serves grants. Prefer that identity-verified
+                # inventory without exporting its cookies or changing the
+                # OAuth token used for an explicitly confirmed claim.
+                verify_login()
+                try:
+                    web = verified_web_client(profile_id, account_uuid, organization["uuid"], home, expected, profile_root, fail_closed=True)
+                    usage = web.get("/api/organizations/" + organization["uuid"] + "/usage?cedar_ember=1")
+                except WebIdentityMismatch:
+                    # The owner's policy is fail closed on any web/OAuth
+                    # identity disagreement, even if OAuth inventory works.
+                    raise
+                except Exception:
+                    # OAuth-only sign-ins retain their original read path.
+                    pass
+                verify_login()
+            if usage is None:
+                usage = client.get("/api/oauth/usage?cedar_ember=1", token)
             verify_root()
             if private_reset_sink is not None:
                 verify_login()
@@ -1380,7 +1425,14 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
             return result
         raise UsageUnavailable("needs_sign_in")
     except UsageUnavailable as error:
-        result["status"] = error.status
+        result["status"] = ("error" if error.status == "rate_limited" else
+                            "unavailable" if error.status == "identity_unconfirmed" else error.status)
+        if error.status == "identity_unconfirmed":
+            result["resetReason"] = "identity-unconfirmed"
+        if error.status == "rate_limited":
+            cooldown["failureCode"] = "rate_limited"
+            if error.retry_after is not None:
+                cooldown["retryAfterSeconds"] = error.retry_after
     except Exception:
         # Includes missing optional cryptography module and native decode errors.
         # No native exception text, paths or decrypted data are printed.
@@ -1389,7 +1441,74 @@ def collect(profile_id, platform, home=None, expected_email=None, profile_dir=No
     return result
 
 
+def _reset_unscoped(scope):
+    return scope is None or (isinstance(scope, dict)
+                             and set(scope) <= {"model", "surface"}
+                             and all(value is None for value in scope.values()))
+
+
+def _reset_limit_key(entry):
+    """Prove a refill bucket from raw kind/group/scope, never a display key."""
+    kind, group, scope = entry.get("kind"), entry.get("group"), entry.get("scope")
+    if _reset_unscoped(scope):
+        if kind == "session" and group == "session":
+            return "five_hour"
+        if kind == "weekly_all" and group == "weekly":
+            return "seven_day"
+    if (kind == "weekly_scoped" and group == "weekly" and isinstance(scope, dict)
+            and set(scope) <= {"model", "surface"} and scope.get("surface") is None
+            and isinstance(scope.get("model"), dict)
+            and scope["model"].get("display_name") == "Fable"):
+        return "seven_day_overage_included"
+    return None
+
+
+def reset_windows(usage):
+    """Private refill evidence retains quota provenance until bucket selection.
+
+    Public normalization also describes unknown kinds and surface-only quotas;
+    its presentation keys cannot prove the scope of a reset. Only explicit
+    legacy buckets or recognized raw quotas establish these three refill IDs.
+    Valid legacy readings win; conflicting dynamic readings drop their bucket.
+    """
+    windows = {}
+    for key in ("five_hour", "seven_day", "seven_day_overage_included"):
+        value = usage.get(key)
+        if not isinstance(value, dict) or not _reset_unscoped(value.get("scope")):
+            continue
+        used = number(value.get("utilization"))
+        if used is not None:
+            windows[key] = used
+    limits = usage.get("limits")
+    if not isinstance(limits, list) or len(limits) > MAX_SCOPED_LIMITS:
+        return windows
+    dynamic = {}
+    for entry in limits:
+        if not isinstance(entry, dict):
+            continue
+        key, used = _reset_limit_key(entry), number(entry.get("percent"))
+        if key is None or key in windows or used is None:
+            continue
+        candidate = (used, reset_at(entry.get("resets_at")))
+        if key in dynamic and dynamic[key] != candidate:
+            dynamic[key] = None
+        elif key not in dynamic:
+            dynamic[key] = candidate
+    windows.update({key: value[0] for key, value in dynamic.items() if value is not None})
+    return windows
+
+
 def reset_host(request):
+    # Only reaching the actual opener can make a claim ambiguous. Collection,
+    # identity, binding and request-construction failures prove no POST occurred.
+    dispatch = {"started": False}
+    result = _reset_host(request, dispatch)
+    if request.get("action") == "claim" and not dispatch["started"]:
+        return {"outcome": "not-sent"}
+    return result
+
+
+def _reset_host(request, dispatch):
     """Private stdin host RPC. Credentials stay on this host, including during writes.
 
     The server must already have durably consumed the caller's exact confirmation.
@@ -1405,6 +1524,12 @@ def reset_host(request):
                          private_reset_sink=captured.append, expected_saved_binding=request.get("expectedSavedBinding"),
                          expected_saved_organization=request.get("expectedSavedOrganization"))
         if result.get("status") != "ok" or len(captured) != 1:
+            if result.get("resetReason") == "identity-unconfirmed":
+                return {"unavailable": True, "reason": "identity-unconfirmed"}
+            if result.get("failureCode") == "rate_limited":
+                return {"unavailable": True, "reason": "rate-limited"}
+            if result.get("status") == "needs_sign_in":
+                return {"unavailable": True, "reason": "signed-out"}
             return {"unavailable": True}
         private = captured[0]
         cedar = private["usage"].get("cedar_ember")
@@ -1413,9 +1538,7 @@ def reset_host(request):
         identity = {"provider": "claude", "account": private["account"],
                     "organization": private["organization"], "profile": profile_id, "host": request["host"]}
         binding = hashlib.sha256(json.dumps([identity, cedar], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        windows = {key: value.get("utilization") for key, value in private["usage"].items()
-                   if isinstance(value, dict) and isinstance(value.get("utilization"), (int, float))
-                   and not isinstance(value.get("utilization"), bool)}
+        windows = reset_windows(private["usage"])
         expiries = []
         for grant in cedar["grants"]:
             raw = grant.get("ends_at") if isinstance(grant, dict) else None
@@ -1440,15 +1563,20 @@ def reset_host(request):
             return {"outcome": "unavailable"}
         if re.fullmatch(UUID, private["organization"]) is None:
             return {"outcome": "identity-changed"}
+        token = private.get("token")
+        if (not isinstance(token, str) or not token or len(token) > 32768
+                or any(ord(char) < 32 for char in token)):
+            return {"outcome": "unavailable"}
         private["verifyRoot"]()
         private["verifyLogin"]()
         client = Client()
         req = urllib.request.Request(
             "https://api.anthropic.com/api/organizations/" + private["organization"] + "/reset_rate_limits",
             data=json.dumps(body, separators=(",", ":")).encode("ascii"), method="POST",
-            headers={"Authorization": "Bearer " + private["token"], "anthropic-beta": "oauth-2025-04-20",
+            headers={"Authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20",
                      "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "CCS-ReadOnly-Usage/1.0"})
         try:
+            dispatch["started"] = True
             with client.opener.open(req, timeout=8) as response:
                 raw = response.read(MAX_BYTES + 1)
                 if len(raw) > MAX_BYTES:

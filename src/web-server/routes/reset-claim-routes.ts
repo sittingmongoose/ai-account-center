@@ -199,14 +199,22 @@ export function createResetClaimRouter(deps: ResetRouteDeps = {}): Router {
         sent = true;
         try {
           result = await deps.source.send(write);
+          // This proof word belongs to the Claude host executor, never an
+          // unrecognized upstream outcome from another provider.
+          if (result.outcome === 'not-sent') {
+            if (account.startsWith('claude:')) sent = false;
+            else result = { outcome: 'ambiguous' };
+          }
         } catch {
           // Never retry here: a timeout may have spent the chosen grant.
         }
         let after: unknown = null;
-        try {
-          after = await readSnapshot(account);
-        } catch {
-          // Provider success remains unconfirmed when the post-claim read fails.
+        if (sent) {
+          try {
+            after = await readSnapshot(account);
+          } catch {
+            // Provider success remains unconfirmed when the post-claim read fails.
+          }
         }
         res.json(
           await call('finish', account, {

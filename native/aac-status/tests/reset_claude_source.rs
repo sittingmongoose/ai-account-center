@@ -33,11 +33,30 @@ def decrypt(*args):
  key='acct:'+account+'|'+CLIENT+':'+ORG+':https://api.anthropic.com:user:inference user:profile'
  return account,{key:{'token':'fixture-token-'+account,'refreshToken':'fixture-refresh','expiresAt':4102444800000}}
 scope['decrypt_cache']=decrypt
+original_web=scope['verified_web_client']
+def no_web(*args,**kwargs):
+ if (root/'web-usage').exists():return original_web(*args,**kwargs)
+ raise scope['UsageUnavailable']()
+scope['verified_web_client']=no_web
+scope['live_session_cookies']=lambda *args,**kwargs:[{'name':'sessionKey','value':'fixture-cookie'}]
+class WebClient:
+ def __init__(self,*args):pass
+ def get(self,route):
+  with (root/'web-reads').open('a') as f:f.write(route+'\n')
+  if route=='/api/account':
+   account='44444444-4444-4444-4444-444444444444' if (root/'web-other-account').exists() else (root/'login').read_text()
+   org='44444444-4444-4444-4444-444444444444' if (root/'web-other-org').exists() else ORG
+   return {'uuid':account,'email_address':'fixture@example.com','memberships':[{'organization':{'uuid':org}}]}
+  if (root/'refill-usage.json').exists():return json.loads((root/'refill-usage.json').read_text())
+  return {'five_hour':{'utilization':100},'seven_day':{'utilization':100},'limits':[{'kind':'weekly_scoped','group':'weekly','percent':37,'scope':{'model':{'display_name':'Fable'},'surface':None}}],'cedar_ember':{'eligible':True,'grants':[{'id':'fixture_grant','resets_left':1,'resets_total':1,'paused':False,'usable_now':True,'clears':['five_hour','seven_day','seven_day_overage_included']}]}}
+scope['WebClient']=WebClient
 class Client:
  def get(self,route,token):
   with (root/'provider-reads').open('a') as f:f.write(route+'\n')
+  if (root/'signed-out').exists():raise scope['UsageUnavailable']('needs_sign_in')
   account=token[len('fixture-token-'):]
   if route=='/api/oauth/profile':return {'account':{'uuid':account,'email':'fixture@example.com','has_claude_pro':True},'organization':{'uuid':ORG}}
+  if (root/'rate-limit').exists():raise scope['UsageUnavailable']('rate_limited',1800)
   if (root/'fail-usage').exists():raise scope['UsageUnavailable']()
   if (root/'hold-usage').exists():
    (root/'waiting').write_text('waiting')
@@ -194,4 +213,128 @@ fn claude_failed_quota_read_rebinds_to_captured_account_and_recovers_after_resta
     let same = store.pending("claude:reused", now()).unwrap();
     assert_eq!(same["canonicalAccountKey"], yi["canonicalAccountKey"]);
     assert!(same["reason"].is_null());
+}
+
+#[test]
+fn web_inventory_reaches_claimable_exact_grants_without_oauth_usage() {
+    let (dir, command) = setup();
+    let db = dir.path().join("claims.sqlite");
+    std::fs::write(dir.path().join("web-usage"), "").unwrap();
+    std::fs::write(dir.path().join("rate-limit"), "").unwrap();
+    let snapshot = read(&db, &command);
+    let mut store = Store::open(&db).unwrap();
+    let inventory = store.inventory("claude:reused", &snapshot, now(), &nonce(30)).unwrap();
+    assert_eq!(inventory["grants"][0]["claimable"], true);
+    assert_eq!(inventory["grants"][0]["kind"], "full");
+    assert_eq!(snapshot.windows["seven_day_overage_included"], 37.0);
+    assert_eq!(snapshot.grants[0].id.as_deref(), Some("fixture_grant"));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("provider-reads")).unwrap(),
+        "/api/oauth/profile\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("web-reads"))
+            .unwrap()
+            .lines()
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn throttled_inventory_preserves_the_safe_reason_instead_of_stale_identity() {
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("rate-limit"), "").unwrap();
+    assert_eq!(
+        reset_claude_source::read(&dir.path().join("claims.sqlite"), "claude:reused", &command).unwrap_err(),
+        "rate-limited"
+    );
+}
+
+#[test]
+fn signed_out_oauth_does_not_turn_web_cookies_into_a_claim_executor() {
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("signed-out"), "").unwrap();
+    std::fs::write(dir.path().join("web-usage"), "").unwrap();
+    assert_eq!(
+        reset_claude_source::read(&dir.path().join("claims.sqlite"), "claude:reused", &command).unwrap_err(),
+        "signed-out"
+    );
+    assert!(!dir.path().join("web-reads").exists());
+}
+
+#[test]
+fn mismatched_web_identity_is_unconfirmed_even_when_oauth_usage_would_succeed() {
+    for marker in ["web-other-account", "web-other-org"] {
+        let (dir, command) = setup();
+        std::fs::write(dir.path().join("web-usage"), "").unwrap();
+        std::fs::write(dir.path().join(marker), "").unwrap();
+        assert_eq!(
+            reset_claude_source::read(&dir.path().join("claims.sqlite"), "claude:reused", &command).unwrap_err(),
+            "identity-unconfirmed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("provider-reads")).unwrap(),
+            "/api/oauth/profile\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("web-reads")).unwrap(),
+            "/api/account\n"
+        );
+    }
+}
+
+fn assert_refill_scope(name: &str) {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/reset-source/claude-refill-scopes.json"
+    ))
+    .unwrap();
+    let case = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == name)
+        .unwrap();
+    let expected = case["claimable"].as_bool().unwrap();
+    let (dir, command) = setup();
+    std::fs::write(dir.path().join("web-usage"), "").unwrap();
+    let usage = json!({"five_hour":{"utilization":100}, "limits":[case["limit"].clone()],
+        "cedar_ember":{"eligible":true,"grants":[{"id":"fixture_grant","resets_left":1,"resets_total":1,
+            "paused":false,"usable_now":true,"clears":["seven_day_overage_included"],"gives_back_weekly":true}]}});
+    std::fs::write(dir.path().join("refill-usage.json"), usage.to_string()).unwrap();
+    let db = dir.path().join("claims.sqlite");
+    let snapshot = read(&db, &command);
+    let mut store = Store::open(&db).unwrap();
+    let inventory = store.inventory("claude:reused", &snapshot, now(), &nonce(51)).unwrap();
+    let grant = &inventory["grants"][0];
+    let prepared = store.prepare(
+        "claude:reused",
+        grant["grantKey"].as_str().unwrap(),
+        "local",
+        &snapshot,
+        now(),
+        &nonce(52),
+    );
+    assert_eq!(grant["claimable"], expected, "{name}");
+    assert_eq!(prepared.is_ok(), expected, "{name}");
+    if !expected {
+        assert_eq!(grant["claimBlockedReason"], "refill-windows-unconfirmed");
+        assert_eq!(prepared.unwrap_err(), "refill-windows-unconfirmed");
+    }
+}
+#[test]
+fn astra_exact_model_control() {
+    assert_refill_scope("exact-model");
+}
+#[test]
+fn astra_known_surface_control() {
+    assert_refill_scope("known-surface");
+}
+#[test]
+fn astra_surface_only_is_not_fable_model() {
+    assert_refill_scope("surface-only");
+}
+#[test]
+fn astra_unknown_surface_is_not_unscoped() {
+    assert_refill_scope("unknown-surface");
 }

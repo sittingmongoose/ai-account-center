@@ -19,6 +19,7 @@ const candidateRoots = ['tests/unit', 'tests/integration', 'tests/npm', 'src'];
 // (catches deletion drift) but CANNOT detect new undeclared slow tests.
 // Automated perf-budget enforcement tracked in issue #1071.
 const slowTests = [
+  'tests/unit/web-server/reset-source-adapter.test.ts',
   'tests/integration/computer-registry.test.ts',
   'tests/unit/web-server/status/share-route.test.ts',
   'tests/integration/logging-request-context.test.ts',

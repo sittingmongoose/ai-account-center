@@ -1,0 +1,62 @@
+[
+  {
+    "name": "exact-model",
+    "claimable": true,
+    "limit": {
+      "kind": "weekly_scoped",
+      "group": "weekly",
+      "percent": 37,
+      "scope": {
+        "model": {
+          "display_name": "Fable"
+        },
+        "surface": null
+      }
+    }
+  },
+  {
+    "name": "known-surface",
+    "claimable": false,
+    "limit": {
+      "kind": "weekly_scoped",
+      "group": "weekly",
+      "percent": 37,
+      "scope": {
+        "model": {
+          "display_name": "Fable"
+        },
+        "surface": "code"
+      }
+    }
+  },
+  {
+    "name": "surface-only",
+    "claimable": false,
+    "limit": {
+      "kind": "weekly_scoped",
+      "group": "weekly",
+      "percent": 37,
+      "scope": {
+        "model": null,
+        "surface": "Fable"
+      }
+    }
+  },
+  {
+    "name": "unknown-surface",
+    "claimable": false,
+    "limit": {
+      "kind": "weekly_scoped",
+      "group": "weekly",
+      "percent": 37,
+      "scope": {
+        "model": {
+          "display_name": "Fable"
+        },
+        "surface": {
+          "unknown": "code"
+        }
+      }
+    }
+  }
+]

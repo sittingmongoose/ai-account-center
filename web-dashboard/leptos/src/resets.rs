@@ -246,7 +246,7 @@ pub fn why_not(reason: &str, provider: &str) -> String {
             "The provider didn't name this exact reset, so AAC can't pick it safely.".into()
         }
         "credential-host-unavailable" if provider == "claude" => {
-            "AAC can use resets only through a Windows sign-in for now; a Mac-only sign-in is view-only.".into()
+            "Listed resets need a verified OAuth sign-in on Windows before AAC can use them; a Mac-only sign-in is view-only.".into()
         }
         "credential-host-unavailable" => "AAC can't find this login's saved profile on this computer.".into(),
         "account-changed-usage-unavailable" => "Account changed; usage unavailable. Earlier claim results stay with the previous account.".into(),
@@ -258,8 +258,10 @@ pub fn why_not(reason: &str, provider: &str) -> String {
             "None of your Codex limits is used up, so there is nothing to refill yet.".into()
         }
         "refill-windows-unconfirmed" => "AAC can't confirm which limit this refills right now.".into(),
+        "signed-out" if provider == "claude" => "Listed resets need a verified OAuth sign-in on Windows. Sign in again before using them.".into(),
         "signed-out" => "This login is signed out.".into(),
         "cooldown" => "The provider asked AAC to wait before another reset.".into(),
+        "rate-limited" if provider == "claude" => "Claude is limiting reset requests. Try again later.".into(),
         "rate-limited" => "Too many reset tries in a short time; wait a minute.".into(),
         "claim-token-outstanding" => "A claim started on another page may still arrive. Check again before using another reset.".into(),
         "check-again-required" => "A reset claim on this account is still unconfirmed.".into(),
@@ -517,7 +519,7 @@ pub struct Said {
     pub check: bool,
 }
 
-pub fn result_said(r: &ClaimResult, _provider: &str) -> Said {
+pub fn result_said(r: &ClaimResult, provider: &str) -> Said {
     let plain = |text: &str| Said {
         text: text.into(),
         bad: false,
@@ -542,9 +544,11 @@ pub fn result_said(r: &ClaimResult, _provider: &str) -> Said {
             check: true,
         },
         "nothing-to-reset" => plain("Nothing to reset right now. Nothing was spent."),
+        "not-sent" => bad("AAC did not send this reset. Nothing was spent."),
         "no-credit" => bad("That reset is no longer there. Nothing was spent."),
         "already-used" => bad("That reset was already used."),
         "cooldown" => bad("The provider asked AAC to wait before another reset. Nothing was spent."),
+        "rate-limited" if provider == "claude" => bad("Claude is limiting reset requests. Nothing was spent; try again later."),
         "rate-limited" => bad("Too many reset tries in a short time. Nothing was spent; wait a minute."),
         "signed-out" => bad("The provider says this login is signed out. Nothing was spent."),
         "identity-changed" => bad("The signed-in account changed. Nothing was spent."),
@@ -603,6 +607,7 @@ pub fn history_word(outcome: &str) -> &'static str {
         "claimed" => "Used, confirmed",
         "claimed-unconfirmed" => "Unconfirmed",
         "nothing-to-reset" => "Nothing to reset",
+        "not-sent" => "Not sent",
         "no-credit" => "No reset left",
         "already-used" => "Already used",
         "cooldown" => "Asked to wait",
@@ -797,6 +802,90 @@ pub enum Load {
     Loading,
     Ready(Inventory),
     Failed(String),
+}
+
+fn inventory_read_note(load: &Load, provider: &str) -> Option<(String, bool)> {
+    match load {
+        Load::Loading | Load::Idle => {
+            Some(("Checking which resets AAC can use\u{2026}".into(), false))
+        }
+        Load::Failed(text) => Some((
+            format!("{text} Resets can't be used from here until it can."),
+            true,
+        )),
+        Load::Ready(inv) if inv.status != "ok" => Some((
+            format!(
+                "{} Resets can't be used from here.",
+                why_not(
+                    if inv.reason.is_empty() {
+                        "unavailable"
+                    } else {
+                        &inv.reason
+                    },
+                    provider
+                )
+            ),
+            true,
+        )),
+        Load::Ready(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod inventory_read_note_tests {
+    use super::*;
+
+    #[test]
+    fn unconfirmed_web_identity_keeps_public_rows_list_only_and_explains_why() {
+        let load = Load::Ready(Inventory {
+            status: "unavailable".into(),
+            reason: "identity-unconfirmed".into(),
+            ..Default::default()
+        });
+        let (text, bad) = inventory_read_note(&load, "claude").unwrap();
+        assert!(bad && text.contains("AAC couldn't confirm which account this is"));
+        let rows = rows_from_reading(
+            &[ReadingRow {
+                key: "fixture".into(),
+                state: "ready".into(),
+                left: 2,
+                count: 2,
+                ..Default::default()
+            }],
+            0.,
+        );
+        assert!(!rows.is_empty());
+        assert!(
+            rows.iter()
+                .all(|row| !row.claimable && row.grant_key.is_none())
+        );
+    }
+
+    #[test]
+    fn empty_unavailable_inventory_explains_the_claude_rate_limit() {
+        let load = Load::Ready(Inventory {
+            status: "unavailable".into(),
+            reason: "rate-limited".into(),
+            ..Default::default()
+        });
+        let (text, bad) = inventory_read_note(&load, "claude").unwrap();
+        assert!(bad);
+        assert!(text.contains("Claude is limiting reset requests"));
+        assert!(!text.contains("Mac-only"));
+        assert!(!text.contains("No resets"));
+        let signed_out = why_not("signed-out", "claude");
+        assert!(signed_out.contains("Listed resets need a verified OAuth sign-in on Windows"));
+        assert!(
+            inventory_read_note(
+                &Load::Ready(Inventory {
+                    status: "ok".into(),
+                    ..Default::default()
+                }),
+                "claude"
+            )
+            .is_none()
+        );
+    }
 }
 
 /// The dialog: asking prepare, then the confirmation (or its end), then sending.
@@ -1485,34 +1574,10 @@ pub fn ResetsGroup(
                 )
             });
         }
-        if mode != "claim" || !has_rows() {
+        if mode != "claim" {
             return None;
         }
-        rc.load.with(|l| match l {
-            Load::Loading | Load::Idle => Some((
-                "Checking which of these AAC can use\u{2026}".to_string(),
-                false,
-            )),
-            Load::Failed(text) => Some((
-                format!("{text} They can't be used from here until it can."),
-                true,
-            )),
-            Load::Ready(inv) if inv.status != "ok" => Some((
-                format!(
-                    "{} They can't be used from here.",
-                    why_not(
-                        if inv.reason.is_empty() {
-                            "unavailable"
-                        } else {
-                            &inv.reason
-                        },
-                        &provider
-                    )
-                ),
-                true,
-            )),
-            Load::Ready(_) => None,
-        })
+        rc.load.with(|l| inventory_read_note(l, &provider))
     };
     let pending_line = move || {
         let said = rc.said.get();

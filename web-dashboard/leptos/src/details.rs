@@ -180,9 +180,9 @@ pub struct DetailsView {
 }
 
 impl DetailsView {
-    /// Whether the panel reads the reset inventory: only where AAC can use a reset and the reading lists some.
+    /// The private inventory is authoritative even when the public reading has no reset rows yet.
     pub fn reads_resets(&self) -> bool {
-        self.resets_mode == "claim" && !self.reset_rows.is_empty()
+        self.resets_mode == "claim"
     }
 }
 
@@ -605,5 +605,17 @@ mod tests {
         // a Z.ai or Qwen account never reads the claim inventory
         let z = parse(r#"{"id":"zai:a","provider":"zai","resetsMode":"zai","resetRows":[{"key":"z","state":"ready","left":2}]}"#).unwrap();
         assert!(!z.reads_resets());
+    }
+
+    #[test]
+    fn claim_inventory_is_read_without_public_reset_rows() {
+        for provider in ["claude", "codex"] {
+            let d = parse(&format!(
+                r#"{{"id":"{provider}:fixture","provider":"{provider}","resetsMode":"claim"}}"#
+            ))
+            .unwrap();
+            assert!(d.reset_rows.is_empty());
+            assert!(d.reads_resets());
+        }
     }
 }
