@@ -114,6 +114,43 @@ const PATH_CHARS = 160;
 // SCRUB_LINES lines cut to SCRUB_LINE_CHARS, and every repeat is bounded, so this stays linear.
 const SCRUB_LINES = 48;
 const SCRUB_LINE_CHARS = 600;
+// One definition of what marks a credential, shared by the whole-line pass and the token pass,
+// and equal to CREDENTIAL_FLAGS/CREDENTIAL_MARKERS in scripts/app-updates/app_update_common.py
+// (a test compares them). Every flag the token pass redacts also removes its whole line.
+export const CREDENTIAL_FLAGS = [
+  'password',
+  'passwd',
+  'pass',
+  'token',
+  'api-?key',
+  'auth(?:-?token)?',
+  'secret',
+  'access-?token',
+  'otp',
+] as const;
+const CREDENTIAL_FLAG = String.raw`--?(?:${CREDENTIAL_FLAGS.join('|')})\b`;
+export const CREDENTIAL_MARKERS = [
+  'auth',
+  'token',
+  'passw(?:or)?d',
+  'passphrase',
+  'pwd',
+  'secret',
+  'cookie',
+  'bearer',
+  'api[_-]?key',
+  'credential',
+  'session',
+  String.raw`private[\s_-]?key`,
+  // The other keys the token pass recognises, and -p given a quoted or '=' value.
+  'access[_-]?key',
+  String.raw`\bbasic\s+[A-Za-z0-9._~+/=-]`,
+  String.raw`\bcode=`,
+  'one[- ]time (?:code|password)',
+  String.raw`(?<![\w-])-p(?:\s*=|\s*[\"'])`,
+  CREDENTIAL_FLAG,
+];
+const CREDENTIAL_MARKER = new RegExp(CREDENTIAL_MARKERS.join('|'), 'i');
 const CREDENTIAL_WORD =
   '(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential' +
   '|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)';
@@ -134,10 +171,7 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
     '$1<redacted>',
   ],
   [/(\bpass(?:word|wd|phrase)\b[^:=\n]{0,40}[:=]\s*)\S.{0,600}$/gim, '$1<redacted>'],
-  [
-    /(--?(?:password|passwd|pass|token|api-?key|auth(?:-?token)?|secret|access-?token|otp)\b)(?:\s+|=)(?!-)\S{1,600}/gi,
-    '$1 <redacted>',
-  ],
+  [new RegExp(`(${CREDENTIAL_FLAG})(?:\\s+|=)(?!-)\\S{1,600}`, 'gi'), '$1 <redacted>'],
   [/\bcode=\S{1,600}/gi, 'code=<redacted>'],
   [/(one[- ]time (?:code|password)\D{0,20})\d{4,10}/gi, '$1<redacted>'],
   [/\beyJ[A-Za-z0-9_-]{8,600}\.[A-Za-z0-9_-]{8,600}(?:\.[A-Za-z0-9_-]{1,600})?/g, '<redacted>'],
@@ -185,9 +219,7 @@ export function scrubText(value: string, lines = TAIL_LINES): string {
     const probe = line.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
     if (
       (removing && (carry || /^[\s\x00-\x1f\x7f-\x9f]/.test(line))) ||
-      /auth|token|passw(?:or)?d|passphrase|pwd|secret|cookie|bearer|api[_-]?key|credential|session|private[\s_-]?key/i.test(
-        probe
-      )
+      CREDENTIAL_MARKER.test(probe)
     ) {
       if (!removing) candidates.push('<line removed: may contain a credential>');
       removing = true;

@@ -53,6 +53,47 @@ class Round2(Home):
                 self.assertEqual(tail, REMOVED)
         self.assertEqual(common.scrub('ordinary ENOSPC diagnostic'), 'ordinary ENOSPC diagnostic')
 
+    H1_FLAGS = ('--password', '--passwd', '--pass', '--token', '--api-key', '--apikey', '--auth', '--auth-token',
+                '--authtoken', '--secret', '--access-token', '--accesstoken', '--otp')
+    H1_WITNESSES = ('horse', 'battery', 'staple', 'correctHorseWitness', 'continuationWitness')
+
+    @classmethod
+    def h1_samples(cls):
+        """Every flag the token pass redacts, both dash forms, quoted and unquoted, '=' and space."""
+        samples = []
+        for flag in cls.H1_FLAGS + tuple(flag[1:] for flag in cls.H1_FLAGS):
+            for value in ('"correct horse battery staple"', "'correct horse battery staple'", 'correctHorseWitness'):
+                samples += ['installer %s %s' % (flag, value), 'installer %s=%s' % (flag, value)]
+        return samples + ['installer -p "correct horse battery staple"', 'installer -p="correct horse battery staple"',
+                          "installer -p'correct horse battery staple'", 'installer --pass \\\n  continuationWitness']
+
+    def test_h1_every_recognised_flag_drops_its_whole_line_through_command_and_export(self):
+        for sample in self.h1_samples():
+            with self.subTest(sample=sample), scope() as record:
+                with self.assertRaises(common.UpdateFailure):
+                    common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(sample) + '); sys.exit(1)'],
+                                   errors=True, label='fixture updater')
+                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
+                self.assertEqual(row['diagnostics']['tail'], REMOVED)
+                self.assertEqual(common.scrub(sample), REMOVED)
+                for witness in self.H1_WITNESSES:
+                    self.assertNotIn(witness, json.dumps(row))
+
+    def test_h1_every_flag_the_token_pass_redacts_is_a_whole_line_marker(self):
+        for flag in self.H1_FLAGS:
+            self.assertRegex(flag, '^' + common.CREDENTIAL_FLAG + '$')
+            self.assertRegex(flag, common._CREDENTIAL_MARKER)
+        self.assertIn(common.CREDENTIAL_FLAG, common.CREDENTIAL_MARKERS)
+
+    def test_h1_ordinary_installer_output_keeps_its_text(self):
+        control = 'installer: unpacking zcode-acp-server 0.84.3 (mkdir -p prefix; lsof -a -p 4242 found 0 holders)'
+        with scope() as record:
+            with self.assertRaises(common.UpdateFailure):
+                common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(control) + '); sys.exit(1)'],
+                               errors=True, label='fixture updater')
+            row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
+        self.assertEqual(row['diagnostics']['tail'], control)
+
     def test_c2_an_unbound_same_window_log_never_overrides_tls_or_generic_output(self):
         for text in ('Update failed: certificate has expired', 'Update failed: Error'):
             # Real fixture log, deliberately a different PID; no launched PID binding exists.

@@ -73,6 +73,18 @@ TAIL_LINES, TAIL_LINE_CHARS, TAIL_CHARS = 12, 200, 1200
 # below is bounded, so scrubbing stays linear in the text (an unbroken 64 KiB run included).
 SCRUB_LINES, SCRUB_LINE_CHARS = 48, 600
 _ANSI = re.compile(r"\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?")
+# One definition of what marks a credential, shared by the whole-line pass and the token pass below,
+# and mirrored in src/web-server/services/app-update-diagnostics.ts (a test keeps the two equal).
+# Every flag the token pass redacts is also a whole-line marker, so a quoted value cannot keep a tail.
+CREDENTIAL_FLAGS = ("password", "passwd", "pass", "token", "api-?key", "auth(?:-?token)?", "secret",
+                    "access-?token", "otp")
+CREDENTIAL_FLAG = r"--?(?:" + "|".join(CREDENTIAL_FLAGS) + r")\b"
+CREDENTIAL_MARKERS = ("auth", "token", "passw(?:or)?d", "passphrase", "pwd", "secret", "cookie", "bearer",
+                      "api[_-]?key", "credential", "session", r"private[\s_-]?key",
+                      # The other keys the token pass recognises, and -p given a quoted or '=' value.
+                      r"access[_-]?key", r"\bbasic\s+[A-Za-z0-9._~+/=-]", r"\bcode=",
+                      r"one[- ]time (?:code|password)", r"(?<![\w-])-p(?:\s*=|\s*[\"'])",
+                      CREDENTIAL_FLAG)
 _CREDENTIAL_WORD = (r"(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential"
                     r"|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)")
 _SECRET_PATTERNS = (
@@ -86,7 +98,7 @@ _SECRET_PATTERNS = (
     (re.compile(r"(?im)([\"']?\b[a-z0-9_.-]{0,40}" + _CREDENTIAL_WORD + r"[a-z0-9_.-]{0,40}[\"']?\s*[:=]\s*)\S.{0,600}$"), r"\1<redacted>"),
     (re.compile(r"(?im)(\bpass(?:word|wd|phrase)\b[^:=\n]{0,40}[:=]\s*)\S.{0,600}$"), r"\1<redacted>"),
     # Command-line flag forms: --password value, --token=value.
-    (re.compile(r"(?i)(--?(?:password|passwd|pass|token|api-?key|auth(?:-?token)?|secret|access-?token|otp)\b)(?:\s+|=)(?!-)\S{1,600}"), r"\1 <redacted>"),
+    (re.compile(r"(?i)(" + CREDENTIAL_FLAG + r")(?:\s+|=)(?!-)\S{1,600}"), r"\1 <redacted>"),
     (re.compile(r"(?i)\bcode=\S{1,600}"), "code=<redacted>"),
     (re.compile(r"(?i)(one[- ]time (?:code|password)\D{0,20})\d{4,10}"), r"\1<redacted>"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,600}\.[A-Za-z0-9_-]{8,600}(?:\.[A-Za-z0-9_-]{1,600})?"), "<redacted>"),
@@ -103,8 +115,7 @@ _SECRET_PATTERNS = (
 # A line naming any credential marker goes whole, with the lines that continue it (indented, or
 # after a line ending in a separator), before any cut: no partial redaction can keep a tail.
 CREDENTIAL_LINE = "<line removed: may contain a credential>"
-_CREDENTIAL_MARKER = re.compile(r"(?i)auth|token|passw(?:or)?d|passphrase|pwd|secret|cookie|bearer|api[_-]?key"
-                                r"|credential|session|private[\s_-]?key")
+_CREDENTIAL_MARKER = re.compile("(?i)" + "|".join(CREDENTIAL_MARKERS))
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _INDENTED = re.compile(r"[\s\x00-\x1f\x7f-\x9f]")
 _CONTINUES = ("\\", ",", ";", ":", "=", "{", "[", "(")
