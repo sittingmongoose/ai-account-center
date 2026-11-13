@@ -7,7 +7,7 @@ import {
   stripAnthropicEnv,
   stripBrowserEnv,
   stripCodexSessionEnv,
-} from '../utils/shell-executor';
+} from './codex-probe-env';
 import type { TargetBinaryInfo } from './target-adapter';
 
 const CODEX_CONFIG_OVERRIDE_FEATURE = 'config-overrides';

@@ -1,3 +1,4 @@
+import type { ActivityKind } from './analytics-tools';
 /** Bounded, resumable native history for the Accounts Analytics page. */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -195,7 +196,6 @@ function hash(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-type ActivityKind = 'claude' | 'codex' | 'omp' | 'muse' | 'zcode' | 'jsonl' | 'antigravity';
 /**
  * Checkpoints of these kinds hold rows from an older parser and are read
  * again from the start: OMP rows now keep the routing provider and never mix

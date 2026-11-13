@@ -1,9 +1,8 @@
 /**
  * Config schema barrel re-exports.
  *
- * All types, interfaces, constants, and functions originally in
- * unified-config-types.ts are re-exported here for backward compatibility.
- * Each module is responsible for a focused domain of the config schema.
+ * Active AAC and held CLIProxy schemas. Ignored launcher sections remain
+ * opaque values and do not have typed accessors or defaults.
  */
 
 // Version constant
@@ -64,70 +63,20 @@ export type {
   QuotaManagementConfig,
 } from './quota';
 
-// Thinking/reasoning budget types and defaults
-export { DEFAULT_THINKING_TIER_DEFAULTS, DEFAULT_THINKING_CONFIG } from './thinking';
-export type { ThinkingMode, ThinkingTierDefaults, ThinkingConfig } from './thinking';
-
-// Runtime (spawned-CLI) types, output-limit env mapping (issue #231)
-export { OUTPUT_LIMITS_ENV_KEYS, buildOutputLimitsEnv } from './runtime';
-export type { OutputLimitsConfig, RuntimeConfig } from './runtime';
-
-// Official channels types and defaults
-export { DEFAULT_OFFICIAL_CHANNELS_CONFIG } from './channels';
-export type { OfficialChannelId, OfficialChannelsConfig } from './channels';
-
-// WebSearch backend types
-export type {
-  DuckDuckGoWebSearchConfig,
-  BraveWebSearchConfig,
-  ExaWebSearchConfig,
-  TavilyWebSearchConfig,
-  SearxngWebSearchConfig,
-  AgyWebSearchConfig,
-  GeminiWebSearchConfig,
-  GrokWebSearchConfig,
-  OpenCodeWebSearchConfig,
-  WebSearchProvidersConfig,
-  WebSearchConfig,
-} from './websearch';
-
-// Browser automation types and defaults
-export { DEFAULT_BROWSER_CONFIG } from './browser';
-export type {
-  BrowserToolPolicy,
-  BrowserEvalMode,
-  BrowserClaudeConfig,
-  BrowserCodexConfig,
-  BrowserConfig,
-} from './browser';
-
 // Logging and preferences types and defaults
 export { DEFAULT_LOGGING_CONFIG } from './logging';
 export type { LoggingLevel, LoggingConfig, PreferencesConfig } from './logging';
 
-// Provider integration types and defaults
-export {
-  DEFAULT_GLOBAL_ENV,
-  DEFAULT_COPILOT_CONFIG,
-  DEFAULT_CURSOR_CONFIG,
-  DEFAULT_CLIPROXY_SERVER_CONFIG,
-  DEFAULT_OPENAI_COMPAT_PROXY_CONFIG,
-  DEFAULT_IMAGE_ANALYSIS_CONFIG,
-} from './providers';
+// CLIProxy proxy configuration held for central-logins research.
 export type {
-  CopilotAccountType,
-  CopilotConfig,
-  CursorConfig,
   ProxyRemoteConfig,
   ProxyFallbackConfig,
   ProxyLocalConfig,
   OpenAICompatProxyRoutingConfig,
   OpenAICompatProxyConfig,
   CliproxyServerConfig,
-  GlobalEnvConfig,
-  ContinuityConfig,
-  ImageAnalysisConfig,
-} from './providers';
+} from './proxy-server';
+export { DEFAULT_CLIPROXY_SERVER_CONFIG, DEFAULT_OPENAI_COMPAT_PROXY_CONFIG } from './proxy-server';
 
 // Main unified config interface, factory, and type guard
 export { createEmptyUnifiedConfig, isUnifiedConfig } from './unified-config';

@@ -1,3 +1,4 @@
+/** Approval-token decision: ../../docs/approval-tokens.md (new actions use AccountConfirmationStore). */
 import { AntigravityError } from './errors';
 import { createHash, randomBytes } from 'crypto';
 import type { ActivationConfirmation, ProcessPlan } from './types';

@@ -1,3 +1,4 @@
+import type { HelperPlatform } from './dashboard-hosts';
 import type { ClaudeSignInRenewal } from './claude-signin-renewal';
 import type { AntigravityAutoSwitchStatus } from '../../antigravity/auto-switch/types';
 import type { AntigravityPlan } from '../../antigravity/plan';
@@ -13,7 +14,7 @@ export type DashboardProvider =
   | 'zai'
   | 'opencode-go';
 
-export type DashboardPlatform = 'ubuntu' | 'mac' | 'windows';
+export type DashboardPlatform = HelperPlatform;
 export type ClaudeDashboardPlatform = 'mac' | 'windows';
 export type DashboardAccountStatus = 'ok' | 'cached' | 'unavailable' | 'error' | 'needs_sign_in';
 /**

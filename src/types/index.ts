@@ -23,17 +23,6 @@ export { isConfig, isSettings } from './config';
 export type { ParsedArgs, ClaudeSpawnOptions, Platform, ClaudeCliInfo } from './cli';
 export { ExitCode } from './cli';
 
-// Delegation types
-export type {
-  SessionMetadata,
-  DelegationSession,
-  DelegationSessionsRegistry,
-  ExecutionResult,
-  ToolEvent,
-  OutputEvent,
-  DelegationEvent,
-} from './delegation';
-
 // Legacy GLMT transformer types
 export type {
   AnthropicMessage,

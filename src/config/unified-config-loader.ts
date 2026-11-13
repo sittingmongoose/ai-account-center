@@ -11,17 +11,13 @@
  *   Phase 4 → src/config/loader/defaults-merger.ts
  *   Phase 5 → src/config/loader/config-getters.ts
  *
- * This file re-exports the full public API so all existing import sites
- * continue to work without modification.
+ * The public surface contains active AAC accessors and the CLIProxy helpers
+ * held for central-logins research. Retired launcher accessors are removed.
  */
 
 import * as fs from 'fs';
 import * as yaml from 'js-yaml';
-import {
-  isUnifiedConfig,
-  createEmptyUnifiedConfig,
-  UNIFIED_CONFIG_VERSION,
-} from './unified-config-types';
+import { isUnifiedConfig, createEmptyUnifiedConfig } from './unified-config-types';
 import type { UnifiedConfig } from './unified-config-types';
 import { isUnifiedConfigEnabled } from './feature-flags';
 
@@ -61,24 +57,6 @@ import {
 } from './loader/io-locks';
 
 // ---------------------------------------------------------------------------
-// Phase 2 re-exports: normalizers
-// ---------------------------------------------------------------------------
-
-export {
-  normalizeBrowserDevtoolsPort,
-  normalizeBrowserPolicy,
-  normalizeBrowserEvalMode,
-  canonicalizeBrowserConfig,
-  normalizeSessionAffinityTtl,
-  hasPositiveDuration,
-  validateCompositeVariants,
-  normalizeContinuityInheritanceMap,
-  normalizeContinuityConfig,
-  normalizeOfficialChannelsConfig,
-} from './loader/normalizers';
-import { canonicalizeBrowserConfig, validateCompositeVariants } from './loader/normalizers';
-
-// ---------------------------------------------------------------------------
 // Phase 3 re-exports: yaml-serializer
 // ---------------------------------------------------------------------------
 
@@ -91,27 +69,21 @@ import { generateYamlHeader, generateYamlWithComments } from './loader/yaml-seri
 
 export { mergeWithDefaults } from './loader/defaults-merger';
 import { mergeWithDefaults } from './loader/defaults-merger';
+import { validateCompositeVariants } from './loader/normalizers';
+export {
+  normalizeSessionAffinityTtl,
+  hasPositiveDuration,
+  validateCompositeVariants,
+} from './loader/normalizers';
 
 // ---------------------------------------------------------------------------
 // Phase 5 re-exports: config-getters
 // ---------------------------------------------------------------------------
 
-export type { GeminiWebSearchInfo } from './loader/config-getters';
 export {
-  getWebSearchConfig,
-  getGlobalEnvConfig,
-  getOutputLimitsEnv,
-  getContinuityInheritanceMap,
-  getCliproxySafetyConfig,
-  getThinkingConfig,
-  getOfficialChannelsConfig,
   isDashboardAuthEnabled,
   getDashboardAuthConfig,
-  getBrowserConfig,
-  hasExplicitClaudeBrowserDevtoolsPort,
-  getImageAnalysisConfig,
   getLoggingConfig,
-  getCursorConfig,
 } from './loader/config-getters';
 
 // ---------------------------------------------------------------------------
@@ -138,7 +110,7 @@ export function getConfigFormat(): 'yaml' | 'json' | 'none' {
 /**
  * Load unified config from YAML file.
  * Returns null if file doesn't exist.
- * Auto-upgrades config if version is outdated (regenerates comments).
+ * Reads never upgrade or rewrite an existing file; versions advance on explicit saves.
  */
 export function loadUnifiedConfig(): UnifiedConfig | null {
   const yamlPath = getConfigYamlPath();
@@ -153,22 +125,6 @@ export function loadUnifiedConfig(): UnifiedConfig | null {
 
     if (!isUnifiedConfig(parsed)) {
       throw new Error(`Invalid config format in ${yamlPath}`);
-    }
-
-    // Auto-upgrade if version is outdated (regenerates YAML with new comments and fields)
-    if ((parsed.version ?? 1) < UNIFIED_CONFIG_VERSION) {
-      const upgraded = mergeWithDefaults(parsed);
-      upgraded.version = UNIFIED_CONFIG_VERSION;
-      try {
-        saveUnifiedConfig(upgraded);
-        if (process.env.CCS_DEBUG) {
-          console.error(`[i] Config upgraded to v${UNIFIED_CONFIG_VERSION}`);
-        }
-        return upgraded;
-      } catch (saveError) {
-        console.error('[!] Config upgrade failed to save:', (saveError as Error).message);
-        // Continue using the upgraded version in-memory even if save fails
-      }
     }
 
     return parsed;
@@ -234,13 +190,7 @@ export function saveUnifiedConfig(config: UnifiedConfig): void {
 export function mutateUnifiedConfig(mutator: (config: UnifiedConfig) => void): UnifiedConfig {
   return withConfigWriteLock(() => {
     const current = loadUnifiedConfigWithLockHeld(mergeWithDefaults, validateCompositeVariants);
-    const previousBrowser = current.browser
-      ? canonicalizeBrowserConfig(current.browser)
-      : undefined;
     mutator(current);
-    if (current.browser) {
-      current.browser = canonicalizeBrowserConfig(current.browser, previousBrowser);
-    }
     writeUnifiedConfigWithLockHeld(current, generateYamlHeader, generateYamlWithComments);
     return current;
   });

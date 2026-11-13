@@ -72,24 +72,38 @@ describe('read-only command fixtures', () => {
   describe('bar CLI read-only and launch boundaries', () => {
     it('rejects unsupported native launch before config reads, server probes or process work', async () => {
       const before = privateSnapshot();
-      let touched = 0;
       await handleBarLaunch([], {
         getPlatform: () => 'linux',
-        getCcsDir: () => {
-          touched += 1;
-          return ccsDir;
-        },
-        findRunningServer: async () => {
-          touched += 1;
-          return null;
-        },
-        spawnDetachedServer: () => {
-          touched += 1;
-        },
       });
-      expect(touched).toBe(0);
       expect(process.exitCode).toBe(1);
       expect(privateSnapshot()).toBe(before);
+    });
+    it('opens the owned native app without creating local-server files', async () => {
+      const app = makeApp();
+      const before = privateSnapshot();
+      const opened: string[] = [];
+      await handleBarLaunch([], {
+        getPlatform: () => 'darwin',
+        getAppsDir: () => appsDir,
+        openApp: async (value) => {
+          opened.push(value);
+        },
+      });
+      expect(opened).toEqual([app]);
+      expect(process.exitCode).toBe(0);
+      expect(privateSnapshot()).toBe(before);
+      expect(fs.existsSync(path.join(ccsDir, 'bar.json'))).toBe(false);
+      expect(fs.existsSync(path.join(ccsDir, 'bar/launch.json'))).toBe(false);
+      expect(fs.existsSync(path.join(ccsDir, 'bar/server.pid'))).toBe(false);
+    });
+    it('rejects every retired local-server command without touching private state', async () => {
+      const before = privateSnapshot();
+      for (const command of ['launch', 'serve', 'stop', 'status', '--port']) {
+        process.exitCode = 0;
+        await handleBarCommand([command]);
+        expect(process.exitCode).toBe(1);
+        expect(privateSnapshot()).toBe(before);
+      }
     });
     it('reads the actual owned canonical version instead of a stale version pin', async () => {
       makeApp();

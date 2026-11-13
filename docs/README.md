@@ -42,3 +42,6 @@ Verify documentation with `bash tests/docs/quickstart-parity.sh` and
 `node tests/docs/documentation-freshness.js`. Keep relative source links current.
 Generated hardening reports must be regenerated from the current source using
 their owning script; old validation totals are not proof of the current build.
+
+Approval-token implementation choice for new guarded actions: [approval tokens](approval-tokens.md).
+Analytics vocabulary and storage compatibility: [Analytics tools](analytics-tools.md).

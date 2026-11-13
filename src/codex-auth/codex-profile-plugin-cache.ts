@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ConfigError } from '../errors/error-types';
-import { resolveCanonicalPath, symlinkPointsTo } from '../management/shared-manager/fs-helpers';
+import { resolveCanonicalPath, symlinkPointsTo } from './codex-plugin-paths';
 import { createLogger } from '../services/logging';
 
 const logger = createLogger('codex-auth:resources');

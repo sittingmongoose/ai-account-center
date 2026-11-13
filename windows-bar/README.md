@@ -283,3 +283,5 @@ opens the current product; both launchers share the singleton and show event. Th
 (DPAPI connection, `preferences.json` with the theme and shortcut choice) and the DPAPI purpose are intentionally
 retained. Provider artwork provenance is in `CCSBar/Resources/Providers/PROVIDER-SOURCES.md` and `sources.json`;
 notices in `THIRD-PARTY-NOTICES.txt`. The original MIT license and upstream attribution are preserved.
+
+The tray connects to its saved dashboard address. The retired CLI local-server mode (`bar launch/serve/stop/status`) is no longer available; run the dashboard separately. Existing server descriptors are left untouched.

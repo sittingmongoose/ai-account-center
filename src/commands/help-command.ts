@@ -30,7 +30,7 @@ export async function handleHelpCommand(writeLine: HelpWriter = console.log): Pr
   writeLine('  ai-account-center codex-auth show');
   writeLine('  ai-account-center codex-auth activate work');
   writeLine('  ai-account-center antigravity signin party');
-  writeLine('  ai-account-center bar status');
+  writeLine('  ai-account-center bar version');
   writeLine('');
 }
 

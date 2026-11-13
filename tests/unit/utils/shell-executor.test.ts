@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { stripAnthropicEnv } from '../../../src/utils/shell-executor';
+import { stripAnthropicEnv } from '../../../src/targets/codex-probe-env';
 
 // We need to mock process.platform for cross-platform testing
 const originalPlatform = process.platform;
@@ -14,22 +14,22 @@ describe('escapeShellArg', () => {
     });
 
     it('wraps argument in double quotes', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('arg')).toBe('"arg"');
     });
 
     it('escapes inner double quotes with backslash', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('say "hello"')).toBe('"say \\"hello\\""');
     });
 
     it('handles paths with spaces', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('/path/to/my file')).toBe('"/path/to/my file"');
     });
 
     it('handles empty string', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('')).toBe('""');
     });
   });
@@ -43,42 +43,42 @@ describe('escapeShellArg', () => {
     });
 
     it('wraps argument in double quotes', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('arg')).toBe('"arg"');
     });
 
     it('escapes inner double quotes by doubling them', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('say "hello"')).toBe('"say ""hello"""');
     });
 
     it('escapes percent signs', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('%PATH%')).toBe('"%%PATH%%"');
     });
 
     it('escapes caret characters', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('a^b')).toBe('"a^^b"');
     });
 
     it('replaces newlines with spaces', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('line1\nline2')).toBe('"line1 line2"');
     });
 
     it('replaces tabs with spaces', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('col1\tcol2')).toBe('"col1 col2"');
     });
 
     it('handles Windows paths with spaces', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('C:\\Program Files\\App')).toBe('"C:\\Program Files\\App"');
     });
 
     it('escapes exclamation marks for delayed expansion', async () => {
-      const { escapeShellArg } = await import('../../../src/utils/shell-executor');
+      const { escapeShellArg } = await import('../../../src/targets/codex-probe-env');
       expect(escapeShellArg('hello!')).toBe('"hello^^!"');
     });
 
@@ -91,7 +91,8 @@ describe('escapeShellArg', () => {
         process.env.SystemRoot = 'C:\\Windows';
         process.env.ComSpec = 'C:\\Windows\\System32\\cmd.exe';
         delete process.env.COMSPEC;
-        const { getWindowsEscapedCommandShell } = await import('../../../src/utils/shell-executor');
+        const { getWindowsEscapedCommandShell } =
+          await import('../../../src/targets/codex-probe-env');
         expect(getWindowsEscapedCommandShell()).toBe('C:\\Windows\\System32\\cmd.exe');
       } finally {
         if (originalComSpec === undefined) delete process.env.ComSpec;
@@ -112,7 +113,8 @@ describe('escapeShellArg', () => {
         process.env.SystemRoot = 'C:\\Windows';
         process.env.ComSpec = 'cmd.exe';
         process.env.COMSPEC = 'C:\\Temp\\cmd.exe';
-        const { getWindowsEscapedCommandShell } = await import('../../../src/utils/shell-executor');
+        const { getWindowsEscapedCommandShell } =
+          await import('../../../src/targets/codex-probe-env');
         expect(getWindowsEscapedCommandShell()).toBe('C:\\Windows\\System32\\cmd.exe');
       } finally {
         if (originalComSpec === undefined) delete process.env.ComSpec;
@@ -137,7 +139,8 @@ describe('escapeShellArg', () => {
         delete process.env.windir;
         process.env.ComSpec = 'Windows\\System32\\cmd.exe';
         process.env.COMSPEC = 'C:\\Temp\\cmd.exe';
-        const { getWindowsEscapedCommandShell } = await import('../../../src/utils/shell-executor');
+        const { getWindowsEscapedCommandShell } =
+          await import('../../../src/targets/codex-probe-env');
         expect(getWindowsEscapedCommandShell()).toBe('C:\\Windows\\System32\\cmd.exe');
       } finally {
         if (originalComSpec === undefined) delete process.env.ComSpec;
@@ -166,7 +169,8 @@ describe('escapeShellArg', () => {
         delete process.env.SystemRoot;
         delete process.env.SYSTEMROOT;
         delete process.env.windir;
-        const { getWindowsEscapedCommandShell } = await import('../../../src/utils/shell-executor');
+        const { getWindowsEscapedCommandShell } =
+          await import('../../../src/targets/codex-probe-env');
         expect(getWindowsEscapedCommandShell()).toBe('C:\\Windows\\System32\\cmd.exe');
       } finally {
         if (originalComSpec === undefined) delete process.env.ComSpec;
@@ -191,7 +195,7 @@ describe('getWindowsEscapedCommandShell', () => {
 
   it('returns shell=true outside Windows if called defensively', async () => {
     Object.defineProperty(process, 'platform', { value: 'linux' });
-    const { getWindowsEscapedCommandShell } = await import('../../../src/utils/shell-executor');
+    const { getWindowsEscapedCommandShell } = await import('../../../src/targets/codex-probe-env');
     expect(getWindowsEscapedCommandShell()).toBe(true);
   });
 });

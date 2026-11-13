@@ -1,39 +1,16 @@
-/**
- * defaults-merger.ts
- *
- * mergeWithDefaults function extracted from unified-config-loader.ts
- * (Phase 4 split — issue #1164).
- *
- * Pure transform: no I/O, no side effects. Merges a partial UnifiedConfig
- * with defaults, filling in missing sections.
- *
- * Circular-import note: this module imports from normalizers.ts (Phase 2)
- * and io-locks.ts (Phase 1) is NOT imported here, so there is no cycle.
- * io-locks.ts callbacks (mergeWithDefaults, validateCompositeVariants) are
- * now replaced with direct imports in unified-config-loader.ts (Phase 6).
- */
-
+/** Merge active defaults and held CLIProxy defaults; all other sections stay opaque. */
 import {
   createEmptyUnifiedConfig,
-  DEFAULT_COPILOT_CONFIG,
-  DEFAULT_CURSOR_CONFIG,
-  DEFAULT_GLOBAL_ENV,
   DEFAULT_CLIPROXY_SERVER_CONFIG,
   DEFAULT_CLIPROXY_SAFETY_CONFIG,
   DEFAULT_OPENAI_COMPAT_PROXY_CONFIG,
   DEFAULT_QUOTA_MANAGEMENT_CONFIG,
-  DEFAULT_THINKING_CONFIG,
   DEFAULT_DASHBOARD_AUTH_CONFIG,
-  DEFAULT_IMAGE_ANALYSIS_CONFIG,
   DEFAULT_LOGGING_CONFIG,
   effectiveSessionLifetimeDays,
 } from '../unified-config-types';
 import type { UnifiedConfig } from '../unified-config-types';
-import { canonicalizeBrowserConfig, normalizeSessionAffinityTtl } from './normalizers';
-import { normalizeContinuityConfig, normalizeOfficialChannelsConfig } from './normalizers';
-import type { LegacyDiscordChannelsConfig } from './normalizers';
-import { canonicalizeImageAnalysisConfig } from '../../utils/hooks/image-analysis-backend-resolver';
-import { normalizeSearxngBaseUrl } from '../../utils/websearch/types';
+import { normalizeSessionAffinityTtl } from './normalizers';
 
 // ---------------------------------------------------------------------------
 // mergeWithDefaults
@@ -47,15 +24,10 @@ function normalizeOptionalString(value: unknown): string | undefined {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
-
-/**
- * Merge partial config with defaults.
- * Preserves existing data while filling in missing sections.
- */
 export function mergeWithDefaults(partial: Partial<UnifiedConfig>): UnifiedConfig {
   const defaults = createEmptyUnifiedConfig();
-  const continuity = normalizeContinuityConfig(partial);
   return {
+    ...partial,
     version: partial.version ?? defaults.version,
     setup_completed: partial.setup_completed,
     default: partial.default ?? defaults.default,
@@ -137,86 +109,6 @@ export function mergeWithDefaults(partial: Partial<UnifiedConfig>): UnifiedConfi
       ...defaults.preferences,
       ...partial.preferences,
     },
-    websearch: {
-      enabled: partial.websearch?.enabled ?? defaults.websearch?.enabled ?? true,
-      providers: {
-        exa: {
-          enabled: partial.websearch?.providers?.exa?.enabled ?? false,
-          max_results: partial.websearch?.providers?.exa?.max_results ?? 5,
-        },
-        tavily: {
-          enabled: partial.websearch?.providers?.tavily?.enabled ?? false,
-          max_results: partial.websearch?.providers?.tavily?.max_results ?? 5,
-        },
-        brave: {
-          enabled: partial.websearch?.providers?.brave?.enabled ?? false,
-          max_results: partial.websearch?.providers?.brave?.max_results ?? 5,
-        },
-        searxng: {
-          enabled: partial.websearch?.providers?.searxng?.enabled ?? false,
-          url: normalizeSearxngBaseUrl(partial.websearch?.providers?.searxng?.url) ?? '',
-          max_results: partial.websearch?.providers?.searxng?.max_results ?? 5,
-        },
-        duckduckgo: {
-          enabled: partial.websearch?.providers?.duckduckgo?.enabled ?? true,
-          max_results: partial.websearch?.providers?.duckduckgo?.max_results ?? 5,
-        },
-        agy: {
-          enabled: partial.websearch?.providers?.agy?.enabled ?? false,
-          model: partial.websearch?.providers?.agy?.model ?? 'gemini-2.5-flash',
-          timeout: partial.websearch?.providers?.agy?.timeout ?? 90,
-        },
-        gemini: {
-          enabled:
-            partial.websearch?.providers?.gemini?.enabled ??
-            partial.websearch?.gemini?.enabled ?? // Legacy fallback
-            false,
-          model: partial.websearch?.providers?.gemini?.model ?? 'gemini-2.5-flash',
-          timeout:
-            partial.websearch?.providers?.gemini?.timeout ??
-            partial.websearch?.gemini?.timeout ?? // Legacy fallback
-            55,
-        },
-        opencode: {
-          enabled: partial.websearch?.providers?.opencode?.enabled ?? false,
-          model: partial.websearch?.providers?.opencode?.model ?? 'opencode/grok-code',
-          timeout: partial.websearch?.providers?.opencode?.timeout ?? 90,
-        },
-        grok: {
-          enabled: partial.websearch?.providers?.grok?.enabled ?? false,
-          timeout: partial.websearch?.providers?.grok?.timeout ?? 55,
-        },
-      },
-      // Legacy fields (keep for backwards compatibility during read)
-      gemini: partial.websearch?.gemini,
-    },
-    // Copilot config - strictly opt-in, merge with defaults
-    copilot: {
-      enabled: partial.copilot?.enabled ?? DEFAULT_COPILOT_CONFIG.enabled,
-      auto_start: partial.copilot?.auto_start ?? DEFAULT_COPILOT_CONFIG.auto_start,
-      port: partial.copilot?.port ?? DEFAULT_COPILOT_CONFIG.port,
-      account_type: partial.copilot?.account_type ?? DEFAULT_COPILOT_CONFIG.account_type,
-      rate_limit: partial.copilot?.rate_limit ?? DEFAULT_COPILOT_CONFIG.rate_limit,
-      wait_on_limit: partial.copilot?.wait_on_limit ?? DEFAULT_COPILOT_CONFIG.wait_on_limit,
-      model: partial.copilot?.model ?? DEFAULT_COPILOT_CONFIG.model,
-    },
-    // Cursor config - disabled by default, merge with defaults
-    cursor: {
-      enabled: partial.cursor?.enabled ?? DEFAULT_CURSOR_CONFIG.enabled,
-      port: partial.cursor?.port ?? DEFAULT_CURSOR_CONFIG.port,
-      auto_start: partial.cursor?.auto_start ?? DEFAULT_CURSOR_CONFIG.auto_start,
-      ghost_mode: partial.cursor?.ghost_mode ?? DEFAULT_CURSOR_CONFIG.ghost_mode,
-      model: partial.cursor?.model ?? DEFAULT_CURSOR_CONFIG.model,
-      opus_model: partial.cursor?.opus_model,
-      sonnet_model: partial.cursor?.sonnet_model,
-      haiku_model: partial.cursor?.haiku_model,
-    },
-    // Global env - injected into all non-Claude subscription profiles
-    global_env: {
-      enabled: partial.global_env?.enabled ?? true,
-      env: partial.global_env?.env ?? { ...DEFAULT_GLOBAL_ENV },
-    },
-    continuity,
     // CLIProxy server config - remote/local CLIProxyAPI settings
     cliproxy_server: {
       remote: {
@@ -298,23 +190,6 @@ export function mergeWithDefaults(partial: Partial<UnifiedConfig>): UnifiedConfi
           DEFAULT_QUOTA_MANAGEMENT_CONFIG.runtime_monitor.cooldown_minutes,
       },
     },
-    // Thinking config - auto/manual/off control for reasoning budget
-    thinking: {
-      mode: partial.thinking?.mode ?? DEFAULT_THINKING_CONFIG.mode,
-      override: partial.thinking?.override,
-      tier_defaults: {
-        opus: partial.thinking?.tier_defaults?.opus ?? DEFAULT_THINKING_CONFIG.tier_defaults.opus,
-        sonnet:
-          partial.thinking?.tier_defaults?.sonnet ?? DEFAULT_THINKING_CONFIG.tier_defaults.sonnet,
-        haiku:
-          partial.thinking?.tier_defaults?.haiku ?? DEFAULT_THINKING_CONFIG.tier_defaults.haiku,
-      },
-      provider_overrides: partial.thinking?.provider_overrides,
-      show_warnings: partial.thinking?.show_warnings ?? DEFAULT_THINKING_CONFIG.show_warnings,
-    },
-    channels: normalizeOfficialChannelsConfig(
-      partial as Partial<UnifiedConfig> & { discord_channels?: LegacyDiscordChannelsConfig }
-    ),
     // Dashboard auth config - disabled by default
     dashboard_auth: {
       enabled: partial.dashboard_auth?.enabled ?? DEFAULT_DASHBOARD_AUTH_CONFIG.enabled,
@@ -339,21 +214,5 @@ export function mergeWithDefaults(partial: Partial<UnifiedConfig>): UnifiedConfi
     ...(partial.dashboard_tls ? { dashboard_tls: partial.dashboard_tls } : {}),
     // Dashboard trusted local network: passed through only when present (off by default).
     ...(partial.dashboard_network ? { dashboard_network: partial.dashboard_network } : {}),
-    browser: canonicalizeBrowserConfig(partial.browser),
-    // Image analysis config - enabled by default for CLIProxy providers
-    image_analysis: canonicalizeImageAnalysisConfig({
-      enabled: partial.image_analysis?.enabled ?? DEFAULT_IMAGE_ANALYSIS_CONFIG.enabled,
-      timeout: partial.image_analysis?.timeout ?? DEFAULT_IMAGE_ANALYSIS_CONFIG.timeout,
-      provider_models:
-        partial.image_analysis?.provider_models ?? DEFAULT_IMAGE_ANALYSIS_CONFIG.provider_models,
-      fallback_backend:
-        partial.image_analysis?.fallback_backend ?? DEFAULT_IMAGE_ANALYSIS_CONFIG.fallback_backend,
-      profile_backends:
-        partial.image_analysis?.profile_backends ?? DEFAULT_IMAGE_ANALYSIS_CONFIG.profile_backends,
-    }),
-    // Runtime config (issue #231) - optional, opt-in spawned-CLI knobs.
-    // Passed through only when present so an absent section stays absent and
-    // no output-limit env is injected (downstream defaults preserved).
-    runtime: partial.runtime,
   };
 }

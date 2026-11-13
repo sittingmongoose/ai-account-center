@@ -1,3 +1,4 @@
+/** Approval-token decision: ../../../docs/approval-tokens.md (new actions use AccountConfirmationStore). */
 import { createHash } from 'crypto';
 import type { Request } from 'express';
 import { authKind, requestDevice } from '../middleware/request-auth';

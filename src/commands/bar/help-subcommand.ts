@@ -14,13 +14,6 @@ export async function showHelp(): Promise<void> {
       'Commands:',
       [
         [
-          'launch',
-          'Start or reuse the local dashboard server and open the installed app (default)',
-        ],
-        ['serve', 'Run the dashboard server in the foreground'],
-        ['stop', 'Stop the verified detached dashboard server'],
-        ['status', 'Show the detached dashboard server status'],
-        [
           'install',
           'Build and install the macOS app from the native sources included in this package',
         ],
@@ -31,7 +24,6 @@ export async function showHelp(): Promise<void> {
     [
       'Options:',
       [
-        ['--port <n>', 'Use this local server port and preserve it for later launches'],
         ['--help, -h', 'Show this help message'],
         ['--version', 'Show CLI and installed app versions'],
       ],
@@ -46,15 +38,12 @@ export async function showHelp(): Promise<void> {
     [
       'Examples:',
       [
-        ['ai-account-center bar', 'Start the local dashboard server and open the app'],
-        ['ai-account-center bar --port 3999', 'Use local server port 3999'],
+        ['ai-account-center bar', 'Open the paired native app'],
         [
           'ai-account-center bar install --launch',
           'Build, install and launch the packaged native app',
         ],
         ['ai-account-center bar install --no-launch', 'Build and install without launching'],
-        ['ai-account-center bar status', 'Show server running state'],
-        ['ai-account-center bar stop', 'Stop the verified server'],
         ['ai-account-center bar version', 'Show CLI and installed native app versions'],
       ],
     ],

@@ -1,3 +1,4 @@
+import { ANALYTICS_TOOLS, isActivityKind } from '../usage/analytics-tools';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
@@ -218,10 +219,7 @@ function sortSourceEntries(entries: AccountAnalyticsSource[]): AccountAnalyticsS
 export function coldScanningSourceStates(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
   for (const host of DASHBOARD_HOSTS) {
-    const tools =
-      host === 'ubuntu'
-        ? (['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'] as const)
-        : analyticsRemoteTargets(host);
+    const tools = host === 'ubuntu' ? ANALYTICS_TOOLS : analyticsRemoteTargets(host);
     for (const tool of tools)
       entries.push({
         tool,
@@ -407,12 +405,7 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
     Record<string, unknown>
   >) {
     if (!source || typeof source !== 'object') return false;
-    if (
-      !['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity'].includes(
-        source.provider as string
-      )
-    )
-      return false;
+    if (!isActivityKind(source.provider as string)) return false;
     if (typeof source.fetchedAt !== 'string') return false;
     if (!Array.isArray(source.data)) return false;
     for (const result of source.data as Array<Record<string, unknown>>) {

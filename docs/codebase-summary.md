@@ -48,3 +48,5 @@ Tests use Bun for TypeScript and Node for dashboard helpers. Native/bridge
 guides describe their independent offline checks. Source-built
 [Docker](../docker/README.md) runs the dashboard only; it does not start CLIProxy
 or import host sessions. Publication is outside the normal build.
+
+Fork cleanup: unused session-launch and Claude config-linking code is removed. CLIProxy is held for central-logins research. See [migration notes](user-guide.md#existing-ccs-installations) and [approval tokens](approval-tokens.md).

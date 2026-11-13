@@ -1,413 +1,126 @@
-/**
- * yaml-serializer.ts
- *
- * YAML generation helpers extracted from unified-config-loader.ts
- * (Phase 3 split — issue #1164).
- *
- * Contains: generateYamlHeader, generateYamlWithComments.
- * These produce the commented YAML written to config.yaml on every save.
- */
-
+/** Serialize active settings; ignored launcher sections are preserved only as raw YAML. */
 import * as yaml from 'js-yaml';
+import { isDeepStrictEqual } from 'node:util';
+import { ConfigError } from '../../errors/error-types';
 import type { UnifiedConfig } from '../unified-config-types';
 
-/**
- * Generate YAML header with helpful comments.
- */
+const IGNORED_SECTIONS = new Set([
+  'websearch',
+  'global_env',
+  'continuity',
+  'copilot',
+  'cursor',
+  'thinking',
+  'runtime',
+  'channels',
+  'browser',
+  'image_analysis',
+]);
+
 export function generateYamlHeader(): string {
-  return `# AI Account Center Configuration
-# Storage schema: CCS-compatible; retained legacy settings preserve existing account data.
-# Docs: https://github.com/sittingmongoose/ai-account-center
-`;
+  return '# AI Account Center configuration\n# Legacy launcher sections are retained but ignored.\n\n';
 }
 
-/**
- * Generate YAML content with section comments for better readability.
- */
-export function generateYamlWithComments(config: UnifiedConfig): string {
-  const lines: string[] = [];
+/** Same options as main's active-section writer: leave alias/reference handling enabled. */
+function serialize(config: Record<string, unknown>): string {
+  return yaml.dump(config, { indent: 2, lineWidth: -1, quotingType: '"' });
+}
 
-  // Version
-  lines.push(`version: ${config.version}`);
-  if (config.setup_completed !== undefined) {
-    lines.push(`setup_completed: ${config.setup_completed}`);
+/** Compare YAML value graphs without recursively expanding cycles or shared aliases. */
+function sameValue(left: unknown, right: unknown): boolean {
+  const pending: Array<[unknown, unknown]> = [[left, right]];
+  const leftPairs = new WeakMap<object, object>();
+  const rightPairs = new WeakMap<object, object>();
+  while (pending.length) {
+    const [a, b] = pending.pop() as [unknown, unknown];
+    if (Object.is(a, b)) continue;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    if (a instanceof Date || b instanceof Date || ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
+      if (!isDeepStrictEqual(a, b)) return false;
+      continue;
+    }
+    if (leftPairs.has(a) || rightPairs.has(b)) {
+      if (leftPairs.get(a) !== b || rightPairs.get(b) !== a) return false;
+      continue;
+    }
+    leftPairs.set(a, b);
+    rightPairs.set(b, a);
+    if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+    if (Array.isArray(a) && (!Array.isArray(b) || a.length !== b.length)) return false;
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+      pending.push([(a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]]);
+    }
   }
-  lines.push('');
+  return true;
+}
 
-  // Default
-  if (config.default) {
-    lines.push(`# Default profile used when running 'ccs' without arguments`);
-    lines.push(`default: "${config.default}"`);
-    lines.push('');
+/** Keep raw retired blocks only when the complete document preserves each section's graph. */
+export function generateYamlWithComments(
+  config: UnifiedConfig,
+  existing = '',
+  preserveOriginal?: () => void
+): string {
+  const active = { ...config };
+  const template = { ...config };
+  const retired = Object.keys(config).filter((key) => IGNORED_SECTIONS.has(key));
+  for (const key of retired) {
+    delete active[key];
+    template[key] = null; // Positions only: never pass retired values to yaml.dump.
   }
-
-  // Accounts section
-  lines.push('# ----------------------------------------------------------------------------');
-  lines.push('# Accounts: Isolated Claude instances (each with separate auth/sessions)');
-  lines.push('# Manage with: ccs auth add <name>, ccs auth list, ccs auth remove <name>');
-  lines.push('# ----------------------------------------------------------------------------');
-  lines.push(
-    yaml.dump({ accounts: config.accounts }, { indent: 2, lineWidth: -1, quotingType: '"' }).trim()
-  );
-  lines.push('');
-
-  // Profiles section
-  lines.push('# ----------------------------------------------------------------------------');
-  lines.push('# Profiles: API-based providers (GLM, Kimi, custom endpoints)');
-  lines.push('# Each profile points to a *.settings.json file containing env vars.');
-  lines.push('# Edit the settings file directly to customize (ANTHROPIC_MAX_TOKENS, etc.)');
-  lines.push('# ----------------------------------------------------------------------------');
-  lines.push(
-    yaml.dump({ profiles: config.profiles }, { indent: 2, lineWidth: -1, quotingType: '"' }).trim()
-  );
-  lines.push('');
-
-  // CLIProxy section
-  lines.push('# ----------------------------------------------------------------------------');
-  lines.push('# CLIProxy: OAuth-based providers (gemini, codex, xai/grok, agy, qwen, iflow)');
-  lines.push('# Each variant can reference a *.settings.json file for custom env vars.');
-  lines.push('# Edit the settings file directly to customize model or other settings.');
-  lines.push(
-    '# Optional: cliproxy.management_panel_repository overrides the generated CPAMC repo.'
-  );
-  lines.push('# ----------------------------------------------------------------------------');
-  lines.push(
-    yaml.dump({ cliproxy: config.cliproxy }, { indent: 2, lineWidth: -1, quotingType: '"' }).trim()
-  );
-  lines.push('');
-
-  if (config.proxy?.routing) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Proxy Routing: OpenAI-compatible local proxy model selection rules');
-    lines.push('# Use profile:model selectors to force a target profile and upstream model.');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml.dump({ proxy: config.proxy }, { indent: 2, lineWidth: -1, quotingType: '"' }).trim()
-    );
-    lines.push('');
+  const generated = serialize(active);
+  const expected = yaml.load(generated) as Record<string, unknown>;
+  let result = serialize(template);
+  const blocks = (text: string): Array<{ key: string; start: number; end: number }> => {
+    const keys = [...text.matchAll(/^(?:([A-Za-z_][\w-]*)|'([^']+)'|"([^"\\]+)")\s*:/gm)];
+    return keys.map((match, index) => ({
+      key: match[1] ?? match[2] ?? match[3],
+      start: match.index ?? 0,
+      end: keys[index + 1]?.index ?? text.length,
+    }));
+  };
+  const oldBlocks = new Map(blocks(existing).map((block) => [block.key, block]));
+  let missing = false;
+  for (const block of blocks(result).reverse()) {
+    if (!IGNORED_SECTIONS.has(block.key)) continue;
+    const old = oldBlocks.get(block.key);
+    if (!old) {
+      missing = true;
+      continue;
+    }
+    const raw = existing.slice(old.start, old.end);
+    result = result.slice(0, block.start) + raw.replace(/\n?$/, '\n') + result.slice(block.end);
   }
-
-  if (config.logging) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Logging: CCS-owned structured runtime logs');
-    lines.push('# Current file: ~/.ccs/logs/current.jsonl');
-    lines.push('# Archives rotate automatically and are pruned by retain_days.');
-    lines.push('# This is separate from cliproxy.logging, which controls CLIProxy runtime files.');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml.dump({ logging: config.logging }, { indent: 2, lineWidth: -1, quotingType: '"' }).trim()
-    );
-    lines.push('');
-  }
-
-  // CLIProxy Server section (remote proxy configuration) - placed right after cliproxy
-  if (config.cliproxy_server) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# CLIProxy Server: Remote proxy connection settings');
-    lines.push('# Configure via Dashboard (`ccs config`) > Proxy tab.');
-    lines.push('#');
-    lines.push('# remote: Connect to a remote CLIProxyAPI instance');
-    lines.push('# fallback: Use local proxy if remote is unreachable');
-    lines.push('# local: Local proxy settings (port, auto-start)');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml
-        .dump(
-          { cliproxy_server: config.cliproxy_server },
-          { indent: 2, lineWidth: -1, quotingType: '"' }
-        )
-        .trim()
-    );
-    lines.push('');
-  }
-
-  // Preferences section
-  lines.push('# ----------------------------------------------------------------------------');
-  lines.push('# Preferences: User settings');
-  lines.push('# ----------------------------------------------------------------------------');
-  lines.push(
-    yaml
-      .dump({ preferences: config.preferences }, { indent: 2, lineWidth: -1, quotingType: '"' })
-      .trim()
-  );
-  lines.push('');
-
-  // WebSearch section
-  if (config.websearch) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# WebSearch: real search backends for third-party profiles');
-    lines.push('# Dashboard (`ccs config`) is the source of truth for provider selection.');
-    lines.push('#');
-    lines.push('# Third-party providers (gemini, codex, agy, etc.) do not have access to');
-    lines.push("# Anthropic's WebSearch tool. CCS intercepts that tool and runs local search.");
-    lines.push('#');
-    lines.push(
-      '# Priority: Exa -> Tavily -> Brave -> DuckDuckGo -> optional legacy AI CLI fallbacks'
-    );
-    lines.push('#');
-    lines.push('# Exa requires EXA_API_KEY in your environment.');
-    lines.push('# Tavily requires TAVILY_API_KEY in your environment.');
-    lines.push('# Brave requires BRAVE_API_KEY in your environment.');
-    lines.push('# DuckDuckGo works with zero extra setup and is enabled by default.');
-    lines.push('#');
-    lines.push('# Optional LLM CLI fallbacks:');
-    lines.push(
-      '#   agy (recommended): curl -fsSL https://antigravity.google/cli/install.sh | bash'
-    );
-    lines.push('#   gemini (deprecated, retired upstream 2026-06-18): use agy instead');
-    lines.push('#   opencode: curl -fsSL https://opencode.ai/install | bash');
-    lines.push('#   grok: npm i -g @vibe-kit/grok-cli');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml
-        .dump({ websearch: config.websearch }, { indent: 2, lineWidth: -1, quotingType: '"' })
-        .trim()
-    );
-    lines.push('');
-  }
-
-  // Copilot section (deprecated GitHub Copilot compatibility bridge)
-  if (config.copilot) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Copilot: Deprecated GitHub Copilot compatibility bridge (via copilot-api)');
-    lines.push(
-      '# Existing local setups remain available, but prefer Codex or another active provider.'
-    );
-    lines.push('# GitHub usage-based Copilot billing begins June 1, 2026.');
-    lines.push('#');
-    lines.push('# !! DISCLAIMER - USE AT YOUR OWN RISK !!');
-    lines.push('# This uses an UNOFFICIAL reverse-engineered API.');
-    lines.push('# Excessive usage may trigger GitHub account restrictions.');
-    lines.push('# CCS provides NO WARRANTY and accepts NO RESPONSIBILITY for consequences.');
-    lines.push('#');
-    lines.push('# Setup: npx copilot-api auth (authenticate with GitHub)');
-    lines.push('# Usage: ccs copilot (switch to copilot profile)');
-    lines.push('#');
-    lines.push('# Models: claude-sonnet-4.5, claude-opus-4.5, gpt-5.1, gemini-2.5-pro');
-    lines.push('# Account types: individual, business, enterprise');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml.dump({ copilot: config.copilot }, { indent: 2, lineWidth: -1, quotingType: '"' }).trim()
-    );
-    lines.push('');
-  }
-
-  // Cursor section (Cursor IDE proxy daemon)
-  if (config.cursor) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Cursor: Cursor IDE proxy daemon');
-    lines.push('# Enables Cursor IDE integration via local proxy daemon.');
-    lines.push('#');
-    lines.push('# enabled: Enable/disable Cursor integration (default: false)');
-    lines.push('# port: Port for cursor proxy daemon (default: 20129)');
-    lines.push('# auto_start: Auto-start daemon when CCS starts (default: false)');
-    lines.push('# ghost_mode: Disable telemetry for privacy (default: true)');
-    lines.push('# model: Default model ID (used for ANTHROPIC_MODEL)');
-    lines.push('# opus_model/sonnet_model/haiku_model: Optional tier model mapping');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml.dump({ cursor: config.cursor }, { indent: 2, lineWidth: -1, quotingType: '"' }).trim()
-    );
-    lines.push('');
-  }
-
-  // Global env section
-  if (config.global_env) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      '# Global Environment Variables: Injected into all non-Claude subscription profiles'
-    );
-    lines.push('# These env vars disable telemetry/reporting for third-party providers.');
-    lines.push('# Configure via Dashboard (`ccs config`) > Global Env tab.');
-    lines.push('#');
-    lines.push('# Default variables:');
-    lines.push('#   DISABLE_BUG_COMMAND: Disables /bug command (not supported by proxy)');
-    lines.push('#   DISABLE_ERROR_REPORTING: Disables error reporting to Anthropic');
-    lines.push('#   DISABLE_TELEMETRY: Disables usage telemetry');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml
-        .dump({ global_env: config.global_env }, { indent: 2, lineWidth: -1, quotingType: '"' })
-        .trim()
-    );
-    lines.push('');
-  }
-
-  // Continuity inheritance section
-  if (config.continuity?.inherit_from_account) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Continuity Inheritance: Reuse account continuity artifacts across profiles');
-    lines.push('# Map execution profile names to source account profiles (CLAUDE_CONFIG_DIR).');
-    lines.push('# Applies to Claude target only; credentials remain profile-specific.');
-    lines.push('# Example: continuity.inherit_from_account.glm: pro');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml
-        .dump({ continuity: config.continuity }, { indent: 2, lineWidth: -1, quotingType: '"' })
-        .trim()
-    );
-    lines.push('');
-  }
-
-  // Thinking section (extended thinking/reasoning configuration)
-  if (config.thinking) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Thinking: Extended thinking/reasoning budget configuration');
-    lines.push('# Controls reasoning depth for supported providers (agy, gemini, codex).');
-    lines.push('#');
-    lines.push(
-      '# Modes: auto (use tier_defaults), off (disable), manual (--thinking/--effort flags)'
-    );
-    lines.push(
-      '# Levels: minimal (512), low (1K), medium (8K), high (24K), xhigh (32K), max (adaptive ceiling), auto'
-    );
-    lines.push('# Override: Set global override value (number or level name)');
-    lines.push('# Provider overrides: Per-provider tier defaults');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml
-        .dump({ thinking: config.thinking }, { indent: 2, lineWidth: -1, quotingType: '"' })
-        .trim()
-    );
-    lines.push('');
-  }
-
-  // Runtime section (opt-in spawned-CLI launch knobs, e.g. output limits)
-  if (config.runtime) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Runtime: opt-in knobs for how CCS launches the downstream CLI');
-    lines.push('# outputLimits raises the spawned CLI output caps via env vars (issue #231):');
-    lines.push('#   maxMcpOutputTokens  -> MAX_MCP_OUTPUT_TOKENS');
-    lines.push('#   bashMaxOutputLength -> BASH_MAX_OUTPUT_LENGTH');
-    lines.push('# Each field is optional; when unset CCS injects nothing and the downstream');
-    lines.push('# CLI keeps its own default caps.');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml.dump({ runtime: config.runtime }, { indent: 2, lineWidth: -1, quotingType: '"' }).trim()
-    );
-    lines.push('');
-  }
-
-  // Official Channels section
-  if (config.channels) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Official Channels: Runtime auto-enable for Anthropic official channel plugins');
-    lines.push('# Supported channels: telegram, discord, imessage');
-    lines.push('# Runtime-only: CCS injects --channels at launch for compatible Claude sessions.');
-    lines.push('# Bot tokens live in Claude channel env files, not in config.yaml.');
-    lines.push('# Use selected: [telegram, discord, imessage] to choose channels.');
-    lines.push(
-      '# unattended adds --dangerously-skip-permissions only when channel auto-enable is active.'
-    );
-    lines.push('# Compatible sessions: native Claude default/account profiles only.');
-    lines.push('# Configure via: ccs config channels or the Settings > Channels dashboard tab.');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml
-        .dump({ channels: config.channels }, { indent: 2, lineWidth: -1, quotingType: '"' })
-        .trim()
-    );
-    lines.push('');
-  }
-
-  // Dashboard auth section (only if configured)
-  if (config.dashboard_auth) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Dashboard Auth: Optional login protection for AI Account Center');
-    lines.push('# Generate password hash: npx bcrypt-cli hash "your-password"');
-    lines.push(
-      '# ENV override: CCS_DASHBOARD_AUTH_ENABLED, CCS_DASHBOARD_USERNAME, CCS_DASHBOARD_PASSWORD_HASH'
-    );
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml
-        .dump(
-          { dashboard_auth: config.dashboard_auth },
-          { indent: 2, lineWidth: -1, quotingType: '"' }
-        )
-        .trim()
-    );
-    lines.push('');
-  }
-
-  if (config.dashboard_tls) {
-    const tls = yaml.dump({ dashboard_tls: config.dashboard_tls }, { indent: 2, lineWidth: -1 });
-    lines.push('# Dashboard TLS: secure transport (off by default)', tls.trim(), '');
-  }
-
   if (config.dashboard_network) {
-    const network = yaml.dump(
-      { dashboard_network: config.dashboard_network },
-      { indent: 2, lineWidth: -1 }
-    );
-    lines.push(
-      '# Dashboard network: trust_local_network lets plain HTTP from trusted_networks carry',
-      '# passwords, keys and sign-in codes (off by default). trusted_networks defaults to',
-      '# 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and fc00::/7.',
-      network.trim(),
-      ''
-    );
+    result =
+      '# Dashboard network: trust_local_network lets plain HTTP from trusted_networks carry\n' +
+      '# passwords, keys and sign-in codes (off by default). trusted_networks defaults to\n' +
+      '# 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and fc00::/7.\n' +
+      result;
   }
-
-  // Browser automation section
-  if (config.browser) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Browser Automation: Claude browser attach and Codex browser tooling');
-    lines.push('# Claude attach reuses a running Chrome/Chromium session with remote debugging.');
-    lines.push('# Codex tooling controls whether CCS injects Playwright MCP overrides.');
-    lines.push('#');
-    lines.push('# claude.user_data_dir should point at the Chrome user-data directory for the');
-    lines.push('# dedicated attach session. claude.devtools_port is the expected debugging port.');
-    lines.push('# Configure via: Settings > Browser or `ccs browser ...`.');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml.dump({ browser: config.browser }, { indent: 2, lineWidth: -1, quotingType: '"' }).trim()
-    );
-    lines.push('');
+  try {
+    const parsed = yaml.load(result) as Record<string, unknown>;
+    const keys = [...Object.keys(expected), ...retired];
+    if (
+      !missing &&
+      parsed &&
+      typeof parsed === 'object' &&
+      Object.keys(parsed).length === keys.length &&
+      keys.every(
+        (key) =>
+          Object.prototype.hasOwnProperty.call(parsed, key) &&
+          sameValue(parsed[key], IGNORED_SECTIONS.has(key) ? config[key] : expected[key])
+      )
+    )
+      return result;
+  } catch {
+    // A marker, unsupported layout or alias crossing section boundaries may invalidate the copy.
   }
-
-  // Image analysis section
-  if (config.image_analysis) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Image Analysis: Vision-based analysis for images and PDFs');
-    lines.push('# Routes Read tool requests for images/PDFs through CLIProxy vision API.');
-    lines.push('#');
-    lines.push('# When enabled: Image files trigger vision analysis instead of raw file read');
-    lines.push('# Provider models: Vision model used for each CLIProxy provider');
-    lines.push('# Timeout: Maximum seconds to wait for analysis (10-600)');
-    lines.push('#');
-    lines.push('# Supported formats: .jpg, .jpeg, .png, .gif, .webp, .heic, .bmp, .tiff, .pdf');
-    lines.push('# Configure via: ccs config image-analysis');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml
-        .dump(
-          { image_analysis: config.image_analysis },
-          { indent: 2, lineWidth: -1, quotingType: '"' }
-        )
-        .trim()
-    );
-    lines.push('');
-  }
-
-  // Quota management section (hybrid auto+manual account selection)
-  if (config.quota_management) {
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push('# Quota Management: Hybrid auto+manual account selection for multi-account setups');
-    lines.push('# mode: auto | manual | hybrid (default: hybrid)');
-    lines.push('# manual.tier_lock: per-provider tier lock map (e.g. { agy: "ultra" })');
-    lines.push('# Compatibility: preserves saved quota tiers for each provider.');
-    lines.push('# ----------------------------------------------------------------------------');
-    lines.push(
-      yaml
-        .dump(
-          { quota_management: config.quota_management },
-          { indent: 2, lineWidth: -1, quotingType: '"' }
-        )
-        .trim()
-    );
-    lines.push('');
-  }
-
-  return lines.join('\n');
+  // Never try to encode retired values. Preserve the original before omitting them.
+  if (!preserveOriginal)
+    throw new ConfigError('Cannot omit retired configuration without backing up the original.');
+  preserveOriginal();
+  return generated;
 }

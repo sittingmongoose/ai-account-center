@@ -1,3 +1,4 @@
+/** Approval-token decision: ../../docs/approval-tokens.md (new actions use AccountConfirmationStore). */
 import { createHash, randomBytes } from 'crypto';
 
 export type CodexActivationProcessRole = 'daemon' | 'desktop' | 'cli' | 'automation';
