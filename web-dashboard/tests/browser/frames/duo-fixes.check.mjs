@@ -314,6 +314,7 @@ async function noInsetObserver(t) {
     };
   });
 }
+// Like their neighbours, these block service workers: the fixture server has no /sw.js (duo-Astra-6-L1).
 tests['duo regression: startup settle catches delayed insets'] = async (t) => {
   await t.newContext({
     viewport: { width: 669, height: 869 },
@@ -321,6 +322,7 @@ tests['duo regression: startup settle catches delayed insets'] = async (t) => {
     isMobile: true,
     hasTouch: true,
     deviceScaleFactor: 1,
+    serviceWorkers: 'block',
   });
   await noInsetObserver(t);
   await navigate(t, '0,0,34,0', { settleMs: 0 });
@@ -341,6 +343,7 @@ for (const event of ['pageshow', 'focus', 'visibilitychange']) {
       isMobile: true,
       hasTouch: true,
       deviceScaleFactor: 1,
+      serviceWorkers: 'block',
     });
     await noInsetObserver(t);
     await navigate(t, '0,0,34,0');

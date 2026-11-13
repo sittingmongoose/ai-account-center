@@ -65,6 +65,9 @@ http.createServer((req, res) => {
     const html = fs.readFileSync(path.join(crate, 'index.html'), 'utf8').replaceAll('{{PKG}}', '/app/pkg').replaceAll('{{CSS}}', '/app/app.css');
     res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(html);
   } else if (p === '/__fixture/start-cover') file(res, path.join(dashboard, 'public/index.html'));
+  // The frame warms the Home Screen start page 4 s after it starts (frame.rs warm_offline_copies): answer it as the
+  // product does, so a check that runs longer has no 404 in its console.
+  else if (p === '/' && !url.search) file(res, path.join(dashboard, 'public/index.html'));
   else if (p === '/__fixture/offline-cover') {
     const source = fs.readFileSync(path.join(dashboard, 'public/sw.js'), 'utf8');
     const html = vm.runInNewContext(source.match(/var OFFLINE_PAGE =([\s\S]*?);\r?\n/)[1]);

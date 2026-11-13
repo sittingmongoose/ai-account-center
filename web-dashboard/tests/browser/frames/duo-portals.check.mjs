@@ -43,7 +43,19 @@ async function pose(t, width, height, padding) {
   await t.page.setViewportSize({ width, height });
   await frames(t);
 }
+// Finite running animations (the popup's 260 ms pop-in) end before a box is measured (duo-Astra-6-L2).
+const settled = (t) =>
+  t.page.evaluate(async () => {
+    await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+    await Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished.catch(() => {}))
+    );
+  });
 async function popupState(t) {
+  await settled(t);
   return t.page.evaluate(() => {
     const pop = document.querySelector('.pop');
     const r = pop?.getBoundingClientRect(),
@@ -274,6 +286,8 @@ for (const kind of ['pin', 'viewer', 'details', 'activation']) {
     await t.page.waitForSelector(selector);
     await pose(t, 669, 951, '82px 0px 34px 0px');
     await t.page.waitForFunction(() => document.documentElement.dataset.chrome === 'band');
+    // The Details panel slides in (dt-up, then dt-in at this width): measure it settled, like Provider (L2).
+    await settled(t);
     await t.check(
       `${kind}: responsive surface stays inside the viewport`,
       await t.page.locator(selector).evaluate((el) => {
@@ -397,3 +411,308 @@ tests['duo portals: expired-session owner unmount retires the viewer and clears 
       (await t.page.locator('.overlay-root').count()) === 0
     );
   };
+
+// ---- Max round 6 follow-ups (Astra M1 / Sol M2, Sol M1, Sol L1). Synthetic controller responses and views only.
+const overlayState = (t) =>
+  t.page.evaluate(() => ({
+    route: location.pathname,
+    roots: document.querySelectorAll('.overlay-root').length,
+    locked: document.body.style.position === 'fixed',
+    guards: document.querySelectorAll('[data-overlay-guard]').length,
+    inside: !!document.activeElement?.closest('.pop'),
+    inOverlay: !!document.activeElement?.closest('.overlay-root'),
+    visible: (document.activeElement?.getBoundingClientRect().width || 0) > 0,
+    body: document.activeElement === document.body,
+    active: document.activeElement?.outerHTML.slice(0, 160),
+  }));
+
+// The real activation-confirmation controller in the dashboard frame's place, with synthetic activate responses:
+// odd calls answer a 409 review, even calls (the confirmation) wait until the test settles them.
+async function approvalController(t) {
+  await t.page.locator('iframe.slint-frame').evaluate((el) =>
+    el.contentWindow.eval(`(async () => {
+      const { createActivationConfirmation } = await import('/activation-confirmation.mjs');
+      window.__events = [];
+      const send = (v) => parent.postMessage({ type: 'aac-content', kind: 'view', key: 'activation', json: v ? JSON.stringify(v) : '' }, location.origin);
+      let calls = 0;
+      window.__controller = createActivationConfirmation({
+        activate: async (target) => {
+          window.__events.push({ kind: 'activate', call: ++calls });
+          if (calls % 2) throw { status: 409, payload: { confirmation: { token: 'a'.repeat(43), targetProfile: target,
+            expiresAt: new Date(Date.now() + 60000).toISOString(), processes: [{ label: 'Synthetic busy process', pid: 1234, role: 'fixture' }] } } };
+          return new Promise((resolve, reject) => { window.__settle = { resolve, reject }; });
+        },
+        prompt: (v) => { window.__events.push({ kind: 'prompt', busy: v.inProgress, error: v.error }); send(v); },
+        close: () => { window.__events.push({ kind: 'close' }); send(null); },
+        busy: () => {}, success: () => {}, error: () => {},
+      });
+      window.__acts = [];
+      addEventListener('message', (e) => {
+        if (e.source !== parent || e.origin !== location.origin || e.data?.type !== 'aac-page') return;
+        window.__acts.push(e.data.kind);
+        if (e.data.kind === 'activation-confirm') void window.__controller.confirm();
+        if (e.data.kind === 'activation-cancel') window.__events.push({ kind: 'cancel', accepted: window.__controller.cancel() });
+      });
+      parent.postMessage({ type: 'aac-content', kind: 'auth', signedIn: true, state: 'authenticated' }, location.origin);
+    })()`)
+  );
+}
+const inFrame = (t, code) =>
+  t.page.locator('iframe.slint-frame').evaluate((el, code) => el.contentWindow.eval(code), code);
+
+tests['duo portals: a late approval result after Back cannot revive the retired modal'] = async (
+  t
+) => {
+  await t.newContext({
+    viewport: { width: 466, height: 678 },
+    screen: { width: 466, height: 678 },
+    deviceScaleFactor: 1,
+    serviceWorkers: 'block',
+  });
+  await t.page.route(
+    (u) => u.pathname === '/' && !u.search,
+    (r) => r.fulfill({ status: 204 })
+  );
+  await t.goto('/app/home?safe=0,84,34,0');
+  await t.page.waitForSelector('iframe.slint-frame', { state: 'attached' });
+  await t.page.getByRole('link', { name: 'Accounts', exact: true }).filter({ visible: true }).click();
+  await approvalController(t);
+  await inFrame(t, "window.__controller.begin('synthetic-review-profile')");
+  await t.page.waitForSelector('.adialog .btn.primary[aria-disabled="false"]');
+  await t.page.locator('.adialog').evaluate((el) => {
+    window.__approval = el;
+  });
+  await t.page.locator('.adialog .btn.primary').click();
+  await t.page.waitForFunction(() =>
+    document.querySelector('.adialog .a-status')?.textContent.includes('Stopping')
+  );
+  const busy = await overlayState(t);
+  await t.check(
+    'a busy update changes the same approval in place: no new portal, focus kept inside',
+    busy.roots === 1 &&
+      busy.inOverlay &&
+      (await t.page.evaluate(() => document.querySelector('.adialog') === window.__approval)),
+    JSON.stringify(busy)
+  );
+  await t.page.goBack();
+  await t.page.waitForFunction(
+    () => location.pathname === '/app/home' && !document.querySelector('.overlay-root')
+  );
+  await settled(t);
+  const retiredState = await overlayState(t);
+  await t.check(
+    'Back retires the busy approval and releases its lock',
+    !retiredState.roots && !retiredState.locked,
+    JSON.stringify(retiredState)
+  );
+  // The same request now fails: the controller publishes its error and then its settled view.
+  await inFrame(t, "window.__settle.reject({ status: 500, message: 'Synthetic stop timeout' })");
+  await settled(t);
+  await inFrame(t, 'Promise.resolve()');
+  await settled(t);
+  const after = await overlayState(t);
+  const events = await inFrame(t, 'window.__events');
+  await t.check(
+    'Astra/Sol: the late failure stays retired on Home: no overlay, no lock, focus not taken',
+    !after.roots && !after.locked && !after.inOverlay,
+    JSON.stringify(after)
+  );
+  await t.check(
+    'the settled approval is cancelled and closed, never while its request ran',
+    events.some((e) => e.kind === 'cancel' && e.accepted) &&
+      events.slice(events.findLastIndex((e) => e.kind === 'prompt')).some((e) => e.kind === 'close') &&
+      !events.some((e) => e.kind === 'cancel' && !e.accepted),
+    JSON.stringify(events)
+  );
+  await t.shot(
+    'late-approval-after-back',
+    'After Back while busy, the switch request fails: Home stays clear, with no approval over it.'
+  );
+  // A new Activate on Accounts opens a fresh approval, focused, with its own lock.
+  await t.page.getByRole('link', { name: 'Accounts', exact: true }).filter({ visible: true }).click();
+  await inFrame(t, "window.__controller.begin('synthetic-review-profile')");
+  await t.page.waitForSelector('.adialog .btn.primary[aria-disabled="false"]');
+  await frames(t);
+  const fresh = await overlayState(t);
+  await t.check(
+    'the next Activate opens a fresh, modal approval',
+    fresh.roots === 1 && fresh.locked && fresh.inOverlay,
+    JSON.stringify(fresh)
+  );
+  await t.page.locator('.adialog .btn').first().click();
+  await t.page.waitForSelector('.adialog', { state: 'detached' });
+  const cancelled = await overlayState(t);
+  await t.check(
+    'Cancel closes it and releases the lock',
+    !cancelled.roots && !cancelled.locked,
+    JSON.stringify(cancelled)
+  );
+};
+
+for (const route of ['Tab', 'focus'])
+  tests[`duo portals: folding a nonmodal Provider with page focus (${route}) moves focus into the sheet`] =
+    async (t) => {
+      await analytics(t, 669, 951, '82,0,34,0', true);
+      await t.page.locator('.prov-btn').click();
+      await t.page.waitForSelector('.pop .pick-row');
+      if (route === 'Tab') {
+        // Sol's trace: ordinary forward Tab from the last option, out of the open nonmodal picker, to Date.
+        await t.page.locator('.pop .pick-row').last().focus();
+        for (let i = 0; i < 45; i++) {
+          await t.page.keyboard.press('Tab');
+          if (await t.page.evaluate(() => document.activeElement?.matches('.date-btn'))) break;
+        }
+      } else await t.page.locator('.date-btn').focus();
+      const before = await overlayState(t);
+      await t.check(
+        'precondition: Provider open and nonmodal, Date focused on the page',
+        before.roots === 1 &&
+          !before.locked &&
+          !before.inside &&
+          (await t.page.evaluate(() => document.activeElement?.matches('.date-btn'))),
+        JSON.stringify(before)
+      );
+      await pose(t, 466, 678, '0px 84px 34px 0px');
+      await t.page.waitForFunction(() => document.documentElement.dataset.chrome === 'rail');
+      await frames(t);
+      const folded = await overlayState(t);
+      await t.check(
+        'Sol M1: the now-modal sheet takes the focus inside, locked and guarded',
+        folded.inside && folded.visible && folded.locked && folded.guards === 2,
+        JSON.stringify(folded)
+      );
+      if (route === 'Tab') {
+        // Unfolding makes it nonmodal again: focus stays on a visible control, then the fold takes it back in.
+        await pose(t, 669, 951, '82px 0px 34px 0px');
+        await t.page.waitForFunction(() => document.documentElement.dataset.chrome === 'band');
+        await frames(t);
+        const unfolded = await overlayState(t);
+        await t.check(
+          'unfolding back to nonmodal leaves focus on a visible control, not stranded',
+          unfolded.roots === 1 && !unfolded.locked && unfolded.guards === 0 && unfolded.visible && !unfolded.body,
+          JSON.stringify(unfolded)
+        );
+        await pose(t, 466, 678, '0px 84px 34px 0px');
+        await t.page.waitForFunction(() => document.documentElement.dataset.chrome === 'rail');
+        await frames(t);
+        const refolded = await overlayState(t);
+        await t.check(
+          'folding again keeps the focus inside the modal sheet',
+          refolded.inside && refolded.locked && refolded.guards === 2,
+          JSON.stringify(refolded)
+        );
+      }
+      await t.page.keyboard.press('Enter');
+      await frames(t);
+      const entered = await overlayState(t);
+      await t.check(
+        'Enter after the fold stays in the sheet: no Custom range opens behind it',
+        entered.roots <= 1,
+        JSON.stringify(entered)
+      );
+      if (route === 'focus')
+        await t.shot(
+          'duo-fold-focus-inside',
+          'Provider was nonmodal with Date focused; after the fold the phone sheet holds the focus.'
+        );
+      await t.page.keyboard.press('Escape');
+      await frames(t);
+      await t.page.keyboard.press('Escape');
+      await frames(t);
+      const closed = await overlayState(t);
+      await t.check(
+        'Escape closes the picker and releases its lock',
+        !closed.roots && !closed.locked,
+        JSON.stringify(closed)
+      );
+    };
+
+tests['duo portals: an open exact-token explanation follows a live model update'] = async (t) => {
+  await analytics(t, 669, 951, '82,0,34,0', true);
+  await t.page.locator('.cbm-row').first().click();
+  await t.page.waitForSelector('.pop .mdetail');
+  await t.page.locator('.pop .md-type [data-tip]').first().tap();
+  await frames(t);
+  const view = read('analytics-view.json'),
+    model = view.usage.cbm.rows[0];
+  model.types[0].tip = '32,022,028 tokens';
+  model.tipIn = model.tipIn.replaceAll('32,022,027', '32,022,028');
+  model.tokTip = model.tokTip.replaceAll('333,816,956', '333,816,957');
+  // One more input token: every formatted total, cost and share stays the same; only the exact count changes.
+  await bridge(t, 'analytics', view);
+  await frames(t);
+  const current = await t.page.evaluate(() => ({
+    input: document.querySelector('.pop .md-type [data-tip]')?.getAttribute('data-tip'),
+    tips: [...document.querySelectorAll('.overlay-root .tip-card')].map((el) => ({
+      hidden: el.hidden,
+      text: el.textContent,
+    })),
+  }));
+  await t.check(
+    'the live model carries the new exact count',
+    current.input === '32,022,028 tokens',
+    JSON.stringify(current)
+  );
+  await t.check(
+    'Sol L1: the open explanation shows the current count or is dismissed, never the old one',
+    !current.tips.some((tip) => !tip.hidden && tip.text === '32,022,027 tokens'),
+    JSON.stringify(current)
+  );
+};
+
+tests['duo portals: Details under an approval closes after Back and opens again on Accounts'] = async (
+  t
+) => {
+  await t.newContext({
+    viewport: { width: 466, height: 678 },
+    screen: { width: 466, height: 678 },
+    deviceScaleFactor: 1,
+    serviceWorkers: 'block',
+  });
+  await t.goto('/app/home?safe=0,84,34,0');
+  await t.page.waitForSelector('iframe.slint-frame', { state: 'attached' });
+  await t.page.getByRole('link', { name: 'Accounts', exact: true }).filter({ visible: true }).click();
+  await approvalController(t);
+  const details = (id) => ({ id, title: `Synthetic account ${id}`, meters: [], amounts: [], facts: [] });
+  await bridge(t, 'details', details('one'));
+  await t.page.waitForSelector('.details');
+  // A switch from the panel asks for approval over it; Details refuses to close while it waits.
+  await inFrame(t, "window.__controller.begin('synthetic-review-profile')");
+  await t.page.waitForSelector('.adialog .btn.primary[aria-disabled="false"]');
+  await t.page.goBack();
+  await t.page.waitForFunction(
+    () => location.pathname === '/app/home' && !document.querySelector('.overlay-root')
+  );
+  await settled(t);
+  await inFrame(t, 'Promise.resolve()');
+  await settled(t);
+  const home = await overlayState(t);
+  const acts = await inFrame(t, 'window.__acts');
+  await t.check(
+    'Back retires both: no overlay or lock over Home',
+    !home.roots && !home.locked,
+    JSON.stringify(home)
+  );
+  await t.check(
+    'once the approval is cancelled, the retired Details closes and tells the dashboard',
+    acts.includes('activation-cancel') && acts.includes('details-closed'),
+    JSON.stringify(acts)
+  );
+  // Forward to Accounts (no press, which would close a stale panel by itself): the next account's Details shows,
+  // so the retired panel wasn't left open and hidden.
+  await t.page.goForward();
+  await t.page.waitForFunction(() => location.pathname === '/app/accounts');
+  await frames(t);
+  await bridge(t, 'details', details('two'));
+  await frames(t);
+  const shown = await t.page.evaluate(() => {
+    const d = document.querySelector('.details');
+    const r = d?.getBoundingClientRect();
+    return { present: !!d, w: r?.width || 0, h: r?.height || 0, title: d?.textContent.includes('two') };
+  });
+  await t.check(
+    'the next Details request on Accounts is visible',
+    shown.present && shown.w > 0 && shown.h > 0 && shown.title,
+    JSON.stringify(shown)
+  );
+};
