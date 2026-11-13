@@ -607,6 +607,69 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(keys, ["argon-weekly", "3p-5h", "gemini-weekly"])
         self.assertEqual(result["windows"][2]["remainingPercent"], 90.0)
 
+    @patch("desktop_usage.request_json")
+    def test_antigravity_free_tier_reading_has_no_argon_window_to_invent(self, request):
+        # Redacted shapes from the 2026-11-13 reads of a free-tier ("Antigravity
+        # Starter Quota") account: two weekly groups, no 5-hour bucket, and no
+        # Gemini 4 Argon group under any client version or host. The reading
+        # must stay those two windows: no Argon window, and no zero for it.
+        request.side_effect = [
+            {"cloudaicompanionProject": "project-fixture",
+             "currentTier": {"id": "free-tier", "name": "Antigravity"},
+             "paidTier": {"id": "free-tier", "name": "Antigravity Starter Quota"}},
+            {"groups": [
+                {"displayName": "Gemini Models", "description": "Models within this group: Gemini Flash, Gemini Pro",
+                 "buckets": [{"bucketId": "gemini-weekly", "displayName": "Weekly Limit Remaining",
+                              "window": "weekly", "resetTime": "2026-11-20T05:56:10Z", "remainingFraction": 1}]},
+                {"displayName": "Claude and GPT models", "buckets": [
+                    {"bucketId": "3p-weekly", "displayName": "Weekly Limit Remaining",
+                     "window": "weekly", "resetTime": "2026-11-20T05:56:10Z", "remainingFraction": 1}]}]},
+        ]
+        result = helpers.account("antigravity", "ubuntu")
+        usage.fetch_antigravity_quota(helpers.Credential("fixture-access"), result)
+        # The summary names the Gemini group, so the optional per-model read stays off.
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual([window["key"] for window in result["windows"]], ["gemini-weekly", "3p-weekly"])
+        self.assertEqual([window["windowMinutes"] for window in result["windows"]], [10080, 10080])
+        self.assertNotIn("argon", json.dumps(result).lower())
+        self.assertEqual(result["plan"], "Antigravity Starter Quota")
+        self.assertEqual(result["reportedPlan"]["paidTier"], {"id": "free-tier", "name": "Antigravity Starter Quota"})
+        self.assertNotIn("project-fixture", json.dumps(result))
+
+    def test_antigravity_hydrogen_buckets_join_the_gemini_models_windows(self):
+        # A current client's per-model read (2026-11-13, Pro account) lists
+        # Gemini 4 Hydrogen with the Gemini Models 5-hour reset and fraction,
+        # and Gemini 4 Argon with its own weekly reset. When the summary has no
+        # Gemini group, the fallback derivation counts Hydrogen in the Gemini
+        # Models window and keeps Argon out of it.
+        summary = usage.normalize_antigravity({"groups": [
+            {"displayName": "Claude and GPT models", "buckets": [
+                {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1, "resetTime": "2026-11-20T05:56:22Z"},
+                {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1, "resetTime": "2026-11-13T10:47:39Z"}]},
+            {"displayName": "Gemini 4 Argon", "buckets": [
+                {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": .9898667,
+                 "resetTime": "2026-11-20T05:47:49Z"}]}]})
+        self.assertFalse(usage.antigravity_summary_has_gemini(summary))
+        payload = {"buckets": [
+            {"tokenType": "WTUS", "modelId": "chat_00000", "remainingFraction": 1},
+            {"tokenType": "WTUS", "modelId": "gemini-3.8-flash-high", "remainingFraction": .9984486,
+             "resetTime": "2026-11-13T10:47:39Z"},
+            {"tokenType": "WTUS", "modelId": "gemini-4-hydrogen-high", "remainingFraction": .9984486,
+             "resetTime": "2026-11-13T10:47:39Z"},
+            {"tokenType": "WTUS", "modelId": "gemini-4-hydrogen-xhigh", "remainingFraction": .9984486,
+             "resetTime": "2026-11-13T10:47:39Z"},
+            {"tokenType": "WTUS", "modelId": "gemini-4-argon-high", "remainingFraction": .5,
+             "resetTime": "2026-11-20T05:47:49Z"},
+        ]}
+        windows = usage.normalize_antigravity_gemini(payload, summary)
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0]["key"], "gemini-5h")
+        self.assertEqual(windows[0]["label"], "Gemini Models · 5-hour")
+        self.assertEqual(windows[0]["modelIds"],
+                         ["gemini-3.8-flash-high", "gemini-4-hydrogen-high", "gemini-4-hydrogen-xhigh"])
+        self.assertAlmostEqual(windows[0]["remainingPercent"], 99.84486, places=4)
+        self.assertNotIn("argon", json.dumps(windows))
+
     @patch("desktop_usage.time")
     @patch("desktop_usage.antigravity_oauth_client",
            return_value=("fixture-client.apps.googleusercontent.com", "synthetic-app-value"))

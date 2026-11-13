@@ -25,7 +25,17 @@ export function antigravityMissingWindow(account, key) {
   const plan = account?.antigravityPlan;
   if (['3p-5h', '3p-weekly'].includes(key) && plan?.thirdPartyModels === false) return 'Not on plan';
   if (['gemini-5h', '3p-5h'].includes(key) && plan?.quotaPolicy === 'weekly') return 'Weekly only';
+  // An extra pool column (such as Gemini 4 Argon) comes from another account. When this
+  // account's own live reading arrived without it, Google reported no such quota here: that
+  // is not a failed reading, so it is never called unavailable (and never shown as zero). A
+  // cached reading is the last good one after a failed refresh, so it stays unavailable.
+  if (!ANTIGRAVITY_COLUMNS.some(column => column.key === key) && antigravityHasLiveReading(account)) return 'Not reported';
   return 'Unavailable';
+}
+function antigravityHasLiveReading(account) {
+  return account?.status === 'ok'
+    && visibleUsageWindows('antigravity', account.windows)
+      .some(window => window.kind !== 'balance' && window.status !== 'cached' && window.cached !== true);
 }
 export function antigravityNoQuota(account) {
   return account?.provider === 'antigravity' && account.antigravityPlan?.quotaPolicy === 'none'
