@@ -131,6 +131,8 @@ export const CREDENTIAL_FLAGS = [
 const CREDENTIAL_FLAG = String.raw`--?(?:${CREDENTIAL_FLAGS.join('|')})\b`;
 // code= is an OAuth code, except the integer in "exit code=1".
 const CODE_KEY = String.raw`\bcode=(?!(?<=exit code=)\d{1,10}\b)`;
+// A credential flag, or -p given a quoted or '=' value: its line and the rest of the output go.
+export const CREDENTIAL_FLAG_FORMS = [String.raw`(?<![\w-])-p(?:\s*=|\s*[\"'])`, CREDENTIAL_FLAG];
 export const CREDENTIAL_MARKERS = [
   'auth',
   'token',
@@ -144,15 +146,17 @@ export const CREDENTIAL_MARKERS = [
   'credential',
   'session',
   String.raw`private[\s_-]?key`,
-  // The other keys the token pass recognises, and -p given a quoted or '=' value.
+  // The other keys the token pass recognises.
   'access[_-]?key',
   String.raw`\bbasic\s+[A-Za-z0-9._~+/=-]`,
   CODE_KEY,
   'one[- ]time (?:code|password)',
-  String.raw`(?<![\w-])-p(?:\s*=|\s*[\"'])`,
-  CREDENTIAL_FLAG,
+  ...CREDENTIAL_FLAG_FORMS,
 ];
 const CREDENTIAL_MARKER = new RegExp(CREDENTIAL_MARKERS.join('|'), 'i');
+const CREDENTIAL_REST = new RegExp(CREDENTIAL_FLAG_FORMS.join('|'), 'i');
+const CREDENTIAL_LINE = '<line removed: may contain a credential>';
+const CREDENTIAL_REST_NOTE = '<rest of output removed: may contain a credential>';
 const CREDENTIAL_WORD =
   '(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential' +
   '|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)';
@@ -192,20 +196,6 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\b[0-9a-fA-F]{32,600}\b/g, '<redacted>'],
   [/[A-Za-z0-9+_=-]{40,600}/g, '<redacted>'],
 ];
-/** The quote still open at the end of text; a backslash inside quotes never closes one. */
-function openQuote(text: string, start: string | null = null): string | null {
-  let quote = start;
-  let escaped = false;
-  for (const char of text) {
-    if (quote === null) {
-      if (char === '"' || char === "'") quote = char;
-    } else if (escaped) escaped = false;
-    else if (char === '\\') escaped = true;
-    else if (char === quote) quote = null;
-  }
-  return quote;
-}
-
 const SLASHED = /(?<![\w/+=-])[A-Za-z0-9+/=_-]{32,600}(?![\w/+=-])/g;
 
 /** A '/'-containing run is a secret only when it looks random, never an ordinary path. */
@@ -226,8 +216,6 @@ export function scrubText(value: string, lines = TAIL_LINES): string {
   const candidates: string[] = [];
   let removing = false;
   let carry = false;
-  // A quote left open after the marker removes lines up to the one that closes it, or to the end.
-  let quote: string | null = null;
   // Scan complete physical lines before truncation: the marker may be outside the tail.
   for (const raw of value.replace(/\r\n?/g, '\n').split('\n')) {
     const line = raw.replace(
@@ -235,18 +223,26 @@ export function scrubText(value: string, lines = TAIL_LINES): string {
       ''
     );
     const probe = line.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
-    const continued: boolean =
-      removing && (carry || quote !== null || /^[\s\x00-\x1f\x7f-\x9f]/.test(line));
-    const marker: number = continued ? -1 : probe.search(CREDENTIAL_MARKER);
+    // No quoting is parsed: a credential flag, or a removed line with a quote after its marker,
+    // ends the kept output, since a value may hold a literal newline.
+    const continued = removing && (carry || /^[\s\x00-\x1f\x7f-\x9f]/.test(line));
+    const marker = probe.search(CREDENTIAL_MARKER);
+    // The note itself (text scrubbed twice) also ends the output, so it stays as written.
+    if (
+      probe.trim() === CREDENTIAL_REST_NOTE ||
+      CREDENTIAL_REST.test(probe) ||
+      ((continued || marker >= 0) && /["']/.test(probe.slice(continued ? 0 : marker)))
+    ) {
+      candidates.push(CREDENTIAL_REST_NOTE);
+      break;
+    }
     if (continued || marker >= 0) {
-      if (!removing) candidates.push('<line removed: may contain a credential>');
+      if (!removing) candidates.push(CREDENTIAL_LINE);
       removing = true;
-      quote = continued ? openQuote(probe, quote) : openQuote(probe.slice(marker));
       carry = /[\\,;:={\[(]$/.test(probe.trimEnd());
       continue;
     }
     removing = carry = false;
-    quote = null;
     if (line.trim()) candidates.push(line.slice(0, SCRUB_LINE_CHARS));
   }
   let text = candidates.slice(-SCRUB_LINES).join('\n');
@@ -343,7 +339,8 @@ export function normalizeDiagnostics(value: unknown): AppUpdateDiagnostics | und
   const reason = word(raw.reason);
   if (reason) result.reason = reason;
   if (typeof raw.command === 'string' && raw.command.length <= 1024) {
-    const command = scrubText(raw.command, 1).slice(0, PATH_CHARS);
+    // One line: a line break inside an argument cannot leave a value's tail as the last line.
+    const command = scrubText(raw.command.replace(/[\r\n]/g, ' '), 1).slice(0, PATH_CHARS);
     if (command) result.command = command;
   }
   if (

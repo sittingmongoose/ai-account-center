@@ -114,7 +114,8 @@ describe('Update apps diagnostics', () => {
         onPath: true,
         copies: 1,
       },
-      tail: '<line removed: may contain a credential>',
+      // A marker word followed by a quote ends the kept output (one line here either way).
+      tail: '<rest of output removed: may contain a credential>',
     });
     const adapters = normalizeAppUpdateRow(WRONG_PREFIX, 't3-acp-adapters', 'mac');
     expect(adapters.message).toBe(MESSAGES.wrong_prefix);

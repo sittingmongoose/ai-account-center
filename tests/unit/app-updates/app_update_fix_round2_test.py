@@ -27,6 +27,7 @@ import app_update_fix_round1_test as fixtures
 from app_update_robustness_test import Home, attach, scope, write_package
 
 REMOVED = '<line removed: may contain a credential>'
+REST = '<rest of output removed: may contain a credential>'
 
 
 class Round2(Home):
@@ -50,7 +51,9 @@ class Round2(Home):
                                    errors=True, label='fixture updater')
                 row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
                 tail = row['diagnostics']['tail']
-                self.assertEqual(tail, REMOVED)
+                # A credential flag, or a quote after a marker, ends the kept output; other markers
+                # drop their line and its continuations.
+                self.assertEqual(tail, REST if sample.startswith(('{', 'installer')) else REMOVED)
         self.assertEqual(common.scrub('ordinary ENOSPC diagnostic'), 'ordinary ENOSPC diagnostic')
 
     H1_FLAGS = ('--password', '--passwd', '--pass', '--token', '--api-key', '--apikey', '--auth', '--auth-token',
@@ -74,8 +77,8 @@ class Round2(Home):
                     common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(sample) + '); sys.exit(1)'],
                                    errors=True, label='fixture updater')
                 row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
-                self.assertEqual(row['diagnostics']['tail'], REMOVED)
-                self.assertEqual(common.scrub(sample), REMOVED)
+                self.assertEqual(row['diagnostics']['tail'], REST)
+                self.assertEqual(common.scrub(sample), REST)
                 for witness in self.H1_WITNESSES:
                     self.assertNotIn(witness, json.dumps(row))
 
@@ -86,21 +89,21 @@ class Round2(Home):
         self.assertIn(common.CREDENTIAL_FLAG, common.CREDENTIAL_MARKERS)
 
     AFTER = 'update step finished'
-    # (output, expected tail): a quote left open after the marker removes lines up to its close, or to the end.
+    # Round-1 witnesses: each carries a credential flag, so the line and the rest of the output go.
     H1_MULTILINE = (
-        ('installer --pass "correct\nhorse battery staple"\n' + AFTER, REMOVED + '\n' + AFTER),
-        ("installer --pass 'correct\nhorse battery staple'\n" + AFTER, REMOVED + '\n' + AFTER),
-        ("installer -OTP 'correct\nhorse battery\nstaple'\n" + AFTER, REMOVED + '\n' + AFTER),
-        ('installer -OTP "correct\nhorse battery staple"\n' + AFTER, REMOVED + '\n' + AFTER),
-        ('installer --password "correct\nhorse battery staple"\n' + AFTER, REMOVED + '\n' + AFTER),
-        ("installer --password 'correct\nhorse battery staple'\n" + AFTER, REMOVED + '\n' + AFTER),
-        ('installer --pass "correct\\"\nhorse battery staple"\n' + AFTER, REMOVED + '\n' + AFTER),
-        ('installer --pass "correct\nhorse battery staple\n' + AFTER, REMOVED),
-        ("installer -OTP 'correct\nhorse\nbattery staple\n" + AFTER, REMOVED),
-        ('installer --password "correct\nhorse battery staple', REMOVED),
+        ('installer --pass "correct\nhorse battery staple"\n' + AFTER, REST),
+        ("installer --pass 'correct\nhorse battery staple'\n" + AFTER, REST),
+        ("installer -OTP 'correct\nhorse battery\nstaple'\n" + AFTER, REST),
+        ('installer -OTP "correct\nhorse battery staple"\n' + AFTER, REST),
+        ('installer --password "correct\nhorse battery staple"\n' + AFTER, REST),
+        ("installer --password 'correct\nhorse battery staple'\n" + AFTER, REST),
+        ('installer --pass "correct\\"\nhorse battery staple"\n' + AFTER, REST),
+        ('installer --pass "correct\nhorse battery staple\n' + AFTER, REST),
+        ("installer -OTP 'correct\nhorse\nbattery staple\n" + AFTER, REST),
+        ('installer --password "correct\nhorse battery staple', REST),
     )
 
-    def test_h1_a_quote_open_after_the_marker_removes_lines_until_it_closes(self):
+    def test_h1_a_multiline_value_after_a_flag_never_keeps_a_tail(self):
         for sample, expected in self.H1_MULTILINE:
             with self.subTest(sample=sample), scope() as record:
                 with self.assertRaises(common.UpdateFailure):
@@ -111,6 +114,60 @@ class Round2(Home):
                 self.assertEqual(common.scrub(sample), expected)
                 for witness in self.H1_WITNESSES:
                     self.assertNotIn(witness, json.dumps(row))
+
+    # RECHECK-H1-2 probe: 24 output carriers. Each holds a credential flag, or a quote after a marker,
+    # so its line and the rest of the output go, with no quote parsing.
+    H1_PROBE = (
+        ('R1 dq', 'installer --pass "correct\nhorse battery staple"\n' + AFTER),
+        ('R1 sq OTP', "installer -OTP 'correct\nhorse battery\nstaple'\n" + AFTER),
+        ('R1 never closed', 'installer --password "correct\nhorse battery staple\n' + AFTER),
+        ('R1 escaped dq', 'installer --pass "correct\\"\nhorse battery staple"\n' + AFTER),
+        ('CRLF dq', 'installer --pass "correct\r\nhorse battery staple"\r\n' + AFTER + '\r\n'),
+        ('CRLF sq eq', "installer --pass='correct\r\nhorse battery staple'\r\n" + AFTER + '\r\n'),
+        ('lone CR', 'installer --pass "correct\rhorse battery staple"\r' + AFTER),
+        ('mixed apostrophe in dq', 'installer --pass "it\'s correct\nhorse battery staple"\n' + AFTER),
+        ('mixed dq in sq', 'installer --pass \'say "hi\nhorse battery staple\'\n' + AFTER),
+        ('mixed concat', 'installer --pass "correct"\'x\nhorse battery staple\'\n' + AFTER),
+        ('eq dq', 'installer --pass="correct\nhorse battery staple"\n' + AFTER),
+        ('space sq', "installer --token 'correct\nhorse battery staple'\n" + AFTER),
+        ('close later + more text', 'installer --pass "correct\nhorse battery staple" --verbose ok\n' + AFTER),
+        ('close later 3 lines', "installer --secret 'a\nb\nhorse battery staple' then\n" + AFTER),
+        ('quote before flag dq', 'installer "--pass=correct\nhorse battery staple"\n' + AFTER),
+        ('quote before flag sq', "installer '--password=correct\nhorse battery staple'\n" + AFTER),
+        ('argv list', 'Running ["installer", "--pass", "correct\nhorse battery staple"]\n' + AFTER),
+        ('earlier quoted marker', 'installer: "auth" step: --pass "correct\nhorse battery staple"\n' + AFTER),
+        ('earlier quoted session', 'error: "session expired"; retry --otp "correct\nhorse battery staple"\n' + AFTER),
+        ('posix escaped sq outside', "installer --pass it\\'s' correct\nhorse battery staple'\n" + AFTER),
+        ('bash sq idiom', "installer --pass 'it'\\''s correct\nhorse battery staple'\n" + AFTER),
+        ('powershell backtick', 'installer --pass "correct`" x\nhorse battery staple"\n' + AFTER),
+        ('unquoted newline (dash -x)', '+ installer --pass correct\nhorse battery staple\n' + AFTER),
+        ('marker password colon', 'password: "correct\nhorse battery staple"\n' + AFTER),
+    )
+
+    def test_h1_recheck2_output_carriers_end_the_kept_output(self):
+        for name, sample in self.H1_PROBE:
+            with self.subTest(name=name), scope() as record:
+                with self.assertRaises(common.UpdateFailure):
+                    common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(sample) + '); sys.exit(1)'],
+                                   errors=True, label='fixture updater')
+                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
+                self.assertEqual(row['diagnostics']['tail'], REST)
+                self.assertEqual(common.scrub(sample), REST)
+                for witness in self.H1_WITNESSES:
+                    self.assertNotIn(witness, json.dumps(row))
+
+    def test_h1_recheck2_a_line_break_in_an_argument_never_leaves_a_tail_in_the_command(self):
+        child = self.root / 'fail.py'
+        child.write_text('import sys; sys.exit(1)')
+        for value in ('correct\nhorse battery staple', 'correct\r\nhorse battery staple', 'zebraWitness'):
+            with self.subTest(value=value), scope() as record:
+                with self.assertRaises(common.UpdateFailure):
+                    common.command([sys.executable, str(child), '--pass', value], errors=True)
+                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
+                self.assertEqual(row['diagnostics']['command'], REST)
+                for witness in self.H1_WITNESSES + ('zebraWitness',):
+                    self.assertNotIn(witness, json.dumps(row))
+        self.assertEqual(common.command_display(['installer', 'line one\nline two']), 'installer line one line two')
 
     def test_h1_an_exit_code_keeps_its_failure_line(self):
         line = 'installer failed: exit code=1; ENOSPC: no space left on device'

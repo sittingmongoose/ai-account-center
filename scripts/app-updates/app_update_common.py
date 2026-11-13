@@ -81,12 +81,13 @@ CREDENTIAL_FLAGS = ("password", "passwd", "pass", "token", "api-?key", "auth(?:-
 CREDENTIAL_FLAG = r"--?(?:" + "|".join(CREDENTIAL_FLAGS) + r")\b"
 # code= is an OAuth code, except the integer in "exit code=1".
 _CODE_KEY = r"\bcode=(?!(?<=exit code=)\d{1,10}\b)"
+# A credential flag, or -p given a quoted or '=' value: its line and the rest of the output go.
+CREDENTIAL_FLAG_FORMS = (r"(?<![\w-])-p(?:\s*=|\s*[\"'])", CREDENTIAL_FLAG)
 CREDENTIAL_MARKERS = ("auth", "token", "passw(?:or)?d", "passphrase", "pwd", "secret", "cookie", "bearer",
                       "api[_-]?key", "credential", "session", r"private[\s_-]?key",
-                      # The other keys the token pass recognises, and -p given a quoted or '=' value.
+                      # The other keys the token pass recognises.
                       r"access[_-]?key", r"\bbasic\s+[A-Za-z0-9._~+/=-]", _CODE_KEY,
-                      r"one[- ]time (?:code|password)", r"(?<![\w-])-p(?:\s*=|\s*[\"'])",
-                      CREDENTIAL_FLAG)
+                      r"one[- ]time (?:code|password)") + CREDENTIAL_FLAG_FORMS
 _CREDENTIAL_WORD = (r"(?:token|secret|password|passwd|passphrase|apikey|api[_-]key|authorization|credential"
                     r"|session[_-]?id|bearer|access[_-]?key|private[_-]?key|client[_-]?secret|cookie)")
 _SECRET_PATTERNS = (
@@ -117,46 +118,36 @@ _SECRET_PATTERNS = (
 # A line naming any credential marker goes whole, with the lines that continue it (indented, or
 # after a line ending in a separator), before any cut: no partial redaction can keep a tail.
 CREDENTIAL_LINE = "<line removed: may contain a credential>"
+CREDENTIAL_REST = "<rest of output removed: may contain a credential>"
+_CREDENTIAL_REST = re.compile("(?i)" + "|".join(CREDENTIAL_FLAG_FORMS))
+_QUOTE = re.compile(r"[\"']")
 _CREDENTIAL_MARKER = re.compile("(?i)" + "|".join(CREDENTIAL_MARKERS))
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _INDENTED = re.compile(r"[\s\x00-\x1f\x7f-\x9f]")
 _CONTINUES = ("\\", ",", ";", ":", "=", "{", "[", "(")
 
 
-def _open_quote(text, quote=None):
-    """The quote still open at the end of text; a backslash inside quotes never closes one."""
-    escaped = False
-    for char in text:
-        if quote is None:
-            if char in "\"'":
-                quote = char
-        elif escaped:
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char == quote:
-            quote = None
-    return quote
-
-
 def _drop_credential_lines(lines):
     """Drop credential carriers and continuations before taking any diagnostic tail.
 
-    A quote left open after the marker keeps removing lines up to the one that closes it, or to
-    the end of the text when it never closes: a quoted value may hold a literal newline.
+    No quoting is parsed. A line with a credential flag (CREDENTIAL_FLAG_FORMS), or a removed line
+    with a quote after its marker, ends the kept output: a value may hold a literal newline.
     """
     kept = []
     removing = carry = False
-    quote = None
     for line in lines:
         probe = _CONTROL.sub("", line)
-        continued = removing and (carry or quote is not None or bool(_INDENTED.match(line)))
-        marker = None if continued else _CREDENTIAL_MARKER.search(probe)
+        continued = removing and (carry or bool(_INDENTED.match(line)))
+        marker = _CREDENTIAL_MARKER.search(probe)
+        # The note itself (text scrubbed twice) also ends the output, so it stays as written.
+        quoted = (continued or marker) and _QUOTE.search(probe, 0 if continued else marker.start())
+        if probe.strip() == CREDENTIAL_REST or _CREDENTIAL_REST.search(probe) or quoted:
+            kept.append(CREDENTIAL_REST)
+            break
         if continued or marker:
             if not removing:
                 kept.append(CREDENTIAL_LINE)
             removing = True
-            quote = _open_quote(probe, quote) if continued else _open_quote(probe[marker.start():])
             carry = probe.rstrip().endswith(_CONTINUES)
             continue
         removing = carry = False
@@ -219,7 +210,8 @@ def command_display(argv, label=None):
         return scrub(label, 1)[:160]
     words = []
     skip = False
-    for index, arg in enumerate(str(item) for item in argv):
+    # One display line: a line break inside an argument cannot leave a value's tail as the last line.
+    for index, arg in enumerate(re.sub(r"[\r\n]", " ", str(item)) for item in argv):
         if skip:
             words.append("<script>")
             skip = False

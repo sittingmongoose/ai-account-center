@@ -51,8 +51,12 @@ print(json.dumps(rows))`;
   );
   expect(child.exitCode).toBe(0);
   const rows = JSON.parse(child.stdout.toString()) as Record<string, unknown>[];
-  const removed = '<line removed: may contain a credential>';
   for (const [index, raw] of rows.entries()) {
+    // A credential flag, or a quote after a marker, ends the kept output; other markers drop
+    // their line and its continuations.
+    const removed = /^[{]|^installer/.test(samples[index])
+      ? '<rest of output removed: may contain a credential>'
+      : '<line removed: may contain a credential>';
     expect(scrubText(samples[index])).toBe(removed);
     const normalized = normalizeAppUpdateRow(raw, 't3-acp-adapters', 'mac');
     expect(normalized.diagnostics?.tail).toBe(removed);
@@ -102,6 +106,10 @@ print(json.dumps(rows))`;
   }
 });
 
+const AFTER = 'update step finished';
+const REMOVED = '<line removed: may contain a credential>';
+const REST = '<rest of output removed: may contain a credential>';
+
 const H1_FLAGS = [
   '--password',
   '--passwd',
@@ -140,7 +148,7 @@ function h1Samples(): string[] {
   ];
 }
 
-function helperRows(root: string, samples: string[]): Record<string, unknown>[] {
+function helperRows(root: string, samples: string[], argv = false): Record<string, unknown>[] {
   const script = `import json,pathlib,sys
 from unittest import mock
 sys.path.insert(0, sys.argv[1])
@@ -150,8 +158,13 @@ with mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(sys.argv[
     for sample in json.load(sys.stdin):
         with c.row_diagnostics() as record:
             try:
-                c.command([sys.executable, '-c', 'import sys; sys.stderr.write('+repr(sample)+'); sys.exit(1)'],
-                          errors=True, label='fixture updater')
+                if sys.argv[3] == 'argv':
+                    child = pathlib.Path(sys.argv[2]) / 'fail.py'
+                    child.write_text('import sys; sys.exit(1)')
+                    c.command([sys.executable, str(child), '--pass', sample], errors=True)
+                else:
+                    c.command([sys.executable, '-c', 'import sys; sys.stderr.write('+repr(sample)+'); sys.exit(1)'],
+                              errors=True, label='fixture updater')
             except c.UpdateFailure:
                 pass
         row=c.result('t3-acp-adapters','mac','failed',code='update_failed')
@@ -159,7 +172,14 @@ with mock.patch.object(pathlib.Path, 'home', return_value=pathlib.Path(sys.argv[
         rows.append(row)
 print(json.dumps(rows))`;
   const child = Bun.spawnSync(
-    ['python3', '-c', script, path.join(process.cwd(), 'scripts/app-updates'), root],
+    [
+      'python3',
+      '-c',
+      script,
+      path.join(process.cwd(), 'scripts/app-updates'),
+      root,
+      argv ? 'argv' : 'out',
+    ],
     { stdin: Buffer.from(JSON.stringify(samples)), env: { ...process.env, CCS_HOME: root } }
   );
   expect(child.exitCode).toBe(0);
@@ -193,14 +213,18 @@ async function savedTail(storage: string, raw: Record<string, unknown>) {
   for (let tries = 0; tries < 100 && service.getStatus().job?.state === 'running'; tries++)
     await new Promise((resolve) => setTimeout(resolve, 0));
   expect(service.getStatus().job?.state).toBe('failed');
+  const job = JSON.stringify(service.getStatus().job);
   const saved = new AppUpdateService({ ccsDir: storage }).getStatus().job!;
   const files = ['dashboard-job.json', 'dashboard-job-expanded.json'].map((file) =>
     fs.readFileSync(path.join(storage, 'app-updates', file), 'utf8')
   );
+  const diagnostics = saved.results.find(
+    (row) => row.appId === 't3-acp-adapters' && row.platform === 'mac'
+  )?.diagnostics;
   return {
-    tail: saved.results.find((row) => row.appId === 't3-acp-adapters' && row.platform === 'mac')
-      ?.diagnostics?.tail,
-    files,
+    tail: diagnostics?.tail,
+    command: diagnostics?.command,
+    files: [...files, job, JSON.stringify(saved)],
   };
 }
 
@@ -227,7 +251,7 @@ it('H1 every recognised flag alias drops its whole line through command, export,
   roots.push(root);
   const samples = h1Samples();
   const rows = helperRows(root, samples);
-  const removed = '<line removed: may contain a credential>';
+  const removed = REST;
   for (const [index, raw] of rows.entries()) {
     expect([samples[index], scrubText(samples[index])]).toEqual([samples[index], removed]);
     const normalized = normalizeAppUpdateRow(raw, 't3-acp-adapters', 'mac');
@@ -248,23 +272,22 @@ it('H1 an ordinary installer line keeps its text through the same path', async (
   expect((await savedTail(path.join(root, 'job'), raw)).tail).toBe(H1_CONTROL);
 });
 
-const AFTER = 'update step finished';
-const REMOVED = '<line removed: may contain a credential>';
-// [output, expected tail]: a quote left open after the marker removes lines up to its close, or to the end.
+// [output, expected tail]: round-1 witnesses. Each carries a credential flag, so its line and the
+// rest of the output go.
 const H1_MULTILINE: Array<[string, string]> = [
-  [`installer --pass "correct\nhorse battery staple"\n${AFTER}`, `${REMOVED}\n${AFTER}`],
-  [`installer --pass 'correct\nhorse battery staple'\n${AFTER}`, `${REMOVED}\n${AFTER}`],
-  [`installer -OTP 'correct\nhorse battery\nstaple'\n${AFTER}`, `${REMOVED}\n${AFTER}`],
-  [`installer -OTP "correct\nhorse battery staple"\n${AFTER}`, `${REMOVED}\n${AFTER}`],
-  [`installer --password "correct\nhorse battery staple"\n${AFTER}`, `${REMOVED}\n${AFTER}`],
-  [`installer --password 'correct\nhorse battery staple'\n${AFTER}`, `${REMOVED}\n${AFTER}`],
-  [`installer --pass "correct\\"\nhorse battery staple"\n${AFTER}`, `${REMOVED}\n${AFTER}`],
-  [`installer --pass "correct\nhorse battery staple\n${AFTER}`, REMOVED],
-  [`installer -OTP 'correct\nhorse\nbattery staple\n${AFTER}`, REMOVED],
-  ['installer --password "correct\nhorse battery staple', REMOVED],
+  [`installer --pass "correct\nhorse battery staple"\n${AFTER}`, REST],
+  [`installer --pass 'correct\nhorse battery staple'\n${AFTER}`, REST],
+  [`installer -OTP 'correct\nhorse battery\nstaple'\n${AFTER}`, REST],
+  [`installer -OTP "correct\nhorse battery staple"\n${AFTER}`, REST],
+  [`installer --password "correct\nhorse battery staple"\n${AFTER}`, REST],
+  [`installer --password 'correct\nhorse battery staple'\n${AFTER}`, REST],
+  [`installer --pass "correct\\"\nhorse battery staple"\n${AFTER}`, REST],
+  [`installer --pass "correct\nhorse battery staple\n${AFTER}`, REST],
+  [`installer -OTP 'correct\nhorse\nbattery staple\n${AFTER}`, REST],
+  ['installer --password "correct\nhorse battery staple', REST],
 ];
 
-it('H1 a quote open after the marker removes lines until it closes, through every saved path', async () => {
+it('H1 a multi-line value after a flag never keeps a tail, through every saved path', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-h1-multiline-'));
   roots.push(root);
   const rows = helperRows(
@@ -294,4 +317,91 @@ it('H1 an exit code keeps its failure line through the same path', async () => {
   expect(scrubText('verification code=482913')).toBe(REMOVED);
   expect(normalizeAppUpdateRow(raw, 't3-acp-adapters', 'mac').diagnostics?.tail).toBe(line);
   expect((await savedTail(path.join(root, 'job'), raw)).tail).toBe(line);
+});
+
+// RECHECK-H1-2 probe: 24 output carriers. Each holds a credential flag, or a quote after a marker,
+// so its line and the rest of the output go, with no quote parsing.
+const H1_PROBE: Array<[string, string]> = [
+  ['R1 dq', `installer --pass "correct\nhorse battery staple"\n${AFTER}`],
+  ['R1 sq OTP', `installer -OTP 'correct\nhorse battery\nstaple'\n${AFTER}`],
+  ['R1 never closed', `installer --password "correct\nhorse battery staple\n${AFTER}`],
+  ['R1 escaped dq', `installer --pass "correct\\"\nhorse battery staple"\n${AFTER}`],
+  ['CRLF dq', `installer --pass "correct\r\nhorse battery staple"\r\n${AFTER}\r\n`],
+  ['CRLF sq eq', `installer --pass='correct\r\nhorse battery staple'\r\n${AFTER}\r\n`],
+  ['lone CR', `installer --pass "correct\rhorse battery staple"\r${AFTER}`],
+  ['mixed apostrophe in dq', `installer --pass "it's correct\nhorse battery staple"\n${AFTER}`],
+  ['mixed dq in sq', `installer --pass 'say "hi\nhorse battery staple'\n${AFTER}`],
+  ['mixed concat', `installer --pass "correct"'x\nhorse battery staple'\n${AFTER}`],
+  ['eq dq', `installer --pass="correct\nhorse battery staple"\n${AFTER}`],
+  ['space sq', `installer --token 'correct\nhorse battery staple'\n${AFTER}`],
+  [
+    'close later + more text',
+    `installer --pass "correct\nhorse battery staple" --verbose ok\n${AFTER}`,
+  ],
+  ['close later 3 lines', `installer --secret 'a\nb\nhorse battery staple' then\n${AFTER}`],
+  ['quote before flag dq', `installer "--pass=correct\nhorse battery staple"\n${AFTER}`],
+  ['quote before flag sq', `installer '--password=correct\nhorse battery staple'\n${AFTER}`],
+  ['argv list', `Running ["installer", "--pass", "correct\nhorse battery staple"]\n${AFTER}`],
+  [
+    'earlier quoted marker',
+    `installer: "auth" step: --pass "correct\nhorse battery staple"\n${AFTER}`,
+  ],
+  [
+    'earlier quoted session',
+    `error: "session expired"; retry --otp "correct\nhorse battery staple"\n${AFTER}`,
+  ],
+  ['posix escaped sq outside', `installer --pass it\\'s' correct\nhorse battery staple'\n${AFTER}`],
+  ['bash sq idiom', `installer --pass 'it'\\''s correct\nhorse battery staple'\n${AFTER}`],
+  ['powershell backtick', `installer --pass "correct\`" x\nhorse battery staple"\n${AFTER}`],
+  ['unquoted newline (dash -x)', `+ installer --pass correct\nhorse battery staple\n${AFTER}`],
+  ['marker password colon', `password: "correct\nhorse battery staple"\n${AFTER}`],
+];
+
+it('H1 recheck-2 output carriers end the kept output, through every saved path', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-h1-probe-'));
+  roots.push(root);
+  const rows = helperRows(
+    root,
+    H1_PROBE.map(([, sample]) => sample)
+  );
+  for (const [index, raw] of rows.entries()) {
+    const [name, sample] = H1_PROBE[index];
+    expect([name, (raw.diagnostics as Record<string, unknown>).tail]).toEqual([name, REST]);
+    expect([name, scrubText(sample)]).toEqual([name, REST]);
+    const normalized = normalizeAppUpdateRow(raw, 't3-acp-adapters', 'mac');
+    expect([name, normalized.diagnostics?.tail]).toEqual([name, REST]);
+    const { tail, files } = await savedTail(path.join(root, String(index)), raw);
+    expect([name, tail]).toEqual([name, REST]);
+    expect(files[1]).toContain(REST);
+    for (const text of [JSON.stringify(raw), JSON.stringify(normalized), ...files])
+      for (const witness of H1_WITNESSES)
+        expect([name, witness, text.includes(witness)]).toEqual([name, witness, false]);
+  }
+}, 60_000);
+
+it('H1 recheck-2 a line break in an argument never leaves a tail in the recorded command', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-h1-argv-'));
+  roots.push(root);
+  const values = ['correct\nhorse battery staple', 'zebraWitness'];
+  const rows = helperRows(root, values, true);
+  for (const [index, raw] of rows.entries()) {
+    expect((raw.diagnostics as Record<string, unknown>).command).toBe(REST);
+    const normalized = normalizeAppUpdateRow(raw, 't3-acp-adapters', 'mac');
+    expect(normalized.diagnostics?.command).toBe(REST);
+    const { command, files } = await savedTail(path.join(root, String(index)), raw);
+    expect(command).toBe(REST);
+    for (const text of [JSON.stringify(raw), JSON.stringify(normalized), ...files])
+      for (const witness of [...H1_WITNESSES, 'zebraWitness']) expect(text).not.toContain(witness);
+  }
+  // A stored row from an older helper: the dashboard collapses line breaks before scrubbing.
+  const stored = {
+    appId: 't3-acp-adapters',
+    status: 'failed',
+    messageCode: 'update_failed',
+    diagnostics: {
+      command: 'installer --pass correct\nhorse battery staple',
+      cause: 'installer_failed',
+    },
+  };
+  expect(normalizeAppUpdateRow(stored, 't3-acp-adapters', 'mac').diagnostics?.command).toBe(REST);
 });

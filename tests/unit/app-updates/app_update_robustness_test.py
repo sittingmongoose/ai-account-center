@@ -177,7 +177,8 @@ class CursorWindowsRegressions(Home):
         install, row = self.run_row(fake)
         self.assertEqual((row["status"], row["messageCode"], row["updateAttempted"]), ("action_required", "cursor_signin_needed", True))
         self.assertEqual((row["diagnostics"]["cause"], row["diagnostics"]["exitCode"]), ("auth_required", 1))
-        self.assertIn("<line removed: may contain a credential>", row["diagnostics"]["tail"])
+        # A marker word followed by a quote ends the kept output: no quoting is parsed.
+        self.assertIn("<rest of output removed: may contain a credential>", row["diagnostics"]["tail"])
         # Every user folder in the row is the placeholder, never an account name.
         self.assertTrue(set(re.findall(r"Users(?:\\\\|\\|/)+([^\\/\"]+)", json.dumps(row))).issubset({"<user>"}))
 
