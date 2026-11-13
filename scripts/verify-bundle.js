@@ -254,7 +254,7 @@ function verifyStoreModule(dir = path.join(__dirname, '../dist/native')) {
   const { spawnSync } = require('child_process');
   const probe = spawnSync(
     process.execPath,
-    ['-e', `process.exit(require(${JSON.stringify(file)}).bindingVersion() === 1 ? 0 : 3)`],
+    ['-e', `process.exit(require(${JSON.stringify(file)}).bindingVersion() === 2 ? 0 : 3)`],
     { encoding: 'utf8' }
   );
   if (probe.status !== 0) throw new Error(`${name} does not load in Node.`);
