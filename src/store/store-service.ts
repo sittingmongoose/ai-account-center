@@ -15,6 +15,12 @@ import {
   type StoreUnavailableReason,
 } from './native-loader';
 import type { StoreObservation } from './usage-observations';
+import type {
+  ActivityRange,
+  ActivitySources,
+  UsageIngestResult,
+  UsageReport,
+} from './usage-report';
 import type { AccountAnalyticsObservation } from '../web-server/services/account-analytics-history';
 
 const logger = createLogger('store');
@@ -187,6 +193,42 @@ export class AacStore {
   }): Promise<Record<string, unknown>> {
     return this.call('backup', options);
   }
+  /** Analytics usage history (docs/store.md section 12): contract reports in, decisions in Rust. */
+  activityIngest(reports: UsageReport[]): Promise<UsageIngestResult> {
+    return this.call('activityIngest', { reports });
+  }
+  activityRange(query: {
+    fromMs: number;
+    toMs: number;
+    resolution?: 'hour' | 'day';
+    dayStarts?: number[];
+    byComputer?: boolean;
+    sessionSample?: number;
+  }): Promise<ActivityRange> {
+    return this.call('activityRange', query);
+  }
+  activitySources(query: { fromMs: number; toMs: number }): Promise<ActivitySources> {
+    return this.call('activitySources', query);
+  }
+  activityOldest(): Promise<number | null> {
+    return this.call<number | null>('activityOldest');
+  }
+  activityCounts(): Promise<Record<string, number>> {
+    return this.call('activityCounts');
+  }
+  activityBackfill(mark: {
+    computer: string;
+    tool: string;
+    state: 'pending' | 'running' | 'done' | 'failed';
+    at: number;
+    started?: number;
+    files_read?: number;
+    files_total?: number;
+    oldest_h?: number;
+    cause?: string;
+  }): Promise<{ ok: boolean }> {
+    return this.call('activityBackfill', mark);
+  }
   getMeta(key: string): Promise<string | null> {
     return this.call('getMeta', { key });
   }
@@ -230,12 +272,17 @@ export function openAacStore(
     const directory = storeDirectory(options.ccsDir);
     const handle = new loaded.module.NativeStore();
     const cacheMb = Number(env.AAC_STORE_CACHE_MB);
+    // Analytics usage history is kept for good unless this opt-in retention is set (90 to 36,500 days).
+    const activityDays = Number(env.AAC_ANALYTICS_RETENTION_DAYS);
     try {
       await handle.call(
         'open',
         JSON.stringify({
           dir: directory,
           retentionDays: STORE_RAW_RETENTION_DAYS,
+          ...(Number.isFinite(activityDays) && activityDays > 0
+            ? { activityRetentionDays: Math.round(activityDays) }
+            : {}),
           ...(Number.isFinite(cacheMb) && cacheMb > 0
             ? { cacheBytes: Math.round(cacheMb) * 1024 * 1024 }
             : {}),

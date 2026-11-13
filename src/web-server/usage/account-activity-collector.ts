@@ -37,6 +37,7 @@ import {
   type AntigravityHelperSessionRow,
 } from './antigravity-native-usage-collector';
 import { analyticsSessionKey } from './analytics-session-key';
+import { cellsFromCompact } from './activity-cells';
 import { EXPERIMENT_CLAUDE_ROOT_DEPTH } from './experiment-usage-roots';
 import { filesUnderT3Root } from './t3-usage-roots';
 import type { AccountAnalyticsActivityProvider } from '../services/account-analytics-types';
@@ -1042,7 +1043,7 @@ export function aggregateRows(
   rows: CompactEntry[],
   source: string,
   sessionTool: AccountAnalyticsActivityProvider
-): Pick<UsageWorkerResult, 'hourly' | 'session'> {
+): Pick<UsageWorkerResult, 'hourly' | 'session' | 'cells'> {
   interface Bucket {
     models: Map<string, ModelBreakdown>;
     /** OMP logged cost per model; those tokens are not priced again. */
@@ -1153,6 +1154,8 @@ export function aggregateRows(
     };
   };
   return {
+    // The usage record contract's session-hour cells, for the history store (store/usage-report.ts).
+    cells: cellsFromCompact(rows, sessionTool),
     hourly: [...hours]
       .map(([hour, bucket]) => ({ hour, ...values(bucket), requestCount: bucket.requestCount }))
       .sort((left, right) => right.hour.localeCompare(left.hour)),
@@ -1666,7 +1669,7 @@ async function collectZcodeAccountActivity(
     }
   }
   if (!cached.rows.length && failed > 0) throw new CCSError('Native log sources could not be read');
-  const { hourly } = aggregateRows(cached.rows, 'zcode-native', 'zcode');
+  const { hourly, cells } = aggregateRows(cached.rows, 'zcode-native', 'zcode');
   // Sessions aggregate from the session rows alone; the hourly rows above
   // already carry the same tokens.
   const { session } = aggregateSessionAggregates(
@@ -1690,6 +1693,7 @@ async function collectZcodeAccountActivity(
     daily: [],
     monthly: [],
     hourly,
+    cells,
     session,
     eventCount: cached.rows.reduce((sum, row) => sum + row.events, 0),
     scan: {
@@ -1815,7 +1819,7 @@ async function collectAntigravityAccountActivity(
     }
   }
   if (!cached.rows.length && failed > 0) throw new CCSError('Native log sources could not be read');
-  const { hourly } = aggregateRows(
+  const { hourly, cells } = aggregateRows(
     cached.rows.map((row) => ({
       entry: {
         inputTokens: Math.floor(row.i),
@@ -1856,6 +1860,7 @@ async function collectAntigravityAccountActivity(
     daily: [],
     monthly: [],
     hourly,
+    cells,
     session,
     eventCount: cached.rows.reduce((sum, row) => sum + Math.floor(row.n), 0),
     scan: {
@@ -2035,7 +2040,7 @@ async function collectZcodeExperimentActivity(
     aggregate.events++;
     sessions.set(sessionKey, aggregate);
   }
-  const { hourly } = aggregateRows(
+  const { hourly, cells } = aggregateRows(
     [...rowMap.values()].slice(0, MAX_TOTAL_ROWS),
     'zcode-native',
     'zcode'
@@ -2045,6 +2050,7 @@ async function collectZcodeExperimentActivity(
     daily: [],
     monthly: [],
     hourly,
+    cells,
     session,
     eventCount: chosen.size,
     scan: {
@@ -3332,11 +3338,12 @@ async function collectExperimentActivity(
   for (const entry of chosen.values()) if (!addEntry(rowMap, entry, options.minDate)) capped++;
   const rows = [...rowMap.values()].slice(0, MAX_TOTAL_ROWS);
   if (capped || rowMap.size > MAX_TOTAL_ROWS) failed++;
-  const { hourly, session } = aggregateRows(rows, source, kind);
+  const { hourly, session, cells } = aggregateRows(rows, source, kind);
   const result: UsageWorkerResult = {
     daily: [],
     monthly: [],
     hourly,
+    cells,
     session,
     eventCount: chosen.size,
     scan: scan(
@@ -3851,11 +3858,12 @@ export async function collectAccountActivity(
           : 'custom-parser';
   if (!rows.length && scanned.length > 0 && failed >= scanned.length && failed > 0)
     throw new CCSError('Native log sources could not be read');
-  const { hourly, session } = aggregateRows(rows, source, request.kind);
+  const { hourly, session, cells } = aggregateRows(rows, source, request.kind);
   const result: AccountActivityScanResult = {
     daily: [],
     monthly: [],
     hourly,
+    cells,
     session,
     eventCount: rows.reduce((sum, row) => sum + row.events, 0),
     scan: {

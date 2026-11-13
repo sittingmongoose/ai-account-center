@@ -5,6 +5,7 @@ import { getCcsDir } from '../../config/config-loader-facade';
 import { CCSError } from '../../errors/error-types';
 import { withDeadline } from '../../utils/settle-deadline';
 import type { CompactEntry, DailyUsage, HourlyUsage, MonthlyUsage, SessionUsage } from './types';
+import type { UsageCell } from '../../store/usage-report';
 
 /**
  * Dot paths into a generic JSONL record (`usage.input_tokens`), from a saved
@@ -170,6 +171,13 @@ export interface UsageWorkerResult {
   readAt?: string;
   daily: DailyUsage[];
   hourly: HourlyUsage[];
+  /**
+   * The same usage as session-hour cells (the usage record contract, store/usage-report.ts), for
+   * the history store. Absent from results saved before the store kept them.
+   */
+  cells?: UsageCell[];
+  /** The computer a remote result was read on (`DashboardHost`); absent for local results. */
+  host?: string;
   monthly: MonthlyUsage[];
   session: SessionUsage[];
   eventCount: number;

@@ -67,7 +67,7 @@ pub fn create_tables(txn: &WriteTransaction) -> Result<()> {
     for def in [SERIES_BY_PROVIDER, DAY_CLOSED] {
         txn.open_table(def)?;
     }
-    Ok(())
+    crate::activity::create_tables(txn)
 }
 
 /// Big-endian key builder.

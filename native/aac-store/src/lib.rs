@@ -5,7 +5,9 @@
 // Tuples of paths, hashes and sizes read better inline than as one-use type aliases.
 #![allow(clippy::type_complexity)]
 
+pub mod activity;
 pub mod capture;
+pub mod contract;
 pub mod db;
 pub mod engine;
 pub mod error;
