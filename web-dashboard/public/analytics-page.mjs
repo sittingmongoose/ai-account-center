@@ -44,9 +44,12 @@ export function analyticsCovers(payload, page, now = Date.now()) {
  * that just started answers "loading" first) every 10 s - a live analytics projection costs real server CPU, so the
  * poll stays calm - except at the start: `waitedMs` (how long the page has waited for its first numbers; bridge.js
  * passes none) reads again after 2 s for the first 10 s and 5 s until 30 s, since the first totals usually land within
- * seconds of that first answer.
+ * seconds of that first answer. An answer the server kept from before the read (`stale`, while it computes the next)
+ * is read again on the same steps.
  */
 export function analyticsPollDelay(payload, waitedMs = Infinity) {
+  // an answer the server kept from before this read (`stale`): it is computing the next one, which lands in seconds
+  if (payload?.stale === true) return waitedMs < 10_000 ? 2000 : waitedMs < 30_000 ? 5000 : 10000;
   const act = payload?.activity;
   const busyNow = act?.status === 'loading' || act?.refreshing === true;
   const converging = Array.isArray(act?.sources) && act.sources.some(r => r?.state === 'scanning');

@@ -5,10 +5,15 @@
 // Pure apart from the injected fetch, clock, timers and sinks (tests/frame-analytics.test.mjs).
 //
 // What it sends, through `emit(key, json)`: `analytics` (the view; `analytics-motion` "morph" or "static" just before
-// it), `analytics-head` (the header between refreshes), `analytics-loading` ({loading, error}) and `chrome`
-// ({statusLead, statusStrong, statusMore}: the frame header's line, worded as bridge.js words it). `signedOut(reason)`
-// says a read found the session gone. Until the first answer nothing is sent but `analytics-loading`: the page shows
-// its loading state, never zeros.
+// it), `analytics-head` (the header between refreshes), `analytics-loading` ({loading, error}), `analytics-fresh`
+// ({shown, updating, stale, asOf, note}: whether the numbers on screen are current and whether newer ones are on
+// their way, worded for the page's updating strip) and `chrome` ({statusLead, statusStrong, statusMore}: the frame
+// header's line, worded as bridge.js words it). `signedOut(reason)` says a read found the session gone.
+//
+// The last answers are kept in this browser (`storage`, ANALYTICS_SAVED_KEY, cleared at sign-out), so the next visit
+// draws them at once, said to be older ("Updating · showing data from 2 min ago"), while the read for current numbers
+// runs. With nothing kept, nothing is sent until the first answer but `analytics-loading`: the page shows its loading
+// state, never zeros.
 import { analyticsSlintModel } from './analytics-data.mjs';
 import { usageView, usageHead, apiRangeFor, trendPaths } from './analytics-usage.mjs';
 import { quotaView, agendaView } from './analytics-quota.mjs';
@@ -23,7 +28,8 @@ import {
 import { chromeView } from './view-model.mjs';
 import { validAntigravityAuto } from './antigravity-data.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
-import { rememberSeen } from './auth-view.mjs';
+import { rememberSeen, ANALYTICS_SAVED_KEY } from './auth-view.mjs';
+import { relTxt } from './analytics-usage.mjs';
 
 /** The header and the chrome line are worded again this often while the page is shown (bridge.js does the same). */
 export const HEAD_EVERY_MS = 15_000;
@@ -31,6 +37,16 @@ export const HEAD_EVERY_MS = 15_000;
 export const DEFAULT_INTERVAL_SECONDS = 60;
 /** A burst of dashboard changes elsewhere in the frame is read once, this long after the last. */
 export const SIDE_SETTLE_MS = 250;
+/** The kept answers are written at most this often (and when the page leaves the screen). */
+export const SAVE_EVERY_MS = 30_000;
+/** Kept answers older than this are not drawn. */
+export const SAVED_MAX_AGE_MS = 7 * 24 * 3_600_000;
+/** What this browser keeps at most, in characters (localStorage holds about 5 million per site). */
+export const SAVED_MAX_CHARS = 2_500_000;
+
+const validPayload = (p) => !!p && typeof p === 'object' && p.schemaVersion === 1 && Array.isArray(p.accounts) && !!p.activity && typeof p.activity === 'object' && typeof p.updatedAt === 'string';
+/** When an answer's numbers were computed. */
+const asOfOf = (p) => { const t = Date.parse(p?.asOf ?? p?.updatedAt ?? ''); return Number.isFinite(t) ? t : null; };
 
 /**
  * The frame's Analytics controller. `fetch`, `now()`, `setTimeout`/`clearTimeout`, `visible()` (the document is on
@@ -64,9 +80,15 @@ export function createFrameAnalytics({
   let pollFails = 0;
   let lastGeo = null;
   let lastSize = '';
-  // when the page first got an answer without numbers (a server that just started): its first polls come quickly
+  // when the page first got an answer without numbers (a server that just started), or one the server kept from before
+  // the read: its next polls come quickly
   let waitingSince = null;
-  const timers = { poll: 0, layout: 0, tick: 0, interval: 0, side: 0 };
+  // the numbers on screen came from this browser's kept answers; no answer from the server yet
+  let restored = false;
+  // an analytics read is out
+  let fetching = false;
+  let lastSaved = -Infinity;
+  const timers = { poll: 0, layout: 0, tick: 0, interval: 0, side: 0, save: 0 };
   const pushed = new Map();
 
   const clear = (name) => {
@@ -150,6 +172,83 @@ export function createFrameAnalytics({
     push('analytics-loading', JSON.stringify({ loading: isLoading, error }));
   }
 
+  /**
+   * Whether the numbers on screen are current, for the page's updating strip. `stale`: they predate this visit's
+   * newest answer (kept in this browser, or kept by the server while it computes the next one); `updating`: newer
+   * numbers are on their way (that read or computation, or the server reading new log lines). `note` words it.
+   */
+  function renderFresh() {
+    if (!payload || stopped) return;
+    const t = now();
+    const asOf = asOfOf(payload);
+    const act = payload.activity || {};
+    const stale = restored || payload.stale === true;
+    const head = (() => { try { return usageHead(payload, page, { now: t }); } catch { return null; } })();
+    const collecting = payload.refreshing === true || act.refreshing === true || act.status === 'loading' || head?.updating === true;
+    const updating = online && ((restored && fetching) || payload.stale === true || collecting);
+    const ago = asOf === null ? 'an earlier read' : t - asOf < 10_000 ? 'a moment ago' : relTxt(asOf, t);
+    const note = stale
+      ? updating ? `Updating · showing data from ${ago}`
+        : !online ? `Offline · showing data from ${ago}`
+          : `Showing data from ${ago} · not updated`
+      : updating ? (head?.updateNote || 'Updating…')
+        : !online ? `Offline · showing data from ${ago}` : '';
+    push('analytics-fresh', JSON.stringify({ shown: note !== '', updating, stale: stale || !online, asOf, note }));
+  }
+
+  /** The kept answer for the page's range, drawn at once on a visit with nothing read yet. */
+  function restore() {
+    if (payload || !storage) return false;
+    let kept = null;
+    try {
+      kept = JSON.parse(storage.getItem(ANALYTICS_SAVED_KEY) || 'null');
+    } catch {
+      return false;
+    }
+    if (!kept || kept.v !== 1 || kept.platform !== platform || !kept.views || typeof kept.views !== 'object') return false;
+    const candidate = kept.views[apiRangeFor(page, now())];
+    const at = asOfOf(candidate);
+    if (!validPayload(candidate) || at === null || now() - at > SAVED_MAX_AGE_MS || at - now() > 60_000) return false;
+    payload = candidate;
+    restored = true;
+    // the account list and thresholds it was drawn with (hidden accounts stay hidden) until the dashboard is read
+    if (!dashboard && kept.dashboard?.schemaVersion === 1 && Array.isArray(kept.dashboard.accounts)) {
+      dashboard = kept.dashboard;
+      antigravityAuto = validAntigravityAuto(kept.auto) ? kept.auto : null;
+    }
+    return true;
+  }
+
+  /** Keeps the newest answer (at most every SAVE_EVERY_MS; `force` when the page leaves the screen). */
+  function save(force = false) {
+    if (!storage || !payload || restored || stopped || ended) return;
+    const wait = lastSaved + SAVE_EVERY_MS - now();
+    if (!force && wait > 0) {
+      if (!timers.save) timers.save = later(() => { timers.save = 0; save(true); }, wait);
+      return;
+    }
+    clear('save');
+    const preset = String(payload.range?.preset || '');
+    if (!preset) return;
+    let views = { [preset]: payload };
+    try {
+      const kept = JSON.parse(storage.getItem(ANALYTICS_SAVED_KEY) || 'null');
+      // one other range is kept beside it (the one a person switches back to)
+      if (kept?.v === 1 && kept.platform === platform && kept.views && typeof kept.views === 'object') {
+        const other = Object.entries(kept.views).find(([key, value]) => key !== preset && validPayload(value));
+        if (other) views = { [other[0]]: other[1], [preset]: payload };
+      }
+    } catch {}
+    const extra = dashboard ? { dashboard, auto: antigravityAuto } : {};
+    let json = JSON.stringify({ v: 1, platform, views, ...extra });
+    if (json.length > SAVED_MAX_CHARS) json = JSON.stringify({ v: 1, platform, views: { [preset]: payload }, ...extra });
+    if (json.length > SAVED_MAX_CHARS) return;
+    try {
+      storage.setItem(ANALYTICS_SAVED_KEY, json);
+      lastSaved = now();
+    } catch {}
+  }
+
   /** mode 'morph' lets the page glide the usage trend from the shape on screen to the new one. */
   function render(mode = 'static') {
     if (!payload || stopped) return;
@@ -181,6 +280,7 @@ export function createFrameAnalytics({
     }
     lastGeo = next;
     lastSize = size;
+    renderFresh();
     schedulePoll();
   }
 
@@ -194,7 +294,7 @@ export function createFrameAnalytics({
   /** While the server is still reading, the page reads again (analytics-page.mjs analyticsPollDelay). */
   function schedulePoll() {
     clear('poll');
-    if (payload?.activity?.totals) waitingSince = null;
+    if (payload?.activity?.totals && payload?.stale !== true) waitingSince = null;
     else if (waitingSince === null) waitingSince = now();
     const ms = analyticsPollDelay(payload, waitingSince === null ? Infinity : now() - waitingSince);
     if (!shown || ms <= 0) return;
@@ -217,7 +317,11 @@ export function createFrameAnalytics({
     if (!quiet) loading(true, '');
     const query = new URLSearchParams({ platform, range: apiRangeFor(page, now()), provider: 'all', account: 'all' });
     if (force) query.set('refresh', 'true');
-    const analytics = () => read(`/api/accounts/analytics?${query}`).then((r) => ({ r }), (error) => ({ error }));
+    const analytics = () => {
+      fetching = true;
+      renderFresh();
+      return read(`/api/accounts/analytics?${query}`).then((r) => ({ r }), (error) => ({ error })).finally(() => { fetching = false; });
+    };
     let result;
     if (force) {
       await readSide(true, true);
@@ -231,13 +335,16 @@ export function createFrameAnalytics({
     armInterval();
     if (result.r && result.r.schemaVersion === 1 && Array.isArray(result.r.accounts)) {
       payload = result.r;
+      restored = false;
       render(mode);
+      save();
       pollFails = 0;
       loading(false, '');
       return;
     }
     const error = result.error || new Error('Unsupported analytics response.');
     render();
+    renderFresh();
     if (quiet && ++pollFails < 2) return;
     pollFails = 0;
     loading(false, error?.message || 'Unable to load account analytics.');
@@ -250,8 +357,14 @@ export function createFrameAnalytics({
    * tab meanwhile is never drawn the old way. Until then the page keeps the view it had.
    */
   function enter() {
+    // a first visit with answers kept in this browser draws them at once, said to be older, while it reads
+    if (!payload && restore()) {
+      render();
+      void refresh(false, 'morph');
+      return;
+    }
     const age = now() - Date.parse(payload?.updatedAt ?? '');
-    if (payload && Number.isFinite(age) && age >= 0 && age < intervalSeconds * 1000 && analyticsCovers(payload, page, now())) {
+    if (payload && !restored && payload.stale !== true && Number.isFinite(age) && age >= 0 && age < intervalSeconds * 1000 && analyticsCovers(payload, page, now())) {
       const gen = generation;
       void readSide(false).then(() => {
         if (gen !== generation || !shown || stopped) return;
@@ -293,6 +406,7 @@ export function createFrameAnalytics({
       timers.tick = 0;
       renderChrome();
       renderHead();
+      renderFresh();
       armTick();
     }, HEAD_EVERY_MS);
   }
@@ -317,9 +431,10 @@ export function createFrameAnalytics({
       armTick();
       armInterval();
     },
-    /** Another tab is on screen: no reads or timers until it comes back. */
+    /** Another tab is on screen: no reads or timers until it comes back (the newest answer is kept first). */
     hide() {
       shown = false;
+      if (timers.save) save(true);
       for (const name of Object.keys(timers)) clear(name);
     },
     /** The window came back on screen (an app resumed): read now if what is shown is old. */

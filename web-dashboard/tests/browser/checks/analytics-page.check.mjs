@@ -98,7 +98,109 @@ const SLOW_FIRST_LOAD = `(() => {
 	});
 })();`;
 
+/** The fixture with every source settled (none still scanning), so current numbers carry no updating words. */
+const settled = (range) => {
+	const answer = analyticsFixture({ range, accounts: ACCOUNTS });
+	for (const source of answer.activity.sources || []) if (source.state === 'scanning') source.state = 'ok';
+	return answer;
+};
+
+async function stubSettled(t) {
+	await t.app.stub('/api/accounts/dashboard', DASHBOARD);
+	await t.page.route((u) => new URL(u).pathname === '/api/accounts/analytics', (r) => r.fulfill({ json: settled(new URL(r.request().url()).searchParams.get('range') || '7d') }));
+}
+
+/**
+ * Holds the page's data reads (analytics, dashboard, preferences, Antigravity switching) until `release()`, so a visit
+ * can be checked before any of them has answered. Returns the release and how many reads are held.
+ */
+async function holdData(t) {
+	let release;
+	const gate = new Promise((resolve) => { release = resolve; });
+	const held = { count: 0, answered: 0 };
+	const data = new Set(['/api/accounts/analytics', '/api/accounts/dashboard', '/api/accounts/preferences', '/api/antigravity/auto-switch']);
+	await t.page.route((u) => data.has(new URL(u).pathname), async (r) => {
+		held.count++;
+		await gate;
+		held.answered++;
+		const url = new URL(r.request().url());
+		if (url.pathname === '/api/accounts/analytics') return r.fulfill({ json: settled(url.searchParams.get('range') || '7d') });
+		if (url.pathname === '/api/accounts/dashboard') return r.fulfill({ json: DASHBOARD });
+		if (url.pathname === '/api/accounts/preferences') return r.fulfill({ json: { timeZone: 'UTC' } });
+		// Antigravity switching off: nothing for the page to mark
+		return r.fulfill({ json: { enabled: false } });
+	});
+	return { release: () => release(), held };
+}
+
+/** What the page shows about its numbers being current: the updating strip, and whether the numbers are dimmed. */
+const freshness = () => {
+	const strip = document.querySelector('.ax-fresh');
+	const page = document.querySelector('.ax-page');
+	return {
+		kpis: document.querySelectorAll('.ax-page .kpi').length,
+		values: [...document.querySelectorAll('.ax-page .kpi-val')].map((e) => e.textContent.trim()),
+		strip: strip ? strip.textContent.trim() : null,
+		state: strip?.dataset.state ?? null,
+		stale: !!page?.classList.contains('ax-stale'),
+		stripHeight: strip ? Math.round(strip.getBoundingClientRect().height) : 0,
+		sideways: document.scrollingElement.scrollWidth > document.scrollingElement.clientWidth + 1,
+		loading: !!document.querySelector('.ax-loading'),
+	};
+};
+
 export const tests = {
+	async 'analytics: a second open shows the kept numbers before any data read answers, says so, then shows current ones'(t) {
+		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+		await t.app.signIn();
+		await stubSettled(t);
+		await openAnalytics(t);
+		const first = await t.page.evaluate(freshness);
+		await t.check('the first open draws current numbers with no strip', first.kpis === 5 && !first.stale && first.strip === null, JSON.stringify(first));
+		await t.until('the numbers are kept in this browser', () => !!localStorage.getItem('aac.analytics.saved.v1'), null, { timeout: 10000, hard: true });
+
+		// the second open: every data read is held, so anything drawn comes from what this browser kept
+		const { release, held } = await holdData(t);
+		const started = Date.now();
+		await t.goto('/app/analytics?e2e', { settleMs: 0 });
+		await t.until('the kept numbers are drawn', () => document.querySelectorAll('.ax-page .kpi').length === 5 && !!document.querySelector('.ax-fresh'), null, { timeout: 30000, hard: true });
+		const shownAfterMs = Date.now() - started;
+		const before = await t.page.evaluate(freshness);
+		await t.equal('no data read has answered yet', held.answered, 0);
+		await t.check(`the data reads are out and held (${held.count})`, held.count >= 1);
+		await t.check(`drawn without the loading placeholders (${shownAfterMs} ms after the open)`, !before.loading);
+		await t.check(`the strip says the numbers are older and being updated: "${before.strip}"`, /^Updating · showing data from /.test(before.strip ?? '') && before.state === 'updating');
+		await t.check('the kept numbers are dimmed, never shown as current', before.stale);
+		await t.equal('they are the numbers the first open showed', before.values, first.values);
+		await t.crop('analytics-kept', await t.page.evaluate(() => { const r = document.querySelector('.ax-fresh').getBoundingClientRect(); return { x: 0, y: Math.max(0, r.y - 80), width: 1440, height: r.height + 260 }; }), 'second open: kept numbers dimmed under the updating strip');
+
+		release();
+		await t.until('current numbers land and the strip goes away', () => !document.querySelector('.ax-fresh') && !document.querySelector('.ax-page.ax-stale'), null, { timeout: 15000, hard: true });
+		const after = await t.page.evaluate(freshness);
+		await t.check('current numbers are drawn', after.kpis === 5 && !after.stale);
+	},
+
+	async 'analytics: the updating strip stays one compact line on a phone and a folded Duo'(t) {
+		for (const f of FORMATS.filter((x) => ['iphone', 'duo-folded'].includes(x.name))) {
+			await t.step(f.name, async () => {
+				await t.newContext({ viewport: { width: f.width, height: f.height }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
+				await t.app.signIn();
+				await stubSettled(t);
+				await openAnalytics(t, f.safe);
+				await t.until('kept', () => !!localStorage.getItem('aac.analytics.saved.v1'), null, { timeout: 10000, hard: true });
+				const { release } = await holdData(t);
+				await t.goto(`/app/analytics?e2e&safe=${f.safe}`, { settleMs: 0 });
+				await t.until('the kept numbers under the strip', () => document.querySelectorAll('.ax-page .kpi').length === 5 && !!document.querySelector('.ax-fresh'), null, { timeout: 30000, hard: true });
+				const state = await t.page.evaluate(freshness);
+				await t.check(`the strip is compact (${state.stripHeight} px): "${state.strip}"`, state.stripHeight > 0 && state.stripHeight <= 46);
+				await t.check('nothing goes sideways', !state.sideways);
+				await t.crop(`analytics-kept-${f.name}`, await t.page.evaluate(() => { const r = document.querySelector('.ax-fresh').getBoundingClientRect(); return { x: 0, y: Math.max(0, r.y - 60), width: innerWidth, height: Math.min(innerHeight - Math.max(0, r.y - 60), r.height + 240) }; }), `${f.name}: kept numbers under the updating strip`);
+				release();
+				await t.until('current', () => !document.querySelector('.ax-fresh'), null, { timeout: 15000, hard: true });
+			});
+		}
+	},
+
 	async "analytics: a late load from a session that ended never stops the next session's page"(t) {
 		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
 		await t.context.addInitScript(SLOW_FIRST_LOAD);

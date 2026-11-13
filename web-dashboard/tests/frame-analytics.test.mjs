@@ -470,3 +470,147 @@ test('analytics-page: actions', () => {
   assert.ok(!p.open.has('a'), 'a second focus closes it');
   assert.deepEqual(applyAnalyticsAction(p, 'analytics-group', 'nope'), {});
 });
+
+// ---------------------------------------------------------------- kept answers and the updating strip
+
+/** A localStorage stand-in. */
+function memoryStorage() {
+  const items = new Map();
+  return {
+    items,
+    getItem: (k) => (items.has(k) ? items.get(k) : null),
+    setItem: (k, v) => items.set(k, String(v)),
+    removeItem: (k) => items.delete(k),
+  };
+}
+const fresh = (sent) => JSON.parse(last(sent, 'analytics-fresh') || 'null');
+
+test('a second visit draws the kept answer before any network answer, said to be older, then the current one', async () => {
+  const storage = memoryStorage();
+  const first = make(defaultRoutes(), { storage });
+  first.controller.show();
+  await settle();
+  await settle();
+  assert.ok(storage.items.has('aac.analytics.saved.v1'), 'the first answer is kept');
+  assert.equal(fresh(first.sent).stale, false);
+  first.controller.stop();
+
+  // the next visit: the server is slow to answer
+  let answer;
+  const held = new Promise((resolve) => { answer = resolve; });
+  const second = make(defaultRoutes({ '/api/accounts/analytics': () => held }), { storage });
+  second.c.run(0);
+  await second.c.run(120_000);
+  second.controller.show();
+  // drawn at once, before any read has answered: the kept numbers, never the loading state's placeholders
+  const view = JSON.parse(last(second.sent, 'analytics'));
+  assert.ok(view.usage.ready && view.usage.kpis.length === 5);
+  const shown = fresh(second.sent);
+  assert.equal(shown.stale, true);
+  assert.equal(shown.updating, true);
+  assert.match(shown.note, /^Updating · showing data from 2m ago$/);
+  // the server answers: the strip goes away and the numbers are current
+  answer({ status: 200, body: analyticsFixture({ range: '7d', now: second.c.now(), accounts: dashboard().accounts }) });
+  await settle();
+  await settle();
+  await settle();
+  const after = fresh(second.sent);
+  assert.equal(after.stale, false);
+  assert.equal(after.shown, after.updating, 'shown only while newer numbers are on their way');
+});
+
+test('an answer the server kept from before the read is said to be older and read again within seconds', async () => {
+  const kept = (url) => ({
+    status: 200,
+    body: { ...analyticsFixture({ range: url.searchParams.get('range') || '7d', now: NOW - 3 * 60_000, accounts: dashboard().accounts }), asOf: new Date(NOW - 3 * 60_000).toISOString(), stale: true, refreshing: true },
+  });
+  const { controller, sent, c, server } = make(defaultRoutes({ '/api/accounts/analytics': kept }));
+  controller.show();
+  await settle();
+  await settle();
+  const state = fresh(sent);
+  assert.equal(state.stale, true);
+  assert.equal(state.updating, true);
+  assert.equal(state.note, 'Updating · showing data from 3m ago');
+  // the next read comes in 2 s, not at the refresh interval
+  const reads = () => server.calls.filter((p) => p.startsWith('/api/accounts/analytics')).length;
+  const before = reads();
+  await c.run(2_000);
+  assert.equal(reads(), before + 1);
+});
+
+test('kept answers: written at most every 30 s and when the page leaves, never across platforms, too old or after sign-out', async () => {
+  const { forgetSignIn } = await import('../public/auth-view.mjs');
+  const storage = memoryStorage();
+  let writes = 0;
+  const counted = { ...storage, setItem: (k, v) => { if (k === 'aac.analytics.saved.v1') writes++; storage.setItem(k, v); } };
+  const { controller, c } = make(defaultRoutes(), { storage: counted });
+  controller.show();
+  await settle();
+  await settle();
+  assert.equal(writes, 1);
+  controller.act('analytics-range', '30d');
+  await settle();
+  await settle();
+  assert.equal(writes, 1, 'a second answer within 30 s waits');
+  controller.hide();
+  assert.equal(writes, 2, 'leaving the page writes it');
+  const record = JSON.parse(storage.getItem('aac.analytics.saved.v1'));
+  assert.deepEqual(Object.keys(record.views).sort(), ['30d', '7d']);
+  assert.equal(record.platform, 'mac');
+  assert.equal(record.dashboard.schemaVersion, 1, 'the account list it was drawn with is kept beside it');
+  controller.stop();
+  void c;
+
+  // another platform's kept answer is not drawn
+  const windows = make(() => new Promise(() => {}), { storage, platform: 'windows' });
+  windows.controller.show();
+  assert.equal(last(windows.sent, 'analytics'), undefined);
+  windows.controller.stop();
+
+  // one older than a week is not drawn
+  const old = make(() => new Promise(() => {}), { storage });
+  await old.c.run(8 * D);
+  old.controller.show();
+  assert.equal(last(old.sent, 'analytics'), undefined);
+  old.controller.stop();
+
+  // signed out: the kept answers leave this browser
+  forgetSignIn(storage);
+  assert.equal(storage.getItem('aac.analytics.saved.v1'), null);
+});
+
+test('offline with a kept answer: it stays on screen and the strip says it is not current', async () => {
+  const storage = memoryStorage();
+  const first = make(defaultRoutes(), { storage });
+  first.controller.show();
+  await settle();
+  await settle();
+  first.controller.stop();
+  const second = make(() => 'offline', { storage });
+  second.controller.show();
+  await settle();
+  await settle();
+  await settle();
+  const state = fresh(second.sent);
+  assert.equal(state.stale, true);
+  assert.equal(state.updating, false);
+  assert.match(state.note, /^Offline · showing data from /);
+  assert.ok(JSON.parse(last(second.sent, 'analytics')).usage.ready, 'the kept numbers stay');
+});
+
+test('current numbers while the server reads new log lines: the strip says so, the numbers are not dimmed', async () => {
+  const reading = (url) => {
+    const body = analyticsFixture({ range: url.searchParams.get('range') || '7d', now: NOW, accounts: dashboard().accounts });
+    body.activity = { ...body.activity, refreshing: true, refreshingRemote: ['mac'] };
+    return { status: 200, body: { ...body, asOf: body.updatedAt, stale: false, refreshing: true } };
+  };
+  const { controller, sent } = make(defaultRoutes({ '/api/accounts/analytics': reading }));
+  controller.show();
+  await settle();
+  await settle();
+  const state = fresh(sent);
+  assert.equal(state.stale, false);
+  assert.equal(state.updating, true);
+  assert.equal(state.note, 'Updating · refreshing Mac…');
+});

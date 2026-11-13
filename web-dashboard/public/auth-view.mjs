@@ -108,7 +108,10 @@ export function rememberedSessionHours(storage) {
 export function rememberSignIn(storage, now = Date.now()) {
   try { storage?.setItem(SESSION_KEY, String(now)); storage?.setItem(SEEN_KEY, String(now)); } catch {}
 }
-export function forgetSignIn(storage) { try { storage?.removeItem(SESSION_KEY); storage?.removeItem(SEEN_KEY); } catch {} }
+/** The last Analytics answers this browser keeps to show at once on the next visit (frame-analytics.mjs). */
+export const ANALYTICS_SAVED_KEY = 'aac.analytics.saved.v1';
+/** Signed out: the session's marks and the Analytics answers it kept leave this browser. */
+export function forgetSignIn(storage) { try { storage?.removeItem(SESSION_KEY); storage?.removeItem(SEEN_KEY); storage?.removeItem(ANALYTICS_SAVED_KEY); } catch {} }
 export function signedInAt(storage) {
   try { const n = Number(storage?.getItem(SESSION_KEY)); return Number.isFinite(n) && n > 0 ? n : null; } catch { return null; }
 }
