@@ -840,6 +840,7 @@ fn AnalyticsRoute(ctx: FrameCtx) -> impl IntoView {
                     updated: Signal::derive(move || line.with(|l| l.status_strong.clone())),
                     live: Signal::derive(move || line.with(|l| l.status_more == "live")),
                     summary: Signal::derive(Vec::new),
+                    strip: None,
                     refresh: Callback::new(move |_| {
                         feed.act("analytics-refresh", "");
                     }),
