@@ -24,9 +24,9 @@ Verified against T3 commit `ab8e488e10d883fa880b0ddcf01917b51839ab07`:
 
 ## Session lifetime
 
-Jared, 2026-11-12 21:23Z, relayed by pm7-build: "Yes, accept 15 minutes (Recommended)".
+The owner, 2026-11-12 21:23Z, relayed by pm7-build: "Yes, accept 15 minutes (Recommended)".
 
-Jared, 2026-11-12 22:01Z, relayed by pm7-build: "Option a for the second thing."
+The owner, 2026-11-12 22:01Z, relayed by pm7-build: "Option a for the second thing."
 Option A means no issuance retry after a possibly committed timeout, and an honest row otherwise.
 
 One successful session issuance covers the remaining overall run deadline,
@@ -102,7 +102,7 @@ A signal that arrives after T3 has saved a new session but before
 exits and that session stays valid until its TTL, at most 15 minutes. The Sol
 6.1 max review of 2f893548 reproduced it offline (`app_update_t3_rpc.py` ~180,
 signal cleanup, against ~234, where the issued session is registered). This is
-the force-stop risk Jared accepted on decision card ACP-KEY: "If an update is
+the force-stop risk the owner accepted on decision card ACP-KEY: "If an update is
 force-stopped partway, its key stays usable for up to 15 minutes." A full fix
 cannot fit the one-second signal budget, because finding the session by its
 label means starting another T3 CLI. pm7-build recorded it as an accepted
@@ -124,7 +124,7 @@ and bounded signals with blocked workers. No real T3 calls or live updates.
 
 ## Issuer lifetime (R9)
 
-Jared, 2026-11-12 at 23:39Z, relayed by pm7-build, answering the Astra max
+The owner, 2026-11-12 at 23:39Z, relayed by pm7-build, answering the Astra max
 orphaned-issuer finding, verbatim: "1 B" (fix it, then a cheap recheck and
 Astra max only).
 
@@ -149,7 +149,7 @@ descendants are covered by group termination on the signal path, not PDEATHSIG.
 
 ### R10: direct Linux issuer and safe shutdown
 
-Jared, 2026-11-13 01:24Z, relayed by pm7-build, verbatim: "B to answer your question".
+The owner, 2026-11-13 01:24Z, relayed by pm7-build, verbatim: "B to answer your question".
 This selects the code fix for Linux AppImage issuance, alongside the TTL and
 idempotent-stop fixes.
 
