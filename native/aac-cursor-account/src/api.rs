@@ -78,12 +78,17 @@ impl Client {
                 });
             }
             Err(ureq::Error::Transport(transport)) => {
+                // The I/O error's kind, not its words: Windows words a timeout differently.
+                let io_kind = std::error::Error::source(&transport)
+                    .and_then(|source| source.downcast_ref::<std::io::Error>())
+                    .map(std::io::Error::kind);
                 let text = transport.to_string().to_ascii_lowercase();
-                return Err(if text.contains("timed out") || text.contains("timeout") {
-                    Failure::Timeout
-                } else {
-                    Failure::Network
-                });
+                let timed_out = matches!(
+                    io_kind,
+                    Some(std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)
+                ) || text.contains("timed out")
+                    || text.contains("timeout");
+                return Err(if timed_out { Failure::Timeout } else { Failure::Network });
             }
         };
         // A redirect is an answer, never followed.

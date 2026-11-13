@@ -62,8 +62,10 @@ fn usage() -> ! {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("--version") {
-        print(json!({"name": "aac-cursor-account", "version": env!("CARGO_PKG_VERSION"), "protocol": 1,
-                     "target": target()}));
+        print(
+            json!({"name": "aac-cursor-account", "version": env!("CARGO_PKG_VERSION"), "protocol": 1,
+                     "target": target()}),
+        );
         return;
     }
     let ccs = args
