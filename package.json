@@ -60,6 +60,7 @@
     "native/aac-store/rustfmt.toml",
     "native/aac-store/registry.json",
     "native/aac-store/src/",
+    "src/web-server/status/report-secret-policy.json",
     "native/aac-status/Cargo.toml",
     "native/aac-status/Cargo.lock",
     "native/aac-status/build.rs",

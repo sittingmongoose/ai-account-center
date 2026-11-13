@@ -320,7 +320,12 @@ it('preserves a suspended open writer through a competing write and DB backfill'
     const target = {
       getMeta: async () => null,
       setMeta: async () => {},
-      record: async (rows: unknown[]) => ({ sampled: rows.length, seen: 0, skipped: 0, rejected: 0 }),
+      record: async (rows: unknown[]) => ({
+        sampled: rows.length,
+        seen: 0,
+        skipped: 0,
+        rejected: 0,
+      }),
     };
     await backfillUsageHistory(target as Parameters<typeof backfillUsageHistory>[0], root);
     expect(fs.existsSync(temporary)).toBe(true);

@@ -1,3 +1,6 @@
+import secretPolicy from './report-secret-policy.json';
+import { ValidationError } from '../../errors/error-types';
+
 /**
  * Shared validators of the agent report documents (report-schema.ts, card-schema.ts). Each
  * projection throws `Invalid` with a fixed reason; nothing here echoes a file's text.
@@ -79,36 +82,17 @@ export function idProblem(value: unknown, writer: string, localMax: number): str
  * Secret patterns: a file that matches one is refused whole (the format says no secrets). Each
  * entry names the kind it found; the matched text is never shown.
  */
-const SECRET_PATTERNS: ReadonlyArray<readonly [string, (text: string) => boolean]> = [
-  ['a private key', matches(/-----BEGIN [A-Z ]*PRIVATE KEY-----/)],
-  ['an API key', matches(/\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/)],
-  ['a GitHub token', matches(/\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})/)],
-  ['a Slack token', matches(/\bxox[abposr]-[A-Za-z0-9-]{10,}/)],
-  ['an AWS key', matches(/\bAKIA[0-9A-Z]{16}\b/)],
-  ['a GitLab token', matches(/\bglpat-[A-Za-z0-9_-]{20,}/)],
-  ['an npm token', matches(/\bnpm_[A-Za-z0-9]{36}\b/)],
-  ['a Hugging Face token', matches(/\bhf_[A-Za-z0-9]{30,}\b/)],
-  ['a Google API key', matches(/\bAIza[0-9A-Za-z_-]{35}/)],
-  ['a JSON web token', hasJsonWebToken],
-  ['a bearer token', matches(/\bBearer\s+[A-Za-z0-9._~+/-]{20,}/i)],
-  [
-    'a credential field',
-    matches(
-      /"(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)"\s*:\s*"[^"]{6,}"/i
-    ),
-  ],
-  [
-    'a credential in a URL',
-    matches(
-      /[?&](?:access_token|token|api_key|apikey|key|sig|signature|password|code)=[^&\s"]{8,}/i
-    ),
-  ],
-  ['an email address', hasEmailAddress],
-];
-
-function matches(pattern: RegExp): (text: string) => boolean {
-  return (text) => pattern.test(text);
-}
+// This packaged policy is also compiled into the native capture boundary. Keep refusal
+// patterns, credential spellings and scan budgets in one source of truth.
+const SECRET_PATTERNS: ReadonlyArray<readonly [string, (text: string) => boolean]> =
+  secretPolicy.patterns.map((entry) => {
+    if (entry.scan === 'jwt') return [entry.kind, hasJsonWebToken] as const;
+    if (entry.scan === 'email') return [entry.kind, hasEmailAddress] as const;
+    if (typeof entry.pattern !== 'string')
+      throw new ValidationError('Invalid report secret policy');
+    const pattern = new RegExp(entry.pattern, entry.flags);
+    return [entry.kind, (text: string) => pattern.test(text)] as const;
+  });
 
 /*
  * These checks run on the main thread over files any writer can fill, up to 512 KB. A regex that
@@ -116,10 +100,10 @@ function matches(pattern: RegExp): (text: string) => boolean {
  * of `a` took 4.7 s), so the two that can are searched from their one literal instead.
  */
 
-const EMAIL_LOCAL_CHAR = /[A-Za-z0-9._%+-]/;
-const EMAIL_DOMAIN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/;
+const EMAIL_LOCAL_CHAR = new RegExp(secretPolicy.email.localChar);
+const EMAIL_DOMAIN = new RegExp(secretPolicy.email.domain);
 /** A domain is at most 253 characters (RFC 1035). */
-const EMAIL_DOMAIN_WINDOW = 256;
+const EMAIL_DOMAIN_WINDOW = secretPolicy.email.domainWindow;
 
 /** `local@domain.tld`: one local character before an `@` and a domain after it. */
 function hasEmailAddress(text: string): boolean {
@@ -130,23 +114,27 @@ function hasEmailAddress(text: string): boolean {
   return false;
 }
 
-const JWT_TAIL = /\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/y;
-const JWT_CHAR = /[A-Za-z0-9_-]/;
-const WORD_CHAR = /[A-Za-z0-9_]/;
-const JWT_HEAD_MIN = 8;
+const JWT_TAIL = new RegExp(secretPolicy.jwt.tail, 'y');
+const JWT_CHAR = new RegExp(secretPolicy.jwt.char);
+const WORD_CHAR = new RegExp(secretPolicy.jwt.wordChar);
+const JWT_HEAD_MIN = secretPolicy.jwt.min;
 
 /** `eyJ...` `.eyJ...` `.sig`, found from its `.eyJ`. Each scan stops at the next dot, so it is linear. */
 function hasJsonWebToken(text: string): boolean {
-  for (let dot = text.indexOf('.eyJ'); dot !== -1; dot = text.indexOf('.eyJ', dot + 1)) {
+  for (
+    let dot = text.indexOf(`.${secretPolicy.jwt.prefix}`);
+    dot !== -1;
+    dot = text.indexOf(`.${secretPolicy.jwt.prefix}`, dot + 1)
+  ) {
     JWT_TAIL.lastIndex = dot;
     if (!JWT_TAIL.test(text)) continue;
     let start = dot;
     while (start > 0 && JWT_CHAR.test(text[start - 1])) start -= 1;
     // The earliest `eyJ` that starts a word leaves the longest head; a later one cannot do better.
-    let head = text.indexOf('eyJ', start);
-    while (head !== -1 && head + 3 + JWT_HEAD_MIN <= dot) {
+    let head = text.indexOf(secretPolicy.jwt.prefix, start);
+    while (head !== -1 && head + secretPolicy.jwt.prefix.length + JWT_HEAD_MIN <= dot) {
       if (head === 0 || !WORD_CHAR.test(text[head - 1])) return true;
-      head = text.indexOf('eyJ', head + 1);
+      head = text.indexOf(secretPolicy.jwt.prefix, head + 1);
     }
   }
   return false;
@@ -193,8 +181,7 @@ export function jsonFromBytes(bytes: Buffer, capBytes: number): Parsed<unknown> 
 }
 
 /** A key that names a credential, whose string value is refused (decoded, so `"pass\u0077ord"` counts). */
-const CREDENTIAL_KEY =
-  /^(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)$/i;
+const CREDENTIAL_KEY = new RegExp(`^${secretPolicy.credentialKey}$`, 'i');
 
 /**
  * The secret check for a parsed JSON file: over the text as written, then over every decoded key and string of the
@@ -213,7 +200,7 @@ export function findSecretIn(source: string, value: unknown): string | null {
   for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
     const [node, credential] = entry;
     if (typeof node === 'string') {
-      if (credential && node.length >= 6) return 'a credential field';
+      if (credential && node.length >= secretPolicy.credentialMin) return 'a credential field';
       const found =
         findSecret(node) ?? (node.includes('\\') ? findSecret(unescapeText(node)) : null);
       if (found) return found;
@@ -221,7 +208,8 @@ export function findSecretIn(source: string, value: unknown): string | null {
       if (inner === UNCHECKED) return 'JSON text that could not be checked';
       if (inner !== undefined) stack.push([inner, credential]);
     } else if (typeof node === 'number') {
-      if (credential && String(Math.abs(Math.trunc(node))).length >= 6) return 'a credential field';
+      if (credential && String(Math.abs(Math.trunc(node))).length >= secretPolicy.credentialMin)
+        return 'a credential field';
     } else if (Array.isArray(node)) {
       for (const item of node) stack.push([item, credential]);
     } else if (node && typeof node === 'object') {
@@ -236,13 +224,12 @@ export function findSecretIn(source: string, value: unknown): string | null {
 }
 
 /** How many characters of JSON text inside strings are parsed per file, and how many such parses may fail. */
-const EMBEDDED_BUDGET = 4 * 1024 * 1024;
-const EMBEDDED_FAILURES = 256;
+const EMBEDDED_BUDGET = secretPolicy.embeddedBudget;
+const EMBEDDED_FAILURES = secretPolicy.embeddedFailures;
 /** JSON text that can't be checked within the budget: the file is refused, not read unchecked. */
 const UNCHECKED = Symbol('unchecked');
 /** A credential key written anywhere in text (quoted, as JSON writes keys). */
-const CREDENTIAL_KEY_TEXT =
-  /"(?:password|passwd|secret|client_?secret|api_?key|access_?token|refresh_?token|session_?token|cookie)"/i;
+const CREDENTIAL_KEY_TEXT = new RegExp(`"${secretPolicy.credentialKey}"`, 'i');
 
 /** Running totals for one file's embedded JSON. */
 type EmbeddedWork = { used: number; failed: number };

@@ -5,7 +5,7 @@ use crate::engine::{Engine, LogId, Projector, now_ms};
 use crate::error::Result;
 use crate::event::Event;
 use crate::log::Finding;
-use crate::{fail, fsx, msgpack, secret};
+use crate::{fail, fsx, msgpack, report_secret};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata, WriteTransaction};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
@@ -32,29 +32,6 @@ pub struct Report {
     pub doc: Json,
 }
 
-fn secret_json(value: &Json) -> bool {
-    match value {
-        Json::String(text) => secret::looks_secret(text),
-        Json::Array(values) => values.iter().any(secret_json),
-        Json::Object(values) => values.iter().any(|(key, value)| {
-            [
-                "password",
-                "passwd",
-                "secret",
-                "api_key",
-                "access_token",
-                "refresh_token",
-                "session_token",
-                "cookie",
-                "authorization",
-            ]
-            .contains(&key.to_ascii_lowercase().as_str())
-                || secret_json(value)
-        }),
-        _ => false,
-    }
-}
-
 impl Report {
     fn validate(&self) -> Result<()> {
         let schema = format!("agent-reports/{}@1", self.kind);
@@ -75,8 +52,8 @@ impl Report {
             || !self.ids.is_object()
             || serde_json::to_vec(&self.ids)?.len() > 16 * 1024
             || serde_json::to_vec(&self.doc)?.len() > MAX_DOC
-            || secret_json(&self.doc)
-            || secret_json(&self.ids)
+            || report_secret::find_secret_in("", &self.doc).is_some()
+            || report_secret::find_secret_in("", &self.ids).is_some()
         {
             fail!("invalid", "capture report failed validation");
         }

@@ -63,6 +63,12 @@ offline maintenance operation after every quota-file writer has stopped: writes 
 reap another temporary file, because age cannot establish that a suspended writer has exited.
 Source JSON and archives remain intact for rollback.
 
+Report readers and native capture share `src/web-server/status/report-secret-policy.json`: refusal
+patterns, credential keys and embedded-text work budgets. Native batch preflight rejects decoded
+keys/strings and embedded JSON before ledger append; its replay projector checks the same policy.
+The policy is packaged as a build input and emitted with the TS reader. Native build fingerprints
+include it, so policy changes require rebuilding the module. Native parse limits fail closed.
+
 ## 1. Scope
 
 ### 1.1 What moves in, in phase order

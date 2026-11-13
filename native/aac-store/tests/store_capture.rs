@@ -104,3 +104,70 @@ fn normalized_large_task_boards_fit_without_losing_items() {
     engine.close().unwrap();
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// Both language boundaries read these same synthetic fixtures. Rejected batches must leave
+/// authoritative ledger bytes, compressed content and query history unchanged.
+#[test]
+fn report_reader_secret_parity_refuses_before_any_persistence() {
+    use aac_store::report_secret;
+    use common::find;
+    let cases: Vec<Json> = serde_json::from_str(include_str!("report-secret-cases.json")).unwrap();
+    let dir = temp_dir("capture-secret-parity");
+    let engine = ops::open_engine(dir.to_str().unwrap(), None, None).unwrap();
+    let ledger = || {
+        find(&dir.join("log/ledger"), "")
+            .into_iter()
+            .filter(|path| path.is_file())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|path| (path.clone(), fs::read(path).unwrap()))
+            .collect::<Vec<_>>()
+    };
+    capture::record(&engine, vec![report(0, "working")]).unwrap();
+    let mut seq = 1;
+    for case in cases {
+        let fields = &case["doc"];
+        let expected = case["secret"].as_str();
+        assert_eq!(report_secret::find_secret_in("", fields), expected, "{}", case["name"]);
+        let mut candidate = report(seq, "working");
+        for (key, value) in fields.as_object().unwrap() {
+            candidate.doc[key] = value.clone();
+        }
+        candidate.source_sha256 = fsx::sha256_hex(&serde_json::to_vec(&candidate.doc).unwrap());
+        if expected.is_some() {
+            let before_log = ledger();
+            assert!(
+                !before_log.is_empty(),
+                "ledger snapshot must inspect actual segment bytes"
+            );
+            let before_health = capture::health(&engine).unwrap();
+            let before_history = history(&engine);
+            // A valid report preceding the bad report in a batch must not append either.
+            assert!(capture::record(&engine, vec![report(seq + 1, "done"), candidate]).is_err());
+            assert_eq!(ledger(), before_log, "{}: ledger untouched", case["name"]);
+            assert_eq!(capture::health(&engine).unwrap(), before_health, "content untouched");
+            assert_eq!(history(&engine), before_history, "no rejected history");
+            let mut secret_ids = report(seq, "done");
+            secret_ids.ids = fields.clone();
+            assert!(capture::record(&engine, vec![secret_ids]).is_err());
+            assert_eq!(ledger(), before_log, "ids are checked before append too");
+            assert_eq!(capture::health(&engine).unwrap(), before_health);
+            assert_eq!(history(&engine), before_history);
+        } else {
+            assert_eq!(capture::record(&engine, vec![candidate]).unwrap()["stored"], 1);
+        }
+        seq += 2;
+    }
+    let before = history(&engine);
+    engine.close().unwrap();
+    drop(engine);
+    fs::remove_file(dir.join("aac.redb")).unwrap();
+    let engine = ops::open_engine(dir.to_str().unwrap(), None, None).unwrap();
+    assert_eq!(
+        history(&engine),
+        before,
+        "ledger replay contains only accepted fixture revisions"
+    );
+    engine.close().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}
