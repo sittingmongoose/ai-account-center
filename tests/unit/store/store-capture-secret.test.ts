@@ -50,7 +50,7 @@ const loaded = loadNativeStore({
           doc,
         };
         const before = await store.captureHistory(query);
-        if (('rustSecret' in fixture ? fixture.rustSecret : fixture.secret) !== null) {
+        if (fixture.secret !== null) {
           const beforeLedger = ledger();
           const beforeCapture = (await store.status()).capture;
           const validDoc = {

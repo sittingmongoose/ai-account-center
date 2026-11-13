@@ -1,5 +1,5 @@
-import { findSecretIn } from '../../shared/secret-policy';
-export { findSecret, findSecretIn } from '../../shared/secret-policy';
+import { findSecretIn, nativeUnreadable } from '../../shared/secret-policy';
+export { findSecret, findSecretIn, nativeUnreadable } from '../../shared/secret-policy';
 
 /**
  * Shared validators of the agent report documents (report-schema.ts, card-schema.ts). Each
@@ -101,6 +101,9 @@ export function jsonFromBytes(bytes: Buffer, capBytes: number): Parsed<unknown> 
   } catch {
     return { ok: false, reason: 'not valid JSON' };
   }
+  // Text Rust cannot parse (an overflowing number, a lone surrogate, nesting past serde's limit)
+  // is not valid JSON here either, so every reader and the native store refuse the same files.
+  if (nativeUnreadable(value)) return { ok: false, reason: 'not valid JSON' };
   let secret: string | null;
   try {
     secret = findSecretIn(source, value);

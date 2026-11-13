@@ -440,6 +440,134 @@ describe.skipIf(!haveModule)('Scoreboard v2 review regressions', () => {
     }
   });
 
+  it('recheck 2 M1: text Rust cannot parse is refused by the share reader and the store alike', async () => {
+    const box = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-sb-r2m1-'));
+    try {
+      const shareRoot = path.join(box, 'share');
+      fs.mkdirSync(path.join(shareRoot, 'v1', 'catalog'), { recursive: true });
+      for (const name of fs.readdirSync(CATALOG))
+        fs.copyFileSync(path.join(CATALOG, name), path.join(shareRoot, 'v1', 'catalog', name));
+      const day = iso(NOW - DAY).slice(0, 10);
+      const at = { endedAt: iso(NOW - DAY), writtenAt: iso(NOW - DAY) };
+      const titled = (local: string, title: string) =>
+        writeRun(
+          shareRoot,
+          runDoc('vm.lead', local, { ...at, task: { id: local, type: 'build', title } }),
+          day
+        );
+      // The reviewer's two titles: JSON text inside a title that JavaScript reads and serde
+      // does not (an overflow to Infinity, an unpaired surrogate escape).
+      titled('overflow', '{"x":1e400}');
+      titled('surrogate', '{"x":"\\ud800"}');
+      // The same at the top level of the file, and nesting past serde's limit.
+      const raw = (local: string, edit: (text: string) => string) => {
+        const file = writeRun(shareRoot, runDoc('vm.lead', local, at), day);
+        fs.writeFileSync(file, edit(fs.readFileSync(file, 'utf8')));
+      };
+      raw('top-overflow', (text) => text.replace('"wallSeconds":100', '"wallSeconds":1e400'));
+      raw('top-surrogate', (text) =>
+        text.replace('"title":"Task top-surrogate"', '"title":"\\ud800"')
+      );
+      raw('top-deep', (text) =>
+        text.replace(/}$/, `,"extra":${'['.repeat(128)}${']'.repeat(128)}}`)
+      );
+      // A clean run, which both keep.
+      titled('clean', 'Plain title');
+      const refusedIds = ['overflow', 'surrogate', 'top-overflow', 'top-surrogate', 'top-deep'].map(
+        (local) => `vm.lead--${local}`
+      );
+      const reader = new RunsReader({ root: () => shareRoot, now: () => NOW });
+      await reader.scan();
+      const shared = reader.snapshot();
+      expect(shared.runs.map((run) => run.doc.id)).toEqual(['vm.lead--clean']);
+      const readerReasons = Object.fromEntries(
+        shared.problems.map((problem) => [path.basename(problem.file, '.json'), problem.reason])
+      );
+      for (const id of refusedIds) expect(readerReasons[id]).toBeDefined();
+      expect(readerReasons['vm.lead--overflow']).toContain('unparseable embedded JSON');
+      expect(readerReasons['vm.lead--surrogate']).toContain('unparseable embedded JSON');
+      expect(readerReasons['vm.lead--top-overflow']).toBe('not valid JSON');
+      expect(readerReasons['vm.lead--top-surrogate']).toBe('not valid JSON');
+      expect(readerReasons['vm.lead--top-deep']).toBe('not valid JSON');
+      // The store: the TypeScript filter refuses before the module is asked.
+      const opened = await openStore(path.join(box, 'store'));
+      try {
+        const runsStore = new RunsStore({
+          store: () => opened,
+          root: () => shareRoot,
+          now: () => NOW,
+        });
+        const pass = await runsStore.pass({ full: true });
+        expect([pass.recorded, pass.refused]).toEqual([1, 5]);
+        expect((await runsStore.query({})).map((run) => run.doc.id)).toEqual(['vm.lead--clean']);
+        // And the module alone, handed the same texts, refuses the same five.
+        const files = fs
+          .readdirSync(path.join(shareRoot, 'v1/writers/vm.lead/runs', day))
+          .map((name) => {
+            const relative = `writers/vm.lead/runs/${day}/${name}`;
+            const text = fs.readFileSync(path.join(shareRoot, 'v1', relative), 'utf8');
+            return { path: relative, text, size: Buffer.byteLength(text), mtimeMs: 1 };
+          });
+        const fresh = await openStore(path.join(box, 'fresh'));
+        try {
+          const direct = await fresh.runs<{ recorded: number; refused: number }>('runsRecord', {
+            files,
+            refused: [],
+            threads: {},
+            catalog: { models: null, aliases: null },
+            nowMs: NOW,
+          });
+          expect([direct.recorded, direct.refused]).toEqual([1, 5]);
+        } finally {
+          await fresh.close();
+        }
+        // The share-only view and the stored view count the same runs.
+        const counted = (view: Awaited<ReturnType<ScoreboardService['view']>>) =>
+          view.uses
+            .flatMap((use) => use.taskTypes.flatMap((type) => type.rows))
+            .reduce((sum, row) => sum + row.n.observed + row.n.benchmark, 0);
+        const options = {
+          root: () => shareRoot,
+          now: () => NOW,
+          timeZone: () => 'UTC',
+          native: null,
+        };
+        const fromShare = await new ScoreboardService({ ...options, store: () => null }).view(
+          ALL_RUNS
+        );
+        const fromStore = await new ScoreboardService({ ...options, store: () => opened }).view(
+          ALL_RUNS
+        );
+        expect(fromStore.history.store).toBe('on');
+        expect(counted(fromStore)).toBe(counted(fromShare));
+        // Both count what a share holding only the clean run counts: no refused run is in either.
+        const cleanRoot = path.join(box, 'clean-share');
+        fs.mkdirSync(path.join(cleanRoot, 'v1', 'catalog'), { recursive: true });
+        for (const name of fs.readdirSync(CATALOG))
+          fs.copyFileSync(path.join(CATALOG, name), path.join(cleanRoot, 'v1', 'catalog', name));
+        writeRun(
+          cleanRoot,
+          runDoc('vm.lead', 'clean', {
+            ...at,
+            task: { id: 'clean', type: 'build', title: 'Plain title' },
+          }),
+          day
+        );
+        const onlyClean = await new ScoreboardService({
+          ...options,
+          root: () => cleanRoot,
+          store: () => null,
+        }).view(ALL_RUNS);
+        expect(counted(onlyClean)).toBeGreaterThan(0);
+        expect(counted(fromShare)).toBe(counted(onlyClean));
+      } finally {
+        await opened.close();
+      }
+    } finally {
+      fs.rmSync(box, { recursive: true, force: true });
+    }
+  });
+
   it('M1 and M2: the stored winner is the TypeScript reader winner, over passes and fresh', async () => {
     const box = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-sb-m12-'));
     try {

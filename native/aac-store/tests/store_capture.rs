@@ -145,11 +145,11 @@ fn report_reader_secret_parity_refuses_before_any_persistence() {
     let mut seq = 1;
     for case in cases {
         let fields = &case["doc"];
-        let expected = case.get("rustSecret").unwrap_or(&case["secret"]).as_str();
-        assert!(
-            case["secret"].is_null() || expected.is_some(),
-            "native must never be looser"
-        );
+        // One verdict and one reason for both languages: no per-language exception.
+        let mut keys: Vec<&String> = case.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["doc", "name", "secret"], "{}", case["name"]);
+        let expected = case["secret"].as_str();
         assert_eq!(report_secret::find_secret_in("", fields), expected, "{}", case["name"]);
         let mut candidate = report(seq, "working");
         for (key, value) in fields.as_object().unwrap() {

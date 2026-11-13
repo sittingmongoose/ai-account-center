@@ -4,9 +4,8 @@ import { findSecretIn } from '../../../../src/shared/secret-policy';
 
 it.each(cases)('applies the shared native capture refusal fixture: $name', (fixture) => {
   const { doc, secret } = fixture;
-  if (secret !== null) {
-    expect('rustSecret' in fixture ? fixture.rustSecret : secret).not.toBeNull();
-  }
+  // One verdict and one reason for both languages: no case may carry a per-language exception.
+  expect(Object.keys(fixture).sort()).toEqual(['doc', 'name', 'secret']);
   expect(findSecretIn('', doc)).toBe(secret);
   expect(findSecretIn(JSON.stringify(doc), doc) === null).toBe(secret === null);
 });
