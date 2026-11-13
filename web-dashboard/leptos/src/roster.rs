@@ -828,7 +828,11 @@ pub fn update_ago(seconds: i64) -> String {
 
 /// "updated 35 h ago · active 2 min ago": the human update first, so a fresh heartbeat never reads as fresh words.
 pub fn two_ages_words(human: i64, beat: i64) -> String {
-    format!("updated {} · active {}", update_ago(human), ago(beat))
+    format!(
+        "updated {} · active {}",
+        update_ago(human),
+        update_ago(beat)
+    )
 }
 
 /// The roster row's age: the human update's when a heartbeat is newer (so the row never reads fresher than its
@@ -1270,6 +1274,11 @@ mod tests {
         assert_eq!(
             two_ages_words(35 * 3600, 30),
             "updated 35 h ago · active just now"
+        );
+        // Both in hours under two days, so an old heartbeat never reads as "1 d" beside "36 h".
+        assert_eq!(
+            two_ages_words(36 * 3600, 35 * 3600),
+            "updated 36 h ago · active 35 h ago"
         );
         // one update writes both files: no second age
         let mut same = u.clone();

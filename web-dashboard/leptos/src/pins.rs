@@ -732,7 +732,7 @@ fn facts(p: &Pin, elapsed: i64) -> impl IntoView + use<> {
     let (upd, upd_age) = match (ages, p.u.status_updated.as_ref(), p.u.updated.as_ref()) {
         // The human update and the heartbeat apart: "updated 35 h ago · active 2 min ago", its clock beside.
         (Some((human, beat)), Some(s), _) => (
-            view! { <span class="fx-ages" data-tone={(human > 6 * 3_600).then_some("warn")}><span class="nw">{format!("updated {}", update_ago(human + elapsed))}</span>" · "<span class="nw">{format!("active {}", ago(beat + elapsed))}</span></span> }.into_any(),
+            view! { <span class="fx-ages" data-tone={(human > 6 * 3_600).then_some("warn")}><span class="nw">{format!("updated {}", update_ago(human + elapsed))}</span>" · "<span class="nw">{format!("active {}", update_ago(beat + elapsed))}</span></span> }.into_any(),
             Some(view! { <span>{fmt::clock(&s.at)}</span> }.into_any()),
         ),
         (_, _, Some(u)) => (

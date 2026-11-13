@@ -310,6 +310,39 @@ export const tests = {
     }
   },
 
+  // Opt-in: `--set realView=<view.json>` draws a Status view built offline from a read-only copy of the reports share
+  // (never the share itself, never a real answer), and checks the same things on real cards and pins. Without it the
+  // test only records that it was skipped.
+  async 'status on a real reports copy'(t) {
+    if (!t.args.realView) {
+      await t.record('real view', true, 'skipped: pass --set realView=<view.json> to draw a real reports copy');
+      return;
+    }
+    const data = JSON.parse(fs.readFileSync(String(t.args.realView), 'utf8'));
+    const labels = new Map(data.cards.open.map((c) => [c.id, c.label || c.id.split('--').pop()]));
+    for (const format of [FORMATS[0], FORMATS[1]]) {
+      await openStatus(t, format, data);
+      await t.page.waitForSelector(CARD);
+      const got = await chip(t, `${CARD} .q-title`);
+      await t.check(`${format.name}: the first real card leads with its stored label`, got?.text === labels.get(got?.id) && got.first && got.oneLine, JSON.stringify(got));
+      await t.shot(`real-card-${format.name}`, `${format.name}: a real open card with its label chip`);
+    }
+    // The index lists every real card's label, verbatim, as the reports stored it.
+    await openStatus(t, FORMATS[2], data);
+    await t.page.waitForSelector(CARD);
+    const shown = await t.page.$$eval('.q-list .q-item .q-label', (l) => l.map((x) => [x.getAttribute('title'), x.textContent]));
+    await t.check('index: each shown label is its card\'s stored label', shown.length > 0 && shown.every(([id, text]) => labels.get(id) === text), JSON.stringify(shown.slice(0, 5)));
+    const settings = data.pinned.updates.find((u) => (u.waits ?? []).some((w) => w.on !== 'owner') && (u.waits ?? []).some((w) => w.on === 'owner'));
+    if (settings) {
+      await t.page.locator('.c2-row', { hasText: settings.title }).first().click();
+      await t.page.waitForSelector('.c2-pane .c2-sheet .fx');
+      const facts = await t.page.$$eval('.c2-pane .c2-sheet .fx > *', (els) => els.map((e) => e.textContent.trim()));
+      const waiting = facts[facts.indexOf('Waiting on') + 1] ?? '';
+      await t.check(`${settings.title}: its other waits show beside the owner wait`, !/Nothing else/.test(waiting) && waiting.length > 0, waiting);
+      await t.shot('real-waits-desktop', `desktop: ${settings.title}, a real owner wait with the waits on others beside it`);
+    }
+  },
+
   async 'status a shared stream board is named'(t) {
     await openStatus(t, FORMATS[2], view());
     await t.page.locator('.c2-row', { hasText: 'Split v3' }).click();
