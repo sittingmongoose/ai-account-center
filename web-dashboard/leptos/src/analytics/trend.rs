@@ -267,6 +267,7 @@ fn TrendChart(
             hatch: t.hatch.clone(),
             clip_note: t.clip_note.clone(),
             cost_shown: t.cost_shown,
+            gaps: t.gaps.clone(),
             ..Default::default()
         })
     });
@@ -305,6 +306,14 @@ fn TrendChart(
                 {t.cost_shown.then(|| view! { <text x=L + pw + 10.0 y=14 class="ax-t ax-cap">"USD"</text> })}
                 <path d=t.minor.clone() transform=format!("translate({L} {T}) scale({sx:.4} {sy:.4})") class="ax-gl" vector-effect="non-scaling-stroke"/>
                 {tail}
+                // spans no computer was read for: marked, never drawn as zero
+                {t.gaps.iter().map(|g| {
+                    let (x0, x1) = (L + g.x0 * sx, L + g.x1 * sx);
+                    view! {
+                        <rect x=x0 y=T width=(x1 - x0).max(1.0) height=ph class="ax-gap"/>
+                        {(x1 - x0 > 48.0).then(|| view! { <text x=(x0 + x1) / 2.0 y=T + 14.0 text-anchor="middle" class="ax-t ax-cap">{g.label.clone()}</text> })}
+                    }
+                }).collect_view()}
                 {(!t.clip_note.is_empty()).then(|| view! { <text x=L + 6.0 y=T + 14.0 class="ax-t ax-cap">{t.clip_note.clone()}</text> })}
             </g>
         }

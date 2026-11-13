@@ -64,8 +64,9 @@ function intensity(ms, rand) {
 	return Math.max(0, work * weekend * (0.55 + rand() * 0.9));
 }
 
-export function analyticsFixture({ range = '7d', now = Date.now(), accounts = [] } = {}) {
-	const span = range === '24h' ? D : range === '30d' ? 30 * D : 7 * D;
+export function analyticsFixture({ range = '7d', now = Date.now(), accounts = [], days = null } = {}) {
+	// with the history store: 90D, All (everything kept, here 120 days) and longer custom ranges
+	const span = range === '24h' ? D : range === '30d' || range === 'custom' ? 30 * D : range === '90d' ? 90 * D : range === 'all' ? 120 * D : 7 * D;
 	const to = Math.floor(now / H) * H + H;
 	const from = to - span;
 	const rand = seeded(Math.floor(now / D));
@@ -174,7 +175,7 @@ export function analyticsFixture({ range = '7d', now = Date.now(), accounts = []
 	return {
 		schemaVersion: 1,
 		updatedAt: iso(now),
-		range: { preset: range, from: iso(from), to: iso(to), bucketMinutes: 60, tz: 'UTC', dayBucketTz: 'UTC', availableFrom: iso(now - 31 * D) },
+		range: { preset: range, from: iso(from), to: iso(to), bucketMinutes: 60, tz: 'UTC', dayBucketTz: 'UTC', availableFrom: iso(now - 120 * D), resolution: 'hour', ...(range === 'custom' && days ? { days } : {}) },
 		filters: { platform: 'mac', provider: 'all', account: 'all' },
 		history: { status: 'ok', retentionDays: 90, collectedSince: iso(now - 60 * D), oldestSampleAt: iso(from), newestSampleAt: iso(now - 2 * 60_000), sampleCount: historyAccounts.reduce((n, a) => n + a.sampleCount, 0), message: '' },
 		summary: { accountCount: historyAccounts.length, availableAccounts: historyAccounts.length, activeCodexAccountId: historyAccounts.find((a) => a.provider === 'codex' && a.isActive)?.id ?? null, activeAccountIds: { codex: historyAccounts.find((a) => a.provider === 'codex' && a.isActive)?.id ?? null }, sampleCount: 0 },
@@ -193,6 +194,16 @@ export function analyticsFixture({ range = '7d', now = Date.now(), accounts = []
 			sessions: { total: 38, sample: sessions, truncated: true },
 			anomalies: { thresholds: { costSpikeMultiplier: 2, highInputTokens: 10_000_000, highIoRatio: 100, highCacheReadTokens: 1_000_000_000 }, items: [], summary: { totalAnomalies: 0, highInputDays: 0, highIoRatioDays: 0, costSpikeDays: 0, highCacheReadDays: 0 } },
 			sources,
+			resolution: 'hour',
+			// the history store: kept since 120 days ago; the Mac was not read for two days last week
+			history: {
+				computers: [
+					{ host: 'ubuntu', oldestAt: iso(now - 120 * D), newestAt: iso(now - H), lastReadAt: iso(now - 90_000), gaps: [] },
+					{ host: 'mac', oldestAt: iso(now - 64 * D), newestAt: iso(now - H), lastReadAt: iso(now - 90_000), gaps: [[iso(now - 5 * D), iso(now - 3 * D)]] },
+				],
+				sources: [],
+				backfill: { running: false, sources: [] },
+			},
 		},
 	};
 }

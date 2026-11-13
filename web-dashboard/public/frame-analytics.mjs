@@ -15,7 +15,7 @@
 // runs. With nothing kept, nothing is sent until the first answer but `analytics-loading`: the page shows its loading
 // state, never zeros.
 import { analyticsSlintModel } from './analytics-data.mjs';
-import { usageView, usageHead, apiRangeFor, trendPaths, hostProgress } from './analytics-usage.mjs';
+import { usageView, usageHead, apiRangeFor, apiQueryFor, payloadViewKey, trendPaths, hostProgress } from './analytics-usage.mjs';
 import { quotaView, agendaView } from './analytics-quota.mjs';
 import {
   createAnalyticsPage,
@@ -271,7 +271,7 @@ export function createFrameAnalytics({
       return;
     }
     clear('save');
-    const preset = String(payload.range?.preset || '');
+    const preset = payloadViewKey(payload);
     if (!preset) return;
     let views = { [preset]: payload };
     try {
@@ -361,11 +361,11 @@ export function createFrameAnalytics({
     const range = apiRangeFor(page, now());
     // another range's read failed: this range's read is under way, so the strip says "Updating", not that failure
     if (!quiet && readError !== null && readErrorRange !== range) readError = null;
-    const query = new URLSearchParams({ platform, range, provider: 'all', account: 'all' });
+    const query = new URLSearchParams({ platform, ...apiQueryFor(range), provider: 'all', account: 'all' });
     if (force) query.set('refresh', 'true');
     const analytics = () => {
       fetching = true;
-      rangeRead = !quiet && !!payload && payload.range?.preset !== range;
+      rangeRead = !quiet && !!payload && payloadViewKey(payload) !== range;
       renderFresh();
       return read(`/api/accounts/analytics?${query}`).then((r) => ({ r }), (error) => ({ error })).finally(() => { fetching = false; rangeRead = false; });
     };
@@ -453,7 +453,7 @@ export function createFrameAnalytics({
   async function changeRange() {
     const covered = !!payload && analyticsCovers(payload, page, now());
     if (covered) render('morph');
-    if (!payload || payload.range?.preset !== apiRangeFor(page, now())) await refresh(false, covered ? 'static' : 'morph', { side: false });
+    if (!payload || payloadViewKey(payload) !== apiRangeFor(page, now())) await refresh(false, covered ? 'static' : 'morph', { side: false });
   }
 
   function armTick() {
@@ -518,7 +518,7 @@ export function createFrameAnalytics({
         return true;
       }
       const known = (id) => !!payload?.accounts?.some((a) => a?.id === id) || !!dashboard?.accounts?.some((a) => a?.id === id);
-      const step = applyAnalyticsAction(page, kind, text, { known, now: now() });
+      const step = applyAnalyticsAction(page, kind, text, { known, now: now(), oldest: Date.parse(payload?.range?.availableFrom) });
       if (!step) return false;
       if (step.range) void changeRange();
       else if (step.render) render(step.render);

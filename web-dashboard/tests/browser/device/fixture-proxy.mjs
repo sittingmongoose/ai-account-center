@@ -27,7 +27,11 @@ function status() {
 }
 const scoreboard = () => ({ ...fixture('scoreboard-view.json'), byModel: fixture('scoreboard-by-model.json') });
 // Analytics: made-up usage logs and quota history for the same accounts, for the range asked (24h, 7d or 30d)
-const analytics = (url) => analyticsFixture({ range: ['24h', '7d', '30d'].includes(url.searchParams.get('range')) ? url.searchParams.get('range') : '7d', accounts: accounts().accounts });
+const analytics = (url) => {
+  const range = ['24h', '7d', '30d', '90d', 'all', 'custom'].includes(url.searchParams.get('range')) ? url.searchParams.get('range') : '7d';
+  const days = url.searchParams.get('from') ? { from: url.searchParams.get('from'), to: url.searchParams.get('to') } : null;
+  return analyticsFixture({ range, days, accounts: accounts().accounts });
+};
 const ANSWERS = { '/api/accounts/dashboard': accounts, '/api/claude/desktop-profiles': homeProfiles, '/api/accounts/analytics': analytics, '/api/status': status, '/api/scoreboard': scoreboard };
 
 // Home's switch flow without switching anything: a Codex Activate first asks for the approval (409, the made-up

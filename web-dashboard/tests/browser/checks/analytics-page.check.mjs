@@ -34,8 +34,10 @@ const FORMATS = [
 async function stubData(t) {
 	await t.app.stub('/api/accounts/dashboard', DASHBOARD);
 	await t.page.route((u) => new URL(u).pathname === '/api/accounts/analytics', (r) => {
-		const range = new URL(r.request().url()).searchParams.get('range') || '7d';
-		return r.fulfill({ json: analyticsFixture({ range, accounts: ACCOUNTS }) });
+		const url = new URL(r.request().url());
+		const range = url.searchParams.get('range') || '7d';
+		const days = url.searchParams.get('from') ? { from: url.searchParams.get('from'), to: url.searchParams.get('to') } : null;
+		return r.fulfill({ json: analyticsFixture({ range, days, accounts: ACCOUNTS }) });
 	});
 }
 
@@ -300,10 +302,31 @@ export const tests = {
 		await t.step('a custom range from the calendar', async () => {
 			await t.page.click('.date-btn');
 			await t.visible('.cal', 'calendar open');
-			await t.page.click('.cal-quick button:has-text("Last 3 days")');
+			await t.page.click('.cal-quick button:has-text("Last 7 days")');
 			await t.page.click('.cal-acts .btn.primary');
 			await t.until('custom range drawn', () => document.querySelector('.date-btn .on') !== null, null, { timeout: 15000 });
 			await t.equal('the controller holds a custom range', (await viewState(t))?.range, 'custom');
+		});
+		await t.step('90D reads its own answer and draws daily buckets', async () => {
+			await t.page.locator('.ax-tools-row .seg button:has-text("90D")').click();
+			await t.equal('the controller holds 90D', (await viewState(t))?.range, '90d');
+			await t.until('the 90-day answer is drawn', () => /Daily buckets/.test(document.querySelector('.trend-card')?.textContent || ''), null, { timeout: 15000 });
+		});
+		await t.step('a custom range across months, from the month grid', async () => {
+			await t.page.click('.date-btn');
+			await t.visible('.cal', 'calendar open');
+			const thisMonth = await t.page.textContent('.cal-month');
+			await t.page.click('.cal-nav button[aria-label="Previous month"]');
+			await t.until('the previous month is shown', (m) => document.querySelector('.cal-month')?.textContent !== m, thisMonth, { timeout: 5000 });
+			// the 10th of last month, then the 1st of this month
+			await t.page.click('.cal-day:not([disabled]) >> text="10"');
+			await t.page.click('.cal-nav button[aria-label="Next month"]');
+			await t.page.click('.cal-day:not([disabled]) >> text="1"');
+			await t.page.click('.cal-acts .btn.primary');
+			await t.until('custom range drawn', () => document.querySelector('.date-btn .on') !== null, null, { timeout: 15000 });
+			const state = await viewState(t);
+			await t.equal('the controller holds a custom range', state?.range, 'custom');
+			await t.equal('it starts in last month', new Date(state.from).getUTCDate(), 10);
 		});
 		await t.step('a quota row opens its focus chart, laid out in its own box', async () => {
 			await t.page.click('button.qh-row >> nth=0');

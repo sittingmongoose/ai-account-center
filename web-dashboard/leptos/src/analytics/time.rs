@@ -215,8 +215,13 @@ pub fn DailyCard() -> impl IntoView {
                         {move || daily.get().bars.into_iter().enumerate().map(|(i, b)| {
                             let n = i as i32;
                             let ot = (1.0 - b.cl - b.cx).max(0.0);
+                            let gap = b.gap;
                             view! {
-                                <div data-bar=n class=move || { let s = sel.get(); if s == n { "db hot" } else if s >= 0 { "db dim" } else { "db" } }>
+                                <div data-bar=n class=move || {
+                                    let s = sel.get();
+                                    let base = if s == n { "db hot" } else if s >= 0 { "db dim" } else { "db" };
+                                    if gap { format!("{base} gap") } else { base.to_string() }
+                                }>
                                     <div class="db-stack" style=format!("height:{:.2}%", (b.h.clamp(0.0, 1.0)) * 100.0)>
                                         {(b.cl > 0.0).then(|| view! { <i style=format!("flex:{:.4} 1 0;background:{}", b.cl, key_color("claude"))></i> })}
                                         {(b.cx > 0.0).then(|| view! { <i style=format!("flex:{:.4} 1 0;background:{}", b.cx, key_color("codex"))></i> })}

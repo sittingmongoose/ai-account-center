@@ -15,10 +15,11 @@ use crate::ui::charts::*;
 use crate::ui::*;
 use leptos::prelude::*;
 
-const RANGES: [(&str, &str); 5] = [
+const RANGES: [(&str, &str); 6] = [
     ("24h", "24H"),
     ("7d", "7D"),
     ("30d", "30D"),
+    ("90d", "90D"),
     ("month", "Month"),
     ("all", "All"),
 ];
@@ -124,7 +125,18 @@ fn IncludedPanel(included: Memo<Included>) -> impl IntoView {
     }
 }
 
-/// The custom range: whole local days within the logs that can be read.
+/// The month of cell `n` (the grid that shows it), or the last month.
+fn month_of(c: &Calendar, n: i32) -> i32 {
+    c.cells
+        .get(n.max(0) as usize)
+        .filter(|_| n >= 0)
+        .map(|d| d.m)
+        .unwrap_or(c.months.len() as i32 - 1)
+        .max(0)
+}
+
+/// The custom range: whole local days back to the oldest stored day, one month at a time; a range can
+/// start in one month and end in another.
 #[component]
 fn DateButton() -> impl IntoView {
     let ax = expect_context::<Ax>();
@@ -136,15 +148,25 @@ fn DateButton() -> impl IntoView {
     let lo = RwSignal::new(-1i32);
     let hi = RwSignal::new(-1i32);
     let hover = RwSignal::new(-1i32);
-    // each opening starts from the page's range
+    let month = RwSignal::new(0i32);
+    // each opening starts from the page's range, on the month of its last day
     Effect::new(move |_| {
         if open.get() {
             let c = cal.get_untracked();
             lo.set(c.lo);
             hi.set(if c.hi >= c.lo { c.hi } else { -1 });
             hover.set(-1);
+            month.set(month_of(&c, if c.hi >= 0 { c.hi } else { c.last_n }));
         }
     });
+    let month_label = move || {
+        cal.with(|c| {
+            c.months
+                .get(month.get().max(0) as usize)
+                .map(|m| m.label.clone())
+                .unwrap_or_default()
+        })
+    };
     let span = move || {
         let (l, h, v) = (lo.get(), hi.get(), hover.get());
         let a = if h < 0 && v >= 0 { l.min(v) } else { l };
@@ -214,11 +236,11 @@ fn DateButton() -> impl IntoView {
         }
         open.set(false);
     };
-    let quick = move |back: i32| {
-        let c = cal.get_untracked();
-        hi.set(c.last_n);
-        lo.set(c.first_n.max(c.last_n - back));
+    let quick = move |l: i32, h: i32| {
+        lo.set(l);
+        hi.set(h);
         hover.set(-1);
+        month.set(month_of(&cal.get_untracked(), h));
     };
     view! {
         <PopButton open=open node_ref=anchor class="date-btn" tip="Pick days within the logs that were read">
@@ -229,14 +251,25 @@ fn DateButton() -> impl IntoView {
                 <h3>"Custom range"</h3>
                 <p class="q3 cal-note">{move || cal.with(|c| c.note.clone())}</p>
                 <div class="cal-quick">
-                    <button class="btn sm" on:click=move |_| quick(0)>"Today"</button>
-                    <button class="btn sm" on:click=move |_| quick(1)>"Last 2 days"</button>
-                    <button class="btn sm" on:click=move |_| quick(2)>"Last 3 days"</button>
+                    {move || cal.get().quick.into_iter().map(|q| {
+                        let (l, h) = (q.lo, q.hi);
+                        view! { <button class="btn sm" on:click=move |_| quick(l, h)>{q.label}</button> }
+                    }).collect_view()}
+                </div>
+                <div class="cal-nav">
+                    <button class="btn ghost sm icon-only" aria-label="Previous month" disabled=move || month.get() <= 0
+                        on:click=move |_| month.update(|m| *m = (*m - 1).max(0))><Icon name="chev-left"/></button>
+                    <b class="cal-month">{month_label}</b>
+                    <button class="btn ghost sm icon-only" aria-label="Next month" disabled=move || month.get() >= cal.with(|c| c.months.len() as i32) - 1
+                        on:click=move |_| { let last = cal.with_untracked(|c| c.months.len() as i32) - 1; month.update(|m| *m = (*m + 1).min(last)) }><Icon name="chev-right"/></button>
                 </div>
                 <div class="cal-grid" on:pointerleave=move |_| hover.set(-1)>
                     {["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].into_iter().map(|w| view! { <span class="cap cal-wd">{w}</span> }).collect_view()}
-                    {move || cal.get().cells.into_iter().enumerate().map(|(i, d)| {
-                        let i = i as i32;
+                    {move || { let shown = month.get(); cal.get().cells.into_iter().filter(move |d| d.m == shown).map(|d| {
+                        let i = d.n;
+                        if d.pad {
+                            return view! { <span class="cal-pad"></span> }.into_any();
+                        }
                         let off = d.off;
                         let today = d.today;
                         let inside = move || { let (a, b) = span(); !off && lo.get() >= 0 && i >= a && i <= b };
@@ -250,8 +283,8 @@ fn DateButton() -> impl IntoView {
                                 {(!d.month.is_empty()).then(|| view! { <small>{d.month.clone()}</small> })}
                                 {d.label}
                             </button>
-                        }
-                    }).collect_view()}
+                        }.into_any()
+                    }).collect_view() }}
                 </div>
                 <div class="cal-foot">
                     <span class="tnum q2">{sentence}</span>
@@ -297,5 +330,33 @@ fn ProviderPicker() -> impl IntoView {
                 }).collect_view()}
             </div>
         </Popover>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ninety_days_sits_between_thirty_days_and_month() {
+        let ids: Vec<&str> = RANGES.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, ["24h", "7d", "30d", "90d", "month", "all"]);
+        assert_eq!(RANGES[3].1, "90D");
+    }
+
+    #[test]
+    fn a_picked_day_opens_its_own_month() {
+        let cal: Calendar = serde_json::from_str(
+            r#"{"cells":[{"day":"","n":0,"m":0,"pad":true,"off":true},{"day":"2026-08-31","n":1,"m":0},
+               {"day":"2026-09-01","n":2,"m":1}],"months":[{"label":"August 2026","first":0},{"label":"September 2026","first":2}],
+               "quick":[{"label":"Today","lo":2,"hi":2}],"lo":1,"hi":2,"firstN":1,"lastN":2,"note":""}"#,
+        )
+        .unwrap();
+        assert_eq!(month_of(&cal, 1), 0);
+        assert_eq!(month_of(&cal, 2), 1);
+        // no picked day: the last month
+        assert_eq!(month_of(&cal, -1), 1);
+        assert!(cal.cells[0].pad);
+        assert_eq!(cal.quick[0].hi, 2);
     }
 }

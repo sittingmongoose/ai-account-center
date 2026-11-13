@@ -227,6 +227,18 @@ pub struct Trend {
     #[serde(deserialize_with = "nullable")]
     pub legend: Vec<LegendItem>,
     pub paths: TrendPaths,
+    /// Spans no computer was read for (plot-local px): drawn as gaps, never as zero.
+    #[serde(deserialize_with = "nullable")]
+    pub gaps: Vec<TrendGap>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TrendGap {
+    pub x0: f64,
+    pub x1: f64,
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -735,6 +747,8 @@ pub struct DailyBar {
     pub total: String,
     #[serde(deserialize_with = "nullable")]
     pub foot: String,
+    /// No computer was read for this bar's time: a gap, not a zero.
+    pub gap: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -748,18 +762,41 @@ pub struct DailyRow {
     pub value: String,
 }
 
-/// The custom range picker: whole local days, Monday-first weeks; `n` is a day's index, `off` days can't be picked.
+/// The custom range picker: whole local days back to the oldest stored day, one Monday-first grid per
+/// month; `n` indexes every cell, `m` is a cell's month, `off` days can't be picked and `pad` cells fill
+/// a month's first week.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Calendar {
     #[serde(deserialize_with = "nullable")]
     pub cells: Vec<Day>,
+    #[serde(deserialize_with = "nullable")]
+    pub months: Vec<CalMonth>,
+    #[serde(deserialize_with = "nullable")]
+    pub quick: Vec<CalQuick>,
     pub lo: i32,
     pub hi: i32,
     pub first_n: i32,
     pub last_n: i32,
     #[serde(deserialize_with = "nullable")]
     pub note: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct CalMonth {
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    pub first: i32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct CalQuick {
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    pub lo: i32,
+    pub hi: i32,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -776,6 +813,9 @@ pub struct Day {
     pub today: bool,
     #[serde(deserialize_with = "nullable")]
     pub long: String,
+    /// The month (index into `Calendar::months`) whose grid shows this cell.
+    pub m: i32,
+    pub pad: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

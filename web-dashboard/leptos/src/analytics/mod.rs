@@ -185,6 +185,9 @@ pub fn line_icon(name: &str) -> &'static str {
         "users" => "users",
         "layers" => "layers",
         "clock" => "clock",
+        // the history store: what it keeps, and the backfill
+        "database" => "server",
+        "download" => "download",
         _ => "info",
     }
 }

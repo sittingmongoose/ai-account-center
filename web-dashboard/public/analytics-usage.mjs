@@ -44,6 +44,8 @@ const F_MD = lazyFormat({ month: 'short', day: 'numeric' });
 const F_WMD = lazyFormat({ weekday: 'short', month: 'short', day: 'numeric' });
 const F_WD = lazyFormat({ weekday: 'short' });
 const F_TIME = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const F_MY = lazyFormat({ month: 'long', year: 'numeric' });
+const F_MDY = lazyFormat({ month: 'short', day: 'numeric', year: 'numeric' });
 export const hourTxt = t => F_HOUR.format(new Date(t));
 export const clockTxt = t => F_CLOCK.format(new Date(t));
 export const mdTxt = t => F_MD.format(new Date(t));
@@ -76,13 +78,17 @@ const remoteHosts = list => REMOTE_HOSTS.filter(([h]) => Array.isArray(list) && 
 // ---------------------------------------------------------------- display-zone calendar
 export const dayStart = t => zonedDayStart(t);
 export const addDays = (t, n) => zonedAddDays(t, n);
+/** Weeks start on Monday, like the picker's grid. */
+const WEEK = 7 * D;
 export function bucketStart(t, step) {
+  if (step >= WEEK) return zonedAddDays(zonedDayStart(t), -zonedWeekday(t));
   if (step >= D) return zonedDayStart(t);
   const k = Math.round(step / H);
   const start = zonedDayStart(t);
   return start + Math.floor((t - start) / (k * H)) * (k * H);
 }
 export function nextBucket(t, step) {
+  if (step >= WEEK) return zonedAddDays(bucketStart(t, step), 7);
   if (step >= D) return zonedAddDays(t, 1);
   return Math.min(bucketStart(t, step) + Math.round(step / H) * H, zonedAddDays(t, 1));
 }
@@ -201,7 +207,7 @@ export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', m
 const toolNames = tools => andList(TOOLS.filter(t => tools.has(t)).map(t => TOOL_LABEL[t]));
 /** Add v to o[k] (per-provider sums over providers that are only known from the data). */
 const bump = (o, k, v) => { o[k] = (o[k] || 0) + v; };
-export const RANGES = [['24h', '24H'], ['7d', '7D'], ['30d', '30D'], ['month', 'Month'], ['all', 'All']];
+export const RANGES = [['24h', '24H'], ['7d', '7D'], ['30d', '30D'], ['90d', '90D'], ['month', 'Month'], ['all', 'All']];
 const tokens = row => TYPES.every(t => finite(row?.[t.f]) && row[t.f] >= 0);
 const TINY = 1e-9;
 export const NOT_LOGGED = 'Not logged';
@@ -250,12 +256,31 @@ function modelSplit(row, tok, total, known) {
 }
 
 /** The analytics API range that covers a page range (the backend accepts 24h, 7d and 30d today). */
+/**
+ * The answer a page range is drawn from, as a key: a preset the server answers (`24h`, `7d`, `30d`,
+ * `90d`, `all`), or `custom:<first day>:<last day>` for a custom range longer than the last 30 days,
+ * which the history store answers for exactly those days. Shorter ranges are cut from a preset.
+ */
 export function apiRangeFor(state, now = Date.now()) {
   const range = state?.range;
-  if (range === '24h' || range === '7d' || range === '30d') return range;
+  if (range === '24h' || range === '7d' || range === '30d' || range === '90d' || range === 'all') return range;
   if (range === 'month') return zonedParts(now).day <= 1 ? '24h' : dayStartMonth(now) >= now - 7 * D + H ? '7d' : '30d';
-  if (range === 'custom' && finite(state.from)) return state.from >= now - D ? '24h' : state.from >= now - 7 * D ? '7d' : '30d';
+  if (range === 'custom' && finite(state.from)) {
+    if (state.from >= now - 30 * D + H) return state.from >= now - D ? '24h' : state.from >= now - 7 * D ? '7d' : '30d';
+    return `custom:${isoDay(state.from)}:${isoDay(Math.max(state.from, (finite(state.to) ? state.to : now) - 1))}`;
+  }
   return '30d';
+}
+/** The query parameters for an answer key (apiRangeFor). */
+export function apiQueryFor(key) {
+  const m = /^custom:(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2})$/.exec(String(key));
+  return m ? { range: 'custom', from: m[1], to: m[2] } : { range: String(key) };
+}
+/** The answer key a response holds (the same as apiRangeFor for the range that asked for it). */
+export function payloadViewKey(payload) {
+  const preset = String(payload?.range?.preset || '');
+  const days = payload?.range?.days;
+  return preset === 'custom' && days && typeof days.from === 'string' && typeof days.to === 'string' ? `custom:${days.from}:${days.to}` : preset;
 }
 const dayStartMonth = now => zonedDayStart(zonedMonthStart(now));
 
@@ -266,6 +291,33 @@ const dayStartMonth = now => zonedDayStart(zonedMonthStart(now));
  * priced at a listed rate (`cost`), and `unk` says some of it is not logged. `label(p)` is a provider's name
  * (the response's provider table, else the dashboard's), and `tools(p)` the tools whose logs hold its usage.
  */
+/** The history store's coverage (activity.history): per computer the oldest stored hour and the spans no read covered. */
+function historyOf(raw) {
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.computers)) return null;
+  const hostLabel = h => SOURCE_HOSTS.find(([id]) => id === h)?.[1] || h;
+  const computers = raw.computers.filter(c => c && typeof c.host === 'string').map(c => ({
+    host: c.host, label: hostLabel(c.host),
+    oldest: Date.parse(c.oldestAt), lastRead: Date.parse(c.lastReadAt),
+    gaps: (Array.isArray(c.gaps) ? c.gaps : []).map(g => [Date.parse(g?.[0]), Date.parse(g?.[1])]).filter(([a, b]) => finite(a) && finite(b) && b > a),
+  }));
+  const backfill = raw.backfill && Array.isArray(raw.backfill.sources) ? raw.backfill.sources.filter(b => b && (b.state === 'pending' || b.state === 'running')).map(b => ({
+    host: hostLabel(text(b.host)), tool: SOURCE_TOOLS.find(([t]) => t === b.tool)?.[1] || text(b.tool),
+    pct: Number.isInteger(b.filesRead) && Number.isInteger(b.filesTotal) && b.filesTotal > 0 ? Math.min(99, Math.floor(b.filesRead / b.filesTotal * 100)) : null,
+  })) : [];
+  return { computers, backfill };
+}
+/**
+ * Computers with history at `t1` that no read covered over [t, t1): `gap` when every computer whose
+ * history had started was missing for the whole span (shown as a gap, never zero), else the names.
+ */
+function missingIn(A, t, t1) {
+  const H0 = A.history;
+  if (!H0) return { gap: false, missing: [] };
+  const started = H0.computers.filter(c => finite(c.oldest) && c.oldest < t1);
+  const missing = started.filter(c => c.gaps.some(([a, b]) => a < t1 && b > t));
+  const whole = started.filter(c => c.gaps.some(([a, b]) => a <= t && b >= t1));
+  return { gap: started.length > 0 && whole.length === started.length, missing: missing.map(c => c.label) };
+}
 function buildActivityRows(payload) {
   const act = payload?.activity || {};
   const available = ['ok', 'cached'].includes(act.status) && tokens(act.totals);
@@ -354,7 +406,10 @@ function buildActivityRows(payload) {
   // usage from a provider other than Claude and Codex (it shares the charts' neutral third series)
   const others = hours.some(r => !ownSeries(r.p)) || models.some(m => !ownSeries(m.provider));
   const refreshingRemote = remoteHosts(act.refreshingRemote);
-  return { available, status: text(act.status), refreshing: act.refreshing === true, refreshingRemote, message: text(act.message), hours, models, unreconciled, blend, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiFrom, fetched };
+  // the history store: day rows for long ranges, what it holds per computer, and the backfill
+  const resolution = act.resolution === 'day' || payload?.range?.resolution === 'day' ? 'day' : 'hour';
+  const history = historyOf(act.history);
+  return { available, status: text(act.status), refreshing: act.refreshing === true, refreshingRemote, message: text(act.message), hours, models, unreconciled, blend, sessions, sessionTotal, sessionSample, sessionsTruncated, costMissing, others, providers, label, tools: p => toolsOf[p] || [], apiPreset: text(payload?.range?.preset), apiKey: payloadViewKey(payload), apiFrom, fetched, resolution, history, availableFrom: Date.parse(payload?.range?.availableFrom) };
 }
 
 // Only the two window ends below read the clock, so the validated rows are kept per response: the
@@ -385,6 +440,7 @@ export function pageRange(state, A, now) {
   if (range === '24h') a = now - D;
   else if (range === '7d') a = now - 7 * D;
   else if (range === '30d') a = now - 30 * D;
+  else if (range === '90d') a = now - 90 * D;
   else if (range === 'month') a = dayStartMonth(now);
   else if (range === 'custom' && finite(state.from) && finite(state.to)) { a = state.from; b = Math.min(now, state.to); }
   else a = A.win0;
@@ -393,12 +449,15 @@ export function pageRange(state, A, now) {
   let step;
   if (range === '24h') step = H;
   else if (range === '7d') step = 4 * H;
-  else if (range === '30d' || range === 'all') step = D;
-  else step = span <= 2 * D + H ? H : span <= 10 * D ? 4 * H : D;
+  else if (range === '30d' || range === '90d') step = D;
+  // long ranges: daily up to 120 days, then Monday weeks
+  else step = span <= 2 * D + H ? H : span <= 10 * D ? 4 * H : span <= 120 * D ? D : WEEK;
+  // day rows (ranges over 92 days from the store) cannot be cut finer than a day
+  if (A.resolution === 'day' && step < D) step = D;
   const end = Math.min(b, A.win1);
   return { range, a, b, a2, end, step, now, clipped: a < A.win0 - H, unread: A.win1 < b ? b - A.win1 : 0 };
 }
-export const stepWord = s => s >= D ? 'Daily' : s === H ? 'Hourly' : `${Math.round(s / H)}-hour`;
+export const stepWord = s => s >= WEEK ? 'Weekly' : s >= D ? 'Daily' : s === H ? 'Hourly' : `${Math.round(s / H)}-hour`;
 /** The provider filter: a picked provider narrows every block to the usage it served. */
 const provOK = (state, p) => !state?.prov || state.prov === 'all' || state.prov === p;
 const allPicked = state => !state?.prov || state.prov === 'all';
@@ -441,7 +500,7 @@ export function buckets(A, R, state) {
   for (let t = bucketStart(R.a2, R.step), guard = 0; t < R.end && guard < 800; t = nextBucket(t, R.step), guard++) {
     const t1 = nextBucket(t, R.step);
     const lo = Math.max(t, R.a2), hi = Math.min(t1, R.end);
-    const b = { t, t1, lo, hi, mid: (lo + hi) / 2, in: 0, out: 0, cw: 0, cr: 0, cost: 0, pc: {}, ptok: {}, punk: {}, unk: false, others: false, partial: t < R.a2 || t1 > R.end };
+    const b = { t, t1, lo, hi, mid: (lo + hi) / 2, in: 0, out: 0, cw: 0, cr: 0, cost: 0, pc: {}, ptok: {}, punk: {}, unk: false, others: false, partial: t < R.a2 || t1 > R.end, ...missingIn(A, lo, hi) };
     list.push(b); map.set(t, b);
   }
   for (const r of rowsIn(A, R, state)) {
@@ -453,6 +512,8 @@ export function buckets(A, R, state) {
     if (r.unk) { b.unk = true; b.punk[r.p] = true; }
     if (!ownSeries(r.p)) b.others = true;
   }
+  // usage in a bucket is proof some computer was read for it: only an empty bucket can be a gap
+  for (const b of list) if (b.gap && (b.in + b.out + b.cw + b.cr > 0 || b.cost > TINY)) b.gap = false;
   return list;
 }
 const shortClock = t => zonedParts(t).minute ? clockTxt(t) : hourTxt(t);
@@ -547,8 +608,17 @@ export function trendView(A, R, state, size) {
     if (waste < best - 1e-9) { best = waste; ts = a; cs = c; }
   }
   const Y = v => ph - v / ts.top * ph, YC = v => ph - v / cs.top * ph;
-  let xs = B.map(b => X(b.mid)), Bn = B;
-  if (B.length === 1) { Bn = [B[0], B[0]]; xs = [X(B[0].lo), X(B[0].hi)]; }
+  // a bucket no computer was read for is a gap: the curve passes over it and a band marks it, never a zero
+  const drawn = B.filter(b => !b.gap);
+  let xs = drawn.map(b => X(b.mid)), Bn = drawn;
+  if (drawn.length === 1) { Bn = [drawn[0], drawn[0]]; xs = [X(drawn[0].lo), X(drawn[0].hi)]; }
+  const gaps = [];
+  for (const b of B) {
+    if (!b.gap) continue;
+    const last = gaps[gaps.length - 1];
+    if (last && Math.abs(last.x1 - pt(X(b.lo))) < 0.5) last.x1 = pt(X(b.hi));
+    else gaps.push({ x0: pt(X(b.lo)), x1: pt(X(b.hi)), label: 'NOT READ' });
+  }
   const x0 = xs.length ? xs[0] : 0, x1 = xs.length ? xs[xs.length - 1] : pw;
   const fns = Object.fromEntries(TYPES.map(t => [t.k, xs.length ? monoFn(xs, Bn.map(b => b[t.k])) : () => 0]));
   const fc = xs.length ? monoFn(xs, Bn.map(b => b.cost)) : () => 0;
@@ -576,15 +646,16 @@ export function trendView(A, R, state, size) {
   const partial = costOk && B.some(b => b.unk);
   const bucketsOut = B.map(b => {
     const top = inc.reduce((s, t) => s + b[t.k], 0), all = b.in + b.out + b.cw + b.cr;
-    const when = R.step >= D ? `${wmdTxt(b.t)}${b.partial ? `, ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`
+    const when = R.step >= WEEK ? `Week of ${wmdTxt(b.t)}` : R.step >= D ? `${wmdTxt(b.t)}${b.partial ? `, ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`
       : `${wmdTxt(b.t)} · ${hourTxt(b.lo)} to ${b.hi === b.t1 ? hourTxt(b.hi) : clockTxt(b.hi)}`;
     const split = showSplit ? ['claude', 'codex'].map(p => `${A.label(p)} ${money(b.pc[p] || 0)}`).join(' · ') : '';
     const costFoot = costOk && b.unk ? split ? `${split} · partial` : 'Partial: some cost here is not logged' : split;
-    const foot = [costFoot, b.t1 > A.win1 ? `Logs read ${clockTxt(A.win1)}; later activity is not in yet` : ''].filter(Boolean);
+    const notRead = b.gap ? 'Not read: no computer\'s logs cover this time' : b.missing.length ? `Not fully read: ${andList(b.missing)}` : '';
+    const foot = [costFoot, b.t1 > A.win1 ? `Logs read ${clockTxt(A.win1)}; later activity is not in yet` : notRead].filter(Boolean);
     return {
       // yCost -1: no logged cost in this bucket, so the crosshair draws no cost marker (never a $0 point)
-      x: pt(X(b.mid)), yTok: pt(Y(top)), yCost: !costOk ? pt(ph) : b.unk && !(b.cost > TINY) ? -1 : pt(YC(b.cost)), time: when.toUpperCase(),
-      vin: tokC(b.in), vout: tokC(b.out), vcw: tokC(b.cw), vcr: tokC(b.cr), all: tokC(all), cost: !costOk ? 'Unavailable' : b.unk && !(b.cost > TINY) ? NOT_LOGGED : money(b.cost),
+      x: pt(X(b.mid)), yTok: b.gap ? -1 : pt(Y(top)), yCost: !costOk ? pt(ph) : b.gap || (b.unk && !(b.cost > TINY)) ? -1 : pt(YC(b.cost)), time: when.toUpperCase(),
+      vin: b.gap ? '—' : tokC(b.in), vout: b.gap ? '—' : tokC(b.out), vcw: b.gap ? '—' : tokC(b.cw), vcr: b.gap ? '—' : tokC(b.cr), all: b.gap ? 'Not read' : tokC(all), cost: b.gap ? 'Not read' : !costOk ? 'Unavailable' : b.unk && !(b.cost > TINY) ? NOT_LOGGED : money(b.cost),
       tin: tokX(b.in), tout: tokX(b.out), tcw: tokX(b.cw), tcr: tokX(b.cr), tall: tokX(all), crDim: !state.cache,
       byProvider: showProviders ? Object.keys(b.ptok).filter(p => b.ptok[p] > 0).sort(byProviderOrder).map(p => `${A.label(p)} ${tokC(b.ptok[p])}`).join(' · ') : '',
       foot: foot[0] || '', foot2: foot[1] || '',
@@ -613,7 +684,7 @@ export function trendView(A, R, state, size) {
     yTicks, xTicks: xt, minor,
     tailX: tail, tailLabel: tail >= 0 ? `LOGS READ ${clockTxt(A.win1).toUpperCase()}` : '', hatch: tail >= 0 ? hatch(tail, 0, pw, ph) : '',
     clipNote: R.clipped ? `LOGS START ${wmdTxt(R.a2).toUpperCase()}, ${hourTxt(R.a2).toUpperCase()}` : '',
-    buckets: bucketsOut, lut, legend,
+    buckets: bucketsOut, lut, legend, gaps,
   };
 }
 /** The trend's eleven path strings for a geometry (also every frame of the range-change morph). */
@@ -968,6 +1039,9 @@ function heatDash(width, height) {
 }
 function heatView(A, R, state, width, height, cellWidth) {
   const cells = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ v: null, n: 0, tok: 0, cost: 0, unk: false })));
+  // day rows carry no hour of the day: the map stays empty and says why
+  const dayRows = A.resolution === 'day';
+  if (dayRows) A = { ...A, available: false };
   // hours inside the read window count (zero when nothing ran); hours outside it stay empty, never zero;
   // without readable activity every hour stays empty
   for (let t = Math.ceil(R.a2 / H) * H; A.available && t < R.end; t += H) { const c = cells[zonedWeekday(t)][zonedHour(t)]; if (c.v === null) c.v = 0; c.n++; }
@@ -993,7 +1067,7 @@ function heatView(A, R, state, width, height, cellWidth) {
   }));
   return {
     mode: byCost ? 'cost' : 'tokens',
-    sub: `${byCost ? partial ? 'Estimated cost, partial,' : 'Estimated cost' : 'Tokens without cache reads'} per hour, local time · ${dateLabel(R)}`,
+    sub: dayRows ? 'The hour-of-week map covers ranges up to 92 days; pick 90D or a shorter range to see it' : `${byCost ? partial ? 'Estimated cost, partial,' : 'Estimated cost' : 'Tokens without cache reads'} per hour, local time · ${dateLabel(R)}`,
     cells: out, days: WD,
     // labels every 3 hours at every width (desktop grids were always wide, so nothing changes there);
     // P shows every other one for the spec's every-6 row (ax-time.slint)
@@ -1011,7 +1085,7 @@ function heatView(A, R, state, width, height, cellWidth) {
  * left out and the bar says so.
  */
 function dailyView(A, R, state, size) {
-  const step = R.end - R.a2 <= 2 * D + H ? H : D;
+  const step = R.step >= WEEK ? WEEK : R.end - R.a2 <= 2 * D + H ? H : D;
   const B = A.available ? buckets(A, { ...R, step }, state) : [];
   const W = Math.max(200, size?.w || DEFAULT_SIZES.daily.w), Hc = Math.max(120, size?.h || DEFAULT_SIZES.daily.h);
   const pad = DAILY_PAD;
@@ -1031,15 +1105,16 @@ function dailyView(A, R, state, size) {
   const otherLabel = picked && !ownSeries(picked) ? A.label(picked) : 'Other providers';
   const bars = B.map((b, i) => {
     const cl = b.pc.claude || 0, cx = b.pc.codex || 0, ot = rest(b), tot = cl + cx + ot;
-    const range = b.t1 > A.win1 ? `So far: logs read ${clockTxt(A.win1)}` : b.t < R.a2 ? `Logs start ${clockTxt(R.a2)}` : '';
+    const range = b.gap ? 'Not read: no computer\'s logs cover this time' : b.t1 > A.win1 ? `So far: logs read ${clockTxt(A.win1)}` : b.t < R.a2 ? `Logs start ${clockTxt(R.a2)}` : b.missing.length ? `Not fully read: ${andList(b.missing)}` : '';
     // the readout: every provider that served usage in the bucket, with its logged cost ("Not logged" when none)
     const served = Object.keys(b.ptok).filter(p => b.ptok[p] > 0 || (b.pc[p] || 0) > TINY).sort(byProviderOrder);
     return {
       h: costOk && sc.top > 0 ? tot / sc.top : 0, cl: tot > 0 ? cl / tot : 0, cx: tot > 0 ? cx / tot : 0,
       label: i % every ? '' : step === H ? (zonedHour(b.t) === 0 ? wdTxt(b.t) : hourTxt(b.t)) : mdTxt(b.t),
-      time: `${step === H ? `${wmdTxt(b.t)} · ${hourTxt(b.t)}` : wmdTxt(b.t)}${b.partial ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
+      time: `${step === H ? `${wmdTxt(b.t)} · ${hourTxt(b.t)}` : step === WEEK ? `Week of ${wmdTxt(b.t)}` : wmdTxt(b.t)}${b.partial && step !== WEEK ? ` · ${clockTxt(b.lo)} to ${clockTxt(b.hi)}` : ''}`.toUpperCase(),
+      gap: !!b.gap,
       rows: costOk ? served.map(p => ({ p: ownSeries(p) ? p : '', label: A.label(p), value: (b.pc[p] || 0) > TINY || !b.punk[p] ? money(b.pc[p] || 0) : NOT_LOGGED })) : [],
-      total: picked ? '' : !costOk ? 'Unavailable' : b.unk && !(tot > TINY) ? NOT_LOGGED : money(tot),
+      total: b.gap ? 'Not read' : picked ? '' : !costOk ? 'Unavailable' : b.unk && !(tot > TINY) ? NOT_LOGGED : money(tot),
       foot: costOk && b.unk ? [range, 'Partial: some cost is not logged'].filter(Boolean).join(' · ') : range,
     };
   });
@@ -1047,7 +1122,7 @@ function dailyView(A, R, state, size) {
   const unlogged = B.some(b => b.unk);
   const who = picked ? A.label(picked) : '';
   return {
-    title: step === H ? 'Hourly cost by provider' : 'Daily cost by provider',
+    title: step === H ? 'Hourly cost by provider' : step === WEEK ? 'Weekly cost by provider' : 'Daily cost by provider',
     sub: `${picked ? `${who} · estimated` : 'Estimated'}, USD · ${dateLabel(R)}`,
     yTicks, bars, empty,
     emptyText: !A.available ? (A.message || 'CLI usage logs are unavailable.') : !empty ? '' : !costOk ? 'Cost is unavailable for this range.'
@@ -1058,10 +1133,29 @@ function dailyView(A, R, state, size) {
   };
 }
 
+/** What the history store holds, per computer, and whether older usage is still being imported. */
+export function historyLines(A) {
+  const H0 = A.history;
+  if (!H0) return [];
+  const known = H0.computers.filter(c => finite(c.oldest));
+  const lines = [];
+  if (known.length) {
+    const days = new Set(known.map(c => isoDay(c.oldest)));
+    const since = days.size === 1
+      ? `Usage is kept in AAC's history since ${mdyTxt(known[0].oldest)}.`
+      : `Usage is kept in AAC's history since ${andList(known.slice().sort((a, b) => a.oldest - b.oldest).map(c => `${mdyTxt(c.oldest)} (${c.label})`))}.`;
+    lines.push({ icon: 'database', text: `${since} Hours a computer could not be read show as gaps, never as zero.` });
+  }
+  if (H0.backfill.length)
+    lines.push({ icon: 'download', text: `Importing older usage from the logs: ${andList(H0.backfill.map(b => `${b.host} ${b.tool}${b.pct === null ? '' : ` ${b.pct}%`}`))}. The oldest days fill in as it goes.` });
+  return lines;
+}
+const mdyTxt = t => F_MDY.format(new Date(t));
+
 // ---------------------------------------------------------------- custom range picker (whole local days)
-export function calendarView(A, R, now, apiAll) {
-  // the backend keeps up to 30 days of logs; the 30-day window bounds the picker until it reports availableFrom
-  const first = dayStart(Math.max(apiAll ?? now - 30 * D, now - 30 * D)), last = dayStart(now);
+/** The classic Slint app's picker: one grid of the last 30 days (its layout holds at most 60 cells). */
+function legacyCalendar(A, R, now) {
+  const first = dayStart(now - 30 * D), last = dayStart(now);
   const mon = t => zonedAddDays(t, -zonedWeekday(t));
   const g0 = mon(first), g1 = addDays(mon(last), 6);
   const cells = [];
@@ -1072,6 +1166,44 @@ export function calendarView(A, R, now, apiAll) {
   const lo = cells.find(c => c.day === isoDay(R.a2))?.n ?? -1;
   const hi = cells.find(c => c.day === isoDay(Math.max(R.a2, R.b - 1)))?.n ?? lo;
   return { cells, lo, hi, firstN: cells.find(c => !c.off)?.n ?? 0, lastN: cells.findLast(c => !c.off)?.n ?? 0, note: `${finite(A.fetched) ? `Logs read ${timeTxt(A.fetched)}.` : 'Logs not read yet.'} Whole local days within the last 30 days.` };
+}
+/**
+ * The custom range picker: whole local days from the oldest stored day to today, a Monday-first grid
+ * per month (`m` is a cell's month, `pad` fills the first week), so a range can start in one month and
+ * end in another. Without the history store it reaches back 30 days. `n` indexes every cell.
+ */
+export function calendarView(A, R, now, monthGrid = true) {
+  if (!monthGrid) return legacyCalendar(A, R, now);
+  const oldest = finite(A.availableFrom) ? A.availableFrom : now - 30 * D;
+  // at most ten years of months in the picker
+  const first = dayStart(A.history ? Math.max(oldest, now - 3660 * D) : now - 30 * D), last = dayStart(now);
+  const cells = [], months = [];
+  let n = 0;
+  for (let m = zonedMonthStart(first), guard = 0; m <= last && guard < 130; guard++) {
+    const next = zonedMonthStart(addDays(m, 32));
+    months.push({ label: F_MY.format(new Date(m)), first: n });
+    for (let p = 0; p < zonedWeekday(m); p++) cells.push({ day: '', n: n++, label: '', month: '', off: true, pad: true, today: false, long: '', m: months.length - 1 });
+    for (let t = m; t < next; t = addDays(t, 1)) {
+      const d = zonedParts(t);
+      cells.push({ day: isoDay(t), n: n++, label: String(d.day), month: '', off: t < first || t > last, pad: false, today: t === last, long: wmdTxt(t), m: months.length - 1 });
+    }
+    m = next;
+  }
+  const byDay = new Map(cells.filter(c => !c.pad).map(c => [c.day, c.n]));
+  const lo = byDay.get(isoDay(R.a2)) ?? -1;
+  const hi = byDay.get(isoDay(Math.max(R.a2, R.b - 1))) ?? lo;
+  const firstN = cells.find(c => !c.off)?.n ?? 0, lastN = cells.findLast(c => !c.off)?.n ?? 0;
+  const quick = [['Today', 0], ['Last 7 days', 6], ['Last 30 days', 29], ['Last 90 days', 89]].map(([label, back]) => {
+    const want = addDays(last, -back);
+    return { label, lo: want < first ? firstN : byDay.get(isoDay(want)) ?? firstN, hi: lastN };
+  });
+  const read = finite(A.fetched) ? `Logs read ${timeTxt(A.fetched)}.` : 'Logs not read yet.';
+  return {
+    cells, months, quick, lo, hi, firstN, lastN,
+    note: A.history
+      ? `${read} Whole local days back to ${mdyTxt(first)}, across months.${A.history.backfill.length ? ' Older usage is still being imported.' : ''}`
+      : `${read} Whole local days within the last 30 days.`,
+  };
 }
 
 // ---------------------------------------------------------------- included usage (activity.sources)
@@ -1284,7 +1416,7 @@ export function usageView(payload, state, opts = {}) {
   const zone = zoneName(now);
   const windowText = `${mdTxt(A.win0)} to ${mdTxt(Math.min(A.win1, now))}`;
   // per-model rows and session counts cover the fetched API window; they cannot follow a different range
-  const apiMatches = ['24h', '7d', '30d', 'all'].includes(state.range) && (state.range === 'all' ? A.apiPreset === '30d' : A.apiPreset === state.range);
+  const apiMatches = ['24h', '7d', '30d', '90d', 'all'].includes(state.range) ? A.apiPreset === state.range : state.range === 'custom' && A.apiKey.startsWith('custom:') && A.apiKey === apiRangeFor(state, now);
   const rangeName = state.range === 'custom' ? 'custom' : RANGES.find(r => r[0] === state.range)?.[1] || '';
   const wholeNote = kind => apiMatches || !A.available ? '' : `${kind === 'sessions' ? 'Session counts' : 'Per-model data'} cover the logs read for ${windowText}, not the ${rangeName} range.`;
   const shown = modelsShown(A, state);
@@ -1321,6 +1453,7 @@ export function usageView(payload, state, opts = {}) {
         noRate ? `${noRate} model${noRate === 1 ? ' has' : 's have'} no listed rate; ${noRate === 1 ? 'its' : 'their'} split uses token shares of the logged cost.` : '',
       ].filter(Boolean).join(' ') : "Per-type costs use each model's rate as CCS prices it and match every model's logged estimate to the cent." },
       { icon: 'clock', text: `${finite(A.fetched) ? `Logs read ${timeTxt(A.fetched)}.` : 'Logs not read yet.'} Hours are shown in local time${zone ? ` (${zone})` : ''}.${A.status === 'cached' ? ' Records read so far are shown; a bounded scan continues in the background.' : ''}` },
+      ...historyLines(A),
     ],
     kpis: kpis(A, R, state, rows, K, C),
     providers: providersView(A, rows, state, opts.sizes?.trend?.w),
@@ -1335,7 +1468,8 @@ export function usageView(payload, state, opts = {}) {
     included: includedView(payload, now),
     heat: heatView(A, R, state, opts.sizes?.heat?.w, opts.sizes?.heat?.h, opts.sizes?.heat?.cellW),
     daily: dailyView(A, R, state, opts.sizes?.daily),
-    calendar: calendarView(A, R, now),
+    // the Leptos frame shows one month at a time back to the oldest stored day; the classic app one 30-day grid
+    calendar: calendarView(A, R, now, opts.calendarMonths !== false),
     range: R,
   };
 }

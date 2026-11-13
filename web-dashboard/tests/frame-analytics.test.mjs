@@ -625,8 +625,13 @@ test('analytics-page: covers, poll delay, thresholds and layout', () => {
   page.range = '30d';
   assert.equal(analyticsCovers(payload, page, NOW), false);
   page.range = 'all';
+  // All is everything stored: only an All answer covers it
   assert.equal(
     analyticsCovers({ range: { from: payload.range.from, preset: '30d' } }, page, NOW),
+    false
+  );
+  assert.equal(
+    analyticsCovers({ range: { from: payload.range.from, preset: 'all' } }, page, NOW),
     true
   );
   assert.equal(analyticsCovers({}, page, NOW), false);
