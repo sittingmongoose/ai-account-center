@@ -1,4 +1,4 @@
-/** Serialize active settings; ignored launcher sections remain opaque. */
+/** Serialize active settings; ignored launcher sections are preserved only as raw YAML. */
 import * as yaml from 'js-yaml';
 import { isDeepStrictEqual } from 'node:util';
 import { ConfigError } from '../../errors/error-types';
@@ -21,44 +21,58 @@ export function generateYamlHeader(): string {
   return '# AI Account Center configuration\n# Legacy launcher sections are retained but ignored.\n\n';
 }
 
-function serialize(config: UnifiedConfig): { text: string; value: unknown } {
-  const text = yaml.dump(config, { indent: 2, lineWidth: -1, quotingType: '"', noRefs: true });
-  return { text, value: yaml.load(text) };
+/** Same options as main's active-section writer: leave alias/reference handling enabled. */
+function serialize(config: Record<string, unknown>): string {
+  return yaml.dump(config, { indent: 2, lineWidth: -1, quotingType: '"' });
 }
 
-function matches(text: string, expected: unknown): boolean {
-  try {
-    return isDeepStrictEqual(yaml.load(text), expected);
-  } catch {
-    return false;
+/** Compare YAML value graphs without recursively expanding cycles or shared aliases. */
+function sameValue(left: unknown, right: unknown): boolean {
+  const pending: Array<[unknown, unknown]> = [[left, right]];
+  const leftPairs = new WeakMap<object, object>();
+  const rightPairs = new WeakMap<object, object>();
+  while (pending.length) {
+    const [a, b] = pending.pop() as [unknown, unknown];
+    if (Object.is(a, b)) continue;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    if (a instanceof Date || b instanceof Date || ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
+      if (!isDeepStrictEqual(a, b)) return false;
+      continue;
+    }
+    if (leftPairs.has(a) || rightPairs.has(b)) {
+      if (leftPairs.get(a) !== b || rightPairs.get(b) !== a) return false;
+      continue;
+    }
+    leftPairs.set(a, b);
+    rightPairs.set(b, a);
+    if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+    if (Array.isArray(a) && (!Array.isArray(b) || a.length !== b.length)) return false;
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+      pending.push([(a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]]);
+    }
   }
+  return true;
 }
 
-/** Require a durable original backup before omitting unencodable retired data. */
-function recoverRetiredSections(config: UnifiedConfig, preserveOriginal?: () => void): string {
-  const active = { ...config };
-  for (const key of IGNORED_SECTIONS) delete active[key];
-  // If active settings cannot be encoded either, throw before any file is changed.
-  const recovered = serialize(active);
-  if (!preserveOriginal) {
-    throw new ConfigError('Cannot omit retired configuration without backing up the original.');
-  }
-  preserveOriginal();
-  return recovered.text;
-}
-
-/** Keep raw retired blocks only when the complete output preserves the intended values. */
+/** Keep raw retired blocks only when the complete document preserves each section's graph. */
 export function generateYamlWithComments(
   config: UnifiedConfig,
   existing = '',
   preserveOriginal?: () => void
 ): string {
-  let generated: { text: string; value: unknown };
-  try {
-    generated = serialize(config);
-  } catch {
-    return recoverRetiredSections(config, preserveOriginal);
+  const active = { ...config };
+  const template = { ...config };
+  const retired = Object.keys(config).filter((key) => IGNORED_SECTIONS.has(key));
+  for (const key of retired) {
+    delete active[key];
+    template[key] = null; // Positions only: never pass retired values to yaml.dump.
   }
+  const generated = serialize(active);
+  const expected = yaml.load(generated) as Record<string, unknown>;
+  let result = serialize(template);
   const blocks = (text: string): Array<{ key: string; start: number; end: number }> => {
     const keys = [...text.matchAll(/^(?:([A-Za-z_][\w-]*)|'([^']+)'|"([^"\\]+)")\s*:/gm)];
     return keys.map((match, index) => ({
@@ -68,20 +82,16 @@ export function generateYamlWithComments(
     }));
   };
   const oldBlocks = new Map(blocks(existing).map((block) => [block.key, block]));
-  let result = generated.text;
-  for (const block of blocks(generated.text).reverse()) {
+  let missing = false;
+  for (const block of blocks(result).reverse()) {
+    if (!IGNORED_SECTIONS.has(block.key)) continue;
     const old = oldBlocks.get(block.key);
-    if (!old || !IGNORED_SECTIONS.has(block.key)) continue;
-    // Flow-style mappings or YAML anchors can span top-level sections. Only splice
-    // a block when it independently parses to exactly its original opaque value.
-    const raw = existing.slice(old.start, old.end);
-    try {
-      const parsed = yaml.load(raw) as Record<string, unknown>;
-      if (!isDeepStrictEqual(parsed, { [block.key]: config[block.key] })) continue;
-      result = result.slice(0, block.start) + raw.replace(/\n?$/, '\n') + result.slice(block.end);
-    } catch {
-      // Unusual shared-anchor syntax still round-trips as the parsed YAML value.
+    if (!old) {
+      missing = true;
+      continue;
     }
+    const raw = existing.slice(old.start, old.end);
+    result = result.slice(0, block.start) + raw.replace(/\n?$/, '\n') + result.slice(block.end);
   }
   if (config.dashboard_network) {
     result =
@@ -90,9 +100,27 @@ export function generateYamlWithComments(
       '# 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 and fc00::/7.\n' +
       result;
   }
-  if (matches(result, generated.value)) return result;
-  // A raw block may contain a document marker or otherwise affect later sections.
-  // Re-serialize its parsed values when the complete spliced document is unsafe.
-  if (matches(generated.text, generated.value)) return generated.text;
-  return recoverRetiredSections(config, preserveOriginal);
+  try {
+    const parsed = yaml.load(result) as Record<string, unknown>;
+    const keys = [...Object.keys(expected), ...retired];
+    if (
+      !missing &&
+      parsed &&
+      typeof parsed === 'object' &&
+      Object.keys(parsed).length === keys.length &&
+      keys.every(
+        (key) =>
+          Object.prototype.hasOwnProperty.call(parsed, key) &&
+          sameValue(parsed[key], IGNORED_SECTIONS.has(key) ? config[key] : expected[key])
+      )
+    )
+      return result;
+  } catch {
+    // A marker, unsupported layout or alias crossing section boundaries may invalidate the copy.
+  }
+  // Never try to encode retired values. Preserve the original before omitting them.
+  if (!preserveOriginal)
+    throw new ConfigError('Cannot omit retired configuration without backing up the original.');
+  preserveOriginal();
+  return generated;
 }

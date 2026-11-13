@@ -247,6 +247,32 @@ export function loadUnifiedConfigWithLockHeld(
   return merged;
 }
 
+/** Reuse an identical regular backup, including backups made by earlier versions. */
+function preserveRetiredOriginal(yamlPath: string, original: Buffer): string {
+  const directory = path.dirname(yamlPath);
+  const prefix = `${path.basename(yamlPath)}.retired-`;
+  const digest = crypto.createHash('sha256').update(original).digest('hex');
+  for (const name of fs.readdirSync(directory).filter((entry) => entry.startsWith(prefix))) {
+    const candidate = path.join(directory, name);
+    const stat = fs.lstatSync(candidate);
+    if (!stat.isFile() || stat.size !== original.length) continue;
+    const bytes = fs.readFileSync(candidate);
+    if (crypto.createHash('sha256').update(bytes).digest('hex') === digest) {
+      if ((stat.mode & 0o777) !== 0o600) fs.chmodSync(candidate, 0o600);
+      return candidate;
+    }
+  }
+  const backup = `${yamlPath}.retired-${Date.now()}-${digest}`;
+  const descriptor = fs.openSync(backup, 'wx', 0o600);
+  try {
+    fs.writeFileSync(descriptor, original);
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return backup;
+}
+
 /**
  * Write unified config to disk while lock is already held.
  * Uses atomic write (temp file + rename) to prevent corruption.
@@ -275,18 +301,12 @@ export function writeUnifiedConfigWithLockHeld(
   // Ensure version is set
   config.version = UNIFIED_CONFIG_VERSION;
 
-  // Generate YAML with section comments
-  const existing = fs.existsSync(yamlPath) ? fs.readFileSync(yamlPath, 'utf8') : '';
-  const yamlContent = generateYamlWithComments(config, existing, () => {
-    if (!existing) throw new ConfigError('Cannot back up an absent original configuration.');
-    const backup = `${yamlPath}.retired-${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
-    const descriptor = fs.openSync(backup, 'wx', 0o600);
-    try {
-      fs.writeFileSync(descriptor, existing, 'utf8');
-      fs.fsyncSync(descriptor);
-    } finally {
-      fs.closeSync(descriptor);
-    }
+  // Read original bytes once; decoding is only for YAML, never for the backup.
+  const original = fs.existsSync(yamlPath) ? fs.readFileSync(yamlPath) : undefined;
+  let backup: string | undefined;
+  const yamlContent = generateYamlWithComments(config, original?.toString('utf8') ?? '', () => {
+    if (!original) throw new ConfigError('Cannot back up an absent original configuration.');
+    backup = preserveRetiredOriginal(yamlPath, original);
   });
   const content = generateYamlHeader() + yamlContent;
 
@@ -307,6 +327,11 @@ export function writeUnifiedConfigWithLockHeld(
     }
     // Classify filesystem errors
     const err = error as NodeJS.ErrnoException;
+    if (backup) {
+      throw new ConfigError(
+        `Cannot save configuration: ${err.message}. Original backup: ${backup}`
+      );
+    }
     if (err.code === 'ENOSPC') {
       throw new Error('Disk full - cannot save config. Free up space and try again.');
     } else if (err.code === 'EROFS' || err.code === 'EACCES') {

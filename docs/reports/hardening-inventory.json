@@ -1,7 +1,7 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1207,
+    "totalOccurrences": 1227,
     "filesAffected": 119,
     "hotpathOccurrences": 535,
     "hotpathFilesAffected": 60,
@@ -253,6 +253,21 @@
         "markers": []
       },
       {
+        "file": "src/config/__tests__/retired-sections.test.ts",
+        "count": 40,
+        "calls": [
+          "existsSync",
+          "mkdirSync",
+          "mkdtempSync",
+          "readdirSync",
+          "readFileSync",
+          "rmSync",
+          "statSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
         "file": "src/commands/bar/__tests__/packaged-install.test.ts",
         "count": 39,
         "calls": [
@@ -265,6 +280,25 @@
           "renameSync",
           "rmSync",
           "symlinkSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/config/loader/io-locks.ts",
+        "count": 29,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "existsSync",
+          "fsyncSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "renameSync",
           "unlinkSync",
           "writeFileSync"
         ],
@@ -311,40 +345,6 @@
           "openSync",
           "readFileSync",
           "realpathSync",
-          "renameSync",
-          "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/antigravity/runtime-refresh.ts",
-        "count": 25,
-        "calls": [
-          "closeSync",
-          "existsSync",
-          "fstatSync",
-          "fsyncSync",
-          "lstatSync",
-          "mkdirSync",
-          "openSync",
-          "readFileSync",
-          "renameSync",
-          "rmSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/config/loader/io-locks.ts",
-        "count": 25,
-        "calls": [
-          "closeSync",
-          "existsSync",
-          "fsyncSync",
-          "mkdirSync",
-          "openSync",
-          "readFileSync",
           "renameSync",
           "unlinkSync",
           "writeFileSync"
@@ -523,11 +523,11 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 727,
-      "typedThrows": 210,
+      "totalThrows": 728,
+      "typedThrows": 211,
       "plainThrows": 56,
       "otherThrows": 461,
-      "adoptionRatio": 0.2889,
+      "adoptionRatio": 0.2898,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
@@ -561,8 +561,8 @@
         },
         {
           "subdomain": "config",
-          "count": 8,
-          "typed": 3,
+          "count": 9,
+          "typed": 4,
           "plain": 5
         },
         {

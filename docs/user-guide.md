@@ -611,11 +611,13 @@ The following `config.yaml` sections are ignored and stay in existing files:
 `websearch`, `global_env`, `continuity`, `copilot`, `cursor`, `thinking`,
 `runtime`, `channels`, `browser`, `image_analysis`. Reads never rewrite an
 old config; unrelated saves preserve these values. Fresh configs omit them.
-Raw retired blocks are kept only when the complete saved YAML still has the
-intended values; otherwise they are re-serialized, which may drop comments and
-layout. If a retired value cannot be serialized, an original-file backup named
-`config.yaml.retired-<timestamp>-<suffix>` is saved beside the config before the
-retired sections are omitted. A failed backup refuses the save.
+Raw retired blocks are copied only when the complete saved YAML retains their
+values. They are never serialized from parsed values. If a raw copy is unsafe,
+the original bytes are saved beside the config in
+`config.yaml.retired-<timestamp>-<content-hash>` before the retired sections are
+omitted. A matching existing backup is reused. A failed backup refuses the save;
+a later failed save names the backup so the original can be recovered. Active
+sections retain the YAML library's reference handling, including cyclic aliases.
 
 CLIProxy code, tests, paused-account handling and the `cliproxy`, `proxy`,
 `cliproxy_server`, `quota_management` config sections are held for the
