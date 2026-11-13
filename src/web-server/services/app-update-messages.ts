@@ -83,7 +83,7 @@ export const MESSAGES = {
   t3_session_issue_unknown:
     'No T3 session in time; no install started. One session may stay valid up to 15 minutes. Check T3.',
   t3_issuer_protection_failed:
-    'T3 session issuer could not be protected against helper termination. No install started. Check local process permissions.',
+    'T3 session issuer could not be protected against helper termination. No install started. Check the local T3 installation and process permissions.',
   t3_install_state_unknown: 'Install state unknown, check T3.',
   t3_session_revoke_failed:
     'T3 session revocation could not be confirmed; the session expires within 15 minutes. Check T3.',

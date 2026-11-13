@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shlex
 import signal
 import socket
 import struct
@@ -28,6 +29,47 @@ def remaining(deadline, maximum=30):
     if value <= 0:
         raise UpdateFailure("t3_install_timeout")
     return value
+
+
+def ttl_argument(deadline):
+    seconds = int(remaining(deadline, SESSION_TTL))
+    if seconds < 1:
+        raise UpdateFailure("t3_install_timeout")
+    return f"{seconds}s"
+
+
+def linux_desktop_cli(shim, proc=pathlib.Path("/proc")):
+    """Resolve the running AppImage mount without executing its forking shim.
+
+    T3 ab8e488e DesktopCliShim.ts:73,83,127-130 and
+    DesktopEnvironment.ts:166-170 define the image, Electron and ASAR layout.
+    Missing/inaccessible mounts fail closed; never mount/extract via the shim.
+    """
+    try:
+        lines = shim.read_text(encoding="utf-8").splitlines()
+        if "# Written by T3 Code: runs the desktop app's bundled t3 CLI." not in lines:
+            raise ValueError()
+        app, = [shlex.split(line[4:])[0] for line in lines if line.startswith("app=")]
+        image = pathlib.Path(app).resolve(strict=True)
+        for process in proc.iterdir():
+            if not process.name.isdigit():
+                continue
+            try:
+                env = dict(item.split(b"=", 1) for item in (process / "environ").read_bytes().split(b"\0") if b"=" in item)
+                if pathlib.Path(os.fsdecode(env.get(b"APPIMAGE", b""))).resolve() != image:
+                    continue
+                executable = (process / "exe").resolve(strict=True)
+                root = pathlib.Path(os.fsdecode(env[b"APPDIR"])).resolve(strict=True)
+                entry = root / "resources/app.asar/apps/server/dist/bin.mjs"
+                # Electron reads inside ASAR; the virtual entry isn't an OS file.
+                if (executable.parent == root and executable.name == "t3code" and
+                        os.access(executable, os.X_OK) and (root / "resources/app.asar").is_file()):
+                    return [str(executable), str(entry)]
+            except (OSError, ValueError, KeyError):
+                continue
+    except (OSError, ValueError, IndexError):
+        pass
+    raise UpdateFailure("t3_issuer_protection_failed")
 
 
 def discover(host):
@@ -55,6 +97,8 @@ def discover(host):
             executable = runtime_install()
             shim = base / "bin/t3"
             candidates = ([shim] if shim.is_file() else []) + ([executable] if executable else [])
+            candidates = [linux_desktop_cli(p) if host == "ubuntu" and p == shim else [str(p)]
+                          for p in candidates]
             version = state.get("serverVersion")
             if version:
                 # Match the running server's published version, including older
@@ -63,11 +107,11 @@ def discover(host):
                 if exact_version(version):
                     pinned = base / "runtime/versions" / version / "t3"
                     if pinned.is_file():
-                        candidates.append(pinned)
+                        candidates.append([str(pinned)])
                 matched = []
                 for candidate in candidates:
                     try:
-                        output = command([str(candidate), "--version"], timeout=10,
+                        output = command([*candidate, "--version"], timeout=10,
                                          env=environment({"ELECTRON_RUN_AS_NODE": "1"}), capture=True,
                                          kill_tree=True)
                         words = output.strip().split()
@@ -80,7 +124,7 @@ def discover(host):
             # shim first, then the standalone runtime. Ties use the same order.
             if not candidates:
                 raise OSError()
-            cli = [str(candidates[0])]
+            cli = candidates[0]
         return cli, base, origin
     except (OSError, ValueError, KeyError, TypeError):
         raise UpdateFailure("t3_unreachable") from None
@@ -104,13 +148,17 @@ if sys.stdin.buffer.read(1) != b'1':
 os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
 if os.name == 'nt':
     sys.exit(subprocess.call(sys.argv[2:]))
-os.execvp(sys.argv[2], sys.argv[2:])
+try:
+    os.execvp(sys.argv[2], sys.argv[2:])
+except OSError:
+    sys.exit(125)
 """
 
 
 class Issuer:
     def __init__(self):
         self.process = None
+        self.stopped = False
         self.job = None
         if os.name == "nt":
             import ctypes
@@ -139,12 +187,25 @@ class Issuer:
                 raise UpdateFailure("t3_issuer_protection_failed")
 
     def stop(self):
+        if self.stopped:
+            return
         if self.job:
             self.kernel.CloseHandle(self.job)
             self.job = None
+            self.stopped = True
         elif self.process is not None and os.name != "nt":
-            with contextlib.suppress(OSError):
-                os.killpg(self.process.pid, signal.SIGKILL)
+            # Popen holds this lock around every waitpid/reap. Never wait for
+            # another thread in the signal handler. While locked, an unreaped
+            # child reserves its PID even if it has just become a zombie.
+            if not self.process._waitpid_lock.acquire(blocking=False):
+                return
+            try:
+                self.stopped = True
+                if self.process.returncode is None:
+                    with contextlib.suppress(OSError):
+                        os.killpg(self.process.pid, signal.SIGKILL)
+            finally:
+                self.process._waitpid_lock.release()
 
     def start(self, argv):
         options = {"creationflags": CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
@@ -199,10 +260,10 @@ def auth_command(cli, base, args, timeout=30):
     try:
         output, _ = process.communicate(timeout=timeout)
     except (subprocess.TimeoutExpired, OSError):
-        _stop_group(process, tree=True)
+        issuer.stop() if issuer else _stop_group(process, tree=True)
         raise UpdateFailure("t3_auth_failed") from None
     except BaseException:
-        _stop_group(process, tree=True)
+        issuer.stop() if issuer else _stop_group(process, tree=True)
         raise
     finally:
         if issuer:
@@ -317,12 +378,12 @@ def bearer(cli, base, deadline):
         try:
             backoff = 1
             while True:
-                ttl = remaining(deadline, SESSION_TTL)
+                ttl = ttl_argument(deadline)
                 try:
                     attempted = True
                     reply = auth_command(cli, base, [
                         "issue", "--scope", "providers:manage", "--scope", "orchestration:read",
-                        "--ttl", str(ttl) + "s", "--label", label, "--json",
+                        "--ttl", ttl, "--label", label, "--json",
                     ], remaining(deadline, float("inf")))
                     issued = json.loads(reply)
                     break

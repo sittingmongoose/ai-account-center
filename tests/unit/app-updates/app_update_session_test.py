@@ -23,10 +23,10 @@ class SingleSessionTests(unittest.TestCase):
         self.revoke = self.stack.enter_context(mock.patch.object(rpc, 'revoke_session', return_value=True))
 
     def test_ttl_tracks_remaining_deadline_and_caps_at_fifteen_minutes(self):
-        for deadline, ttl in ((1000, 900), (140.25, 40.25), (2000, 900)):
+        for deadline, ttl in ((1000, 900), (140.25, 40), (2000, 900)):
             with rpc.bearer([], None, deadline): pass
             args = self.issue.call_args.args[2]
-            self.assertEqual(float(args[args.index('--ttl') + 1][:-1]), ttl)
+            self.assertEqual(args[args.index('--ttl') + 1], f'{ttl}s')
 
     def test_slow_twenty_nine_second_issue_reconnects_without_starving_or_reissuing(self):
         owner = self

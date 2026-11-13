@@ -30,7 +30,10 @@ Jared, 2026-11-12 22:01Z, relayed by pm7-build: "Option a for the second thing."
 Option A means no issuance retry after a possibly committed timeout, and an honest row otherwise.
 
 One successful session issuance covers the remaining overall run deadline,
-capped at 900 seconds (15 minutes). Scopes remain `providers:manage` and
+capped at 900 seconds (15 minutes), rounded down to whole seconds by
+`ttl_argument`. Less than one second remaining fails before issuance. The compact
+TTL grammar is [cli/config.ts:557](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/server/src/cli/config.ts#L557).
+Scopes remain `providers:manage` and
 `orchestration:read`. There is no rotation, renewal or overlapping credential.
 Each issuance attempt gets the entire remaining overall deadline. Only a proven
 failure to start the CLI is retried; exponential backoff caps at eight seconds.
@@ -140,9 +143,51 @@ t3_issuer_protection_failed. T3 is never released unprotected.
 
 On Linux, start_new_session creates a process group, killed on signals. A fresh
 Python interpreter sets PR_SET_PDEATHSIG(SIGKILL), rechecks its parent PID, then
-reads the gate and execs T3. No preexec_fn runs in a threaded parent. Failure to
+reads the gate and execs the real issuer directly. No preexec_fn runs in a threaded parent. Failure to
 set the death signal exits before T3. A hard kill kills the issuer itself;
 descendants are covered by group termination on the signal path, not PDEATHSIG.
+
+### R10: direct Linux issuer and safe shutdown
+
+Jared, 2026-11-13 01:24Z, relayed by pm7-build, verbatim: "B to answer your question".
+This selects the code fix for Linux AppImage issuance, alongside the TTL and
+idempotent-stop fixes.
+
+The official AppImage shim forks Electron rather than execing it:
+[DesktopCliShim.ts:83-106](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopCliShim.ts#L83-L106).
+AAC reads its literal `app=` assignment (line 73), without executing the shim.
+It finds a running `/proc` process whose APPIMAGE matches that image, resolves
+its executable and APPDIR, and requires the executable immediately inside
+APPDIR and a `resources/app.asar` archive. Electron is the runtime; AAC passes
+`APPDIR/resources/app.asar/apps/server/dist/bin.mjs` as its entry, with
+ELECTRON_RUN_AS_NODE=1. This is the shim's exact invocation (lines 72, 83);
+lines 127-130 derive the executable name from process.execPath.
+[DesktopEnvironment.ts:165-170](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/apps/desktop/src/app/DesktopEnvironment.ts#L165-L170)
+uses appRoot for Linux serverRoot; Windows alone uses server.asar.
+[build-desktop-artifact.ts:2888-2896](https://github.com/pingdotgg/t3code/blob/ab8e488e10d883fa880b0ddcf01917b51839ab07/scripts/build-desktop-artifact.ts#L2888-L2896)
+packages Linux as AppImage with executableName `t3code`.
+
+No shim, mounter, extraction subprocess or shell sits between the protected
+launcher and Electron. Unreadable/missing image identity, process metadata,
+mount, executable or archive fails with `t3_issuer_protection_failed`. Direct
+exec failure exits the protected launcher, producing `t3_auth_failed` and the
+existing conservative `t3_session_issue_unknown` handling at the bearer layer;
+it never retries issuance. AAC does not fall back to the shim.
+Standalone server installs keep their direct CLI path. A mount that vanishes
+during use yields an honest failure; no unprotected issuer is started.
+
+POSIX stop holds Popen's waitpid lock without blocking and checks returncode
+before signalling the group. An unreaped child reserves its PID, including
+while it is a zombie. Concurrent communicate/poll cannot reap under that lock.
+After reap no numeric group signal is sent. Repeated successful stop calls do
+nothing. A busy reap lock defers stop; the signal path still exits under the
+existing watchdog and Linux parent-death protection remains active.
+
+Linux-only offline tests `test_appimage_real_issuer_dies_on_helper_hard_kill`
+and `test_appimage_unresolvable_fails_closed` use fake image metadata and a
+Python executable standing in for Electron, never real T3. POSIX stop tests
+also skip Windows. The fake auth store enforces T3's pinned TTL grammar.
+`test_unstartable_real_issuer_fails_closed` also runs only on Linux.
 
 ### Accepted residual: macOS hard kill during issuer startup
 

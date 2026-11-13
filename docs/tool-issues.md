@@ -1,5 +1,12 @@
 # Test tool issues
 
+R10 ttl-issuer recheck on AlexisGamingPC: the existing Windows helper-sync ACL
+inspection still exits 1 with a 20-second timeout (nine other helper-sync tests
+pass). Broad Python discovery again reaches Windows-incompatible T3 fixtures
+and ends with KeyboardInterrupt in the existing scheduler fixture. Scoped RPC,
+session and ACP fixtures pass separately. No new false pass or product bug is
+demonstrated; these remain the existing tool-batch items below.
+
 Non-blocking tool findings are collected for the six-hour batch under the
 shared test-tool stopping bar. A reproduced false pass on a real check or a
 product bug stops the lane. No such false pass was demonstrated below.

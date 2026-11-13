@@ -7,6 +7,9 @@ import io
 import json
 import os
 import pathlib
+import re
+import shutil
+import shlex
 import struct
 import signal
 import subprocess
@@ -25,13 +28,15 @@ import app_update_t3_rpc as rpc
 
 
 TOKEN = "private-rpc-fixture-secret"
+# T3 ab8e488e10d883fa880b0ddcf01917b51839ab07, cli/config.ts ~557.
+T3_TTL = re.compile(r"^\d+(ms|s|m|h|d|w)$", re.IGNORECASE)
 
 
 class DiscoveryTests(unittest.TestCase):
     def test_unix_layouts_and_running_server_version(self):
         for host in ("mac", "ubuntu"):
             for standalone, desktop in ((True, False), (False, True), (True, True), (False, False)):
-                with self.subTest(host=host, standalone=standalone, desktop=desktop), tempfile.TemporaryDirectory() as temporary, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(temporary)):
+                with self.subTest(host=host, standalone=standalone, desktop=desktop), tempfile.TemporaryDirectory() as temporary, mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path(temporary)), mock.patch.object(rpc, "linux_desktop_cli", side_effect=lambda p: [str(p)]):
                     base = pathlib.Path(temporary) / ".t3"
                     state = base / "userdata/server-runtime.json"
                     state.parent.mkdir(parents=True)
@@ -102,7 +107,11 @@ class FakeAuthStore:
     def command(self, cli, base, args, timeout=30):
         assert args[0] == "issue"
         assert [args[i + 1] for i, v in enumerate(args) if v == "--scope"] == ["providers:manage", "orchestration:read"]
-        ttl = float(args[args.index("--ttl") + 1][:-1])
+        argument = args[args.index("--ttl") + 1]
+        if not T3_TTL.fullmatch(argument):
+            raise common.UpdateFailure("t3_auth_failed")
+        match = re.fullmatch(r"(\d+)(ms|s|m|h|d|w)", argument, re.IGNORECASE)
+        ttl = int(match[1]) * {"ms": .001, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[match[2].lower()]
         identifier = "session-" + str(len(self.rows) + 1)
         self.rows[identifier] = {"expires": self.now() + ttl, "revoked": False,
                                  "label": args[args.index("--label") + 1]}
@@ -183,6 +192,28 @@ def crash_fixture(stage, base):
 
 
 class AuthTests(unittest.TestCase):
+    def test_exact_ttl_argument_for_clock_deadlines(self):
+        now = time.monotonic()
+        for duration in (1, 1.9, 29.345, 899.9995437999969, 900, 901.5, 10000):
+            deadline = now + duration
+            store = FakeAuthStore(lambda: now)
+            with self.subTest(duration=duration), mock.patch.object(rpc.time, "monotonic", return_value=now), mock.patch.object(rpc, "auth_command", side_effect=store.command) as auth, mock.patch.object(rpc, "revoke_session", side_effect=store.revoke):
+                with rpc.bearer(["fake"], pathlib.Path("unused"), deadline):
+                    args = auth.call_args.args[2]
+                    value = args[args.index("--ttl") + 1]
+                    self.assertEqual(value, f"{int(min(900, deadline - now))}s")
+                    self.assertIsNotNone(T3_TTL.fullmatch(value))
+        with mock.patch.object(rpc.time, "monotonic", return_value=now):
+            with self.assertRaises(common.UpdateFailure):
+                rpc.ttl_argument(now + .999)
+
+    def test_fake_auth_rejects_fractional_ttl(self):
+        store = FakeAuthStore(time.monotonic)
+        for value in ("899.9995437999969s", "1.0s", "1", "seconds"):
+            with self.assertRaises(common.UpdateFailure):
+                store.command([], None, ["issue", "--scope", "providers:manage", "--scope", "orchestration:read", "--ttl", value])
+        self.assertFalse(store.rows)
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -486,6 +517,113 @@ class WireTests(unittest.TestCase):
 
 
 class IssuerLifetimeTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux AppImage and PDEATHSIG")
+    def test_appimage_real_issuer_dies_on_helper_hard_kill(self):
+        root = pathlib.Path(tempfile.mkdtemp(prefix="aac-appimage-issuer-"))
+        print("Retained fixture:", root)
+        mount = root / "mounted image"
+        mount.mkdir()
+        executable = mount / "t3code"
+        shutil.copy2(sys.executable, executable)
+        entry = mount / "resources/app.asar/apps/server/dist/bin.mjs"
+        entry.parent.mkdir(parents=True)
+        entry.write_text("import os,pathlib,time\np=pathlib.Path(" + repr(str(root)) + ")\n(p/'ready').write_text(str(os.getpid()))\ntime.sleep(2)\n(p/'session').touch()\n")
+        # The fake archive is a directory for Python; Electron's archive is a file.
+        image = root / "T3.AppImage"
+        image.touch()
+        shim = root / "t3"
+        shim.write_text("#!/bin/sh\n# Written by T3 Code: runs the desktop app's bundled t3 CLI.\napp=" + shlex.quote(str(image)) + "\necho unprotected > " + shlex.quote(str(root / "shim-ran")) + "\n")
+        proc = root / "proc/123"
+        proc.mkdir(parents=True)
+        (proc / "environ").write_bytes(b"APPIMAGE=" + os.fsencode(image) + b"\0APPDIR=" + os.fsencode(mount) + b"\0")
+        (proc / "exe").symlink_to(executable)
+        script = '''import pathlib,sys,time
+from unittest import mock
+sys.path.insert(0,sys.argv[1])
+import app_update_t3_rpc as rpc
+root=pathlib.Path(sys.argv[2])
+original=pathlib.Path.is_file
+with mock.patch.object(pathlib.Path,'is_file',lambda p: True if p == root/'mounted image/resources/app.asar' else original(p)):
+    cli=rpc.linux_desktop_cli(root/'t3',root/'proc')
+issuer=rpc.Issuer()
+process=issuer.start(cli)
+(root/'issuer-pid').write_text(str(process.pid))
+time.sleep(20)
+'''
+        helper = subprocess.Popen([sys.executable, "-B", "-c", script, str(pathlib.Path(rpc.__file__).parent), str(root)], stderr=subprocess.PIPE)
+        try:
+            end = time.monotonic() + 10
+            while not (root / "ready").exists():
+                if helper.poll() is not None or time.monotonic() > end:
+                    self.fail("real issuer did not start")
+                time.sleep(.02)
+            self.assertEqual((root / "ready").read_text(), (root / "issuer-pid").read_text())
+            helper.kill()
+            helper.wait(timeout=1)
+            pid = (root / "ready").read_text()
+            end = time.monotonic() + 1
+            while time.monotonic() < end:
+                status = pathlib.Path('/proc') / pid / 'stat'
+                if not status.exists() or status.read_text().split(') ')[1].startswith('Z'):
+                    break
+                time.sleep(.02)
+            else:
+                self.fail("real issuer survived helper hard kill")
+            time.sleep(2.1)
+            self.assertFalse((root / "session").exists())
+            self.assertFalse((root / "shim-ran").exists())
+        finally:
+            if helper.poll() is None:
+                helper.kill()
+            helper.communicate(timeout=3)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux AppImage discovery")
+    def test_appimage_unresolvable_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(rpc, "command") as command:
+            root = pathlib.Path(temporary)
+            shim = root / "t3"
+            shim.write_text("#!/bin/sh\n# Written by T3 Code: runs the desktop app's bundled t3 CLI.\napp='/missing/T3.AppImage'\n")
+            with self.assertRaisesRegex(common.UpdateFailure, "t3_issuer_protection_failed"):
+                rpc.linux_desktop_cli(shim, root)
+            image = root / "T3.AppImage"
+            image.touch()
+            shim.write_text("#!/bin/sh\n# Written by T3 Code: runs the desktop app's bundled t3 CLI.\napp=" + shlex.quote(str(image)) + "\n")
+            # A real image with no readable mounted process also fails closed.
+            with self.assertRaisesRegex(common.UpdateFailure, "t3_issuer_protection_failed"):
+                rpc.linux_desktop_cli(shim, root)
+            command.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux direct exec failure")
+    def test_unstartable_real_issuer_fails_closed(self):
+        with self.assertRaisesRegex(common.UpdateFailure, "t3_auth_failed"):
+            rpc.auth_command(["/nonexistent/aac-fixture/t3code", "entry.mjs"], pathlib.Path("unused"), ["issue"])
+
+    @unittest.skipIf(os.name == "nt", "POSIX waitpid ownership")
+    def test_stop_after_reap_and_twice_sends_no_signal(self):
+        issuer = rpc.Issuer()
+        issuer.start([sys.executable, "-c", "pass"]).communicate(timeout=5)
+        with mock.patch.object(rpc.os, "killpg") as kill:
+            issuer.stop()
+            issuer.stop()
+        kill.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "POSIX waitpid ownership")
+    def test_stop_live_is_idempotent_and_holds_reap_lock(self):
+        issuer = rpc.Issuer()
+        process = issuer.start([sys.executable, "-c", "import time; time.sleep(20)"])
+        original = os.killpg
+        def kill(pid, sig):
+            self.assertTrue(process._waitpid_lock.locked())
+            self.assertIsNone(process.returncode)
+            original(pid, sig)
+        try:
+            with mock.patch.object(rpc.os, "killpg", side_effect=kill) as send:
+                issuer.stop()
+                issuer.stop()
+            send.assert_called_once_with(process.pid, signal.SIGKILL)
+        finally:
+            process.communicate(timeout=5)
+
     def witness(self, hard=False):
         # Retained for review; no real T3, stores or credentials.
         root = pathlib.Path(tempfile.mkdtemp(prefix="aac-issuer-lifetime-"))
