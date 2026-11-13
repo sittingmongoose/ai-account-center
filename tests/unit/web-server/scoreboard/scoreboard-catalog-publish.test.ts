@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   CATALOG_FILES,
+  CatalogReader,
   memberSpan,
   packagedCatalogDir,
   parseCatalogFile,
@@ -126,7 +127,7 @@ describe('seedCatalog publishing', () => {
     );
   });
 
-  it('adds only the alias keys the share lacks and keeps its own values and suffixes', async () => {
+  it('adds only the alias keys and effort suffixes the share lacks, keeping its own values', async () => {
     const { root, dir } = catalogDir();
     const share = {
       schema: packagedAliases.schema,
@@ -141,7 +142,11 @@ describe('seedCatalog publishing', () => {
     const doc = JSON.parse(fs.readFileSync(file, 'utf8')) as typeof packagedAliases;
     expect(doc.aliases['gpt-6.1-sol']).toBe('example/owner-choice');
     expect(doc.aliases['owner-written']).toBe('zai/glm-5.3');
-    expect(doc.effortSuffixes).toEqual(['-high']);
+    // The share's own suffix stays first; the packaged ones it lacks follow in packaged order.
+    expect(doc.effortSuffixes).toEqual([
+      '-high',
+      ...packagedAliases.effortSuffixes.filter((suffix) => suffix !== '-high'),
+    ]);
     const missing = Object.keys(packagedAliases.aliases).filter((key) => key !== 'gpt-6.1-sol');
     expect(Object.keys(doc.aliases)).toEqual(['gpt-6.1-sol', 'owner-written', ...missing]);
     for (const key of missing) expect(doc.aliases[key]).toBe(packagedAliases.aliases[key]);
@@ -267,6 +272,36 @@ describe('seedCatalog publishing', () => {
     expect(doc.models).toHaveLength(1);
     expect(doc.models[0].notes).toBe('edit 3');
     expect(dotFiles(dir)).toEqual([]);
+  });
+
+  it('publishes the merged table and the new models to a share as of Nov 11 on the next start', async () => {
+    const { root, dir } = catalogDir();
+    // The live share then: models.json with the 16 ids, the other kinds, and no alias table yet.
+    const nov11 = {
+      schema: packagedModels.schema,
+      models: packagedModels.models.filter((row) => !NEW_MODELS.includes(row.model)),
+    };
+    expect(nov11.models).toHaveLength(16);
+    fs.writeFileSync(path.join(dir, 'models.json'), pretty(nov11));
+    for (const name of ['task-types.json', 'measures.json', 'uses.json', 'benchmarks.json'])
+      fs.writeFileSync(path.join(dir, name), packaged(name));
+    const { written, failures } = await seed(root);
+    expect(failures).toEqual([]);
+    expect(written.sort()).toEqual(['model-aliases.json', 'models.json']);
+    expect(fs.readFileSync(path.join(dir, 'model-aliases.json'), 'utf8')).toBe(
+      packaged('model-aliases.json')
+    );
+    const reader = new CatalogReader({ root: () => root, now: () => NOW });
+    await reader.scan();
+    const state = reader.snapshot();
+    expect(state.problems).toEqual([]);
+    expect(state.missingFiles).toEqual([]);
+    expect(state.models.map((row) => row.model)).toEqual([
+      ...nov11.models.map((row) => row.model),
+      ...NEW_MODELS,
+    ]);
+    expect(Object.keys(state.aliases)).toHaveLength(Object.keys(packagedAliases.aliases).length);
+    expect(state.effortSuffixes).toEqual(packagedAliases.effortSuffixes);
   });
 
   it('leaves the other catalog files as they are on the share', async () => {

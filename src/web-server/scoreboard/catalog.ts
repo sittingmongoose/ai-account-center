@@ -7,7 +7,8 @@
  * problem and the kinds it holds stay empty, never a crash. Unknown fields never reach the view;
  * reasons are fixed sentences. At server start AAC writes a packaged seed where the share has no
  * file, and adds to an existing `models.json` or `model-aliases.json` only the packaged entries it
- * lacks by id (the dashboard publishing step for the catalog; `seedCatalog`).
+ * lacks by id: models, alias keys and effort suffixes (the dashboard publishing step for the
+ * catalog; `seedCatalog`).
  */
 import fs from 'fs';
 import path from 'path';
@@ -447,24 +448,34 @@ export function packagedCatalogDir(): string {
   return path.resolve(__dirname, '../../../docs/agent-reports/catalog');
 }
 
+/** A top-level member of a share file that the seeder extends by id. */
+type AppendMember = 'models' | 'aliases' | 'effortSuffixes';
+
 /**
- * The share files the seeder extends by id when they already exist: the member holding the entries.
+ * The share files the seeder extends by id when they already exist, and the members it extends:
  * `models.json` gains the packaged models whose `model` it lacks, `model-aliases.json` the packaged
- * `aliases` keys it lacks. The other catalog files are only ever seeded whole.
+ * `aliases` keys and `effortSuffixes` it lacks. The other catalog files are only ever seeded whole.
  */
-const APPEND_BY_ID: Partial<Record<CatalogFileName, 'models' | 'aliases'>> = {
-  'models.json': 'models',
-  'model-aliases.json': 'aliases',
+const APPEND_BY_ID: Partial<Record<CatalogFileName, readonly AppendMember[]>> = {
+  'models.json': ['models'],
+  'model-aliases.json': ['aliases', 'effortSuffixes'],
 };
 
 /** Attempts at an append while another writer keeps changing the share file. */
 const APPEND_ATTEMPTS = 3;
 
-/** The ids a parsed file holds, for the files extended by id. */
-function entryIds(file: CatalogFile): string[] {
-  if (file.kind === 'models') return file.models.map((row) => row.model);
-  if (file.kind === 'aliases') return Object.keys(file.aliases);
+/** The ids one member of a parsed file holds: model ids, alias keys or effort suffixes. */
+function entryIds(file: CatalogFile, member: AppendMember): string[] {
+  if (file.kind === 'models' && member === 'models') return file.models.map((row) => row.model);
+  if (file.kind === 'aliases' && member === 'aliases') return Object.keys(file.aliases);
+  if (file.kind === 'aliases' && member === 'effortSuffixes') return file.effortSuffixes;
   return [];
+}
+
+interface NewEntry {
+  id: string;
+  wide: string;
+  narrow: string;
 }
 
 /** Offsets of a top-level member's opening and closing bracket in a JSON object's text. */
@@ -515,11 +526,7 @@ export function memberSpan(text: string, key: string): MemberSpan | null {
  * indentation and line ending, or one line when the member is written on one). Every byte already in
  * `text` stays as it was; only the new entries (and the comma after the last old one) are inserted.
  */
-function appendToMember(
-  text: string,
-  span: MemberSpan,
-  entries: Array<{ wide: string; narrow: string }>
-): string {
+function appendToMember(text: string, span: MemberSpan, entries: readonly NewEntry[]): string {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const indented = (entry: string, indent: string) =>
     indent + entry.split('\n').join(`${eol}${indent}`);
@@ -545,10 +552,20 @@ function appendToMember(
 
 /** The packaged entries a share file lacks, by id, in the packaged order, rendered for appending. */
 function missingEntries(
-  member: 'models' | 'aliases',
+  member: AppendMember,
   seed: Record<string, unknown>,
   have: ReadonlySet<string>
-): Array<{ id: string; wide: string; narrow: string }> {
+): NewEntry[] {
+  if (member === 'effortSuffixes') {
+    const suffixes = Array.isArray(seed.effortSuffixes) ? (seed.effortSuffixes as unknown[]) : [];
+    return suffixes
+      .filter((suffix): suffix is string => typeof suffix === 'string' && !have.has(suffix))
+      .map((suffix) => ({
+        id: suffix,
+        wide: JSON.stringify(suffix),
+        narrow: JSON.stringify(suffix),
+      }));
+  }
   if (member === 'models') {
     const rows = Array.isArray(seed.models) ? (seed.models as Array<Record<string, unknown>>) : [];
     return rows
@@ -568,23 +585,37 @@ function missingEntries(
     });
 }
 
-/** The share file after the append, or a reason it cannot be made: never a file that reads differently. */
+/** One member's additions: the ids the share holds and the packaged entries it lacks. */
+interface MemberAppend {
+  member: AppendMember;
+  have: string[];
+  entries: NewEntry[];
+}
+
+/**
+ * The share file after the appends, or null when they cannot be made: never a file that reads
+ * differently. Each member must end up holding exactly its old ids and the new ones.
+ */
 function appendedText(
   name: CatalogFileName,
-  member: 'models' | 'aliases',
   shareText: string,
-  shareIds: string[],
-  entries: Array<{ id: string; wide: string; narrow: string }>
+  appends: readonly MemberAppend[]
 ): string | null {
-  const span = memberSpan(shareText, member);
-  if (!span) return null;
-  const next = appendToMember(shareText, span, entries);
+  let next = shareText;
+  for (const { member, entries } of appends) {
+    if (entries.length === 0) continue;
+    const span = memberSpan(next, member);
+    if (!span) return null;
+    next = appendToMember(next, span, entries);
+  }
   const parsed = parseCatalogFile(name, Buffer.from(next, 'utf8'));
   if (!parsed.ok) return null;
-  const nextIds = entryIds(parsed.value);
-  const expected = new Set([...shareIds, ...entries.map((entry) => entry.id)]);
-  if (nextIds.length !== expected.size || nextIds.some((entryId) => !expected.has(entryId)))
-    return null;
+  for (const { member, have, entries } of appends) {
+    const nextIds = entryIds(parsed.value, member);
+    const expected = new Set([...have, ...entries.map((entry) => entry.id)]);
+    if (nextIds.length !== expected.size || nextIds.some((entryId) => !expected.has(entryId)))
+      return null;
+  }
   return next;
 }
 
@@ -597,7 +628,7 @@ function appendedText(
 async function appendMissing(
   target: string,
   name: CatalogFileName,
-  member: 'models' | 'aliases',
+  members: readonly AppendMember[],
   found: fs.Stats,
   sourceDir: string,
   onFailure: (failure: SeedFailure) => void
@@ -623,10 +654,12 @@ async function appendMissing(
         onFailure({ file: name, code: 'invalid' });
         return false;
       }
-      const shareIds = entryIds(share.value);
-      const entries = missingEntries(member, seed, new Set(shareIds));
-      if (entries.length === 0) return false;
-      const next = appendedText(name, member, before.toString('utf8'), shareIds, entries);
+      const appends = members.map((member) => {
+        const have = entryIds(share.value, member);
+        return { member, have, entries: missingEntries(member, seed, new Set(have)) };
+      });
+      if (appends.every((append) => append.entries.length === 0)) return false;
+      const next = appendedText(name, before.toString('utf8'), appends);
       if (next === null) {
         onFailure({ file: name, code: 'unmergeable' });
         return false;
@@ -653,7 +686,8 @@ async function appendMissing(
  * Publishes the packaged catalog into an existing `v1/catalog` folder. A file the folder lacks is
  * written whole (temporary dot file, then a hard link, which fails on a file that appeared meanwhile).
  * `models.json` and `model-aliases.json` that exist gain only the packaged entries they lack, by id
- * (`appendMissing`): share edits win, and nothing on the share is changed or removed. Resolves the
+ * (models, alias keys, effort suffixes; `appendMissing`): share edits win, and nothing on the share
+ * is changed or removed. Resolves the
  * names it wrote; never throws.
  */
 export async function seedCatalog(
@@ -675,8 +709,8 @@ export async function seedCatalog(
       });
       if (found === undefined) continue;
       if (found !== null) {
-        const member = APPEND_BY_ID[name];
-        if (member && (await appendMissing(target, name, member, found, sourceDir, onFailure)))
+        const members = APPEND_BY_ID[name];
+        if (members && (await appendMissing(target, name, members, found, sourceDir, onFailure)))
           written.push(name);
         continue;
       }

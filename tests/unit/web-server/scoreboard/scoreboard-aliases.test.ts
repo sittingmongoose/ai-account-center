@@ -161,7 +161,11 @@ describe('alias table', () => {
       expect(resolve(written)).toEqual({ id: canonical, effort: null });
     // A new prefix of a known bare id is not stripped: prefixes never match by rule.
     expect(resolve('codex/future-model')).toEqual({ id: 'codex/future-model', effort: null });
-    expect(resolve('zcode/gpt-6.1-sol')).toEqual({ id: 'zcode/gpt-6.1-sol', effort: null });
+    // (`zcode/gpt-6.1-sol` itself is an entry since the union with agent-report's copy.)
+    expect(resolve('newharness/gpt-6.1-sol')).toEqual({
+      id: 'newharness/gpt-6.1-sol',
+      effort: null,
+    });
   });
 
   it('resolves harness spellings by their full written string, exactly and case-sensitively', () => {
