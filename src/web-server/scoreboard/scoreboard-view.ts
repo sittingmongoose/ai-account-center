@@ -24,6 +24,9 @@ import type {
   ScoreboardTaskType,
   ScoreboardUse,
   ScoreboardView,
+  UnscoredExample,
+  UnscoredReason,
+  UnscoredSummary,
 } from './scoreboard-view-types';
 import { catalogSource, runsSource, type ScoreboardInputs } from './scoreboard-sources';
 import { judgeGroup, VERDICT_LABELS } from './scoreboard-verdicts';
@@ -262,14 +265,64 @@ function bump(map: Map<string, number>, key: string): void {
 
 export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
   const { catalog, runs, now } = inputs;
-  const docs = runs.runs.map(({ doc }) => {
+  // The alias table applies to every run read, history included, before scoring: a run keeps its
+  // raw written id only when it resolves to no catalog id.
+  const rawDocs = runs.runs.map(({ doc }) => doc);
+  const docs = rawDocs.map((doc) => {
     if (!doc.model.id) return doc;
-    const identity = normalizeModel(doc.model.id, doc.model.effort, catalog.models);
+    const identity = normalizeModel(doc.model.id, doc.model.effort, catalog.models, {
+      aliases: catalog.aliases,
+      effortSuffixes: catalog.effortSuffixes,
+    });
     return {
       ...doc,
       model: { ...doc.model, id: identity.id, effort: identity.effort, provider: null },
     };
   });
+  const knownModels = new Set(catalog.models.map((model) => model.model));
+  let noModel = 0;
+  let noTaskType = 0;
+  let unknownModel = 0;
+  const unknownCounts = new Map<string, number>();
+  const examplesAll: UnscoredExample[] = [];
+  for (let i = 0; i < rawDocs.length; i++) {
+    const raw = rawDocs[i];
+    const resolved = docs[i].model.id;
+    const written = raw.model.id;
+    let reason: UnscoredReason | null = null;
+    if (!written) {
+      noModel += 1;
+      reason = 'no-model';
+    } else if (!raw.task.type) {
+      noTaskType += 1;
+      reason = 'no-task-type';
+    } else if (resolved === null || !knownModels.has(resolved)) {
+      unknownModel += 1;
+      reason = 'unknown-model';
+      bump(unknownCounts, written);
+    }
+    if (reason)
+      examplesAll.push({
+        id: raw.id,
+        model: raw.model.id,
+        taskType: raw.task.type,
+        reason,
+        endedAt: raw.endedAt,
+      });
+  }
+  const unscoredSummary: UnscoredSummary = {
+    total: noModel + noTaskType + unknownModel,
+    noModel,
+    noTaskType,
+    unknownModel,
+    unknownModels: [...unknownCounts]
+      .map(([id, runs]) => ({ id, runs }))
+      .sort((a, b) => b.runs - a.runs || a.id.localeCompare(b.id))
+      .slice(0, 20),
+    examples: [...examplesAll]
+      .sort((a, b) => Date.parse(b.endedAt) - Date.parse(a.endedAt) || a.id.localeCompare(b.id))
+      .slice(0, 10),
+  };
   const index = buildReviewIndex(docs);
   const labels = new Map(catalog.models.map((model) => [model.model, model.label]));
   const shared: Shared = {
@@ -283,13 +336,9 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
   const known = new Set(catalog.taskTypes.map((type) => type.id));
   const missingTypes = new Map<string, number>();
   const missingModels = new Map<string, number>();
-  let unscored = 0;
   for (const run of docs) {
     const model = modelOf(run);
-    if (!model || !run.task.type) {
-      unscored += 1;
-      continue;
-    }
+    if (!model || !run.task.type) continue;
     if (!known.has(run.task.type)) {
       bump(missingTypes, run.task.type);
       continue;
@@ -322,7 +371,13 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
     generatedAt: new Date(now).toISOString(),
     refresh: { pollSeconds: SCOREBOARD_POLL_SECONDS },
     sources: [
-      runsSource(inputs, unscored, index.ignored, unknownOutcomes(docs), negativeQuotaRuns(docs)),
+      runsSource(
+        inputs,
+        unscoredSummary.noModel + unscoredSummary.noTaskType,
+        index.ignored,
+        unknownOutcomes(docs),
+        negativeQuotaRuns(docs)
+      ),
       catalogSource(inputs, missingTypes, missingModels),
     ],
     catalog: {
@@ -338,5 +393,6 @@ export function buildScoreboardView(inputs: ScoreboardInputs): ScoreboardView {
       .sort(newestFirst)
       .slice(0, RECENT_RUNS)
       .map((run) => summary(run, labels)),
+    unscored: unscoredSummary,
   };
 }

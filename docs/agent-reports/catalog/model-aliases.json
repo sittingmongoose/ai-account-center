@@ -1,0 +1,31 @@
+{
+  "schema": "agent-reports/model-aliases@1",
+  "aliases": {
+    "gpt-6.1-sol": "openai/gpt-6.1-sol",
+    "claude-opus-5-5": "anthropic/claude-opus-5-5",
+    "codex/gpt-6.1-sol": "openai/gpt-6.1-sol",
+    "gpt-6-astra": "openai/gpt-6-astra",
+    "muse-ember-1.0": "muse/muse-ember-1.0",
+    "opencode-go/deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
+    "grok-4.7": "xai/grok-4.7",
+    "codex/gpt-6-astra": "openai/gpt-6-astra",
+    "claude-fable-5-2": "anthropic/claude-fable-5-2",
+    "muse-wonder-full-1.0": "muse/muse-wonder-full-1.0",
+    "glm-5.3": "zai/glm-5.3",
+    "builtin:zai-coding-plan\\GLM-5.3": "zai/glm-5.3",
+    "zcode/glm-5.3": "zai/glm-5.3",
+    "muse-spark-1.3": "muse/muse-spark-1.3-contributor",
+    "deepseek-v4.1-flash": "deepseek/deepseek-v4.1-flash",
+    "builtin:bigmodel-coding-plan\\GLM-5.3": "zai/glm-5.3",
+    "alibaba-token-plan/qwen3.8-max": "alibaba/qwen3.8-max",
+    "cursor/grok-4.7": "xai/grok-4.7",
+    "omp/alibaba-token-plan/qwen4-max-preview": "alibaba/qwen4-max-preview"
+  },
+  "effortSuffixes": [
+    "-low",
+    "-medium",
+    "-high",
+    "-xhigh",
+    "-max"
+  ]
+}

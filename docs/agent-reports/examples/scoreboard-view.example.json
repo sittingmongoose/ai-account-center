@@ -225,6 +225,37 @@
         ],
         "prices": null,
         "notes": null
+      },
+      {
+        "model": "deepseek/deepseek-v4.1-flash",
+        "label": "DeepSeek V4.1 Flash",
+        "family": "DeepSeek",
+        "runtimes": [
+          "opencode-go"
+        ],
+        "efforts": [],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "alibaba/qwen3.8-max",
+        "label": "Qwen 3.8 Max",
+        "family": "Qwen",
+        "runtimes": [],
+        "efforts": [],
+        "prices": null,
+        "notes": null
+      },
+      {
+        "model": "alibaba/qwen4-max-preview",
+        "label": "Qwen 4 Max Preview",
+        "family": "Qwen",
+        "runtimes": [
+          "omp"
+        ],
+        "efforts": [],
+        "prices": null,
+        "notes": null
       }
     ],
     "taskTypes": [
@@ -12139,5 +12170,33 @@
       "flags": 0,
       "evidence": []
     }
-  ]
+  ],
+  "unscored": {
+    "total": 2,
+    "noModel": 0,
+    "noTaskType": 1,
+    "unknownModel": 1,
+    "unknownModels": [
+      {
+        "id": "example-1",
+        "runs": 1
+      }
+    ],
+    "examples": [
+      {
+        "id": "vm.scoreboard-lead--no-type",
+        "model": "glm-5.3",
+        "taskType": null,
+        "reason": "no-task-type",
+        "endedAt": "2026-11-06T13:30:00Z"
+      },
+      {
+        "id": "vm.scoreboard-lead--unlisted-model",
+        "model": "example-1",
+        "taskType": "build",
+        "reason": "unknown-model",
+        "endedAt": "2026-11-06T11:30:00Z"
+      }
+    ]
+  }
 }

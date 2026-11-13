@@ -199,6 +199,37 @@
       ],
       "prices": null,
       "notes": ""
+    },
+    {
+      "model": "deepseek/deepseek-v4.1-flash",
+      "label": "DeepSeek V4.1 Flash",
+      "family": "DeepSeek",
+      "runtimes": [
+        "opencode-go"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "alibaba/qwen3.8-max",
+      "label": "Qwen 3.8 Max",
+      "family": "Qwen",
+      "runtimes": [],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
+    },
+    {
+      "model": "alibaba/qwen4-max-preview",
+      "label": "Qwen 4 Max Preview",
+      "family": "Qwen",
+      "runtimes": [
+        "omp"
+      ],
+      "efforts": [],
+      "prices": null,
+      "notes": ""
     }
   ]
 }

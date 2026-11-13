@@ -1,9 +1,12 @@
 /**
  * The Model Scoreboard catalog (docs/scoreboard.md): `<reports>/v1/catalog/*.json`, owned by AAC and
- * edited on the share as data. Each file is `{ schema: "catalog-<kind>@1", <kind>: [...] }`. A file
- * that later fails keeps its last good copy; a catalog with no good copy shows as a Source problem
- * and the kinds it holds stay empty, never a crash. Unknown fields never reach the view; reasons are
- * fixed sentences. At server start AAC writes a packaged seed only where the share has no file.
+ * edited on the share as data. Each file is `{ schema: "catalog-<kind>@1", <kind>: [...] }`, except
+ * `model-aliases.json`, which is `{ schema: "agent-reports/model-aliases@1",
+ * aliases: { <written id>: <canonical id> }, effortSuffixes: ["-high", ...] }` (see model-identity.ts).
+ * A file that later fails keeps its last good copy; a catalog with no good copy shows as a Source
+ * problem and the kinds it holds stay empty, never a crash. Unknown fields never reach the view;
+ * reasons are fixed sentences. At server start AAC writes a packaged seed only where the share
+ * has no file (the dashboard publishing step for the catalog).
  */
 import fs from 'fs';
 import path from 'path';
@@ -84,6 +87,12 @@ export interface CatalogBenchmark {
   description: string | null;
   items: number | null;
   scoring: string | null;
+}
+
+/** The shared alias table: written model ids to canonical `models.json` ids, plus effort suffixes. */
+export interface ModelAliases {
+  aliases: Record<string, string>;
+  effortSuffixes: string[];
 }
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/;
@@ -232,8 +241,37 @@ function benchmarks(value: unknown): CatalogBenchmark[] {
   );
 }
 
+/**
+ * An effort suffix: one leading dash, then a lowercase word (`-high`, `-xhigh`, ...). The dash is
+ * part of the stored form so stripping is exact; the effort value is the suffix without the dash.
+ */
+const SUFFIX = /^-[a-z][a-z0-9-]{0,15}$/;
+
+function modelAliases(doc: Record<string, unknown>): ModelAliases {
+  const raw = obj(doc.aliases, 'aliases');
+  const entries = Object.entries(raw);
+  if (entries.length > 500) fail('aliases');
+  const aliases: Record<string, string> = {};
+  for (const [written, canonical] of entries) {
+    if (typeof written !== 'string' || written.length === 0 || written.length > 120)
+      fail('aliases');
+    if (typeof canonical !== 'string' || canonical.length === 0 || canonical.length > 120)
+      fail('aliases');
+    text(written, 'aliases', 120);
+    text(canonical, 'aliases', 120);
+    aliases[written] = canonical;
+  }
+  const suffixes = list(doc.effortSuffixes, 'effortSuffixes', 32, (item, at) => {
+    const suffix = text(item, at, 16);
+    if (!SUFFIX.test(suffix)) fail(at);
+    return suffix;
+  });
+  return { aliases, effortSuffixes: [...new Set(suffixes)] };
+}
+
 const FILES = {
   'models.json': { schema: 'catalog-models@1', key: 'models' },
+  'model-aliases.json': { schema: 'agent-reports/model-aliases@1', key: 'aliases' },
   'task-types.json': { schema: 'catalog-task-types@1', key: 'taskTypes' },
   'measures.json': { schema: 'catalog-measures@1', key: 'measures' },
   'uses.json': { schema: 'catalog-uses@1', key: 'uses' },
@@ -245,6 +283,7 @@ export const CATALOG_FILES = Object.keys(FILES) as CatalogFileName[];
 
 export type CatalogFile =
   | { kind: 'models'; models: CatalogModel[] }
+  | { kind: 'aliases'; aliases: Record<string, string>; effortSuffixes: string[] }
   | { kind: 'taskTypes'; taskTypes: CatalogTaskType[] }
   | { kind: 'measures'; minRuns: number; measures: CatalogMeasure[] }
   | { kind: 'uses'; uses: CatalogUse[] }
@@ -258,6 +297,13 @@ export function parseCatalogFile(name: CatalogFileName, bytes: Buffer): Parsed<C
   try {
     const doc = obj(raw.value, 'document');
     if (doc.schema !== schema) fail('schema');
+    if (key === 'aliases') {
+      const parsed = modelAliases(doc);
+      return {
+        ok: true,
+        value: { kind: 'aliases', aliases: parsed.aliases, effortSuffixes: parsed.effortSuffixes },
+      };
+    }
     const rows = doc[key];
     if (!Array.isArray(rows)) fail(key);
     switch (key) {
@@ -291,6 +337,9 @@ export interface CatalogState {
   problems: ReportProblem[];
   minRuns: number;
   models: CatalogModel[];
+  /** The alias table (`model-aliases.json`), empty when the file has no good copy. */
+  aliases: Record<string, string>;
+  effortSuffixes: string[];
   taskTypes: CatalogTaskType[];
   measures: CatalogMeasure[];
   uses: CatalogUse[];
@@ -361,6 +410,7 @@ export class CatalogReader {
     const problems = byFile(this.files.problems());
     const named = new Set(problems.map((problem) => problem.file));
     const measuresFile = read('measures.json', 'measures');
+    const aliasesFile = read('model-aliases.json', 'aliases');
     return {
       state: this.state,
       scannedAt: this.scannedAt,
@@ -370,6 +420,8 @@ export class CatalogReader {
       problems,
       minRuns: measuresFile?.minRuns ?? DEFAULT_MIN_RUNS,
       models: read('models.json', 'models')?.models ?? [],
+      aliases: aliasesFile?.aliases ?? {},
+      effortSuffixes: aliasesFile?.effortSuffixes ?? [],
       taskTypes: read('task-types.json', 'taskTypes')?.taskTypes ?? [],
       measures: measuresFile?.measures ?? [],
       uses: read('uses.json', 'uses')?.uses ?? [],
