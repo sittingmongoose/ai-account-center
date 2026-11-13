@@ -188,10 +188,15 @@ describe('unknownModel (agent-report 1.6)', () => {
       runs: snapshot,
     });
     const source = view.sources.find((s) => s.id === 'scoreboard-catalog');
-    expect(source?.detail).toContain('Models in runs but not in the catalog: acme-model-9 (1 run)');
-    // Counted with the other build runs, not dropped.
+    expect(source?.detail).toContain(
+      'Models in runs but not in the catalog, not scored: acme-model-9 (1 run)'
+    );
+    // Read, not dropped: an unknown model forms no scored row and is counted
+    // under "runs not scored" instead.
     const build = view.uses.flatMap((use) => use.taskTypes).find((type) => type.id === 'build');
     const counted = (build?.rows ?? []).reduce((sum, row) => sum + row.n.observed, 0);
-    expect(counted).toBe(2);
+    expect(counted).toBe(1);
+    expect(view.unscored.unknownModel).toBe(1);
+    expect(view.unscored.unknownModels).toEqual([{ id: 'acme-model-9', runs: 1 }]);
   });
 });
