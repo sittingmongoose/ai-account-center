@@ -31,8 +31,8 @@ async function openBoard(t, query = '', change) {
 	await t.page.waitForSelector('.picks');
 }
 
-// The fixture's runs not scored (leptos/fixtures/scoreboard-view.json `unscored`): 12 + 23 + 6.
-const UNSCORED_LINE = '41 runs not scored: 12 unknown model, 23 no task type, 6 no model';
+// The fixture's runs not scored (leptos/fixtures/scoreboard-view.json `unscored`): 4 + 12 + 3 + 23 + 6.
+const UNSCORED_LINE = '48 runs not scored: 4 unreadable, 12 unknown model, 3 unknown task type, 23 no task type, 6 no model';
 const lineText = (t) => t.page.evaluate(() => document.querySelector('.sb-unscored summary')?.textContent.replace(/\s+/g, ' ').trim() ?? null);
 /** The list under the line: whether it shows, floats (a hover) or sits in the flow (open), and its box. */
 const listState = (t) => t.page.evaluate(() => {
@@ -165,14 +165,14 @@ export const tests = {
 		// A mouse hover shows the list floating under the line, over the page; it goes when the pointer leaves.
 		const box = await t.page.locator('.sb-unscored summary').boundingBox();
 		await t.page.mouse.move(box.x + 20, box.y + box.height / 2);
-		await t.until('a hover shows the list', () => document.querySelector('.sbu-list').innerText.includes('41 runs not scored'), null, { timeout: 3000 });
+		await t.until('a hover shows the list', () => document.querySelector('.sbu-list').innerText.includes('48 runs not scored'), null, { timeout: 3000 });
 		let list = await listState(t);
 		await t.check('the hovered list floats and moves nothing', list.floating && (await stackTop(t)) === before);
 		await t.check('the hovered list hangs under the line, inside the window', list.top >= box.y + box.height - 8 && list.top - (box.y + box.height) < 16 && list.right <= 1440);
-		await t.text('.sbu-list .sbu-head', '41 runs not scored');
+		await t.text('.sbu-list .sbu-head', '48 runs not scored');
 		const lines = (sel) => t.page.$$eval(sel, (l) => l.map((e) => e.textContent.trim()));
 		const why = await lines('.sbu-list .sbu-why');
-		await t.equal('three reasons, each with its runs', why.map((w) => w.split(' · ')[0]), ['Unknown model: 12 runs', 'No task type: 23 runs', 'No model: 6 runs']);
+		await t.equal('five reasons, each with its runs', why.map((w) => w.split(' · ')[0]), ['Unreadable: 4 runs', 'Unknown model: 12 runs', 'Unknown task type: 3 runs', 'No task type: 23 runs', 'No model: 6 runs']);
 		await t.equal('the unknown ids with their runs', await lines('.sbu-list .sbu-id'), [
 			'example-vendor/example-model-9-preview7 runs',
 			'builtin:example-coding-plan\\Example-4.23 runs',
@@ -212,6 +212,41 @@ export const tests = {
 		}
 	},
 
+	// Review 1, M3: the chevron never stands alone on a line. The reviewer's sweep: the note's box from 120 to 520 px,
+	// at the page's own size and at 13 px, with the fixture's words and with the live share's words of that day.
+	async 'scoreboard runs not scored: the chevron never stands alone'(t) {
+		const texts = [
+			['fixture', (v) => v],
+			['share 2026-11-13', (v) => ({ ...v, unscored: { total: 46, unreadable: 0, noModel: 11, noTaskType: 35, unknownModel: 0, unknownTaskType: 0, unknownModels: [], examples: [] } })],
+			['share with refusals', (v) => ({ ...v, unscored: { total: 752, unreadable: 706, noModel: 11, noTaskType: 35, unknownModel: 0, unknownTaskType: 0, unknownModels: [], examples: [] } })],
+		];
+		for (const [name, change] of texts) {
+			await t.newContext({ viewport: { width: 1440, height: 900 } });
+			await openBoard(t, '', change);
+			const sweep = await t.page.evaluate(() => {
+				const note = document.querySelector('.sb-unscored');
+				const chev = note.querySelector('.chev');
+				const tail = note.querySelector('summary .nw');
+				const bad = [];
+				for (const size of ['', '13px']) {
+					note.style.fontSize = size;
+					for (let w = 120; w <= 520; w++) {
+						note.style.width = `${w}px`;
+						const words = tail.getClientRects();
+						const c = chev.getBoundingClientRect();
+						const w0 = words[words.length - 1];
+						const alone = words.length !== 1 || Math.abs(c.top + c.height / 2 - (w0.top + w0.height / 2)) > w0.height / 2;
+						if (alone) bad.push(`${size || 'own'}@${w}`);
+					}
+				}
+				note.style.fontSize = '';
+				note.style.width = '';
+				return { bad: bad.slice(0, 12), count: bad.length };
+			});
+			await t.check(`${name}: the chevron stays with the last words at every width from 120 to 520 px`, sweep.count === 0, `alone at ${sweep.bad.join(', ')}${sweep.count > 12 ? ' ...' : ''}`);
+		}
+	},
+
 	async 'scoreboard runs not scored in each format'(t) {
 		for (const f of FORMATS) {
 			await t.newContext({ viewport: { width: f.w, height: f.h }, isMobile: f.mobile, hasTouch: f.mobile, deviceScaleFactor: 1 });
@@ -247,7 +282,7 @@ export const tests = {
 			await t.check(`${f.name}: the open list stays inside the content`, list.left >= content.left - 1 && list.right <= content.right + 1, `${Math.round(list.left)}-${Math.round(list.right)} in ${Math.round(content.left)}-${Math.round(content.right)}`);
 			await t.check(`${f.name}: no sideways scroll with it open`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 			await t.count('.sbu-list .sbu-id', 2);
-			await t.text('.sbu-list .sbu-why', /^Unknown model: 12 runs · /);
+			await t.text('.sbu-list .sbu-why', /^Unreadable: 4 runs · /);
 			if (f.name === 'iphone' || f.name === 'duo-landscape') await t.shot(`scoreboard-unscored-${f.name}`, `runs not scored on ${f.name} (${f.w}x${f.h}): the list open under the line`);
 			await t.page.click('.sb-unscored summary');
 			await t.equal(`${f.name}: another tap closes it`, (await listState(t)).shown, false);

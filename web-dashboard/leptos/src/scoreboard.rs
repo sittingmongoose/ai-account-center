@@ -43,9 +43,12 @@ pub struct ScoreboardView {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Unscored {
     pub total: u32,
+    /// Run files the reader refused (named in the Sources list).
+    pub unreadable: u32,
     pub no_model: u32,
     pub no_task_type: u32,
     pub unknown_model: u32,
+    pub unknown_task_type: u32,
     /// The written ids of the unknown models, most runs first (the top 20). The view's `examples` are not read: the
     /// note names reasons and ids, and the bundle has no room to spare.
     pub unknown_models: Vec<UnknownModel>,
@@ -68,9 +71,11 @@ impl Unscored {
         };
         Unscored {
             total: count(v, "total"),
+            unreadable: count(v, "unreadable"),
             no_model: count(v, "noModel"),
             no_task_type: count(v, "noTaskType"),
             unknown_model: count(v, "unknownModel"),
+            unknown_task_type: count(v, "unknownTaskType"),
             unknown_models: v
                 .get("unknownModels")
                 .and_then(serde_json::Value::as_array)
@@ -1059,15 +1064,27 @@ pub fn shown_unscored(view: &ScoreboardView) -> Option<Unscored> {
         .filter(|u| u.total > 0)
 }
 
-/// The reasons that have runs, in one fixed order (unknown model, no task type, no model), so the note keeps its
-/// shape from one refresh to the next.
+/// The reasons that have runs, in one fixed order (unreadable, unknown model, unknown task type, no task type, no
+/// model), so the note keeps its shape from one refresh to the next.
 pub fn unscored_reasons(u: &Unscored) -> Vec<UnscoredReason> {
     [
+        UnscoredReason {
+            runs: u.unreadable,
+            short: "unreadable",
+            label: "Unreadable",
+            why: "the reader refused the run file (each is named under Sources)",
+        },
         UnscoredReason {
             runs: u.unknown_model,
             short: "unknown model",
             label: "Unknown model",
             why: "its model is not in the catalog or its alias table",
+        },
+        UnscoredReason {
+            runs: u.unknown_task_type,
+            short: "unknown task type",
+            label: "Unknown task type",
+            why: "its task type is not in the catalog",
         },
         UnscoredReason {
             runs: u.no_task_type,
@@ -1145,7 +1162,7 @@ pub fn unscored_lines(u: &Unscored) -> Vec<(&'static str, Vec<Run>)> {
         (
             "q3 sbu-lead",
             vec![plain(
-                "Read from the agent reports, left out of every verdict:".into(),
+                "In the agent reports, left out of every verdict:".into(),
             )],
         ),
     ];
@@ -1198,10 +1215,14 @@ pub fn unlisted_unknown_runs(u: &Unscored) -> u32 {
 fn UnscoredNote(board: Board) -> impl IntoView {
     move || {
         board.view.with(|v| v.as_ref().and_then(shown_unscored)).map(|u| {
+            // The last count, its words and the chevron share one unbreakable piece: a break is allowed before an
+            // inline icon even after a no-break space, which left the chevron alone on a line (review 1, M3).
+            let mut note = unscored_note(&u);
+            let last = note.split_off(note.len().saturating_sub(2));
             view! {
                 <div class="sb-unscored">
                     <details>
-                        <summary>{runs_view(unscored_note(&u))}<Icon name="chev-down" class="chev"/></summary>
+                        <summary>{runs_view(note)}<span class="nw">{runs_view(last)}<Icon name="chev-down" class="chev"/></span></summary>
                     </details>
                     <div class="sbu-list">
                         {unscored_lines(&u).into_iter().map(|(class, runs)| view! { <p class=class>{runs_view(runs)}</p> }).collect_view()}
@@ -1344,6 +1365,25 @@ mod tests {
             "41 runs not scored: 12 unknown model, 23 no task type, 6 no model"
         );
         assert_eq!(sentence(&unscored(1, 0, 0)), "1 run not scored: 1 no model");
+        // unreadable files and unknown task types are reasons of their own, first and third
+        let all = Unscored {
+            total: 10,
+            unreadable: 4,
+            unknown_task_type: 1,
+            ..unscored(2, 2, 1)
+        };
+        assert_eq!(
+            sentence(&all),
+            "10 runs not scored: 4 unreadable, 1 unknown model, 1 unknown task type, 2 no task type, 2 no model"
+        );
+        assert_eq!(
+            sentence(&Unscored {
+                total: 4,
+                unreadable: 4,
+                ..Default::default()
+            }),
+            "4 runs not scored: 4 unreadable"
+        );
         // each piece stays whole: a bold count, then its words joined by no-break spaces; the only break
         // opportunity is the plain space after a comma or the colon
         let runs = unscored_note(&unscored(6, 23, 12));
@@ -1407,8 +1447,9 @@ mod tests {
         let u = shown_unscored(&view).expect("the fixture has runs not scored");
         assert_eq!(
             sentence(&u),
-            "41 runs not scored: 12 unknown model, 23 no task type, 6 no model"
+            "48 runs not scored: 4 unreadable, 12 unknown model, 3 unknown task type, 23 no task type, 6 no model"
         );
+        assert_eq!((u.unreadable, u.unknown_task_type), (4, 3));
         assert_eq!(u.unknown_models.len(), 2);
         assert_eq!(
             u.unknown_models[1].id,
@@ -1423,21 +1464,29 @@ mod tests {
                 .join("|")
         };
         assert_eq!(lines[0].0, "sbu-head");
-        assert_eq!(text(&lines[0]), "41 runs not scored");
+        assert_eq!(text(&lines[0]), "48 runs not scored");
         assert_eq!(
             text(&lines[2]),
+            "Unreadable|: 4 runs · the reader refused the run file (each is named under Sources)"
+        );
+        assert_eq!(
+            text(&lines[3]),
             "Unknown model|: 12 runs · its model is not in the catalog or its alias table"
         );
-        assert_eq!(lines[5].0, "cap sbu-cap");
         assert_eq!(
-            text(&lines[6]),
+            text(&lines[4]),
+            "Unknown task type|: 3 runs · its task type is not in the catalog"
+        );
+        assert_eq!(lines[7].0, "cap sbu-cap");
+        assert_eq!(
+            text(&lines[8]),
             "example-vendor/example-model-9-preview|7 runs"
         );
         assert_eq!(
             lines.last().map(text).as_deref(),
             Some("2 more runs under other ids.")
         );
-        assert_eq!(lines.len(), 9);
+        assert_eq!(lines.len(), 11);
         // no unknown ids: no heading for them and nothing over
         let bare = unscored(0, 4, 0);
         assert!(

@@ -12088,10 +12088,12 @@
     }
   ],
   "unscored": {
-    "total": 41,
+    "total": 48,
+    "unreadable": 4,
     "noModel": 6,
     "noTaskType": 23,
     "unknownModel": 12,
+    "unknownTaskType": 3,
     "unknownModels": [
       {
         "id": "example-vendor/example-model-9-preview",
