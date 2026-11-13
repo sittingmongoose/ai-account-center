@@ -1039,14 +1039,22 @@ row ended as it did instead of "The app update failed":
 | --- | --- |
 | `cause` | One fixed class: `none`, `shadowed`, `auth_required`, `signin_needed`, `policy_blocked`, `wrong_prefix`, `not_writable`, `lost_session_reply`, `t3_absent`, `t3_not_ready`, `t3_restart_pending`, `installer_failed`, `in_use`, `timeout` or `unknown` |
 | `reason` | One fixed word naming the step or refusal (`http_401`, `execution_policy`, `owner_unchanged`, `reply_empty`, `previous_server`, `token_storage_change`, `no_enabled_instance`; for `unknown`, the message code or probe failure) |
-| `command`, `exitCode` | The command that decided the row: for a clean row the last one that succeeded (a fallback that worked, not the attempt it replaced), otherwise the last one that failed. Read-only probes (versions, service states, launchctl plumbing) are never it. The program's own name and fixed arguments with home folders as `~`, never a script body or an encoded command; its exit code |
+| `tool`, `exitCode` | The run that decided the row: for a clean row the last one that succeeded (a fallback that worked, not the attempt it replaced), otherwise the last one that failed. Read-only probes (versions, service states, launchctl plumbing) are never it. `tool` is one fixed word from `TOOLS` in `app_update_common.py` (the label's first word, else the program's own name, else `unlisted`), never its arguments; its exit code |
 | `phases` | Milliseconds per step (`checking`, `updating`, `t3_ready`, `offer`, `install`, `verify`, `refresh_models`, ...) |
 | `owner` | The copy used and how it was chosen: manager, prefix or executable (home-relative), source (`t3-config`, `path`, `default`, `found`, `versions-folder`), whether it is on PATH and which copy comes first, the Antigravity runtime kind and where its target came from, and other copies with their versions |
 | `notes` | Up to six fixed words (`policy_fallback_direct`, `direct_install`, `refresh_failed`, ...) |
-| `tail` | For a row that did not finish cleanly: the last 12 lines (at most 1200 characters) of the failing command's stderr |
+**Installer output and command text are never saved (owner decision U13, until the Rust
+port).** A failed command's output is read in memory to classify its cause (sign-in, policy,
+ENOSPC, version went down and so on) and then discarded. No output tail and no argv or command
+text is stored, exported, logged, written to `dashboard-job.json` or
+`dashboard-job-expanded.json`, or restored. The dashboard drops any `tail` or `command` field
+from every row, including rows saved by older helpers; a saved job that still holds one is
+rewritten without it on the next load (left to its owner while it runs). Where a tail was
+shown, the page says: "Installer output isn't saved; cause: <cause>, exit code <n>".
 
-The tail passes the same scrubber twice, in the helper and at the dashboard
-boundary. Before any truncation it replaces each whole line naming `auth`,
+The scrubber below stays as defence in depth for the free text that remains (owner paths).
+It checks each original line as well as its ANSI-stripped form, so an ANSI title cannot hide
+a flag. Before any truncation it replaces each whole line naming `auth`,
 `token`, `password`, `passwd`, `pwd`, `secret`, `cookie`, `authorization`, `bearer`,
 `api_key`, `apikey`, `api-key`, `credential`, `session` or `private key` with
 `<line removed: may contain a credential>`. Indented and separator-continued
@@ -1192,7 +1200,7 @@ Results are `updated`, `current`, `not_installed`, `failed`, `restart_failed`,
 codes, restart counts/forced-stop counts, safe terminal target metadata and
 `diagnostics` (see [Diagnosable outcomes](#diagnosable-outcomes)). Process argv,
 environments, installer response bodies and credentials are never returned; a
-failed command's output appears only as the scrubbed tail described there. Host/helper execution locks prevent overlapping
+failed command's output is never returned or saved (owner decision U13). Host/helper execution locks prevent overlapping
 work. Package operation timeout or a relaunch refusal is reported honestly and
 does not prevent other apps/hosts from producing their own results. Status reads
 never retry an interrupted job.

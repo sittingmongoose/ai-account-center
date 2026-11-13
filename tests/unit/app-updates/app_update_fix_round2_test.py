@@ -28,6 +28,10 @@ from app_update_robustness_test import Home, attach, scope, write_package
 
 REMOVED = '<line removed: may contain a credential>'
 REST = '<rest of output removed: may contain a credential>'
+# Owner decision U13: a row's diagnostics keep only these; never output or command text.
+KEPT_FIELDS = {'cause', 'reason', 'tool', 'exitCode', 'phases', 'owner', 'notes'}
+AFTER = 'update step finished'
+ESC, BEL = '\x1b', '\x07'
 
 
 class Round2(Home):
@@ -36,7 +40,27 @@ class Round2(Home):
     npm_writes = fixtures.Adapters.npm_writes
     update = fixtures.Adapters.update
 
-    def test_c1_real_command_drops_carriers_and_continuations_before_truncation(self):
+    def run_failing(self, sample=None, argv=None, label='fixture updater', **kwargs):
+        """One real failing command in a row's scope: its exception (raw output, in memory) and exported row."""
+        with scope() as record:
+            with self.assertRaises(common.UpdateFailure) as caught:
+                if argv is None:
+                    argv = [sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(sample) + '); sys.exit(1)']
+                common.command(argv, errors=True, label=label, **kwargs)
+            row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
+        return caught.exception, row
+
+    def assert_nothing_kept(self, row, witnesses, tool='unlisted'):
+        """No output, tail or command text in the exported row; only the fixed fields remain."""
+        diagnostics = row['diagnostics']
+        self.assertLessEqual(set(diagnostics), KEPT_FIELDS)
+        self.assertEqual((diagnostics['cause'], diagnostics.get('tool'), diagnostics.get('exitCode')),
+                         ('installer_failed', tool, 1))
+        text = json.dumps(row)
+        for witness in witnesses:
+            self.assertNotIn(witness, text)
+
+    def test_c1_real_command_keeps_no_output_from_any_carrier(self):
         samples = ['{"//registry.example.test/:_auth":"dXNlcjpmaXh0dXJl"}',
                    'Cookie: SID=fixtureCookieOne;\n\tHSID=fixtureCookieTwo',
                    'installer --password "first second third"',
@@ -44,21 +68,19 @@ class Round2(Home):
                    'x' * 700 + ' api_key=lateMarkerWitness',
                    'aUtH: value\n foldedWitness\n\tlastWitness',
                    'Cookie:\nfoldedWitness;\nlastWitness']
+        witnesses = ('dXNlcjpmaXh0dXJl', 'fixtureCookieOne', 'fixtureCookieTwo', 'second third', 'foldedWitness',
+                     'lateMarkerWitness', 'lastWitness', 'xxxxxxxx')
         for sample in samples:
-            with self.subTest(sample=sample[:60]), scope() as record:
-                with self.assertRaises(common.UpdateFailure):
-                    common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(sample) + '); sys.exit(1)'],
-                                   errors=True, label='fixture updater')
-                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
-                tail = row['diagnostics']['tail']
-                # A credential flag, or a quote after a marker, ends the kept output; other markers
-                # drop their line and its continuations.
-                self.assertEqual(tail, REST if sample.startswith(('{', 'installer')) else REMOVED)
-        self.assertEqual(common.scrub('ordinary ENOSPC diagnostic'), 'ordinary ENOSPC diagnostic')
+            with self.subTest(sample=sample[:60]):
+                error, row = self.run_failing(sample)
+                self.assert_nothing_kept(row, witnesses)
+                # Classification still reads the output, in memory only.
+                self.assertIn(sample[:40], error.output)
 
     H1_FLAGS = ('--password', '--passwd', '--pass', '--token', '--api-key', '--apikey', '--auth', '--auth-token',
                 '--authtoken', '--secret', '--access-token', '--accesstoken', '--otp')
-    H1_WITNESSES = ('horse', 'battery', 'staple', 'correctHorseWitness', 'continuationWitness')
+    H1_WITNESSES = ('horse', 'battery', 'staple', 'correctHorseWitness', 'continuationWitness', 'zebraWitness',
+                    'aaaaaaaaaa', 'fail.py')
 
     @classmethod
     def h1_samples(cls):
@@ -70,53 +92,20 @@ class Round2(Home):
         return samples + ['installer -p "correct horse battery staple"', 'installer -p="correct horse battery staple"',
                           "installer -p'correct horse battery staple'", 'installer --pass \\\n  continuationWitness']
 
-    def test_h1_every_recognised_flag_drops_its_whole_line_through_command_and_export(self):
-        for sample in self.h1_samples():
-            with self.subTest(sample=sample), scope() as record:
-                with self.assertRaises(common.UpdateFailure):
-                    common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(sample) + '); sys.exit(1)'],
-                                   errors=True, label='fixture updater')
-                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
-                self.assertEqual(row['diagnostics']['tail'], REST)
-                self.assertEqual(common.scrub(sample), REST)
-                for witness in self.H1_WITNESSES:
-                    self.assertNotIn(witness, json.dumps(row))
-
-    def test_h1_every_flag_the_token_pass_redacts_is_a_whole_line_marker(self):
-        for flag in self.H1_FLAGS:
-            self.assertRegex(flag, '^' + common.CREDENTIAL_FLAG + '$')
-            self.assertRegex(flag, common._CREDENTIAL_MARKER)
-        self.assertIn(common.CREDENTIAL_FLAG, common.CREDENTIAL_MARKERS)
-
-    AFTER = 'update step finished'
-    # Round-1 witnesses: each carries a credential flag, so the line and the rest of the output go.
+    # Round 1 (RECHECK-H1): multi-line values after a flag.
     H1_MULTILINE = (
-        ('installer --pass "correct\nhorse battery staple"\n' + AFTER, REST),
-        ("installer --pass 'correct\nhorse battery staple'\n" + AFTER, REST),
-        ("installer -OTP 'correct\nhorse battery\nstaple'\n" + AFTER, REST),
-        ('installer -OTP "correct\nhorse battery staple"\n' + AFTER, REST),
-        ('installer --password "correct\nhorse battery staple"\n' + AFTER, REST),
-        ("installer --password 'correct\nhorse battery staple'\n" + AFTER, REST),
-        ('installer --pass "correct\\"\nhorse battery staple"\n' + AFTER, REST),
-        ('installer --pass "correct\nhorse battery staple\n' + AFTER, REST),
-        ("installer -OTP 'correct\nhorse\nbattery staple\n" + AFTER, REST),
-        ('installer --password "correct\nhorse battery staple', REST),
+        'installer --pass "correct\nhorse battery staple"\n' + AFTER,
+        "installer --pass 'correct\nhorse battery staple'\n" + AFTER,
+        "installer -OTP 'correct\nhorse battery\nstaple'\n" + AFTER,
+        'installer -OTP "correct\nhorse battery staple"\n' + AFTER,
+        'installer --password "correct\nhorse battery staple"\n' + AFTER,
+        "installer --password 'correct\nhorse battery staple'\n" + AFTER,
+        'installer --pass "correct\\"\nhorse battery staple"\n' + AFTER,
+        'installer --pass "correct\nhorse battery staple\n' + AFTER,
+        "installer -OTP 'correct\nhorse\nbattery staple\n" + AFTER,
+        'installer --password "correct\nhorse battery staple',
     )
-
-    def test_h1_a_multiline_value_after_a_flag_never_keeps_a_tail(self):
-        for sample, expected in self.H1_MULTILINE:
-            with self.subTest(sample=sample), scope() as record:
-                with self.assertRaises(common.UpdateFailure):
-                    common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(sample) + '); sys.exit(1)'],
-                                   errors=True, label='fixture updater')
-                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
-                self.assertEqual(row['diagnostics']['tail'], expected)
-                self.assertEqual(common.scrub(sample), expected)
-                for witness in self.H1_WITNESSES:
-                    self.assertNotIn(witness, json.dumps(row))
-
-    # RECHECK-H1-2 probe: 24 output carriers. Each holds a credential flag, or a quote after a marker,
-    # so its line and the rest of the output go, with no quote parsing.
+    # Round 2 (RECHECK-H1-2): 24 output carriers.
     H1_PROBE = (
         ('R1 dq', 'installer --pass "correct\nhorse battery staple"\n' + AFTER),
         ('R1 sq OTP', "installer -OTP 'correct\nhorse battery\nstaple'\n" + AFTER),
@@ -143,67 +132,85 @@ class Round2(Home):
         ('unquoted newline (dash -x)', '+ installer --pass correct\nhorse battery staple\n' + AFTER),
         ('marker password colon', 'password: "correct\nhorse battery staple"\n' + AFTER),
     )
+    # Round 4 (RECHECK-H1-4, H1-R6): an ANSI title (OSC) that holds the flag, and a coloured flag.
+    H1_OSC = (
+        ('osc newline', ESC + ']0;installer --pass "correct\nhorse battery staple"' + BEL + '\n' + AFTER),
+        ('osc crlf otp', ESC + ']0;installer --otp "correct\r\nhorse battery staple"' + BEL + '\r\n' + AFTER),
+        ('osc over 512', ESC + ']0;installer --pass ' + 'a' * 520 + 'horse battery staple' + BEL + '\n' + AFTER),
+        ('sgr coloured flag', 'installer ' + ESC + '[31m--pass' + ESC + '[0m "correct horse battery staple"\n' + AFTER),
+    )
 
-    def test_h1_recheck2_output_carriers_end_the_kept_output(self):
-        for name, sample in self.H1_PROBE:
-            with self.subTest(name=name), scope() as record:
-                with self.assertRaises(common.UpdateFailure):
-                    common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(sample) + '); sys.exit(1)'],
-                                   errors=True, label='fixture updater')
-                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
-                self.assertEqual(row['diagnostics']['tail'], REST)
+    def output_samples(self):
+        return ([('alias', sample) for sample in self.h1_samples()] + [('multiline', sample) for sample in self.H1_MULTILINE]
+                + list(self.H1_PROBE) + list(self.H1_OSC))
+
+    def test_h1_no_output_from_any_probe_reaches_the_row(self):
+        """Every witness of rounds 1-4 (aliases, multi-line, 24 carriers, OSC): classified, then discarded."""
+        for name, sample in self.output_samples():
+            with self.subTest(name=name, sample=sample[:50]):
+                error, row = self.run_failing(sample)
+                self.assert_nothing_kept(row, self.H1_WITNESSES)
+                # Classification still reads the output, in memory only.
+                self.assertIn('staple' if 'staple' in sample else 'Witness', error.output)
+
+    def test_h1_no_argument_reaches_the_row(self):
+        """Rounds 2-3: argv values with line breaks, plain values and long slash '=' values. Only the tool word stays."""
+        child = self.root / 'fail.py'
+        child.write_text('import sys; sys.exit(1)')
+        values = [['--pass', 'correct\nhorse battery staple'], ['--pass', 'correct\r\nhorse battery staple'],
+                  ['--pass', 'zebraWitness'], ['--pass=/' + 'horse battery staple/' * 12],
+                  ['--password=/' + 'horse battery staple/' * 12], ['--verbose', 'correctHorseWitness']]
+        for extra in values:
+            with self.subTest(extra=extra[0][:20]):
+                _, row = self.run_failing(argv=[sys.executable, str(child), *extra], label=None)
+                self.assert_nothing_kept(row, self.H1_WITNESSES, tool='python')
+        # A label names the tool by its first word only.
+        _, row = self.run_failing(argv=[sys.executable, str(child), '--token', 'zebraWitness'],
+                                  label='npm install --global zebraWitness')
+        self.assert_nothing_kept(row, self.H1_WITNESSES, tool='npm')
+
+    def test_h1_tool_ids_are_fixed_words(self):
+        self.assertEqual(common.tool_id(['/usr/bin/systemctl', '--user', 'restart', 'x']), 'systemctl')
+        self.assertEqual(common.tool_id(['C:\\Program Files\\nodejs\\node.exe', 'cli.js']), 'node')
+        self.assertEqual(common.tool_id(['/usr/bin/python3.14', '-c', 'x']), 'python')
+        self.assertEqual(common.tool_id(['x'], 'cursor-agent update (Mac GUI)'), 'cursor-agent')
+        self.assertEqual(common.tool_id(['/home/someone/--pass=zebraWitness']), 'unlisted')
+        self.assertEqual(common.tool_id(['x'], 'fixture updater'), 'unlisted')
+        self.assertEqual(common.tool_id([]), 'unlisted')
+        self.assertTrue(all(common.REASON.fullmatch(tool) for tool in common.TOOLS))
+
+    def test_h1_the_recorder_drops_output_handed_to_it_directly(self):
+        """The Mac GUI path hands its own output to ran(); it is discarded the same way."""
+        with scope() as record:
+            record.ran(['/usr/bin/open', '-W', 'x'], 1, 'installer --pass "correct\nhorse battery staple"',
+                       label='cursor-agent update (Mac GUI)')
+            row = attach(common.result('cursor-cli', 'mac', 'failed', code='update_failed'), record)
+        self.assert_nothing_kept(row, self.H1_WITNESSES, tool='cursor-agent')
+
+    def test_h1_scrubbers_stay_as_defence_in_depth(self):
+        """No output reaches storage, but the scrubbers still clean any remaining free text (owner paths)."""
+        for flag in self.H1_FLAGS:
+            self.assertRegex(flag, '^' + common.CREDENTIAL_FLAG + '$')
+            self.assertRegex(flag, common._CREDENTIAL_MARKER)
+        self.assertIn(common.CREDENTIAL_FLAG, common.CREDENTIAL_MARKERS)
+        for name, sample in list(self.H1_PROBE) + list(self.H1_OSC):
+            with self.subTest(name=name):
                 self.assertEqual(common.scrub(sample), REST)
-                for witness in self.H1_WITNESSES:
-                    self.assertNotIn(witness, json.dumps(row))
-
-    def test_h1_recheck2_a_line_break_in_an_argument_never_leaves_a_tail_in_the_command(self):
-        child = self.root / 'fail.py'
-        child.write_text('import sys; sys.exit(1)')
-        for value in ('correct\nhorse battery staple', 'correct\r\nhorse battery staple', 'zebraWitness'):
-            with self.subTest(value=value), scope() as record:
-                with self.assertRaises(common.UpdateFailure):
-                    common.command([sys.executable, str(child), '--pass', value], errors=True)
-                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
-                self.assertEqual(row['diagnostics']['command'], REST)
-                for witness in self.H1_WITNESSES + ('zebraWitness',):
-                    self.assertNotIn(witness, json.dumps(row))
-        self.assertEqual(common.command_display(['installer', 'line one\nline two']), 'installer line one line two')
-
-    def test_h1_recheck3_a_long_slash_equals_argument_never_leaves_fragments_in_the_command(self):
-        # Path shortening keeps an argument's last characters; the flag must be seen on the
-        # complete argument before that shortening can remove it.
-        child = self.root / 'fail.py'
-        child.write_text('import sys; sys.exit(1)')
-        for arg in ('--pass=/' + 'horse battery staple/' * 12,
-                    '--password=/' + 'horse battery staple/' * 12):
-            with self.subTest(arg=arg[:20]), scope() as record:
-                with self.assertRaises(common.UpdateFailure):
-                    common.command([sys.executable, str(child), arg], errors=True)
-                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
-                self.assertEqual(row['diagnostics']['command'], REST)
-                self.assertEqual(common.command_display(['installer', arg]), REST)
-                self.assertEqual(common.display_path(arg), REST)
-                for witness in self.H1_WITNESSES:
-                    self.assertNotIn(witness, json.dumps(row))
-        # Short and ordinary commands still display normally.
-        self.assertEqual(common.command_display(['installer', '--verbose']), 'installer --verbose')
-        self.assertEqual(common.command_display(['installer', 'share/file.txt']), 'installer share/file.txt')
+        for arg in ('--pass=/' + 'horse battery staple/' * 12, ESC + ']0;--pass ' + BEL + 'horse/battery/staple'):
+            self.assertEqual(common.display_path(arg), REST)
         self.assertEqual(common.display_path('share/file.txt'), 'share/file.txt')
-
-    def test_h1_an_exit_code_keeps_its_failure_line(self):
         line = 'installer failed: exit code=1; ENOSPC: no space left on device'
         self.assertEqual(common.scrub(line), line)
         self.assertEqual(common.scrub('callback code=abc123def'), REMOVED)
         self.assertEqual(common.scrub('verification code=482913'), REMOVED)
-
-    def test_h1_ordinary_installer_output_keeps_its_text(self):
         control = 'installer: unpacking zcode-acp-server 0.84.3 (mkdir -p prefix; lsof -a -p 4242 found 0 holders)'
-        with scope() as record:
-            with self.assertRaises(common.UpdateFailure):
-                common.command([sys.executable, '-c', 'import sys; sys.stderr.write(' + repr(control) + '); sys.exit(1)'],
-                               errors=True, label='fixture updater')
-            row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
-        self.assertEqual(row['diagnostics']['tail'], control)
+        self.assertEqual(common.scrub(control), control)
+
+    def test_h1_ordinary_output_is_not_kept_either_but_its_cause_and_exit_are(self):
+        control = 'installer: unpacking zcode-acp-server 0.84.3\nENOSPC: no space left on device'
+        error, row = self.run_failing(control)
+        self.assert_nothing_kept(row, ('unpacking', 'ENOSPC', 'zcode-acp-server'))
+        self.assertIn('ENOSPC', error.output)
 
     def test_c2_an_unbound_same_window_log_never_overrides_tls_or_generic_output(self):
         for text in ('Update failed: certificate has expired', 'Update failed: Error'):

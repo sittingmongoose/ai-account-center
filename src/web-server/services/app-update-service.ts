@@ -61,7 +61,7 @@ export type { HostRunControl } from './app-update-hosts';
  * result reads "Timed out" instead of the job waiting forever.
  */
 const HOST_DEADLINE_MS = 33 * 60 * 1000;
-/** The expanded saved job: 60 rows, each with its diagnostics (stderr tails are at most 1200 characters). */
+/** The expanded saved job: 60 rows, each with its diagnostics (never installer output: owner decision U13). */
 const MAX_SAVED_JOB = 512 * 1024;
 
 export class AppUpdateBusyError extends Error {
@@ -587,7 +587,45 @@ export class AppUpdateService {
   private restore(): void {
     if (this.deps.persist === false || this.lockHeld) return;
     for (const name of ['dashboard-job-expanded.json', 'dashboard-job.json']) {
-      if (this.restoreFile(name)) return;
+      if (this.restoreFile(name)) break;
+    }
+    this.purgeSavedOutput();
+  }
+
+  /**
+   * Owner decision U13: installer output and command text are never kept. A job saved before
+   * that (a row's diagnostics with `tail` or `command`) is rewritten without them on load: the
+   * restored job is already normalized, so saving it again drops them. A running job is left
+   * to its owner's next save; a file that changed meanwhile waits for the next load.
+   */
+  private purgeSavedOutput(): void {
+    const files = ['dashboard-job-expanded.json', 'dashboard-job.json'].map((name) =>
+      path.join(this.directory, name)
+    );
+    const read = (): Array<string | null> =>
+      files.map((file) => {
+        try {
+          return fs.statSync(file).size <= MAX_SAVED_JOB ? fs.readFileSync(file, 'utf8') : null;
+        } catch {
+          return null;
+        }
+      });
+    const before = read();
+    const holding = before.map((text) => text !== null && savedOutputIn(text));
+    if (!holding.some(Boolean) || this.job?.state === 'running') return;
+    try {
+      this.acquireLock();
+    } catch {
+      return;
+    }
+    try {
+      if (read().some((text, index) => text !== before[index])) return;
+      if (this.job) this.save();
+      else files.forEach((file, index) => holding[index] && fs.rmSync(file, { force: true }));
+    } catch {
+      /* The files stay as they are until the next load. */
+    } finally {
+      this.releaseLock();
     }
   }
 
@@ -740,4 +778,20 @@ export function getAppUpdateService(): AppUpdateService {
     services.set(scope, service);
   }
   return service;
+}
+
+/** Whether saved job text still holds installer output or command text in a row's diagnostics. */
+function savedOutputIn(text: string): boolean {
+  try {
+    const results = record(record(JSON.parse(text))?.job)?.results;
+    return (
+      Array.isArray(results) &&
+      results.some((row) => {
+        const diagnostics = record(record(row)?.diagnostics);
+        return !!diagnostics && ('tail' in diagnostics || 'command' in diagnostics);
+      })
+    );
+  } catch {
+    return false;
+  }
 }

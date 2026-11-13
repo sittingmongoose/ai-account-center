@@ -56,13 +56,15 @@ class B1Scrubber(unittest.TestCase):
             with self.assertRaises(common.UpdateFailure):
                 common.command(["/usr/bin/npm", "install", "--global", "zcode-acp-server@latest"])
             row = attach(common.result("t3-acp-adapters", "mac", "failed", code="update_failed"), record)
-        return record_of(row).get("tail", "")
+        # Owner decision U13: the row keeps no output at all, only the tool and exit code.
+        self.assertNotIn("tail", record_of(row))
+        self.assertEqual((record_of(row)["tool"], record_of(row)["exitCode"]), ("npm", 1))
+        return json.dumps(row)
 
-    def test_registry_auth_and_whole_cookie_headers_never_reach_the_tail(self):
-        tail = self.failed_command_tail(self.ASTRA)
+    def test_registry_auth_and_whole_cookie_headers_never_reach_the_row(self):
+        saved = self.failed_command_tail(self.ASTRA)
         for secret in ("dXNlcjpmaXh0dXJl", "fixtureCookieOne", "fixtureCookieTwo"):
-            self.assertNotIn(secret, tail)
-        self.assertIn("<line removed: may contain a credential>", tail)
+            self.assertNotIn(secret, saved)
 
     def test_other_credential_shapes_go_and_ordinary_words_stay(self):
         cases = {
@@ -190,7 +192,8 @@ class B4MacGui(Home):
             install = cursor.detect_cursor("mac")
             row = attach(cursor.update_cursor(install, time.monotonic() + 60), record)
         self.assertEqual((row["status"], row["messageCode"]), ("action_required", "cursor_signin_needed"))
-        self.assertEqual((record_of(row)["command"], record_of(row)["exitCode"]), ("cursor-agent update (Mac GUI)", 1))
+        self.assertEqual((record_of(row)["tool"], record_of(row)["exitCode"]), ("cursor-agent", 1))
+        self.assertNotIn("tail", record_of(row))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -494,7 +497,7 @@ class B13CursorFallback(Home):
         with mock.patch.object(common, "_run_bounded", side_effect=run), scope() as record:
             row = attach(cursor.update_cursor(cursor.detect_cursor("windows"), time.monotonic() + 60), record)
         self.assertEqual(row["status"], "current")
-        self.assertEqual((record_of(row)["command"], record_of(row)["exitCode"]), ("cursor-agent update (node direct)", 0))
+        self.assertEqual((record_of(row)["tool"], record_of(row)["exitCode"]), ("cursor-agent", 0))
 
     def test_group_policy_plus_a_failed_direct_run_is_policy_blocked(self):
         self.layout()
@@ -502,7 +505,9 @@ class B13CursorFallback(Home):
         with mock.patch.object(common, "_run_bounded", side_effect=run), scope() as record:
             row = attach(cursor.update_cursor(cursor.detect_cursor("windows"), time.monotonic() + 60), record)
         self.assertEqual((row["status"], row["messageCode"]), ("action_required", "policy_blocked"))
-        self.assertIn("ENOTFOUND", record_of(row)["tail"])
+        # Classified from the output in memory; the output itself is not kept (owner decision U13).
+        self.assertNotIn("tail", record_of(row))
+        self.assertNotIn("ENOTFOUND", json.dumps(row))
 
     def test_same_day_folders_under_group_policy_still_give_a_version(self):
         root = self.layout(("2026.11.13-aaaaaaa", "2026.11.13-bbbbbbb"))
@@ -616,7 +621,8 @@ class Recheck1(Home):
     def test_l1_output_naming_its_own_cause_still_wins_over_a_401_log(self):
         row = self.cursor_with_log("Error: ENOSPC: no space left on device, write\n")
         self.assertEqual((row["status"], row["messageCode"]), ("failed", "update_failed"))
-        self.assertIn("ENOSPC", record_of(row)["tail"])
+        self.assertNotIn("tail", record_of(row))
+        self.assertNotIn("ENOSPC", json.dumps(row))
 
 
 class SignInLossReachesTheInstall(AcpFake):

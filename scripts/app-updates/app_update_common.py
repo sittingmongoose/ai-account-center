@@ -135,13 +135,17 @@ def _drop_credential_lines(lines):
     """
     kept = []
     removing = carry = False
-    for line in lines:
-        probe = _CONTROL.sub("", line)
+    for raw in lines:
+        # The original line is checked too: removing an ANSI title (OSC) can delete a flag.
+        line = _ANSI.sub("", raw)
+        probe, raw_probe = _CONTROL.sub("", line), _CONTROL.sub("", raw)
         continued = removing and (carry or bool(_INDENTED.match(line)))
-        marker = _CREDENTIAL_MARKER.search(probe)
+        marker = _CREDENTIAL_MARKER.search(probe) or _CREDENTIAL_MARKER.search(raw_probe)
+        if marker and not _CREDENTIAL_MARKER.search(probe):
+            probe = raw_probe
         # The note itself (text scrubbed twice) also ends the output, so it stays as written.
         quoted = (continued or marker) and _QUOTE.search(probe, 0 if continued else marker.start())
-        if probe.strip() == CREDENTIAL_REST or _CREDENTIAL_REST.search(probe) or quoted:
+        if probe.strip() == CREDENTIAL_REST or _CREDENTIAL_REST.search(probe) or _CREDENTIAL_REST.search(raw_probe) or quoted:
             kept.append(CREDENTIAL_REST)
             break
         if continued or marker:
@@ -185,7 +189,8 @@ def _scrub_paths(text):
 
 def _credential_flag(text):
     """Whether complete text holds a recognised credential flag, before any shortening of it."""
-    return bool(_CREDENTIAL_REST.search(_CONTROL.sub("", _ANSI.sub("", text))))
+    # Both views: removing an ANSI title (OSC) can delete a flag, and colour codes can split one.
+    return any(_CREDENTIAL_REST.search(_CONTROL.sub("", view)) for view in (text, _ANSI.sub("", text)))
 
 
 def display_path(path):
@@ -201,7 +206,7 @@ def scrub(text, lines=TAIL_LINES):
     """The bounded tail of command output with credentials, people and private paths removed."""
     if not isinstance(text, str) or not text:
         return ""
-    raw = (_ANSI.sub("", line) for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+    raw = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     candidates = [line[:SCRUB_LINE_CHARS] for line in _drop_credential_lines(raw) if line.strip()]
     text = "\n".join(candidates[-SCRUB_LINES:])
     text = "".join(char if char in "\n\t" or 32 <= ord(char) < 127 or ord(char) > 159 else " " for char in text)
@@ -213,36 +218,30 @@ def scrub(text, lines=TAIL_LINES):
     return "\n".join(kept)[-TAIL_CHARS:]
 
 
-def command_display(argv, label=None):
-    """What ran, for a row: the program's own name and its fixed arguments, never a script body."""
+# Owner decision U13: installer output and argv are never saved, only which tool ran, as one
+# fixed word from this list (the label's first word, else the program's own name), or "unlisted".
+TOOLS = ("agy", "antigravity", "apt", "apt-cache", "apt-get", "bun", "claude", "codesign", "codex", "cursor",
+         "cursor-agent", "ditto", "dpkg", "dpkg-query", "hdiutil", "launchctl", "lsof", "msiexec", "muse", "node",
+         "npm", "npx", "omp", "open", "pnpm", "powershell", "ps", "pwsh", "python", "spctl", "sudo", "systemctl",
+         "systemd-run", "t3", "winget", "wt", "zcode")
+
+
+def tool_id(argv, label=None):
+    """Which tool a run used: one word from TOOLS, never its arguments or output."""
     if label:
-        text = re.sub(r"[\r\n]", " ", str(label))
-        return CREDENTIAL_REST if _credential_flag(text) else scrub(text, 1)[:160]
-    # One display line: a line break inside an argument cannot leave a value's tail as the last line.
-    flat = [re.sub(r"[\r\n]", " ", str(item)) for item in argv]
-    # Basename conversion, display_path() and the per-argument cut below can each remove a
-    # credential flag before scrub() sees it, so the complete argv is checked first.
-    if _credential_flag(" ".join(flat)):
-        return CREDENTIAL_REST
-    words = []
-    skip = False
-    for index, arg in enumerate(flat):
-        if skip:
-            words.append("<script>")
-            skip = False
-            continue
-        if index == 0 or ("/" in arg or "\\" in arg) and len(arg) > 3:
-            arg = re.split(r"[\\/]", arg)[-1] if index == 0 else display_path(arg)
-        if arg.lower() in ("-encodedcommand", "-command", "-c") and index > 0:
-            skip = True
-        words.append(arg if len(arg) <= 60 else arg[:57] + "...")
-    return scrub(" ".join(words), 1)[:160]
+        word = (str(label).split() or [""])[0]
+    else:
+        word = re.split(r"[\\/]", str(argv[0]))[-1] if argv else ""
+    word = re.sub(r"[\d.]+$", "", re.sub(r"(?i)\.(?:exe|cmd|bat|ps1|app)$", "", word)).lower()
+    return word if word in TOOLS else "unlisted"
 
 
 class Diagnostics:
     """One row's record. Helpers write to the recorder of the row their thread runs.
 
-    Every recorded command is kept (bounded); the row shows the one that decided it:
+    Owner decision U13: a run's output and argv are read in memory to classify it and then
+    discarded. A run keeps only its tool (tool_id), exit code and whether it failed.
+    Every recorded run is kept (bounded); the row shows the one that decided it:
     for a row that finished cleanly the last command that succeeded (a fallback that
     worked, not the attempt it replaced), otherwise the last command that failed.
     Read-only probes run quiet and are never "what ran"."""
@@ -267,9 +266,10 @@ class Diagnostics:
         self._phase = (name, now) if name else None
 
     def ran(self, argv, exit_code=None, output="", label=None, failed=None):
+        # output is accepted for older call sites and dropped here, unread.
+        del output
         failed = exit_code not in (None, 0) if failed is None else failed
-        self.runs.append({"command": command_display(argv, label), "exitCode": exit_code,
-                          "tail": scrub(output) if failed else "", "failed": failed})
+        self.runs.append({"tool": tool_id(argv, label), "exitCode": exit_code, "failed": failed})
         del self.runs[:-self.RUNS]
 
     def deciding(self, success):
@@ -281,9 +281,9 @@ class Diagnostics:
 
     # Older call sites and tests read these.
     @property
-    def command(self):
+    def tool(self):
         run = self.deciding(False)
-        return run["command"] if run else None
+        return run["tool"] if run else None
 
     @property
     def exit_code(self):
@@ -312,7 +312,7 @@ class Diagnostics:
         if reason:
             value["reason"] = reason
         if run:
-            value["command"] = run["command"]
+            value["tool"] = run["tool"]
             if isinstance(run["exitCode"], int) and -2 ** 31 <= run["exitCode"] < 2 ** 32:
                 value["exitCode"] = run["exitCode"]
         phases = {name: max(0, min(ms, 86400000)) for name, ms in list(self.phases.items())[:8] if REASON.fullmatch(name)}
@@ -322,8 +322,6 @@ class Diagnostics:
             value["owner"] = self.owner
         if self.notes:
             value["notes"] = list(self.notes)
-        if run and run["tail"] and cause != "none":
-            value["tail"] = run["tail"]
         return value
 
 
@@ -931,9 +929,8 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
     merged with its stdout, in the exception's output for in-memory classification only.
     kill_tree opts this one call into whole-tree cleanup; only the muse warm sets it.
 
-    Every run is recorded in the row's diagnostics: what ran (label, or the program's
-    own name and fixed arguments), its exit code, and for a failure the scrubbed tail
-    of its stderr. Without errors the failure's output is that stderr too, still in
+    Every run is recorded in the row's diagnostics: which tool ran (tool_id: one fixed word)
+    and its exit code. Its output and argv are never recorded (owner decision U13). Without errors the failure's output is that stderr too, still in
     memory only, so callers can classify a refusal (sign-in, policy) by its words.
     stderr_tail=False keeps stderr on the null device: for commands that hand off a
     long-lived app (open -a, wt.exe, systemd-run), whose output must not land anywhere.

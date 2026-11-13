@@ -36,7 +36,8 @@ function row(appId: UpdateAppId, fields: Record<string, unknown> = {}): Record<s
   };
 }
 
-// The rows the 2026-11-13 failures now produce, as the helper sends them.
+// The rows the 2026-11-13 failures produced, as an older helper sent them: with a command and an
+// output tail, which the dashboard now drops (owner decision U13), and the tool a newer helper names.
 const CURSOR_SIGNIN = row('cursor-cli', {
   status: 'action_required',
   messageCode: 'cursor_signin_needed',
@@ -47,6 +48,7 @@ const CURSOR_SIGNIN = row('cursor-cli', {
     cause: 'auth_required',
     reason: 'http_401',
     command: 'cursor-agent update',
+    tool: 'cursor-agent',
     exitCode: 1,
     phases: { update: 650, verify: 20 },
     owner: {
@@ -97,14 +99,14 @@ const WRONG_PREFIX = row('t3-acp-adapters', {
 });
 
 describe('Update apps diagnostics', () => {
-  it('keeps the cause, command, exit code, phases, owner and a scrubbed tail', () => {
+  it('keeps the cause, tool, exit code, phases and owner, never a command or output tail', () => {
     const result = normalizeAppUpdateRow(CURSOR_SIGNIN, 'cursor-cli', 'windows');
     expect(result.status).toBe('action_required');
     expect(result.message).toBe(MESSAGES.cursor_signin_needed);
     expect(result.diagnostics).toEqual({
       cause: 'auth_required',
       reason: 'http_401',
-      command: 'cursor-agent update',
+      tool: 'cursor-agent',
       exitCode: 1,
       phases: { update: 650, verify: 20 },
       owner: {
@@ -114,8 +116,6 @@ describe('Update apps diagnostics', () => {
         onPath: true,
         copies: 1,
       },
-      // A marker word followed by a quote ends the kept output (one line here either way).
-      tail: '<rest of output removed: may contain a credential>',
     });
     const adapters = normalizeAppUpdateRow(WRONG_PREFIX, 't3-acp-adapters', 'mac');
     expect(adapters.message).toBe(MESSAGES.wrong_prefix);
@@ -128,7 +128,7 @@ describe('Update apps diagnostics', () => {
     ]);
   });
 
-  it('scrubs credentials, people and other users\u2019 folders again at the boundary', () => {
+  it('scrubs credentials, people and other users\u2019 folders as defence in depth', () => {
     const tail = [
       'npm error 401 Unauthorized - GET https://registry.npmjs.org/x?token=abc123 user:pass',
       'Authorization: Bearer abcdefghijklmnopqrstuvwxyz',
@@ -136,7 +136,11 @@ describe('Update apps diagnostics', () => {
       'contact someone@example.com from C:\\Users\\otheruser\\AppData and /Users/someone/.npmrc',
       'key ' + 'A'.repeat(48),
     ].join('\n');
-    const kept = normalizeDiagnostics({ cause: 'installer_failed', tail })!.tail!;
+    // No output reaches a row at all (owner decision U13); the scrubber still cleans free text.
+    expect(normalizeDiagnostics({ cause: 'installer_failed', tail })).toEqual({
+      cause: 'installer_failed',
+    });
+    const kept = scrubText(tail);
     for (const secret of [
       'abc123',
       'abcdefghijklmnopqrstuvwxyz',
@@ -165,7 +169,10 @@ describe('Update apps diagnostics', () => {
       String.raw`c:\users\Jane Doe\AppData\Roaming\npm`,
       'ssh: connect to host: someone@macbook-pro',
     ].join('\n');
-    const kept = normalizeDiagnostics({ cause: 'installer_failed', tail })!.tail!;
+    expect(normalizeDiagnostics({ cause: 'installer_failed', tail })).toEqual({
+      cause: 'installer_failed',
+    });
+    const kept = scrubText(tail);
     for (const secret of [
       'dXNlcjpmaXh0dXJl',
       'fixtureCookieOne',
@@ -203,6 +210,8 @@ describe('Update apps diagnostics', () => {
         owner: { manager: 'npm', packages: [{ package: 'other', prefix: '/x' }], extra: 'x' },
         notes: ['fine', 'Not fine'],
         tail: 'boom',
+        command: 'npm install',
+        tool: 'npm install',
         extra: 'dropped',
       })
     ).toEqual({
@@ -210,10 +219,12 @@ describe('Update apps diagnostics', () => {
       phases: { verify: 10 },
       owner: { manager: 'npm' },
       notes: ['fine'],
-      tail: 'boom',
     });
-    // A successful row never carries a tail.
-    expect(normalizeDiagnostics({ cause: 'none', tail: 'noise' })).toEqual({ cause: 'none' });
+    // Only a listed tool word is kept.
+    expect(normalizeDiagnostics({ cause: 'none', tool: 'npm', tail: 'noise' })).toEqual({
+      cause: 'none',
+      tool: 'npm',
+    });
     // Older helpers send none: the row has no diagnostics rather than invented ones.
     expect(
       normalizeAppUpdateRow({ ...row('omp'), diagnostics: undefined }, 'omp', 'ubuntu').diagnostics

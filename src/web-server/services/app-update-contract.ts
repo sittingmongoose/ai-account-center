@@ -72,7 +72,7 @@ export interface AppUpdateResult {
   parts?: AdapterPart[];
   /** Other Codex or Claude copies beside a managed install; present only when there are some. */
   strays?: AppUpdateStray[];
-  /** Why the row ended as it did (cause class, command, exit code, phases, install owner, stderr tail). */
+  /** Why the row ended as it did (cause class, tool, exit code, phases, install owner); never output (U13). */
   diagnostics?: AppUpdateDiagnostics;
   restartTargets: Array<{
     kind: 'tmux' | 'terminal' | 'windows-terminal' | 'desktop' | 'systemd';

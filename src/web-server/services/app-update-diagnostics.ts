@@ -1,8 +1,12 @@
 /**
- * Why an Update apps row ended as it did: a fixed cause class, plus what ran (command, exit code,
- * phase times), which copy it used (install owner) and a short stderr tail. The helper already
- * scrubs all of it; this boundary keeps only known fields with bounded shapes and scrubs text again,
- * so a credential, an email or another user's folder never reaches the page or a saved job.
+ * Why an Update apps row ended as it did: a fixed cause class, plus which tool ran (one fixed
+ * word), its exit code, phase times and which copy it used (install owner).
+ *
+ * Owner decision U13: installer output and argv are never saved. The helper classifies its
+ * output in memory and discards it; this boundary drops any `tail` or `command` field a row
+ * still carries (older helpers, saved jobs), keeps only known fields with bounded shapes and
+ * scrubs the remaining text again, so a credential, an email or another user's folder never
+ * reaches the page or a saved job.
  */
 import { record, safeVersion } from './app-update-values';
 
@@ -24,6 +28,48 @@ export const APP_UPDATE_CAUSES = [
   'unknown',
 ] as const;
 export type AppUpdateCause = (typeof APP_UPDATE_CAUSES)[number];
+/** The tools a run may name, equal to TOOLS in scripts/app-updates/app_update_common.py. */
+export const APP_UPDATE_TOOLS = [
+  'agy',
+  'antigravity',
+  'apt',
+  'apt-cache',
+  'apt-get',
+  'bun',
+  'claude',
+  'codesign',
+  'codex',
+  'cursor',
+  'cursor-agent',
+  'ditto',
+  'dpkg',
+  'dpkg-query',
+  'hdiutil',
+  'launchctl',
+  'lsof',
+  'msiexec',
+  'muse',
+  'node',
+  'npm',
+  'npx',
+  'omp',
+  'open',
+  'pnpm',
+  'powershell',
+  'ps',
+  'pwsh',
+  'python',
+  'spctl',
+  'sudo',
+  'systemctl',
+  'systemd-run',
+  't3',
+  'winget',
+  'wt',
+  'zcode',
+  'unlisted',
+] as const;
+export type AppUpdateTool = (typeof APP_UPDATE_TOOLS)[number];
 
 export interface AppUpdateOwnerPackage {
   package: 'muse-acp' | 'zcode-acp-server';
@@ -55,15 +101,13 @@ export interface AppUpdateDiagnostics {
   cause: AppUpdateCause;
   /** One fixed word naming the step or the refusal (no_enabled_instance, http_401, previous_server). */
   reason?: string;
-  /** What ran: the program's own name and its fixed arguments, never a script body. */
-  command?: string;
+  /** Which tool ran: one word from APP_UPDATE_TOOLS, never its arguments. */
+  tool?: AppUpdateTool;
   exitCode?: number;
   /** Milliseconds per step (t3_ready, offer, install, verify, refresh_models, update, ...). */
   phases?: Record<string, number>;
   owner?: AppUpdateOwner;
   notes?: string[];
-  /** The last lines of a failed command's stderr, scrubbed. */
-  tail?: string;
 }
 
 /** Codes that name a cause, each allowed on one app and status (and Windows only for policy refusals). */
@@ -222,7 +266,10 @@ export function scrubText(value: string, lines = TAIL_LINES): string {
       /\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g,
       ''
     );
-    const probe = line.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+    // The original line is checked too: removing an ANSI title (OSC) can delete a flag.
+    const rawProbe = raw.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+    const cleanProbe = line.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+    const probe = CREDENTIAL_MARKER.test(cleanProbe) ? cleanProbe : rawProbe;
     // No quoting is parsed: a credential flag, or a removed line with a quote after its marker,
     // ends the kept output, since a value may hold a literal newline.
     const continued = removing && (carry || /^[\s\x00-\x1f\x7f-\x9f]/.test(line));
@@ -230,7 +277,8 @@ export function scrubText(value: string, lines = TAIL_LINES): string {
     // The note itself (text scrubbed twice) also ends the output, so it stays as written.
     if (
       probe.trim() === CREDENTIAL_REST_NOTE ||
-      CREDENTIAL_REST.test(probe) ||
+      CREDENTIAL_REST.test(cleanProbe) ||
+      CREDENTIAL_REST.test(rawProbe) ||
       ((continued || marker >= 0) && /["']/.test(probe.slice(continued ? 0 : marker)))
     ) {
       candidates.push(CREDENTIAL_REST_NOTE);
@@ -269,10 +317,14 @@ function word(value: unknown): string | undefined {
 
 /** Whether complete text holds a recognised credential flag, before any shortening of it. */
 function hasCredentialFlag(value: string): boolean {
-  const probe = value
-    .replace(/\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g, '')
-    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
-  return CREDENTIAL_REST.test(probe);
+  // Both views: removing an ANSI title (OSC) can delete a flag, and colour codes can split one.
+  const stripped = value.replace(
+    /\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g,
+    ''
+  );
+  return [value, stripped].some((view) =>
+    CREDENTIAL_REST.test(view.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ''))
+  );
 }
 
 function displayPath(value: unknown): string | undefined {
@@ -349,16 +401,9 @@ export function normalizeDiagnostics(value: unknown): AppUpdateDiagnostics | und
   const result: AppUpdateDiagnostics = { cause: raw.cause as AppUpdateCause };
   const reason = word(raw.reason);
   if (reason) result.reason = reason;
-  if (typeof raw.command === 'string') {
-    // One line: a line break inside an argument cannot leave a value's tail as the last line.
-    // The complete value is checked before the length limit and the cut below can remove a flag.
-    const flat = raw.command.replace(/[\r\n]/g, ' ');
-    if (hasCredentialFlag(flat)) result.command = CREDENTIAL_REST_NOTE;
-    else if (raw.command.length <= 1024) {
-      const command = scrubText(flat, 1).slice(0, PATH_CHARS);
-      if (command) result.command = command;
-    }
-  }
+  // Owner decision U13: no command text or output tail is kept, whatever the row carries.
+  const tool = APP_UPDATE_TOOLS.find((name) => name === raw.tool);
+  if (tool) result.tool = tool;
   if (
     typeof raw.exitCode === 'number' &&
     Number.isSafeInteger(raw.exitCode) &&
@@ -380,10 +425,6 @@ export function normalizeDiagnostics(value: unknown): AppUpdateDiagnostics | und
   if (Array.isArray(raw.notes)) {
     const notes = raw.notes.slice(0, 6).flatMap((note) => word(note) ?? []);
     if (notes.length) result.notes = notes;
-  }
-  if (typeof raw.tail === 'string' && raw.tail && result.cause !== 'none') {
-    const tail = scrubText(raw.tail);
-    if (tail) result.tail = tail;
   }
   return result;
 }

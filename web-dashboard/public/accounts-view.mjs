@@ -816,14 +816,15 @@ const causeOf = (row) => {
   return typeof cause === 'string' && Object.prototype.hasOwnProperty.call(CAUSE_LINES, cause) ? cause : '';
 };
 const seconds = (ms) => ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, '0')}s` : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
-// "Cause: ... · ran `cursor-agent update` (exit 1) · uses ~/x (T3 settings) · also ~/y 0.84.3 · update 0.7s · output: ..."
+// "Cause: ... · ran cursor-agent · uses ~/x (T3 settings) · also ~/y 0.84.3 · update 0.7s · Installer output isn't saved; ..."
+// Owner decision U13: installer output and command text are never saved or shown, even from an older row.
 const diagnosticsWords = (row) => {
   const d = row?.diagnostics;
   if (!d || typeof d !== 'object') return '';
   const cause = causeOf(row);
   const words = [];
   if (cause && cause !== 'none') words.push(`Cause: ${CAUSE_LINES[cause]}${text(d.reason) ? ` (${d.reason})` : ''}`);
-  if (text(d.command)) words.push(`ran ${d.command}${Number.isInteger(d.exitCode) ? ` (exit ${d.exitCode})` : ''}`);
+  if (text(d.tool) && d.tool !== 'unlisted') words.push(`ran ${d.tool}`);
   const owner = d.owner && typeof d.owner === 'object' ? d.owner : null;
   for (const item of Array.isArray(owner?.packages) ? owner.packages : [])
     words.push(`${text(item.package)} in ${text(item.prefix)} (${text(item.source) === 't3-config' ? 'what T3 runs' : text(item.source) === 'path' ? 'first on PATH' : text(item.source)})`);
@@ -834,7 +835,8 @@ const diagnosticsWords = (row) => {
   if (Array.isArray(d.notes) && d.notes.length) words.push(`notes: ${d.notes.join(', ')}`);
   const phases = d.phases && typeof d.phases === 'object' ? Object.entries(d.phases).filter(([, ms]) => Number.isInteger(ms)) : [];
   if (phases.length) words.push(phases.map(([name, ms]) => `${name.replaceAll('_', ' ')} ${seconds(ms)}`).join(', '));
-  if (text(d.tail)) words.push(`output: ${d.tail.split('\n').join(' | ')}`);
+  if (cause && cause !== 'none')
+    words.push(`Installer output isn't saved; cause: ${CAUSE_LINES[cause]}${Number.isInteger(d.exitCode) ? `, exit code ${d.exitCode}` : ''}`);
   return words.join(' · ');
 };
 const rowWord = (row, label) => {
