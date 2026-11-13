@@ -19,9 +19,12 @@ import plistlib
 import re
 import shutil
 import sys
+import tempfile
 import time
 import urllib.request
 import uuid
+
+import app_update_common as _common
 
 from app_update_common import (
     Install, UpdateFailure, asar_package, command, diagnostics, display_path, download, environment, powershell,
@@ -73,12 +76,14 @@ UBUNTU_RUN = {}
 
 @dataclasses.dataclass
 class AdaptersInstall(Install):
-    # Each adapter's installed version in its owner's copy; None when absent or unreadable.
+    # Each adapter's installed version (the lowest across its owners' copies); None when absent or unreadable.
     parts: dict = None
-    # {adapter: Owner}: the copy T3 runs and the installer that owns it.
+    # {adapter: [Owner, ...]}: every copy T3 runs and the installer that owns it.
     owners: dict = None
-    # {adapter: [(node_modules, version)]}: every copy found, the owner's included.
+    # {adapter: [(node_modules, version)]}: every copy found, the owners' included.
     copies: dict = None
+    # {adapter: [version of each owner's copy]} at detection.
+    before: dict = None
 
 
 def exact_version(value):
@@ -172,6 +177,8 @@ class Owner:
     manager: str
     source: str = "default"
     node: pathlib.Path = None
+    # pnpm only: the folder its global bin links go to (PNPM_HOME).
+    bin_dir: pathlib.Path = None
 
     def describe(self, name, version):
         return {"package": name, "manager": self.manager, "prefix": display_path(self.prefix), "source": self.source,
@@ -185,13 +192,22 @@ def _real(path):
         return pathlib.Path(path)
 
 
+def _lexical(path):
+    """The path as written, made absolute, without following links."""
+    return pathlib.Path(os.path.normpath(os.path.abspath(str(path))))
+
+
 def owner_of_modules(modules, source="default", node=None, host=None):
     """The installer that owns one node_modules folder, by its layout. On Linux and the Mac npm's
     global folder is <prefix>/lib/node_modules; any other plain folder has no installer AAC can bind."""
     modules = _real(modules)
     text = path_text(modules)
+    if "/.pnpm/" in text + "/":
+        # A path inside pnpm's store is never an install target (package_in maps it back first).
+        return Owner(modules, modules.parent, "other", source, node)
     if "/pnpm/global/" in text or text.endswith("/.pnpm-global/node_modules"):
-        return Owner(modules, modules.parent.parent if modules.parent.name.isdigit() else modules.parent, "pnpm", source, node)
+        global_dir = modules.parent.parent if modules.parent.name.isdigit() else modules.parent
+        return Owner(modules, global_dir, "pnpm", source, node, global_dir.parent)
     if text.endswith("/install/global/node_modules") and "/.bun/" in text:
         return Owner(modules, modules.parent, "bun", source, node)
     if text.endswith("/yarn/global/node_modules"):
@@ -202,9 +218,18 @@ def owner_of_modules(modules, source="default", node=None, host=None):
     return Owner(modules, modules.parent, "npm" if host in (None, "windows") else "other", source, node)
 
 
-def package_in(path):
-    """(node_modules folder, adapter name) for a file inside one adapter package, else None."""
-    parts = _real(path).parts
+def _modules_of(path):
+    parts = path.parts
+    if ".pnpm" in parts:
+        # pnpm's store: <global>/<n>/node_modules/.pnpm/<pkg>@<v>/node_modules/<pkg>. The install
+        # belongs to the node_modules folder that holds .pnpm, never to the store entry.
+        index = parts.index(".pnpm")
+        tail = "/".join(parts[index + 1:])
+        if index > 0 and parts[index - 1] == "node_modules":
+            for name, package in PACKAGES.items():
+                if "/node_modules/" + package in "/" + tail:
+                    return pathlib.Path(*parts[:index]), name
+        return None
     for index in range(len(parts) - 1, -1, -1):
         if parts[index] != "node_modules":
             continue
@@ -213,6 +238,15 @@ def package_in(path):
             if "/".join(rest[:len(package.split("/"))]) == package:
                 return pathlib.Path(*parts[:index + 1]), name
     return None
+
+
+def package_in(path):
+    """(node_modules folder, adapter name) for a file inside one adapter package, else None.
+
+    The path as written is read first: pnpm's global node_modules/<pkg> is a link into its
+    store, and following it would name the store as the install. Links are followed only
+    when the written path names no package (a bin link such as /opt/homebrew/bin/zcode-acp-server)."""
+    return _modules_of(_lexical(path)) or _modules_of(_real(path))
 
 
 def _shim_package(path):
@@ -226,7 +260,7 @@ def _shim_package(path):
 
 
 def t3_consumers():
-    """{adapter: (node_modules, node)} named by T3's enabled ACP provider instances (their command and arguments).
+    """{adapter: [(node_modules, node), ...]}: every distinct copy T3's enabled ACP provider instances run.
 
     Only config.commandPath and config.commandArgs are read: they are paths and flags. Environment values,
     which can be secrets, are never read. A missing or unreadable settings file names nothing."""
@@ -251,20 +285,14 @@ def t3_consumers():
                 continue
             hit = package_in(candidate) if pathlib.Path(candidate).exists() else None
             hit = hit or _shim_package(candidate)
-            if hit and hit[1] not in found:
-                found[hit[1]] = (hit[0], node)
+            if hit and not any(_real(root) == _real(hit[0]) for root, _ in found.get(hit[1], [])):
+                found.setdefault(hit[1], []).append((hit[0], node))
     return found
 
 
 def effective_path(host):
-    """PATH as ordinary processes see it: the helper's own, plus the Mac's system folders."""
-    folders = os.environ.get("PATH", "").split(os.pathsep)
-    if host == "mac":
-        for extra in ("/etc/paths",):
-            with contextlib.suppress(OSError):
-                folders += pathlib.Path(extra).read_text(encoding="utf-8").split()
-        folders += ["/opt/homebrew/bin", "/usr/local/bin"]
-    return [folder for folder in dict.fromkeys(folders) if folder]
+    """PATH as ordinary processes see it (app_update_common.effective_path)."""
+    return _common.effective_path(host)
 
 
 def path_consumers(host):
@@ -350,28 +378,28 @@ def copies_of(host, name):
 
 
 def discover_owners(host):
-    """{adapter: Owner} for each installed adapter, and {adapter: [(root, version)]} of every copy.
+    """{adapter: [Owner, ...]} for each installed adapter, and {adapter: [(root, version)]} of every copy.
 
-    Precedence: what T3's enabled instances run, then the command on PATH, then the
-    usual folder for this OS, then the first other copy found. Each choice records
-    its source, so a row says why it updated (and verified) that copy."""
+    Precedence: every distinct copy T3's enabled instances run (two instances may run two
+    copies, and each is updated and verified), else the command on PATH, else the usual
+    folder for this OS, else the first other copy found. Each owner records its source,
+    so a row says why it updated (and verified) that copy."""
     consumers, on_path = t3_consumers(), path_consumers(host)
     owners, copies = {}, {}
     for name in PACKAGES:
         copies[name] = copies_of(host, name)
         if name in consumers:
-            root, node = consumers[name]
-            owners[name] = owner_of_modules(root, "t3-config", node, host)
+            owners[name] = [owner_of_modules(root, "t3-config", node, host) for root, node in consumers[name]]
         elif name in on_path:
-            owners[name] = owner_of_modules(on_path[name], "path", host=host)
+            owners[name] = [owner_of_modules(on_path[name], "path", host=host)]
         elif (adapter_root(host) / PACKAGES[name] / "package.json").is_file():
-            owners[name] = owner_of_modules(adapter_root(host), "default", host=host)
+            owners[name] = [owner_of_modules(adapter_root(host), "default", host=host)]
         elif copies[name]:
-            owners[name] = owner_of_modules(copies[name][0][0], "found", host=host)
-        if name in owners:
-            real = _real(owners[name].root)
+            owners[name] = [owner_of_modules(copies[name][0][0], "found", host=host)]
+        for owner in owners.get(name, []):
+            real = _real(owner.root)
             if not any(_real(root) == real for root, _ in copies[name]):
-                copies[name].insert(0, (owners[name].root, package_version(owners[name].root, name)))
+                copies[name].insert(0, (owner.root, package_version(owner.root, name)))
     return owners, copies
 
 
@@ -383,16 +411,28 @@ def read_parts(root):
     return {name: package_version(root, name) for name in PACKAGES}
 
 
+def lowest(versions):
+    """The lowest of several copies' versions; None when any copy's version is unreadable."""
+    if not versions or any(version is None for version in versions):
+        return None
+    return min(versions, key=npm_version_key)
+
+
+def owner_versions(install):
+    """{adapter: [version of each owner's copy]}, in owner order."""
+    return {name: [package_version(owner.root, name) for owner in owners] for name, owners in (install.owners or {}).items()}
+
+
 def owned_parts(install):
-    """Each adapter's version in the copy its owner names; None for an adapter without one."""
-    owners = install.owners or {}
-    return {name: package_version(owners[name].root, name) if name in owners else None for name in PACKAGES}
+    """Each adapter's version in the copies its owners name (the lowest, so one unchanged copy
+    never reads as updated); None for an adapter without one."""
+    versions = owner_versions(install)
+    return {name: lowest(versions[name]) if name in versions else None for name in PACKAGES}
 
 
 def elsewhere(install, name):
     """The other copies of one adapter as they are now (a run can create one), with their versions."""
-    owner = (install.owners or {}).get(name)
-    skip = {str(_real(owner.root))} if owner else set()
+    skip = {str(_real(owner.root)) for owner in (install.owners or {}).get(name, [])}
     found = []
     for root, _ in copies_of(install.platform, name) + (install.copies or {}).get(name, []):
         key = str(_real(root))
@@ -406,25 +446,25 @@ def detect_adapters(host):
     owners, copies = discover_owners(host)
     if not owners:
         return None
-    first = owners[next(name for name in PACKAGES if name in owners)]
+    first = owners[next(name for name in PACKAGES if name in owners)][0]
     install = AdaptersInstall("t3-acp-adapters", host, first.root, None, "npm", package_root=first.root,
                               owners=owners, copies=copies)
     install.parts = owned_parts(install)
+    install.before = owner_versions(install)
     install.owner = adapters_owner(install)
     return install
 
 
 def adapters_owner(install, after=None):
-    """diagnostics.owner for an adapters row: each package's owner and any other copies."""
-    after = after or {}
+    """diagnostics.owner for an adapters row: every owner of each package and any other copies."""
+    now = owner_versions(install) if after is not None else (install.before or owner_versions(install))
     value = {"packages": [], "elsewhere": []}
     for name in PACKAGES:
-        owner = (install.owners or {}).get(name)
-        if owner is None:
-            continue
-        value["packages"].append(owner.describe(name, after.get(name, (install.parts or {}).get(name))))
+        for index, owner in enumerate((install.owners or {}).get(name, [])):
+            value["packages"].append(owner.describe(name, now.get(name, [None] * (index + 1))[index]))
         for root, version in elsewhere(install, name):
             value["elsewhere"].append({"package": name, "prefix": display_path(owner_of_modules(root).prefix), "version": version})
+    value["packages"] = value["packages"][:4]
     value["elsewhere"] = value["elsewhere"][:COPY_LIMIT * 2]
     if not value["elsewhere"]:
         del value["elsewhere"]
@@ -568,10 +608,12 @@ def adapter_owners(item, root):
     (any letter case, native subfolders such as native/x86_64-pc-windows-msvc too), or a name or session marker.
     root is one node_modules folder, or {adapter: Owner} when each package has its own."""
     texts = [path_text(value) for value in (item.exe, *item.args[:16])]
-    roots = ({name: owner.root for name, owner in root.items()} if isinstance(root, dict)
-             else {name: root for name in PACKAGES})
+    if isinstance(root, dict):
+        roots = {name: [owner.root for owner in (value if isinstance(value, list) else [value])] for name, value in root.items()}
+    else:
+        roots = {name: [root] for name in PACKAGES}
     owners = {name for name, package in PACKAGES.items() if name in roots
-              and any(text.startswith(path_text(roots[name] / package) + "/") for text in texts)}
+              and any(text.startswith(path_text(folder / package) + "/") for folder in roots[name] for text in texts)}
     if any(pathlib.PurePosixPath(text).name in ADAPTER_NAMES for text in texts[1:]):
         owners.add("muse-acp")
     if any(text.endswith(SESSION_MARKERS[0]) for text in texts[1:]):
@@ -593,12 +635,14 @@ def locked_here(output, name):
             re.search(re.escape("node_modules/" + PACKAGES[name]) + r"(?![\w.@-])", errors, re.IGNORECASE) is not None)
 
 
-def npm_argv(node, cli, prefix, name, shell):
-    """One package's own global install: no other package rides along in the same npm run."""
+def npm_argv(node, cli, prefix, name, shell, version="latest"):
+    """One package's own global install: no other package rides along in the same npm run.
+    version is the exact release the public registry named: a mirror that cannot serve it fails
+    honestly instead of installing another (older) version under @latest."""
     argv = [str(node), str(cli), "install", "--global", "--prefix", str(prefix)]
     if shell is not None:
         argv += ["--script-shell", str(shell)]
-    return argv + [PACKAGES[name] + "@latest"]
+    return argv + [PACKAGES[name] + "@" + version]
 
 
 def git_bash():
@@ -898,27 +942,49 @@ def adapters_row(install, status, after=None, code=None, attempted=False, held=(
 
 def npm_pair(owner, host):
     """(node, npm-cli.js) for an npm owner: T3's own node when its config names one, else the prefix's pair."""
-    if host != "windows" and owner.node is not None:
+    if owner.node is not None:
         node = _real(owner.node)
-        for cli in (node.parents[1] / "lib/node_modules/npm/bin/npm-cli.js", node.parents[1] / "libexec/lib/node_modules/npm/bin/npm-cli.js"):
+        home = node.parent if host == "windows" else node.parents[1]
+        for cli in ((home / "node_modules/npm/bin/npm-cli.js",) if host == "windows" else
+                    (home / "lib/node_modules/npm/bin/npm-cli.js", home / "libexec/lib/node_modules/npm/bin/npm-cli.js")):
             if node.is_file() and cli.is_file():
                 return node, cli
     return resolve_npm(owner.prefix)
 
 
-def install_command(owner, name, host, shell):
+def pnpm_argv(host):
+    """pnpm itself, never through cmd.exe: on Windows a pnpm.cmd shim is replaced by node and
+    pnpm's own pnpm.cjs, as npm runs (a & or % in a path would otherwise be interpreted)."""
+    located = shutil.which("pnpm")
+    if not located:
+        return None
+    path = pathlib.Path(located)
+    if host == "windows" and path.suffix.casefold() in (".cmd", ".bat", ".ps1"):
+        node = shutil.which("node.exe") or shutil.which("node")
+        for cli in (path.parent / "node_modules/pnpm/bin/pnpm.cjs", path.parent / "node_modules/pnpm/bin/pnpm.js"):
+            if node and cli.is_file():
+                return [node, str(cli)]
+        return None
+    return [str(path)]
+
+
+def install_command(owner, name, host, shell, version):
     """(argv, extra env, label) for one package bound to its owner; None when that manager is not here."""
-    package = PACKAGES[name] + "@latest"
+    package = PACKAGES[name] + "@" + version
     if owner.manager == "npm":
         pair = npm_pair(owner, host)
         if pair is None:
             return None
-        return npm_argv(*pair, owner.prefix, name, shell), None, "npm install --global --prefix " + display_path(owner.prefix) + " " + package
+        return npm_argv(*pair, owner.prefix, name, shell, version), None, "npm install --global --prefix " + display_path(owner.prefix) + " " + package
     if owner.manager == "pnpm":
-        pnpm = shutil.which("pnpm")
+        pnpm = pnpm_argv(host)
         if pnpm is None:
             return None
-        return [pnpm, "add", "--global", "--global-dir", str(owner.prefix), package], None, "pnpm add --global --global-dir " + display_path(owner.prefix) + " " + package
+        bin_dir = str(owner.bin_dir or owner.prefix)
+        # pnpm refuses a global install without its bin folder (PNPM_HOME) on PATH.
+        extra = {"PNPM_HOME": bin_dir, "PATH": bin_dir + os.pathsep + os.environ.get("PATH", "")}
+        return ([*pnpm, "add", "--global", "--global-dir", str(owner.prefix), package], extra,
+                "pnpm add --global --global-dir " + display_path(owner.prefix) + " " + package)
     if owner.manager == "bun":
         bun = shutil.which("bun") or (str(pathlib.Path.home() / ".bun/bin/bun") if (pathlib.Path.home() / ".bun/bin/bun").is_file() else None)
         if bun is None:
@@ -928,28 +994,44 @@ def install_command(owner, name, host, shell):
 
 
 def writable(owner, host):
-    try:
-        folders = [owner.root] + ([] if host == "windows" or owner.manager != "npm" else [owner.prefix / "bin"])
-        return all(os.access(folder, os.W_OK) for folder in folders if folder.exists())
-    except OSError:
-        return False
+    """Whether this account can write the owner's folders, by creating and removing a file there.
+    os.access cannot see a Windows ACL: a non-elevated task reads C:\\Program Files as writable."""
+    folders = [owner.root] + ([owner.prefix / "bin"] if host != "windows" and owner.manager == "npm" else [])
+    for folder in folders:
+        if not folder.exists():
+            continue
+        try:
+            handle, name = tempfile.mkstemp(prefix=".aac-write-check-", dir=str(folder))
+            os.close(handle)
+            os.unlink(name)
+        except OSError:
+            return False
+    return True
 
 
-def install_owned(install, deadline, phase, state, behind, held):
-    """Each behind, free package installs in its own run, bound to the prefix its owner names.
+# npm's words when the folder itself refuses the write (an ACL or a system folder): EPERM or EACCES on
+# creating something. Removing or renaming a file a program holds (rmdir, unlink, rename) or EBUSY is a lock.
+DENIED = re.compile(r"\b(?:EPERM|EACCES)\b")
+LOCK_SYSCALL = re.compile(r"\bEBUSY\b|\bsyscall (?:rmdir|unlink|rename|scandir|lstat)\b|(?:EPERM|EACCES)[^\n]{0,60}, (?:rmdir|unlink|rename) ")
 
-    Returns {adapter: failure code}. A package npm reports EPERM or EBUSY on (Windows) joins held."""
+
+def install_owned(install, deadline, phase, state, plan, held, targets, busy=frozenset()):
+    """Each behind copy installs in its own run, bound to the owner that holds it.
+
+    plan is [(adapter, owner index)]. Returns {adapter: failure code}. A package npm reports
+    EBUSY on, or EPERM while an adapter process uses it (Windows), joins held; EPERM or EACCES
+    with nothing using it is an unwritable folder."""
     failed = {}
     shell = git_bash() if install.platform == "windows" else None
-    for name in behind:
-        if name in held:
+    for name, index in plan:
+        if name in held or name in failed:
             continue
-        owner = install.owners[name]
+        owner = install.owners[name][index]
         if not writable(owner, install.platform):
             failed[name] = "prefix_not_writable"
             diagnostics().blame("not_writable", "prefix_not_writable")
             continue
-        planned = install_command(owner, name, install.platform, shell)
+        planned = install_command(owner, name, install.platform, shell, targets[name])
         if planned is None:
             failed[name] = "unsupported"
             diagnostics().note("manager_missing")
@@ -961,47 +1043,71 @@ def install_owned(install, deadline, phase, state, behind, held):
             command(argv, timeout=budget(deadline, NPM_SECONDS), errors=True, label=label,
                     **({"env": environment(extra), "preserve_env": True} if extra else {}))
         except UpdateFailure as error:
-            # npm's output is read here only, never shown: a lock on this package's files is in_use, not failed.
+            # npm's output is read here only, never shown in full.
             if install.platform == "windows" and locked_here(error.output, name):
-                held.add(name)
+                if name in busy or not DENIED.search(error.output or "") or LOCK_SYSCALL.search(error.output or ""):
+                    held.add(name)
+                else:
+                    failed[name] = "prefix_not_writable"
+                    diagnostics().blame("not_writable", "npm_denied")
             else:
                 failed[name] = error.code
     return failed
 
 
 def moved_elsewhere(install, name):
-    """Whether a copy other than the owner's changed (or appeared) during this row."""
-    owner = install.owners.get(name)
-    real = _real(owner.root) if owner else None
+    """Whether a copy other than the owners' changed (or appeared) during this row."""
+    owners = {str(_real(owner.root)) for owner in (install.owners or {}).get(name, [])}
     before = {str(_real(root)): version for root, version in (install.copies or {}).get(name, [])}
     for root, version in copies_of(install.platform, name):
         key = str(_real(root))
-        if _real(root) != real and version and before.get(key) != version:
+        if key not in owners and version and before.get(key) != version:
             return True
     return False
 
 
-def adapters_settle(install, behind, failed, held, attempted, unit_code=None, busy=None):
+def adapters_settle(install, behind, targets, failed, held, attempted, unit_code=None, busy=None):
     """The row for what really changed in the owners' copies.
 
-    Precedence: a wrong prefix (npm changed a copy T3 does not run) or another real failure
-    makes the row failed; an unwritable owner needs the user; a held part is in_use; else updated."""
+    A package is updated only when every copy T3 runs reached the registry's newest version.
+    Precedence: a wrong prefix (npm changed a copy T3 does not run), a version other than
+    the newest (an older or mirrored registry) or another real failure makes the row failed;
+    an unwritable owner needs the user; a held part is in_use; else updated."""
     after = owned_parts(install)
-    before = install.parts or {}
-    changed = {name for name in behind if after.get(name) and after[name] != before.get(name)}
-    held = set(held) - changed
+    now = owner_versions(install)
+    before = install.before or {}
+    changed = set()
+    held = set(held)
     for name in behind:
-        if name in changed or name in held or name in failed:
+        versions = now.get(name, [])
+        reached = [version is not None and npm_version_key(version) >= npm_version_key(targets[name]) for version in versions]
+        if versions and all(reached):
+            changed.add(name)
             continue
-        if moved_elsewhere(install, name):
+        if any(reached):
+            diagnostics().note("owners_partial")
+        if name in held or name in failed:
+            continue
+        moved = [old != new for old, new in zip(before.get(name, []), versions)]
+        if any(moved) and any(new is not None and old is not None and npm_version_key(new) < npm_version_key(old)
+                              for old, new in zip(before.get(name, []), versions)):
+            failed[name] = "registry_mismatch"
+            diagnostics().blame("installer_failed", "registry_older")
+        elif any(moved):
+            failed[name] = "registry_mismatch"
+            diagnostics().blame("installer_failed", "registry_other")
+        elif moved_elsewhere(install, name):
             failed[name] = "wrong_prefix"
         elif busy is not None and busy():
             held.add(name)
         else:
             failed[name] = unit_code or "update_failed"  # it finished, but this package's installed version did not move
+    held -= changed
     if "wrong_prefix" in failed.values():
         diagnostics().blame("wrong_prefix", "owner_unchanged")
         return adapters_row(install, "failed", after, "wrong_prefix", attempted, held)
+    if "registry_mismatch" in failed.values():
+        return adapters_row(install, "failed", after, "registry_mismatch", attempted, held)
     real = {name: code for name, code in failed.items() if code != "prefix_not_writable"}
     if real:
         return adapters_row(install, "failed", after, next(iter(real.values())), attempted, held)
@@ -1015,10 +1121,12 @@ def adapters_settle(install, behind, failed, held, attempted, unit_code=None, bu
 def unit_owns(install):
     """Whether the owner's t3-acp-update unit installs into the copies T3 runs (npm in ~/.local)."""
     local = _real(pathlib.Path.home() / ".local/lib/node_modules")
-    return all(owner.manager == "npm" and _real(owner.root) == local for owner in (install.owners or {}).values())
+    return all(owner.manager == "npm" and _real(owner.root) == local
+               for owners in (install.owners or {}).values() for owner in owners)
 
 
-def adapters_ubuntu(install, deadline, phase, state, behind):
+def adapters_ubuntu(install, deadline, phase, state, plan, targets):
+    behind = list(dict.fromkeys(name for name, _ in plan))
     busy = lambda: bool(busy_packages(scan("ubuntu"), install.owners))
     if acp_unit_present() and unit_owns(install):
         # The zcode row may already have run t3-acp-update in this job; it never runs twice.
@@ -1027,32 +1135,36 @@ def adapters_ubuntu(install, deadline, phase, state, behind):
         phase("updating")
         code = run_unit(deadline)
         state["attempted"] = True
-        return adapters_settle(install, behind, {}, set(), True, code, busy)
+        return adapters_settle(install, behind, targets, {}, set(), True, code, busy)
     # No unit, or T3 runs a copy the unit does not install: install there directly.
     diagnostics().note("direct_install")
-    held = set(behind) & busy_packages(scan("ubuntu"), install.owners)
-    failed = install_owned(install, deadline, phase, state, behind, held)
-    return adapters_settle(install, behind, failed, held, state["attempted"])
+    in_use = busy_packages(scan("ubuntu"), install.owners)
+    held = set(behind) & in_use
+    failed = install_owned(install, deadline, phase, state, plan, held, targets, in_use)
+    return adapters_settle(install, behind, targets, failed, held, state["attempted"])
 
 
-def adapters_mac(install, deadline, phase, state, behind):
+def adapters_mac(install, deadline, phase, state, plan, targets):
     """macOS replaces files under running adapters safely, so nothing is held. The install is bound to
     the prefix T3's copy lives in: the owner's own script ran plain `npm install -g`, which follows
     whichever Node is first and updated an unused prefix on 2026-11-13."""
-    failed = install_owned(install, deadline, phase, state, behind, set())
-    return adapters_settle(install, behind, failed, set(), state["attempted"])
+    behind = list(dict.fromkeys(name for name, _ in plan))
+    failed = install_owned(install, deadline, phase, state, plan, set(), targets)
+    return adapters_settle(install, behind, targets, failed, set(), state["attempted"])
 
 
-def adapters_windows(install, deadline, phase, state, behind):
-    """Each behind package installs in its own npm run, so none can block or roll back another.
+def adapters_windows(install, deadline, phase, state, plan, targets):
+    """Each behind copy installs in its own npm run, so none can block or roll back another.
 
-    A package a running adapter uses is held (in_use), and so is one npm reports EPERM or EBUSY on;
+    A package a running adapter uses is held (in_use), and so is one npm reports EBUSY on;
     a package that is not behind is never installed. Lifecycle scripts run under Git for Windows'
     bash when it is installed (git_bash), since zcode-acp-server's postinstall is a POSIX command.
     """
-    held = {name for name in behind if name in busy_packages(scan("windows"), install.owners)}
-    failed = install_owned(install, deadline, phase, state, behind, held)
-    return adapters_settle(install, behind, failed, held, state["attempted"])
+    behind = list(dict.fromkeys(name for name, _ in plan))
+    in_use = busy_packages(scan("windows"), install.owners)
+    held = {name for name in behind if name in in_use}
+    failed = install_owned(install, deadline, phase, state, plan, held, targets, in_use)
+    return adapters_settle(install, behind, targets, failed, held, state["attempted"])
 
 
 def update_adapters(install, deadline, phase=None):
@@ -1060,17 +1172,20 @@ def update_adapters(install, deadline, phase=None):
     state, behind = {"attempted": False}, []
     try:
         present = [name for name in PACKAGES if name in (install.owners or {})]
-        if not present or not all((install.parts or {}).get(name) for name in present):
+        versions = install.before or owner_versions(install)
+        if not present or not all(all(versions.get(name, [None])) for name in present):
             raise UpdateFailure("version_unknown", reason="adapter_version_unreadable")
         latest = {name: registry_version(name) for name in present}
         if None in latest.values():
             # Without the registry's answer nothing can be called current, so nothing runs.
             raise UpdateFailure("update_failed", reason="registry_unreadable")
-        # Only a package behind its latest is installed; one already current is never reinstalled.
-        behind = [name for name in present if npm_version_key(latest[name]) > npm_version_key(install.parts[name])]
-        if not behind:
+        # Only a copy behind its latest is installed; one already current is never reinstalled.
+        plan = [(name, index) for name in present for index, version in enumerate(versions[name])
+                if npm_version_key(latest[name]) > npm_version_key(version)]
+        behind = list(dict.fromkeys(name for name, _ in plan))
+        if not plan:
             return adapters_row(install, "current")
-        return {"ubuntu": adapters_ubuntu, "mac": adapters_mac, "windows": adapters_windows}[install.platform](install, deadline, phase, state, behind)
+        return {"ubuntu": adapters_ubuntu, "mac": adapters_mac, "windows": adapters_windows}[install.platform](install, deadline, phase, state, plan, latest)
     except Exception as error:
         code = error.code if isinstance(error, UpdateFailure) else "update_failed"
         if isinstance(error, UpdateFailure) and (error.cause or error.reason):
