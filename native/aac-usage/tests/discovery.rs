@@ -357,7 +357,8 @@ fn sessions_carry_their_full_hash_and_reported_cwd_unless_capture_is_off() {
         entry["cwd"]["path"],
         format!("~{}code{}proj", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR)
     );
-    assert_eq!(entry["cwd"]["identitySource"], "reported");
+    assert_eq!(entry["cwd"]["identitySource"], "inferred_cwd");
+    assert_eq!(entry["cwd"]["confidence"], "inferred");
     assert!(!answer.to_string().contains("sess-1"));
     let mut off = request(&["claude"]);
     off.cwd = false;
@@ -405,8 +406,16 @@ fn a_transcript_past_260_characters_is_read() {
     let home = tempfile::tempdir().unwrap();
     let h = home.path();
     write(&h.join(".claude-t3/acct/settings.json"), "{}");
-    let deep = format!("C--Users-x-{}", "very-long-project-folder-name-".repeat(9));
-    let file = h.join(".claude-t3/acct/projects").join(&deep).join("ad66e34b-f9d0-4c32-89b2-2cc98c95b583.jsonl");
+    // Several folder names, each under the 255-character limit of one name on ext4, APFS and NTFS.
+    let mut file = h.join(".claude-t3/acct/projects");
+    for part in 0..3 {
+        file = file.join(format!(
+            "C--Users-x-{part}-{}",
+            "very-long-project-folder-name-".repeat(4)
+        ));
+    }
+    let file = file.join("ad66e34b-f9d0-4c32-89b2-2cc98c95b583.jsonl");
+    assert!(file.components().all(|c| c.as_os_str().len() < 255));
     assert!(file.to_string_lossy().len() > 300);
     write(&file, &claude_line("m-long", "long", "/w"));
     let answer = protocol::scan(&request(&["claude"]), h, &env(h));

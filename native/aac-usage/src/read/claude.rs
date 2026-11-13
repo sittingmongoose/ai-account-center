@@ -303,6 +303,11 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
     }
     let mut aliases: HashMap<GroupKey, usize> = HashMap::new();
     for (index, path) in paths.iter().enumerate() {
+        // Each print below opens the file; the budget holds in this pass too.
+        if collector.expired() {
+            collector.truncated = true;
+            return true;
+        }
         let mirror = is_mirror(path);
         let name = path
             .file_name()
@@ -354,11 +359,11 @@ pub fn scan_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, f
             collector.truncated = true;
             return true;
         }
-        let deps = format!(
-            "{}:{}",
-            super::deps_print("claude", &group),
-            util::filekey("claude", &group[0])
-        );
+        let Some(group_print) = super::deps_print("claude", &group, collector.deadline()) else {
+            collector.truncated = true;
+            return true;
+        };
+        let deps = format!("{}:{}", group_print, util::filekey("claude", &group[0]));
         let members: BTreeSet<String> = group.iter().map(|p| util::filekey("claude", p)).collect();
         let previous: BTreeSet<String> = members
             .iter()

@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// Per-file parser state (the Python helper's `box`).
 #[derive(Default)]
@@ -299,25 +300,27 @@ pub fn copy_key(kind: &str, path: &Path) -> String {
     name
 }
 
-/// Python's `_deps_print`: a digest of each copy reference's key and print.
-pub fn deps_print(kind: &str, copies: &[PathBuf]) -> String {
+/// Python's `_deps_print`: a digest of each copy reference's key and print. None when the deadline
+/// passes before every copy is printed (each print opens the file and reads its head and tail).
+pub fn deps_print(kind: &str, copies: &[PathBuf], deadline: Instant) -> Option<String> {
     let mut sorted: Vec<&PathBuf> = copies.iter().collect();
     sorted.sort_by_key(|p| path_text(p));
-    let lines: Vec<String> = sorted
-        .iter()
-        .map(|path| {
-            let print = util::fingerprint(path);
-            format!(
-                "{}:{}:{}:{}:{}",
-                util::filekey(kind, path),
-                print.as_ref().map_or("None".to_string(), |p| p.size.to_string()),
-                print.as_ref().map_or("None".to_string(), |p| p.mtime_ms.to_string()),
-                print.as_ref().map_or("None".to_string(), |p| p.head.clone()),
-                print.as_ref().map_or("None".to_string(), |p| p.tail.clone()),
-            )
-        })
-        .collect();
-    util::sha256_hex(lines.join("\n").as_bytes())
+    let mut lines: Vec<String> = Vec::with_capacity(sorted.len());
+    for path in sorted {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        let print = util::fingerprint(path);
+        lines.push(format!(
+            "{}:{}:{}:{}:{}",
+            util::filekey(kind, path),
+            print.as_ref().map_or("None".to_string(), |p| p.size.to_string()),
+            print.as_ref().map_or("None".to_string(), |p| p.mtime_ms.to_string()),
+            print.as_ref().map_or("None".to_string(), |p| p.head.clone()),
+            print.as_ref().map_or("None".to_string(), |p| p.tail.clone()),
+        ));
+    }
+    Some(util::sha256_hex(lines.join("\n").as_bytes()))
 }
 
 /// Python's `_t3_files`: non-default files to read, each mapped to the default and earlier non-default
@@ -464,6 +467,12 @@ pub fn scan_kind_files(
     let mut seen: HashSet<Option<(u64, String, String)>> = HashSet::new();
     let mut distinct = Vec::new();
     for path in &paths {
+        // Each print opens the file: on a slow disk with thousands of files this pass alone can
+        // outlast the budget, and ssh would then time the whole computer out.
+        if collector.expired() {
+            collector.truncated = true;
+            return true;
+        }
         let stamp = util::fingerprint(path).map(|p| (p.size, p.head, p.tail));
         if stamp.is_some() && seen.contains(&stamp) {
             continue;
@@ -480,7 +489,11 @@ pub fn scan_kind_files(
         let deps = if copies.is_empty() {
             None
         } else {
-            Some(deps_print(kind, &copies))
+            let Some(print) = deps_print(kind, &copies, collector.deadline()) else {
+                collector.truncated = true;
+                return true;
+            };
+            Some(print)
         };
         let Some(filekey) = collector.note_file(kind, &path, deps.as_deref()) else {
             let staged = util::filekey(kind, &path);

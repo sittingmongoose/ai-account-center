@@ -208,7 +208,10 @@ fn windows_identity(path: &Path) -> Option<(u64, u64)> {
     } else {
         text
     };
-    let wide: Vec<u16> = std::ffi::OsStr::new(&verbatim).encode_wide().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = std::ffi::OsStr::new(&verbatim)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     // SAFETY: a NUL-terminated path; zero access rights only query attributes; the handle is closed.
     unsafe {
         let handle = CreateFileW(

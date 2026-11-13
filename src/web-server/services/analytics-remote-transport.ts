@@ -274,7 +274,13 @@ export interface AnalyticsRemoteDiscovery {
 /** Identity evidence of one session (DB audit 2): its full hash and the working folder its log states. */
 export interface AnalyticsSessionEvidence {
   hash: string;
-  cwd: { key: string; path: string; identitySource: 'reported'; confidence: 'explicit' } | null;
+  cwd: {
+    key: string;
+    path: string;
+    /** An inferred join only, never a measured attribution (history DESIGN 1.3). */
+    identitySource: 'inferred_cwd';
+    confidence: 'inferred';
+  } | null;
 }
 
 /** Which reader answered: the Rust scanner, or the Python helper standing in (with why). */
@@ -423,15 +429,15 @@ export function parseAnalyticsSessions(
         typeof item.key !== 'string' ||
         !SESSION_KEY_HEX.test(item.key) ||
         !cleanText(item.path, 1024) ||
-        item.identitySource !== 'reported' ||
-        item.confidence !== 'explicit'
+        item.identitySource !== 'inferred_cwd' ||
+        item.confidence !== 'inferred'
       )
         continue;
       evidence = {
         key: item.key,
         path: item.path,
-        identitySource: 'reported',
-        confidence: 'explicit',
+        identitySource: 'inferred_cwd',
+        confidence: 'inferred',
       };
     }
     result[key] = { hash, cwd: evidence };

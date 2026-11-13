@@ -423,8 +423,8 @@ describe('the scanner answer and the cells it gives', () => {
               cwd: {
                 key: 'e'.repeat(16),
                 path: '~/code/proj',
-                identitySource: 'reported',
-                confidence: 'explicit',
+                identitySource: 'inferred_cwd',
+                confidence: 'inferred',
               },
             },
             ['f'.repeat(16)]: { hash: 'not-a-hash', cwd: null },

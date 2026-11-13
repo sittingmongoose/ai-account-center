@@ -304,7 +304,9 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
         }
     }
     let mut discovery = json!({"kinds": discovery_kinds});
-    if request.presence {
+    // Presence runs after the readers and only while the budget lasts, so a slow disk cannot push an
+    // answer past ssh's timeout; without it the server keeps the last presence it saw.
+    if request.presence && !collector.expired() {
         discovery["tools"] = Value::Object(discover::presence(home, env, &instances, Duration::from_secs(3)));
     }
     // Identity evidence of every session this answer names: its full hash and, when the log states
@@ -320,8 +322,10 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                 json!({
                     "key": util::sha256_hex(format!("aac-cwd-v1:{path}").as_bytes())[..16].to_string(),
                     "path": path,
-                    "identitySource": "reported",
-                    "confidence": "explicit",
+                    // An inferred join only, never a measured attribution (history DESIGN 1.3,
+                    // DATA-ARCHITECTURE 2.1).
+                    "identitySource": "inferred_cwd",
+                    "confidence": "inferred",
                 })
             });
             (key.clone(), json!({"hash": evidence.hash, "cwd": cwd}))
