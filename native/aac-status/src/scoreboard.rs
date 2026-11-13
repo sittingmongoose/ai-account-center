@@ -44,6 +44,10 @@ pub struct ViewIn {
     pub catalog: CatalogIn,
     pub uses: Vec<UseIn>,
     pub sources: Vec<SourceIn>,
+    /// Scoreboard v2: families, catalog model order and effort order (aac-store's
+    /// `runsIdentity`). Absent from a share-only view; the by-model words never read it.
+    #[serde(default)]
+    pub identity: Option<IdentityIn>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -131,6 +135,16 @@ pub struct ColumnIn {
     pub why: String,
     #[serde(default)]
     pub measures: HashMap<String, MeasureIn>,
+    /// The column's newest runs (only their end times are read, for recency).
+    #[serde(default)]
+    pub runs: Vec<ColumnRunIn>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnRunIn {
+    #[serde(default)]
+    pub ended_at: Option<String>,
 }
 
 /// One measure of a column. `value`, `low` and `high` keep the JSON number exactly as the
@@ -157,6 +171,9 @@ pub struct MeasureIn {
     pub per_task: Option<StatIn>,
     #[serde(default)]
     pub estimate: Option<EstimateIn>,
+    /// cost: measured USD per accepted unit, apart from credits (the measure's own value).
+    #[serde(default)]
+    pub usd: Option<CreditsRateIn>,
 }
 
 impl MeasureIn {
@@ -1266,7 +1283,9 @@ struct ModelWork {
     reviews: i64,
 }
 
-fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str]) -> Result<ViewOut> {
+/// The view's jobs, the shown ones, and one row per model at one effort across them, sorted
+/// as the page shows them (shared by the view and its grouping keys).
+fn select_models<'a>(view: &'a ViewIn, use_ids: &[&str]) -> Result<(Vec<&'a TaskIn>, Vec<&'a TaskIn>, Vec<ModelWork>)> {
     let min_runs = view.catalog.min_runs;
     let jobs = view_jobs(view, use_ids)?;
     const ORDER: [&str; 4] = ["worknode-build", "review", "plan", "scout"];
@@ -1406,6 +1425,12 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
             .then(runs)
             .then_with(|| a.label.cmp(&b.label))
     });
+    Ok((jobs, shown, grouped))
+}
+
+fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str]) -> Result<ViewOut> {
+    let min_runs = view.catalog.min_runs;
+    let (jobs, shown, grouped) = select_models(view, use_ids)?;
 
     let out_models: Vec<ModelOut> = grouped
         .iter()
@@ -1789,4 +1814,198 @@ mod identity_tests {
         );
         assert_eq!(normalize_model("unknown", None, &models), ("unknown".into(), None));
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Grouping and sort keys (Scoreboard v2): Family > Model > Effort, and the page's sort columns.
+// A separate answer from `by_model`, whose words and golden pair stay as they are; the keys are
+// computed over the same rows the matrix shows (`select_models`).
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct IdentityIn {
+    #[serde(default)]
+    pub families: Vec<FamilyOut>,
+    #[serde(default)]
+    pub models: HashMap<String, IdentityModelIn>,
+    #[serde(default)]
+    pub efforts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct IdentityModelIn {
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub order: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct FamilyOut {
+    pub id: String,
+    pub label: String,
+    pub short: String,
+    pub order: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GroupsOut {
+    /// In order, ending with the family of models the catalog does not place.
+    pub families: Vec<FamilyOut>,
+    /// Effort levels in order.
+    pub efforts: Vec<String>,
+    /// View id to model row key (`model|runtime|effort`) to its keys.
+    pub views: BTreeMap<String, BTreeMap<String, KeysOut>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeysOut {
+    pub family: String,
+    pub model_order: i64,
+    pub effort_order: i64,
+    /// Cells recommended, fine and avoid.
+    pub verdicts: [i64; 3],
+    /// The best rank of any of its cells (1 is best); null when none is ranked.
+    pub rank: Option<i64>,
+    pub runs: i64,
+    /// Blind-review items passed and decided, over the row's jobs; null when none was decided.
+    pub passed: Option<i64>,
+    pub decided: Option<i64>,
+    /// Measured cost per accepted unit in the first shown job that has one, with its unit.
+    pub cost: Option<f64>,
+    pub cost_unit: Option<String>,
+    pub cost_job: Option<String>,
+    /// The newest run behind its cells (ISO time).
+    pub last_run_at: Option<String>,
+}
+
+pub const NO_FAMILY: &str = "none";
+const EFFORT_UNRECOGNIZED: i64 = 50;
+const EFFORT_UNKNOWN: i64 = 100;
+const MODEL_UNORDERED: i64 = 10_000;
+
+/// The grouping and sort keys of every model row of both views.
+pub fn group_keys(view: &ViewIn) -> Result<GroupsOut> {
+    let mut normalized = view.clone();
+    for usage in &mut normalized.uses {
+        for task in &mut usage.task_types {
+            for row in &mut task.rows {
+                let (id, effort) = normalize_model(&row.model, row.effort.clone(), &view.catalog.models);
+                row.model = id;
+                row.effort = effort;
+            }
+        }
+    }
+    let view = &normalized;
+    let identity = view.identity.clone().unwrap_or_default();
+    let mut families = identity.families.clone();
+    families.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.label.cmp(&b.label)));
+    families.push(FamilyOut {
+        id: NO_FAMILY.to_string(),
+        label: "Not in the catalog".to_string(),
+        short: "Other".to_string(),
+        order: 1000,
+    });
+    let effort_order = |effort: &Option<String>| -> i64 {
+        match effort {
+            None => EFFORT_UNKNOWN,
+            Some(e) => identity
+                .efforts
+                .iter()
+                .position(|level| level == e)
+                .map(|p| p as i64)
+                .unwrap_or(EFFORT_UNRECOGNIZED),
+        }
+    };
+    let mut views = BTreeMap::new();
+    for (id, use_ids) in [
+        ("pipeline", &["planning", "building", "pm-users"][..]),
+        ("pm-users", &["pm-users"][..]),
+    ] {
+        let (_, shown, grouped) = select_models(view, use_ids)?;
+        let mut keys = BTreeMap::new();
+        for model in &grouped {
+            let placed = identity.models.get(&model.model);
+            let family = placed
+                .and_then(|m| m.family.clone())
+                .filter(|f| families.iter().any(|known| &known.id == f))
+                .unwrap_or_else(|| NO_FAMILY.to_string());
+            let mut verdicts = [0i64; 3];
+            for cell in model.cells.values() {
+                match cell.verdict.as_str() {
+                    "recommended" => verdicts[0] += 1,
+                    "fine" => verdicts[1] += 1,
+                    "avoid" => verdicts[2] += 1,
+                    _ => {}
+                }
+            }
+            let mut rank: Option<i64> = None;
+            let (mut passed, mut decided) = (0i64, 0i64);
+            let mut decided_any = false;
+            let mut cost: Option<(f64, String, String)> = None;
+            let mut last: Option<String> = None;
+            for job in &shown {
+                let Some((_, index)) = model.rows.iter().find(|(job_id, _)| job_id == &job.id) else {
+                    continue;
+                };
+                let row = &job.rows[*index];
+                if row.ranked
+                    && let Some(r) = row.rank
+                {
+                    rank = Some(rank.map_or(r, |best| best.min(r)));
+                }
+                if let Some(c) = column(row) {
+                    if let Some(q) = c.measures.get("quality")
+                        && let (Some(of), Some(per)) = (q.of, q.per)
+                        && per > 0
+                    {
+                        passed += of;
+                        decided += per;
+                        decided_any = true;
+                    }
+                    if cost.is_none()
+                        && let Some(m) = c.measures.get("cost")
+                    {
+                        if let Some(credits) = m.value.as_f64() {
+                            cost = Some((credits, format!("credits per {}", job.unit), job.label.clone()));
+                        } else if let Some(usd) = m.usd.as_ref().and_then(|u| u.value) {
+                            cost = Some((usd, format!("USD per {}", job.unit), job.label.clone()));
+                        }
+                    }
+                }
+                for c in row.observed.iter().chain(row.benchmarks.iter()) {
+                    for r in &c.runs {
+                        if let Some(at) = &r.ended_at
+                            && last.as_ref().is_none_or(|l| at > l)
+                        {
+                            last = Some(at.clone());
+                        }
+                    }
+                }
+            }
+            keys.insert(
+                model.key.clone(),
+                KeysOut {
+                    family,
+                    model_order: placed.map(|m| m.order).unwrap_or(MODEL_UNORDERED),
+                    effort_order: effort_order(&model.effort),
+                    verdicts,
+                    rank,
+                    runs: model.real + model.bench,
+                    passed: decided_any.then_some(passed),
+                    decided: decided_any.then_some(decided),
+                    cost: cost.as_ref().map(|c| c.0),
+                    cost_unit: cost.as_ref().map(|c| c.1.clone()),
+                    cost_job: cost.map(|c| c.2),
+                    last_run_at: last,
+                },
+            );
+        }
+        views.insert(id.to_string(), keys);
+    }
+    Ok(GroupsOut {
+        families,
+        efforts: identity.efforts.clone(),
+        views,
+    })
 }

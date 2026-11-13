@@ -245,6 +245,29 @@ export interface ScoreboardIdentity {
   efforts: string[];
 }
 
+/** One by-model row's grouping and sort keys (native/aac-status `group_keys`). */
+export interface ScoreboardRowKeys {
+  family: string;
+  modelOrder: number;
+  effortOrder: number;
+  verdicts: [number, number, number];
+  rank: number | null;
+  runs: number;
+  passed: number | null;
+  decided: number | null;
+  cost: number | null;
+  costUnit: string | null;
+  costJob: string | null;
+  lastRunAt: string | null;
+}
+
+export interface ScoreboardGroups {
+  families: Array<{ id: string; label: string; short: string; order: number }>;
+  efforts: string[];
+  /** View id to by-model row key to its keys. */
+  views: Record<string, Record<string, ScoreboardRowKeys>>;
+}
+
 /** Where the runs come from: the history store (kept forever) or the share alone. */
 export interface ScoreboardHistory {
   store: 'on' | 'off';
@@ -277,6 +300,8 @@ export interface ScoreboardView {
   filters?: ScoreboardFiltersView;
   identity?: ScoreboardIdentity | null;
   history?: ScoreboardHistory;
+  /** The by-model rows' grouping and sort keys (aac-status `composeGroups`); absent when unavailable. */
+  groups?: ScoreboardGroups;
   /** The by-model matrix (CONTRACT-spend-bymodel.md section 2), composed in the
    * aac-status native module and passed through; absent when it cannot be had. */
   byModel?: ByModelView;

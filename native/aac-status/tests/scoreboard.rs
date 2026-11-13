@@ -724,3 +724,73 @@ fn unknown_speed_and_cost_are_not_called_the_same() {
     assert!(text.contains("is also Recommended here, with 15 runs."));
     assert!(text.contains("is also Recommended here, with 8 runs."));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Scoreboard v2: grouping and sort keys over the same rows as the matrix.
+
+fn identity() -> Value {
+    json!({
+        "families": [
+            { "id": "openai", "label": "OpenAI · GPT, Codex", "short": "GPT", "order": 2 },
+            { "id": "anthropic", "label": "Anthropic · Claude", "short": "Claude", "order": 1 },
+            { "id": "zai", "label": "Z.ai · GLM", "short": "GLM", "order": 3 }
+        ],
+        "models": {
+            "anthropic/claude-opus-5-5": { "family": "anthropic", "order": 0 },
+            "anthropic/claude-sonnet-5-5": { "family": "anthropic", "order": 1 },
+            "anthropic/claude-haiku-5-5": { "family": "anthropic", "order": 2 },
+            "openai/gpt-6.1-sol": { "family": "openai", "order": 4 },
+            "zai/glm-5.3": { "family": "zai", "order": 8 }
+        },
+        "efforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultrathink"]
+    })
+}
+
+fn with_identity() -> ViewIn {
+    let mut view: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    view["identity"] = identity();
+    serde_json::from_value(view).unwrap()
+}
+
+#[test]
+fn every_matrix_row_has_its_family_order_and_sort_keys() {
+    let view = with_identity();
+    let groups = aac_status::scoreboard::group_keys(&view).unwrap();
+    let words = by_model(&view).unwrap();
+    // The identity never changes the words: the golden pair still reproduces with it present.
+    let expected: Value = serde_json::from_str(&fixture("scoreboard-by-model.json")).unwrap();
+    assert_same_json(&serde_json::to_value(&words).unwrap(), &expected);
+    let ids: Vec<&str> = groups.families.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(ids, vec!["anthropic", "openai", "zai", "none"]);
+    for section in &words.views {
+        let keys = &groups.views[&section.id];
+        assert_eq!(keys.len(), section.models.len(), "{}", section.id);
+        for model in &section.models {
+            let k = &keys[&model.key];
+            let verdicts = model.cells.values().flatten().filter(|c| c.verdict != "not-enough-data").count() as i64;
+            assert_eq!(k.verdicts.iter().sum::<i64>(), verdicts, "{}", model.key);
+            assert_eq!(k.runs, model.runs, "{}", model.key);
+            if let (Some(passed), Some(decided)) = (k.passed, k.decided) {
+                assert!(passed <= decided && decided > 0);
+            }
+        }
+    }
+    let pipeline = &groups.views["pipeline"];
+    let opus_xhigh = &pipeline["anthropic/claude-opus-5-5|claude-code|xhigh"];
+    let opus_high = &pipeline["anthropic/claude-opus-5-5|claude-code|high"];
+    let haiku = &pipeline["anthropic/claude-haiku-5-5|claude-code|"];
+    assert_eq!(opus_xhigh.family, "anthropic");
+    assert!(opus_high.effort_order < opus_xhigh.effort_order);
+    assert_eq!(haiku.effort_order, 100, "no effort sorts after every level");
+    assert_eq!(pipeline["zai/glm-5.3|zcode|max"].family, "zai");
+    assert!(pipeline["openai/gpt-6.1-sol|codex|high"].model_order > opus_xhigh.model_order);
+}
+
+#[test]
+fn without_identity_every_row_is_unplaced_and_the_call_still_answers() {
+    let groups = aac_status::scoreboard::group_keys(&golden_view()).unwrap();
+    assert_eq!(groups.families.len(), 1);
+    assert!(groups.views["pipeline"].values().all(|k| k.family == "none" && k.model_order == 10_000));
+    let answer = ops::dispatch("composeGroups", &fixture("scoreboard-view.json")).unwrap();
+    assert!(answer.contains("\"views\""));
+}

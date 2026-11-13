@@ -24,7 +24,7 @@ import {
   type ScoreboardFilters,
   type ScoreboardView,
 } from './scoreboard-view';
-import { composeByModel } from './by-model';
+import { composeByModel, composeGroups } from './by-model';
 import { openStatusHandle } from '../../status-native/pinned';
 import type { NativeStatusHandle } from '../../status-native/native-loader';
 import { getAacStore, openAacStore, type AacStore } from '../../store/store-service';
@@ -122,8 +122,11 @@ export class ScoreboardService {
   /** The by-model matrix is the native composer's own words over the view just built. */
   private async finish(view: ScoreboardView): Promise<ScoreboardView> {
     const byModel = this.native ? await composeByModel(view, { handle: this.native }) : null;
+    const groups =
+      byModel && this.native ? await composeGroups(view, { handle: this.native }) : null;
     return {
       ...(byModel ? { ...view, byModel } : view),
+      ...(groups ? { groups } : {}),
       cached: true,
       cacheAgeSeconds: 0,
       refreshing: false,
