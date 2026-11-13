@@ -3,7 +3,7 @@
 // real is touched). Each flow checks what the page draws by DOM selector and exactly which requests it sends: the
 // same ones the Slint page sent through bridge.js and accounts-controller.mjs (now run by public/frame-dashboard.mjs).
 
-import { fakeServer, serve, changes } from '../accounts-fixture.mjs';
+import { fakeServer, serve, changes, updateJob } from '../accounts-fixture.mjs';
 
 async function open(t, server, { width = 1440, height = 900, phone = false, duo = false, safe = '' } = {}) {
 	await t.newContext(phone
@@ -158,6 +158,24 @@ export const tests = {
 		await t.page.waitForSelector('.details');
 		await t.page.click('[data-probe="details-close"]');
 		await t.until('the close button closes it', () => !document.querySelector('.details'), null, { timeout: 5000 });
+	},
+
+	async 'accounts: an Update apps row names its cause and shows what ran, the step times and the output'(t) {
+		const server = fakeServer({ update: updateJob() });
+		await open(t, server);
+		await t.until('the Update apps table is open', () => !!document.querySelector('[data-probe="update-card"] .upd-table'), null, { timeout: 15000, hard: true });
+		const cell = await t.page.evaluate(() => {
+			const item = [...document.querySelectorAll('.ut-item')].find((i) => i.querySelector('.ut-app')?.textContent.trim() === 'Antigravity CLI');
+			const cells = item ? [...item.querySelectorAll('.ut-cell')] : [];
+			const failed = cells.find((c) => c.textContent.trim() === 'installer failed');
+			return failed ? { title: failed.getAttribute('title') || '', crit: failed.classList.contains('w-crit') } : null;
+		});
+		await t.check('the failed cell says "installer failed" in red, not just "failed"', !!cell && cell.crit);
+		await t.check('its tip names the cause, the command, the exit code and the steps',
+			!!cell && /Cause: its installer failed · ran agy update \(exit 1\) · checking 0\.9s, updating 4\.2s · output: Error: connection reset by peer/.test(cell.title));
+		await t.page.evaluate(() => [...document.querySelectorAll('.ut-item')].find((i) => i.querySelector('.ut-app')?.textContent.trim() === 'Antigravity CLI')?.querySelector('button.ut-row')?.click());
+		await t.until('its details list the output for Nas1', () => [...document.querySelectorAll('.ut-details li')].some((li) => li.textContent.includes('Nas1') && li.textContent.includes('output: Error: connection reset by peer')), null, { timeout: 5000 });
+		await t.check('rows without diagnostics keep their old words', await t.page.evaluate(() => [...document.querySelectorAll('.ut-cell')].some((c) => c.textContent.trim() === 'quit to finish')));
 	},
 
 	async 'accounts: on a phone the cards stack, Update apps folds to its line, nothing runs sideways'(t) {

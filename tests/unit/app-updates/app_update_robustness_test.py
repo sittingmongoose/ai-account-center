@@ -329,6 +329,7 @@ class AdapterOwnershipRegressions(Home):
             install = zcode.detect_adapters(host)
             return install, attach(zcode.update_adapters(install, time.monotonic() + 600), record)
 
+    @unittest.skipIf(os.name == "nt", "the Mac fixture uses symlinks, which Windows creates only with Developer Mode")
     def test_mac_installs_into_the_prefix_t3_runs_and_verifies_that_copy(self):
         """Row 3. On main the owner's script installed zcode-acp-server 0.84.3 into the standalone Node's prefix,
         AAC read Homebrew's unchanged 0.84.2 and reported 'The app update failed'."""
@@ -345,6 +346,7 @@ class AdapterOwnershipRegressions(Home):
         self.assertEqual({(p["package"], p["source"]) for p in owner}, {("zcode-acp-server", "t3-config"), ("muse-acp", "path")})
         self.assertNotIn(str(self.root), json.dumps(row))
 
+    @unittest.skipIf(os.name == "nt", "the Mac fixture uses symlinks, which Windows creates only with Developer Mode")
     def test_an_installer_that_changes_another_copy_is_wrong_prefix_with_both_folders(self):
         """Partial progress is reported as it is: the copy T3 runs did not move, another copy did."""
         self.mac()
@@ -405,6 +407,7 @@ class AdapterOwnershipRegressions(Home):
         self.assertEqual(install.owners["zcode-acp-server"].manager, "other")
         self.assertEqual((row["status"], row["messageCode"]), ("failed", "unsupported"))
 
+    @unittest.skipIf(os.name == "nt", "the Mac fixture uses symlinks, which Windows creates only with Developer Mode")
     def test_an_owner_in_a_folder_this_user_cannot_write_needs_action_and_runs_nothing(self):
         self.mac()
         with mock.patch.object(zcode, "writable", return_value=False):
@@ -548,6 +551,7 @@ class T3ReadinessTests(Home):
 # T3 4616 offering the 1.5.8 native CLI, which cannot read the stored sign-in.
 # ---------------------------------------------------------------------------------------------
 class AntigravitySignInRegression(Home):
+    @unittest.skipIf(os.name == "nt", "a Linux runtime record needs Unix executable bits")
     def test_vm_records_hold_the_move_to_the_native_cli_and_install_nothing(self):
         records = json.loads(evidence("antigravity-vm-records.json"))["records"]
         old = next(record for record in records if record["version"] == "1.4.5")
