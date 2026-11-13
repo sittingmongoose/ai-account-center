@@ -218,7 +218,11 @@ export const tests = {
 			const list = await t.page.evaluate(() => getComputedStyle(document.querySelector('.sb-models')).display !== 'none');
 			if (list) {
 				await t.check(`${f.name}: a family line is one line`, await t.page.evaluate(() =>
-					[...document.querySelectorAll('.sbm-fam')].every((n) => n.getBoundingClientRect().height < 30)
+					// The visible label (long or short) holds one line of 12.5 px text.
+					[...document.querySelectorAll('.sbm-fam')].every((n) => {
+						const label = [...n.querySelectorAll('span')].find((s) => getComputedStyle(s).display !== 'none');
+						return label && label.getBoundingClientRect().height < 24;
+					})
 				));
 				await t.check(`${f.name}: a model card's name and its runs share a line`, await t.page.evaluate(() =>
 					[...document.querySelectorAll('.sbm-head')].every((n) => n.getBoundingClientRect().height < 44)

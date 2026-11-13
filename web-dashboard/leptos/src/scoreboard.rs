@@ -899,8 +899,9 @@ fn pick_card(pick: Pick) -> impl IntoView {
                 Some(m) => view! {
                     <div class="pick-model">
                         <Mark name=m.mark.clone() size=18/>
-                        {m.label.clone()}
-                        {m.effort.clone().map(|e| view! { <span class="eff">{format!(" · {e}")}</span> })}
+                        // One text: the effort is bound to the name's last word, so a narrow card never leaves
+                        // "· max" alone on a line.
+                        <span class="pm-name">{m.label.clone()}{m.effort.clone().map(|e| view! { <span class="eff">{format!("\u{a0}·\u{a0}{e}")}</span> })}</span>
                     </div>
                 }.into_any(),
                 None => view! { <div class="pick-model">{pick.none_label.clone().unwrap_or_else(|| "No pick yet".into())}</div> }.into_any(),
@@ -970,6 +971,11 @@ fn ago(iso: Option<&str>) -> String {
         return "–".into();
     }
     fmt::age(((js_sys::Date::now() - at) / 1000.0).floor() as i64)
+}
+
+/// "1 run", "1,838 runs".
+fn runs_count(n: i64) -> String {
+    format!("{} {}", count(n), if n == 1 { "run" } else { "runs" })
 }
 
 /// A whole number with thousands separators ("1,838").
@@ -1048,7 +1054,7 @@ fn ModelsSections(
             Line::Family { label, short, runs, .. } => view! {
                 <tr class="sb-fam"><td colspan=cols>
                     <span class="lbl-long">{label.clone()}</span><span class="lbl-short">{short.clone()}</span>
-                    <span class="fam-n">{format!("{} runs", count(*runs))}</span>
+                    <span class="fam-n">{runs_count(*runs)}</span>
                 </td></tr>
             }
             .into_any(),
@@ -1075,7 +1081,7 @@ fn ModelsSections(
                         <td>{row_name(&m, *sub, false)}</td>
                         {cells}
                         <td class="num-col">{pass}</td>
-                        <td class="num-col">{last}</td>
+                        <td class="num-col last-col">{last}</td>
                         <td class="runs-col">{m.runs.map(|r| count(r as i64)).unwrap_or_else(|| "–".into())}</td>
                     </tr>
                 }
@@ -1106,7 +1112,7 @@ fn ModelsSections(
                     })
                     .collect_view();
                 let stats = [
-                    m.runs.map(|r| format!("{} runs", count(r as i64))),
+                    m.runs.map(|r| runs_count(r as i64)),
                     k.as_ref().and_then(|k| k.pass_rate()).map(|_| format!("{} pass", arr::pass_text(k.as_ref()))),
                 ]
                 .into_iter()
@@ -1115,7 +1121,7 @@ fn ModelsSections(
                 .join(" · ");
                 view! {
                     <button class="sbm" class:sub=*sub class:sel={let k = m.key.clone(); move || selected_key.get().as_ref() == Some(&k)} on:click=move |_| { on_row.run(open.key.clone()); on_sheet.run(open.clone()); }>
-                        <div class="sbm-head">{row_name(&m, *sub, true)}<span class="sbm-n">{stats}</span></div>
+                        <div class="sbm-head">{row_name(&m, *sub, false)}<span class="sbm-n">{stats}</span><Icon name="chev-right" class="chev"/></div>
                         <div class="sbm-jobs">{job_rows}</div>
                     </button>
                 }
@@ -1153,7 +1159,7 @@ fn ModelsSections(
                             <th><span class="cap">"Model · effort"</span></th>
                             {jobs.iter().map(|j| view! { <th><span class="cap">{j.label.clone()}</span></th> }).collect_view()}
                             <th class="num-col"><span class="cap">"Pass"</span></th>
-                            <th class="num-col"><span class="cap">"Last run"</span></th>
+                            <th class="num-col last-col"><span class="cap">"Last run"</span></th>
                             <th style="text-align:right"><span class="cap">"Runs"</span></th>
                         </tr>
                     </thead>

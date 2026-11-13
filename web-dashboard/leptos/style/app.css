@@ -694,6 +694,7 @@ textarea.note::placeholder { color: var(--ink-4); }
 .pick-model { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 640; font-variation-settings: 'wght' 640; }
 .pick-model .mk { width: 18px; height: 18px; }
 .pick-model .eff { font-weight: 450; font-variation-settings: 'wght' 450; color: var(--ink-3); }
+.pick-model .pm-name { min-width: 0; }
 .pick-why { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; line-height: 1.4; }
 .pick-why b { color: var(--ink-2); font-weight: 600; font-variation-settings: 'wght' 600; }
 .pick.none .pick-model { color: var(--ink-3); font-weight: 560; font-variation-settings: 'wght' 560; font-size: 14.5px; }
