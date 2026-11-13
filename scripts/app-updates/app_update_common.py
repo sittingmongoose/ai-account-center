@@ -895,14 +895,18 @@ def command(argv, timeout=30, env=None, capture=False, preserve_env=False, captu
 
 # Windows PowerShell 5.1 writes to a pipe in the OEM code page (CP437, CP850, ...), which
 # command() would read as UTF-8: a "C:\\Users\\Ren\u00e9" path or a localized error came back as U+FFFD.
-POWERSHELL_UTF8 = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+# UTF8Encoding($false) has no byte-order mark: [System.Text.Encoding]::UTF8 carries one, and a BOM
+# before the first character would break every json.loads of a PowerShell reply.
+POWERSHELL_UTF8 = "[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding $false); "
 
 
 def powershell(script, timeout=30, capture_limit=65536, label=None, quiet=False):
     import base64
     encoded = base64.b64encode((POWERSHELL_UTF8 + script).encode("utf-16le")).decode("ascii")
-    return command(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], timeout, capture=True,
-                   capture_limit=capture_limit, label=label, quiet=quiet)
+    output = command(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], timeout, capture=True,
+                     capture_limit=capture_limit, label=label, quiet=quiet)
+    # A preamble is never part of the reply, whatever the console writer does.
+    return output[1:] if output.startswith("\ufeff") else output
 
 
 def ps_quote(value):

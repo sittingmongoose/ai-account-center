@@ -132,8 +132,10 @@ Cursor's updater authenticates. When it refuses the CLI's sign-in (HTTP 401,
 row is `action_required` / `cursor_signin_needed` with cause `auth_required`:
 sign in with `cursor-agent login` on that computer. The words come from the
 updater's own output (stdout and stderr on every computer; on the Mac the GUI
-agent's own output files and the exit code launchd reports). Its output always
-decides: Cursor's session log is read only when the run printed nothing, only in
+agent's own output files and the exit code launchd reports). Output that names a
+cause decides (the sign-in or policy words, or an errno such as ENOSPC, EPERM,
+EACCES, ENOTFOUND): Cursor's session log is read only when the run printed
+nothing or only a generic line, only in
 this user's own folder (`cursor-agent-logs-<user>`, owned by this account), only a
 log whose name says it started during this run, and only when it records the
 update's own failure (`Update failed:`) with the sign-in words. Without such a log
@@ -207,7 +209,9 @@ a move from the runtime pair to the native CLI is not installed: the row is
 native version as `heldVersion`. The hold checks the migration itself, not only
 T3's offer: T3's start re-reads Google's channel, so a stale harness offer (1.4.6)
 with a native channel (1.5.8) is held too, and so is any start when the channel
-cannot be read (reason `migration_unchecked`). Install it from T3's Antigravity settings when
+cannot be read while T3 offers a newer runtime pair (reason `migration_unchecked`).
+With neither an offer nor a readable channel nothing starts either, and the row is
+`unknown` / `antigravity_acp_offer_unknown`: the target could not be read. Install it from T3's Antigravity settings when
 you can sign in again there. Windows makes the move. The hosts that keep a
 sign-in are listed in `app_update_antigravity_release.py`.
 
@@ -1035,9 +1039,12 @@ the next separator (`/home/<user>`, `/Users/<user>`, `C:\Users\<user>`, names
 with spaces included). Every pattern runs on at most 48 lines cut to 600
 characters with bounded repeats, so it stays linear (a 64 KiB line takes about a
 millisecond). T3 session commands never record output. Every PowerShell script
-first sets `[Console]::OutputEncoding` to UTF-8: Windows PowerShell 5.1 otherwise
-writes in the OEM code page and a `C:\Users\René` path or a localized error came
-back mangled. Stderr is captured into an unnamed temporary file,
+first sets `[Console]::OutputEncoding` to `New-Object System.Text.UTF8Encoding $false`
+(UTF-8 without a byte-order mark): Windows PowerShell 5.1 otherwise writes in the OEM
+code page and a `C:\Users\René` path or a localized error came back mangled. A
+leading BOM is stripped from the reply all the same, so it never reaches a JSON
+parse. Checked on both Windows PCs (2026-11-13, one `ConvertTo-Json @{a='é'}`
+call): no BOM, `é` round-trips as UTF-8. Stderr is captured into an unnamed temporary file,
 never a pipe, so a detached grandchild cannot hold a run open.
 
 The dashboard keeps only these fields with bounded shapes. Rows from older

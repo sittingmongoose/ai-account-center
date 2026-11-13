@@ -25,6 +25,9 @@ POLICY = re.compile(r"PSSecurityException|FullyQualifiedErrorId\s*:\s*Unauthoriz
                     r"|running scripts is disabled on this system|is not digitally signed", re.I)
 # Cursor's words when its update service refuses the CLI's sign-in (HTTP 401, ERROR_NOT_LOGGED_IN).
 AUTH = re.compile(r"\[unauthenticated\]|ERROR_NOT_LOGGED_IN|not logged in|\"status\"\s*:\s*401\b|\b401\b[^\n]{0,40}unauthori[sz]ed|please (?:log|sign) in", re.I)
+# Words by which a run names its own cause (an errno, a disk or permission refusal): then its own output decides.
+NAMED_CAUSE = re.compile(r"\bE(?:NOSPC|PERM|ACCES|BUSY|NOENT|NOTFOUND|CONNREFUSED|CONNRESET|TIMEDOUT|AI_AGAIN|NETUNREACH|HOSTUNREACH|ROFS|MFILE|EXIST|NOTEMPTY|IO)\b"
+                         r"|no space left on device|permission denied|operation not permitted|read-only file system", re.I)
 # A session log belongs to an update run only when it records the update's own failure.
 UPDATE_FAILED = re.compile(r"Update failed:", re.I)
 LOG_NAME = re.compile(r"^session-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z-(\d+)-\d+\.log$")
@@ -249,8 +252,8 @@ def session_log_says_signin(started, ended):
 
 
 def classify(error, started, ended=None):
-    """A failed Cursor run, by its own words. The run's own output always decides; Cursor's
-    session log is read only when the run printed nothing, and only the log of this run."""
+    """A failed Cursor run, by its own words. Output that names a cause (sign-in, policy, an errno)
+    decides; otherwise (nothing printed, or only a generic line) Cursor's own log of this run is read."""
     text = error.output or ""
     if error.code not in ("update_failed", "policy_blocked"):
         return error
@@ -259,7 +262,7 @@ def classify(error, started, ended=None):
                              reason="http_401" if re.search(r"401|unauthenticated", text, re.I) else "not_logged_in")
     if POLICY.search(text):
         return UpdateFailure("policy_blocked", text, error.exit_code, cause="policy_blocked", reason="execution_policy")
-    if error.code == "update_failed" and not text.strip():
+    if error.code == "update_failed" and not NAMED_CAUSE.search(text):
         if session_log_says_signin(started, ended if ended is not None else time.time()):
             return UpdateFailure("cursor_signin_needed", text, error.exit_code, cause="auth_required", reason="session_log_401")
         diagnostics().note("signin_undetermined")

@@ -406,6 +406,12 @@ class AcpFake(Home):
         self.assertEqual((row["status"], row["version"]), ("current", "1.5.8"))
         self.assertNotIn("server.refreshProviders", self.calls)
 
+    def test_l9_no_offer_and_no_channel_is_offer_unknown_and_still_installs_nothing(self):
+        # Recheck 1 L9: the hold stays (nothing starts), but the words say the target could not be read.
+        row = self.run_acp("ubuntu", "1.4.5", False, offer=None, newest=None)
+        self.assertNotIn("provider.install.start", self.calls)
+        self.assertEqual((row["status"], row["messageCode"]), ("unknown", "antigravity_acp_offer_unknown"))
+
     def test_b10_a_usable_t3_offer_needs_no_outside_lookup(self):
         self.run_acp("windows", "1.5.8", True, offer="1.5.8", newest="1.5.8")
         self.assertEqual(self.manifest_reads, [])
@@ -450,7 +456,8 @@ class B12PowerShell(unittest.TestCase):
             return 0, json.dumps({"path": "C:\\Users\\Ren\u00e9\\AppData"}, ensure_ascii=False).encode("utf-8")
         with mock.patch.object(common, "_run_bounded", side_effect=run):
             output = common.powershell("ConvertTo-Json @{path=$env:LOCALAPPDATA} -Compress")
-        self.assertTrue(seen[0].startswith("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"), seen[0][:80])
+        self.assertTrue(seen[0].startswith("[Console]::OutputEncoding="), seen[0][:80])
+        self.assertIn("UTF8", seen[0].split(";")[0])
         self.assertIn("Ren\u00e9", json.loads(output)["path"])
 
 
@@ -562,6 +569,48 @@ class AlsoFixed(Home):
         owner = zcode.Owner(prefix / "node_modules", prefix, "npm", node=prefix / "node.exe")
         with mock.patch.object(zcode, "resolve_npm", return_value=(other / "node.exe", other / "node_modules/npm/bin/npm-cli.js")):
             self.assertEqual(zcode.npm_pair(owner, "windows")[0], (prefix / "node.exe").resolve())
+
+
+class Recheck1(Home):
+    """Recheck 1 (RECHECK-1.md): L5 the PowerShell preamble, L1 the Cursor log when output names no cause,
+    L9 a held row whose target could not be read."""
+
+    def test_l5_the_prelude_asks_for_utf8_without_a_byte_order_mark(self):
+        self.assertIn("New-Object System.Text.UTF8Encoding $false", common.POWERSHELL_UTF8)
+        self.assertNotIn("[System.Text.Encoding]::UTF8", common.POWERSHELL_UTF8)
+
+    def test_l5_a_leading_bom_never_reaches_the_json_parse(self):
+        reply = "\ufeff" + json.dumps({"a": "\u00e9"}, ensure_ascii=False)
+        with mock.patch.object(common, "_run_bounded", return_value=(0, reply.encode("utf-8"))):
+            output = common.powershell("Write-Output (ConvertTo-Json @{a='x'})")
+        self.assertFalse(output.startswith("\ufeff"))
+        self.assertEqual(json.loads(output), {"a": "\u00e9"})
+
+    def cursor_with_log(self, stderr):
+        root = self.root / "AppData/Local/cursor-agent"
+        (root / "versions/2026.11.11-b912975").mkdir(parents=True)
+        for name in ("cursor-agent.ps1", "cursor-agent.cmd"):
+            (root / name).write_text("launcher")
+        for name in ("node.exe", "index.js"):
+            (root / "versions/2026.11.11-b912975" / name).write_text("x")
+        logs = self.root / "tmp" / ("cursor-agent-logs-" + getpass.getuser())
+        def write_log():
+            logs.mkdir(parents=True, exist_ok=True)
+            (logs / log_name(time.time())).write_text(evidence("cursor-owner-pc-session.log"))
+        fake = FakeWindows(self, policy_restricted=False, update_stderr=stderr, write_log=write_log)
+        with mock.patch.object(tempfile, "gettempdir", return_value=str(self.root / "tmp")), \
+                mock.patch.object(common, "_run_bounded", side_effect=fake.run), scope() as record:
+            return attach(cursor.update_cursor(cursor.detect_cursor("windows"), time.monotonic() + 60), record)
+
+    def test_l1_output_naming_no_cause_reads_this_runs_log(self):
+        row = self.cursor_with_log("Checking for updates...\nUpdate failed: Error\n")
+        self.assertEqual((row["status"], row["messageCode"]), ("action_required", "cursor_signin_needed"))
+        self.assertEqual(record_of(row)["reason"], "session_log_401")
+
+    def test_l1_output_naming_its_own_cause_still_wins_over_a_401_log(self):
+        row = self.cursor_with_log("Error: ENOSPC: no space left on device, write\n")
+        self.assertEqual((row["status"], row["messageCode"]), ("failed", "update_failed"))
+        self.assertIn("ENOSPC", record_of(row)["tail"])
 
 
 class SignInLossReachesTheInstall(AcpFake):

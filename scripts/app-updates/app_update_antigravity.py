@@ -274,7 +274,8 @@ def update_antigravity_acp(install, deadline=None, progress=None, t3_row=None):
             record.owner = {**(current.owner or {}), "target": "t3-offer" if target and target == offered else "cli-manifest"}
             if guarded:
                 native = [version for version in known if version_tuple(version) >= NATIVE_FROM]
-                if native or (newest is None and (target is None or newer(target, current.version))):
+                # With no target at all nothing can start either: that is "offer unknown" below, not a sign-in.
+                if native or (newest is None and target is not None and newer(target, current.version)):
                     # Whatever the offer says, start may install the native CLI, which cannot read the
                     # sign-in this runtime pair stored here. (If both signals are stale at the instant
                     # of start, AAC cannot tell; T3 must carry the sign-in over to close that window.)
