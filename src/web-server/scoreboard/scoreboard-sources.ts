@@ -87,12 +87,19 @@ export function runsSource(
       `${plural(negativeQuota.length, 'run')} with a negative quota move left out of the quota rates: ${negativeQuota.slice(0, 5).join(', ')}${more}.`
     );
   }
-  if (runs.problems.length > 0) {
-    const since = Math.min(...runs.problems.map((problem) => problem.since));
+  const fileProblems = runs.problems.filter((p) => !p.file.startsWith('limits/'));
+  const limitProblems = runs.problems.filter((p) => p.file.startsWith('limits/'));
+  if (fileProblems.length > 0) {
+    const since = Math.min(...fileProblems.map((problem) => problem.since));
     parts.unshift(
-      `${plural(runs.problems.length, 'file')} unreadable since ${clockText(since, timeZone)}: ${problemList(runs.problems)}.`
+      `${plural(fileProblems.length, 'file')} unreadable since ${clockText(since, timeZone)}: ${problemList(fileProblems)}.`
     );
+    for (const problem of limitProblems) parts.push(problem.reason);
     return { ...base, state: 'unreadable', detail: parts.join(' ') } as const;
+  }
+  if (limitProblems.length > 0) {
+    for (const problem of limitProblems) parts.push(problem.reason);
+    return { ...base, state: 'ok', detail: parts.join(' ') } as const;
   }
   return { ...base, state: 'ok', detail: parts.join(' ') } as const;
 }

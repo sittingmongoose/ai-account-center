@@ -179,12 +179,24 @@ function reportsSource(inputs: StatusInputs): Source {
       state: 'stale',
       detail: `The agent reports folder has not answered since ${clockText(reports.scannedAt, timeZone)}.`,
     };
-  if (reports.problems.length > 0) {
-    const since = Math.min(...reports.problems.map((p) => p.since));
+  const fileProblems = reports.problems.filter((p) => !p.file.startsWith('limits/'));
+  const limitProblems = reports.problems.filter((p) => p.file.startsWith('limits/'));
+  if (fileProblems.length > 0) {
+    const since = Math.min(...fileProblems.map((p) => p.since));
+    const limits =
+      limitProblems.length > 0 ? ` ${limitProblems.map((p) => p.reason).join(' ')}` : '';
     return {
       ...base,
       state: 'unreadable',
-      detail: `${plural(reports.problems.length, 'file')} unreadable since ${clockText(since, timeZone)}: ${problemList(reports.problems)}.`,
+      detail: `${plural(fileProblems.length, 'file')} unreadable since ${clockText(since, timeZone)}: ${problemList(fileProblems)}.${limits}`,
+    };
+  }
+  if (limitProblems.length > 0) {
+    const limits = limitProblems.map((p) => p.reason).join(' ');
+    return {
+      ...base,
+      state: 'ok',
+      detail: `${plural(reports.threads.length, 'thread')} and ${plural(reports.cards.length, 'card')} read ${clockText(reports.scannedAt, timeZone)}. ${limits}`,
     };
   }
   return {

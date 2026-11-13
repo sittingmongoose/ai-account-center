@@ -195,7 +195,7 @@ export interface ReaderFs {
  * without bound. Past a limit the rest is named as a problem; the most recently changed writers are
  * the ones kept.
  */
-export const REPORT_LIMITS = { writers: 200, cards: 500, bytes: 64 * 1024 * 1024 };
+export const REPORT_LIMITS = { writers: 1000, cards: 500, bytes: 64 * 1024 * 1024 };
 
 export const nodeReaderFs: ReaderFs = {
   readdir: (dir) => fs.promises.readdir(dir, { withFileTypes: true }),
@@ -458,7 +458,7 @@ export class AgentReportsReader {
       this.scanPartial = true;
       folderProblem(
         'limits/writers',
-        `${names.length - kept.length} writer folders past the limit of ${limits.writers} were not read (the most recently changed are kept)`
+        `${names.length - kept.length} active writers past the limit of ${limits.writers} were not read; the most recently changed are kept`
       );
     }
     let cardsVisited = 0;

@@ -56,7 +56,7 @@ export interface StatusDocsState {
 
 /** As many writers as the agent-reports reader reads, and how many documents stay retained
  * across scans (not just this scan's selection). */
-export const STATUS_DOCS_LIMITS = { writers: 200, retained: 200 };
+export const STATUS_DOCS_LIMITS = { writers: 1000, retained: 1000 };
 
 /** A handle to the native module, or null when it is not available (the caller says so). */
 export type StatusHandle = () => NativeStatusHandle | null;
