@@ -3,11 +3,15 @@
 //! dashboard is loaded for this tab and nothing waits on its bridge.
 //!
 //! `index.html` installs `window.aacLoadAnalytics()` (a dynamic import, started early on `/app/analytics`); it resolves
-//! once `window.aacFrameAnalytics` holds the controller. Its views arrive as `aac-analytics` events (`{key, json}`) and
-//! the page's actions go back through `aacFrameAnalytics.act(kind, value)`.
+//! to the module, and the page installs its controller (`installFrameAnalytics`, which makes it
+//! `window.aacFrameAnalytics`) only if it is still there. Its views arrive as `aac-analytics` events (`{key, json}`) and
+//! the page's actions go back through `aacFrameAnalytics.act(kind, value)`. A page drives and stops only the controller
+//! it installed (its `id`): a load that lands after sign-out never touches the next session's (review L4).
 
 use leptos::prelude::*;
 use serde::Deserialize;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use wasm_bindgen::{JsCast, JsValue};
 
 /// The latest of each view, as raw JSON (the page parses its own types). Empty until the first answer: the page shows
@@ -24,6 +28,8 @@ pub struct Feed {
     pub loading: RwSignal<String>,
     /// The frame header's line for this tab (`{statusLead, statusStrong, statusMore}`, as the dashboard words it).
     pub chrome: RwSignal<String>,
+    /// The id of the controller this page installed; 0 until then.
+    pub(crate) controller: RwSignal<u64>,
 }
 
 /// The frame header's line, as the controller sends it.
@@ -50,6 +56,7 @@ impl Feed {
             head: RwSignal::new(String::new()),
             loading: RwSignal::new(String::new()),
             chrome: RwSignal::new(String::new()),
+            controller: RwSignal::new(0),
         }
     }
 
@@ -70,7 +77,8 @@ impl Feed {
     /// Runs one of the page's action kinds. False, and nothing done, until the controller has loaded (a layout report
     /// is then sent again with the first view).
     pub fn act(&self, kind: &str, value: &str) -> bool {
-        call("act", &[kind.into(), value.into()])
+        let id = self.controller.try_get_untracked().unwrap_or(0);
+        call_on(id, "act", &[kind.into(), value.into()])
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
     }
@@ -96,16 +104,38 @@ fn controller() -> Option<JsValue> {
         .filter(|v| v.is_object())
 }
 
-/// Calls one of the controller's methods.
+/// A controller's id (`installFrameAnalytics` numbers them from 1); 0 for anything else.
+fn id_of(controller: &JsValue) -> u64 {
+    js_sys::Reflect::get(controller, &"id".into())
+        .ok()
+        .and_then(|v| v.as_f64())
+        .filter(|v| *v >= 1.0 && v.fract() == 0.0)
+        .map(|v| v as u64)
+        .unwrap_or(0)
+}
+
+/// Calls one of the current controller's methods, whichever page installed it.
 fn call(method: &str, args: &[JsValue]) -> Option<JsValue> {
+    apply(&controller()?, method, args)
+}
+
+/// Calls one of the controller's methods only if it is the one with this id (this page's).
+fn call_on(id: u64, method: &str, args: &[JsValue]) -> Option<JsValue> {
     let target = controller()?;
-    let f = js_sys::Reflect::get(&target, &method.into()).ok()?;
+    if id == 0 || id_of(&target) != id {
+        return None;
+    }
+    apply(&target, method, args)
+}
+
+fn apply(target: &JsValue, method: &str, args: &[JsValue]) -> Option<JsValue> {
+    let f = js_sys::Reflect::get(target, &method.into()).ok()?;
     let f = f.dyn_ref::<js_sys::Function>()?;
     let list = js_sys::Array::new();
     for a in args {
         list.push(a);
     }
-    f.apply(&target, &list).ok()
+    f.apply(target, &list).ok()
 }
 
 fn read_str(data: &JsValue, key: &str) -> String {
@@ -168,6 +198,9 @@ pub(crate) fn dashboard_view(json: &str) {
 pub fn start(shown: Signal<bool>, ended: impl Fn(String) + 'static) -> Feed {
     let feed = Feed::new();
     let ready = RwSignal::new(false);
+    // Whether the page is still there, and the controller it installed: read after its signals are gone (sign-out).
+    let alive = Arc::new(AtomicBool::new(true));
+    let own = Arc::new(AtomicU64::new(0));
     let listener = window_event_listener_untyped("aac-analytics", move |event| {
         let Some(event) = event.dyn_ref::<web_sys::CustomEvent>() else {
             return;
@@ -187,30 +220,43 @@ pub fn start(shown: Signal<bool>, ended: impl Fn(String) + 'static) -> Feed {
         .and_then(|f| f.call0(&JsValue::NULL).ok())
         .and_then(|p| p.dyn_into::<js_sys::Promise>().ok());
     match load {
-        Some(promise) => leptos::task::spawn_local(async move {
-            let loaded = wasm_bindgen_futures::JsFuture::from(promise).await.is_ok();
-            if !loaded {
-                let _ = feed.loading.try_set(NO_START.into());
-            } else if ready.try_set(true).is_some() {
-                // signed out while it loaded: the page is gone, so is its controller
-                call("stop", &[]);
-            }
-        }),
+        Some(promise) => {
+            let (alive, own) = (alive.clone(), own.clone());
+            leptos::task::spawn_local(async move {
+                let module = wasm_bindgen_futures::JsFuture::from(promise).await;
+                // signed out while it loaded: this page is gone, and it installs nothing
+                if !alive.load(Ordering::Relaxed) {
+                    return;
+                }
+                let controller = module
+                    .ok()
+                    .and_then(|m| js_sys::Reflect::get(&m, &"installFrameAnalytics".into()).ok())
+                    .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+                    .and_then(|f| f.call1(&JsValue::NULL, &window()).ok())
+                    .map(|c| id_of(&c))
+                    .filter(|id| *id != 0);
+                let Some(id) = controller else {
+                    let _ = feed.loading.try_set(NO_START.into());
+                    return;
+                };
+                own.store(id, Ordering::Relaxed);
+                let _ = feed.controller.try_set(id);
+                let _ = ready.try_set(true);
+            });
+        }
         None => feed.loading.set(NO_START.into()),
     }
     Effect::new(move |_| {
         if !ready.get() {
             return;
         }
-        if shown.get() {
-            call("show", &[]);
-        } else {
-            call("hide", &[]);
-        }
+        let id = feed.controller.get_untracked();
+        call_on(id, if shown.get() { "show" } else { "hide" }, &[]);
     });
     on_cleanup(move || {
+        alive.store(false, Ordering::Relaxed);
         listener.remove();
-        call("stop", &[]);
+        call_on(own.load(Ordering::Relaxed), "stop", &[]);
     });
     feed
 }

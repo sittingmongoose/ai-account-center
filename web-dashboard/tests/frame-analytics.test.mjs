@@ -2,7 +2,7 @@
 // (public/analytics-page.mjs), against a fake server with made-up data (tests/browser/device/analytics-fixture.mjs).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createFrameAnalytics, HEAD_EVERY_MS } from '../public/frame-analytics.mjs';
+import { createFrameAnalytics, installFrameAnalytics, HEAD_EVERY_MS } from '../public/frame-analytics.mjs';
 import {
   createAnalyticsPage,
   analyticsCovers,
@@ -391,6 +391,30 @@ test('stopped (signed out), it sends nothing more', async () => {
   assert.ok(!keys(sent).includes('analytics'));
   assert.deepEqual(c.pending(), []);
   assert.equal(controller.act('analytics-range', '30d'), false);
+});
+
+test('each installed controller has its own id, and a new one stops the one before (review L4)', () => {
+  const listeners = new Set();
+  const win = {
+    location: { search: '' },
+    navigator: { userAgent: 'test' },
+    matchMedia: () => ({ matches: false }),
+    fetch: async () => ({ ok: false, status: 503, json: async () => null }),
+    localStorage: null,
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
+    dispatchEvent: () => true,
+    document: { visibilityState: 'visible', addEventListener: (_, f) => listeners.add(f), removeEventListener: (_, f) => listeners.delete(f) },
+  };
+  const first = installFrameAnalytics(win);
+  const second = installFrameAnalytics(win);
+  assert.ok(Number.isInteger(first.id) && first.id >= 1, `an id from 1: ${first.id}`);
+  assert.ok(second.id > first.id, 'a later install has a later id');
+  assert.equal(win.aacFrameAnalytics, second);
+  assert.equal(first.state().stopped, true, 'the one before is stopped');
+  assert.equal(second.state().stopped, false);
+  assert.equal(listeners.size, 1, 'only the current one follows the window');
+  second.stop();
+  assert.equal(listeners.size, 0);
 });
 
 test('analytics-page: covers, poll delay, thresholds and layout', () => {

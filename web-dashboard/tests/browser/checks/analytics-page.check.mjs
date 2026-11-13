@@ -82,7 +82,44 @@ async function overlaps(t) {
 // the frame's controller keeps the last view it built (?e2e)
 const viewState = (t) => t.page.evaluate(() => window.__aacLastAnalytics?.state ?? null);
 
+// The first session's Analytics module load is held for 4 s, as a slow phone might hold it, while the page signs out and
+// in again: when that late load lands, it must not touch the new session's controller (review L4).
+const SLOW_FIRST_LOAD = `(() => {
+	let wrapped = null, calls = 0;
+	Object.defineProperty(window, 'aacLoadAnalytics', {
+		configurable: true,
+		get: () => wrapped,
+		set: (load) => {
+			wrapped = () => {
+				const loaded = load();
+				return calls++ === 0 ? new Promise((done) => setTimeout(() => done(loaded), 4000)) : loaded;
+			};
+		},
+	});
+})();`;
+
 export const tests = {
+	async "analytics: a late load from a session that ended never stops the next session's page"(t) {
+		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+		await t.context.addInitScript(SLOW_FIRST_LOAD);
+		await t.app.signIn();
+		await stubData(t);
+		await t.goto('/app/analytics?e2e', { settleMs: 0 });
+		await t.until('the first session opens Analytics (its load held)', () => !!document.querySelector('.ax-page'), null, { timeout: 30000, hard: true });
+		const started = Date.now();
+		await t.page.evaluate(() => window.aacFrameSession.signOut());
+		await t.until('signed out', () => !!document.querySelector('.signin-page'), null, { timeout: 15000, hard: true });
+		await t.app.signIn();
+		await t.page.evaluate(() => window.aacFrameSession.recheck());
+		await t.until('the next session draws Analytics', () => document.querySelectorAll('.ax-page .kpi').length === 5, null, { timeout: 30000, hard: true });
+		// the held load lands now
+		await t.page.waitForTimeout(Math.max(0, 4800 - (Date.now() - started)));
+		const state = await t.page.evaluate(() => window.aacFrameAnalytics?.state?.() ?? null);
+		await t.check('the next session\'s controller still runs, shown', !!state && state.stopped === false && state.shown === true, JSON.stringify(state));
+		await t.page.click('.ax-tools-row .seg button:has-text("30D")');
+		await t.until('and the page still answers its controls', () => window.__aacLastAnalytics?.state?.range === '30d', null, { timeout: 10000 });
+	},
+
 	async 'analytics: every block is drawn from the view, and the controls come back drawn'(t) {
 		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
 		await t.app.signIn();

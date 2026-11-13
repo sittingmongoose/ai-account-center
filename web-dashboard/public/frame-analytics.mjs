@@ -366,10 +366,14 @@ export function createFrameAnalytics({
   };
 }
 
+let installs = 0;
+
 /**
  * Starts the frame's Analytics: `window.aacFrameAnalytics` holds the calls (a previous one is stopped), and every view
  * is sent as an `aac-analytics` event whose detail is `{key, json}`; `signed-out` (json: the reason) says the session
- * ended. With `?e2e`, `window.__aacLastAnalytics` keeps the last view (as bridge.js keeps it for the kit).
+ * ended. Each controller has its own `id` (from 1): the page that installed it drives and stops only that one
+ * (leptos/src/analytics/feed.rs). With `?e2e`, `window.__aacLastAnalytics` keeps the last view (as bridge.js keeps it
+ * for the kit).
  */
 export function installFrameAnalytics(win = globalThis) {
   win.aacFrameAnalytics?.stop?.();
@@ -415,6 +419,7 @@ export function installFrameAnalytics(win = globalThis) {
     win.document?.removeEventListener?.('visibilitychange', onVisible);
     stop();
   };
+  controller.id = ++installs;
   win.aacFrameAnalytics = controller;
   return controller;
 }

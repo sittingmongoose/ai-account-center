@@ -34,7 +34,8 @@
         if (!/[?&]embed=1(&|$)/.test(location.search)) {
           let analytics = /\/app\/analytics\/?$/.test(location.pathname) ? import('/frame-analytics.mjs') : null;
           analytics?.catch(() => {});
-          window.aacLoadAnalytics = () => (analytics ??= import('/frame-analytics.mjs')).then((m) => m.installFrameAnalytics(window));
+          // the module; the page that asked installs its controller only if it is still there (analytics/feed.rs)
+          window.aacLoadAnalytics = () => (analytics ??= import('/frame-analytics.mjs'));
           const { installFrameSession } = await import('/frame-session.mjs');
           installFrameSession(window);
         }
