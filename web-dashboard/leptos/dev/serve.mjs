@@ -46,6 +46,23 @@ function liveView() {
   return { ...view, generatedAt: new Date(now).toISOString(), cards, simlock: { ...view.simlock, leases }, spendByStream: view.spendByStream ?? fixtureJson('spend-by-stream.json') };
 }
 
+// The reads of the frame's dashboard controller (public/frame-dashboard.mjs) for Home and Accounts: an honest empty
+// dashboard (no accounts reported), so a frame check that visits those tabs draws their empty state with nothing
+// failing. Made-up, never real. A check that needs rows hands its own view to the page (the `aac-dash` event).
+const DASHBOARD_READS = {
+  '/api/accounts/dashboard': () => ({ schemaVersion: 1, updatedAt: new Date().toISOString(), accounts: [], providers: [], settings: { refreshIntervalSeconds: 60, hiddenProviders: [], hiddenAccountIds: [], trayHiddenProviders: [] }, codexAutoSwitch: { enabled: false, thresholdPercent: 5 } }),
+  '/api/accounts/settings': () => ({ refreshIntervalSeconds: 60 }),
+  '/api/accounts/preferences': () => ({ timeZone: 'America/New_York' }),
+  '/api/claude/desktop-profiles': () => ({ profiles: [] }),
+  '/api/antigravity/profiles': () => ({ schemaVersion: 1, hostId: 'ubuntu', activationSupported: false, profiles: [] }),
+  '/api/antigravity/auto-switch': () => ({ enabled: false, thresholdUsedPercent: 95, pollIntervalSeconds: 60, maxQuotaAgeSeconds: 300, cooldownSeconds: 300, selectedHostIds: [], requestedPoolId: null, outcome: 'setup_required', message: 'Fixture server.', activationInProgress: false }),
+  '/api/app-updates/status': () => ({ job: null }),
+  '/api/accounts/registry': () => ({ providers: [], accounts: [], jobs: [], trash: [] }),
+  '/api/auth/session': () => ({ username: 'fixture', otherBrowsers: 0, secureTransport: true, managedBy: 'config' }),
+  '/api/auth/devices': () => ({ devices: [] }),
+  '/api/auth/network': () => ({ trustLocalNetwork: false, connection: { peer: '127.0.0.1', trusted: true }, canTurnOn: false }),
+};
+
 function json(res, status, value) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(value));
@@ -78,17 +95,8 @@ http.createServer((req, res) => {
   else if (p === '/manifest.webmanifest') file(res, path.join(dashboard, 'public', 'manifest.webmanifest'));
   else if (p === '/api/auth/check') json(res, 200, { authenticated: true, authRequired: true, username: 'fixture', accessMode: 'password' });
   else if (p === '/api/auth/setup') json(res, 200, { configured: true, sessionTimeoutHours: 720 });
-  else if (p === '/' && url.searchParams.get('content') === '1') {
-    // No Slint build here: a stand-in that speaks the frame's message contract, for layout work on the frame itself.
-    res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(`<!doctype html><html><body style="margin:0;font:15px system-ui;background:#ECF0F3;color:#63717F;display:grid;place-items:center;height:100vh">
-<p id="t"></p><script>
-const say = (page) => { document.getElementById('t').textContent = 'The ' + page + ' page of the Slint dashboard shows here.'; };
-say(new URLSearchParams(location.search).get('view') || 'home');
-addEventListener('message', (e) => { if (e.origin === location.origin && e.data && e.data.type === 'aac-frame' && e.data.action === 'navigate') say(e.data.value); });
-parent.postMessage({ type: 'aac-content', kind: 'ready' }, location.origin);
-parent.postMessage({ type: 'aac-content', kind: 'chrome', statusLead: 'Updated', statusStrong: 'just now', statusMore: 'live' }, location.origin);
-</script></body></html>`);
-  } else if (p.startsWith('/app/marks/')) file(res, path.join(crate, 'src/ui/marks', path.basename(p)));
+  else if (req.method === 'GET' && p in DASHBOARD_READS) json(res, 200, DASHBOARD_READS[p]());
+  else if (p.startsWith('/app/marks/')) file(res, path.join(crate, 'src/ui/marks', path.basename(p)));
   else if (p.startsWith('/app/pkg/')) file(res, path.join(crate, 'pkg', path.basename(p)));
   else if (p === '/app/app.css') file(res, path.join(crate, 'style/app.css'));
   else if (p === '/app/MartianMono.ttf') file(res, path.join(dashboard, 'ui/fonts/MartianMono.ttf'));

@@ -33,13 +33,23 @@
         // a server that doesn't say application/wasm: the runtime fetches it itself
         const compiled = WebAssembly.compileStreaming ? WebAssembly.compileStreaming(fetch(wasm)).catch(() => wasm) : Promise.resolve(wasm);
         if (!/[?&]embed=1(&|$)/.test(location.search)) {
-          let analytics = /\/app\/analytics\/?$/.test(location.pathname) ? import('/frame-analytics.mjs') : null;
-          analytics?.catch(() => {});
+          // A page's module, loaded once. Offline it is not asked for early (the start page opens on the stored copy, and
+          // the browser keeps a failed module); a load that failed is asked for again under a new address next time.
+          const loader = (path, early) => {
+            let tries = 0;
+            let pending = null;
+            const load = () => {
+              const p = import(tries++ ? `${path}?retry=${tries}` : path);
+              p.catch(() => { if (pending === p) pending = null; });
+              return (pending = p);
+            };
+            if (early && navigator.onLine !== false) load();
+            return () => pending ?? load();
+          };
           // the module; the page that asked installs its controller only if it is still there (analytics/feed.rs)
-          window.aacLoadAnalytics = () => (analytics ??= import('/frame-analytics.mjs'));
-          let dashboard = /\/app\/(home|accounts)\/?$/.test(location.pathname) ? import('/frame-dashboard.mjs') : null;
-          dashboard?.catch(() => {});
-          window.aacLoadDashboard = () => (dashboard ??= import('/frame-dashboard.mjs')).then((m) => m.installFrameDashboard(window));
+          window.aacLoadAnalytics = loader('/frame-analytics.mjs', /\/app\/analytics\/?$/.test(location.pathname));
+          const dashboard = loader('/frame-dashboard.mjs', /\/app\/(home|accounts)\/?$/.test(location.pathname));
+          window.aacLoadDashboard = () => dashboard().then((m) => m.installFrameDashboard(window));
           const { installFrameSession } = await import('/frame-session.mjs');
           installFrameSession(window);
         }

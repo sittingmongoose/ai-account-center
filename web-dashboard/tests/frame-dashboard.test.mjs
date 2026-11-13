@@ -648,3 +648,39 @@ test('stop: nothing more is read or sent', async () => {
   assert.equal(ctl.calls.length, calls);
   assert.equal(ctl.emitted.length, out);
 });
+
+test('the frame loads a page module once, not early while offline, and asks again under a new address after a failure', async () => {
+  const html = await readFile(new URL('../leptos/index.html', import.meta.url), 'utf8');
+  const source = html.match(/const loader = \(path, early\) => \{[\s\S]*?\n {10}\};/)?.[0];
+  assert.ok(source, 'index.html defines the loader');
+  const make = (online, answers) => {
+    const asked = [];
+    // eslint-disable-next-line no-new-func
+    const loader = new Function('__import', 'navigator', `${source.replaceAll('import(', '__import(')}; return loader;`)(
+      (url) => { asked.push(url); return answers.shift()(url); },
+      { onLine: online }
+    );
+    return { loader, asked };
+  };
+  const ok = (url) => Promise.resolve({ url });
+  const fail = () => Promise.reject(new Error('offline'));
+  // online and on the page's own address: asked for at once, then reused
+  const a = make(true, [ok]);
+  const loadA = a.loader('/frame-dashboard.mjs', true);
+  assert.deepEqual(a.asked, ['/frame-dashboard.mjs']);
+  assert.equal((await loadA()).url, '/frame-dashboard.mjs');
+  await loadA();
+  assert.equal(a.asked.length, 1, 'one load');
+  // offline at start: nothing is asked for early; a failed load is asked again under a new address
+  const b = make(false, [fail, ok]);
+  const loadB = b.loader('/frame-dashboard.mjs', true);
+  assert.deepEqual(b.asked, []);
+  await assert.rejects(loadB());
+  await flush();
+  assert.equal((await loadB()).url, '/frame-dashboard.mjs?retry=2');
+  assert.deepEqual(b.asked, ['/frame-dashboard.mjs', '/frame-dashboard.mjs?retry=2']);
+  // another page's address: not early, loaded on first use
+  const c = make(true, [ok]);
+  c.loader('/frame-dashboard.mjs', false);
+  assert.deepEqual(c.asked, []);
+});

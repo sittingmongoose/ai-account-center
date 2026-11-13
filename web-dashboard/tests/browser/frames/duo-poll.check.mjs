@@ -53,7 +53,7 @@ async function open(t, view, folded = false, bridge = false) {
   await t.page.waitForSelector('.c2-row');
   if (bridge) {
     await t.page.locator('a[href="/app/home"]:visible').click();
-    await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().started === true);
+    await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().hasData === true);
     await t.page.locator('a[href="/app/status"]:visible').click();
     await t.page.waitForSelector('.c2-row');
   }

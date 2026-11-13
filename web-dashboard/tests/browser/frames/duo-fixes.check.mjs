@@ -422,7 +422,7 @@ tests['duo interactions: Details and approval use body with nested locks'] = asy
   await open(t, 951, 669, '0,84,34,0');
   // The frame starts its dashboard controller on the first account-backed tab, then keeps it when returning to Status.
   await t.page.locator('.rail a[href="/app/home"]').click();
-  await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().started === true);
+  await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().hasData === true);
   await t.page.locator('.rail a[href="/app/status"]').click();
   await t.page.waitForSelector('.c2-row');
   await t.page.evaluate(() => {
