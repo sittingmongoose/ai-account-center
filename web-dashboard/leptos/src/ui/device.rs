@@ -189,17 +189,21 @@ fn strip(insets: Insets) -> f64 {
     }
 }
 
-/// How far below the top of the strip the app's tabs may start: past the iOS clock and the signal and battery ring
-/// (measured on the device, 2026-11-10: the cluster ends near 168 pt folded and 116 pt open). On its side the folded
-/// Duo shows no status cluster in its strip, on either side. The open landscape panel must reserve its cluster
-/// even while iOS briefly reports no strip at launch, on resume or during rotation.
+/// How far below the top of the strip the app's tabs may start: past the iOS status area, with a Live Activity in it.
+/// iOS draws an app's Live Activity (a pill) at the top of the strip and moves the clock and the signal ring down
+/// under it, and it reports none of this in the safe-area insets, so the reserve always allows for one. Measured on
+/// the owner's Duo: the clock and ring alone end near 168 pt folded and 116 pt open (2026-11-10); under a Live
+/// Activity the status area ends at 242 pt folded and 204 pt open (2026-11-13). The tabs start 10 pt or more below
+/// that (DEVICE-CHECKLIST: 8 pt or more). On its side the folded Duo shows no status cluster in its strip, on either
+/// side. The open landscape panel must reserve its status area even while iOS briefly reports no strip at launch, on
+/// resume or during rotation.
 pub fn rail_reserve(width: f64, height: f64, _insets: Insets) -> f64 {
     if width >= 760.0 {
-        136.0
+        216.0
     } else if width > height {
         12.0
     } else {
-        184.0
+        252.0
     }
 }
 
@@ -604,7 +608,7 @@ mod tests {
                 Insets::default(),
                 insets(0.0, 0.0, 34.0, 84.0),
             ] {
-                assert_eq!(rail_reserve(951.0, height, i), 136.0, "{height} {i:?}");
+                assert_eq!(rail_reserve(951.0, height, i), 216.0, "{height} {i:?}");
             }
         }
     }
@@ -755,12 +759,26 @@ mod tests {
     fn reserve_keeps_the_clock_and_signal_clear() {
         let right = insets(0.0, 84.0, 34.0, 0.0);
         let left = insets(0.0, 0.0, 34.0, 84.0);
-        assert_eq!(rail_reserve(466.0, 678.0, right), 184.0, "folded upright");
-        assert_eq!(rail_reserve(951.0, 669.0, right), 136.0, "open on its side");
+        // The status area's foot under a Live Activity, measured on the owner's Duo (2026-11-13), and the clock and
+        // ring alone (2026-11-10): the tabs start 8 pt or more below either.
+        let measured = [(466.0, 678.0, 242.0, 168.0), (951.0, 669.0, 204.0, 116.0)];
+        for (w, h, with_activity, clock_only) in measured {
+            let reserve = rail_reserve(w, h, right);
+            assert!(
+                reserve >= with_activity + 8.0,
+                "{w}x{h}: {reserve} under a Live Activity"
+            );
+            assert!(
+                reserve >= clock_only + 8.0,
+                "{w}x{h}: {reserve} under the clock"
+            );
+        }
+        assert_eq!(rail_reserve(466.0, 678.0, right), 252.0, "folded upright");
+        assert_eq!(rail_reserve(951.0, 669.0, right), 216.0, "open on its side");
         assert_eq!(
             rail_reserve(951.0, 669.0, Insets::default()),
-            136.0,
-            "open landscape clears the cluster even without a reported strip"
+            216.0,
+            "open landscape clears the status area even without a reported strip"
         );
         // folded on its side: no status cluster in the strip, whichever side it is on
         assert_eq!(rail_reserve(678.0, 466.0, right), 12.0);
