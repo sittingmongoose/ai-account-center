@@ -1353,7 +1353,7 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 .sb-unscored > summary b { color: var(--ink-2); font-weight: 600; font-variation-settings: 'wght' 600; }
 .sb-unscored > summary:hover, .sb-unscored[open] > summary { color: var(--ink-2); }
 .sb-unscored > summary:hover b, .sb-unscored[open] > summary b { color: var(--ink); }
-.sb-unscored .chev { width: 12px; height: 12px; margin-left: 3px; vertical-align: -1px; transition: transform 260ms cubic-bezier(.2, .8, .2, 1); }
+.sb-unscored .chev { display: inline-block; width: 12px; height: 12px; margin-left: 3px; vertical-align: -1px; transition: transform 260ms cubic-bezier(.2, .8, .2, 1); }
 .sb-unscored[open] .chev { transform: rotate(180deg); }
 .sbu-list { display: none; max-width: 380px; margin-top: 6px; padding: 10px 14px 12px; border: 1px solid var(--rule); border-radius: 12px;
   background: var(--paper); font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }

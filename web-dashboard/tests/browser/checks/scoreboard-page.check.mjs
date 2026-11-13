@@ -142,6 +142,26 @@ export const tests = {
 		await t.equal('the list is closed at first', (await listState(t)).shown, false);
 		await t.audit('scoreboard runs not scored');
 		const before = await stackTop(t);
+		// The hover preview is for devices that hover (a phone's tap would leave a sticky :hover behind). Headless
+		// Chrome answers (hover: none), so the check takes the shipped rule out of its media block, as it is, to
+		// exercise it; it first asserts the rule is there and gated.
+		const gate = await t.page.evaluate(() => {
+			for (const sheet of document.styleSheets) {
+				let rules;
+				try { rules = sheet.cssRules; } catch { continue; }
+				for (const rule of rules) {
+					if (!(rule instanceof CSSMediaRule) || rule.conditionText.replace(/\s/g, '') !== '(hover:hover)') continue;
+					for (const inner of rule.cssRules) {
+						if (inner.selectorText !== '.sb-unscored:not([open]):hover > .sbu-list') continue;
+						const headless = !matchMedia('(hover: hover)').matches;
+						if (headless) sheet.insertRule(inner.cssText, sheet.cssRules.length);
+						return { headless };
+					}
+				}
+			}
+			return null;
+		});
+		await t.check('the hover preview is gated to devices that hover', gate !== null);
 		// A mouse hover shows the list floating under the line, over the page; it goes when the pointer leaves.
 		const box = await t.page.locator('.sb-unscored > summary').boundingBox();
 		await t.page.mouse.move(box.x + 20, box.y + box.height / 2);
