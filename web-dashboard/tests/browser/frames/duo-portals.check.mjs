@@ -440,39 +440,41 @@ const overlayState = (t) =>
     active: document.activeElement?.outerHTML.slice(0, 160),
   }));
 
-// The real activation-confirmation controller in the dashboard frame's place, with synthetic activate responses:
-// odd calls answer a 409 review, even calls (the confirmation) wait until the test settles them.
+// The real activation-confirmation controller in the dashboard controller's place, with synthetic activate responses:
+// odd calls answer a 409 review, even calls (the confirmation) wait until the test settles them. It takes the page's
+// approval actions from the frame's dashboard controller (public/frame-dashboard.mjs, whose other actions still run)
+// and hands its views to the page as that controller does (`aac-dash` events).
 async function approvalController(t) {
-  await t.page.locator('iframe.slint-frame').evaluate((el) =>
-    el.contentWindow.eval(`(async () => {
-      const { createActivationConfirmation } = await import('/activation-confirmation.mjs');
-      window.__events = [];
-      const send = (v) => parent.postMessage({ type: 'aac-content', kind: 'view', key: 'activation', json: v ? JSON.stringify(v) : '' }, location.origin);
-      let calls = 0;
-      window.__controller = createActivationConfirmation({
-        activate: async (target) => {
-          window.__events.push({ kind: 'activate', call: ++calls });
-          if (calls % 2) throw { status: 409, payload: { confirmation: { token: 'a'.repeat(43), targetProfile: target,
-            expiresAt: new Date(Date.now() + 60000).toISOString(), processes: [{ label: 'Synthetic busy process', pid: 1234, role: 'fixture' }] } } };
-          return new Promise((resolve, reject) => { window.__settle = { resolve, reject }; });
-        },
-        prompt: (v) => { window.__events.push({ kind: 'prompt', busy: v.inProgress, error: v.error }); send(v); },
-        close: () => { window.__events.push({ kind: 'close' }); send(null); },
-        busy: () => {}, success: () => {}, error: () => {},
-      });
-      window.__acts = [];
-      addEventListener('message', (e) => {
-        if (e.source !== parent || e.origin !== location.origin || e.data?.type !== 'aac-page') return;
-        window.__acts.push(e.data.kind);
-        if (e.data.kind === 'activation-confirm') void window.__controller.confirm();
-        if (e.data.kind === 'activation-cancel') window.__events.push({ kind: 'cancel', accepted: window.__controller.cancel() });
-      });
-      parent.postMessage({ type: 'aac-content', kind: 'auth', signedIn: true, state: 'authenticated' }, location.origin);
-    })()`)
-  );
+  await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().hasData === true);
+  await t.page.evaluate(async () => {
+    const { createActivationConfirmation } = await import('/activation-confirmation.mjs');
+    window.__events = [];
+    const send = (v) =>
+      dispatchEvent(new CustomEvent('aac-dash', { detail: { key: 'activation', json: v ? JSON.stringify(v) : '' } }));
+    let calls = 0;
+    window.__controller = createActivationConfirmation({
+      activate: async (target) => {
+        window.__events.push({ kind: 'activate', call: ++calls });
+        if (calls % 2) throw { status: 409, payload: { confirmation: { token: 'a'.repeat(43), targetProfile: target,
+          expiresAt: new Date(Date.now() + 60000).toISOString(), processes: [{ label: 'Synthetic busy process', pid: 1234, role: 'fixture' }] } } };
+        return new Promise((resolve, reject) => { window.__settle = { resolve, reject }; });
+      },
+      prompt: (v) => { window.__events.push({ kind: 'prompt', busy: v.inProgress, error: v.error }); send(v); },
+      close: () => { window.__events.push({ kind: 'close' }); send(null); },
+      busy: () => {}, success: () => {}, error: () => {},
+    });
+    window.__acts = [];
+    const dashboard = window.aacFrameDashboard;
+    const act = dashboard.act.bind(dashboard);
+    dashboard.act = (kind, value) => {
+      window.__acts.push(kind);
+      if (kind === 'activation-confirm') { void window.__controller.confirm(); return true; }
+      if (kind === 'activation-cancel') { window.__events.push({ kind: 'cancel', accepted: window.__controller.cancel() }); return true; }
+      return act(kind, value);
+    };
+  });
 }
-const inFrame = (t, code) =>
-  t.page.locator('iframe.slint-frame').evaluate((el, code) => el.contentWindow.eval(code), code);
+const inFrame = (t, code) => t.page.evaluate(code);
 
 tests['duo portals: a late approval result after Back cannot revive the retired modal'] = async (
   t
@@ -488,7 +490,7 @@ tests['duo portals: a late approval result after Back cannot revive the retired 
     (r) => r.fulfill({ status: 204 })
   );
   await t.goto('/app/home?safe=0,84,34,0');
-  await t.page.waitForSelector('iframe.slint-frame', { state: 'attached' });
+  await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().hasData === true);
   await t.page.getByRole('link', { name: 'Accounts', exact: true }).filter({ visible: true }).click();
   await approvalController(t);
   await inFrame(t, "window.__controller.begin('synthetic-review-profile')");
@@ -684,7 +686,7 @@ tests['duo portals: Details under an approval closes after Back and opens again 
     serviceWorkers: 'block',
   });
   await t.goto('/app/home?safe=0,84,34,0');
-  await t.page.waitForSelector('iframe.slint-frame', { state: 'attached' });
+  await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().hasData === true);
   await t.page.getByRole('link', { name: 'Accounts', exact: true }).filter({ visible: true }).click();
   await approvalController(t);
   const details = (id) => ({ id, title: `Synthetic account ${id}`, meters: [], amounts: [], facts: [] });

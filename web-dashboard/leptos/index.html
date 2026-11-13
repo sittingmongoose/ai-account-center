@@ -48,8 +48,7 @@
           };
           // the module; the page that asked installs its controller only if it is still there (analytics/feed.rs)
           window.aacLoadAnalytics = loader('/frame-analytics.mjs', /\/app\/analytics\/?$/.test(location.pathname));
-          const dashboard = loader('/frame-dashboard.mjs', /\/app\/(home|accounts)\/?$/.test(location.pathname));
-          window.aacLoadDashboard = () => dashboard().then((m) => m.installFrameDashboard(window));
+          window.aacLoadDashboard = loader('/frame-dashboard.mjs', /\/app\/(home|accounts)\/?$/.test(location.pathname));
           const { installFrameSession } = await import('/frame-session.mjs');
           installFrameSession(window);
         }

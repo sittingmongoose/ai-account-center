@@ -156,7 +156,10 @@ impl Page {
     }
 
     /// Its data, actions and header line come from the dashboard controller (dash.rs, `public/frame-dashboard.mjs`),
-    /// which the frame starts the first time such a tab is shown. Analytics reads its own (analytics/feed.rs).
+    /// which the frame starts the first time such a tab is shown; until G5 these were the bridged tabs (`bridged()`).
+    /// Analytics reads its own (analytics/feed.rs). Contract (analytics-native L2): the `dashboard` view these tabs
+    /// draw also goes to `analytics::feed::dashboard_view` (dash.rs `deliver`), so Analytics follows an account hidden,
+    /// shown or removed here while its own tab is away.
     pub fn reads_dashboard(self) -> bool {
         matches!(self, Page::Home | Page::Accounts)
     }

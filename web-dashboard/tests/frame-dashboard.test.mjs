@@ -684,3 +684,29 @@ test('the frame loads a page module once, not early while offline, and asks agai
   c.loader('/frame-dashboard.mjs', false);
   assert.deepEqual(c.asked, []);
 });
+
+test('each install numbers its controller and stops the one before, so a page drives only its own', async () => {
+  const listeners = new Map();
+  const win = {
+    location: { protocol: 'http:', hostname: '192.0.2.10', host: '192.0.2.10:3000', origin: ORIGIN, search: '', href: '' },
+    navigator: { userAgent: 'Mac fixture' }, innerWidth: 1440,
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    fetch: async () => respond({ status: 404, payload: {} }),
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
+    dispatchEvent: () => {},
+    addEventListener: (name, fn) => listeners.set(name, [...(listeners.get(name) || []), fn]),
+    removeEventListener: (name, fn) => listeners.set(name, (listeners.get(name) || []).filter((f) => f !== fn)),
+    history: { state: null, pushState: () => {}, back: () => {} },
+    matchMedia: () => ({ matches: false }),
+  };
+  const first = installFrameDashboard(win);
+  const second = installFrameDashboard(win);
+  assert.ok(Number.isInteger(first.id) && first.id >= 1);
+  assert.equal(second.id, first.id + 1);
+  assert.equal(win.aacFrameDashboard, second);
+  assert.equal(first.state().stopped, true, 'the earlier controller was stopped');
+  assert.equal(first.act('details', 'codex:one'), false);
+  assert.equal((listeners.get('popstate') || []).length, 1, 'only the current one listens');
+  second.stop();
+  assert.equal((listeners.get('popstate') || []).length, 0);
+});
