@@ -139,7 +139,9 @@ def t3_installed(host):
         local = pathlib.Path(os.environ.get("LOCALAPPDATA", str(home / "AppData/Local")))
         candidates = [local / "Programs/t3code/T3 Code (Nightly).exe"]
     else:
-        candidates = [home / ".t3/bin/t3", home / ".local/bin/t3", pathlib.Path("/Applications/T3 Code (Nightly).app")]
+        candidates = [home / ".t3/bin/t3", home / ".local/bin/t3"]
+        if host == "mac":
+            candidates.append(pathlib.Path("/Applications/T3 Code (Nightly).app"))
     try:
         versions = home / ".t3/runtime/versions"
         if versions.is_dir() and any((child / "t3").is_file() for child in versions.iterdir()):
@@ -186,8 +188,10 @@ def wait_ready(host, deadline, expected_version=None, seconds=READY_SECONDS, sle
             origin = urllib.parse.urlsplit(state.get("origin", ""))
             if origin.hostname not in ("127.0.0.1", "localhost", "::1") or not origin.port:
                 raise ValueError("no_server_endpoint")
-            if expected_version and state.get("serverVersion") not in (None, expected_version):
-                raise ValueError("previous_server")
+            # After T3 was replaced the record must name the new server; a record without a
+            # version cannot prove it is not the previous server's.
+            if expected_version and state.get("serverVersion") != expected_version:
+                raise ValueError("previous_server" if state.get("serverVersion") else "no_server_version")
             with socket.create_connection((origin.hostname, origin.port), timeout=max(0.2, min(3, end - time.monotonic()))):
                 pass
             return attempts
@@ -484,12 +488,14 @@ def bearer(cli, base, deadline):
             if isinstance(error, UpdateFailure) and error.code == "t3_issuer_protection_failed":
                 raise
             if attempted and not session_id:
+                # Only an empty or unreadable reply is a lost reply; a CLI that failed or timed out is not.
+                cause = "lost_session_reply" if lost.startswith("reply_") else "unknown"
                 session_id = find_issued_session(cli, base, label)
                 if session_id:
                     _known_sessions[session_id] = (cli, base)
                     # Revoked in finally; a failed revoke replaces this with t3_session_revoke_failed.
-                    raise UpdateFailure("t3_session_reply_lost", cause="lost_session_reply", reason=lost) from None
-                raise UpdateFailure("t3_session_issue_unknown", cause="lost_session_reply", reason=lost) from None
+                    raise UpdateFailure("t3_session_reply_lost", cause=cause, reason=lost) from None
+                raise UpdateFailure("t3_session_issue_unknown", cause=cause, reason=lost) from None
             raise UpdateFailure("t3_auth_failed") from None
         yield token
     finally:
@@ -698,7 +704,8 @@ class Rpc:
                         errors = [c.get("error") for c in causes if isinstance(c, dict) and isinstance(c.get("error"), dict)]
                         denied = any(e.get("_tag") == "EnvironmentAuthorizationError" for e in errors)
                         # Server details can name paths or accounts: classification only, never emitted.
-                        detail = "\n".join(str(e.get(key, ""))[:2000] for e in errors for key in ("_tag", "instanceId", "operation", "detail"))
+                        # Only the error's tag and its detail: an instance or operation name is no evidence.
+                        detail = "\n".join(str(e.get(key, ""))[:2000] for e in errors for key in ("_tag", "detail"))
                         raise UpdateFailure("t3_auth_failed" if denied else "t3_install_failed:rpc", output=detail)
                     yield exit_value.get("value")
                     return

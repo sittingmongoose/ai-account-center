@@ -14,7 +14,6 @@ import platform
 import re
 import socket
 import time
-import urllib.request
 
 from app_update_antigravity_release import CLI_MANIFEST_BASE, NATIVE_FROM, SIGNIN_CARRIES_TO_NATIVE
 from app_update_common import Install, UpdateFailure, diagnostics, result, version_tuple
@@ -28,6 +27,8 @@ STATE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 # How long a subscription may stay quiet while T3's background release check runs
 # (its manifest read is bounded at 10 seconds).
 OFFER_SETTLE_SECONDS = 15
+MANIFEST_SECONDS = 10
+MANIFEST_LIMIT = 16 * 1024
 # A T3 server this run did not replace gets one short retry window, not the full wait.
 QUIET_READY_SECONDS = 15
 # T3 bounds one instance's model refresh at 90 seconds.
@@ -119,22 +120,22 @@ def detect_antigravity_acp(host):
 
 
 def newest_cli_version(host, deadline):
-    """The CLI channel's newest version for this computer (what T3's Install fetches), or None."""
+    """The CLI channel's newest version for this computer (what T3's Install fetches), or None.
+
+    Read by the same killable child as the ZCode release page, so DNS, a stalled
+    server or a byte-by-byte body cannot hold the row past min(10 s, its deadline)."""
+    from app_update_zcode import read_bounded
     target = cli_target(host)
-    seconds = min(10, deadline - time.monotonic())
-    if target is None or seconds <= 0:
+    if target is None or deadline - time.monotonic() <= 0:
         return None
     try:
-        request = urllib.request.Request(CLI_MANIFEST_BASE + target + ".json", headers={"User-Agent": "CCS-Installed-App-Updater/1.0"})
-        with urllib.request.urlopen(request, timeout=seconds) as response:
-            if not response.geturl().startswith(CLI_MANIFEST_BASE):
-                return None
-            raw = response.read(16 * 1024 + 1)
-        value = json.loads(raw.decode("utf-8")) if len(raw) <= 16 * 1024 else None
-        version = value.get("version") if isinstance(value, dict) else None
-        return version if isinstance(version, str) and SEMVER.fullmatch(version) and version_tuple(version) >= NATIVE_FROM else None
-    except Exception:
+        raw = read_bounded(CLI_MANIFEST_BASE + target + ".json", CLI_MANIFEST_BASE, MANIFEST_LIMIT,
+                           min(deadline, time.monotonic() + MANIFEST_SECONDS))
+        value = json.loads(raw.decode("utf-8"))
+    except (UpdateFailure, OSError, ValueError, UnicodeDecodeError):
         return None
+    version = value.get("version") if isinstance(value, dict) else None
+    return version if isinstance(version, str) and SEMVER.fullmatch(version) and version_tuple(version) >= NATIVE_FROM else None
 
 
 def checked_state(value):
@@ -180,27 +181,34 @@ def refresh_models(client, instances):
 
     T3 refreshes only the instance an install started on, and only when it is
     enabled. One request per instance keeps another provider's failure from
-    hiding this one's. A refusal that mentions sign-in (or an instance that now
-    reads unauthenticated) means the new runtime cannot use the stored sign-in.
-    Returns (outcome, reason): ("ok" | "signin" | "failed", word)."""
-    outcome = ("ok", None)
+    hiding this one's, and every instance is asked even after one needs a sign-in.
+    A refusal whose words (its error tag and detail, never the instance name)
+    mention sign-in, or an instance that now reads unauthenticated, means the new
+    runtime cannot use the stored sign-in. Returns (outcome, reason), the worst of
+    all instances: ("signin" | "failed" | "ok", word)."""
+    signin, failed = None, None
     for instance in instances:
         try:
             reply = client.call("server.refreshProviders", {"instanceId": instance, "refreshModels": True})
         except UpdateFailure as error:
             if SIGNIN_WORDS.search(error.output or ""):
-                return ("signin", "refresh_signin")
-            outcome = ("failed", "refresh_timed_out" if "timed out" in (error.output or "").lower() else "refresh_failed")
+                signin = signin or "refresh_signin"
+            else:
+                failed = failed or ("refresh_timed_out" if "timed out" in (error.output or "").lower() else "refresh_failed")
             continue
         except (OSError, TimeoutError):
-            outcome = ("failed", "refresh_failed")
+            failed = failed or "refresh_failed"
             continue
         providers = reply.get("providers") if isinstance(reply, dict) else None
         for provider in providers if isinstance(providers, list) else []:
             if (isinstance(provider, dict) and provider.get("instanceId") == instance and
                     isinstance(provider.get("auth"), dict) and provider["auth"].get("status") == "unauthenticated"):
-                return ("signin", "unauthenticated")
-    return outcome
+                signin = signin or "unauthenticated"
+    if signin:
+        return ("signin", signin)
+    if failed:
+        return ("failed", failed)
+    return ("ok", None)
 
 
 def restart_pending(t3_row):
@@ -253,27 +261,36 @@ def update_antigravity_acp(install, deadline=None, progress=None, t3_row=None):
                                     reason="no_enabled_instance" if installable else "no_installable_instance")
             instance = enabled[0]
             offer = read_offer(client, instance)
-            offered = offer.get("version") if offer else None
-            newest = newest_cli_version(install.platform, deadline)
-            target = offered if offered and SEMVER.fullmatch(offered) else newest
+            offered = offer.get("version") if offer and offer.get("version") and SEMVER.fullmatch(offer["version"]) else None
             current = detect_antigravity_acp(install.platform)
             if current is None or current.probe:
                 raise UpdateFailure("t3_install_failed:readiness_unknown", reason="runtime_record_invalid")
-            record.owner = {**(current.owner or {}), "target": "t3-offer" if target == offered else "cli-manifest"}
+            guarded = current.runtime_kind == "harness" and install.platform not in SIGNIN_CARRIES_TO_NATIVE
+            # Google's channel is read only when T3 gave no usable offer, or when this runtime pair
+            # could be replaced by the native CLI: T3's start re-reads that channel itself.
+            newest = newest_cli_version(install.platform, deadline) if offered is None or guarded else None
+            known = [version for version in (offered, newest) if version]
+            target = max(known, key=version_tuple) if known else None
+            record.owner = {**(current.owner or {}), "target": "t3-offer" if target and target == offered else "cli-manifest"}
+            if guarded:
+                native = [version for version in known if version_tuple(version) >= NATIVE_FROM]
+                if native or (newest is None and (target is None or newer(target, current.version))):
+                    # Whatever the offer says, start may install the native CLI, which cannot read the
+                    # sign-in this runtime pair stored here. (If both signals are stale at the instant
+                    # of start, AAC cannot tell; T3 must carry the sign-in over to close that window.)
+                    record.blame("signin_needed", "token_storage_change" if native else "migration_unchecked")
+                    value = result(install.app_id, install.platform, "action_required", before, current.version,
+                                   install.manager, "antigravity_acp_signin_hold")
+                    held = max(native, key=version_tuple) if native else target
+                    if held:
+                        value["heldVersion"] = held
+                    return value
             if target is None:
                 record.blame("unknown", "no_offer")
                 return result(install.app_id, install.platform, "unknown", before, current.version, install.manager,
                               "antigravity_acp_offer_unknown")
             if not newer(target, current.version):
                 return result(install.app_id, install.platform, "current", before, current.version, install.manager, "current")
-            if (current.runtime_kind == "harness" and version_tuple(target) >= NATIVE_FROM and
-                    install.platform not in SIGNIN_CARRIES_TO_NATIVE):
-                # The native CLI cannot read the sign-in the runtime pair stored here.
-                record.blame("signin_needed", "token_storage_change")
-                value = result(install.app_id, install.platform, "action_required", before, current.version,
-                               install.manager, "antigravity_acp_signin_hold")
-                value["heldVersion"] = target
-                return value
             if progress:
                 progress("updating")
             record.phase("install")
@@ -295,9 +312,16 @@ def update_antigravity_acp(install, deadline=None, progress=None, t3_row=None):
                 raise UpdateFailure("t3_install_failed:" + ("cancelled" if state["phase"] == "cancelled" else "installer"))
             record.phase("verify")
             final = detect_antigravity_acp(install.platform)
-            if final is None or final.probe or newer(target, final.version):
+            # T3 must have activated at least what its operation named, and never gone backwards.
+            if final is None or final.probe or newer(target, final.version) or newer(current.version, final.version):
                 raise UpdateFailure("t3_install_failed:verification")
             record.owner = {**(final.owner or {}), "target": record.owner.get("target")}
+            if not newer(final.version, current.version):
+                # T3 only re-checked the installed runtime (a withdrawn release, its own manifest
+                # read failed, a rollback): nothing new runs, so this is not an update.
+                record.note("reverified")
+                return result(install.app_id, install.platform, "current", before, final.version, install.manager,
+                              "current", attempted)
             record.phase("refresh_models")
             outcome, reason = refresh_models(client, enabled)
             if outcome == "signin":
