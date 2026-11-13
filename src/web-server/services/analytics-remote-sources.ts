@@ -845,6 +845,14 @@ function toSessionAggregates(srows: AnalyticsRemoteSessionRow[]): SessionAggrega
   }));
 }
 
+/** Rows in the remote rows' shape as one tool's usage (the Cursor account reader uses it too). */
+export function analyticsRowsResult(
+  rows: AnalyticsRemoteRow[],
+  kind: AnalyticsRemoteKind
+): UsageWorkerResult {
+  return toWorkerResult(rows, [], kind);
+}
+
 function toWorkerResult(
   rows: AnalyticsRemoteRow[],
   srows: AnalyticsRemoteSessionRow[],

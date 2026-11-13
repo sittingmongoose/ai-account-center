@@ -213,6 +213,12 @@ export interface AccountAnalyticsActivity {
   refreshing?: boolean;
   /** Remote hosts the running collection is still waiting on; absent or empty when settled. */
   refreshingRemote?: AnalyticsRemoteHost[];
+  /**
+   * The Cursor account through AAC's own API key (DESIGN 17.5): its state, when it was read, and
+   * how much of its usage the local runs account for. Only the part outside the scanned computers
+   * is added to the totals (`outsideTokens`).
+   */
+  cursorAccount?: AccountAnalyticsCursorAccount | null;
   scope: 'multi-host-cli';
   /** The zone used for `byDay`, `byDayModel` and anomaly dates. `byHour[].hour` stays a UTC instant. */
   timezone: string;
@@ -328,6 +334,22 @@ export interface AccountAnalyticsHistoryCoverage {
    * first and last flagged hour. `outputIncludesReasoningTwice`: the retired Codex cache's output.
    */
   quality: Array<{ tool: string; flags: string[]; from: string; to: string }>;
+}
+
+export interface AccountAnalyticsCursorAccount {
+  state: 'no_key' | 'key_rejected' | 'read' | 'unavailable' | 'no_reader';
+  /** When the account was last asked (any state). */
+  checkedAt: string | null;
+  /** When its usage was last read in full; the numbers are from then. */
+  readAt: string | null;
+  /** A fixed word when `unavailable`: timeout, network, server_error, bad_response, ... */
+  cause?: string;
+  /** The key's last four characters, never more. */
+  last4?: string;
+  accountTokens: number;
+  matchedTokens: number;
+  outsideTokens: number;
+  localUnmatchedTokens: number;
 }
 
 /** Internal facts the activity reader passes to the analytics service; never serialised. */

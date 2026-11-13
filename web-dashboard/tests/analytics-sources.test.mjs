@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 process.env.TZ = 'UTC';
 const { setDisplayTimeZone } = await import('../public/time-format.mjs');
 setDisplayTimeZone('UTC');
-const { usageView, activityData, includedView, notLoggedPart, modelShades, tokC, hostProgress, TOOLS } = await import('../public/analytics-usage.mjs');
+const { usageView, activityData, includedView, notLoggedPart, modelShades, tokC, hostProgress, TOOLS, cursorAccountLine } = await import('../public/analytics-usage.mjs');
 const { modelRates } = await import('../public/model-rates.mjs');
 
 const now = Date.parse('2026-10-01T12:00:00Z');
@@ -338,6 +338,19 @@ test('round 2 cells: Cursor runs read where a run store is, Devin CLI read, expe
   assert.equal(by('Devin CLI').ubuntu.text, 'No usage in range');
   assert.match(by('Codex').ubuntu.tip, /partly read: 1,450,000,000 of 4,637,763,647 bytes/);
   assert.match(inc.line, /Includes .*Cursor/);
+});
+
+test('the Cursor account line says each state; only usage outside the scanned computers counts (DESIGN 17.5)', () => {
+  const base = { checkedAt: at(1), readAt: at(1), accountTokens: 0, matchedTokens: 0, outsideTokens: 0, localUnmatchedTokens: 0 };
+  assert.match(cursorAccountLine({ ...base, state: 'read', outsideTokens: 1_500_000, matchedTokens: 400 }, now), /^Cursor account read .*: 1\.5M tokens used outside the scanned computers are counted\.$/);
+  assert.match(cursorAccountLine({ ...base, state: 'read' }, now), /all its usage is T3's runs, already counted/);
+  assert.equal(cursorAccountLine({ ...base, state: 'no_key', readAt: null }, now), 'Cursor account: no key, so Cursor used outside T3 (the app, cloud agents) is not counted.');
+  assert.match(cursorAccountLine({ ...base, state: 'key_rejected', last4: 'WXYZ', readAt: null }, now), /key ending WXYZ was rejected/);
+  assert.match(cursorAccountLine({ ...base, state: 'unavailable', cause: 'timeout' }, now), /not read just now \(timeout\); showing its usage as read/);
+  assert.match(cursorAccountLine({ ...base, state: 'unavailable', cause: 'network', readAt: null }, now), /nothing of it is counted/);
+  assert.equal(cursorAccountLine(undefined, now), '');
+  const inc = includedView(payload({ sources: SOURCES, cursorAccount: { ...base, state: 'no_key', readAt: null } }), now);
+  assert.match(inc.line, /Cursor account: no key/);
 });
 
 test('hostProgress never calls a host whose every tool failed "read"', () => {

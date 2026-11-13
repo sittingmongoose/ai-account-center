@@ -21,6 +21,7 @@ export const ROOT_COMMAND_ROUTES: readonly NamedCommandRoute[] = [
         args[0] !== 'usage-snapshot' &&
         args[0] !== 'proxy' &&
         args[0] !== 'store' &&
+        args[0] !== 'cursor-key' &&
         (hasAnyFlag(args, ['--help', '-h']) || args[0] === 'help')
       ) {
         const { showConfigCommandHelp } = await import('./config-command-options');

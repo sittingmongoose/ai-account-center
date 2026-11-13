@@ -117,6 +117,9 @@ export function showConfigCommandHelp(writeLine: (line: string) => void = consol
   writeLine(
     '  store check|backup|restore <dir>   Check, back up or restore it (dashboard stopped)'
   );
+  writeLine(
+    "  cursor-key set|status|remove   AAC's Cursor API key (the key on stdin, never printed)"
+  );
   writeLine('');
   writeLine('Options:');
   writeLine('  --port, -p PORT    Server port (default: auto-detect)');

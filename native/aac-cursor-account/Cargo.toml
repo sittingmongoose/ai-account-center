@@ -1,0 +1,38 @@
+[package]
+name = "aac-cursor-account"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+publish = false
+description = "AI Account Center: the Cursor account's usage events through AAC's own API key (DESIGN 17); runs on the dashboard's computer only"
+repository = "https://github.com/sittingmongoose/ai-account-center"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "aac-cursor-account"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+sha2 = "0.11"
+# Blocking HTTPS with rustls and bundled web roots: no system certificate store, no async runtime.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+opt-level = 3
+strip = true
+codegen-units = 1
+panic = "abort"

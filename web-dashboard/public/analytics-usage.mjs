@@ -1341,6 +1341,32 @@ const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
  * that could not be read: "Can't read"). A failing source never reads as a zero.
  * tone: ok | cached | unavailable | scanning | quiet.
  */
+/**
+ * The Cursor account through AAC's own key (DESIGN 17.5): one sentence for its state. Only the account's usage outside the
+ * scanned computers is added to the numbers; the rest is T3's runs, already counted from their logs.
+ */
+export function cursorAccountLine(account, now = Date.now()) {
+  if (!account || typeof account !== 'object') return '';
+  const at = Date.parse(text(account.readAt));
+  const read = finite(at) ? `read ${relTxt(at, now)}` : 'never read';
+  switch (account.state) {
+    case 'read': {
+      const outside = finite(account.outsideTokens) ? account.outsideTokens : 0;
+      return `Cursor account ${read}: ${outside > 0 ? `${tokC(outside)} tokens used outside the scanned computers are counted` : 'all its usage is T3\'s runs, already counted'}${finite(account.localUnmatchedTokens) && account.localUnmatchedTokens > 0 ? `; ${tokC(account.localUnmatchedTokens)} local Cursor tokens are not in this account's events` : ''}.`;
+    }
+    case 'no_key':
+      return 'Cursor account: no key, so Cursor used outside T3 (the app, cloud agents) is not counted.';
+    case 'key_rejected':
+      return `Cursor account: the key${text(account.last4) ? ` ending ${text(account.last4)}` : ''} was rejected, so Cursor used outside T3 is not counted.`;
+    case 'no_reader':
+      return 'Cursor account: its reader is not built for this computer.';
+    case 'unavailable':
+      return `Cursor account not read just now (${text(account.cause) || 'unavailable'}); ${finite(at) ? `showing its usage as read ${relTxt(at, now)}` : 'nothing of it is counted'}.`;
+    default:
+      return '';
+  }
+}
+
 export function includedView(payload, now = Date.now()) {
   const seen = new Set();
   const list = (Array.isArray(payload?.activity?.sources) ? payload.activity.sources : []).filter(r => SOURCE_TOOLS.some(([t]) => t === r?.tool)
@@ -1373,6 +1399,7 @@ export function includedView(payload, now = Date.now()) {
     included.length ? `Includes ${andList(included)}${hosts.length ? ` on ${andList(hosts)}` : ''}.` : 'No usage log could be read yet.',
     nologLine,
     readerLine,
+    cursorAccountLine(payload?.activity?.cursorAccount, now),
   ].filter(Boolean).join(' ');
   const when = r => Date.parse(text(r.lastScanAt));
   // "1,234 files in 3 folders (default folder 900, other home 334)"; the older reader says so.
