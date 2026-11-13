@@ -267,8 +267,19 @@ function word(value: unknown): string | undefined {
   return typeof value === 'string' && WORD.test(value) ? value : undefined;
 }
 
+/** Whether complete text holds a recognised credential flag, before any shortening of it. */
+function hasCredentialFlag(value: string): boolean {
+  const probe = value
+    .replace(/\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g, '')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+  return CREDENTIAL_REST.test(probe);
+}
+
 function displayPath(value: unknown): string | undefined {
-  if (typeof value !== 'string' || !value || value.length > 1024) return undefined;
+  if (typeof value !== 'string' || !value) return undefined;
+  // Shortening below keeps the last characters, which would remove a flag at the start.
+  if (hasCredentialFlag(value.replace(/[\r\n]/g, ' '))) return CREDENTIAL_REST_NOTE;
+  if (value.length > 1024) return undefined;
   const text = scrubText(value, 1).slice(-PATH_CHARS);
   return text || undefined;
 }
@@ -338,10 +349,15 @@ export function normalizeDiagnostics(value: unknown): AppUpdateDiagnostics | und
   const result: AppUpdateDiagnostics = { cause: raw.cause as AppUpdateCause };
   const reason = word(raw.reason);
   if (reason) result.reason = reason;
-  if (typeof raw.command === 'string' && raw.command.length <= 1024) {
+  if (typeof raw.command === 'string') {
     // One line: a line break inside an argument cannot leave a value's tail as the last line.
-    const command = scrubText(raw.command.replace(/[\r\n]/g, ' '), 1).slice(0, PATH_CHARS);
-    if (command) result.command = command;
+    // The complete value is checked before the length limit and the cut below can remove a flag.
+    const flat = raw.command.replace(/[\r\n]/g, ' ');
+    if (hasCredentialFlag(flat)) result.command = CREDENTIAL_REST_NOTE;
+    else if (raw.command.length <= 1024) {
+      const command = scrubText(flat, 1).slice(0, PATH_CHARS);
+      if (command) result.command = command;
+    }
   }
   if (
     typeof raw.exitCode === 'number' &&

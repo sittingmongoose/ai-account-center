@@ -186,6 +186,33 @@ print(json.dumps(rows))`;
   return JSON.parse(child.stdout.toString()) as Record<string, unknown>[];
 }
 
+/** Rows whose deciding command received each sample as one whole argument. */
+function helperArgRows(root: string, args: string[]): Record<string, unknown>[] {
+  const script = `import json,pathlib,sys
+from unittest import mock
+sys.path.insert(0, sys.argv[1])
+import app_update_common as c
+root=pathlib.Path(sys.argv[2]); child=root/'fail.py'; child.write_text('import sys; sys.exit(1)')
+rows=[]
+with mock.patch.object(pathlib.Path, 'home', return_value=root):
+    for arg in json.load(sys.stdin):
+        with c.row_diagnostics() as record:
+            try:
+                c.command([sys.executable, str(child), arg], errors=True)
+            except c.UpdateFailure:
+                pass
+        row=c.result('t3-acp-adapters','mac','failed',code='update_failed')
+        row['diagnostics']=record.export(row)
+        rows.append(row)
+print(json.dumps(rows))`;
+  const child = Bun.spawnSync(
+    ['python3', '-c', script, path.join(process.cwd(), 'scripts/app-updates'), root],
+    { stdin: Buffer.from(JSON.stringify(args)), env: { ...process.env, CCS_HOME: root } }
+  );
+  expect(child.exitCode).toBe(0);
+  return JSON.parse(child.stdout.toString()) as Record<string, unknown>[];
+}
+
 /** Runs one job whose Mac adapter row is `raw`, then restores it from disk. */
 async function savedTail(storage: string, raw: Record<string, unknown>) {
   const service = new AppUpdateService({
@@ -405,3 +432,75 @@ it('H1 recheck-2 a line break in an argument never leaves a tail in the recorded
   };
   expect(normalizeAppUpdateRow(stored, 't3-acp-adapters', 'mac').diagnostics?.command).toBe(REST);
 });
+
+it('H1 recheck-3 a long slash equals argument never leaves fragments in the recorded command', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-h1-longargv-'));
+  roots.push(root);
+  // Path shortening keeps an argument's last characters; the flag must be seen on the complete
+  // argument before that shortening can remove it.
+  const args = [
+    '--pass=/' + 'horse battery staple/'.repeat(12),
+    '--password=/' + 'horse battery staple/'.repeat(12),
+  ];
+  const rows = helperArgRows(root, args);
+  for (const [index, raw] of rows.entries()) {
+    const arg = args[index];
+    expect(scrubText(arg)).toBe(REST);
+    expect((raw.diagnostics as Record<string, unknown>).command).toBe(REST);
+    const normalized = normalizeAppUpdateRow(raw, 't3-acp-adapters', 'mac');
+    expect(normalized.diagnostics?.command).toBe(REST);
+    const { command, files } = await savedTail(path.join(root, String(index)), raw);
+    expect(command).toBe(REST);
+    expect(files[1]).toContain(REST);
+    for (const text of [JSON.stringify(raw), JSON.stringify(normalized), ...files])
+      for (const witness of H1_WITNESSES) expect(text).not.toContain(witness);
+    // A stored row from an older helper: its unshortened command is cleaned on read,
+    // through the service job, both job files and restoration by a fresh service.
+    const stored = {
+      ...raw,
+      diagnostics: {
+        ...(raw.diagnostics as Record<string, unknown>),
+        command: `installer ${arg}`,
+      },
+    };
+    expect(normalizeAppUpdateRow(stored, 't3-acp-adapters', 'mac').diagnostics?.command).toBe(REST);
+    const restored = await savedTail(path.join(root, 'stored' + index), stored);
+    expect(restored.command).toBe(REST);
+    for (const text of restored.files)
+      for (const witness of H1_WITNESSES) expect(text).not.toContain(witness);
+  }
+  // Past the stored-command length limit the flag still replaces the whole command:
+  // the check runs on the complete value before any length guard or shortening.
+  const longArg = '--pass=/' + 'horse battery staple/'.repeat(60);
+  const longStored = {
+    appId: 't3-acp-adapters',
+    status: 'failed',
+    messageCode: 'update_failed',
+    diagnostics: {
+      command: `installer ${longArg}`,
+      cause: 'installer_failed',
+      owner: { manager: 'native', executable: longArg },
+    },
+  };
+  const longNormalized = normalizeAppUpdateRow(longStored, 't3-acp-adapters', 'mac');
+  expect(longNormalized.diagnostics?.command).toBe(REST);
+  expect(longNormalized.diagnostics?.owner?.executable).toBe(REST);
+  for (const witness of H1_WITNESSES) expect(JSON.stringify(longNormalized)).not.toContain(witness);
+  // Short and ordinary commands still display normally.
+  expect(scrubText('installer --verbose share/file.txt')).toBe(
+    'installer --verbose share/file.txt'
+  );
+  const control = {
+    appId: 't3-acp-adapters',
+    status: 'failed',
+    messageCode: 'update_failed',
+    diagnostics: { command: 'installer --verbose share/file.txt', cause: 'installer_failed' },
+  };
+  expect(normalizeAppUpdateRow(control, 't3-acp-adapters', 'mac').diagnostics?.command).toBe(
+    'installer --verbose share/file.txt'
+  );
+  const [controlRow] = helperArgRows(root, ['--verbose']);
+  expect(
+    normalizeAppUpdateRow(controlRow, 't3-acp-adapters', 'mac').diagnostics?.command
+  ).toContain('--verbose');
+}, 60_000);

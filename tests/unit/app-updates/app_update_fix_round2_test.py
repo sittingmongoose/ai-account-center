@@ -169,6 +169,27 @@ class Round2(Home):
                     self.assertNotIn(witness, json.dumps(row))
         self.assertEqual(common.command_display(['installer', 'line one\nline two']), 'installer line one line two')
 
+    def test_h1_recheck3_a_long_slash_equals_argument_never_leaves_fragments_in_the_command(self):
+        # Path shortening keeps an argument's last characters; the flag must be seen on the
+        # complete argument before that shortening can remove it.
+        child = self.root / 'fail.py'
+        child.write_text('import sys; sys.exit(1)')
+        for arg in ('--pass=/' + 'horse battery staple/' * 12,
+                    '--password=/' + 'horse battery staple/' * 12):
+            with self.subTest(arg=arg[:20]), scope() as record:
+                with self.assertRaises(common.UpdateFailure):
+                    common.command([sys.executable, str(child), arg], errors=True)
+                row = attach(common.result('t3-acp-adapters', 'mac', 'failed', code='update_failed'), record)
+                self.assertEqual(row['diagnostics']['command'], REST)
+                self.assertEqual(common.command_display(['installer', arg]), REST)
+                self.assertEqual(common.display_path(arg), REST)
+                for witness in self.H1_WITNESSES:
+                    self.assertNotIn(witness, json.dumps(row))
+        # Short and ordinary commands still display normally.
+        self.assertEqual(common.command_display(['installer', '--verbose']), 'installer --verbose')
+        self.assertEqual(common.command_display(['installer', 'share/file.txt']), 'installer share/file.txt')
+        self.assertEqual(common.display_path('share/file.txt'), 'share/file.txt')
+
     def test_h1_an_exit_code_keeps_its_failure_line(self):
         line = 'installer failed: exit code=1; ENOSPC: no space left on device'
         self.assertEqual(common.scrub(line), line)

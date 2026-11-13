@@ -183,9 +183,18 @@ def _scrub_paths(text):
     return re.sub(r"(/home/)[^/\s\"']{1,128}", r"\1<user>", text)
 
 
+def _credential_flag(text):
+    """Whether complete text holds a recognised credential flag, before any shortening of it."""
+    return bool(_CREDENTIAL_REST.search(_CONTROL.sub("", _ANSI.sub("", text))))
+
+
 def display_path(path):
     """A path with the home folder as ~ and any other user's folder as <user>; bounded."""
-    return _scrub_paths(str(path)[-1024:])[-160:]
+    text = str(path)
+    # Shortening below keeps the last characters, which would remove a flag at the start.
+    if _credential_flag(re.sub(r"[\r\n]", " ", text)):
+        return CREDENTIAL_REST
+    return _scrub_paths(text[-1024:])[-160:]
 
 
 def scrub(text, lines=TAIL_LINES):
@@ -207,11 +216,17 @@ def scrub(text, lines=TAIL_LINES):
 def command_display(argv, label=None):
     """What ran, for a row: the program's own name and its fixed arguments, never a script body."""
     if label:
-        return scrub(label, 1)[:160]
+        text = re.sub(r"[\r\n]", " ", str(label))
+        return CREDENTIAL_REST if _credential_flag(text) else scrub(text, 1)[:160]
+    # One display line: a line break inside an argument cannot leave a value's tail as the last line.
+    flat = [re.sub(r"[\r\n]", " ", str(item)) for item in argv]
+    # Basename conversion, display_path() and the per-argument cut below can each remove a
+    # credential flag before scrub() sees it, so the complete argv is checked first.
+    if _credential_flag(" ".join(flat)):
+        return CREDENTIAL_REST
     words = []
     skip = False
-    # One display line: a line break inside an argument cannot leave a value's tail as the last line.
-    for index, arg in enumerate(re.sub(r"[\r\n]", " ", str(item)) for item in argv):
+    for index, arg in enumerate(flat):
         if skip:
             words.append("<script>")
             skip = False
