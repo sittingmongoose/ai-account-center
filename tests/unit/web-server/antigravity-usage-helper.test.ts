@@ -98,19 +98,21 @@ function conversation(
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
   try {
-    if (tables.includes('gen_metadata'))
-      db.run('CREATE TABLE gen_metadata (idx INTEGER, data BLOB)');
-    if (tables.includes('steps')) db.run('CREATE TABLE steps (idx INTEGER, metadata BLOB)');
-    for (const [idx, data] of (rows.generations ?? []).entries())
-      db.query('INSERT INTO gen_metadata VALUES (?, ?)').run(idx, new Uint8Array(data));
-    for (const [idx, data] of (rows.steps ?? []).entries())
-      db.query('INSERT INTO steps VALUES (?, ?)').run(idx, new Uint8Array(data));
-    if (rows.trajectory) {
-      db.run('CREATE TABLE trajectory_metadata_blob (data BLOB)');
-      db.query('INSERT INTO trajectory_metadata_blob VALUES (?)').run(
-        new Uint8Array(rows.trajectory)
-      );
-    }
+    db.transaction(() => {
+      if (tables.includes('gen_metadata'))
+        db.run('CREATE TABLE gen_metadata (idx INTEGER, data BLOB)');
+      if (tables.includes('steps')) db.run('CREATE TABLE steps (idx INTEGER, metadata BLOB)');
+      for (const [idx, data] of (rows.generations ?? []).entries())
+        db.query('INSERT INTO gen_metadata VALUES (?, ?)').run(idx, new Uint8Array(data));
+      for (const [idx, data] of (rows.steps ?? []).entries())
+        db.query('INSERT INTO steps VALUES (?, ?)').run(idx, new Uint8Array(data));
+      if (rows.trajectory) {
+        db.run('CREATE TABLE trajectory_metadata_blob (data BLOB)');
+        db.query('INSERT INTO trajectory_metadata_blob VALUES (?)').run(
+          new Uint8Array(rows.trajectory)
+        );
+      }
+    })();
   } finally {
     db.close();
   }

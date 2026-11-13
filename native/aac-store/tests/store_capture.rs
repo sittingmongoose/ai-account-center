@@ -111,7 +111,8 @@ fn normalized_large_task_boards_fit_without_losing_items() {
 fn report_reader_secret_parity_refuses_before_any_persistence() {
     use aac_store::report_secret;
     use common::find;
-    let cases: Vec<Json> = serde_json::from_str(include_str!("report-secret-cases.json")).unwrap();
+    let cases: Vec<Json> =
+        serde_json::from_str(include_str!("../../../tests/fixtures/secret-policy-cases.json")).unwrap();
     let dir = temp_dir("capture-secret-parity");
     let engine = ops::open_engine(dir.to_str().unwrap(), None, None).unwrap();
     let ledger = || {
@@ -229,4 +230,18 @@ fn shared_policy_keeps_the_legacy_native_credential_shapes() {
         }
     }
     assert!(recognized > 1000, "union check must exercise legacy-positive shapes");
+}
+
+#[test]
+fn shared_loader_exposes_the_packaged_policy_without_a_status_dependency() {
+    let policy = aac_store::secret_policy::load_secret_policy();
+    assert_eq!(
+        aac_store::secret_policy::SECRET_POLICY_PATH,
+        "src/shared/secret-policy.json"
+    );
+    assert_eq!(policy["version"], 2);
+    assert!(policy["patterns"].as_array().unwrap().len() > 10);
+    assert_eq!(aac_store::report_secret::load_secret_policy(), policy);
+    assert!(aac_store::secret_policy::find_secret(&format!("sk-{}", "A".repeat(20))).is_some());
+    assert!(aac_store::secret_policy::find_secret(&format!("sk-{}", "A".repeat(19))).is_none());
 }

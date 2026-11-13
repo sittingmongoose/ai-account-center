@@ -44,7 +44,8 @@ function sourceHash() {
     'Cargo.lock',
     'build.rs',
     'rust-toolchain.toml',
-    '../../src/web-server/status/report-secret-policy.json',
+    '../../src/shared/secret-policy.json',
+    '../shared/secret_policy.rs',
   ];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(path.join(CRATE, dir), { withFileTypes: true })) {

@@ -7,6 +7,19 @@ use serde_json::Value as Json;
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
+/// Stable packaged resource, shared by every TS and Rust consumer.
+pub const SECRET_POLICY_PATH: &str = "src/shared/secret-policy.json";
+
+/// Immutable process-wide policy data. This module can be included by any native crate
+/// through `#[path = "../../shared/secret_policy.rs"]`; it has no store/Status dependencies.
+pub fn load_secret_policy() -> &'static Json {
+    static POLICY: OnceLock<Json> = OnceLock::new();
+    POLICY.get_or_init(|| {
+        serde_json::from_str(include_str!("../../src/shared/secret-policy.json"))
+            .expect("checked packaged secret policy")
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Policy {
@@ -84,8 +97,7 @@ fn rules() -> &'static Rules {
     static RULES: OnceLock<Rules> = OnceLock::new();
     RULES.get_or_init(|| {
         let policy: Policy =
-            serde_json::from_str(include_str!("../../../src/web-server/status/report-secret-policy.json"))
-                .expect("checked shared report policy");
+            serde_json::from_value(load_secret_policy().clone()).expect("checked shared secret policy");
         let patterns = policy
             .patterns
             .iter()

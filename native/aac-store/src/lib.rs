@@ -16,7 +16,10 @@ pub mod log;
 pub mod msgpack;
 pub mod ops;
 pub mod pack;
-pub mod report_secret;
+#[path = "../../shared/secret_policy.rs"]
+pub mod secret_policy;
+// Compatibility for callers from the original capture implementation.
+pub use secret_policy as report_secret;
 pub mod secret;
 pub mod storage_health;
 pub mod usage;

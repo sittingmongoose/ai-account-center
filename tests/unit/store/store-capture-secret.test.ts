@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import cases from '../../../native/aac-store/tests/report-secret-cases.json';
+import { secretPolicyCases as cases } from '../../fixtures/secret-policy-cases';
 import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore, type StoreReportCapture } from '../../../src/store/store-service';
 
@@ -137,3 +137,16 @@ const loaded = loadNativeStore({
     }
   }
 );
+
+it('exposes the compiled shared detector to callers outside Status', () => {
+  const shared =
+    require('../../../dist/shared/secret-policy.js') as typeof import('../../../src/shared/secret-policy');
+  const compatibility =
+    require('../../../dist/web-server/status/schema-helpers.js') as typeof import('../../../src/web-server/status/schema-helpers');
+  expect(shared.SECRET_POLICY_PATH).toBe('src/shared/secret-policy.json');
+  expect(shared.loadSecretPolicy().version).toBe(2);
+  expect(shared.findSecret('Basic dTpw')).toBe('an authorization credential');
+  expect(shared.findSecret('https://svc:pass@localhost/api')).toBe('URL userinfo');
+  expect(shared.findSecret(`sk-${'A'.repeat(20)}`)).toBe('an API key');
+  expect(compatibility.findSecretIn).toBe(shared.findSecretIn);
+});
