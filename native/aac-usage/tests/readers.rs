@@ -283,7 +283,12 @@ fn devin_replies_count_once_each_and_no_text_leaves() {
     assert!(answer["rows"].as_array().unwrap().iter().all(|r| r["m"] == "swe-2-max"));
     let key = aac_usage::util::session_key("devin", Some("devin-session-1")).unwrap();
     // The working folder, kept as the log wrote it (outside home, so not shortened to ~).
-    assert!(answer["sessions"][&key]["cwd"]["path"].as_str().unwrap().ends_with("proj"));
+    assert!(
+        answer["sessions"][&key]["cwd"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("proj")
+    );
     let text = answer.to_string();
     assert!(!text.contains(SECRET));
     assert!(!text.contains("devin-session-1"));
