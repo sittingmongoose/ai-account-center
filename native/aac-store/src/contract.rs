@@ -356,7 +356,11 @@ pub fn hex64_ok(s: &str) -> bool {
 
 /// A persisted label: bounded, no control characters, nothing shaped like a credential.
 pub fn label_ok(s: &str, max: usize) -> bool {
-    crate::usage::text_ok(s, max)
+    // the shared AAC secret policy (docs/secret-policy.md): no credential and no email address
+    !s.is_empty()
+        && s.len() <= max
+        && !s.chars().any(|c| c.is_control())
+        && crate::secret_policy::find_secret(s).is_none()
 }
 
 fn route_ok(s: &str) -> bool {
@@ -613,6 +617,30 @@ impl Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn labels_follow_the_shared_secret_policy() {
+        for ok in [
+            "claude-opus-5-5",
+            "gpt-5.6-sol",
+            "claude-3-5-sonnet-v2@20241022",
+            "anthropic/claude-sonnet-4.5",
+            "codex",
+            "~/projects/aac",
+        ] {
+            assert!(label_ok(ok, 200), "{ok}");
+        }
+        for bad in [
+            "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+            "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+            "someone@example.com",
+            "https://user:hunter2@internal/api",
+        ] {
+            assert!(!label_ok(bad, 200), "{bad}");
+            assert!(crate::secret_policy::find_secret(bad).is_some(), "{bad}");
+        }
+        assert!(!label_ok("", 10) && !label_ok("a\nb", 10) && !label_ok("abcdef", 5));
+    }
 
     #[test]
     fn iso_round_trip() {

@@ -888,6 +888,9 @@ computer, tool, session, route, model, effort and account; that tuple is its ded
 row is keyed by tool and session key; a mirrored log is one session. `loggedCostUsd` (what the tool
 logged) is kept apart from `costUsd` and `fallbackCostUsd` (computed by the server). Per-message
 records (`messages[]`) are reserved and refused with `not_supported` until their table is built.
+Every label a report carries (model, route, account, target, folder) is checked with the shared AAC
+secret policy (`aac_store::secret_policy`, [secret-policy.md](secret-policy.md)): a report holding a
+credential or an email address is refused whole, before anything reaches the log.
 Today's TypeScript collectors are adapted on the TypeScript side (`src/store/activity-reports.ts`,
 `src/web-server/usage/activity-cells.ts`).
 
