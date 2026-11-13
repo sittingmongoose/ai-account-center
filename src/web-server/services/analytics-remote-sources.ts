@@ -39,6 +39,16 @@ import {
   type AnalyticsSessionEvidence,
 } from './analytics-remote-transport';
 import { readAnalyticsCaptureSettings } from './analytics-capture-settings';
+import {
+  MAX_REMOTE_CACHE_BYTES,
+  fitRemoteCache,
+  parseRemoteCacheDiscard,
+  parseRemoteCacheTrim,
+  remoteCacheNote,
+  type RemoteCacheDiscard,
+  type RemoteCacheDiscardCause,
+  type RemoteCacheTrim,
+} from './analytics-remote-cache-limit';
 import { readDashboardPreferences } from './dashboard-preferences';
 import { runBounded } from '../usage/collector-concurrency';
 import { localClaudeLogNames, type ClaudeLogNames } from './analytics-claude-log-names';
@@ -287,10 +297,14 @@ interface RemoteCache {
   discovery?: AnalyticsRemoteDiscovery;
   /** When `discovery.tools` was read. */
   toolsAt?: string;
-  /** Identity evidence per session key (full hash, reported cwd), bounded. */
+  /** Identity evidence per session key (full hash, inferred cwd), bounded. */
   sessions?: Record<string, AnalyticsSessionEvidence>;
   /** Which reader answered last (`python-fallback:<cause>` when the scanner did not). */
   reader?: string | null;
+  /** Why the cache saved before this one was discarded at load; kept until a complete read. */
+  discarded?: RemoteCacheDiscard;
+  /** Usage dropped to keep this cache under its limit; named while the cut is in range. */
+  trimmed?: RemoteCacheTrim;
 }
 
 function cacheFile(cacheDir: string, host: AnalyticsRemoteHost): string {
@@ -301,9 +315,23 @@ function blankCache(): RemoteCache {
   return { version: CACHE_VERSION, fingerprints: {}, rows: [], srows: [], lastScanAt: null };
 }
 
-function loadCache(file: string): RemoteCache {
+/**
+ * A host's saved cache. A missing file is a first scan; a file over the limit, unreadable or of an
+ * unknown shape is discarded with its cause, so the page says why the computer is read from the start.
+ */
+function loadCache(file: string, at: () => string = () => new Date().toISOString()): RemoteCache {
+  const discard = (cause: RemoteCacheDiscardCause): RemoteCache => ({
+    ...blankCache(),
+    discarded: { cause, at: at() },
+  });
+  let size: number;
   try {
-    if (fs.statSync(file).size > 8 * 1024 * 1024) return blankCache();
+    size = fs.statSync(file).size;
+  } catch {
+    return blankCache();
+  }
+  if (size > MAX_REMOTE_CACHE_BYTES) return discard('cache_oversize');
+  try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Omit<RemoteCache, 'version'> & {
       version: number;
     };
@@ -320,7 +348,9 @@ function loadCache(file: string): RemoteCache {
       (value.lastScanAt !== null && typeof value.lastScanAt !== 'string') ||
       (value.settled !== undefined && typeof value.settled !== 'boolean')
     )
-      return blankCache();
+      return discard('cache_format');
+    value.discarded = parseRemoteCacheDiscard(value.discarded);
+    value.trimmed = parseRemoteCacheTrim(value.trimmed);
     // Discovery, evidence and the reader label are diagnostics: damaged entries are dropped.
     value.discovery = parseAnalyticsDiscovery(value.discovery);
     value.sessions = parseAnalyticsSessions(value.sessions);
@@ -372,21 +402,102 @@ function loadCache(file: string): RemoteCache {
     }
     return { ...value, version: CACHE_VERSION };
   } catch {
-    return blankCache();
+    return discard('cache_unreadable');
   }
 }
 
-function saveCache(file: string, value: RemoteCache): void {
+/** Session evidence without working folders. */
+function withoutCwd(
+  sessions: Record<string, AnalyticsSessionEvidence> | undefined
+): Record<string, AnalyticsSessionEvidence> | undefined {
+  if (!sessions) return sessions;
+  return Object.fromEntries(
+    Object.entries(sessions).map(([key, evidence]) => [key, { ...evidence, cwd: null }])
+  );
+}
+
+function writePrivate(file: string, body: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const body = JSON.stringify({
-    ...value,
-    rows: value.rows.slice(0, MAX_CACHED_ROWS),
-    srows: value.srows.slice(0, MAX_CACHED_ROWS),
-  });
   const temporary = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temporary, body, { mode: 0o600 });
   fs.renameSync(temporary, file);
   fs.chmodSync(file, 0o600);
+}
+
+/**
+ * Every save goes through here. With cwd capture off, no working folder is written, whatever the
+ * answer or the cache in memory held (a scan that started before the setting changed included).
+ * A cache over the limit the load enforces is trimmed to fit (see `fitRemoteCache`); returns what
+ * was written, or null when nothing fits (the last saved cache then stays).
+ */
+function saveCache(file: string, value: RemoteCache): RemoteCache | null {
+  let saved: RemoteCache = {
+    ...value,
+    rows: value.rows.slice(0, MAX_CACHED_ROWS),
+    srows: value.srows.slice(0, MAX_CACHED_ROWS),
+  };
+  if (!readAnalyticsCaptureSettings().cwd) saved.sessions = withoutCwd(saved.sessions);
+  let body = JSON.stringify(saved);
+  if (Buffer.byteLength(body) > MAX_REMOTE_CACHE_BYTES) {
+    const fitted = fitRemoteCache(saved, new Date().toISOString());
+    if (!fitted) return null;
+    saved = fitted;
+    body = JSON.stringify(saved);
+  }
+  writePrivate(file, body);
+  return saved;
+}
+
+/**
+ * Turning cwd capture off removes the working folders already saved, not only new ones: every
+ * host's cache is rewritten without them. A cache the loader would discard anyway (over the limit
+ * or unreadable) is removed, since it may hold folders too. Returns how many folders were cleared
+ * and how many such caches were removed.
+ */
+export function clearAnalyticsRemoteCwds(cacheDir: string = path.join(getCcsDir(), 'cache')): {
+  folders: number;
+  caches: number;
+} {
+  let cleared = 0;
+  let removed = 0;
+  for (const host of REMOTE_ANALYTICS_HOSTS) {
+    const file = cacheFile(cacheDir, host);
+    let size: number;
+    try {
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile()) continue;
+      size = stat.size;
+    } catch {
+      continue;
+    }
+    let value: unknown = null;
+    if (size <= MAX_REMOTE_CACHE_BYTES)
+      try {
+        value = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch {
+        value = null;
+      }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      fs.rmSync(file, { force: true });
+      removed++;
+      continue;
+    }
+    const sessions = (value as { sessions?: unknown }).sessions;
+    if (!sessions || typeof sessions !== 'object') continue;
+    let changed = 0;
+    for (const evidence of Object.values(sessions as Record<string, unknown>))
+      if (evidence && typeof evidence === 'object') {
+        const item = evidence as { cwd?: unknown };
+        if (item.cwd !== null && item.cwd !== undefined) {
+          item.cwd = null;
+          changed++;
+        }
+      }
+    if (!changed) continue;
+    writePrivate(file, JSON.stringify(value));
+    cleared += changed;
+  }
+  return { folders: cleared, caches: removed };
 }
 
 function hourEpoch(hour: string): number {
@@ -545,6 +656,21 @@ function standingFailure(
   return last && stopped(last) && (!read || Date.parse(last.at) > Date.parse(read))
     ? last
     : undefined;
+}
+
+/** A host's cells with what its cache says about itself (discarded at load, or trimmed to fit). */
+function withCacheNote(
+  states: AnalyticsRemoteSourceState[],
+  cache: Pick<RemoteCache, 'discarded' | 'trimmed'>,
+  minDateMs: number
+): AnalyticsRemoteSourceState[] {
+  const note = remoteCacheNote(cache.discarded, cache.trimmed, minDateMs);
+  if (!note) return states;
+  return states.map((state) =>
+    REMOTE_KIND_NAMES.has(state.tool)
+      ? { ...state, detail: state.detail ? `${state.detail}; ${note}` : note }
+      : state
+  );
 }
 
 /**
@@ -729,7 +855,7 @@ export function loadAnalyticsRemoteCachedSources(
     });
     const part = cachedHostSources(host, cached, minDateMs, 'remote scan timed out');
     results.push(...part.results);
-    states.push(...part.states);
+    states.push(...withCacheNote(part.states, cached, minDateMs));
     states.push(...noReaderStates(host, cached.discovery?.tools, cached.toolsAt ?? null));
   }
   const reconcileClaudeMirrors = mirrorReconciler(
@@ -939,12 +1065,15 @@ export async function loadAnalyticsRemoteSources(
   const states: AnalyticsRemoteSourceState[] = [];
   const jobs: Array<Promise<void>> = [];
   const parts = new Map<AnalyticsRemoteHost, HostRows>();
+  // What each host's cache says about itself, named on its cells once every host is done.
+  const cacheMarks = new Map<AnalyticsRemoteHost, Pick<RemoteCache, 'discarded' | 'trimmed'>>();
   for (const host of REMOTE_ANALYTICS_HOSTS) {
     jobs.push(
       (async (): Promise<void> => {
         const allKinds = REMOTE_TARGETS[host];
         const file = cacheFile(cacheDir, host);
-        const cached = loadCache(file);
+        const cached = loadCache(file, () => new Date(now()).toISOString());
+        cacheMarks.set(host, cached);
         // A successful disk answer remains authoritative across process restarts.
         // Each kind has its own last scan; one recent kind cannot hide an old one.
         const recentKinds = allKinds.filter((kind) => {
@@ -1165,8 +1294,19 @@ export async function loadAnalyticsRemoteSources(
         for (const source of [response.sessions ?? {}, cached.sessions ?? {}])
           for (const [key, evidence] of Object.entries(source))
             if (keptKeys.has(key) && !(key in sessions)) sessions[key] = evidence;
+        const settled =
+          !olderClaude &&
+          cutKinds.size === 0 &&
+          failedKinds.size === 0 &&
+          kinds.every(
+            (tool) =>
+              response.kinds[tool]?.state !== 'pending' &&
+              response.kinds[tool]?.state !== 'error' &&
+              response.kinds[tool]?.partial !== true &&
+              !(tool === 'antigravity' && response.kinds[tool]?.unreadable)
+          );
         try {
-          saveCache(file, {
+          const saved = saveCache(file, {
             version: CACHE_VERSION,
             fingerprints: prints,
             rows: merged,
@@ -1188,18 +1328,14 @@ export async function loadAnalyticsRemoteSources(
                   },
                 }
               : {}),
-            settled:
-              !olderClaude &&
-              cutKinds.size === 0 &&
-              failedKinds.size === 0 &&
-              kinds.every(
-                (tool) =>
-                  response.kinds[tool]?.state !== 'pending' &&
-                  response.kinds[tool]?.state !== 'error' &&
-                  response.kinds[tool]?.partial !== true &&
-                  !(tool === 'antigravity' && response.kinds[tool]?.unreadable)
-              ),
+            settled,
+            // A discard is named until a complete read; a trim while its cut is in range.
+            ...(cached.discarded && !settled ? { discarded: cached.discarded } : {}),
+            ...(cached.trimmed && Date.parse(cached.trimmed.before) > minDateMs
+              ? { trimmed: cached.trimmed }
+              : {}),
           });
+          if (saved) cacheMarks.set(host, { ...saved, discarded: cached.discarded });
         } catch {
           /* Cache writes are best-effort; the rows are still served. */
         }
@@ -1345,6 +1481,16 @@ export async function loadAnalyticsRemoteSources(
     );
   }
   await Promise.all(jobs);
+  for (const [host, marks] of cacheMarks) {
+    const noted = withCacheNote(
+      states.filter((state) => state.host === host),
+      marks,
+      minDateMs
+    );
+    let next = 0;
+    for (let index = 0; index < states.length; index++)
+      if (states[index].host === host) states[index] = noted[next++];
+  }
   const reconcileClaudeMirrors = mirrorReconciler(
     parts,
     results,
