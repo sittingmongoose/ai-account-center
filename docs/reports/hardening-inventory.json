@@ -1,9 +1,9 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1399,
+    "totalOccurrences": 1402,
     "filesAffected": 140,
-    "hotpathOccurrences": 740,
+    "hotpathOccurrences": 743,
     "hotpathFilesAffected": 81,
     "topHotpathFiles": [
       {
@@ -76,7 +76,7 @@
       },
       {
         "file": "src/web-server/services/app-update-service.ts",
-        "count": 20,
+        "count": 23,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -84,6 +84,7 @@
           "openSync",
           "readFileSync",
           "renameSync",
+          "rmSync",
           "statSync",
           "unlinkSync",
           "writeFileSync"
@@ -783,7 +784,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 70,
+      "countOver400": 71,
       "countOver600": 29,
       "topOver400": [
         {

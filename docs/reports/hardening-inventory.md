@@ -6,9 +6,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1399 |
+| Sync fs occurrences (all) | 1402 |
 | Sync fs files affected (all) | 140 |
-| Sync fs occurrences (runtime hotpaths) | 740 |
+| Sync fs occurrences (runtime hotpaths) | 743 |
 | Sync fs files affected (runtime hotpaths) | 81 |
 | Legacy shim markers | 241 |
 | Legacy shim files affected | 80 |
@@ -21,7 +21,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/management/shared-manager/diverged-file-adopter.ts` | 29 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync |
 | `src/web-server/usage/analytics-request-plan.ts` | 28 | existsSync, realpathSync, statSync |
 | `src/management/shared-manager/migrations.ts` | 25 | copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, unlinkSync, writeFileSync |
-| `src/web-server/services/app-update-service.ts` | 20 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync |
+| `src/web-server/services/app-update-service.ts` | 23 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync |
 | `src/web-server/services/dashboard-preferences.ts` | 19 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync |
 | `src/web-server/services/usage-failover-cache.ts` | 19 | closeSync, fstatSync, lstatSync, mkdirSync, opendirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync |
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
@@ -59,7 +59,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | hotpath console.error/warn files | 18 |
 | files with createLogger | 46/514 |
 | subdomains with zero createLogger | 22 (antigravity, api, bin, channels, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, copilot, cursor, delegation, management, shared, status-native, targets, types) |
-| files > 400 LOC | 70 |
+| files > 400 LOC | 71 |
 | files > 600 LOC | 29 |
 
 ### Top Hotpath console.error/warn Files
