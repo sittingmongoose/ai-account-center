@@ -803,3 +803,50 @@ fn without_identity_every_row_is_unplaced_and_the_call_still_answers() {
     let answer = ops::dispatch("composeGroups", &fixture("scoreboard-view.json")).unwrap();
     assert!(answer.contains("\"views\""));
 }
+
+/// The foot's runs joined as the page draws them (one after another).
+fn foot_texts(view: &ViewIn) -> Vec<String> {
+    by_model(view)
+        .unwrap()
+        .views
+        .iter()
+        .map(|panel| panel.foot.iter().map(|run| run.text.as_str()).collect::<String>())
+        .collect()
+}
+
+#[test]
+fn the_foot_never_runs_two_sentences_together() {
+    // Review of 6baa2f370: "...Muse Wonder 1.0.Models in runs but not in the catalog:".
+    for text in foot_texts(&golden_view()) {
+        assert!(
+            text.contains("Muse Wonder 1.0. Models in runs but not in the catalog: example/example-1 (1 run)."),
+            "{text}"
+        );
+        assert!(
+            !text
+                .as_bytes()
+                .windows(2)
+                .any(|w| w[0] == b'.' && w[1].is_ascii_uppercase()),
+            "a sentence runs into the next: {text}"
+        );
+        assert!(!text.ends_with(' '), "{text:?}");
+    }
+    // With nothing outside the catalog the note ends at its last sentence, with no stray space.
+    let mut doc: Value = serde_json::from_str(&fixture("scoreboard-view.json")).unwrap();
+    edit_objects(&mut doc, &mut |map| {
+        if let Some(models) = map.get_mut("models").map(|value| value.as_array_mut().unwrap())
+            && let Some(sonnet) = models
+                .iter()
+                .find(|model| model.get("model").and_then(|m| m.as_str()) == Some("anthropic/claude-sonnet-5-5"))
+                .cloned()
+        {
+            let mut known = sonnet;
+            known["model"] = json!("example/example-1");
+            known["label"] = json!("Example One");
+            models.push(known);
+        }
+    });
+    for text in foot_texts(&serde_json::from_value(doc).unwrap()) {
+        assert!(text.ends_with("Muse Wonder 1.0."), "{text:?}");
+    }
+}

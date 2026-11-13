@@ -1621,7 +1621,13 @@ fn build_view(view: &ViewIn, id: &str, label: &str, short: &str, use_ids: &[&str
                 strong("No verdicts yet:"),
                 run(format!(" {}. ", no_verdict.join(", "))),
                 strong("In the catalog with no runs:"),
-                run(format!(" {}.", no_runs.join(", "))),
+                // A space after the sentence when another follows, so the page never runs two
+                // sentences together ("1.0.Models").
+                run(format!(
+                    " {}.{}",
+                    no_runs.join(", "),
+                    if unknown_models.is_empty() { "" } else { " " }
+                )),
             ],
             if unknown_models.is_empty() {
                 Vec::new()
