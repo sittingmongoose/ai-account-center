@@ -178,12 +178,10 @@ export function scrubText(value: string, lines = TAIL_LINES): string {
     .filter((line) => line.trim())
     .map((line) => line.slice(0, SCRUB_LINE_CHARS));
   let text = candidates.slice(-SCRUB_LINES).join('\n');
-  // eslint-disable-next-line no-control-regex
   text = text.replace(
     /\x1b\[[0-9;?]{0,32}[ -/]{0,8}[@-~]|\x1b\][^\x07\x1b\n]{0,512}(?:\x07|\x1b\\)?/g,
     ''
   );
-  // eslint-disable-next-line no-control-regex
   text = text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ' ');
   text = scrubPaths(text);
   for (const [pattern, replacement] of SECRET_PATTERNS) text = text.replace(pattern, replacement);
