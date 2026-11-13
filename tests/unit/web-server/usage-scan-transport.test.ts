@@ -244,8 +244,84 @@ describe.skipIf(process.platform === 'win32')('the hash-checked launcher (run fo
     expect(text).toContain('Get-FileHash -LiteralPath $p -Algorithm SHA256');
     expect(text.indexOf('Get-FileHash')).toBeLessThan(text.indexOf('& $p'));
     expect(text).not.toContain('[Console]::In');
+    // Fails closed (FIX-ROUND-BIG 14): 'Stop' before the check, the run only after `$verified`.
+    expect(text.startsWith("$ErrorActionPreference = 'Stop'")).toBe(true);
+    expect(text.indexOf('if ($verified -ne $true)')).toBeLessThan(text.indexOf('& $p'));
+    expect(text).toContain('PROCESSOR_ARCHITEW6432');
   });
 });
+
+/**
+ * The Windows launcher run by PowerShell itself (FIX-ROUND-BIG 14). The "scanner" is a copy of
+ * hostname.exe, which prints a line when it runs. With Get-FileHash made to fail (a non-terminating
+ * error and no object, or a throw) the launcher must exit BINARY_MISSING_EXIT and print nothing.
+ * At b09066667 the null hash threw inside the `if`, PowerShell went on to `& $p` and the copy ran.
+ */
+describe.skipIf(process.platform !== 'win32')(
+  'the Windows launcher fails closed (run for real)',
+  () => {
+    const run = (prefix: string) => {
+      const exe = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'HOSTNAME.EXE');
+      const body = fs.readFileSync(exe);
+      const local = path.join(dir, 'local');
+      const bin = path.join(local, 'ai-account-center', 'bin');
+      fs.mkdirSync(bin, { recursive: true });
+      const manifest: UsageScanManifest = {
+        dir,
+        version: '0.1.0',
+        protocol: 3,
+        targets: {
+          'x86_64-pc-windows-msvc': { file: 'x.exe', sha256: sha(body), size: body.length },
+        },
+      };
+      fs.writeFileSync(path.join(bin, remoteName('x86_64-pc-windows-msvc', sha(body))), body);
+      const encoded = scanCommand('alexis', manifest).split(' ').pop() ?? '';
+      const script = `${prefix}${Buffer.from(encoded, 'base64').toString('utf16le')}`;
+      return spawnSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-EncodedCommand',
+          Buffer.from(script, 'utf16le').toString('base64'),
+        ],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, LOCALAPPDATA: local, PROCESSOR_ARCHITECTURE: 'AMD64' },
+          timeout: 60_000,
+        }
+      );
+    };
+
+    it('runs the copy when its hash matches (control)', () => {
+      const ok = run('');
+      expect(ok.status).toBe(0);
+      expect(ok.stdout.trim().length).toBeGreaterThan(0);
+    });
+
+    it('runs nothing when Get-FileHash gives no object', () => {
+      const failed = run(
+        "function Get-FileHash { Write-Error 'simulated hash failure'; return $null }; "
+      );
+      expect(failed.status).toBe(BINARY_MISSING_EXIT);
+      expect(failed.stdout.trim()).toBe('');
+      expect(binaryMarker(failed.status, failed.stderr)).toEqual({
+        missing: 'x86_64-pc-windows-msvc',
+      });
+    });
+
+    it('runs nothing when Get-FileHash throws or answers another hash', () => {
+      const thrown = run("function Get-FileHash { throw 'simulated lock' }; ");
+      expect(thrown.status).toBe(BINARY_MISSING_EXIT);
+      expect(thrown.stdout.trim()).toBe('');
+      const other = run(
+        "function Get-FileHash { [pscustomobject]@{ Hash = 'AB' + ('0' * 62) } }; "
+      );
+      expect(other.status).toBe(BINARY_MISSING_EXIT);
+      expect(other.stdout.trim()).toBe('');
+    });
+  }
+);
 
 describe('copying the scanner to a computer', () => {
   const steps = (codes: Array<number | null>, stdout: string[] = []) => {

@@ -140,16 +140,25 @@ function quoteShell(value: string): string {
 export function scanCommand(platform: AnalyticsRemoteHost, manifest: UsageScanManifest): string {
   if (HOST_OS[platform] === 'windows') {
     const entry = manifest.targets['x86_64-pc-windows-msvc'];
+    // Fails closed (FIX-ROUND-BIG 14): every step before the run is under 'Stop' inside one try, and
+    // the binary runs only when `$verified` was set after a hash that was computed and matched. A
+    // hash that cannot be computed (a locked file, a missing module) is a mismatch, never a pass.
+    // 32-bit PowerShell on 64-bit Windows says x86 in PROCESSOR_ARCHITECTURE and AMD64 in
+    // PROCESSOR_ARCHITEW6432 (FIX-ROUND-BIG 17).
     const lines = [
-      "$ErrorActionPreference = 'Continue'",
+      "$ErrorActionPreference = 'Stop'",
       "$ProgressPreference = 'SilentlyContinue'",
-      "$dir = Join-Path $env:LOCALAPPDATA 'ai-account-center\\bin'",
+      '$verified = $false',
+      "$t = 'x86_64-pc-windows-msvc'",
+      '$arch = if ($env:PROCESSOR_ARCHITEW6432) { [string]$env:PROCESSOR_ARCHITEW6432 } else { [string]$env:PROCESSOR_ARCHITECTURE }',
       entry
-        ? `if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') { $p = Join-Path $dir '${remoteName('x86_64-pc-windows-msvc', entry.sha256)}'; $h = '${entry.sha256}'; $t = 'x86_64-pc-windows-msvc' } else { $p = $null }`
-        : '$p = $null',
-      `if (-not $p) { [Console]::Error.WriteLine('aac-helper: binary_unavailable:windows-' + $env:PROCESSOR_ARCHITECTURE); exit ${BINARY_MISSING_EXIT} }`,
-      `if (-not (Test-Path -LiteralPath $p)) { [Console]::Error.WriteLine('aac-helper: binary_missing:' + $t); exit ${BINARY_MISSING_EXIT} }`,
-      `if ((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower() -ne $h) { [Console]::Error.WriteLine('aac-helper: binary_missing:' + $t); exit ${BINARY_MISSING_EXIT} }`,
+        ? `if ($arch -ne 'AMD64') { [Console]::Error.WriteLine('aac-helper: binary_unavailable:windows-' + $arch); exit ${BINARY_MISSING_EXIT} }`
+        : `[Console]::Error.WriteLine('aac-helper: binary_unavailable:windows-' + $arch); exit ${BINARY_MISSING_EXIT}`,
+      `$h = '${entry?.sha256 ?? ''}'`,
+      `try { $p = Join-Path (Join-Path $env:LOCALAPPDATA 'ai-account-center\\bin') '${entry ? remoteName('x86_64-pc-windows-msvc', entry.sha256) : ''}'; if (Test-Path -LiteralPath $p -PathType Leaf) { $got = [string](Get-FileHash -LiteralPath $p -Algorithm SHA256 -ErrorAction Stop).Hash; if ($got -and $h -and ($got.ToLowerInvariant() -eq $h)) { $verified = $true } } } catch { $verified = $false }`,
+      `if ($verified -ne $true) { [Console]::Error.WriteLine('aac-helper: binary_missing:' + $t); exit ${BINARY_MISSING_EXIT} }`,
+      // The scanner's own stderr and exit code pass through as before.
+      "$ErrorActionPreference = 'Continue'",
       // No pipeline input: the scanner inherits the ssh session's stdin and reads the request itself.
       '& $p',
       'exit $LASTEXITCODE',
