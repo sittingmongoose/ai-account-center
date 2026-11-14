@@ -136,7 +136,8 @@ describe('AI Account Center CLI', () => {
       const result = runCli(['codex-auth', command, 'saved']);
       expect(result.status).toBe(1);
       expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('codex-auth activate <saved-login>');
+      expect(result.stderr).toContain(`codex-auth ${command} is retired`);
+      expect(result.stderr).toContain('Account switching was removed');
       expect(result.stderr).toContain('No CODEX_HOME exports');
     }
   });

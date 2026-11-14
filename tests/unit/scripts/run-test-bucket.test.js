@@ -44,7 +44,7 @@ describe('run-test-bucket', () => {
   test('discovers colocated backend tests under src', () => {
     const discovered = bucket.getDiscoveredTests();
 
-    expect(discovered).toContain('src/cliproxy/types/__tests__/types-backward-compat.test.ts');
+    expect(discovered).toContain('src/config/__tests__/retired-sections.test.ts');
   });
 
   test('passes selected tests to Bun as explicit relative paths', () => {
