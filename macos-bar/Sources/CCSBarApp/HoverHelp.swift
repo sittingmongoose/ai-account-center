@@ -186,7 +186,7 @@ final class HelpPresenter {
   private var clickMonitor: Any?
   /// A click or key press closed the tag: it stays closed until the pointer leaves the view.
   private var dismissed = false
-  /// The tag's text. A tag already on screen follows a change at once (a refresh, an auto-switch or a new
+  /// The tag's text. A tag already on screen follows a change at once (a refresh, a new active login or a new
   /// Show or Value choice while it is up), so it never keeps naming an account the panel no longer shows.
   var text = "" {
     didSet {

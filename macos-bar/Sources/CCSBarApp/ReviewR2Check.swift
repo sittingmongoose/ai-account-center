@@ -15,14 +15,12 @@ enum ReviewR2Check {
           "source": "Fixture", "status": hidden ? "unavailable" : "ok", "isActive": false,
           "trayHidden": hidden, "sampledAt": "2026-10-15T12:00:00Z",
           "windows": [["key": "gemini-5h", "label": "Gemini", "usedPercent": 20, "poolId": "watched"]],
-          "capabilities": ["antigravityProfileId": id, "antigravityHostIds": ["ubuntu"],
-            "antigravityCanActivate": true, "claudePlatforms": []]]
+          "capabilities": ["antigravityProfileId": id, "antigravityHostIds": ["ubuntu"], "claudePlatforms": []]]
       }
       func dashboard(_ accounts: [[String: Any]]) throws -> AccountDashboard {
         let object: [String: Any] = ["schemaVersion": 1, "updatedAt": "2026-10-15T12:00:00Z", "accounts": accounts,
           "codexAutoSwitch": ["enabled": false, "thresholdPercent": 5, "pollIntervalSeconds": 60,
-            "outcome": "disabled", "message": "", "activationInProgress": false],
-          "antigravityAutoSwitch": ["enabled": true, "thresholdUsedPercent": 95, "requestedPoolId": "watched"]]
+            "outcome": "disabled", "message": "", "activationInProgress": false]]
         return try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
       }
       let sample = try dashboard([account("shown"), account("hidden", hidden: true)])
@@ -30,9 +28,8 @@ enum ReviewR2Check {
       let (host, _, window) = PreviewRenderer.host(sample, options: PreviewRenderer.Options([]))
       defer { window.orderOut(nil) }
       let text = try PreviewRenderer.recognizedText(host).joined(separator: " ")
-      check(AlignmentProbe.frames["antigravity-auto|header"] != nil, "hidden second account keeps header controls")
-      check(AlignmentProbe.frames["meter|shown|gemini-5h|notch"] != nil, "hidden second account keeps watched-pool notch")
-      check(AlignmentProbe.frames["slot|activate-shown|label"] != nil || text.contains("Activate"), "hidden second account keeps Activate")
+      check(AlignmentProbe.frames["antigravity-auto|header"] == nil && AlignmentProbe.frames["meter|shown|gemini-5h|notch"] == nil
+        && !text.contains("Activate") && !text.contains("Auto-switch"), "no switch control, notch or Activate renders")
       check(!text.contains("hidden@example.com") && text.lowercased().contains("nas1"), "only shown rows render with host provenance")
 
       var pro = account("claude", provider: "claude")

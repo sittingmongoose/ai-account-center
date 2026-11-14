@@ -25,6 +25,7 @@ struct SectionLayout {
   var identity: CGFloat { provider == "antigravity" ? TrayMetrics.antigravityIdentityColumn : TrayMetrics.identityColumn }
   var gap: CGFloat { provider == "antigravity" ? TrayMetrics.antigravityColumnGap : TrayMetrics.columnGap }
   var slot: CGFloat { provider == "claude" ? TrayMetrics.claudeSlot : TrayMetrics.switchSlot }
+  /// Codex and Antigravity report which saved account is the live login; Claude does not.
   var switchable: Bool { provider != "claude" }
 
   static func make(_ provider: String, accounts: [DashboardAccount]) -> SectionLayout {
@@ -77,7 +78,12 @@ struct AccountRow: View {
             cell(column.key).frame(maxWidth: .infinity, alignment: .leading)
           }
         }
-        actions(palette).frame(width: layout.slot, alignment: layout.provider == "claude" ? .trailing : .leading)
+        // The slot keeps its width when it shows nothing (an inactive Codex row), so the meter columns never shift.
+        ZStack(alignment: layout.provider == "claude" ? .trailing : .leading) {
+          Color.clear.frame(width: layout.slot, height: 1)
+          actions(palette)
+        }
+        .frame(width: layout.slot, alignment: layout.provider == "claude" ? .trailing : .leading)
         // The disclosure chevron reserves a trailing column inside the row (the pattern the provider
         // rows already used), so it sits inside the hover highlight and the active row's platter
         // instead of overhanging the row's trailing edge, and the meters never move when it appears.
@@ -158,19 +164,13 @@ struct AccountRow: View {
       }
     case "codex":
       if let window = column == "5h" ? account.fiveHourWindow : account.weeklyWindow {
-        let used = Double(100) - (model.dashboard?.codexAutoSwitch.thresholdPercent ?? 5)
-        meter(window, notch: used, notchOpacity: notchOpacity(enabled: model.dashboard?.codexAutoSwitch.enabled == true))
+        meter(window)
       } else {
         Color.clear.frame(height: 1)
       }
     default:
       if let window = account.visibleWindows.first(where: { $0.key == column }) {
-        if let status = model.dashboard?.antigravityAutoSwitch, (model.dashboard?.antigravityAccountCount ?? 0) >= 2,
-          let pool = status.requestedPoolId, window.poolId == pool {
-          meter(window, notch: Double(status.thresholdUsedPercent), notchOpacity: notchOpacity(enabled: status.enabled))
-        } else {
-          meter(window)
-        }
+        meter(window)
       } else {
         missingCell(column)
       }
@@ -187,14 +187,9 @@ struct AccountRow: View {
       unavailableHelp: missing.help, hovered: rowHovered)
   }
 
-  private func notchOpacity(enabled: Bool) -> Double {
-    if !enabled { return 0.18 }
-    return account.isActive ? 1 : 0.4
-  }
-
-  private func meter(_ window: AccountQuotaWindow, notch: Double? = nil, notchOpacity: Double = 1) -> some View {
+  private func meter(_ window: AccountQuotaWindow) -> some View {
     let key = "\(account.id)|\(window.key)"
-    return MeterView(key: key, window: window, sampledAt: account.sampledAt, pendingReset: account.pendingReset(window), notch: notch, notchOpacity: notchOpacity, hovered: rowHovered,
+    return MeterView(key: key, window: window, sampledAt: account.sampledAt, pendingReset: account.pendingReset(window), hovered: rowHovered,
       motion: open.motion(key, block: block))
   }
 
@@ -203,17 +198,10 @@ struct AccountRow: View {
     case "claude":
       ClaudeOpenPair(model: model, account: account)
     case "codex":
+      // The live ~/.codex login on Ubuntu: a fact. Account switching was removed (2026-11-14).
       if account.isActive {
         ActiveLabel(platform: account.provenance, draw: open.activeAtOpen["codex"] != nil && open.activeAtOpen["codex"] != account.id,
           probe: "slot|active-\(account.id)")
-      } else if account.canActivate {
-        let switching = model.dashboard?.codexAutoSwitch.activationInProgress == true
-        ActivateButton(title: "Activate", busy: model.busyAction == account.id,
-          enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation && !switching,
-          help: switching ? "Codex is switching accounts automatically. Activate again when it finishes."
-            : "Make \(account.identity) the active Codex account on Ubuntu", id: "activate-\(account.id)") {
-          model.activate(account)
-        }
       }
     default:
       antigravityAction(palette)
@@ -228,21 +216,9 @@ struct AccountRow: View {
     } else if account.status == "needs_sign_in" {
       ActivateButton(title: "Finish setup", compact: true, help: "Finish the supervised login in the dashboard's Accounts and Settings",
         id: "finish-setup-\(account.id)") { model.openDashboard() }
-    } else if (model.dashboard?.antigravityAccountCount ?? 0) < 2 {
-      if !anyActive { NotReportedLabel() }
-    } else if model.dashboard?.canActivateAntigravity(account) == true {
-      let switching = model.dashboard?.antigravityAutoSwitch?.activationInProgress == true
-      ActivateButton(title: "Activate", busy: model.busyAction == account.id,
-        enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation
-          && model.dashboard?.canActivateAntigravity(account) == true,
-        help: switching ? "Antigravity is already switching accounts on Ubuntu. Activate again when it finishes."
-          : "Make \(account.identity) the active Antigravity account on Ubuntu", id: "activate-\(account.id)") {
-        model.activateAntigravity(account)
-      }
-    } else {
-      ActivateButton(title: "Activate", enabled: false,
-        help: "Antigravity switching is not available for this account on Ubuntu yet. The dashboard enables it once the runtime is verified.",
-        id: "activate-\(account.id)") {}
+    } else if sectionAccounts.count < 2 && !anyActive {
+      // With two or more accounts the section header says "Active account not reported yet".
+      NotReportedLabel()
     }
   }
 }
@@ -309,29 +285,19 @@ struct SectionHeader: View {
 
   var body: some View {
     withPalette { palette in
-      let multiAntigravity = layout.provider == "antigravity" && (model.dashboard?.antigravityAccountCount ?? 0) > 1
-      // Codex shows its auto-switch here, above its accounts, whenever the dashboard reports it —
-      // the same condition the footer cluster used, so no connected user loses the toggle.
-      let codexAuto = layout.provider == "codex" && model.dashboard?.codexAutoSwitch != nil
-      let headerAuto = multiAntigravity || codexAuto
+      // Several Antigravity accounts: the "<name> active" meta needs the whole first line, so the captions take a
+      // second line (the layout the auto-switch controls used before account switching was removed, 2026-11-14).
+      let twoLine = layout.provider == "antigravity" && accounts.count > 1
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: layout.gap) {
           HStack(spacing: 8) {
             ProviderMark(provider: layout.provider, size: 16).frame(width: TrayMetrics.markColumn)
             title(palette)
           }
-          .frame(width: headerAuto ? nil : TrayMetrics.markColumn + layout.gap + layout.identity, alignment: .leading)
-          if multiAntigravity {
-            Spacer(minLength: 8)
-            AntigravityAutoControls(model: model)
-          } else if codexAuto {
-            Spacer(minLength: 8)
-            CodexAutoControls(model: model)
-          } else {
-            captions(palette)
-          }
+          .frame(width: twoLine ? nil : TrayMetrics.markColumn + layout.gap + layout.identity, alignment: .leading)
+          if twoLine { Spacer(minLength: 8) } else { captions(palette) }
         }
-        if headerAuto {
+        if twoLine {
           HStack(spacing: layout.gap) {
             Color.clear.frame(width: TrayMetrics.markColumn + layout.gap + layout.identity, height: 1)
             captions(palette)
@@ -377,150 +343,6 @@ struct SectionHeader: View {
         .id(active.id)
     } else if accounts.count > 1 {
       Text("Active account not reported yet").font(.system(size: 12)).foregroundStyle(palette.label2)
-    }
-  }
-}
-
-/// Why Codex automatic switching is stuck, in plain words, above the Codex accounts.
-/// Visible only for blocked outcomes; healthy switching adds no line and changes no layout.
-/// The money case (paid credits burning) gets the warn tint; other blocks stay a quiet note.
-struct CodexAutoStatusLine: View {
-  @ObservedObject var model: AccountsViewModel
-
-  var body: some View {
-    withPalette { palette in
-      if let text = AccountFormatting.codexAutoStatusText(
-        status: model.dashboard?.codexAutoSwitch, accounts: model.dashboard?.accounts ?? [])
-      {
-        Text(verbatim: text)
-          .font(.system(size: 12))
-          .foregroundStyle(model.dashboard?.codexAutoSwitch.usingCredits == true ? palette.warnText : palette.label2)
-          .fixedSize(horizontal: false, vertical: true)
-          .padding(.leading, TrayMetrics.rowLeading)
-          .padding(.trailing, TrayMetrics.rowTrailing)
-          .padding(.top, 2)
-          .accessibilityIdentifier("codex-auto-status")
-      }
-    }
-  }
-}
-
-/// Antigravity's own auto-switch (thresholdUsedPercent, % used), shown once two accounts exist.
-struct AntigravityAutoControls: View {
-  @ObservedObject var model: AccountsViewModel
-
-  var body: some View {
-    withPalette { palette in
-      let status = model.dashboard?.antigravityAutoSwitch
-      let canToggle = status != nil && (status?.enabled == true || model.antigravityAutoCanEnable)
-        && model.busyAction == nil && !model.isRefreshing
-      HStack(spacing: 6) {
-        Toggle("Auto-switch", isOn: Binding(
-          get: { status?.enabled == true },
-          set: { model.toggleAntigravityAutomatic($0) }
-        ))
-        .toggleStyle(.switch).controlSize(.mini).tint(palette.accent)
-        .font(.system(size: 12.5))
-        .disabled(!canToggle)
-        .background(RowActionExclusion())
-        .hoverHelp(status == nil ? "Antigravity automatic switching status is unavailable"
-          : model.antigravityAutoCanEnable || status?.enabled == true
-            ? "Switch Antigravity accounts on Ubuntu automatically when the active one reaches the threshold"
-            : "Choose the shared quota pool in the dashboard first; then automatic switching can start here",
-          id: "antigravity-auto-switch")
-        ThresholdMenu(value: status?.thresholdUsedPercent ?? 95,
-          enabled: status != nil && model.busyAction == nil && !model.isRefreshing,
-          id: "antigravity-threshold") { model.setAntigravityThreshold(usedPercent: $0) }
-      }
-      .padding(.leading, 10).padding(.trailing, 4).frame(height: 30)
-      .glassControl()
-      .alignmentProbe("antigravity-auto|header")
-    }
-  }
-}
-
-/// Codex's auto-switch in the Codex section header, above its accounts: the footer cluster moved up
-/// and restyled exactly like Antigravity's — same toggle, threshold menu and explainer, same writes,
-/// hover tags and disabled states, only the placement and the pill styling changed.
-struct CodexAutoControls: View {
-  @ObservedObject var model: AccountsViewModel
-  @State private var showAutoInfo = false
-
-  var body: some View {
-    withPalette { palette in
-      let status = model.dashboard?.codexAutoSwitch
-      HStack(spacing: 6) {
-        Toggle("Auto-switch", isOn: Binding(
-          get: { status?.enabled == true },
-          set: { model.toggleAutomaticSwitching($0) }
-        ))
-        .toggleStyle(.switch).controlSize(.mini).tint(palette.accent)
-        .font(.system(size: 12.5))
-        .disabled(status == nil || model.busyAction != nil || model.isRefreshing)
-        .background(RowActionExclusion())
-        .hoverHelp("Switch Codex accounts on Ubuntu automatically when the active one reaches the threshold",
-          id: "codex-auto-switch")
-        .alignmentProbe("codex-auto|toggle")
-        ThresholdMenu(value: 100 - Int(status?.thresholdPercent ?? 5),
-          enabled: status != nil && model.busyAction == nil && !model.isRefreshing,
-          id: "codex-auto-threshold") { model.setAutomaticThreshold(usedPercent: $0) }
-          .alignmentProbe("codex-auto|threshold")
-        let info = { showAutoInfo = true }
-        Button(action: info) {
-          Image(systemName: "info.circle").font(.system(size: 14)).foregroundStyle(palette.label2)
-            .frame(width: 28, height: 28).contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .hoverHelp("How Codex auto-switch works", id: "codex-auto-info", action: info)
-        .dismissedByPanel($showAutoInfo)
-        .popover(isPresented: $showAutoInfo, arrowEdge: .top) {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("Codex automatic switching").font(.system(size: 13, weight: .semibold))
-            Text(status?.message ?? "").font(.system(size: 12.5)).fixedSize(horizontal: false, vertical: true)
-            Text("Switches at \(TrayFormat.number(100 - (status?.thresholdPercent ?? 5)))% used (\(TrayFormat.number(status?.thresholdPercent ?? 5))% left), checking every \(status?.pollIntervalSeconds ?? 60) seconds. Switching waits until Codex is idle. Claude accounts stay manual. The notch on each Codex meter marks the threshold.")
-              .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-          }
-          .padding(16).frame(width: 340)
-        }
-      }
-      .padding(.leading, 10).padding(.trailing, 4).frame(height: 30)
-      .glassControl()
-      .alignmentProbe("codex-auto|header")
-    }
-  }
-}
-
-/// "at 95%" with a chevron: the switch threshold, always shown as % used.
-struct ThresholdMenu: View {
-  let value: Int
-  var enabled = true
-  let id: String
-  let onSelect: (Int) -> Void
-
-  var body: some View {
-    withPalette { palette in
-      Menu {
-        ForEach(Array(Set([85, 90, 95, 98, value])).sorted(), id: \.self) { option in
-          Button {
-            onSelect(option)
-          } label: {
-            if option == value { Label("at \(option)% used", systemImage: "checkmark") } else { Text("at \(option)% used") }
-          }
-        }
-      } label: {
-        HStack(spacing: 3) {
-          Text("at").foregroundStyle(palette.label2)
-          Text("\(value)%").foregroundStyle(palette.label).monospacedDigit()
-          Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(palette.label2)
-        }
-        .font(.system(size: 12.5, weight: .medium))
-        .padding(.horizontal, 8).frame(height: 24)
-        .contentShape(Capsule())
-      }
-      .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-      .disabled(!enabled)
-      .background(RowActionExclusion())
-      .accessibilityIdentifier(id)
     }
   }
 }

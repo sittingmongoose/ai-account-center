@@ -312,7 +312,7 @@ enum PreviewRenderer {
   }
 
   /// Every icon control has a help tag equal to its accessibility label; every account and provider row is
-  /// one full-width Details target; nested controls (Open, Activate, packs, footer) are never the row.
+  /// one full-width Details target; nested controls (Open, Finish setup, packs, footer) are never the row.
   static func checkNativeTooltips(input: String) -> Never {
     do {
       let dashboard = try loadFixture(input)
@@ -321,13 +321,12 @@ enum PreviewRenderer {
       let visible = dashboard.visibleAccounts
       let sectionAccounts = visible.filter { ["claude", "codex", "antigravity"].contains($0.provider) }
       let otherGroups = dashboard.providerGroups.filter { !["claude", "codex", "antigravity"].contains($0.id) }
-      var expectedHelp = Set(["header-menu", "footer-dashboard", "footer-refresh", "footer-settings", "codex-auto-info"])
+      var expectedHelp = Set(["header-menu", "footer-dashboard", "footer-refresh", "footer-settings"])
       for account in visible where account.provider == "claude" && account.capabilities.claudeProfileId != nil {
         for platform in account.capabilities.claudePlatforms where ["mac", "windows"].contains(platform) {
           expectedHelp.insert("claude-\(platform)-\(account.id)")
         }
       }
-      for account in visible where account.provider == "codex" && account.canActivate { expectedHelp.insert("activate-\(account.id)") }
       if visible.contains(where: { $0.provider == "qwen" && !$0.creditPacks.isEmpty }) { expectedHelp.insert("qwen-packs") }
       let helpIDs = Set(help.map { $0.identifier?.rawValue ?? "" }.filter { !$0.isEmpty })
       let missingHelp = expectedHelp.subtracting(helpIDs).sorted()
@@ -474,19 +473,19 @@ enum PreviewRenderer {
   }
 
   /// Every rendered meter against its own track's laid-out width: a reading of X% fills exactly X% of
-  /// the track (±0.5 pt) starting at the track's edge, ticks sit at 25/50/75, and the notch sits at the
-  /// switch threshold. Meters with no reading render no fill and no notch.
+  /// the track (±0.5 pt) starting at the track's edge and ticks sit at 25/50/75. No meter draws a notch
+  /// (the switch-threshold notch went with account switching, 2026-11-14), and meters with no reading
+  /// render no fill.
   static func checkMeterGeometry(input: String) -> Never {
     do {
       let dashboard = try loadFixture(input)
       let hosted = host(dashboard, options: Options([]))
       defer { hosted.2.orderOut(nil) }
       var failures: [String] = []
-      var meters = 0, fills = 0, notches = 0, ticks = 0
+      var meters = 0, fills = 0, ticks = 0
       var trackWidths: [Double] = []
-      var maxFillError = 0.0, maxTickError = 0.0, maxNotchError = 0.0
+      var maxFillError = 0.0, maxTickError = 0.0
       let byID = Dictionary(uniqueKeysWithValues: dashboard.visibleAccounts.map { ($0.id, $0) })
-      let antigravityCount = dashboard.antigravityAccountCount
       for id in AlignmentProbe.frames.keys.sorted() where id.hasPrefix("meter|") && id.hasSuffix("|track") {
         guard let track = AlignmentProbe.frames[id] else { continue }
         // Meter keys join account and window ids with "|", as the pending-reset keys do.
@@ -498,20 +497,18 @@ enum PreviewRenderer {
         meters += 1
         trackWidths.append(Double(track.width))
         let fill = AlignmentProbe.frames["meter|\(key)|fill"]
-        let notchFrame = AlignmentProbe.frames["meter|\(key)|notch"]
         guard let window = account.visibleWindows.first(where: { $0.key == parts[1] }) else {
-          // Cells with no window behind them render a dashed track with no fill and no notch, never a
+          // Cells with no window behind them render a dashed track with no fill, never a
           // fake reading: the "Not reported yet" Fable cell, and an Antigravity column the account
           // does not report (the muted Weekly only / Not on plan / Unavailable cell).
           let windowless = (parts[1] == "seven_day_fable" && account.provider == "claude")
             || (account.provider == "antigravity" && TrayColumns.antigravityKeys.contains(parts[1]))
-          if windowless && fill == nil && notchFrame == nil { continue }
+          if windowless && fill == nil { continue }
           failures.append("\(key): no such window on \(account.id)"); continue
         }
         let target: Double? = account.pendingReset(window) == nil ? window.meterUsedPercent : nil
         guard let target else {
           if fill != nil { failures.append("\(key): no reading but a fill rendered") }
-          if notchFrame != nil { failures.append("\(key): no reading but a notch rendered") }
           continue
         }
         guard let fill else { failures.append("\(key): reading \(target)% but no fill rendered"); continue }
@@ -532,30 +529,12 @@ enum PreviewRenderer {
           maxTickError = max(maxTickError, tickError)
           if tickError > 0.5 { failures.append("\(key): tick \(mark) off by \(tickError) pt") }
         }
-        // The notch: every Codex cell, and Antigravity cells on the chosen pool with 2+ accounts.
-        let expectedNotch: Double? = {
-          if account.provider == "codex" { return 100 - dashboard.codexAutoSwitch.thresholdPercent }
-          if account.provider == "antigravity", antigravityCount >= 2,
-            let status = dashboard.antigravityAutoSwitch, let pool = status.requestedPoolId, window.poolId == pool {
-            return Double(status.thresholdUsedPercent)
-          }
-          return nil
-        }()
-        if let expectedNotch {
-          guard let notchFrame else { failures.append("\(key): notch missing"); continue }
-          notches += 1
-          let notchError = abs((notchFrame.midX - track.minX) - track.width * min(100, max(0, expectedNotch)) / 100)
-          maxNotchError = max(maxNotchError, notchError)
-          if notchError > 0.5 { failures.append("\(key): notch off by \(notchError) pt") }
-        } else if notchFrame != nil {
-          failures.append("\(key): unexpected notch rendered")
-        }
       }
       // A fixture with no meters (amounts only) passes vacuously; the counts say what was covered.
       let passed = failures.isEmpty
-      let result: [String: Any] = ["passed": passed, "meters": meters, "fills": fills, "notches": notches,
+      let result: [String: Any] = ["passed": passed, "meters": meters, "fills": fills,
         "ticks": ticks, "trackWidthMin": trackWidths.min() ?? 0, "trackWidthMax": trackWidths.max() ?? 0,
-        "maxFillErrorPt": maxFillError, "maxTickErrorPt": maxTickError, "maxNotchErrorPt": maxNotchError,
+        "maxFillErrorPt": maxFillError, "maxTickErrorPt": maxTickError,
         "failures": failures, "hiddenAppOwnedInspection": true,
         "desktopCaptureOrAutomation": false, "accountActionsInvoked": false]
       print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
@@ -612,71 +591,5 @@ enum PreviewRenderer {
       print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
       exit(passed ? 0 : 1)
     } catch { fputs("Menu-bar preference inspection failed.\n", stderr); exit(1) }
-  }
-
-  /// The Codex auto-switch placement: the toggle and its threshold sit in the Codex section header,
-  /// above the first Codex account and inside the Codex section, at Antigravity's pill height — and
-  /// no auto-switch control is left in the footer. The fixture needs Codex accounts and a
-  /// codexAutoSwitch status; with two Antigravity accounts it also checks the pill-height parity.
-  static func checkCodexAutoPlacement(input: String) -> Never {
-    do {
-      let dashboard = try loadFixture(input)
-      let hosted = host(dashboard, options: Options([]))
-      defer { hosted.2.orderOut(nil) }
-      var failures: [String] = []
-      func check(_ ok: Bool, _ message: String) { if !ok { failures.append(message) } }
-      func rect(_ frame: CGRect) -> [String: Double] {
-        ["x": Double(frame.minX), "y": Double(frame.minY), "width": Double(frame.width), "height": Double(frame.height)]
-      }
-      let frames = AlignmentProbe.frames
-      let codexIDs = dashboard.visibleAccounts.filter { $0.provider == "codex" }.map(\.id)
-      check(!codexIDs.isEmpty, "the fixture needs at least one visible Codex account")
-      // `codexAutoSwitch` is a required dashboard key: a fixture without one fails decoding, not this check.
-      guard let toggle = frames["codex-auto|toggle"], let threshold = frames["codex-auto|threshold"],
-        let pill = frames["codex-auto|header"]
-      else {
-        failures.append("the Codex auto-switch header controls did not render")
-        let passed = false
-        let result: [String: Any] = ["passed": passed, "failures": failures,
-          "hiddenAppOwnedInspection": true, "desktopCaptureOrAutomation": false, "accountActionsInvoked": false]
-        print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
-        exit(1)
-      }
-      let rows = codexIDs.compactMap { frames["row|\($0)"] }
-      check(rows.count == codexIDs.count, "every Codex row must render (\(rows.count) of \(codexIDs.count) did)")
-      if let firstTop = rows.map(\.minY).min() {
-        check(toggle.maxY <= firstTop + 0.5, "the toggle must sit above the first Codex account")
-        check(threshold.maxY <= firstTop + 0.5, "the threshold must sit above the first Codex account")
-      }
-      if let section = frames["section|codex"] {
-        check(toggle.minY >= section.minY - 0.5, "the toggle must sit inside the Codex section")
-        check(threshold.minY >= section.minY - 0.5, "the threshold must sit inside the Codex section")
-      } else {
-        failures.append("the Codex section did not render")
-      }
-      if let footer = frames["footer"] {
-        check(!toggle.intersects(footer), "no Codex auto-switch control may stay in the footer")
-        check(!threshold.intersects(footer), "no Codex threshold control may stay in the footer")
-        check(!pill.intersects(footer), "no Codex auto-switch pill may stay in the footer")
-      } else {
-        failures.append("the footer did not render")
-      }
-      check(abs(pill.height - 30) <= 0.5, "the Codex pill must match Antigravity's 30 pt header height")
-      var parity: [String: Any] = ["compared": false]
-      if let agPill = frames["antigravity-auto|header"] {
-        let gap = abs(pill.height - agPill.height)
-        check(gap <= 0.5, "the Codex and Antigravity pills must share one height")
-        parity = ["compared": true, "codexHeight": Double(pill.height), "antigravityHeight": Double(agPill.height)]
-      }
-      let passed = failures.isEmpty
-      let result: [String: Any] = [
-        "passed": passed, "failures": failures,
-        "toggle": rect(toggle), "threshold": rect(threshold),
-        "pillHeight": Double(pill.height), "codexRows": rows.count, "pillParity": parity,
-        "hiddenAppOwnedInspection": true, "desktopCaptureOrAutomation": false, "accountActionsInvoked": false,
-      ]
-      print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
-      exit(passed ? 0 : 1)
-    } catch { fputs("Codex auto-switch placement inspection failed.\n", stderr); exit(1) }
   }
 }

@@ -43,12 +43,6 @@
     </Setter.Value>
    </Setter>
   </Style>
-  <!-- Activate: accent text on a hairline accent border, sized to its label, 23 px padding inside the 1 px border. -->
-  <Style x:Key="AccentLineButton" TargetType="ButtonBase" BasedOn="{StaticResource AtlasButton}">
-   <Setter Property="Foreground" Value="{DynamicResource AccentText}" />
-   <Setter Property="BorderBrush" Value="{DynamicResource AccentLine}" />
-   <Setter Property="Tag" Value="{DynamicResource AccentSoft}" />
-  </Style>
   <Style x:Key="AtlasPrimaryButton" TargetType="ButtonBase" BasedOn="{StaticResource AtlasButton}">
    <Setter Property="Foreground" Value="{DynamicResource AccentInk}" />
    <Setter Property="Background" Value="{DynamicResource Accent}" />

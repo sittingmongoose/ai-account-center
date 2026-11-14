@@ -113,8 +113,6 @@ final class PanelController: NSObject, NSWindowDelegate {
     let panel = self.panel ?? makePanel()
     closing = false
     closeGeneration += 1
-    model.pendingCodexSwitch = nil
-    model.pendingAntigravitySwitch = nil
     state.settingsOpen = false
     state.panelHover.set(false)
     model.panelOpened()
@@ -150,9 +148,6 @@ final class PanelController: NSObject, NSWindowDelegate {
     // First: later refreshes store silently again (the confirmation clears below go quietly with them).
     model.panelOpen = false
     model.lastShown = model.currentReadings
-    // An unanswered switch confirmation ends with the panel, so background refresh resumes.
-    model.pendingCodexSwitch = nil
-    model.pendingAntigravitySwitch = nil
     removeDismissMonitors()
     statusItem.button?.highlight(false)
     if state.reduceMotion {
@@ -185,13 +180,11 @@ final class PanelController: NSObject, NSWindowDelegate {
   }
 
   /// Escape closes a popover first, then stops a running address check or pair (nothing is saved, and a key the
-  /// dashboard already issued is revoked), then closes Settings, then an unanswered switch confirmation, then the panel.
+  /// dashboard already issued is revoked), then closes Settings, then the panel.
   func cancel() {
     if popoverShown { state.popoverDismissal += 1 }
     else if model.signIn.active && model.signIn.cancelRunning() {}
     else if state.settingsOpen { state.setSettings(false) }
-    else if model.pendingCodexSwitch != nil { model.cancelCodexSwitch() }
-    else if model.pendingAntigravitySwitch != nil { model.cancelAntigravitySwitch() }
     else { close() }
   }
 

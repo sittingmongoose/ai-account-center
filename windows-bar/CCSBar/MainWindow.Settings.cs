@@ -152,10 +152,6 @@ public partial class MainWindow
         {
             var refresh = dashboard.Settings?.ValidatedInterval ?? 60;
             kv.Children.Add(Fact("Usage refresh", "Every " + (refresh < 120 ? refresh + " s" : Math.Round(refresh / 60.0) + " min"), true).Row);
-            var codex = dashboard.CodexAutoSwitch;
-            kv.Children.Add(Fact("Codex auto-switch", $"{(codex.Enabled ? "On" : "Off")} · switches at {Formatting.Percent(100 - codex.ThresholdPercent)} used · checks every {codex.PollIntervalSeconds} s").Row);
-            var ag = dashboard.AntigravityAutoSwitch;
-            kv.Children.Add(Fact("Antigravity auto-switch", ag is null ? "Not reported by this server" : $"{(ag.Enabled ? "On" : "Off")} · switches at {Formatting.Percent(ag.ThresholdUsedPercent)} used").Row);
             // The trays follow only "Show in tray"; "Show on dashboard" is the dashboard's own switch.
             var hidden = dashboard.Hidden.Select(provider => Formatting.ProviderName(provider)).ToList();
             var oneByOne = dashboard.TrayHiddenAccountCount;

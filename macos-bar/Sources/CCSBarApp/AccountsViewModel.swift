@@ -3,32 +3,6 @@ import AppKit
 import Combine
 import CCSBarCore
 
-struct PendingCodexSwitch: Identifiable {
-  let accountID: String
-  let profile: String
-  let identity: String
-  let confirmation: CodexSwitchConfirmation
-  var id: String { confirmation.token }
-  static let requiredWarning = "Stopping these programs interrupts active Codex work. AI Account Center will switch the account and restart the affected programs without replaying prompts."
-  /// The fixed warning, plus the server's own only when it says something else.
-  var warning: String {
-    let legacy = "Stopping these programs interrupts active Codex work. CCS will switch the account and restart the affected programs without replaying prompts."
-    return [legacy, Self.requiredWarning].contains(confirmation.warning)
-      ? Self.requiredWarning : "\(Self.requiredWarning)\n\n\(confirmation.warning)"
-  }
-  var processes: [CodexSwitchProcess] { confirmation.processes }
-}
-
-struct PendingAntigravitySwitch: Identifiable {
-  let accountID: String
-  let profile: String
-  let identity: String
-  let confirmation: AntigravitySwitchConfirmation
-  var id: String { confirmation.token }
-  var warning: String { AntigravitySwitchConfirmation.warning }
-  var processes: [CodexSwitchProcess] { confirmation.processes }
-}
-
 @MainActor
 final class AccountsViewModel: ObservableObject {
   /// The menu-bar label's own state, synced on every delivery (see `syncMenuBar`).
@@ -70,16 +44,6 @@ final class AccountsViewModel: ObservableObject {
   private(set) var lastSyncedAt: Date? {
     get { _lastSyncedAt }
     set { publish(); _lastSyncedAt = newValue }
-  }
-  private var _pendingCodexSwitch: PendingCodexSwitch?
-  var pendingCodexSwitch: PendingCodexSwitch? {
-    get { _pendingCodexSwitch }
-    set { publish(); _pendingCodexSwitch = newValue }
-  }
-  private var _pendingAntigravitySwitch: PendingAntigravitySwitch?
-  var pendingAntigravitySwitch: PendingAntigravitySwitch? {
-    get { _pendingAntigravitySwitch }
-    set { publish(); _pendingAntigravitySwitch = newValue }
   }
   /// Meter readings as they were when the panel last closed: a later open animates only what changed.
   var lastShown: [String: Double] = [:]
@@ -195,11 +159,7 @@ final class AccountsViewModel: ObservableObject {
   /// The sign-in screen shows in place of the list.
   var needsConnection: Bool { signIn.active }
 
-  var hasPendingConfirmation: Bool { pendingCodexSwitch != nil || pendingAntigravitySwitch != nil }
-
   func configure() {
-    pendingCodexSwitch = nil
-    pendingAntigravitySwitch = nil
     // A reload never resumes an Open: its progress lived only in memory.
     openProgress = [:]
     connected = false
@@ -254,8 +214,6 @@ final class AccountsViewModel: ObservableObject {
   /// A new key works and is saved (or, on a dashboard without pairing, a verified password): the list loads in.
   func didPair(flash: String) {
     connectionGeneration += 1
-    pendingCodexSwitch = nil
-    pendingAntigravitySwitch = nil
     openProgress = [:]
     connection = session.connection
     connected = false
@@ -303,8 +261,6 @@ final class AccountsViewModel: ObservableObject {
       dashboard = nil
       connected = false
       openProgress = [:]
-      pendingCodexSwitch = nil
-      pendingAntigravitySwitch = nil
       message = nil
       recordStatus(connected: false)
       syncMenuBar()
@@ -319,8 +275,6 @@ final class AccountsViewModel: ObservableObject {
     connectionGeneration += 1
     connection = session.connection
     openProgress = [:]
-    pendingCodexSwitch = nil
-    pendingAntigravitySwitch = nil
     message = nil
     if let restored = session.connection, restored.hasPassword {
       Task { await refresh() }
@@ -370,7 +324,7 @@ final class AccountsViewModel: ObservableObject {
   }
 
   /// Offline checks only: a preview tray takes a new dashboard the way a refresh delivers one (a forced refresh
-  /// at open, the refresh timer or a Codex auto-switch). Does nothing in the app.
+  /// at open or the refresh timer). Does nothing in the app.
   func previewReplace(_ value: AccountDashboard) {
     guard isPreview else { return }
     dashboard = value
@@ -378,7 +332,7 @@ final class AccountsViewModel: ObservableObject {
   }
 
   func refresh(force: Bool = false) async {
-    guard !isPreview, !isRefreshing, busyAction == nil, !hasPendingConfirmation, let client else { return }
+    guard !isPreview, !isRefreshing, busyAction == nil, let client else { return }
     let generation = connectionGeneration
     isRefreshing = true
     var replaced = false
@@ -460,8 +414,6 @@ final class AccountsViewModel: ObservableObject {
       "checkedAt": AccountFormatting.iso8601(Date()),
       "accountCount": dashboard?.accounts.count ?? 0,
       "providers": Array(Set(dashboard?.accounts.map(\.provider) ?? [])).sorted(),
-      "codexAutomaticEnabled": dashboard?.codexAutoSwitch.enabled as Any? ?? NSNull(),
-      "codexThresholdRemaining": dashboard?.codexAutoSwitch.thresholdPercent as Any? ?? NSNull(),
     ]
     do {
       try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]).write(to: file, options: .atomic)
@@ -480,125 +432,7 @@ final class AccountsViewModel: ObservableObject {
     return values
   }
 
-  // MARK: Codex
-
-  func activate(_ account: DashboardAccount) {
-    guard let profile = account.capabilities.codexProfile, dashboard?.canActivateCodex(account) == true else { return }
-    activateCodex(id: account.id, profile: profile, identity: account.identity)
-  }
-
-  func cancelCodexSwitch() { pendingCodexSwitch = nil }
-
-  func confirmCodexSwitch(_ offer: PendingCodexSwitch) {
-    pendingCodexSwitch = nil
-    guard offer.confirmation.isValid(for: offer.profile) else {
-      message = "The switching confirmation expired. Activate again to review the current programs."
-      return
-    }
-    activateCodex(id: offer.accountID, profile: offer.profile, identity: offer.identity,
-      confirmationToken: offer.confirmation.token)
-  }
-
-  private func activateCodex(id: String, profile: String, identity: String, confirmationToken: String? = nil) {
-    guard busyAction == nil, !hasPendingConfirmation, !isRefreshing, let client else { return }
-    busyAction = id
-    Task {
-      var succeeded = false
-      do {
-        try await client.activateCodex(profile: profile, confirmationToken: confirmationToken)
-        message = nil
-        succeeded = true
-      } catch BarClientError.codexConfirmation(let confirmation) {
-        pendingCodexSwitch = PendingCodexSwitch(accountID: id, profile: profile,
-          identity: identity, confirmation: confirmation)
-        message = nil
-      } catch { fail(error) }
-      busyAction = nil
-      if succeeded { await refresh() }
-    }
-  }
-
-  // MARK: Antigravity (Ubuntu runtime, the routes from 9cf75fbe)
-
-  func activateAntigravity(_ account: DashboardAccount) {
-    guard let profile = account.antigravityProfile, dashboard?.canActivateAntigravity(account) == true else { return }
-    runAntigravity(id: account.id, profile: profile, identity: account.identity, offer: nil)
-  }
-
-  func cancelAntigravitySwitch() { pendingAntigravitySwitch = nil }
-
-  func confirmAntigravitySwitch(_ offer: PendingAntigravitySwitch) {
-    pendingAntigravitySwitch = nil
-    guard offer.confirmation.isValid(for: offer.profile) else {
-      message = "This Antigravity confirmation expired. Activate again to review the running programs."
-      return
-    }
-    runAntigravity(id: offer.accountID, profile: offer.profile, identity: offer.identity, offer: offer.confirmation)
-  }
-
-  static let antigravityApprovalFailed = "The Antigravity switch could not complete. Click Activate again to review the running programs."
-
-  /// One Antigravity attempt. A reviewed approval is sent once: a fresh offer that comes back from it is
-  /// never adopted (it needs a new review), and an account other than the reviewed one is reported, as
-  /// the dashboard does. Any finished attempt refreshes, because the server may have changed state.
-  private func runAntigravity(id: String, profile: String, identity: String, offer approval: AntigravitySwitchConfirmation?) {
-    guard busyAction == nil, !hasPendingConfirmation, !isRefreshing, let client else { return }
-    busyAction = id
-    Task {
-      var succeeded = false
-      do {
-        if let approval {
-          let result = try await client.confirmAntigravity(profile: profile, confirmationToken: approval.token)
-          if let email = result.email, email.lowercased() != approval.email.lowercased() {
-            message = Self.antigravityApprovalFailed
-          } else {
-            message = nil
-            succeeded = true
-          }
-        } else {
-          try await client.activateAntigravity(profile: profile)
-          message = nil
-          succeeded = true
-        }
-      } catch BarClientError.antigravityConfirmation(let offer) {
-        if approval == nil {
-          pendingAntigravitySwitch = PendingAntigravitySwitch(accountID: id, profile: profile, identity: identity, confirmation: offer)
-          message = nil
-        } else {
-          message = Self.antigravityApprovalFailed
-        }
-      } catch { fail(error) }
-      busyAction = nil
-      // A consumed approval may have changed the Ubuntu runtime even when it failed; show the truth, but
-      // keep the failure text that a successful refresh would otherwise clear.
-      if pendingAntigravitySwitch == nil && (succeeded || approval != nil) {
-        let note = message
-        await refresh(force: succeeded)
-        if let note { message = note }
-      }
-    }
-  }
-
-  /// Enabling needs the quota pool chosen in the dashboard; the server revalidates every write.
-  var antigravityAutoCanEnable: Bool {
-    guard let status = dashboard?.antigravityAutoSwitch else { return false }
-    // Every Antigravity account counts, tray-hidden ones too: hiding one in the tray never stops switching.
-    return (dashboard?.antigravityAccountCount ?? 0) >= 2 && status.requestedPoolId != nil && status.activationInProgress != true
-  }
-
-  func toggleAntigravityAutomatic(_ enabled: Bool) {
-    guard dashboard?.antigravityAutoSwitch != nil, !enabled || antigravityAutoCanEnable else { return }
-    perform(id: "antigravity-automatic") { client in try await client.setAntigravityAutomaticSwitching(enabled: enabled) }
-  }
-
-  func setAntigravityThreshold(usedPercent: Int) {
-    guard dashboard?.antigravityAutoSwitch != nil, (1...99).contains(usedPercent) else { return }
-    perform(id: "antigravity-automatic") { client in
-      try await client.setAntigravityAutomaticSwitching(thresholdUsedPercent: usedPercent)
-    }
-  }
-
-  // MARK: Claude and Codex automatic switching
+  // MARK: Claude
 
   /// Claude "Open on Mac" and "Open on Windows". The POST goes out once with `Prefer: respond-async`; a 202 turns
   /// into a read-poll of the profile list whose progress the row shows, and a 200 is today's finished Open. The row's
@@ -606,7 +440,7 @@ final class AccountsViewModel: ObservableObject {
   func openClaude(_ account: DashboardAccount, platform: String = "mac") {
     guard account.provider == "claude", let profile = account.capabilities.claudeProfileId,
       account.capabilities.claudePlatforms.contains(platform), let client else { return }
-    guard openProgress[account.id]?.running != true, busyAction == nil, !hasPendingConfirmation else { return }
+    guard openProgress[account.id]?.running != true, busyAction == nil else { return }
     let key = account.id
     let generation = connectionGeneration
     openProgress[key] = ClaudeOpenProgress(platform: platform, text: ClaudeOpenFlow.starting, finished: false, opened: false)
@@ -649,33 +483,6 @@ final class AccountsViewModel: ObservableObject {
   private func report(key: String, generation: Int, _ value: ClaudeOpenProgress) {
     guard generation == connectionGeneration else { return }
     openProgress[key] = value
-  }
-
-  func toggleAutomaticSwitching(_ enabled: Bool) {
-    perform(id: "automatic") { client in try await client.setAutomaticSwitching(enabled: enabled) }
-  }
-
-  /// The trays always show % used; Codex stores the threshold as % remaining.
-  func setAutomaticThreshold(usedPercent: Int) {
-    guard dashboard?.codexAutoSwitch != nil, (1...99).contains(usedPercent) else { return }
-    perform(id: "automatic") { client in
-      try await client.setAutomaticSwitching(thresholdPercent: 100 - usedPercent)
-    }
-  }
-
-  private func perform(id: String, operation: @escaping (AccountsClient) async throws -> Void) {
-    guard busyAction == nil, !hasPendingConfirmation, let client else { return }
-    busyAction = id
-    Task {
-      var succeeded = false
-      do {
-        try await operation(client)
-        message = nil
-        succeeded = true
-      } catch { fail(error) }
-      busyAction = nil
-      if succeeded { await refresh() }
-    }
   }
 
   func openDashboard() {

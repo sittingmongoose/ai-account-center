@@ -357,15 +357,12 @@ struct AccountsMenuView: View {
   private func accountSection(_ accounts: [DashboardAccount], provider: String) -> some View {
     let layout = SectionLayout.make(provider, accounts: accounts)
     let activeID = accounts.first(where: \.isActive)?.id
-    // The header and its rows share one platter. The value animations sit outside the platter, as they did
-    // when it held only the rows, so it still grows with a switch confirmation; the header keeps its own
-    // unanimated update when the active account changes, as when it sat above the platter.
+    // The header and its rows share one platter. The value animation sits outside the platter, as it did
+    // when it held only the rows; the header keeps its own unanimated update when the active account
+    // changes, as when it sat above the platter.
     return VStack(alignment: .leading, spacing: 2) {
       SectionHeader(model: model, layout: layout, accounts: accounts)
         .animation(nil, value: activeID)
-      if provider == "codex" {
-        CodexAutoStatusLine(model: model)
-      }
       VStack(spacing: 0) {
         ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
           if index > 0 {
@@ -383,26 +380,12 @@ struct AccountsMenuView: View {
               }
             }
             .alignmentProbe("row|\(account.id)")
-          if let offer = model.pendingCodexSwitch, provider == "codex", offer.accountID == account.id {
-            SwitchConfirmView(product: "Codex", identity: offer.identity, processes: offer.processes, warning: offer.warning,
-              expiresAt: offer.confirmation.expiresAt, onCancel: model.cancelCodexSwitch,
-              onConfirm: { model.confirmCodexSwitch(offer) })
-              .transition(.opacity.combined(with: .move(edge: .top)))
-          }
-          if let offer = model.pendingAntigravitySwitch, provider == "antigravity", offer.accountID == account.id {
-            SwitchConfirmView(product: "Antigravity", identity: offer.identity, processes: offer.processes, warning: offer.warning,
-              expiresAt: offer.confirmation.expiresAt, onCancel: model.cancelAntigravitySwitch,
-              onConfirm: { model.confirmAntigravitySwitch(offer) })
-              .transition(.opacity.combined(with: .move(edge: .top)))
-          }
         }
       }
     }
     .alignmentProbe("section|\(provider)")
     .sectionPlatter()
     .animation(state.reduceMotion ? nil : .trayValue(duration: TrayMotion.platterDuration), value: activeID)
-    .animation(.trayValue(duration: 0.3), value: model.pendingCodexSwitch?.id)
-    .animation(.trayValue(duration: 0.3), value: model.pendingAntigravitySwitch?.id)
   }
 
   // MARK: Footer
@@ -414,7 +397,7 @@ struct AccountsMenuView: View {
           Text(model.signIn.footNote).font(.system(size: 12)).foregroundStyle(palette.label2)
             .contentTransition(.opacity)
         }
-        // The Codex auto-switch moved into the Codex section header; the footer's left side stays empty.
+        // The footer's left side stays empty while connected.
         Spacer(minLength: 8)
         if !model.needsConnection {
           let openDashboard = { model.openDashboard() }

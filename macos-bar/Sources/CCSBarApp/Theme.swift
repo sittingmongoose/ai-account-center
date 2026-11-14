@@ -312,7 +312,7 @@ extension View {
   }
 }
 
-/// The panel's request to close its popovers: Details, the Qwen packs and the auto-switch info.
+/// The panel's request to close its popovers: Details and the Qwen packs.
 private struct PopoverDismissalKey: EnvironmentKey { static let defaultValue = 0 }
 extension EnvironmentValues {
   var trayPopoverDismissal: Int {

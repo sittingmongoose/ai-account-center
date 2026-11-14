@@ -33,14 +33,13 @@ public partial class MainWindow : Window
     private AccountDashboard? dashboard;
     private readonly DispatcherTimer timer;
     private readonly Preferences preferences;
-    private bool busy, staleSample, settingsVisible, signInVisible, confirmationVisible, popupOpen, openedOnce, signInEntered;
+    private bool busy, staleSample, settingsVisible, signInVisible, popupOpen, openedOnce, signInEntered;
     private readonly HashSet<string> expanded = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Meter> meters = new(StringComparer.Ordinal);
     private readonly Dictionary<string, double?> shownAtHide = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Border> platters = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string?> platterFor = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FrameworkElement> activeRows = new(StringComparer.Ordinal);
-    private readonly HashSet<string> drawCheck = new(StringComparer.Ordinal);
     private DateTimeOffset lastFailure = DateTimeOffset.MinValue;
     private DateTime lastHidden = DateTime.MinValue;
     private string? statusFlash;
@@ -120,7 +119,7 @@ public partial class MainWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(SettingsButton, "Settings");
         PaintFade(); Theme.Changed += PaintFade;
         ContentScroll.ScrollChanged += (_, _) => UpdateFade();
-        Deactivated += (_, _) => { if (!confirmationVisible && !popupOpen && !signInVisible) HidePopup(); };
+        Deactivated += (_, _) => { if (!popupOpen && !signInVisible) HidePopup(); };
         PreviewKeyDown += OnPreviewKeyDown;
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
         // While the sign-in screen shows (Re-pair, Securing) the list is not polled behind it.
@@ -495,7 +494,7 @@ public partial class MainWindow : Window
         {
             renderFailed = true;
             staleSample = true;
-            AutoSwitchPanel.Content = null;
+            FooterNotePanel.Content = null;
             ContentPanel.Children.Clear();
             ContentPanel.Children.Add(Ui.Text("Usage could not be displayed. Try Refresh.", 12, "WarnText", wrap: true));
         }
@@ -662,14 +661,6 @@ public partial class MainWindow : Window
         return result;
     }
 
-    private bool AntigravitySwitchable(DashboardAccount[] accounts) => accounts.Length >= 2;
-
-    /// <summary>Every Antigravity account the dashboard reports, tray-hidden ones included: "Show in tray" only changes
-    /// what this panel lists, never what the user can operate, and the server keeps hidden accounts as auto-switch
-    /// candidates. Falls back to the given rows when no sample is loaded.</summary>
-    internal static DashboardAccount[] AllAntigravity(AccountDashboard? sample, DashboardAccount[] fallback) =>
-        sample?.Accounts.Where(account => account.Provider == "antigravity").ToArray() ?? fallback;
-
     /// <summary>The rows a provider's or an account's details may list: only the accounts shown in the tray.</summary>
     internal static DashboardAccount[] DetailAccounts(AccountDashboard sample, string provider) =>
         sample.ShownAccounts.Where(account => account.Provider == provider).ToArray();
@@ -680,13 +671,9 @@ public partial class MainWindow : Window
         var switchable = provider is "codex" or "antigravity";
         double acts = provider == "claude" ? 62 : 108;
         var stack = new StackPanel();
-        // Two Antigravity accounts get the auto-switch tools line, counting one hidden in the tray too: hiding it
-        // never takes away the switch the user can operate.
-        var multiAg = provider == "antigravity" && (AllAntigravity(dashboard, accounts).Length > 1 || dashboard?.AntigravityAutoSwitch?.Enabled == true);
-        // Codex shows the same tools in its header whenever the dashboard reports them: the footer cluster
-        // showed them for every connected user, so no account-count gate is added here.
-        var multiCodex = provider == "codex" && dashboard?.CodexAutoSwitch is not null;
-        var separate = multiAg || multiCodex;
+        // Account switching (Activate, auto-switch and its header tools) was removed on 2026-11-14. Several Antigravity
+        // accounts keep the two-line header: the "<name> active" meta needs the whole name line, captions go below.
+        var separate = provider == "antigravity" && accounts.Length > 1;
         stack.Children.Add(SectionHeader(provider, accounts, columns, acts, separateCaptions: separate));
         if (separate) stack.Children.Add(CaptionRow(columns, acts));
         var rowsGrid = new Grid { Margin = new Thickness(0, 0, 0, 0) };
@@ -711,11 +698,6 @@ public partial class MainWindow : Window
             if (switchable && account.IsActive) activeRows[provider] = row;
             if (expanded.Contains(account.Id)) rowsStack.Children.Add(DetailsHost(AccountDetails(provider, account, accounts), open: true));
         }
-        if (provider == "codex")
-        {
-            var autoStatus = CodexAutoStatus();
-            if (autoStatus is not null) stack.Children.Add(autoStatus);
-        }
         stack.Children.Add(rowsGrid);
         var card = Card(stack); card.Uid = "section:" + provider; card.Padding = new Thickness(0, 0, 0, 2);
         return card;
@@ -737,13 +719,12 @@ public partial class MainWindow : Window
         if (meta is not null) { meta.Margin = new Thickness(9, 0, 0, 0); meta.VerticalAlignment = VerticalAlignment.Bottom; meta.Padding = new Thickness(0, 0, 0, 1); identity.Children.Add(meta); }
         if (separateCaptions)
         {
-            // Auto-switch tools on the name line, captions on the next line: two Antigravity accounts, or Codex.
+            // The name line on its own, captions on the next line (several Antigravity accounts).
             var line = new DockPanel { Margin = new Thickness(12, 6, 10, 0), MinHeight = 22, LastChildFill = false };
             var head = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             // The mark sits centred in the grid's 22 px mark column and the name starts on the identity column (22 + 14).
             var mark2 = Ui.Mark(provider, 16); mark2.Margin = new Thickness(3, 0, 17, 0); head.Children.Add(mark2); head.Children.Add(identity);
             line.Children.Add(head);
-            var tools = provider == "codex" ? CodexTools() : AntigravityTools(accounts); DockPanel.SetDock(tools, Dock.Right); line.Children.Add(tools);
             return line;
         }
         Grid.SetColumn(identity, 2); grid.Children.Add(identity);
@@ -861,7 +842,7 @@ public partial class MainWindow : Window
             if (!account.IsMaxPlanAccount) return null; // Pro: no Fable cell
             var fable = column.Pick(account);
             if (fable is null) return ShowMeter(key, MeterKind.Compact, new MeterSpec(null, "Fable usage is not reported yet. It appears here as its own weekly window once the dashboard sends one.", NaText: "Not reported yet"));
-            return ShowMeter(key, MeterKind.Compact, CompactSpec(account, fable, null, 1));
+            return ShowMeter(key, MeterKind.Compact, CompactSpec(account, fable));
         }
         var window = column.Pick(account);
         if (window is null)
@@ -881,18 +862,7 @@ public partial class MainWindow : Window
             }
             return null; // no reported window, no cell
         }
-        double? notch = null; double notchOpacity = 1;
-        if (provider == "codex" && dashboard is not null)
-        {
-            notch = 100 - dashboard.CodexAutoSwitch.ThresholdPercent;
-            notchOpacity = !dashboard.CodexAutoSwitch.Enabled ? 0.18 : account.IsActive ? 1 : 0.4;
-        }
-        else if (provider == "antigravity" && dashboard?.AntigravityAutoSwitch is { } ag && ag.RequestedPoolId is not null && window.PoolId == ag.RequestedPoolId && AntigravitySwitchable(dashboard.Accounts.Where(a => a.Provider == "antigravity").ToArray()))
-        {
-            notch = ag.ThresholdUsedPercent;
-            notchOpacity = !ag.Enabled ? 0.18 : account.IsActive ? 1 : 0.4;
-        }
-        var meter = ShowMeter(key, MeterKind.Compact, CompactSpec(account, window, notch, notchOpacity));
+        var meter = ShowMeter(key, MeterKind.Compact, CompactSpec(account, window));
         meter.Margin = new Thickness(0, 0, 8, 0); // the 8 px overage gutter (a muted cell keeps none, set in MutedMeter)
         return meter;
     }
@@ -909,17 +879,17 @@ public partial class MainWindow : Window
         return meter;
     }
 
-    private static MeterSpec CompactSpec(DashboardAccount account, QuotaWindow window, double? notch, double notchOpacity)
+    private static MeterSpec CompactSpec(DashboardAccount account, QuotaWindow window)
     {
         if (Formatting.PendingReset(account, window) is DateTimeOffset reset) return PendingSpec(account, window, reset, MeterKind.Compact);
         var used = window.Unlimited || window.Enabled == false ? null : window.DisplayPercent;
         var na = window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : "Unavailable";
         // A retained (cached) window keeps its sample time in the tooltip; the compact row stays one line.
-        return new MeterSpec(used, MeterTip(account, window, notch), Reset: Formatting.ResetShort(window.ResetAt), ResetSoon: ResetSoon(window.ResetAt), Notch: notch, NotchOpacity: notchOpacity, NaText: na,
+        return new MeterSpec(used, MeterTip(account, window), Reset: Formatting.ResetShort(window.ResetAt), ResetSoon: ResetSoon(window.ResetAt), NaText: na,
             ResetFallbacks: Formatting.ResetFallbacks(window.ResetAt));
     }
 
-    /// <summary>F6: a reading from before its window's reset. No number, no fill, no notch and no amount: the meter is
+    /// <summary>F6: a reading from before its window's reset. No number, no fill and no amount: the meter is
     /// drawn as unavailable with "Reset at ... · new reading pending" (compact cells fit the longest form that fits;
     /// labelled and detail meters say "Pending" beside the label and give the reset under the track).</summary>
     private static MeterSpec PendingSpec(DashboardAccount account, QuotaWindow window, DateTimeOffset reset, MeterKind kind, string? label = null)
@@ -939,7 +909,7 @@ public partial class MainWindow : Window
 
     private static bool ResetSoon(string? reset) => DateTimeOffset.TryParse(reset, out var at) && at - Formatting.Now() < TimeSpan.FromHours(2) && at > Formatting.Now();
 
-    private static string MeterTip(DashboardAccount account, QuotaWindow window, double? notch)
+    private static string MeterTip(DashboardAccount account, QuotaWindow window)
     {
         var parts = new List<string> { Formatting.WindowLabel(account, window) };
         if (window.DisplayPercent is double used)
@@ -951,14 +921,13 @@ public partial class MainWindow : Window
         }
         else parts.Add(window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : "Unavailable: no reading, not zero");
         parts.Add(window.ResetAt is null ? "No reset reported" : Formatting.ResetLong(window.ResetAt));
-        if (notch is double at) parts.Add($"Notch: auto-switch at {Formatting.Percent(at)} used");
         if (window.Status == "cached") parts.Add("Cached · " + Formatting.WindowSample(window.SampledAt));
         else if (account.SampledAt is not null) parts.Add("Sampled " + Formatting.Relative(account.SampledAt));
         return string.Join(" · ", parts);
     }
 
-    /// <summary>The fixed action slot. Claude: the Open pair, right-aligned. Codex and Antigravity: Activate, or the
-    /// active label with no button chrome, its check in the button's 24 px leading space and "Active" on the label's x.</summary>
+    /// <summary>The fixed action slot. Claude: the Open pair, right-aligned. Codex and Antigravity: the active label
+    /// with no button chrome on the live login's row (account switching was removed on 2026-11-14).</summary>
     private FrameworkElement? ActionSlot(string provider, DashboardAccount account, DashboardAccount[] accounts)
     {
         if (provider == "claude")
@@ -981,18 +950,9 @@ public partial class MainWindow : Window
             }
             return pair;
         }
-        if (account.IsActive) return ActiveLabel(account, drawCheck.Remove(provider + ":" + account.Id));
-        if (provider == "codex")
-        {
-            if (!Formatting.IsSafeProfile(account.Capabilities.CodexProfile)) return null;
-            return ActivateButton(account, () => ActivateCodex(account), dashboard?.CodexAutoSwitch.ActivationInProgress == true,
-                () => dashboard?.CodexAutoSwitch.ActivationInProgress != true);
-        }
+        if (account.IsActive) return ActiveLabel(account, false);
+        if (provider == "codex") return null;
         // Antigravity
-        var switchable = AntigravitySwitchable(AllAntigravity(dashboard, accounts));
-        if (switchable && account.Capabilities.AntigravityCanActivate && Formatting.IsSafeId(account.Capabilities.AntigravityProfileId))
-            return ActivateButton(account, () => ActivateAntigravity(account), dashboard?.AntigravityAutoSwitch?.ActivationInProgress == true,
-                () => dashboard?.AntigravityAutoSwitch?.ActivationInProgress != true);
         if (accounts.Any(other => other.IsActive)) return null;
         return NotReportedLabel();
     }
@@ -1004,14 +964,6 @@ public partial class MainWindow : Window
         return account.SignInNeededPlatforms.Contains(platform)
             ? "Sign-in needed on " + name + ". Open shows the Claude sign-in window for " + (account.Email ?? account.Label) + "; sign in once on that computer."
             : "Open " + (account.Email ?? account.Label) + " in Claude on " + name;
-    }
-
-    private Button ActivateButton(DashboardAccount account, Func<Task> activate, bool inProgress, Func<bool>? gate = null)
-    {
-        var button = new Button { Style = (Style)FindResource("AccentLineButton"), Content = new TextBlock { Text = "Activate" }, Padding = new Thickness(24, 0, 24, 0), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, HorizontalContentAlignment = HorizontalAlignment.Left, IsEnabled = !inProgress, Uid = "mutation:activate", Tag = gate };
-        button.ToolTip = Ui.Tip("Make " + (account.Email ?? account.Label) + " the active " + Formatting.ProviderName(account.Provider) + " account");
-        button.Click += async (_, _) => await activate();
-        return button;
     }
 
     public static FrameworkElement ActiveLabel(DashboardAccount account, bool draw)
@@ -1219,7 +1171,7 @@ public partial class MainWindow : Window
             var used = window.Unlimited || window.Enabled == false ? null : window.DisplayPercent;
             var meter = ShowMeter(representative.Id + "|" + window.Key, MeterKind.Labeled, Formatting.PendingReset(representative, window) is DateTimeOffset pending
                 ? PendingSpec(representative, window, pending, MeterKind.Labeled, ShortLabel(provider, window))
-                : new MeterSpec(used, MeterTip(representative, window, null), Label: ShortLabel(provider, window),
+                : new MeterSpec(used, MeterTip(representative, window), Label: ShortLabel(provider, window),
                 Reset: window.ResetAt is null ? null : Formatting.ResetShort(window.ResetAt), ResetSoon: ResetSoon(window.ResetAt),
                 Amount: qwen || windows.Length == 1 ? AmountText(window) : null, NaText: window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : "Unavailable"));
             Grid.SetColumn(meter, 4 + 2 * i); grid.Children.Add(meter);
@@ -1287,7 +1239,7 @@ public partial class MainWindow : Window
             popupOpen = false;
             if (chevron?.RenderTransform is RotateTransform back) Motion.To(back, RotateTransform.AngleProperty, 0, 220);
             if (ReferenceEquals(openPopup, popup)) openPopup = null;
-            Dispatcher.BeginInvoke(new Action(() => { if (!IsActive && IsVisible && !confirmationVisible && !signInVisible) HidePopup(); }), DispatcherPriority.Background);
+            Dispatcher.BeginInvoke(new Action(() => { if (!IsActive && IsVisible && !signInVisible) HidePopup(); }), DispatcherPriority.Background);
         };
         popup.IsOpen = true;
     }
@@ -1431,7 +1383,7 @@ public partial class MainWindow : Window
                 if (window.Status == "cached") reset += " · cached " + Formatting.Relative(window.SampledAt);
                 var meter = ShowMeter("detail:" + account.Id + "|" + window.Key, MeterKind.Detail, Formatting.PendingReset(account, window) is DateTimeOffset pending
                     ? PendingSpec(account, window, pending, MeterKind.Detail, Formatting.WindowLabel(account, window))
-                    : new MeterSpec(used, MeterTip(account, window, null), Label: Formatting.WindowLabel(account, window), Reset: reset, Amount: AmountText(window),
+                    : new MeterSpec(used, MeterTip(account, window), Label: Formatting.WindowLabel(account, window), Reset: reset, Amount: AmountText(window),
                     NaText: window.Enabled == false ? "Disabled" : window.Unlimited ? "Unlimited" : "Unavailable"));
                 meter.Margin = new Thickness(0, i >= 2 ? 12 : 0, 8, 0);
                 Grid.SetRow(meter, i / 2); Grid.SetColumn(meter, i % 2 == 0 ? 0 : 2); grid.Children.Add(meter);
@@ -1546,103 +1498,16 @@ public partial class MainWindow : Window
         RefreshButton.IsEnabled = client is not null && !busy;
         if (unpaired)
         {
-            AutoSwitchPanel.Content = Ui.Text(SignInFootNote, 12, "Ink3", trim: true);
+            FooterNotePanel.Content = Ui.Text(SignInFootNote, 12, "Ink3", trim: true);
             return;
         }
         if (dashboard is null)
         {
-            AutoSwitchPanel.Content = Ui.Text("Loading accounts", 12, "Ink3");
+            FooterNotePanel.Content = Ui.Text("Loading accounts", 12, "Ink3");
             return;
         }
-        // The Codex auto-switch lives in the Codex section header now; the footer's left side stays empty.
-        AutoSwitchPanel.Content = null;
-    }
-
-    /// <summary>Codex's auto-switch in the Codex section header, above its accounts: the footer cluster moved up
-    /// and restyled exactly like Antigravity's — same toggle, threshold menu and explainer, same writes,
-    /// tooltips and disabled states, only the placement and the label changed.</summary>
-    private FrameworkElement CodexTools()
-    {
-        var status = dashboard!.CodexAutoSwitch;
-        var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        var toggle = new ToggleSwitch(status.Enabled, "Auto-switch", "Automatically switch Codex accounts when usage reaches the threshold and Codex is idle. Claude stays manual.") { Uid = "mutation:toggle" };
-        toggle.SetEnabled(!status.ActivationInProgress && !busy && !staleSample);
-        toggle.Tag = (Func<bool>)(() => !status.ActivationInProgress);
-        toggle.Toggled += async requested => await Action(async () => { if (client is not null) await client.SetAutoSwitch(requested); }, requested ? "Codex auto-switch is on." : "Codex auto-switch is off.");
-        row.Children.Add(toggle);
-        var currentUsed = 100 - (int)Math.Round(status.ThresholdPercent);
-        var drop = ThresholdDrop(currentUsed, "Codex switch threshold", used => Action(async () => { if (client is not null) await client.SetAutoSwitch(thresholdPercent: 100 - used); }, "Codex switch threshold updated."), () => !status.ActivationInProgress);
-        drop.Margin = new Thickness(10, 0, 4, 0); drop.IsEnabled = !status.ActivationInProgress && !busy && !staleSample;
-        row.Children.Add(drop);
-        var info = Ui.IconButton("info", "How Codex auto-switch works", 28, "BareIconButton", 16);
-        info.Click += (_, _) =>
-        {
-            var text = new StackPanel { MaxWidth = 340, Margin = new Thickness(8, 6, 8, 6) };
-            text.Children.Add(Ui.Text("Codex auto-switch", 12.5, "Ink", FontWeights.SemiBold));
-            var body = Ui.Text($"Checks every {status.PollIntervalSeconds} s and switches at {currentUsed}% used ({Formatting.Percent(status.ThresholdPercent)} left) once Codex is idle. Claude stays manual.", 12, "Ink2", wrap: true);
-            body.Margin = new Thickness(0, 4, 0, 0); text.Children.Add(body);
-            if (!string.IsNullOrWhiteSpace(status.Message) && status.Message.Length < 300) { var message = Ui.Text(status.Message, 12, "Ink3", wrap: true); message.Margin = new Thickness(0, 6, 0, 0); text.Children.Add(message); }
-            ShowPopup(Menus.Create(info, text, PlacementMode.Top, 260));
-        };
-        row.Children.Add(info);
-        return row;
-    }
-
-    private Button ThresholdDrop(int currentUsed, string name, Func<int, Task> choose, Func<bool>? gate = null)
-    {
-        var content = new StackPanel { Orientation = Orientation.Horizontal };
-        content.Children.Add(Ui.Text("at ", 12.5, "Ink3"));
-        var value = new TextBlock { Text = currentUsed + "%", FontSize = 12.5, FontWeight = FontWeights.Medium, Foreground = Theme.Brush("Ink") };
-        content.Children.Add(value);
-        var chevron = Icons.Icon("chevDown", 13, Theme.Brush("Ink3")); chevron.Margin = new Thickness(5, 0, 0, 0); chevron.RenderTransformOrigin = new Point(0.5, 0.5); chevron.RenderTransform = new RotateTransform();
-        content.Children.Add(chevron);
-        var drop = new Button { Style = (Style)FindResource("AtlasButton"), Content = content, Padding = new Thickness(9, 0, 7, 0), Uid = "mutation:drop", Tag = gate };
-        System.Windows.Automation.AutomationProperties.SetName(drop, name);
-        drop.Click += (_, _) =>
-        {
-            var list = new StackPanel();
-            Popup? popup = null;
-            foreach (var choice in new[] { 85, 90, 95, 98 }.Append(currentUsed).Distinct().OrderBy(x => x))
-                list.Children.Add(Menus.Item("at " + choice + "% used", choice == currentUsed, async () => { if (popup is not null) popup.IsOpen = false; if (choice != currentUsed) await choose(choice); }));
-            popup = Menus.Create(drop, list, PlacementMode.Top, 150);
-            ShowPopup(popup, chevron);
-        };
-        return drop;
-    }
-
-    /// <summary>Why Codex automatic switching is stuck, in plain words, above the Codex accounts.
-    /// Null unless the switch is enabled and blocked, so healthy switching adds no line.</summary>
-    private FrameworkElement? CodexAutoStatus()
-    {
-        var text = Formatting.CodexAutoStatusText(dashboard?.CodexAutoSwitch, dashboard?.Accounts);
-        if (text is null) return null;
-        var line = Ui.Text(text, 12, dashboard?.CodexAutoSwitch?.UsingCredits == true ? "WarnText" : "Ink3", wrap: true);
-        line.Margin = new Thickness(36, 2, 10, 0);
-        return line;
-    }
-
-    private FrameworkElement AntigravityTools(DashboardAccount[] accounts)
-    {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        var status = dashboard?.AntigravityAutoSwitch;
-        if (!AntigravitySwitchable(AllAntigravity(dashboard, accounts)) || status is null)
-        {
-            var off = new ToggleSwitch(status?.Enabled == true, "Auto-switch", "Switching moves between Antigravity accounts, so it starts once a second account is signed in.");
-            off.SetEnabled(false); row.Children.Add(off);
-            var note = Ui.Text(status is null ? "not reported by this server" : "starts with a second signed-in account", 12, "Ink3"); note.Margin = new Thickness(8, 0, 0, 0); note.VerticalAlignment = VerticalAlignment.Center;
-            row.Children.Add(note);
-            return row;
-        }
-        var toggle = new ToggleSwitch(status.Enabled, "Auto-switch", "Automatically switch Antigravity accounts at the threshold once Antigravity is idle.") { Uid = "mutation:toggle" };
-        toggle.SetEnabled(!status.ActivationInProgress && !busy && !staleSample && (status.Enabled || !string.IsNullOrWhiteSpace(status.RequestedPoolId)));
-        toggle.Tag = (Func<bool>)(() => !status.ActivationInProgress && (status.Enabled || !string.IsNullOrWhiteSpace(status.RequestedPoolId)));
-        toggle.Toggled += async requested => await Action(async () => { if (requested && string.IsNullOrWhiteSpace(status.RequestedPoolId)) return; if (client is not null) await client.SetAntigravityAutoSwitch(enabled: requested); }, requested ? "Antigravity auto-switch is on." : "Antigravity auto-switch is off.");
-        row.Children.Add(toggle);
-        var used = (int)Math.Round(status.ThresholdUsedPercent);
-        var drop = ThresholdDrop(used, "Antigravity switch threshold", value => Action(async () => { if (client is not null) await client.SetAntigravityAutoSwitch(thresholdUsedPercent: value); }, "Antigravity switch threshold updated."), () => !status.ActivationInProgress);
-        drop.Margin = new Thickness(10, 0, 0, 0); drop.IsEnabled = !status.ActivationInProgress && !busy && !staleSample;
-        row.Children.Add(drop);
-        return row;
+        // The footer's left side stays empty while connected.
+        FooterNotePanel.Content = null;
     }
 
     // ------------------------------------------------------------------ actions
@@ -1722,102 +1587,6 @@ public partial class MainWindow : Window
     /// <summary>The dashboard never answered: refused, name not resolved, or timed out.</summary>
     private static bool Unreachable(Exception error) => error is System.Net.Http.HttpRequestException or OperationCanceledException;
 
-    private async Task ActivateCodex(DashboardAccount account)
-    {
-        if (busy || staleSample || client is null) return;
-        var profile = account.Capabilities.CodexProfile!;
-        await Switch(account, "Checking running Codex programs", () => CodexSwitchFlow.Run(profile,
-            async token => { await client.Activate(profile, token); },
-            confirmation => Confirm("Codex", account, confirmation.Warning, confirmation.Processes, () => confirmation.Expired)));
-    }
-
-    private async Task ActivateAntigravity(DashboardAccount account)
-    {
-        if (busy || staleSample || client is null) return;
-        var profile = account.Capabilities.AntigravityProfileId!;
-        string? approvedEmail = null;
-        await Switch(account, "Checking running Antigravity programs", () => AntigravitySwitchFlow.Run(profile,
-            async token =>
-            {
-                var result = await client.ActivateAntigravity(profile, token);
-                if (!ValidAntigravityResult(result, profile, approvedEmail))
-                    throw new InvalidOperationException("The Antigravity switch could not be verified. Refresh and try again.");
-            },
-            confirmation =>
-            {
-                approvedEmail = confirmation.Email;
-                return Confirm("Antigravity", account, confirmation.Warning, confirmation.Processes, () => confirmation.Expired, confirmation.Email);
-            }));
-    }
-
-    internal static bool ValidAntigravityResult(System.Text.Json.JsonElement result, string profile, string? approvedEmail)
-    {
-        if (result.ValueKind != System.Text.Json.JsonValueKind.Object
-            || !result.TryGetProperty("status", out var status) || status.ValueKind != System.Text.Json.JsonValueKind.String || status.GetString() is not ("active" or "already-active")
-            || !result.TryGetProperty("profileId", out var id) || id.ValueKind != System.Text.Json.JsonValueKind.String || id.GetString() != profile
-            || !result.TryGetProperty("hostId", out var host) || host.ValueKind != System.Text.Json.JsonValueKind.String || host.GetString() != "ubuntu") return false;
-        if (!result.TryGetProperty("email", out var email) || email.ValueKind == System.Text.Json.JsonValueKind.Null) return true;
-        return email.ValueKind == System.Text.Json.JsonValueKind.String && AntigravityConfirmation.IsEmail(email.GetString())
-            && (approvedEmail is null || string.Equals(email.GetString(), approvedEmail, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private Task<bool> Confirm(string provider, DashboardAccount account, string warning, IReadOnlyList<CodexSwitchProcess> processes, Func<bool> expired, string? identity = null)
-    {
-        confirmationVisible = true;
-        try
-        {
-            var dialog = new SwitchConfirmDialog(provider, identity ?? account.Email ?? account.Label, warning, processes, expired) { Owner = this };
-            return Task.FromResult(dialog.ShowDialog() == true);
-        }
-        finally { confirmationVisible = false; }
-    }
-
-    private async Task Switch(DashboardAccount account, string checking, Func<Task<bool>> run)
-    {
-        if (client is null) return;
-        busy = true; DisableMutations();
-        statusFlash = checking; UpdateStatus();
-        try
-        {
-            if (!await run()) { statusFlash = "Switch cancelled. The " + Formatting.ProviderName(account.Provider) + " account was not changed."; return; }
-            drawCheck.Add(account.Provider + ":" + account.Id);
-            var sample = await client.Dashboard(false);
-            dashboard = sample; staleSample = false;
-            statusFlash = Formatting.ProviderName(account.Provider) + " switched to " + ShortName(account) + ".";
-        }
-        catch (Exception error)
-        {
-            if (error is DeviceSignedOutException { IsDeviceCode: true } signedOut) { busy = false; SignedOutRemotely(signedOut); return; }
-            statusFlash = DisplayError(error);
-            if (dashboard is not null) staleSample = true;
-        }
-        finally
-        {
-            FinishRequest();
-            ClearFlashLater();
-        }
-    }
-
-    private async Task Action(Func<Task> action, string success, bool refresh = true)
-    {
-        if (busy || staleSample && refresh || client is null) return;
-        busy = true; DisableMutations();
-        statusFlash = "Working"; UpdateStatus();
-        try
-        {
-            await action();
-            statusFlash = success;
-            if (refresh) { dashboard = await client.Dashboard(false); staleSample = false; }
-        }
-        catch (Exception error)
-        {
-            if (error is DeviceSignedOutException { IsDeviceCode: true } signedOut) { busy = false; SignedOutRemotely(signedOut); return; }
-            statusFlash = DisplayError(error);
-            if (refresh && dashboard is not null) staleSample = true;
-        }
-        finally { FinishRequest(); ClearFlashLater(); }
-    }
-
     private void ClearFlashLater()
     {
         var flash = statusFlash;
@@ -1828,7 +1597,7 @@ public partial class MainWindow : Window
 
     private void DisableMutations()
     {
-        foreach (var element in Descendants(ContentPanel).Concat(Descendants(AutoSwitchPanel)))
+        foreach (var element in Descendants(ContentPanel).Concat(Descendants(FooterNotePanel)))
         {
             if (element is Button button && button.Uid.StartsWith("mutation", StringComparison.Ordinal)) button.IsEnabled = false;
             if (element is ToggleSwitch toggle) toggle.SetEnabled(false);
@@ -1837,13 +1606,12 @@ public partial class MainWindow : Window
 
     /// <summary>Wakes the mutation controls a request disabled, without a rebuild (the closing half of a visible
     /// refresh's single pass, N6). Each control's own rule decides, so the states a rest must keep stay resting:
-    /// an Open in progress keeps its buttons off, an activation in progress keeps Activate, the auto-switch toggle
-    /// and the threshold drop off, and a stale sample keeps everything off until a fresh read. Controls built
-    /// without a gate (the tools shown before a second account exists) stay off, as they were built.</summary>
+    /// an Open in progress keeps its buttons off, and a stale sample keeps everything off until a fresh read.
+    /// Controls built without a gate stay off, as they were built.</summary>
     private void EnableMutations()
     {
         if (busy || staleSample) return;
-        foreach (var element in Descendants(ContentPanel).Concat(Descendants(AutoSwitchPanel)))
+        foreach (var element in Descendants(ContentPanel).Concat(Descendants(FooterNotePanel)))
         {
             if (element is Button { Tag: Func<bool> gate, IsEnabled: false } button
                 && button.Uid.StartsWith("mutation", StringComparison.Ordinal) && gate()) button.IsEnabled = true;

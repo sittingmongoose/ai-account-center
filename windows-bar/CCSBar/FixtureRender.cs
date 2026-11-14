@@ -15,9 +15,9 @@ namespace CCSBar;
 
 /// <summary>
 /// Offline render checks (--render-fixture DIR): the real panel drawn from the bundled sanitized fixture
-/// (example.com identities, captured 2026-10-01) in Light and Dark, with Settings, an expanded row and a switch.
-/// Measures the selected-row alignment rule: every check and "Active" must land on the Activate button's left edge
-/// and label x within 0.5 px, before and after a switch. Never connects anywhere and never changes an account.
+/// (example.com identities, captured 2026-10-01) in Light and Dark, with Settings, an expanded row and a new active
+/// login. Measures the selected-row alignment rule: the check and "Active" must land on the slot's leading edge and
+/// label x within 0.5 px, before and after the active login changes. Never connects anywhere and never changes an account.
 /// </summary>
 public static class FixtureRender
 {
@@ -64,21 +64,14 @@ public static class FixtureRender
             report.Checks[$"{name}_section_columns_and_names_aligned"] = Columns(window, measures, name);
             var codexSection = FindUid(window.ContentPanel, "section:codex");
             report.Checks[$"{name}_codex_header_has_no_active_meta"] = codexSection is not null && FindUid(codexSection, "section-meta") is null;
-            // The Codex auto-switch moved from the footer into the Codex section header: its toggle and
-            // threshold sit above the first Codex account and inside the Codex section, and the footer
-            // keeps no auto-switch control.
-            var codexTools = codexSection is null ? null : FindUid(codexSection, "mutation:toggle");
-            var codexDrop = codexSection is null ? null : FindUid(codexSection, "mutation:drop");
-            var codexFirstRow = FindUid(window.ContentPanel, "row:codex:example-1");
-            report.Checks[$"{name}_codex_auto_in_section_header"] = codexSection is not null && codexTools is ToggleSwitch && codexDrop is Button && codexFirstRow is not null
-                && Y(codexTools, window) + codexTools.ActualHeight <= Y(codexFirstRow, window) + 0.5
-                && Y(codexTools, window) >= Y(codexSection, window) - 0.5
-                && Y(codexDrop, window) + codexDrop.ActualHeight <= Y(codexFirstRow, window) + 0.5;
-            report.Checks[$"{name}_footer_has_no_auto_switch"] = window.AutoSwitchPanel.Content is null
-                && FindUid(window.AutoSwitchPanel, "mutation:toggle") is null
-                && FindUid(window.AutoSwitchPanel, "mutation:drop") is null;
+            // Account switching was removed on 2026-11-14: no Activate, auto-switch toggle or threshold anywhere, and the
+            // footer's left side stays empty.
+            report.Checks[$"{name}_no_switch_controls"] = window.FooterNotePanel.Content is null
+                && FindUid(window.ContentPanel, "mutation:activate") is null
+                && FindUid(window.ContentPanel, "mutation:toggle") is null
+                && FindUid(window.ContentPanel, "mutation:drop") is null;
 
-            // Switch: codex-3 becomes active; the platter moves to it and the alignment still holds.
+            // The active login changes: codex-3 becomes active; the platter moves to it and the alignment still holds.
             var switched = Clone(fixture);
             foreach (var account in switched.Accounts.Where(account => account.Provider == "codex")) account.IsActive = account.Id == "codex:example-3";
             window.ApplyDashboardSample(switched);
@@ -90,39 +83,32 @@ public static class FixtureRender
             // Two signed-in Antigravity accounts, the second one active: Antigravity uses the same slot and indicator.
             var twoAg = Clone(fixture);
             var first = twoAg.Accounts.First(account => account.Provider == "antigravity");
-            first.Capabilities.AntigravityProfileId = "example-1"; first.Capabilities.AntigravityCanActivate = true; first.Capabilities.AntigravityHostIds = new() { "ubuntu" };
+            first.Capabilities.AntigravityProfileId = "example-1"; first.Capabilities.AntigravityHostIds = new() { "ubuntu" };
             var second = Clone(new AccountDashboard { Accounts = { first } }).Accounts[0];
             second.Id = "antigravity:example-2"; second.Email = "antigravity-2@example.com"; second.Label = "Antigravity account 2"; second.IsActive = true; second.Capabilities.AntigravityProfileId = "example-2";
             // A same-day reset beside a two-decimal value: the tightest compact cell (live data showed "5:1...").
             second.Windows.First(window => window.Key == "gemini-weekly").ResetAt = capturedAt.AddHours(5).AddMinutes(15).ToString("O");
             twoAg.Accounts.Insert(twoAg.Accounts.IndexOf(first) + 1, second);
-            twoAg.AntigravityAutoSwitch = new AntigravityAutoStatus { Enabled = true, ThresholdUsedPercent = 95, PollIntervalSeconds = 60 };
             window.ApplyDashboardSample(twoAg);
             await Settle(window);
             SavePng(window, Path.Combine(directory, $"panel-{name}-antigravity-two.png"));
-            report.Checks[$"{name}_antigravity_active_aligned"] = Aligned(window, "antigravity", measures, name + "_ag") && SameLine(measures, name + "_ag_button", name + "_before_button");
+            report.Checks[$"{name}_antigravity_active_aligned"] = Aligned(window, "antigravity", measures, name + "_ag") && SameLine(measures, name + "_ag_slot", name + "_before_slot");
             report.Checks[$"{name}_antigravity_platter_on_active_row"] = PlatterOn(window, "antigravity", "row:antigravity:example-2", measures, name + "_ag");
             report.Checks[$"{name}_antigravity_two_columns_and_names_aligned"] = Columns(window, measures, name + "_ag2");
             var agTwoSection = FindUid(window.ContentPanel, "section:antigravity");
             report.Checks[$"{name}_antigravity_header_keeps_active_meta"] = agTwoSection is not null && FindUid(agTwoSection, "section-meta") is not null;
-            var codexToggleTwo = FindUid(window.ContentPanel, "section:codex") is FrameworkElement codexTwo ? FindUid(codexTwo, "mutation:toggle") : null;
-            var agToggleTwo = agTwoSection is null ? null : FindUid(agTwoSection, "mutation:toggle");
-            report.Checks[$"{name}_codex_auto_matches_antigravity_tools"] = codexToggleTwo is ToggleSwitch codexSwitch && agToggleTwo is ToggleSwitch agSwitch
-                && Math.Abs(codexSwitch.ActualHeight - agSwitch.ActualHeight) <= 0.5;
             var compact = All(window.ContentPanel).OfType<Meter>().Where(meter => meter.Kind == MeterKind.Compact && meter.IsVisible).ToArray();
             var tight = compact.FirstOrDefault(meter => meter.Key == "antigravity:example-2|gemini-weekly");
             report.Notes[$"{name}_tight_reset_shown"] = tight?.ResetShown ?? "missing";
             report.Checks[$"{name}_compact_resets_shown_whole"] = tight is not null && compact.All(meter => !meter.ResetClipped);
-            // The active one of the two hidden in the tray: the other still offers Activate and the Auto-switch toggle
-            // stays live, because "Show in tray" never changes what the user can operate.
+            // The active one of the two hidden in the tray: only the other is listed.
             var agHidden = Clone(twoAg);
             agHidden.Accounts.First(account => account.Id == "antigravity:example-2").TrayHidden = true;
             window.ApplyDashboardSample(agHidden);
             await Settle(window);
             var agRow = FindUid(window.ContentPanel, "row:antigravity:example-1");
-            var agSection = FindUid(window.ContentPanel, "section:antigravity");
-            report.Checks[$"{name}_antigravity_switching_survives_tray_hiding"] = FindUid(window.ContentPanel, "row:antigravity:example-2") is null
-                && agRow is not null && FindUid(agRow, "mutation:activate") is not null && agSection is not null && FindUid(agSection, "mutation:toggle") is not null;
+            report.Checks[$"{name}_antigravity_tray_hidden_row_is_left_out"] = FindUid(window.ContentPanel, "row:antigravity:example-2") is null
+                && agRow is not null;
 
             // Antigravity plan display (ANTIGRAVITY-SPEC): the fixture's three plans on the four columns — the Pro
             // account shows all four meters, the Free account's missing 5-hour cells read "Weekly only" and "Not on
@@ -719,27 +705,22 @@ public static class FixtureRender
 
     private static double Y(FrameworkElement element, Window window) => element.TranslatePoint(new Point(0, 0), window).Y;
 
-    /// <summary>Check-circle left = Activate left, "Active" left = "Activate" label left, within 0.5 px.</summary>
+    /// <summary>The active row's label sits at its slot's leading edge: the check on the slot's left and "Active" 24 px
+    /// (the check plus its gap) to its right.</summary>
     private static bool Aligned(MainWindow window, string provider, Dictionary<string, double> measures, string tag)
     {
         var section = FindUid(window.ContentPanel, "section:" + provider);
         if (section is null) return false;
-        var buttons = All(section).OfType<Button>().Where(button => button.Uid == "mutation:activate" && button.IsVisible).ToArray();
         var actives = All(section).Where(element => element.Uid == "active-label" && element.IsVisible).ToArray();
-        if (buttons.Length == 0 || actives.Length != 1) return false;
+        if (actives.Length != 1) return false;
         var active = actives[0];
+        var slot = All(section).FirstOrDefault(element => element.Uid == "slot" && element.IsVisible && All(element).Contains(active));
+        if (slot is null) return false;
         var check = All(active).First(element => element.Uid == "active-check");
         var text = All(active).OfType<TextBlock>().First(element => element.Uid == "active-text");
-        bool ok = true;
-        foreach (var button in buttons)
-        {
-            var label = (TextBlock)button.Content;
-            var buttonLeft = X(button, window); var labelLeft = X(label, window);
-            ok &= Math.Abs(X(check, window) - buttonLeft) <= 0.5 && Math.Abs(X(text, window) - labelLeft) <= 0.5;
-            measures[tag + "_button"] = buttonLeft; measures[tag + "_label"] = labelLeft;
-        }
-        measures[tag + "_check"] = X(check, window); measures[tag + "_active_text"] = X(text, window);
-        return ok;
+        var slotLeft = X(slot, window);
+        measures[tag + "_slot"] = slotLeft; measures[tag + "_check"] = X(check, window); measures[tag + "_active_text"] = X(text, window);
+        return Math.Abs(X(check, window) - slotLeft) <= 0.5 && Math.Abs(X(text, window) - (slotLeft + 24)) <= 0.5;
     }
 
     /// <summary>Every account section's name starts on one x, and the first meter (and its caption) starts on one x,
@@ -767,12 +748,12 @@ public static class FixtureRender
     private static bool SlotLine(MainWindow window, Dictionary<string, double> measures, string name)
     {
         var section = FindUid(window.ContentPanel, "section:antigravity");
-        var codexButton = All(FindUid(window.ContentPanel, "section:codex")!).OfType<Button>().FirstOrDefault(button => button.Uid == "mutation:activate");
-        if (section is null || codexButton is null) return false;
+        var codexSlot = All(FindUid(window.ContentPanel, "section:codex")!).FirstOrDefault(element => element.Uid == "slot" && element.IsVisible);
+        if (section is null || codexSlot is null) return false;
         var ring = FindUid(section, "slot-ring");
         if (ring is null) return false;
         measures[name + "_ag_ring"] = X(ring, window);
-        return Math.Abs(X(ring, window) - X(codexButton, window)) <= 0.5;
+        return Math.Abs(X(ring, window) - X(codexSlot, window)) <= 0.5;
     }
 
     private static bool PlatterOn(MainWindow window, string provider, string rowUid, Dictionary<string, double> measures, string tag)

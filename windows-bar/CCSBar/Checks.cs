@@ -21,7 +21,6 @@ public sealed class CheckReport
     public Dictionary<string, string> Notes { get; set; } = new();
     public int? Accounts { get; set; }
     public Dictionary<string, int>? Providers { get; set; }
-    public bool? AutoSwitchEnabled { get; set; }
     public bool ReadOnly { get; set; } = true;
 }
 
@@ -172,11 +171,9 @@ public static partial class Checks
         report.Checks["cleartext_remote_connection_rejected"] = RejectConnection("http://example.com");
         report.Checks["dpapi_round_trip"] = SecureStore.CheckRoundTrip(Encoding.UTF8.GetBytes("test-only-secret-value"));
         await PublicErrorChecks(report);
-        await ConfirmationChecks(report);
         report.Checks["authenticated_cookie_origin_contract"] = await MockServer();
         ResetPendingChecks(report);
         HiddenRenderChecks(report);
-        CodexAutoStatusChecks(report);
         await SignInChangeChecks(report);
         await ClaudeOpenChecks(report);
         await RefreshMutationChecks(report);
@@ -205,7 +202,6 @@ public static partial class Checks
             report.Checks["safe_antigravity_action_ids"] = dashboard.Accounts.Where(a => a.Capabilities.AntigravityProfileId is not null).All(a => a.Provider == "antigravity" && Formatting.IsSafeId(a.Capabilities.AntigravityProfileId));
             report.Accounts = dashboard.Accounts.Count;
             report.Providers = dashboard.Accounts.GroupBy(a => a.Provider).ToDictionary(g => g.Key, g => g.Count());
-            report.AutoSwitchEnabled = dashboard.CodexAutoSwitch.Enabled;
             report.Passed = report.Checks.Values.All(value => value);
         }
         catch { report.Checks["live_dashboard_read"] = false; }
@@ -224,7 +220,8 @@ public static partial class Checks
         report.Checks["r2_https_proxy_supports_pairing_without_trust_field"] = proxy.SupportsPairing && proxy.CanPair;
         report.Checks["r2_pairing_capability_is_presence_of_any_supported_field"] = new AuthCheck { SecureTransport = false }.SupportsPairing
             && new AuthCheck { Connection = new AuthConnection() }.SupportsPairing && !new AuthCheck().SupportsPairing;
-        report.Checks["r2_missing_codex_policy_stays_absent_and_is_rejected"] = !DashboardClient.SupportedDashboard(
+        // The retired codexAutoSwitch (account switching was removed on 2026-11-14) is no longer required.
+        report.Checks["r2_dashboard_without_retired_codex_policy_is_supported"] = DashboardClient.SupportedDashboard(
             JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[]}", Formatting.Json)!);
         var now = DateTimeOffset.Parse("2026-10-15T12:00:00Z");
         report.Checks["r2_qwen_expired_credit_is_not_usable_unknown_expiry_is_retained"] =
@@ -266,29 +263,6 @@ public static partial class Checks
         signIn.Model.SetupCodeRequired = true; signIn.Apply(SignInState.SetupCode, instant: true);
         report.Checks["r2_required_setup_keeps_code_visible"] = signIn.Code.Visibility == System.Windows.Visibility.Visible;
 
-        using (var response = new System.Net.Http.HttpResponseMessage(HttpStatusCode.Conflict))
-        {
-            response.Headers.Date = now;
-            var lifetime = ConfirmationLifetime.Deadline(now.AddSeconds(30).ToString("O"), response);
-            var expired = ConfirmationLifetime.Deadline(now.AddSeconds(-1).ToString("O"), response);
-            report.Checks["r2_server_time_confirmation_ignores_local_clock_skew"] = lifetime is not null
-                && !ConfirmationLifetime.Expired(lifetime, "2000-01-01T00:00:00Z")
-                && ConfirmationLifetime.Expired(expired, "2099-01-01T00:00:00Z");
-            response.Headers.Date = null;
-            report.Checks["r2_missing_server_time_uses_existing_expiry_fallback"] = ConfirmationLifetime.Deadline(now.ToString("O"), response) is null;
-        }
-        System.Text.Json.JsonElement Result(string json) => JsonSerializer.Deserialize<JsonElement>(json);
-        report.Checks["r2_antigravity_result_is_bound_to_reviewed_email_profile_host"] =
-            MainWindow.ValidAntigravityResult(Result("{\"status\":\"active\",\"profileId\":\"fixture\",\"hostId\":\"ubuntu\",\"email\":\"approved@example.com\"}"), "fixture", "approved@example.com")
-            && !MainWindow.ValidAntigravityResult(Result("{\"status\":\"active\",\"profileId\":\"fixture\",\"hostId\":\"ubuntu\",\"email\":\"other@example.com\"}"), "fixture", "approved@example.com")
-            && !MainWindow.ValidAntigravityResult(Result("{\"status\":\"active\",\"profileId\":\"other\",\"hostId\":\"ubuntu\"}"), "fixture", null)
-            && !MainWindow.ValidAntigravityResult(Result("{\"status\":\"failed\",\"profileId\":\"fixture\",\"hostId\":\"ubuntu\"}"), "fixture", null);
-        var meter = new Meter("r2", MeterKind.Compact);
-        meter.Update(new MeterSpec(null, "Unavailable", Notch: 95), animate: false);
-        report.Checks["r2_unavailable_meter_hides_notch"] = !meter.NotchVisibleForCheck;
-        meter.Update(new MeterSpec(0, "Real zero", Notch: 95, NotchOpacity: 0.18), animate: false);
-        report.Checks["r2_real_zero_keeps_faint_policy_notch"] = meter.NotchVisibleForCheck;
-
         var window = new MainWindow(new Preferences { Theme = "light", Hotkey = false }, loadConnection: false);
         try
         {
@@ -302,28 +276,16 @@ public static partial class Checks
                     && FixtureRender.FindUid(window.ContentPanel, "row:r2") is not null;
             }
             var shown = fixture.Accounts[0]; shown.Status = "error"; shown.Host = "nas1";
-            shown.Capabilities.AntigravityCanActivate = true; shown.Capabilities.AntigravityProfileId = "fixture";
+            shown.Capabilities.AntigravityProfileId = "fixture";
             shown.Windows.Add(new QuotaWindow { Key = "gemini-5h", PoolId = "other", UsedPercent = 20 });
             shown.Windows.Add(new QuotaWindow { Key = "3p-5h", PoolId = "watched", UsedPercent = 30 });
             fixture.Accounts.Add(new DashboardAccount { Id = "hidden", Provider = "antigravity", TrayHidden = true, Status = "unavailable" });
-            fixture.AntigravityAutoSwitch = new AntigravityAutoStatus { Enabled = true, RequestedPoolId = "watched" };
             window.ApplyDashboardSample(fixture);
-            var meters = Walk(window.ContentPanel).OfType<Meter>().ToArray();
-            report.Checks["r2_notch_follows_watched_pool_only"] = meters.Any(item => item.Key.EndsWith("3p-5h", StringComparison.Ordinal) && item.NotchVisibleForCheck)
-                && meters.Any(item => item.Key.EndsWith("gemini-5h", StringComparison.Ordinal) && !item.NotchVisibleForCheck);
-            report.Checks["r2_hidden_unavailable_account_counts_for_switching"] = Walk(window.ContentPanel).OfType<System.Windows.Controls.Button>().Any(button => button.Uid == "mutation:activate")
-                && Walk(window.ContentPanel).OfType<ToggleSwitch>().Any(toggle => toggle.IsOn);
+            report.Checks["r2_no_switch_controls_render"] = !Walk(window.ContentPanel).OfType<System.Windows.Controls.Button>().Any(button => button.Uid == "mutation:activate")
+                && !Walk(window.ContentPanel).OfType<ToggleSwitch>().Any();
             var rowText = Walk(window.ContentPanel).OfType<System.Windows.Controls.TextBlock>().Select(block => new System.Windows.Documents.TextRange(block.ContentStart, block.ContentEnd).Text).ToArray();
             report.Checks["r2_error_row_meta_and_host_are_visible"] = rowText.Any(text => text.Contains("nas1", StringComparison.OrdinalIgnoreCase) && text.Contains("Refresh failed", StringComparison.OrdinalIgnoreCase));
-            fixture.AntigravityAutoSwitch.RequestedPoolId = null;
-            window.ApplyDashboardSample(fixture);
-            report.Checks["r2_enabled_policy_can_be_disabled_without_pool"] = Walk(window.ContentPanel).OfType<ToggleSwitch>().Any(toggle => toggle.IsOn && toggle.EnabledForCheck);
-            fixture.AntigravityAutoSwitch.Enabled = false;
-            window.ApplyDashboardSample(fixture);
-            report.Checks["r2_policy_cannot_enable_without_pool"] = Walk(window.ContentPanel).OfType<ToggleSwitch>().All(toggle => !toggle.EnabledForCheck);
-            fixture.AntigravityAutoSwitch.Enabled = true; fixture.Accounts.RemoveAt(1);
-            window.ApplyDashboardSample(fixture);
-            report.Checks["r2_single_account_keeps_reported_enabled_state"] = Walk(window.ContentPanel).OfType<ToggleSwitch>().Any(toggle => toggle.IsOn && !toggle.EnabledForCheck);
+            fixture.Accounts.RemoveAt(1);
             fixture.Accounts[0].Windows = null!;
             window.ApplyDashboardSample(fixture);
             report.Checks["r2_render_failure_is_inline_without_recursive_render"] = window.IsStale
@@ -370,7 +332,7 @@ public static partial class Checks
         var valid = true;
         var loop = Task.Run(async () =>
         {
-            for (int i = 0; i < 13; i++)
+            for (int i = 0; i < 4; i++)
             {
                 var context = await listener.GetContextAsync();
                 var request = context.Request;
@@ -392,58 +354,11 @@ public static partial class Checks
                 else if (path == "/api/accounts/dashboard")
                 {
                     valid &= request.QueryString["platform"] == "windows" && request.QueryString["refresh"] == "true";
-                    payload = new AccountDashboard { SchemaVersion = 1, UpdatedAt = DateTimeOffset.UtcNow.ToString("O"), CodexAutoSwitch = new AutoSwitchStatus { Enabled = true } };
-                }
-                else if (path == "/api/codex/profiles/auto-switch")
-                {
-                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
-                    var fields = json.RootElement.EnumerateObject().Count();
-                    valid &= request.HttpMethod == "PUT" && fields == 1;
-                    var configured = json.RootElement.TryGetProperty("thresholdPercent", out var threshold);
-                    valid &= configured ? threshold.GetInt32() == 10 && !json.RootElement.TryGetProperty("enabled", out _) : !json.RootElement.GetProperty("enabled").GetBoolean();
-                    payload = new AutoSwitchStatus { Enabled = false, ThresholdPercent = configured ? 10 : 5 };
-                }
-                else if (path == "/api/codex/profiles/party/activate")
-                {
-                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
-                    valid &= request.HttpMethod == "POST";
-                    if (!json.RootElement.TryGetProperty("confirmationToken", out var token))
-                    {
-                        valid &= !json.RootElement.EnumerateObject().Any();
-                        context.Response.StatusCode = 409;
-                        payload = new { code = "busy", reason = "running_processes", confirmation = Proposal() };
-                    }
-                    else
-                    {
-                        valid &= json.RootElement.EnumerateObject().Count() == 1;
-                        if (token.GetString() == "fixture-session-changed") { context.Response.StatusCode = 401; payload = new { error = "Session changed" }; }
-                        else { valid &= token.GetString() == "fixture-confirmation-token"; payload = new { success = true }; }
-                    }
-                }
-                else if (path == "/api/antigravity/auto-switch")
-                {
-                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
-                    valid &= request.HttpMethod == "PUT" && request.ContentType?.StartsWith("application/json", StringComparison.Ordinal) == true
-                        && json.RootElement.EnumerateObject().Count() == 1 && !json.RootElement.GetProperty("enabled").GetBoolean();
-                    payload = new { enabled = false, thresholdUsedPercent = 95, pollIntervalSeconds = 60, outcome = "disabled", message = "Off", activationInProgress = false };
-                }
-                else if (path == "/api/antigravity/profiles/example-2/activate")
-                {
-                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
-                    valid &= request.HttpMethod == "POST" && json.RootElement.EnumerateObject().Count() == 1 && json.RootElement.GetProperty("hostId").GetString() == "ubuntu";
-                    context.Response.StatusCode = 409;
-                    payload = new { status = "confirmation-required", profileId = "example-2", hostId = "ubuntu", reason = "running-processes", confirmation = AntigravityProposal() };
-                }
-                else if (path == "/api/antigravity/profiles/example-2/confirm")
-                {
-                    using var reader = new StreamReader(request.InputStream); using var json = JsonDocument.Parse(await reader.ReadToEndAsync());
-                    valid &= request.HttpMethod == "POST" && json.RootElement.EnumerateObject().Count() == 2 && json.RootElement.GetProperty("hostId").GetString() == "ubuntu"
-                        && json.RootElement.GetProperty("confirmationToken").GetString() == "fixture_antigravity_token_0001";
-                    payload = new { status = "active", profileId = "example-2", hostId = "ubuntu" };
+                    payload = new AccountDashboard { SchemaVersion = 1, UpdatedAt = DateTimeOffset.UtcNow.ToString("O") };
                 }
                 else
                 {
-                    valid &= request.HttpMethod == "POST" && path is "/api/codex/profiles/gmail/activate" or "/api/claude/desktop-profiles/fixture-a/open";
+                    valid &= request.HttpMethod == "POST" && path == "/api/claude/desktop-profiles/fixture-a/open";
                     payload = new { success = true };
                 }
                 var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, Formatting.Json);
@@ -455,31 +370,13 @@ public static partial class Checks
         try
         {
             var summary = await client.Dashboard(true); valid &= summary.SchemaVersion == 1;
-            valid &= !(await client.SetAutoSwitch(false)).Enabled;
-            var configured = await client.SetAutoSwitch(thresholdPercent: 10);
-            valid &= !configured.Enabled && configured.ThresholdPercent == 10;
-            await client.Activate("gmail"); await client.OpenClaude("fixture-a", "mac");
-            valid &= await CodexSwitchFlow.Run("party", async token => { await client.Activate("party", token); }, confirmation => Task.FromResult(confirmation.Processes[0].Label == "Fixture Codex desktop"));
-            bool authRejected = false;
-            try { await client.Activate("party", "fixture-session-changed"); }
-            catch (InvalidOperationException error) { authRejected = error.Message.Contains("session changed"); }
-            valid &= authRejected;
-            valid &= !(await client.SetAntigravityAutoSwitch(enabled: false)).Enabled;
-            int antigravityApprovals = 0;
-            valid &= await AntigravitySwitchFlow.Run("example-2", async token => { await client.ActivateAntigravity("example-2", token); }, confirmation => { antigravityApprovals++; return Task.FromResult(confirmation.Processes.Count == 1 && confirmation.Processes[0].Label == "Antigravity CLI"); });
-            valid &= antigravityApprovals == 1;
+            await client.OpenClaude("fixture-a", "mac");
             await loop.WaitAsync(TimeSpan.FromSeconds(10));
         }
         catch { valid = false; }
         finally { listener.Stop(); }
         return valid;
     }
-
-    private static object AntigravityProposal() => new
-    {
-        token = "fixture_antigravity_token_0001", expiresAt = DateTimeOffset.UtcNow.AddMinutes(1).ToString("O"), profileId = "example-2", hostId = "ubuntu",
-        email = "antigravity-2@example.com", warning = "Fixture only.", processes = new[] { new { pid = 4321, role = "cli", label = "Antigravity CLI" } },
-    };
 
     private static void NewBehaviourChecks(CheckReport report)
     {
@@ -513,12 +410,10 @@ public static partial class Checks
         var providerTray = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"codexAutoSwitch\":{},\"providers\":[{\"id\":\"codex\",\"visible\":true,\"trayVisible\":false},{\"id\":\"zai\",\"visible\":false,\"trayVisible\":true}],\"accounts\":[{\"id\":\"codex:a\",\"provider\":\"codex\",\"trayHidden\":false},{\"id\":\"zai:usage\",\"provider\":\"zai\",\"hidden\":true,\"trayHidden\":false}]}", Formatting.Json)!;
         var shownProviders = providerTray.ShownAccounts.GroupBy(account => account.Provider).Where(group => !providerTray.Hidden.Contains(group.Key)).Select(group => group.Key).ToArray();
         report.Checks["provider_tray_switch_wins_and_dashboard_switch_is_ignored"] = shownProviders.SequenceEqual(new[] { "zai" });
-        // One of two Kimi accounts hidden in the tray: its details list only the other. One of two Antigravity accounts
-        // hidden in the tray: switching still counts both, as the server does.
+        // One of two Kimi accounts hidden in the tray: its details list only the other.
         var oneOfTwo = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"codexAutoSwitch\":{},\"accounts\":[{\"id\":\"kimi-code:a\",\"provider\":\"kimi-code\"},{\"id\":\"kimi-code:b\",\"provider\":\"kimi-code\",\"trayHidden\":true},{\"id\":\"antigravity:a\",\"provider\":\"antigravity\",\"status\":\"ok\"},{\"id\":\"antigravity:b\",\"provider\":\"antigravity\",\"status\":\"ok\",\"trayHidden\":true}]}", Formatting.Json)!;
         report.Checks["provider_details_list_only_tray_shown_accounts"] = MainWindow.DetailAccounts(oneOfTwo, "kimi-code").Select(account => account.Id).SequenceEqual(new[] { "kimi-code:a" });
-        var shownAg = oneOfTwo.ShownAccounts.Where(account => account.Provider == "antigravity").ToArray();
-        report.Checks["antigravity_switching_counts_tray_hidden_accounts"] = shownAg.Length == 1 && MainWindow.AllAntigravity(oneOfTwo, shownAg).Length == 2 && MainWindow.AllAntigravity(null, shownAg).Length == 1;
+        report.Checks["antigravity_tray_hidden_account_is_not_listed"] = oneOfTwo.ShownAccounts.Where(account => account.Provider == "antigravity").Select(account => account.Id).SequenceEqual(new[] { "antigravity:a" });
         // Claude "Sign-in needed" before Open (accounts[].signInNeeded), fake profiles only. Loose: junk is ignored and
         // never fails the dashboard; a computer the profile cannot open on is not named.
         var signIn = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"codexAutoSwitch\":{},\"accounts\":[{\"id\":\"claude:fake-a\",\"provider\":\"claude\",\"email\":\"fake-a@example.com\",\"signInNeeded\":[\"windows\"],\"capabilities\":{\"claudeProfileId\":\"fake-a\",\"claudePlatforms\":[\"mac\",\"windows\"]}},{\"id\":\"claude:fake-b\",\"provider\":\"claude\",\"signInNeeded\":[\"windows\",\"mac\",7,\"ubuntu\"],\"capabilities\":{\"claudeProfileId\":\"fake-b\",\"claudePlatforms\":[\"mac\",\"windows\"]}},{\"id\":\"claude:fake-c\",\"provider\":\"claude\",\"signInNeeded\":\"windows\",\"capabilities\":{\"claudeProfileId\":\"fake-c\",\"claudePlatforms\":[\"mac\",\"windows\"]}},{\"id\":\"claude:fake-d\",\"provider\":\"claude\",\"signInNeeded\":[\"windows\"],\"capabilities\":{\"claudeProfileId\":\"fake-d\",\"claudePlatforms\":[\"mac\"]}},{\"id\":\"claude:fake-e\",\"provider\":\"claude\",\"capabilities\":{\"claudeProfileId\":\"fake-e\",\"claudePlatforms\":[\"mac\",\"windows\"]}}]}", Formatting.Json)!;
@@ -527,21 +422,11 @@ public static partial class Checks
             && signIn.Accounts[2].SignInNeededText is null && signIn.Accounts[3].SignInNeededText is null && signIn.Accounts[4].SignInNeededText is null
             && MainWindow.OpenTip(signIn.Accounts[0], "windows").StartsWith("Sign-in needed on Windows. Open shows the Claude sign-in window", StringComparison.Ordinal)
             && MainWindow.OpenTip(signIn.Accounts[0], "mac") == "Open fake-a@example.com in Claude on Mac";
+        // An older dashboard still sends the retired switching fields (account switching was removed on 2026-11-14): the
+        // tray ignores them and keeps the rest of the dashboard.
         var antigravity = JsonSerializer.Deserialize<AccountDashboard>("{\"schemaVersion\":1,\"accounts\":[{\"id\":\"antigravity:a\",\"provider\":\"antigravity\",\"isActive\":true,\"capabilities\":{\"antigravityProfileId\":\"a\",\"antigravityHostIds\":[\"ubuntu\"],\"antigravityCanActivate\":true}}],\"codexAutoSwitch\":{},\"antigravityAutoSwitch\":{\"enabled\":true,\"thresholdUsedPercent\":90,\"activationInProgress\":false}}", Formatting.Json)!;
-        report.Checks["antigravity_dto_decoded"] = antigravity.Accounts[0].Capabilities.AntigravityProfileId == "a" && antigravity.Accounts[0].Capabilities.AntigravityCanActivate && antigravity.AntigravityAutoSwitch?.ThresholdUsedPercent == 90 && antigravity.AntigravityAutoSwitch.Enabled;
-        var proposal = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!;
-        var badToken = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!; badToken.Token = "short";
-        var otherHost = JsonSerializer.Deserialize<AntigravityConfirmation>(JsonSerializer.Serialize(AntigravityProposal(), Formatting.Json), Formatting.Json)!; otherHost.HostId = "mac";
-        report.Checks["antigravity_confirmation_validated"] = proposal.IsValidFor("example-2") && !proposal.IsValidFor("example-1") && !badToken.IsValidFor("example-2") && !otherHost.IsValidFor("example-2") && !proposal.Expired;
-        int calls = 0; bool tokenSent = false;
-        var cancelled = AntigravitySwitchFlow.Run("example-2", token => { calls++; tokenSent |= token is not null; throw new AntigravityConfirmationRequiredException(proposal); }, _ => Task.FromResult(false)).GetAwaiter().GetResult();
-        report.Checks["antigravity_cancel_never_posts_token"] = !cancelled && calls == 1 && !tokenSent;
-        report.Checks["antigravity_errors_use_fixed_public_messages"] =
-            DashboardClient.AntigravityError(HttpStatusCode.Conflict, "busy", "activation-running") == "Another Antigravity switch is already running. Wait for it to finish."
-            && DashboardClient.AntigravityError(HttpStatusCode.Conflict, "stale-confirmation", null).StartsWith("The running Antigravity programs", StringComparison.Ordinal)
-            && DashboardClient.AntigravityError(HttpStatusCode.BadRequest, "invalid-profile", null) == "The selected Antigravity account has no valid saved login."
-            && DashboardClient.AntigravityError(HttpStatusCode.InternalServerError, "recovery-required", null).Contains("needs recovery", StringComparison.Ordinal)
-            && !DashboardClient.AntigravityError(HttpStatusCode.Conflict, "FIXTURE_ONLY_PRIVATE", "token=fixture").Contains("FIXTURE", StringComparison.Ordinal);
+        report.Checks["retired_switching_fields_are_ignored"] = antigravity.Accounts[0].Capabilities.AntigravityProfileId == "a" && antigravity.Accounts[0].IsActive
+            && DashboardClient.SupportedDashboard(antigravity);
         var dashboard = new AccountDashboard { Accounts = { new DashboardAccount { Provider = "codex", IsActive = true, Email = "codex-2@example.com", Capabilities = new AccountCapabilities { CodexProfile = "b" }, Windows = { new QuotaWindow { Key = "seven_day", Label = "Weekly", UsedPercent = 9.25, WindowMinutes = 10080 } } } } };
         var tooltip = Formatting.TrayTooltip(dashboard);
         report.Checks["tray_tooltip_shows_usage_percent"] = tooltip == "AI Account Center · Codex: codex-2, 90.75% weekly left" && Formatting.TrayTooltip(dashboard, stale: true).EndsWith("· last sample", StringComparison.Ordinal)
@@ -653,27 +538,6 @@ public static partial class Checks
         finally { Formatting.Now = saved; }
     }
 
-    private static void CodexAutoStatusChecks(CheckReport report)
-    {
-        var waiting = new AutoSwitchStatus { Enabled = true, Outcome = "waiting_idle", Message = "Waiting for Codex to finish active work before switching accounts.", Candidate = "beta" };
-        var codexAccounts = new List<DashboardAccount>
-        {
-            new() { Id = "codex:a", Provider = "codex", Email = "a@example.test", Capabilities = new AccountCapabilities { CodexProfile = "alpha" } },
-            new() { Id = "codex:b", Provider = "codex", Email = "b@example.test", Capabilities = new AccountCapabilities { CodexProfile = "beta" } },
-        };
-        report.Checks["codex_auto_status_names_candidate"] = Formatting.CodexAutoStatusText(waiting, codexAccounts) == "Waiting for Codex to finish active work before switching accounts. Will switch to b@example.test when Codex goes idle. Activate b@example.test to switch now.";
-        report.Checks["codex_auto_status_falls_back_to_profile"] = Formatting.CodexAutoStatusText(waiting, new List<DashboardAccount>()) == "Waiting for Codex to finish active work before switching accounts. Will switch to beta when Codex goes idle. Activate beta to switch now.";
-        report.Checks["codex_auto_status_shows_plain_reason"] = Formatting.CodexAutoStatusText(new AutoSwitchStatus { Enabled = true, Outcome = "no_quota", Message = "The reading is out of date." }, codexAccounts) == "The reading is out of date.";
-        report.Checks["codex_auto_status_hidden_when_healthy"] = Formatting.CodexAutoStatusText(new AutoSwitchStatus { Enabled = true, Outcome = "healthy", Message = "m" }, codexAccounts) is null
-            && Formatting.CodexAutoStatusText(new AutoSwitchStatus { Enabled = false, Outcome = "waiting_idle", Message = "m", Candidate = "beta" }, codexAccounts) is null
-            && Formatting.CodexAutoStatusText(null, codexAccounts) is null;
-    }
-
-    /// <summary>
-    /// N6: samples that arrive while the live panel is hidden update the data and the tooltip but skip the
-    /// visual rebuild; the next open rebuilds once. Check windows (no live connection) paint until the simulated
-    /// hide, so the pre-hide assertions see a tree.
-    /// </summary>
     private static void HiddenRenderChecks(CheckReport report)
     {
         var fixture = FixtureRender.LoadFixture(out _);
@@ -1243,24 +1107,18 @@ public static partial class Checks
             await window.Refresh(true);
 
             System.Windows.Controls.Button[] Buttons(string uid) => Walk(window!.ContentPanel).OfType<System.Windows.Controls.Button>().Where(button => button.Uid == uid).ToArray();
-            ToggleSwitch[] Switches() => Walk(window!.ContentPanel).OfType<ToggleSwitch>().ToArray();
             var openIcons = Buttons("mutation");
-            var activate = Buttons("mutation:activate").FirstOrDefault();
-            var toggle = Switches().FirstOrDefault();
             report.Checks["visible_refresh_reenables_the_mutation_controls"] = window.Dashboard is not null && !window.IsStale
-                && openIcons.Length == 2 && openIcons.All(button => button.IsEnabled)
-                && activate is { IsEnabled: true } && toggle is not null && toggle.EnabledForCheck;
+                && openIcons.Length == 2 && openIcons.All(button => button.IsEnabled);
             report.Checks["visible_refresh_stays_one_visual_pass"] = window.RenderPassesForCheck == 1;
 
             fixture.DashboardMode = "500:down";
             await window.Refresh(true);
             report.Checks["failed_refresh_keeps_the_controls_resting"] = window.IsStale && FixtureRender.FindUid(window.ContentPanel, "stale") is not null
-                && Buttons("mutation").All(button => !button.IsEnabled) && Buttons("mutation:activate").All(button => !button.IsEnabled)
-                && Switches().All(sw => !sw.EnabledForCheck);
+                && Buttons("mutation").All(button => !button.IsEnabled);
             fixture.DashboardMode = "200";
             await window.Refresh(true);
-            report.Checks["fresh_read_wakes_the_controls_again"] = !window.IsStale && Buttons("mutation").All(button => button.IsEnabled)
-                && Switches().All(sw => sw.EnabledForCheck);
+            report.Checks["fresh_read_wakes_the_controls_again"] = !window.IsStale && Buttons("mutation").All(button => button.IsEnabled);
 
             // The action slot, on its own window against the Open fixture.
             using var openFixture = new ClaudeOpenFixture();
@@ -1408,68 +1266,38 @@ public static partial class Checks
         public void Dispose() { try { listener.Stop(); listener.Close(); } catch { } }
     }
 
-    private static CodexSwitchConfirmation Proposal() => new()
-    {
-        Token = "fixture-confirmation-token", ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(1).ToString("O"), TargetProfile = "party",
-        Processes = new List<CodexSwitchProcess> { new() { Label = "Fixture Codex desktop", Pid = 1234, Role = "desktop" } },
-        Warning = "Fixture only. Active work may be interrupted."
-    };
-
     private static async Task PublicErrorChecks(CheckReport report)
     {
         const string canary = "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile";
-        // Reviewed golden table SHA256947f5a63a2c83fcd35296ec3be8ee195328b2852aeb29f8b16eba5965407fd86.
+        // The switching rows (auto-switch settings and Codex activation) left with account switching on 2026-11-14.
         var cases = new (int Status, DashboardRequestKind Kind, string? Code, string? Reason, string BodyKind, string Expected)[]
         {
             (400, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
             (400, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
-            (400, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The automatic switching settings were rejected. Refresh and try again."),
             (401, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Dashboard sign-in needs attention. Check Settings."),
             (401, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Dashboard sign-in needs attention. Check Settings."),
-            (401, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Dashboard sign-in needs attention. Check Settings."),
             (403, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this action. Check the connection origin."),
             (403, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this action. Check the connection origin."),
-            (403, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this action. Check the connection origin."),
             (404, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account action is not available on this server."),
             (404, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The selected Claude profile is not available on that computer."),
-            (404, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account action is not available on this server."),
             (408, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
             (408, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
-            (408, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
             (409, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Another account action is running. Try again when it finishes."),
             (409, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Another account action is running. Try again when it finishes."),
-            (409, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Another account action is running. Try again when it finishes."),
             (415, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
             (415, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
-            (415, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The automatic switching settings were rejected. Refresh and try again."),
             (422, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
             (422, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard rejected this request. Refresh and try again."),
-            (422, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The automatic switching settings were rejected. Refresh and try again."),
             (429, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard is limiting requests. Wait before trying again."),
             (429, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard is limiting requests. Wait before trying again."),
-            (429, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard is limiting requests. Wait before trying again."),
             (500, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Usage could not be refreshed. Try Refresh."),
             (500, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard could not complete this request. Try again later."),
-            (500, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard could not complete this request. Try again later."),
             (502, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account service is unavailable. Try Refresh."),
             (502, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Claude could not be opened on the selected computer. Check its profile setup and connection."),
-            (502, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account service is unavailable. Try Refresh."),
             (503, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account service is unavailable. Try Refresh."),
             (503, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "Claude could not be opened on the selected computer. Check its profile setup and connection."),
-            (503, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The requested account service is unavailable. Try Refresh."),
             (504, DashboardRequestKind.Usage, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
             (504, DashboardRequestKind.ClaudeOpen, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
-            (504, DashboardRequestKind.AutoSwitch, "unknown-fixture-code", "FIXTURE_ONLY_PRIVATE_ERROR_CANARY token=fixture-token path=/fixture/private/profile", "json", "The dashboard took too long to respond. Try Refresh."),
-            (409, DashboardRequestKind.CodexActivation, "busy", "activation_running", "json", "Another Codex account activation is already running. Wait for it to finish."),
-            (409, DashboardRequestKind.CodexActivation, "busy", "unsupported_process", "json", "A running Codex program cannot be restarted safely. Close it and try again."),
-            (409, DashboardRequestKind.CodexActivation, "busy", "running_processes", "json", "Codex is busy. Try switching after its work finishes."),
-            (409, DashboardRequestKind.CodexActivation, "confirmation_stale", null, "json", "The running Codex programs or account changed. Activate again to review a new warning."),
-            (400, DashboardRequestKind.CodexActivation, "invalid_profile", null, "json", "The selected profile has no valid saved login."),
-            (400, DashboardRequestKind.CodexActivation, "invalid_codex_home", null, "json", "Account activation needs the shared Codex configuration."),
-            (500, DashboardRequestKind.CodexActivation, "restart_failed", null, "json", "Codex could not restart. Check its processes before retrying activation."),
-            (500, DashboardRequestKind.CodexActivation, "verification_failed", null, "json", "The activated account could not be verified. Refresh accounts before retrying."),
-            (500, DashboardRequestKind.CodexActivation, "auth_read_failed", null, "json", "The saved Codex login could not be read safely."),
-            (500, DashboardRequestKind.CodexActivation, "auth_write_failed", null, "json", "The Codex login could not be installed safely."),
             (400, DashboardRequestKind.Usage, null, null, "malformed", "The dashboard rejected this request. Refresh and try again."),
             (502, DashboardRequestKind.Usage, null, null, "html", "The requested account service is unavailable. Try Refresh."),
             (500, DashboardRequestKind.Usage, null, null, "large", "Usage could not be refreshed. Try Refresh."),
@@ -1485,54 +1313,20 @@ public static partial class Checks
                 _ => JsonSerializer.Serialize(new { error = canary, message = canary, code = example.Code, reason = example.Reason })
             };
             using var response = new System.Net.Http.HttpResponseMessage((HttpStatusCode)example.Status) { Content = new System.Net.Http.StringContent(body) };
-            try { await DashboardClient.Decode<JsonElement>(response, example.Kind == DashboardRequestKind.CodexActivation ? "party" : null, example.Kind); allFixed = false; }
+            try { await DashboardClient.Decode<JsonElement>(response, example.Kind); allFixed = false; }
             catch (InvalidOperationException error) { allFixed &= error.Message == example.Expected && !error.Message.Contains("FIXTURE_ONLY") && !error.Message.Contains("fixture-token") && !error.Message.Contains("/fixture/private/profile"); }
         }
-        report.Checks["all_52_server_error_canaries_use_fixed_public_messages"] = allFixed;
+        report.Checks["all_29_server_error_canaries_use_fixed_public_messages"] = allFixed;
         bool scoped = true;
-        foreach (var example in new[] { (Status: HttpStatusCode.BadRequest, Kind: DashboardRequestKind.Usage), (Status: HttpStatusCode.Conflict, Kind: DashboardRequestKind.AutoSwitch), (Status: HttpStatusCode.BadGateway, Kind: DashboardRequestKind.CodexActivation) })
+        foreach (var example in new[] { (Status: HttpStatusCode.BadRequest, Kind: DashboardRequestKind.Usage), (Status: HttpStatusCode.Conflict, Kind: DashboardRequestKind.ClaudeOpen), (Status: HttpStatusCode.BadGateway, Kind: DashboardRequestKind.Usage) })
         {
             using var response = new System.Net.Http.HttpResponseMessage(example.Status) { Content = new System.Net.Http.StringContent(JsonSerializer.Serialize(new { code = "invalid_profile", reason = "activation_running", error = canary })) };
-            try { await DashboardClient.Decode<JsonElement>(response, example.Kind == DashboardRequestKind.CodexActivation ? "party" : null, example.Kind); scoped = false; }
+            try { await DashboardClient.Decode<JsonElement>(response, example.Kind); scoped = false; }
             catch (InvalidOperationException error) { scoped &= error.Message != "The selected profile has no valid saved login." && !error.Message.Contains(canary); }
         }
-        report.Checks["codex_public_codes_apply_only_to_approved_context_and_status"] = scoped;
+        report.Checks["retired_codex_codes_map_to_generic_messages"] = scoped;
     }
 
-    private static async Task ConfirmationChecks(CheckReport report)
-    {
-        int calls = 0; bool tokenSent = false;
-        var cancelled = await CodexSwitchFlow.Run("party", token => { calls++; tokenSent |= token is not null; throw new CodexConfirmationRequiredException(Proposal()); }, _ => Task.FromResult(false));
-        report.Checks["confirmation_cancel_never_posts_token"] = !cancelled && calls == 1 && !tokenSent;
-        calls = 0;
-        var approved = await CodexSwitchFlow.Run("party", token =>
-        {
-            calls++; if (token is null) throw new CodexConfirmationRequiredException(Proposal());
-            return token == "fixture-confirmation-token" ? Task.CompletedTask : Task.FromException(new Exception());
-        }, _ => Task.FromResult(true));
-        report.Checks["confirmation_approval_posts_exact_token_once"] = approved && calls == 2;
-        calls = 0; var expired = Proposal(); expired.ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1).ToString("O");
-        bool expiredRejected = false;
-        try { await CodexSwitchFlow.Run("party", token => { calls++; throw new CodexConfirmationRequiredException(expired); }, _ => Task.FromResult(true)); }
-        catch (InvalidOperationException) { expiredRejected = true; }
-        report.Checks["expired_confirmation_requires_fresh_activate"] = expiredRejected && calls == 1;
-        calls = 0; bool staleRejected = false;
-        try
-        {
-            await CodexSwitchFlow.Run("party", token => { calls++; if (token is null) throw new CodexConfirmationRequiredException(Proposal()); throw new InvalidOperationException("confirmation_stale"); }, _ => Task.FromResult(true));
-        }
-        catch (InvalidOperationException) { staleRejected = true; }
-        report.Checks["changed_process_confirmation_is_not_retried"] = staleRejected && calls == 2;
-        var malformed = Proposal(); malformed.Token = null!;
-        report.Checks["confirmation_target_and_shape_validated"] = !Proposal().IsValidFor("gmail") && !malformed.IsValidFor("party");
-    }
-
-    /// <summary>
-    /// N6 energy invariants (offline, loopback fixture, isolated store): a hidden background poll updates the model
-    /// and the tray tooltip but rebuilds nothing — the deferred visual pass runs exactly once when the panel opens;
-    /// a visible refresh rebuilds exactly once; 24 open/close cycles with a hidden poll each keep GDI/USER objects,
-    /// handles and managed memory bounded.
-    /// </summary>
     private static async Task EnergyChecks(CheckReport report)
     {
         var folder = Path.Combine(Path.GetTempPath(), "aac-energy-check-" + Guid.NewGuid().ToString("N"));

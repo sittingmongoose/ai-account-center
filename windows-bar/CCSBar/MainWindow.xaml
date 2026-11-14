@@ -4,9 +4,8 @@
  Title="AI Account Center" Width="760" Height="850" MinHeight="320"
  WindowStyle="None" ResizeMode="NoResize" AllowsTransparency="True" UseLayoutRounding="True"
  Background="Transparent" ShowInTaskbar="False" Topmost="True">
- <!-- Daylight Atlas Windows panel (trays/ concept, Windows view): today's layout and order. Header; Claude, Codex
-      (with its auto-switch tools in the section header), Antigravity; the other providers; footer (Dashboard,
-      Refresh, Settings). Settings slides over the list inside the panel; the gear toggles it, the X and
+ <!-- Daylight Atlas Windows panel (trays/ concept, Windows view): today's layout and order. Header; Claude, Codex,
+      Antigravity; the other providers; footer (Dashboard, Refresh, Settings). Settings slides over the list inside the panel; the gear toggles it, the X and
       Escape close it. -->
  <Border x:Name="Root" CornerRadius="9" BorderThickness="1" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Rule}">
   <Border.RenderTransform><TranslateTransform x:Name="RootShift" /></Border.RenderTransform>
@@ -45,7 +44,7 @@
    <Border x:Name="Footer" Grid.Row="2" Padding="16,10,16,11" BorderThickness="0,1,0,0" CornerRadius="0,0,8,8" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Rule}">
     <Grid>
      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-     <ContentControl x:Name="AutoSwitchPanel" VerticalAlignment="Center" Focusable="False" />
+     <ContentControl x:Name="FooterNotePanel" VerticalAlignment="Center" Focusable="False" />
      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
       <Button x:Name="DashboardButton" Style="{StaticResource AtlasButton}" Height="30" Margin="0,0,8,0" Click="DashboardClicked" />
       <Button x:Name="RefreshButton" Style="{StaticResource IconButton}" Width="30" Height="30" Margin="0,0,8,0" Click="RefreshClicked" />
