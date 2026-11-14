@@ -67,11 +67,11 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     expect(buildStatus.sourceHash()).not.toBe(beforeHash);
     expect(buildUi.leptosFingerprint(leptosCrate).sha256).not.toBe(beforeLeptos);
     const activity = await load('src/web-server/services/account-analytics-activity.ts');
-    expect(
-      activity
-        .coldScanningSourceStates()
-        .filter((entry: { host: string }) => entry.host === 'future')
-    ).toHaveLength(7);
+    // The new Linux entry gets exactly the sources every other Linux computer gets (nas1), whatever that list holds.
+    const coldStates = activity.coldScanningSourceStates() as Array<{ host: string }>;
+    const nas1Sources = coldStates.filter((entry) => entry.host === 'nas1').length;
+    expect(nas1Sources).toBeGreaterThan(0);
+    expect(coldStates.filter((entry) => entry.host === 'future')).toHaveLength(nas1Sources);
     const updates = await load('src/web-server/services/app-update-contract.ts');
     expect(updates.PLATFORMS).toContain('future');
     expect(updates.EXPECTED_RESULTS).toBe(72);
@@ -84,7 +84,10 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     expect(remote.REMOTE_ANALYTICS_HOSTS).toContain('future');
     expect((await remote.resolveAnalyticsRemoteHosts()).future).toBe('future-linux');
     const analytics = await load('src/web-server/services/analytics-remote-sources.ts');
-    expect(analytics.analyticsRemoteTargets('future')).toHaveLength(6);
+    expect(analytics.analyticsRemoteTargets('future')).toHaveLength(
+      analytics.analyticsRemoteTargets('nas1').length
+    );
+    expect(analytics.analyticsRemoteTargets('nas1').length).toBeGreaterThan(0);
     const scanned: string[] = [];
     const config = await load('src/utils/config-manager.ts');
     await config.runWithScopedCcsHome(fixture, () =>
