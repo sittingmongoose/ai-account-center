@@ -154,8 +154,8 @@ describe('what the scanner says about failures reaches the cell', () => {
     expect(parsed.stalled).toBe(true);
   });
 
-  // Sol M5, Argon H1, Wonder M2, Fable M7: a log folder that cannot be listed is "can't read",
-  // never "installed, no logs", and the usage read before stays.
+  // A denied folder stays named; readable usage keeps the tool partial instead of claiming
+  // the entire tool cannot be read. Previously read usage remains included.
   it('keeps the rows of a log folder that became unreadable and says so', async () => {
     const unreadable = answer({
       kinds: { codex: { state: 'not_installed', partial: true, fingerprints: {} } },
@@ -181,7 +181,7 @@ describe('what the scanner says about failures reaches the cell', () => {
     });
     const { cell, input } = await scans([answer({}), unreadable]);
     expect(input).toBe(10);
-    expect(cell?.state).toBe('unreadable');
+    expect(cell?.state).toBe('cached');
     expect(cell?.detail).toContain('permission denied');
   });
 
@@ -308,18 +308,18 @@ describe('recheck 1 leftovers (RECHECK-BIG-1, FIX-ROUND-BIG-2)', () => {
         ]),
       });
       const live = await scans([answer({}), unreadable], 60_000);
-      expect(live.cell?.state).toBe('unreadable');
+      expect(live.cell?.state).toBe('cached');
       const cached = loadAnalyticsRemoteCachedSources(MIN_DATE, {
         cacheDir: cache,
         localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
       });
       const cell = cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex');
-      expect(cell?.state).toBe('unreadable');
+      expect(cell?.state).toBe('cached');
       expect(cell?.cause).toBe('unreadable_folder');
       expect(cell?.detail).toContain('permission denied');
       if (failure === 'nested folder')
         expect(cell?.detail).toContain('1 folder inside its log folders');
-      // The asynchronous loader at +1 s must read the persisted quality without scanning.
+      // An incomplete kind retries on the next request; healthy siblings keep their TTL.
       let helperCalls = 0;
       const cachedAgain = await loadAnalyticsRemoteSources(MIN_DATE, {
         cacheDir: cache,
@@ -329,13 +329,13 @@ describe('recheck 1 leftovers (RECHECK-BIG-1, FIX-ROUND-BIG-2)', () => {
         localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
         runHelper: async () => {
           helperCalls++;
-          throw new Error('cached request must not scan');
+          throw new Error('fixture retry still cannot read the source');
         },
       });
-      expect(helperCalls).toBe(0);
+      expect(helperCalls).toBe(1);
       expect(
         cachedAgain.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex')
-      ).toMatchObject({ state: 'unreadable', cause: 'unreadable_folder' });
+      ).toMatchObject({ state: 'cached', cause: 'unreadable_folder' });
       const tokens = cached.results
         .filter((entry) => entry.tool === 'codex')
         .flatMap((entry) => entry.data.hourly)

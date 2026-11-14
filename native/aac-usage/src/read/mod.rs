@@ -806,6 +806,14 @@ fn scan_codex_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse,
                 if gone(path) {
                     continue;
                 }
+                // A readable, empty rollout has no conversation or usage to attribute. It is
+                // completely read, not a damaged header. Reinspect it next scan in case it grew.
+                if crate::fsx::open_regular(path)
+                    .and_then(|file| file.metadata())
+                    .is_ok_and(|meta| meta.len() == 0)
+                {
+                    continue;
+                }
                 let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 collector.no_session_logs.push((path.clone(), size));
                 collector.read_failure("codex", util::filekey("codex", path));

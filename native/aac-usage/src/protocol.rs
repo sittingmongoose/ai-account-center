@@ -352,7 +352,19 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
                 collector.search_limit(kind, read, seen);
             }
             for folder in &failed {
-                collector.unreadable_folder(kind, folder);
+                // This is a failed search candidate, not an established log folder. Preserve
+                // the actual candidate and cause; do not turn it into nested-folder counts.
+                collector.note_root(kind, folder, "experiment");
+                let cause = if crate::fsx::avoided(folder) {
+                    "did_not_answer"
+                } else {
+                    crate::fsx::list_dir(folder)
+                        .err()
+                        .as_ref()
+                        .map(crate::fsx::error_cause)
+                        .unwrap_or("io_error")
+                };
+                collector.root_failure(kind, folder, "unreadable", cause);
             }
             if mounts_under_home {
                 collector.usage_partial.insert(kind.clone());

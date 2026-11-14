@@ -163,9 +163,15 @@ pub fn metadata(path: &Path) -> io::Result<fs::Metadata> {
 pub fn discovery_metadata(collector: &mut Collector, kind: &str, path: &Path) -> Option<fs::Metadata> {
     match metadata(path) {
         Ok(meta) => Some(meta),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => None,
         Err(_) => {
-            collector.unreadable_folder(kind, path);
+            // A failed stat does not establish a folder. In particular, a busy regular file,
+            // SQLite sidecar or broken file link must never inflate unreadableFolders.
+            if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()) {
+                collector.unreadable_folder(kind, path);
+            } else {
+                collector.read_failure(kind, util::filekey(kind, path));
+            }
             None
         }
     }
@@ -257,7 +263,7 @@ pub fn sorted_names(directory: &Path) -> Option<Vec<String>> {
 fn listing(collector: &mut Collector, kind: &str, directory: &Path) -> Option<Vec<String>> {
     match list_dir(directory) {
         Ok(names) => Some(names),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => None,
         Err(_) => {
             collector.unreadable_folder(kind, directory);
             None
@@ -335,7 +341,12 @@ pub fn child_dirs(base: &Path) -> Vec<PathBuf> {
 pub fn child_dirs_checked(base: &Path) -> (Vec<PathBuf>, bool) {
     let names = match list_dir(base) {
         Ok(names) => names,
-        Err(error) => return (Vec::new(), error.kind() != io::ErrorKind::NotFound),
+        Err(error) => {
+            return (
+                Vec::new(),
+                !matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory),
+            );
+        }
     };
     let mut found = Vec::new();
     let mut failed = false;
@@ -554,7 +565,7 @@ pub fn walk_t3_files(
                     Some(id) => found.push((real, id)),
                     None => {
                         if !matches!(metadata(&real), Err(error) if error.kind() == io::ErrorKind::NotFound) {
-                            collector.unreadable_folder(kind, &real);
+                            collector.read_failure(kind, util::filekey(kind, &real));
                         }
                     }
                 }
@@ -614,12 +625,16 @@ pub enum Probe {
     },
 }
 
-fn failed(linked: bool, error: &io::Error) -> Probe {
-    let cause = match error.kind() {
+pub fn error_cause(error: &io::Error) -> &'static str {
+    match error.kind() {
         io::ErrorKind::PermissionDenied => "permission_denied",
         io::ErrorKind::TimedOut => "did_not_answer",
         _ => "io_error",
-    };
+    }
+}
+
+fn failed(linked: bool, error: &io::Error) -> Probe {
+    let cause = error_cause(error);
     Probe::Failed {
         state: if !linked {
             "unreadable"
@@ -654,7 +669,9 @@ fn probe_one(path: &Path, folder: bool, linked: bool) -> Probe {
                 cause: "target_missing",
             };
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Probe::Absent,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => {
+            return Probe::Absent;
+        }
         Err(error) => return failed(linked, &error),
     };
     let readable = if folder {
@@ -670,7 +687,7 @@ fn probe_one(path: &Path, folder: bool, linked: bool) -> Probe {
     };
     match readable {
         Ok(()) => Probe::Readable(real),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Probe::Absent,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => Probe::Absent,
         Err(error) => failed(linked, &error),
     }
 }

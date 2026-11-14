@@ -17,7 +17,17 @@ export type StoreActivityCoverage = AccountAnalyticsHistoryCoverage;
 
 /** The "Included usage" grid from the store's last reads, for an answer before this run's first pass. */
 export function gridFromStore(history: StoreActivityCoverage): AccountAnalyticsSource[] {
-  const tools = ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity', 'cursor'];
+  const tools = [
+    'claude',
+    'codex',
+    'omp',
+    'muse',
+    'zcode',
+    'jsonl',
+    'antigravity',
+    'cursor',
+    'devin',
+  ];
   const grid: AccountAnalyticsSource[] = [];
   for (const s of history.sources) {
     if (!tools.includes(s.tool)) continue;
@@ -30,21 +40,33 @@ export function gridFromStore(history: StoreActivityCoverage): AccountAnalyticsS
             ? 'cached'
             : s.state === 'scanning'
               ? 'scanning'
-              : s.state === 'not_installed' || s.state === 'installed_no_logs'
-                ? 'not_installed'
+              : s.state === 'not_installed' ||
+                  s.state === 'installed_no_logs' ||
+                  s.state === 'no_reader' ||
+                  s.state === 'unreadable' ||
+                  s.state === 'scan_failed'
+                ? s.state
                 : 'unavailable';
     grid.push({
       tool: s.tool as AccountAnalyticsSource['tool'],
       host: s.host as AccountAnalyticsSource['host'],
       state,
-      lastScanAt: s.lastReadAt,
+      lastScanAt:
+        s.lastFullReadAt ??
+        (state === 'ok' ||
+        state === 'no_usage' ||
+        state === 'not_installed' ||
+        state === 'installed_no_logs'
+          ? s.lastReadAt
+          : null),
       rowCount: 0,
       detail:
         state === 'unavailable'
           ? s.state === 'no_reader'
             ? 'no local usage log'
             : (s.cause ?? 'the last read failed')
-          : null,
+          : s.cause,
+      ...(s.cause ? { cause: s.cause } : {}),
     });
   }
   return grid;
@@ -75,6 +97,7 @@ export function coverageOf(sources: ActivitySources): StoreActivityCoverage {
       state: s.state,
       cause: s.cause,
       lastReadAt: at(s.lastReadMs),
+      lastFullReadAt: at(s.lastCompleteMs),
       badSince: at(s.badSinceMs),
       oldestAt: at(s.oldestMs),
       futureDated: typeof s.futureDated === 'number' && s.futureDated > 0 ? s.futureDated : null,

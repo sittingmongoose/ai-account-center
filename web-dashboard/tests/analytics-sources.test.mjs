@@ -545,3 +545,14 @@ test('a listed zero rate reads "Free", never unknown: cost rows, detail, donut a
   assert.doesNotMatch(JSON.stringify(kpi(view, 'cost').sub), /Partial/);
   assert.equal(view.trend.legend.find(l => l.key === 'cost').note, 'right axis, USD');
 });
+
+test('readable usage beside a failed folder is partial, with its last full-read clock', () => {
+  for (const kind of ['cached', 'unreadable']) {
+    const inc = includedView(payload({sources:[{tool:'codex',host:'nas1',state:kind,cause:'unreadable_folder',lastScanAt:null,rowCount:42,detail:'One folder searched for other tool homes could not be read (permission denied); readable logs are included'}]}),now);
+    const cell=inc.rows.find(r=>r.tool==='Codex').cells.find(c=>c.id==='nas1');
+    assert.equal(cell.text,'Read, partial');
+    assert.equal(cell.tone,'cached');
+    assert.match(cell.tip,/permission denied/);
+    assert.match(cell.tip,/No complete read recorded/);
+  }
+});

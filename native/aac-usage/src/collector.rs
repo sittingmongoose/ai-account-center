@@ -251,6 +251,13 @@ impl Collector {
     /// A folder inside a root that exists but cannot be listed: the kind is partial and says how
     /// many (FIX-ROUND-BIG 4). Its cached rows stay.
     pub fn unreadable_folder(&mut self, kind: &str, directory: &Path) {
+        // Error paths can lose the entry's type (a failed stat, a raced file, a socket or a
+        // SQLite sidecar). Count a folder only with evidence that it is one. Never re-probe
+        // an avoided mount; unknown entries remain failures without a false folder claim.
+        if crate::fsx::avoided(directory) || !std::fs::symlink_metadata(directory).is_ok_and(|meta| meta.is_dir()) {
+            self.read_failure(kind, util::filekey(kind, directory));
+            return;
+        }
         self.unreadable_folders
             .entry(kind.to_string())
             .or_default()

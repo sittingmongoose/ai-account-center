@@ -1436,19 +1436,20 @@ export function includedView(payload, now = Date.now()) {
   const cell = (r, id, tool) => {
     if (!r && NO_READER_TOOLS.has(tool)) return { id, text: 'Not found', tone: 'quiet', tip: 'No sign of this tool on this computer, or the computer was read by the older reader.' };
     if (!r) return { id, text: 'Not read', tone: 'quiet', tip: 'This computer is not read for this tool.' };
-    const t = when(r), last = finite(t) ? `Last scan ${timeTxt(t)}.` : 'Never scanned.';
+    const t = when(r), partial = r.state === 'cached' || r.state === 'unreadable';
+    const last = finite(t) ? `${partial ? 'Last full read' : 'Last scan'} ${timeTxt(t)}.` : partial ? 'No complete read recorded.' : 'Never scanned.';
     const why = text(r.detail) ? `${capFirst(r.detail)}. ` : '';
     if (r.state === 'scanning') return { id, text: 'Scanning…', tone: 'scanning', tip: `${why}${last}` };
     // A read with a note (a folder that did not answer, a write-ahead log, a cache cut) says it and is marked.
     if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: why ? 'cached' : 'ok', tip: [why.trim(), events(r), found(r), last].filter(Boolean).join(' · ') };
-    if (r.state === 'cached') return { id, text: finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Earlier records are shown until a scan finishes. ${last}` };
+    if (r.state === 'cached') return { id, text: r.cause === 'unreadable_folder' && r.rowCount > 0 ? 'Read, partial' : finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Usage from readable logs is included; a complete read is still pending. ${last}` };
     if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
     if (r.state === 'installed_no_logs') return { id, text: 'Installed, no logs yet', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
     if (r.state === 'no_reader') return r.cause === 'no_local_usage_records'
       ? { id, text: 'No local usage records', tone: 'quiet', tip: `${why}${found(r)}` }
       : { id, text: 'No usage reader yet', tone: 'quiet', tip: `${why}${found(r)}` };
     if (r.state === 'scan_failed') return { id, text: 'Scan failed', tone: 'unavailable', tip: `${why}${last}` };
-    if (r.state === 'unreadable') return { id, text: "Can't read", tone: 'unavailable', tip: `${why}${last}` };
+    if (r.state === 'unreadable') return { id, text: r.rowCount > 0 ? 'Read, partial' : "Can't read", tone: r.rowCount > 0 ? 'cached' : 'unavailable', tip: `${why}${last}` };
     if (notMeasured(r)) return { id, text: 'Not measured', tone: 'quiet', tip: `${capFirst(r.detail)}.` };
     if (noLocalLog(r)) return { id, text: 'No usage log', tone: 'quiet', tip: 'This tool keeps no local usage log to read.' };
     if (r.state === 'not_installed') return { id, text: 'Not installed', tone: 'quiet', tip: why || 'No usage logs for this tool were found on this computer.' };

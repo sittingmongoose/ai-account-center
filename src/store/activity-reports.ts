@@ -149,9 +149,9 @@ function reportState(
     case 'no_usage':
       return { state: hasCells ? 'ok' : 'no_usage', cause: null };
     case 'cached':
-      return { state: hasCells ? 'partial' : 'cached', cause: null };
+      return { state: hasCells ? 'partial' : 'cached', cause: fixed };
     case 'scanning':
-      return { state: hasCells ? 'partial' : 'scanning', cause: null };
+      return { state: hasCells ? 'partial' : 'scanning', cause: fixed };
     case 'not_installed':
       return { state: 'not_installed', cause: null };
     case 'unavailable':

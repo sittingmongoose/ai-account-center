@@ -429,7 +429,7 @@ const MAX_CACHED_ROWS = 100_000;
  * version 3 are read again. (3: per-session aggregates ride with the hourly
  * rows, so remote sessions count like local ones.)
  */
-const CACHE_VERSION = 7;
+const CACHE_VERSION = 8;
 
 /** A kind's last confirmed read, and the logs it has not read to their end (DESIGN 16.1). */
 interface KindRead {
@@ -439,6 +439,9 @@ interface KindRead {
   unfinishedCount?: number;
   /** Last nested-folder failure, retained through cached/failed reads until successful recovery. */
   unreadableFolders?: number;
+  /** The last attempt's explanation, retained with its state between scans. */
+  detail?: string | null;
+  cause?: string;
 }
 
 interface RemoteCache {
@@ -507,7 +510,7 @@ function loadCache(file: string, at: () => string = () => new Date().toISOString
     // Versions 1/2 predate hashed session aggregates and cannot safely retain
     // their sessions or confirm their files. Unknown future formats also reset.
     if (
-      ![3, 4, 5, 6, CACHE_VERSION].includes(value.version) ||
+      ![3, 4, 5, 6, 7, CACHE_VERSION].includes(value.version) ||
       !value.fingerprints ||
       typeof value.fingerprints !== 'object' ||
       !Array.isArray(value.rows) ||
@@ -525,6 +528,14 @@ function loadCache(file: string, at: () => string = () => new Date().toISOString
     // A kind's unfinished list is a diagnostic: a malformed one is dropped.
     for (const read of Object.values(value.kinds ?? {})) {
       if (!read || typeof read !== 'object') continue;
+      // Before v8 a productive partial scan overwrote the full-read clock. Its old full
+      // read cannot be recovered; retain all usage, but never publish an attempt as that read.
+      if (value.version < 8) {
+        if (read.state === 'cached') read.lastScanAt = null;
+        // Old counts included file failures and speculative signature child paths. The state
+        // and rows stay; only a new scan can establish an accurate folder count.
+        delete read.unreadableFolders;
+      }
       if (
         !Number.isSafeInteger(read.unreadableFolders) ||
         (read.unreadableFolders ?? 0) <= 0 ||
@@ -580,7 +591,7 @@ function loadCache(file: string, at: () => string = () => new Date().toISOString
       // Version 7 keys Codex by conversation and Muse by session: their rows keyed by path are read
       // again, and a take-over of them waits for that read (FIX-ROUND-BIG 1 and 2).
       const rebuilt = new Set<string>(
-        value.version < 6 ? ['claude', 'codex', 'muse'] : ['codex', 'muse']
+        value.version < 6 ? ['claude', 'codex', 'muse'] : value.version < 7 ? ['codex', 'muse'] : []
       );
       const fingerprints = { ...value.fingerprints };
       const kinds = { ...value.kinds };
@@ -976,6 +987,12 @@ export function rootFailureText(roots: AnalyticsDiscoveryRoot[]): string {
         ? 'could not be read (permission denied)'
         : 'could not be read';
   const linked = roots.every((root) => root.state.startsWith('link_'));
+  if (
+    roots.every(
+      (root) => ['signature', 'experiment'].includes(root.origin) && root.counts.filesFound === 0
+    )
+  )
+    return `${count} folder${count === 1 ? '' : 's'} searched for logs ${why}; discovery is incomplete, while readable log folders are still counted`;
   return `${count} ${linked ? 'linked ' : ''}log folder${count === 1 ? '' : 's'} ${count === 1 ? why.replace('point at', 'points at') : why}, so ${count === 1 ? 'its' : 'their'} logs are not counted`;
 }
 
@@ -1057,7 +1074,7 @@ function cachedHostSources(
     const unfinished = read?.unfinished?.length
       ? `; ${unfinishedText(read.unfinished, read.unfinishedCount)}`
       : '';
-    const why = `${failed ? `${scanFailureText(failed.cause)} (${failed.at})` : detail}${unfinished}`;
+    const why = `${failed ? `${scanFailureText(failed.cause)} (${failed.at})` : (read?.detail ?? detail)}${unfinished}`;
     const found = { ...sourceCounts(cached.discovery?.kinds[tool]), reader: cached.reader ?? null };
     // The last known per-root quality rides along (RECHECK-BIG-1 M5): a log folder the last real
     // scan could not read stays named on cached cells, never plain "cached". The saved discovery
@@ -1072,10 +1089,10 @@ function cachedHostSources(
       states.push({
         tool,
         host,
-        state: 'unreadable',
+        state: kept.length || keptSessions.length ? 'cached' : 'unreadable',
         lastScanAt: read?.lastScanAt ?? null,
         rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
-        detail: `${causes}${failed ? `; ${scanFailureText(failed.cause)} (${failed.at})` : ''}; ${kept.length || keptSessions.length ? 'showing previously read usage' : 'nothing is counted from them'}`,
+        detail: `${causes}${failed ? `; ${scanFailureText(failed.cause)} (${failed.at})` : ''}; ${kept.length || keptSessions.length ? 'usage from readable logs is included' : 'nothing is counted from them'}`,
         cause: 'unreadable_folder',
         ...found,
       });
@@ -1086,11 +1103,12 @@ function cachedHostSources(
       states.push({
         tool,
         host,
-        state: 'cached',
+        state: !failed && read?.state === 'ok' ? 'ok' : 'cached',
         lastScanAt: read?.lastScanAt ?? null,
         rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
-        detail: `${why}; showing previously read aggregates`,
-        ...(failed ? { cause: failed.cause } : {}),
+        detail:
+          !failed && read?.state === 'ok' ? null : `${why}; showing previously read aggregates`,
+        ...(failed ? { cause: failed.cause } : read?.cause ? { cause: read.cause } : {}),
         ...found,
       });
     } else if (failed) {
@@ -1115,12 +1133,26 @@ function cachedHostSources(
         state:
           read?.state === 'no_usage' ||
           read?.state === 'not_installed' ||
-          read?.state === 'installed_no_logs'
+          read?.state === 'installed_no_logs' ||
+          read?.state === 'unreadable' ||
+          read?.state === 'scanning' ||
+          read?.state === 'scan_failed'
             ? read.state
-            : 'unavailable',
+            : read?.state === 'cached'
+              ? 'scanning'
+              : 'unavailable',
         lastScanAt: read?.lastScanAt ?? null,
         rowCount: 0,
-        detail,
+        detail:
+          read?.detail ??
+          (read?.state === 'unreadable'
+            ? 'its logs were found but could not be read'
+            : read?.state === 'scanning' || read?.state === 'cached'
+              ? 'the scan has not finished'
+              : read
+                ? null
+                : detail),
+        ...(read?.state === 'unreadable' ? { cause: 'read_failed' } : {}),
         ...found,
       });
     }
@@ -1727,12 +1759,24 @@ export async function loadAnalyticsRemoteSources(
         const kindReads = { ...cached.kinds };
         for (const tool of kinds) {
           const kind = response.kinds[tool];
-          if (!kind || discarded(tool)) continue;
+          if (!kind) continue;
           const partial =
             cutKinds.has(tool) || kind.partial || (tool === 'omp' && response.discoveryTruncated);
-          if (partial && Object.keys(freshPrints[tool] ?? {}).length === 0) continue;
+          if (discarded(tool) || (partial && Object.keys(freshPrints[tool] ?? {}).length === 0)) {
+            kindReads[tool] = {
+              ...cached.kinds?.[tool],
+              lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
+              state:
+                kind.state === 'pending'
+                  ? 'scanning'
+                  : kind.state === 'error' && !merged.some((row) => row.k === tool)
+                    ? 'unreadable'
+                    : 'cached',
+            };
+            continue;
+          }
           kindReads[tool] = {
-            lastScanAt: scannedAt,
+            lastScanAt: partial ? (cached.kinds?.[tool]?.lastScanAt ?? null) : scannedAt,
             state: partial
               ? 'cached'
               : kind.state === 'not_installed'
@@ -1855,41 +1899,6 @@ export async function loadAnalyticsRemoteSources(
             ...LOCAL_SCANNER_KINDS.filter((kind) => !TAKEOVER_KINDS.includes(kind)),
             ...(Object.keys(owned) as AnalyticsRemoteKind[]),
           ]);
-        try {
-          const saved = saveCache(file, {
-            ...(owned && Object.keys(owned).length ? { owned } : {}),
-            version: CACHE_VERSION,
-            fingerprints: prints,
-            rows: merged,
-            srows: mergedSessions,
-            lastScanAt: scannedAt,
-            kinds: kindReads,
-            discovery,
-            ...(toolsAt ? { toolsAt } : {}),
-            sessions,
-            reader,
-            // A kind whose call failed keeps the failure on record; a full answer clears it.
-            ...(failedKinds.size
-              ? {
-                  lastFailure: {
-                    cause: failure.cause ?? 'helper_failed',
-                    exitCode: failure.exitCode ?? null,
-                    at: scannedAt,
-                    kinds: [...failedKinds],
-                  },
-                }
-              : {}),
-            settled,
-            // A discard is named until a complete read; a trim while its cut is in range.
-            ...(cached.discarded && !settled ? { discarded: cached.discarded } : {}),
-            ...(cached.trimmed && Date.parse(cached.trimmed.before) > minDateMs
-              ? { trimmed: cached.trimmed }
-              : {}),
-          });
-          if (saved) cacheMarks.set(host, { ...saved, discarded: cached.discarded });
-        } catch {
-          /* Cache writes are best-effort; the rows are still served. */
-        }
         const firstState = states.length;
         for (const tool of kinds) {
           await yieldTurn();
@@ -2014,10 +2023,10 @@ export async function loadAnalyticsRemoteSources(
               states.push({
                 tool,
                 host,
-                state: 'unreadable',
+                state: kept || srows.length ? 'cached' : 'unreadable',
                 lastScanAt: cached.kinds?.[tool]?.lastScanAt ?? null,
                 rowCount: events,
-                detail: `${parts.join('; ')}; ${kept ? 'showing previously read usage' : 'nothing is counted from them'}`,
+                detail: `${parts.join('; ')}; ${kept || srows.length ? 'usage from readable logs is included' : 'nothing is counted from them'}`,
                 cause: 'unreadable_folder',
               });
               continue;
@@ -2093,6 +2102,48 @@ export async function loadAnalyticsRemoteSources(
             const note = `${count} network folder${count === 1 ? '' : 's'} on this computer did not answer, so logs there are not counted`;
             entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
           }
+        }
+        for (const entry of states.slice(firstState)) {
+          const read = kindReads[entry.tool as AnalyticsRemoteKind];
+          if (read) {
+            read.detail = entry.detail;
+            read.cause = entry.cause ?? undefined;
+          }
+        }
+        try {
+          const saved = saveCache(file, {
+            ...(owned && Object.keys(owned).length ? { owned } : {}),
+            version: CACHE_VERSION,
+            fingerprints: prints,
+            rows: merged,
+            srows: mergedSessions,
+            lastScanAt: scannedAt,
+            kinds: kindReads,
+            discovery,
+            ...(toolsAt ? { toolsAt } : {}),
+            sessions,
+            reader,
+            // A kind whose call failed keeps the failure on record; a full answer clears it.
+            ...(failedKinds.size
+              ? {
+                  lastFailure: {
+                    cause: failure.cause ?? 'helper_failed',
+                    exitCode: failure.exitCode ?? null,
+                    at: scannedAt,
+                    kinds: [...failedKinds],
+                  },
+                }
+              : {}),
+            settled,
+            // A discard is named until a complete read; a trim while its cut is in range.
+            ...(cached.discarded && !settled ? { discarded: cached.discarded } : {}),
+            ...(cached.trimmed && Date.parse(cached.trimmed.before) > minDateMs
+              ? { trimmed: cached.trimmed }
+              : {}),
+          });
+          if (saved) cacheMarks.set(host, { ...saved, discarded: cached.discarded });
+        } catch {
+          /* Cache writes are best-effort; the rows are still served. */
         }
         states.push(...noReaderStates(host, discovery.tools, toolsAt ?? null));
         onHostScan(host, 'done');

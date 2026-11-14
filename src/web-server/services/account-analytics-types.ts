@@ -312,6 +312,8 @@ export interface AccountAnalyticsHistoryCoverage {
     state: string | null;
     cause: string | null;
     lastReadAt: string | null;
+    /** Last complete live read; an incomplete attempt must not replace this clock. */
+    lastFullReadAt?: string | null;
     badSince: string | null;
     oldestAt: string | null;
     /** Records the current read left out as dated more than five minutes after it. */
