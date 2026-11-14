@@ -32,6 +32,21 @@ export function pythonSignInFallback(): void {
   logger.info('agent.verbs.fallback', 'fallback: python', { verb: 'signin-expiry' });
 }
 
+/** The service's single fallback boundary, shared by local and SSH collectors. */
+export async function collectSignInWithFallback(
+  agent: () => Promise<string | null>,
+  python: () => Promise<string>
+): Promise<string> {
+  try {
+    const result = await agent();
+    if (result !== null) return result;
+  } catch {
+    /* Python remains the reference. */
+  }
+  pythonSignInFallback();
+  return python();
+}
+
 function target(platform: UsageHost['platform']): string {
   return platform === 'mac'
     ? 'aarch64-apple-darwin'
@@ -49,7 +64,7 @@ export function agentLauncher(artifact: AgentArtifact, platform: UsageHost['plat
   return `p="$HOME/.cache/ai-account-center/bin/aac-agent"; [ -f "$p" ] && [ -x "$p" ] || exit 87; h=$(sha256sum "$p" 2>/dev/null || shasum -a 256 "$p") || exit 87; [ "\${h%% *}" = '${artifact.sha256}' ] || exit 87; exec "$p"`;
 }
 
-function reply(stdout: string, id: string): string {
+function reply(stdout: string, id: string): string | null {
   const lines = stdout.trim().split('\n');
   if (lines.length !== 1) throw new ConfigError('Invalid agent reply');
   const event: unknown = JSON.parse(lines[0]);
@@ -57,73 +72,82 @@ function reply(stdout: string, id: string): string {
   const row = event as Record<string, unknown>;
   if (row.protocol !== 1 || row.id !== id || row.type !== 'result')
     throw new ConfigError('Agent failed');
+  if (JSON.stringify(row.value) === '{"fallback":"python"}') return null;
   const value = row.value as { schemaVersion?: unknown; profiles?: unknown } | null;
   if (value?.schemaVersion !== 1 || !Array.isArray(value.profiles))
     throw new ConfigError('Invalid agent result');
   return JSON.stringify(value);
 }
 
-/** Null means no verified agent; a running agent's failure stays a failure. */
+/** Every unavailable, unproven or failed agent delegates to the labelled Python helper. */
 export async function runSignInAgent(
   host: UsageHost,
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
   run = runManagedCommand,
   mode: AgentVerbs = agentVerbs()
 ): Promise<string | null> {
-  if (mode === 'off') return null;
-  const artifact = artifacts.find((a) => a.target === target(host.platform));
-  if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return null;
-  const id = 'signin-expiry';
-  let executable = 'ssh';
-  let args: string[];
-  if (host.sshHost) {
-    args = sshArgv(host.sshHost, agentLauncher(artifact, host.platform), {
-      interval: 5,
-      countMax: 1,
-    });
-  } else {
-    executable = path.resolve(__dirname, '../../..', artifact.file);
-    try {
-      const info = await fs.promises.lstat(executable);
-      if (!info.isFile() || info.size > 128 * 1024 * 1024) return null;
-      const hash = createHash('sha256');
-      for await (const chunk of fs.createReadStream(executable)) hash.update(chunk);
-      if (hash.digest('hex') !== artifact.sha256) return null;
-    } catch {
-      return null;
-    }
-    const version = await run(executable, ['--version'], { timeoutMs: 3000, maxBytes: 4096 });
-    if (version.failed) return null;
-    try {
-      const identity = JSON.parse(version.stdout);
-      if (
-        identity.name !== 'aac-agent' ||
-        identity.version !== artifact.version ||
-        identity.protocol !== 1 ||
-        identity.target !== artifact.target
-      )
+  try {
+    if (mode === 'off') return null;
+    const artifact = artifacts.find((a) => a.target === target(host.platform));
+    if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return null;
+    const id = 'signin-expiry';
+    let executable = 'ssh';
+    let args: string[];
+    if (host.sshHost) {
+      args = sshArgv(host.sshHost, agentLauncher(artifact, host.platform), {
+        interval: 5,
+        countMax: 1,
+      });
+    } else {
+      executable = path.resolve(__dirname, '../../..', artifact.file);
+      try {
+        const info = await fs.promises.lstat(executable);
+        if (!info.isFile() || info.size > 128 * 1024 * 1024) return null;
+        const hash = createHash('sha256');
+        for await (const chunk of fs.createReadStream(executable)) hash.update(chunk);
+        if (hash.digest('hex') !== artifact.sha256) return null;
+      } catch {
         return null;
-    } catch {
-      return null;
+      }
+      const version = await run(executable, ['--version'], { timeoutMs: 3000, maxBytes: 4096 });
+      if (version.failed || version.code !== 0 || version.timedOut || version.missing) return null;
+      try {
+        const identity = JSON.parse(version.stdout);
+        if (
+          identity.name !== 'aac-agent' ||
+          identity.version !== artifact.version ||
+          identity.protocol !== 1 ||
+          identity.target !== artifact.target
+        )
+          return null;
+      } catch {
+        return null;
+      }
+      args = [];
     }
-    args = [];
+    const input =
+      JSON.stringify({
+        protocol: 1,
+        verb: 'signin-expiry',
+        id,
+        deadlineMs: 15000,
+        args: host.sshHost ? {} : { ccsDir: getCcsDir() },
+      }) + '\n';
+    const result = await run(executable, args, {
+      timeoutMs: 20000,
+      maxBytes: 1024 * 1024,
+      input,
+      env: { ...process.env },
+    });
+    if (host.sshHost && result.code === 87) return null;
+    if (result.failed || result.code !== 0 || result.timedOut || result.missing) return null;
+    const value = reply(result.stdout, id);
+    if (value !== null)
+      logger.info('agent.verbs.result', 'Agent sign-in expiry collected', {
+        verb: 'signin-expiry',
+      });
+    return value;
+  } catch {
+    return null;
   }
-  const input =
-    JSON.stringify({
-      protocol: 1,
-      verb: 'signin-expiry',
-      id,
-      deadlineMs: 15000,
-      args: host.sshHost ? {} : { ccsDir: getCcsDir() },
-    }) + '\n';
-  const result = await run(executable, args, {
-    timeoutMs: 20000,
-    maxBytes: 1024 * 1024,
-    input,
-    env: { ...process.env },
-  });
-  if (host.sshHost && result.code === 87) return null;
-  if (result.failed) throw new ConfigError('collector failed');
-  logger.info('agent.verbs.result', 'Agent sign-in expiry collected', { verb: 'signin-expiry' });
-  return reply(result.stdout, id);
 }

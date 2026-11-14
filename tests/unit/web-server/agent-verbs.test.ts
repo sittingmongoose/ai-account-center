@@ -3,7 +3,11 @@ import { createHash } from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { agentLauncher, runSignInAgent } from '../../../src/web-server/services/agent-verbs';
+import {
+  agentLauncher,
+  runSignInAgent,
+  collectSignInWithFallback,
+} from '../../../src/web-server/services/agent-verbs';
 import type { UsageHost } from '../../../src/web-server/services/usage-failover-contract';
 import type { ManagedCommandResult } from '../../../src/utils/managed-process';
 const host: UsageHost = { machine: 'fixture', platform: 'linux', sshHost: 'fixture' };
@@ -54,26 +58,47 @@ describe('agent verb opt-in', () => {
     );
     expect(JSON.parse(result!)).toEqual({ schemaVersion: 1, profiles: [] });
   });
-  it('falls back only for absent/mismatched remote binaries; running failures remain errors', async () => {
+  it('invokes the Python collector after every agent failure or fallback reply', async () => {
+    const outcomes = [
+      async () => {
+        throw new Error('spawn failed');
+      },
+      async () => ({ ...ok(''), code: 87, failed: true }),
+      async () => ({ ...ok(''), code: 1, failed: true }),
+      async () => ({ ...ok(''), code: 1 }),
+      async () => ({ ...ok(''), timedOut: true }),
+      async () => ({ ...ok(''), missing: true }),
+      async () => ok('broken json'),
+      async () => ok('{"type":"failure","protocol":1,"id":"signin-expiry"}'),
+      async () => ok('{"type":"result","protocol":1,"id":"wrong"}'),
+      async () =>
+        ok('{"type":"result","protocol":1,"id":"signin-expiry","value":{"fallback":"python"}}'),
+    ];
+    for (const run of outcomes) {
+      let pythonCalls = 0;
+      const result = await collectSignInWithFallback(
+        () => runSignInAgent(host, [artifact], run, 'on'),
+        async () => {
+          pythonCalls++;
+          return 'python fixture report';
+        }
+      );
+      expect(result).toBe('python fixture report');
+      expect(pythonCalls).toBe(1);
+    }
+    let pythonCalls = 0;
     expect(
-      await runSignInAgent(
-        host,
-        [artifact],
-        async () => ({ ...ok(''), failed: true, code: 87 }),
-        'on'
+      await collectSignInWithFallback(
+        async () => {
+          throw new Error('verify failed');
+        },
+        async () => {
+          pythonCalls++;
+          return 'python';
+        }
       )
-    ).toBeNull();
-    await expect(
-      runSignInAgent(host, [artifact], async () => ({ ...ok(''), failed: true, code: 1 }), 'on')
-    ).rejects.toThrow('collector failed');
-    await expect(
-      runSignInAgent(
-        host,
-        [artifact],
-        async () => ok('{"type":"result","protocol":1,"id":"wrong"}'),
-        'on'
-      )
-    ).rejects.toThrow();
+    ).toBe('python');
+    expect(pythonCalls).toBe(1);
   });
   it('rejects a corrupt local binary before executing it', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-agent-adapter-'));

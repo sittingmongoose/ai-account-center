@@ -2,6 +2,121 @@
   "schemaVersion": 1,
   "cases": [
     {
+      "source": "review-M4-numeric-grammar",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "cores=0x10\n"
+      },
+      "expected": {
+        "cores": 16,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": null,
+        "memTotalBytes": null,
+        "disk": null,
+        "diskError": "The machine did not report its system disk.",
+        "memoryError": "The machine did not report its memory.",
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      },
+      "fallback": true
+    },
+    {
+      "source": "review-M4-numeric-grammar",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "cores=1\nload=0x10\n"
+      },
+      "expected": {
+        "cores": 1,
+        "load1": 16,
+        "busyPct": null,
+        "memAvailableBytes": null,
+        "memTotalBytes": null,
+        "disk": null,
+        "diskError": "The machine did not report its system disk.",
+        "memoryError": "The machine did not report its memory.",
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      },
+      "fallback": true
+    },
+    {
+      "source": "review-M4-numeric-grammar",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "cores=1e1\n"
+      },
+      "expected": {
+        "cores": 10,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": null,
+        "memTotalBytes": null,
+        "disk": null,
+        "diskError": "The machine did not report its system disk.",
+        "memoryError": "The machine did not report its memory.",
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      },
+      "fallback": true
+    },
+    {
+      "source": "review-M4-numeric-grammar",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "cores=+1\n"
+      },
+      "expected": {
+        "cores": 1,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": null,
+        "memTotalBytes": null,
+        "disk": null,
+        "diskError": "The machine did not report its system disk.",
+        "memoryError": "The machine did not report its memory.",
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      },
+      "fallback": true
+    },
+    {
+      "source": "review-M4-numeric-grammar",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "cores=١\n"
+      },
+      "expected": null,
+      "fallback": true
+    },
+    {
+      "source": "review-M4-numeric-grammar",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "cores=9007199254740992\n"
+      },
+      "expected": {
+        "cores": 9007199254740992,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": null,
+        "memTotalBytes": null,
+        "disk": null,
+        "diskError": "The machine did not report its system disk.",
+        "memoryError": "The machine did not report its memory.",
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      },
+      "fallback": true
+    },
+    {
       "source": "tests/unit/web-server/status/status-collectors.test.ts:226",
       "verb": "inventory",
       "args": {

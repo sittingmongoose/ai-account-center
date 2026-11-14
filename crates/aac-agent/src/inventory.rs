@@ -5,6 +5,35 @@ use std::{collections::BTreeMap, path::Path};
 use tokio::io::AsyncReadExt;
 
 pub(crate) fn parse(platform: &str, text: &str) -> Value {
+    crate::proof::scope(|| parse_proven(platform, text))
+}
+fn parse_proven(platform: &str, text: &str) -> Value {
+    for (key, value) in text.lines().filter_map(|l| l.split_once('=')) {
+        if key.trim() == "cpu" {
+            for n in value.split_whitespace() {
+                crate::proof::decimal(n);
+            }
+        } else if [
+            "cores",
+            "coreCount",
+            "load",
+            "memTotalKb",
+            "memTotalB",
+            "memAvailKb",
+            "pageSize",
+            "pagesAvail",
+            "diskTotalKb",
+            "diskTotalB",
+            "diskFreeKb",
+            "diskFreeB",
+            "cpuLoad",
+            "cpuPct",
+        ]
+        .contains(&key.trim())
+        {
+            crate::proof::decimal(value.trim());
+        }
+    }
     let values: BTreeMap<_, _> = text
         .lines()
         .filter_map(|l| l.split_once('='))
@@ -190,15 +219,16 @@ pub(crate) async fn run(args: &Value) -> Result<Value, Failure> {
     let mut bytes = Vec::new();
     stdout.take(65537).read_to_end(&mut bytes).await?;
     if bytes.len() > 65536 {
-        return Err(Failure::new(
-            Cause::OutputTooLarge,
-            "machine probe cap exceeded",
-        ));
+        return Ok(crate::proof::fallback());
     }
     let _ = child.wait().await?;
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| Failure::new(Cause::Damaged, "invalid machine probe"))?;
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return Ok(crate::proof::fallback());
+    };
     let sample = parse(platform, text);
+    if sample == crate::proof::fallback() {
+        return Ok(sample);
+    }
     let mut tools = BTreeMap::new();
     for name in [
         "claude",

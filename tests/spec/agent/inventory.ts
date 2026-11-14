@@ -18,9 +18,13 @@ for (const row of cases) {
     timeout: 5000,
   });
   const actual = JSON.parse(result.stdout);
+  assert.equal(result.status, 0);
+  assert.equal(actual.type, 'result');
+  assert.equal(actual.protocol, 1);
+  assert.equal(actual.id, 'parity');
   assert.deepStrictEqual(
     actual.value,
-    expected,
+    row.fallback ? { fallback: 'python' } : expected,
     JSON.stringify({ source: row.source, ts: expected, rust: actual })
   );
   assert.deepStrictEqual(expected, row.expected);

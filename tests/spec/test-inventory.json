@@ -712,6 +712,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/spec/agent/harness_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/account-usage/claude_dynamic_e2e_test.py",
       "kind": "helper",
       "evidence": [

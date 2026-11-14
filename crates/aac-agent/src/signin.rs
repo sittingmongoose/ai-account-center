@@ -52,6 +52,12 @@ const FIELDS: [&str; 12] = [
 ];
 
 pub(crate) fn epoch(value: &Value) -> Option<i64> {
+    if let Value::String(s) = value
+        && s.bytes()
+            .any(|c| !c.is_ascii_digit() && !b" \t\r\n".contains(&c))
+    {
+        crate::proof::reject();
+    }
     let number = match value {
         Value::Number(n) => n
             .as_f64()
@@ -216,15 +222,22 @@ fn dir_state(path: &Path) -> (bool, bool) {
     }
 }
 fn read(path: &Path) -> Option<Value> {
+    read_with_cap(path, 65536, false)
+}
+fn read_with_cap(path: &Path, cap: usize, bom: bool) -> Option<Value> {
     if let Some(raw) = fixture_io("reads", path) {
         use base64::Engine;
         return raw
             .as_str()
             .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
-            .and_then(|b| json_bytes(&b));
+            .and_then(|b| crate::proof::json(&b, cap, bom));
     }
     let before = fs::symlink_metadata(path).ok()?;
-    if !before.is_file() || before.len() > 65536 {
+    if before.len() > cap as u64 {
+        crate::proof::reject();
+        return None;
+    }
+    if !before.is_file() {
         return None;
     }
     let mut options = fs::OpenOptions::new();
@@ -247,45 +260,11 @@ fn read(path: &Path) -> Option<Value> {
         }
     }
     let mut bytes = Vec::new();
-    file.take(65537).read_to_end(&mut bytes).ok()?;
-    if bytes.len() > 65536 {
-        return None;
-    }
-    json_bytes(&bytes)
+    file.take(cap as u64 + 1).read_to_end(&mut bytes).ok()?;
+    crate::proof::json(&bytes, cap, bom)
 }
 fn json_bytes(bytes: &[u8]) -> Option<Value> {
-    if let Ok(value) = serde_json::from_slice(bytes) {
-        return Some(value);
-    }
-    // Python accepts these non-standard numeric literals; their epochs are absent.
-    let text = std::str::from_utf8(bytes).ok()?;
-    let mut out = String::new();
-    let mut quoted = false;
-    let mut escape = false;
-    let mut at = 0;
-    while at < text.len() {
-        let rest = &text[at..];
-        let c = rest.chars().next()?;
-        if !quoted
-            && let Some(token) = ["-Infinity", "Infinity", "NaN"]
-                .into_iter()
-                .find(|s| rest.starts_with(s))
-        {
-            out.push_str("null");
-            at += token.len();
-            continue;
-        }
-        out.push(c);
-        at += c.len_utf8();
-        if escape {
-            escape = false;
-        } else if quoted && c == '\\' {
-            escape = true;
-        } else if c == '"' {
-            quoted = !quoted;
-        }
-    }
-    serde_json::from_str(&out).ok()
+    crate::proof::json(bytes, 65536, false)
 }
 fn display(path: &Path, home: &Path) -> String {
     match path.strip_prefix(home) {
@@ -602,7 +581,7 @@ fn roots(
             }
         }
         let settings_path = home.join(".t3/userdata/settings.json");
-        let settings = read(&settings_path);
+        let settings = read_with_cap(&settings_path, 1_048_576, true);
         if settings.is_none()
             && (fs::symlink_metadata(&settings_path).is_ok() || dir_state(&settings_path).1)
         {
@@ -841,6 +820,7 @@ fn merge_keychain(row: &mut Value, candidate: &Value, now: i64) -> (bool, bool) 
             (false, true)
         }
         Some("oversized") => {
+            crate::proof::reject();
             row["error"] = "keychain item unreadable".into();
             (true, false)
         }
@@ -886,6 +866,20 @@ fn codex(home: &Path) -> Option<Value> {
 }
 
 pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
+    let mut failure = None;
+    let value = crate::proof::scope(|| match run_inner(args) {
+        Ok(v) => v,
+        Err(e) => {
+            failure = Some(e);
+            Value::Null
+        }
+    });
+    match failure {
+        Some(e) => Err(e),
+        None => Ok(value),
+    }
+}
+fn run_inner(args: &Value) -> Result<Value, Failure> {
     #[cfg(feature = "parity-fixtures")]
     {
         FIXTURE_IO.with(|v| *v.borrow_mut() = args.get("io").cloned().unwrap_or(Value::Null));

@@ -9,7 +9,22 @@ const source = ts.createSourceFile(
   ts.ScriptTarget.Latest,
   true
 );
-const cases: unknown[] = [];
+const cases: unknown[] = [
+  ...[
+    'cores=0x10\n',
+    'cores=1\nload=0x10\n',
+    'cores=1e1\n',
+    'cores=+1\n',
+    'cores=١\n',
+    'cores=9007199254740992\n',
+  ].map((probe) => ({
+    source: 'review-M4-numeric-grammar',
+    verb: 'inventory',
+    args: { platform: 'linux', probe },
+    expected: parseMachineProbe('linux', probe),
+    fallback: true,
+  })),
+];
 function visit(node: ts.Node) {
   if (
     ts.isCallExpression(node) &&

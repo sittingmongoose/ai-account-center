@@ -1,5 +1,6 @@
 //! Read-only host agent with bounded, deadline-controlled NDJSON requests.
 mod inventory;
+mod proof;
 mod signin;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{Control, Event, Handshake, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request};

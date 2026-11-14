@@ -40,3 +40,46 @@ hashes and binaries; this task neither ships nor installs them. A missing or
 hash-mismatched binary keeps the labelled `fallback: python`; an executing
 agent's failure remains a failure. Existing foundation fake-transport tests
 exercise upload, verification and handshake without contacting real peers.
+
+## Fix round 1: conservative delegation
+
+The current contract supersedes the original failure behavior above: **every
+agent failure** (spawn, exit, verification, timeout, protocol or explicit
+fallback result) invokes the labelled Python helper through the same collector
+boundary for local and SSH hosts.
+
+`proof.rs` centralizes the grammar boundary. A verb returns exactly
+`{"fallback":"python"}` in its normal terminal result whenever it cannot prove
+an input belongs to the supported subset. It never publishes a partially parsed
+answer. JSON must parse under serde's bounded nesting, contain only exact-range
+integers as numbers, and have no non-ASCII numeric characters in strings. Invalid
+UTF-8, lone JSON surrogate escapes, nonstandard constants, fractions/exponents,
+overflowing values and inputs beyond their file cap delegate. Expiry strings use
+ASCII digits/ordinary ASCII spacing. Inventory accepts plain finite decimal
+numbers in the exact-integer range; hex, exponent, signed-plus, Unicode numeric
+and excessive numeric forms delegate. It deliberately does not implement all
+Python JSON or JS Number quirks. Credential documents use 65,536 bytes; settings
+use their own 1,048,576-byte cap and optional UTF-8 BOM.
+
+Regenerate with the original capture scripts followed by
+`python3 tests/spec/agent/review-cases.py`. The latter records explicit delegation
+expectations independently of the agent and adds real-file review cases. Compare
+105 sign-in cases (including 9 direct-file regressions) and 15 inventory cases
+(including 6 numeric-boundary regressions). A fallback case must return the exact
+fixed value, while Python still must equal the recorded reference output.
+
+For a separate production-path witness, build without `parity-fixtures`, then run
+`python3 tests/spec/agent/run.py target/debug/aac-agent --production-only`. These
+9 cases recreate real credential/settings files without injecting IO. The
+harness validates exit 0 plus terminal type, protocol and correlation id before
+comparing any value. `python3 tests/spec/agent/harness_test.py` rejects a matching
+value with wrong terminal metadata or a nonzero process exit.
+
+Coverage limits: the original 96 captures inject credential read outcomes and
+therefore do **not** prove production credential opens, races or permission
+behavior. The direct-file suite covers the review's document grammar and cap
+cases, not every filesystem race or hung mount. Inventory parser cases do **not**
+exercise real tool presence, subprocess probes or native Mac/Windows behavior.
+Keychain cases use injected responses; no real Keychain is tested. Transport
+failures use fakes, not real SSH hosts. These are explicit limits, not claims of
+exhaustive Python/TS parity. Unsupported input classes delegate to the reference.
