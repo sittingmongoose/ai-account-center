@@ -238,8 +238,8 @@ describe('one cache size limit for save and load', () => {
     fs.writeFileSync(file, body + ' '.repeat(MAX_REMOTE_CACHE_BYTES - Buffer.byteLength(body)));
     expect(fs.statSync(file).size).toBe(MAX_REMOTE_CACHE_BYTES);
     const at = codexCell(loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).states);
-    expect(at).toMatchObject({ state: 'cached', rowCount: 3 });
-    expect(at?.detail).not.toContain('cache_oversize');
+    expect(at).toMatchObject({ state: 'ok', rowCount: 3 });
+    expect(at?.detail ?? '').not.toContain('cache_oversize');
 
     fs.appendFileSync(file, ' ');
     const over = codexCell(loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).states);
