@@ -2847,6 +2847,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/cursor-quota.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/dashboard-auth-devices.test.ts",
       "kind": "safety",
       "evidence": [

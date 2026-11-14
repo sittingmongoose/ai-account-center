@@ -101,6 +101,17 @@ the legacy pools. Changing plans therefore cannot turn old monthly model usage
 into a new shared-pool forecast. A newly verified plan also invalidates cached
 quota from the previous plan when usage itself is unavailable.
 
+The dashboard's Cursor quota card and `aac-usage` publication prefer AAC's stored
+Cursor API key (`ai-account-center cursor-key set`). The existing Rust
+`aac-cursor-account quota` reader supplies total usage, auto usage and the billing
+cycle reset; the dashboard transport never handles the key itself. Reads are
+cached for ten minutes, with manual refresh allowed. A failed read retains the
+last successful reading with its sample time and cached status. A rejected key
+shows "The key was rejected." without quota values. Only a confirmed missing key
+uses the desktop/session fallback. The private, versioned
+`cache/cursor-quota-v1.json` stores sanitized quota samples bound to a key
+fingerprint; dashboard and publisher JSON contracts are unchanged.
+
 `cursor_usage.py` is shared by the standalone desktop helper and the streamed
 failover bundle. Standalone installations must update it together with
 `desktop_usage.py`, `desktop_helpers.py` and `plan_common.py`. The collector uses
