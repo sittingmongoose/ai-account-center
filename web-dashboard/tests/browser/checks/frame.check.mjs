@@ -287,58 +287,44 @@ export const tests = {
 		}
 	},
 
-	async 'frame: on by default, Classic app one tap away, and Try it brings it back'(t) {
+	async 'frame: / serves the frame, and every classic address and a stored classic choice land on it'(t) {
 		await t.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
 		await t.app.signIn();
-		await t.page.evaluate(() => localStorage.removeItem('aac-frame'));
-		await t.goto('/', { settleMs: 300 });
-		await t.until('nothing chosen: the start page opens the frame (FRAME_DEFAULT)', () => location.pathname === '/app/home', null, { timeout: 15000, hard: true });
-
-		await t.step('every classic address opens the frame', async () => {
-			for (const [from, page] of [['/', 'home'], ['/analytics', 'analytics'], ['/accounts', 'accounts'], ['/?view=scoreboard', 'scoreboard'], ['/status', 'status']]) {
+		await t.step('/ is the frame page itself, not a page that sends the browser on', async () => {
+			const r = await t.page.evaluate(async () => {
+				const res = await fetch('/', { credentials: 'same-origin', redirect: 'manual' });
+				const html = await res.text();
+				return { status: res.status, frame: /\/pkg\/[a-f0-9]{12}\/aac_web\.js/.test(html), canvas: html.includes('id="canvas"') || html.includes('bridge.js') };
+			});
+			await t.check('/ answers 200 with the frame page', r.status === 200 && r.frame && !r.canvas, JSON.stringify(r));
+		});
+		await t.step('every classic address opens its tab at its /app address', async () => {
+			for (const [from, page] of [['/', 'home'], ['/login', 'home'], ['/analytics', 'analytics'], ['/accounts', 'accounts'], ['/accounts/claude', 'accounts'], ['/status', 'status'], ['/scoreboard', 'scoreboard'], ['/?view=scoreboard', 'scoreboard'], ['/?view=accounts&e2e', 'accounts'], ['/?classic=1', 'home'], ['/?content=1', 'home'], ['/home', 'home'], ['/settings', 'accounts']]) {
 				await t.goto(from, { settleMs: 200 });
-				await t.until(`${from} opens /app/${page}`, (p) => location.pathname === `/app/${p}`, page, { timeout: 15000 });
+				await t.until(`${from} opens /app/${page}`, (p) => location.pathname === `/app/${p}` && !/[?&](view|classic|content)=/.test(location.search), page, { timeout: 15000 });
+				await routeShown(t, page);
 			}
-			await t.goto('/?classic=1', { settleMs: 1200 });
-			await t.equal('?classic=1 still opens the classic app', await t.page.evaluate(() => location.pathname), '/');
 			const manifest = await t.page.evaluate(async () => (await (await fetch('/manifest.webmanifest')).json()).start_url);
-			await t.equal('the installed app starts at /, so a fresh install opens the frame', manifest, '/');
+			await t.equal('the installed app starts at /, which is the frame', manifest, '/');
 		});
-
-		await t.step('Classic app in the account menu', async () => {
-			await openFrame(t, 'home');
+		await t.step('a device that chose the classic app lands on the frame', async () => {
+			await t.page.evaluate(() => localStorage.setItem('aac-frame', 'classic'));
+			await t.goto('/', { settleMs: 1200 });
+			await t.until('a stored classic choice opens the frame', () => location.pathname === '/app/home' && !!document.querySelector('.shell'), null, { timeout: 15000, hard: true });
+			await t.check('no classic canvas or bridge anywhere', await t.page.evaluate(() => !document.querySelector('#canvas') && !performance.getEntriesByType('resource').some((e) => /bridge\.js|ccs_account_dashboard/.test(e.name))));
 			await t.page.click('.chrome .select-btn[aria-label="Account"]');
-			await t.page.locator('.acct-menu .menu-item', { hasText: 'Classic app' }).click();
-			await t.until('Classic app opens /', () => location.pathname === '/' && !!document.querySelector('#canvas'), null, { timeout: 15000, hard: true });
-			await t.page.waitForTimeout(1500);
-			await t.equal('and stays there', await t.page.evaluate(() => location.pathname), '/');
-			await t.equal('the setting is classic for this device', await t.page.evaluate(() => localStorage.getItem('aac-frame')), 'classic');
-		});
-
-		await t.step('Try it on the classic Status tab', async () => {
-			await t.goto('/status?e2e', { settleMs: 500 });
-			await t.until('the classic shell shows Status', () => {
-				const f = [...document.querySelectorAll('iframe.aac-frame')].find((x) => (x.getAttribute('src') || '').startsWith('/app/status'));
-				return !!f && f.style.visibility === 'visible';
-			}, null, { timeout: 30000, hard: true });
-			const status = t.page.frames().find((f) => f.url().includes('/app/status'));
-			await status.waitForSelector('.frame-offer button');
-			await status.click('.frame-offer button');
-			await t.until('Try it opens the frame on Status', () => location.pathname === '/app/status', null, { timeout: 15000, hard: true });
-			await routeShown(t, 'status');
-			await t.equal('the setting is the frame again', await t.page.evaluate(() => localStorage.getItem('aac-frame')), 'new');
+			await t.check('the account menu offers no classic app', await t.page.evaluate(() => ![...document.querySelectorAll('.acct-menu .menu-item')].some((b) => /Classic/.test(b.textContent))));
 		});
 	},
 
 	async 'frame: the installed app opens offline from the service worker'(t) {
 		await t.newContext({ viewport: { width: 402, height: 874 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
 		await t.app.signIn();
-		await t.page.evaluate(() => localStorage.setItem('aac-frame', 'new'));
 		await openFrame(t, 'status');
 		await t.until('the service worker controls the frame', () => !!navigator.serviceWorker?.controller, null, { timeout: 20000 });
-		// Under the worker, as the installed app has used it: the classic page once, and the frame, which stores each
-		// tab's page and the start page 4 s after it starts.
-		await t.goto('/?classic=1', { settleMs: 2500 });
+		// Under the worker, as the installed app uses it: the frame stores each tab's page and the start page (/, the
+		// frame page too) 4 s after it starts.
+		await t.goto('/', { settleMs: 2500 });
 		await openFrame(t, 'status');
 		await t.page.waitForTimeout(6000);
 		await t.context.setOffline(true);

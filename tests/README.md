@@ -30,7 +30,7 @@ command. CLI process boundaries are covered by the retained command and package
 fixtures in those buckets.
 
 Some package checks need current `dist` artifacts. `bun run test`
-builds the TypeScript server and Slint dashboard before running `test:all`.
+builds the TypeScript server and Leptos dashboard before running `test:all`.
 Direct `test:all` and `test:npm` invocations do not imply a fresh
 build. See the [build guide](../CONTRIBUTING.md) for the required toolchain.
 
@@ -54,7 +54,7 @@ The full contributor sequence is defined by
 | Commands and package | [command tests](./unit/commands/), [package guide](./npm/README.md) | Product help/version, dashboard aliases, saved-login commands, migration guidance, private-state preservation, package metadata |
 | Dashboard and controls | [web-server tests](./unit/web-server/), [integration tests](./integration/) | Account projections, guarded activation, automatic switching, refresh settings, update jobs, and local HTTP boundaries |
 | Analytics | [account analytics tests](./unit/web-server/account-analytics-service.test.ts), [history tests](./unit/web-server/account-analytics-history.test.ts), [activity tests](./unit/web-server/account-activity-collector.test.ts) | Observed quotas, unknown values, identity separation, bounded history, and authentic local activity |
-| Slint browser helpers | [dashboard tests](../web-dashboard/tests/) | Data fidelity, activation review, analytics views, and renderer startup helpers |
+| Dashboard data layer | [dashboard tests](../web-dashboard/tests/) | Data fidelity, activation review, analytics views, the frame's controllers and sign-in session |
 | Shared support | [fixtures and isolation helpers](./shared/), [mocks](./mocks/) | Synthetic state and bounded test doubles |
 | Native bars | [Mac guide](../macos-bar/README.md), [Windows guide](../windows-bar/README.md) | Platform-specific build and verification instructions |
 
@@ -89,7 +89,7 @@ Retained security coverage includes
 [current API surface](./unit/web-server/api-product-surface.test.ts).
 See [SECURITY.md](../SECURITY.md) for reporting guidance.
 
-## Slint validation
+## Dashboard validation
 
 Browser helper tests run with Node's test runner:
 
@@ -97,9 +97,9 @@ Browser helper tests run with Node's test runner:
 node --test web-dashboard/tests/*.test.mjs
 ```
 
-`bun run ui:build` compiles the pinned Rust/Slint dashboard into `dist/ui`.
-`bun run ui:validate` checks Rust formatting, helper tests, bridge syntax, and
-that the bundle matches the current source fingerprint. Helper tests do not
+`bun run ui:build` compiles the pinned Leptos dashboard into `dist/ui`.
+`bun run ui:validate` checks Rust formatting, helper tests, and that the bundle
+matches the current source and shell fingerprints. Helper tests do not
 establish a successful browser render, provider request, or actual account switch.
-See the [Slint guide](../web-dashboard/README.md),
+See the [dashboard guide](../web-dashboard/README.md),
 [builder](../scripts/build-ui.js), and [validator](../scripts/validate-ui.js).

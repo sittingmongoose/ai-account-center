@@ -5,6 +5,7 @@ import { isDarkTheme, themeColor } from '../public/device.mjs';
 
 const publicDir = new URL('../public/', import.meta.url);
 const read = (name) => readFileSync(new URL(name, publicDir), 'utf8');
+const frame = () => readFileSync(new URL('../leptos/index.html', import.meta.url), 'utf8');
 
 test('isDarkTheme resolves the app theme (DESIGN-MOBILE.md 6.3)', () => {
   assert.equal(isDarkTheme({ mode: 'dark', systemDark: false }), true);
@@ -24,16 +25,17 @@ test('cover screens follow the resolved theme, including forced dark (F41)', () 
   assert.equal(themeColor({ mode: 'dark', systemDark: false, screen: 'dashboard' }), '#131B23');
 });
 
-test('index.html first paint bets on the cover screen in both themes', () => {
-  const html = read('index.html');
-  // The static meta matches the loading screen (a cover screen); bridge.js refines it
-  // to the dashboard colors once the session is known.
-  assert.match(html, /<meta name="theme-color" content="#ECF0F3">/);
-  // The inline first-paint script mirrors isDarkTheme (stored theme, else the OS)
-  // and points the meta at the resolved cover color before the wasm boots.
-  assert.match(html, /localStorage\.getItem\('aac-theme'\)/);
-  assert.match(html, /querySelector\('meta\[name="theme-color"\]'\)/);
-  assert.match(html, /'#0C1217':'#ECF0F3'/);
+test('the frame page paints the cover colour of each scheme first; the frame follows the chosen theme', () => {
+  const html = frame();
+  // One meta per scheme, with the cover colours of device.mjs; lib.rs sync_theme_color points both at the chosen
+  // theme's colour once it is known (an explicit Light or Dark wins over the scheme).
+  assert.match(html, /<meta name="theme-color" content="#ECF0F3" media="\(prefers-color-scheme: light\)" \/>/);
+  assert.match(html, /<meta name="theme-color" content="#0C1217" media="\(prefers-color-scheme: dark\)" \/>/);
+  assert.equal(themeColor({ mode: 'light', screen: 'cover' }), '#ECF0F3');
+  assert.equal(themeColor({ mode: 'dark', screen: 'cover' }), '#0C1217');
+  const lib = readFileSync(new URL('../leptos/src/lib.rs', import.meta.url), 'utf8');
+  assert.match(lib, /const THEME_COLOR_LIGHT: &str = "#ECF0F3";/);
+  assert.match(lib, /const THEME_COLOR_DARK: &str = "#0C1217";/);
 });
 
 test('the service-worker offline page follows the OS theme', () => {
@@ -49,11 +51,18 @@ test('the service-worker offline page follows the OS theme', () => {
   assert.doesNotMatch(sw, /<meta name="theme-color" content="/);
 });
 
-test('index.html opts into the measured standalone status-strip viewport', () => {
-  const html = read('index.html');
+test('the frame page opts into the measured standalone status-strip viewport', () => {
+  const html = frame();
   assert.match(
     html,
-    /<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">/
+    /<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" \/>/
   );
   assert.doesNotMatch(html, /name="apple-mobile-web-app-status-bar-style" content="default"/);
+});
+
+test('the frame page, the start page now, names the Home Screen icon as the classic page did', () => {
+  const html = frame();
+  assert.match(html, /<link rel="apple-touch-icon" sizes="180x180" href="\/icons\/apple-touch-icon-180-v2.png" \/>/);
+  assert.match(html, /<link rel="apple-touch-icon" href="\/icons\/apple-touch-icon-180-v2.png" \/>/);
+  assert.ok(readFileSync(new URL('icons/apple-touch-icon-180-v2.png', publicDir)).length > 0);
 });

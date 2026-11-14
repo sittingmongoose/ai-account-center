@@ -190,16 +190,14 @@ for (const theme of ['light', 'dark']) {
       serviceWorkers: 'block',
     });
     await t.page.addInitScript(() => {
-      localStorage.setItem('aac-frame', 'classic');
       const set = () => document.documentElement.style.setProperty('--safe-top', '62px');
       if (document.documentElement) set();
       else document.addEventListener('DOMContentLoaded', set, { once: true });
     });
-    await t.page.route('**/bridge.js', (r) =>
-      r.fulfill({ body: '', contentType: 'text/javascript' })
-    );
+    // The start page is the frame's page: it reads its measured inset from safe=, as on the other poses; the offline
+    // cover is the service worker's own page, which paints from the strip's --safe-top above.
     for (const page of ['start-cover', 'offline-cover']) {
-      await t.goto('/__fixture/' + page);
+      await t.goto('/__fixture/' + page + (page === 'start-cover' ? `?safe=${p.safe}` : ''));
       await t.equal(
         `${page}: translucent install metadata`,
         await t.page.evaluate(

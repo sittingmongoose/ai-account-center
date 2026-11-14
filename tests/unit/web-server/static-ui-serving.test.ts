@@ -19,13 +19,13 @@ import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-a
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 import { negotiateEncoding, resolvePageRoute } from '../../../src/web-server/static-ui';
 
-const { buildUi } = require('../../../scripts/build-ui.js');
+import {
+  FIXTURE_WASM as WASM,
+  fakeRun,
+  writeLeptosFixture,
+} from '../../shared/fixtures/leptos-ui-fixture';
 
-const WASM = Buffer.concat([
-  Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]),
-  Buffer.from('slint-dashboard-serving-fixture-'.repeat(512)),
-]);
-const INDEX = `<!doctype html><canvas id="slint-dashboard"></canvas>${'<!-- page -->'.repeat(120)}<script type="module" src="/bridge.js"></script>`;
+const { buildUi } = require('../../../scripts/build-ui.js');
 const FIXTURE_ENVIRONMENT = [
   'CCS_HOME',
   'CCS_DIR',
@@ -46,51 +46,15 @@ let port = 0;
 let originalEnvironment: Record<string, string | undefined> = {};
 
 function buildFixtureUi(root: string): typeof manifest {
-  const crate = path.join(root, 'web-dashboard');
-  for (const directory of ['public', 'pkg', 'tests'])
-    fs.mkdirSync(path.join(crate, directory), { recursive: true });
-  fs.writeFileSync(
-    path.join(crate, 'Cargo.toml'),
-    '[dependencies]\nslint = { version = "=1.18.1" }\n[build-dependencies]\nslint-build = "=1.18.1"\n'
-  );
-  fs.writeFileSync(
-    path.join(crate, 'Cargo.lock'),
-    '[[package]]\nname = "slint"\nversion = "1.18.1"\n[[package]]\nname = "slint-build"\nversion = "1.18.1"\n[[package]]\nname = "wasm-bindgen"\nversion = "0.2.130"\n[[package]]\nname = "wasm-bindgen-futures"\nversion = "0.4.80"\n[[package]]\nname = "js-sys"\nversion = "0.3.107"\n[[package]]\nname = "web-sys"\nversion = "0.3.107"\n'
-  );
-  fs.writeFileSync(path.join(crate, 'public', 'index.html'), INDEX);
-  fs.writeFileSync(
-    path.join(crate, 'public', 'bridge.js'),
-    "import init from './pkg/ccs_account_dashboard.js';\ninit();\n"
-  );
-  fs.writeFileSync(
-    path.join(crate, 'public', 'view-model.mjs'),
-    'export const rows = [];\n'.repeat(100)
-  );
-  fs.writeFileSync(
-    path.join(crate, 'pkg', 'ccs_account_dashboard.js'),
-    `export default async function init() {}\n${'// glue\n'.repeat(200)}`
-  );
-  fs.writeFileSync(path.join(crate, 'pkg', 'ccs_account_dashboard_bg.wasm'), WASM);
-  return buildUi({
-    repoRoot: root,
-    run: (command: string, args: string[]) =>
-      command.includes('rustc')
-        ? 'rustc 1.99.1 (fixture)'
-        : command.includes('rustup')
-          ? 'wasm32-unknown-unknown\n'
-          : command.includes('wasm-pack')
-            ? 'wasm-pack 0.15.1\n'
-            : args[0]?.endsWith('tail-call-compat.mjs')
-              ? JSON.stringify({
-                  policy: 'webkit-ipint-boundaries-v1',
-                  imported: 0,
-                  indirect: 0,
-                  internal: 0,
-                })
-              : '',
-    readCommit: () => '8fb5e3de',
-  });
+  const publicDir = path.join(root, 'web-dashboard', 'public');
+  fs.mkdirSync(publicDir, { recursive: true });
+  fs.writeFileSync(path.join(publicDir, 'view-model.mjs'), 'export const rows = [];\n'.repeat(100));
+  writeLeptosFixture(root);
+  return buildUi({ repoRoot: root, run: fakeRun, readCommit: () => '8fb5e3de' });
 }
+
+/** The frame page as the build staged it: every page route answers with it. */
+const PAGE = () => fs.readFileSync(path.join(staticDir, 'app', 'index.html'), 'utf8');
 
 async function start(): Promise<void> {
   instance = await startServer({ port: 0, host: '127.0.0.1', staticDir });
@@ -304,7 +268,7 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     tampered[tampered.length - 1] ^= 0xff; // same size, different hash
     fs.writeFileSync(brFile, tampered);
     const glue = manifest.precompressed.find(
-      (row) => row.path.endsWith('ccs_account_dashboard.js') && row.encoding === 'gzip'
+      (row) => row.path.endsWith('aac_web.js') && row.encoding === 'gzip'
     );
     fs.appendFileSync(path.join(staticDir, `${glue?.file}`), Buffer.from([0])); // size changes
     await start();
@@ -327,8 +291,8 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     expect(response.body.equals(WASM)).toBe(true);
   });
 
-  it('keeps no-cache on index.html, bridge.js and modules', async () => {
-    for (const route of ['/index.html', '/bridge.js', '/view-model.mjs']) {
+  it('keeps no-cache on the frame page, its stylesheet and modules', async () => {
+    for (const route of ['/app/index.html', '/app/app.css', '/view-model.mjs']) {
       const response = await raw('GET', route, { 'Accept-Encoding': 'br, gzip' });
       expect([route, response.status, response.headers['cache-control']]).toEqual([
         route,
@@ -339,10 +303,9 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     const module = await raw('GET', '/view-model.mjs', { 'Accept-Encoding': 'gzip' });
     expect(module.headers['content-encoding']).toBe('gzip');
     expect(module.headers['content-type']).toBe('text/javascript; charset=utf-8');
-    const bridge = await raw('GET', '/bridge.js');
-    expect(bridge.body.toString()).toContain(`./pkg/${manifest.buildId}/ccs_account_dashboard.js`);
-    expect(bridge.headers['content-type']).toBe('text/javascript; charset=utf-8');
-    const index = await raw('GET', '/index.html');
+    const index = await raw('GET', '/app/index.html');
+    expect(index.body.toString()).toContain(`/pkg/${manifest.buildId}/aac_web.js`);
+    expect(index.headers['content-type']).toBe('text/html; charset=utf-8');
     expect(index.headers['x-content-type-options']).toBe('nosniff');
     expect(index.headers['referrer-policy']).toBe('same-origin');
     // Only AAC's own shell may frame it.
@@ -411,15 +374,18 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
   });
 });
 
-describe('the Leptos pages', () => {
-  it('answers the app frame\'s five /app pages with app/index.html once a build has them', async () => {
-    const entry = path.join(staticDir, 'app', 'index.html');
-    const page =
-      '<!doctype html><title>AI Account Center</title><script type="module">/* leptos */</script>';
-    fs.mkdirSync(path.dirname(entry), { recursive: true });
-    fs.writeFileSync(entry, page);
-    try {
-      for (const route of ['/app/home', '/app/analytics', '/app/accounts', '/app/status', '/app/scoreboard']) {
+describe('the app frame', () => {
+  it("answers the app frame's five /app pages with app/index.html", async () => {
+    const page = PAGE();
+    expect(page).toContain(`/pkg/${manifest.buildId}/aac_web.js`);
+    {
+      for (const route of [
+        '/app/home',
+        '/app/analytics',
+        '/app/accounts',
+        '/app/status',
+        '/app/scoreboard',
+      ]) {
         const response = await raw('GET', route);
         expect(response.status).toBe(200);
         expect(response.body.toString()).toBe(page);
@@ -432,15 +398,17 @@ describe('the Leptos pages', () => {
       const slash = await raw('GET', '/app/status/');
       expect(slash.status).toBe(301);
       expect(slash.headers.location).toBe('/app/status');
-    } finally {
-      fs.rmSync(path.dirname(entry), { recursive: true, force: true });
     }
   });
 
-  it('says plainly when the build has no Status page instead of showing the dashboard', async () => {
-    const response = await raw('GET', '/app/status');
-    expect(response.status).toBe(404);
-    expect(response.body.toString()).toBe('This build has no Status page.');
+  it('says plainly when the build has no frame page instead of showing anything else', async () => {
+    for (const file of ['index.html', 'index.html.br', 'index.html.gz'])
+      fs.rmSync(path.join(staticDir, 'app', file), { force: true });
+    for (const route of ['/app/status', '/', '/analytics']) {
+      const response = await raw('GET', route);
+      expect(response.status).toBe(404);
+      expect(response.body.toString()).toBe('This build has no dashboard page.');
+    }
   });
 });
 
@@ -454,7 +422,7 @@ describe('page routes and deep links', () => {
     '/accounts/kimi-code',
     '/status',
     '/scoreboard',
-  ])('serves index.html for %s with the page headers', async (route) => {
+  ])('serves the frame page for %s with the page headers', async (route) => {
     for (const encoding of [undefined, 'br']) {
       const response = await raw('GET', route, encoding ? { 'Accept-Encoding': encoding } : {});
       expect(response.status).toBe(200);
@@ -462,7 +430,7 @@ describe('page routes and deep links', () => {
         response.headers['content-encoding'] === 'br'
           ? zlib.brotliDecompressSync(response.body)
           : response.body;
-      expect(body.toString()).toBe(INDEX);
+      expect(body.toString()).toBe(PAGE());
       expect(response.headers['content-type']).toBe('text/html; charset=utf-8');
       expect(response.headers['cache-control']).toBe('no-cache');
       expect(response.headers['x-content-type-options']).toBe('nosniff');
@@ -477,7 +445,7 @@ describe('page routes and deep links', () => {
     expect(head.body.length).toBe(0);
     const query = await raw('GET', '/accounts?provider=%3Cscript%3E&view=<b>x</b>');
     expect(query.status).toBe(200);
-    expect(query.body.toString()).toBe(INDEX);
+    expect(query.body.toString()).toBe(PAGE());
   });
 
   it.each([
@@ -570,20 +538,21 @@ describe('JSON error answers', () => {
   });
 
   it('answers a failed page send with JSON from the final handler', async () => {
-    fs.rmSync(path.join(staticDir, 'index.html'));
-    fs.rmSync(path.join(staticDir, 'index.html.br'), { force: true });
-    fs.rmSync(path.join(staticDir, 'index.html.gz'), { force: true });
+    // the page is there but cannot be sent: a folder where the file should be
+    for (const file of ['index.html', 'index.html.br', 'index.html.gz'])
+      fs.rmSync(path.join(staticDir, 'app', file), { force: true });
+    fs.mkdirSync(path.join(staticDir, 'app', 'index.html'));
     const response = await raw('GET', '/analytics');
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(500);
     expect(JSON.parse(response.body.toString())).toEqual({
-      error: 'The request could not be processed.',
+      error: 'The request could not be completed safely.',
     });
-    expect(response.body.toString()).not.toMatch(/ENOENT|\bat\s|index\.html/);
+    expect(response.body.toString()).not.toMatch(/EISDIR|ENOENT|\bat\s|index\.html/);
     // The server keeps a trace: status and error class, never the message or a path.
     const failures = getRecentLogEntries().filter((entry) => entry.event === 'web.request.failed');
     const last = failures[failures.length - 1];
-    expect(last?.level).toBe('warn');
-    expect(last?.context).toEqual({ status: 404, kind: 'ENOENT', headersSent: false });
+    expect(last?.level).toBe('error');
+    expect(last?.context).toEqual({ status: 500, kind: 'EISDIR', headersSent: false });
     expect(JSON.stringify(last)).not.toMatch(/index\.html|ccs-static-ui|no such file/);
   });
 

@@ -13,7 +13,13 @@
     <meta name="theme-color" content="#0C1217" media="(prefers-color-scheme: dark)" />
     <title>AI Account Center</title>
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
-    <script>if(self!==top||/[?&](embed|content)=1(&|$)/.test(location.search))document.documentElement.setAttribute('data-status-embedded','1');</script>
+    <!-- iOS's Add to Home Screen icon (the start page is this page since the classic one went). -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180-v2.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180-v2.png" />
+    <script>if(self!==top||/[?&]embed=1(&|$)/.test(location.search))document.documentElement.setAttribute('data-status-embedded','1');</script>
+    <!-- Chromium's install prompt can come before any module has loaded: it is kept for Settings' "Install app"
+    (public/frame-dashboard.mjs), which says so with an `aac-install` event, as is an install made meanwhile. -->
+    <script>addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__aacInstallPrompt=e;dispatchEvent(new Event('aac-install'))});addEventListener('appinstalled',function(){window.__aacInstallPrompt=null;dispatchEvent(new Event('aac-install'))});</script>
     <link rel="stylesheet" href="/status-bar.css" />
     <link rel="stylesheet" href="{{CSS}}" />
     <link rel="modulepreload" href="{{PKG}}/aac_web.js" />
@@ -46,9 +52,20 @@
             if (early && navigator.onLine !== false) load();
             return () => pending ?? load();
           };
+          // The tab this address opens, as lib.rs page_from_location reads it (/app/<tab>, then ?view=, then the classic
+          // app's addresses, else Home): its module is asked for at once.
+          const startPage = ((path, search) => {
+            const tab = (id) => /^(home|analytics|accounts|status|scoreboard)$/.test(id);
+            const p = path.replace(/\/+$/, '');
+            if (path === '/app' || path.startsWith('/app/')) return tab(p.split('/').pop()) ? p.split('/').pop() : 'status';
+            const view = /[?&]view=([a-z]+)(&|$)/.exec(search)?.[1];
+            if (tab(view)) return view;
+            if (/^\/(analytics|accounts|status|scoreboard)$/.test(p)) return p.slice(1);
+            return /^\/accounts\/[a-z0-9][a-z0-9-]{0,63}$/.test(p) ? 'accounts' : 'home';
+          })(location.pathname, location.search);
           // the module; the page that asked installs its controller only if it is still there (analytics/feed.rs)
-          window.aacLoadAnalytics = loader('/frame-analytics.mjs', /\/app\/analytics\/?$/.test(location.pathname));
-          window.aacLoadDashboard = loader('/frame-dashboard.mjs', /\/app\/(home|accounts)\/?$/.test(location.pathname));
+          window.aacLoadAnalytics = loader('/frame-analytics.mjs', startPage === 'analytics');
+          window.aacLoadDashboard = loader('/frame-dashboard.mjs', startPage === 'home' || startPage === 'accounts');
           const { installFrameSession } = await import('/frame-session.mjs');
           installFrameSession(window);
         }

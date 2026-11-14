@@ -22,10 +22,10 @@
   /** Never cached or intercepted: APIs, the usage hub, the socket, in any letter case. */
   var NEVER_CACHED = [/^\/api(\/|$)/, /^\/v0(\/|$)/, /^\/ws$/];
   /**
-   * The Leptos pages the shell shows in its Status and Scoreboard iframes (/app/status, /app/scoreboard and
-   * their assets). They are not the dashboard shell: an /app page offline falls back only to its own cached
-   * copy, is never mirrored to the start URL, and never answers another navigation as "any shell" (each way
-   * would put one page inside the other).
+   * The app frame's own addresses (/app/home ... /app/scoreboard and their assets). An /app page offline falls
+   * back only to its own cached copy (the frame stores every tab's address and the start page while online), is
+   * never mirrored to the start URL and never answers another navigation as "any shell". The rule dates from the
+   * retired Slint shell, which showed /app pages in its iframes; it keeps each address answering with its own copy.
    */
   var APP_PAGES = /^\/app(\/|$)/i;
   /** A navigation waits this long for the network before reading the cache. */
@@ -60,7 +60,7 @@
 
   /**
    * How sw.js answers a request: 'passthrough' (the worker does not call
-   * respondWith), 'network-first' (the shell: index.html, bridge.js, *.mjs,
+   * respondWith), 'network-first' (the shell: the frame page, *.mjs,
    * fonts, icons, page routes) or 'cache-first' (the immutable pkg runtime).
    * `request` is { method, sameOrigin, pathname }; anything cross-origin or not
    * a GET passes through, as do the never-cached paths whatever the method.

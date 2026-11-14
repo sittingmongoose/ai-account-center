@@ -188,11 +188,8 @@ export const tests = {
 			await t.check('the page says another browser signed this one out', /^Signed out from another browser/.test(w.banner), w.banner);
 		});
 
-		await t.step('the way back from the sign-in page', async () => {
-			await t.page.locator('.signin-note a', { hasText: 'Open the classic app' }).click();
-			await t.until('the classic app opens', () => location.pathname === '/' && !!document.querySelector('#canvas'), null, { timeout: 15000, hard: true });
-			await t.equal('and the setting is off', await t.page.evaluate(() => localStorage.getItem('aac-frame')), 'classic');
-			await page(t);
+		await t.step('the sign-in page offers no classic app', async () => {
+			await t.equal('no link to the retired classic app', await t.page.locator('.signin-page a', { hasText: /classic/i }).count(), 0);
 		});
 
 		await t.step('too many tries: the limiter and its countdown', async () => {

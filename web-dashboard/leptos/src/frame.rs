@@ -1,8 +1,8 @@
 //! The app frame (PLAN step 4): one chrome around all five tabs, every one drawn here, and every one reading its own
 //! data: Status `/api/status`, the Scoreboard its own, Analytics `/api/accounts/analytics` (analytics/feed.rs), and
-//! Home and Accounts & Settings the dashboard (dash.rs, `public/frame-dashboard.mjs`: bridge.js's server calls, timers
-//! and guards, run in this window). The frame never loads the Slint dashboard or its bridge (G5); the classic app
-//! (`/?classic=1`) is unchanged.
+//! Home and Accounts & Settings the dashboard (dash.rs, `public/frame-dashboard.mjs`: the server calls, timers and
+//! guards bridge.js kept, run in this window since G5). The classic Slint app and bridge.js were retired in Leptos
+//! finish (step 9): every page address opens this frame.
 //!
 //! Details (details.rs) and the switch confirmation (activation.rs) are the frame's own overlays over every tab.
 //!
@@ -55,7 +55,8 @@ fn push_history(path: &str, replace: bool) {
     let Ok(history) = window().history() else {
         return;
     };
-    let search = window().location().search().unwrap_or_default();
+    // the classic app's ?view=, ?classic=1 and ?content=1 go: the tab is in the path now
+    let search = crate::kept_search(&window().location().search().unwrap_or_default());
     let url = format!("{path}{search}");
     let _ = if replace {
         history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url))
@@ -95,6 +96,10 @@ impl FrameCtx {
         self.route.set(page);
         crate::set_active(page);
         window().scroll_to_with_x_and_y(0.0, 0.0);
+        // the tab this device showed last, for the next fresh sign-in (`reopen_last_page`)
+        if let Some(s) = window().local_storage().ok().flatten() {
+            let _ = s.set_item(LAST_PAGE_KEY, page.id());
+        }
     }
 
     /// A page tells the chrome what to say for its tab; the id lets it take that back when it is unmounted.
@@ -150,14 +155,6 @@ impl FrameCtx {
         self.theme.set(mode.to_string());
     }
 
-    /// The way back: this device opens the classic app again until the frame is turned on.
-    pub fn classic(&self) {
-        if let Some(s) = window().local_storage().ok().flatten() {
-            let _ = s.set_item("aac-frame", "classic");
-        }
-        let _ = window().location().set_href("/");
-    }
-
     /// Sign out. With the dashboard controller started, its own Sign out runs (bridge.js signOut): it waits while an
     /// account switch is waiting on screen, words a failure, and ends the frame's session when it has signed out.
     /// Otherwise (not loaded yet, so no switch can be waiting) the frame's session signs out itself.
@@ -192,10 +189,50 @@ impl FrameCtx {
     }
 }
 
+/// The tab this device showed last (a page id, never data): the classic app's key, so a device keeps its place.
+const LAST_PAGE_KEY: &str = "aac-last-page";
+
+/// Where a fresh sign-in goes (DESIGN-MOBILE.md 4.5.4, bridge.js `signedIn`): signed in through the form while the
+/// frame shows Home, the tab this device showed last opens instead; a stored id that names no tab, or Home, changes
+/// nothing. An address that names another tab is kept.
+pub(crate) fn reopen_target(fresh: bool, on: Page, stored: Option<&str>) -> Option<Page> {
+    if !fresh || on != Page::Home {
+        return None;
+    }
+    Page::from_id(stored?).filter(|p| *p != Page::Home)
+}
+
+/// Follows the session: once per fresh sign-in, the last tab opens (`reopen_target`).
+fn reopen_last_page(ctx: FrameCtx, view: RwSignal<SessionView>) {
+    Effect::new(move |done: Option<bool>| {
+        let (signed_in, fresh) = view.with(|v| (v.signed_in, v.fresh));
+        // one reopen per sign-in: armed again once signed out
+        if !signed_in {
+            return false;
+        }
+        if done == Some(true) {
+            return true;
+        }
+        let stored = window()
+            .local_storage()
+            .ok()
+            .flatten()
+            .and_then(|s| s.get_item(LAST_PAGE_KEY).ok().flatten());
+        if let Some(page) = reopen_target(fresh, ctx.route.get_untracked(), stored.as_deref()) {
+            ctx.go(page);
+        }
+        true
+    });
+}
+
 /// The browser's Back and Forward move between tabs.
 fn follow_history(ctx: FrameCtx) {
     let handler = Closure::<dyn Fn()>::new(move || {
-        let page = crate::page_from_path(&window().location().pathname().unwrap_or_default());
+        let location = window().location();
+        let page = crate::page_from_location(
+            &location.pathname().unwrap_or_default(),
+            &location.search().unwrap_or_default(),
+        );
         if page != ctx.route.get_untracked() {
             ctx.show(page);
         }
@@ -426,6 +463,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
     for page in [Page::Home, Page::Accounts] {
         ctx.register(page, dash_info);
     }
+    reopen_last_page(ctx, view_signal);
     follow_history(ctx);
     warm_offline_copies();
     watch_build(ctx);
@@ -614,6 +652,25 @@ mod tests {
             refresh: Callback::new(|_| {}),
             lead: None,
         }
+    }
+
+    #[test]
+    fn a_fresh_sign_in_on_home_reopens_the_last_tab() {
+        assert_eq!(
+            reopen_target(true, Page::Home, Some("analytics")),
+            Some(Page::Analytics)
+        );
+        assert_eq!(
+            reopen_target(true, Page::Home, Some("scoreboard")),
+            Some(Page::Scoreboard)
+        );
+        // nothing stored, Home itself, or something that is not a tab: Home stays
+        assert_eq!(reopen_target(true, Page::Home, None), None);
+        assert_eq!(reopen_target(true, Page::Home, Some("home")), None);
+        assert_eq!(reopen_target(true, Page::Home, Some("settings")), None);
+        // a session the browser already had, or an address that named another tab, is kept
+        assert_eq!(reopen_target(false, Page::Home, Some("analytics")), None);
+        assert_eq!(reopen_target(true, Page::Status, Some("analytics")), None);
     }
 
     #[test]

@@ -1,8 +1,9 @@
 // Device environment for the responsive dashboard (DESIGN-MOBILE.md 1.1, 6.2-6.3, 6.6).
 //
-// Pure helpers; bridge.js wires them to the browser and pushes the results into the Device
-// global through the set-safe-area, set-input-profile, set-keyboard and set-online wasm exports.
-// Every number, label and visibility decision stays here (tested); Slint only lays out.
+// Pure helpers. frame-dashboard.mjs uses installRow and isAppleMobile for Settings' "Home screen app" row;
+// the rest (safe areas, keyboard height, viewport size, theme colours) served the retired Slint canvas, whose
+// bridge.js pushed them into its Device global, and stay tested for the data they describe. The frame reads the
+// device itself (leptos/src/ui/device.rs).
 
 /** Parse a CSS px length ("47px") into a finite number, else 0. */
 export function px(value) {

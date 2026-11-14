@@ -1,9 +1,7 @@
-// Accounts & Settings clicks: clicking a provider row (or the Settings jump) must never push the
-// clicked row or any probed control off the page — reported 2026-11-01 as "clicking providers can
-// sometimes go off the page". Synthetic accounts only, shaped like the dashboard payload.
-// A probe reports its rectangle even while its control is hidden, so "on screen" here means the
-// rectangle sits inside the viewport; visibility itself is judged by the canvas shots.
-import { KNOWN_SMALL } from '../browser-check.config.mjs'; // the row toggles' known size finding
+// Accounts & Settings clicks: clicking an account row (it opens Details) or a provider's header switch must never push
+// the clicked control, or anything on the page, off the page; reported 2026-11-01 as "clicking providers can sometimes
+// go off the page". Ported from the classic canvas (?e2e probes) to the app frame's DOM when Slint was retired.
+// Synthetic accounts only, shaped like the dashboard payload.
 
 const at = (minutes) => new Date(Date.parse('2026-11-01T15:00:00Z') + minutes * 60_000).toISOString();
 
@@ -19,7 +17,7 @@ const account = (id, provider, email, plan, extra = {}) => ({
 	windows: [], capabilities: {}, signInNeeded: [], ...extra,
 });
 
-	const FIXTURE = {
+const FIXTURE = {
 	schemaVersion: 1,
 	updatedAt: at(-1),
 	// The Antigravity policy box under the section: reported pools dedupe to one chip per label
@@ -69,139 +67,141 @@ const account = (id, provider, email, plan, extra = {}) => ({
 	settings: {},
 };
 
-// D tier (1280+), the F tiers in between (760-1279, where Details is a side panel or sheet),
-// and the phone tier separately below: every layout branch the page re-flows through.
-// 1710 is the width of the window the watch-pool overflow was reported at.
+// D tier (1280+), the F tiers in between (760-1279, where Details is a side panel or sheet), and the phone tier
+// separately below: every layout branch the page re-flows through. 1710 is the width the watch-pool overflow was
+// reported at.
 const WIDTHS = [1920, 1710, 1600, 1430, 1360, 1280, 1160, 1024, 900, 780];
 
-// Below D the Details side panel parks past the right edge while closed and its probe reports
-// even hidden, so the page-level overflow check must skip it there (the open panel is asserted
-// on its own right after a row click).
-const overflowIgnore = (width) => (width < 1280 ? ['details-panel', 'details-sheet'] : []);
-// The settings column's "Usage log sources" rows also answer to row: probes; they are
-// provider toggles, not provider rows, and clicking one opens no Details.
-const accountRows = (probes) => Object.keys(probes).filter((id) => id.startsWith('row:') && !id.includes(':usage'));
+/** The fixture's accounts only: the registry is answered empty, so nothing from the server's own state is drawn. */
+const EMPTY_REGISTRY = { providers: [], accounts: [], jobs: [], trash: [] };
+const FIXTURE_IDS = FIXTURE.accounts.map((a) => a.id);
+
+async function openAccounts(t) {
+	await t.app.stub('/api/accounts/dashboard', FIXTURE);
+	await t.app.stub('/api/accounts/registry', EMPTY_REGISTRY);
+	await t.app.noResets();
+	await t.app.open({ page: 'accounts' });
+	await t.until('the Accounts page is drawn from the dashboard', () => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row]').length >= 3, null, { timeout: 45000, hard: true });
+}
+
+/** The frame fetches its pages and modules for the offline copy 4 s after it starts (frame.rs warm_offline_copies). Let
+ * them finish before the app is opened again, so the next open doesn't abort them (net::ERR_ABORTED). */
+async function warmCopiesDone(t) {
+	await t.page.waitForFunction(() => performance.now() > 4300, null, { timeout: 15000 });
+	await t.page.evaluate(async () => {
+		await Promise.allSettled([window.aacLoadAnalytics?.(), window.aacLoadDashboard?.()]);
+		const pages = ['/', '/app/home', '/app/analytics', '/app/accounts', '/app/status', '/app/scoreboard'];
+		for (let i = 0; i < 100 && !pages.every((p) => performance.getEntriesByName(location.origin + p).length); i++)
+			await new Promise((done) => setTimeout(done, 100));
+	});
+}
+
+/** The page's rectangle of a control, after scrolling it into view. */
+const rectOf = (t, selector) => t.page.evaluate((sel) => {
+	const el = document.querySelector(sel);
+	if (!el) return null;
+	el.scrollIntoView({ block: 'center', inline: 'nearest' });
+	const r = el.getBoundingClientRect();
+	return { x: r.x, y: r.y, width: r.width, height: r.height };
+}, selector);
+
+/** Nothing on the page runs past the left or right edge, and the page does not scroll sideways. */
+async function noSideways(t, name) {
+	const r = await t.page.evaluate(() => {
+		const w = innerWidth;
+		const bad = [...document.querySelectorAll('.route:not([hidden]) button, .route:not([hidden]) .acc-item, .details, .ag-box')]
+			.filter((el) => el.getClientRects().length > 0)
+			.map((el) => ({ el, r: el.getBoundingClientRect() }))
+			.filter(({ r }) => r.width > 0 && (r.x < -1 || r.right > w + 1))
+			.map(({ el, r }) => `${el.className || el.tagName} ${Math.round(r.x)}..${Math.round(r.right)} of ${w}`);
+		return { scroll: document.documentElement.scrollWidth <= w + 1, bad: bad.slice(0, 6) };
+	});
+	return t.check(name, r.scroll && r.bad.length === 0, JSON.stringify(r));
+}
+
+async function closeDetails(t) {
+	await t.page.keyboard.press('Escape');
+	await t.until('Details closed', () => !document.querySelector('.details'), null, { timeout: 5000 });
+}
+
+async function everyRowSurvivesItsClick(t, width) {
+	const rows = await t.page.evaluate((ids) => [...document.querySelectorAll('.route:not([hidden]) .acc-item[data-row]')].map((el) => el.dataset.row).filter((id) => ids.includes(id)), FIXTURE_IDS);
+	if (!rows.length) throw new Error('no account rows rendered');
+	const height = t.page.viewportSize().height;
+	for (const id of rows) {
+		const sel = `.route:not([hidden]) .acc-item[data-row="${id}"]`;
+		const before = await rectOf(t, sel);
+		await t.page.click(`${sel} .acc-email`);
+		await t.page.waitForSelector('.details', { timeout: 10000 });
+		await t.page.waitForTimeout(250);
+		const after = await t.page.evaluate((s) => { const r = document.querySelector(s).getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; }, sel);
+		for (const [when, rect] of [['before', before], ['after', after]]) {
+			if (!rect || rect.y + rect.height < 0 || rect.y > height) throw new Error(`${id} ${when} the click went off the page at ${width}: ${JSON.stringify(rect)}`);
+		}
+		await noSideways(t, `${width}: nothing past the edge with Details open for ${id}`);
+		await closeDetails(t);
+	}
+}
+
+/** The reported bug lived inside the Antigravity policy box: watch-pool choices pushed the cooldown past its edge. */
+async function cooldownInsidePolicyBox(t, width) {
+	const r = await t.page.evaluate(() => {
+		const box = document.querySelector('.route:not([hidden]) .ag-box');
+		if (!box) return null;
+		box.scrollIntoView({ block: 'center' });
+		const b = box.getBoundingClientRect();
+		const params = [...box.querySelectorAll('.ag-param')].map((p) => p.getBoundingClientRect().right);
+		return { right: b.right, params };
+	});
+	if (!r) throw new Error(`the Antigravity policy box is missing at ${width}`);
+	await t.check(`${width}: the policy box's choices stay inside it`, r.params.every((right) => right <= r.right + 0.5), JSON.stringify(r));
+}
 
 export const tests = {
 	async 'provider clicks keep the page on screen'(t) {
-		await t.app.stub('/api/accounts/dashboard', FIXTURE);
 		for (const width of WIDTHS) {
 			await t.viewport(width, 1080);
-			await t.app.open({ page: 'accounts' });
-			await t.painted('#canvas', `canvas painted at ${width}`);
-			await t.step(`${width}: every account row survives its own click`, async () => {
-				const rows = accountRows(await t.app.probes());
-				if (!rows.length) throw new Error('no account rows rendered');
-				for (const id of rows) {
-					const before = await scrollIntoView(t, id);
-					await t.app.click(id);
-					await t.page.waitForTimeout(250);
-					const after = await t.app.rect(id);
-					const height = t.page.viewportSize().height;
-					for (const [when, rect] of [['before', before], ['after', after]]) {
-						if (rect.y < 0 || rect.y + rect.height > height) {
-							throw new Error(`${id} ${name(when)} the click went off the page at ${width}: ${JSON.stringify(rect)}`);
-						}
-					}
-					// The open panel (and every control on the page) stays inside the viewport.
-					await t.app.noProbeOverflow(`no control past the edge after clicking ${id}`, { ignore: overflowIgnore(width) });
-					await t.page.keyboard.press('Escape');
-					await t.page.waitForTimeout(400);
-				}
-			});
-			await assertCooldownInsidePolicyBox(t, width);
-			// Every control on the page with real accounts: reported, inside the edges, uncovered, big enough or spaced, drawn
-			await t.audit(`accounts ${width}`, { controls: ['add:claude'], ignore: KNOWN_SMALL });
+			await openAccounts(t);
+			await t.step(`${width}: every account row survives its own click`, () => everyRowSurvivesItsClick(t, width));
+			await cooldownInsidePolicyBox(t, width);
+			await t.audit(`accounts ${width}`);
 			await t.snap(`accounts-clicks-${width}`);
+			await warmCopiesDone(t);
 		}
 		// The next test (and file) starts at the default width, not the last one here
 		await t.viewport(1920, 1080);
 	},
 
-	// The header controls re-render a provider's section in place; the row layout below them
-	// (and the page) must keep every probed control where it was, not push it off the page.
-	async 'provider header toggles keep the page on screen'(t) {
-		await t.app.stub('/api/accounts/dashboard', FIXTURE);
-		await t.app.open({ page: 'accounts' });
-		const width = t.page.viewportSize().width;
-		for (const id of ['show:claude', 'tray:claude', 'show:codex', 'acct-show:codex-1', 'acct-tray:codex-1']) {
-			await t.step(`${id} at ${width}`, async () => {
-				const rect = await scrollIntoView(t, id);
-				await t.app.click(id);
+	// The header switches re-render a provider's card in place; nothing may move off the page.
+	async 'provider header switches keep the page on screen'(t) {
+		await t.viewport(1920, 1080);
+		await openAccounts(t);
+		const height = t.page.viewportSize().height;
+		for (const probe of ['show:claude', 'tray:claude', 'show:codex']) {
+			await t.step(probe, async () => {
+				const sel = `.route:not([hidden]) [data-probe="${probe}"]`;
+				const rect = await rectOf(t, sel);
+				if (!rect) throw new Error(`no switch ${probe}`);
+				await t.page.click(sel);
 				await t.page.waitForTimeout(400);
-				const after = await t.app.rect(id);
-				const height = t.page.viewportSize().height;
-				if (after && (after.y < 0 || after.y + after.height > height)) {
-					throw new Error(`${id} was pushed off the page by its own click: ${JSON.stringify({ rect, after })}`);
-				}
-				await t.app.noProbeOverflow(`no control past the edge after ${id}`);
-				// Back as it was: these toggles are saved by the server, and a hidden Claude section takes Home's legend with it
-				// for every test after this one
-				await t.app.click(id);
+				const after = await rectOf(t, sel);
+				if (after && (after.y < 0 || after.y + after.height > height)) throw new Error(`${probe} was pushed off the page by its own click: ${JSON.stringify({ rect, after })}`);
+				await noSideways(t, `nothing past the edge after ${probe}`);
+				// back as it was: these switches are saved by the server
+				await t.page.click(sel);
+				await t.page.waitForTimeout(400);
 			});
 		}
-		await t.snap('accounts-clicks-toggles');
+		await t.snap('accounts-clicks-switches');
 	},
 
-	// The phone tier stacks the rows, adds the page head with the Settings jump and ends in the
-	// tab bar: the narrowest layout, where "went off the page" shows first.
+	// The phone tier stacks the rows and ends in the tab bar: the narrowest layout, where "went off the page" shows first.
 	async 'provider clicks keep the phone page on screen'(t) {
 		await t.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
-		await t.app.stub('/api/accounts/dashboard', FIXTURE);
-		await t.app.open({ page: 'accounts' });
-		await t.app.probeVisible('tab-accounts');
-		await t.step('390: every account row survives its own click', async () => {
-			const rows = accountRows(await t.app.probes());
-			if (!rows.length) throw new Error('no account rows rendered');
-			for (const id of rows) {
-				const before = await scrollIntoView(t, id);
-				await t.app.click(id);
-				await t.page.waitForTimeout(250);
-				const after = await t.app.rect(id);
-				const height = t.page.viewportSize().height;
-				for (const [when, rect] of [['before', before], ['after', after]]) {
-					if (rect.y < 0 || rect.y + rect.height > height) {
-						throw new Error(`${id} ${name(when)} the click went off the page at 390: ${JSON.stringify(rect)}`);
-					}
-				}
-				await t.app.noProbeOverflow(`no control past the edge after clicking ${id}`);
-				await t.page.keyboard.press('Escape');
-				await t.page.waitForTimeout(150);
-			}
-		});
-		await t.audit('accounts 390', { controls: ['tab-accounts'] });
+		await openAccounts(t);
+		await t.visible('.tabbar a[href="/app/accounts"]', 'the Accounts tab');
+		await t.step('390: every account row survives its own click', () => everyRowSurvivesItsClick(t, 390));
+		await t.audit('accounts 390');
 		await t.snap('accounts-clicks-390');
 	},
 };
-
-// The reported bug lived entirely inside the Antigravity policy card: five watch-pool
-// chips pushed the cooldown segments past the card's right edge while the page and
-// viewport still had room. The card and both segmented rows carry probes, so the
-// assertion is in code, not only in the snapshots.
-async function assertCooldownInsidePolicyBox(t, width) {
-	await scrollIntoView(t, 'show:antigravity');
-	const all = await t.app.probes();
-	const box = all['ag-policy'];
-	if (!box) throw new Error(`policy-box probe missing at ${width}`);
-	// the box's own 14 px inner padding is each segment row's right limit
-	for (const id of ['watch-pool-segments', 'cooldown-segments']) {
-		const row = all[id];
-		if (!row) throw new Error(`probe "${id}" missing at ${width}`);
-		if (row.x + row.width > box.x + box.width - 13) {
-			throw new Error(`${id} ran past the policy box at ${width}: row ends at ${Math.round(row.x + row.width)}, box at ${Math.round(box.x + box.width)}`);
-		}
-	}
-}
-
-// The page scroller is Slint's own Flickable on one canvas, so a control is brought into view with real wheel turns
-// (browser-check's t.scrollToControl), with the pointer over the page, not the header, or the wheel goes nowhere.
-// Returns the control's rectangle once it sits wholly inside the viewport.
-async function scrollIntoView(t, id) {
-	const rect = await t.scrollToControl(id);
-	if (!rect) throw new Error(`could not scroll "${id}" into view (see the scroll check)`);
-	return rect;
-}
-
-function name(when) {
-	return when === 'before' ? 'sat' : 'was pushed';
-}

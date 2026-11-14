@@ -160,13 +160,16 @@ test('the sign-in page keeps the session lifetime learned while signed in, and n
 
 test('the sign-in screen states the remembered lifetime and words an unknown one without a number', async () => {
   const fs = await import('node:fs');
-  const slint = fs.readFileSync(new URL('../ui/shell/signin.slint', import.meta.url), 'utf8');
-  const bridge = fs.readFileSync(new URL('../public/bridge.js', import.meta.url), 'utf8');
-  assert.match(slint, /if hours <= 0 \{ return "Session length is set in the dashboard's Settings"; \}/);
-  assert.doesNotMatch(slint, /return "7 days"/);
-  assert.equal((slint.match(/SessionLength\.line\(root\.auth\.session-hours\)/g) || []).length, 3);
-  // The bridge starts from the remembered lifetime and learns it from setup and from Settings' session read.
-  assert.match(bridge, /let sessionHours = rememberedSessionHours\(/);
-  assert.match(bridge, /learnSessionHours\(setup\.sessionTimeoutHours\)/);
-  assert.match(bridge, /learnSessionHours\(st\.signin\?\.session\?\.sessionTimeoutHours\)/);
+  const page = fs.readFileSync(new URL('../leptos/src/session.rs', import.meta.url), 'utf8');
+  const session = fs.readFileSync(new URL('../public/frame-session.mjs', import.meta.url), 'utf8');
+  const dashboard = fs.readFileSync(new URL('../public/frame-dashboard.mjs', import.meta.url), 'utf8');
+  // The frame's sign-in page (session.rs session_line, unit-tested there) words an unknown lifetime without a number.
+  assert.match(page, /0 => "Session length is set in the dashboard's Settings"\.into\(\)/);
+  assert.match(page, /session_line\(v\.session_hours\)/);
+  assert.doesNotMatch(page, /"7 days"/);
+  // The sign-in session starts from the remembered lifetime and learns it from setup; the dashboard controller learns
+  // it from Settings' session read, so the next sign-in page states it.
+  assert.match(session, /let sessionHours = rememberedSessionHours\(/);
+  assert.match(session, /learnSessionHours\(setup\.sessionTimeoutHours\)/);
+  assert.match(dashboard, /learnSessionHours\(st\.signin\?\.session\?\.sessionTimeoutHours\)/);
 });

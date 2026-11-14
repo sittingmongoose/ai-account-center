@@ -1,31 +1,31 @@
 # AAC dashboard browser checks
 
-These are browser checks for the web dashboard (Slint 1.18 compiled to WebAssembly, drawn into one `<canvas id="canvas">`), run with browser-check (`browser-check guide`, or `Agent-Guides/browser-check.md` on the Cursor share).
+These are browser checks for the web dashboard (the Leptos app frame, compiled to WebAssembly), run with browser-check (`browser-check guide`, or `Agent-Guides/browser-check.md` on the Cursor share).
 
 ```sh
-browser-check run web-dashboard/tests/browser/checks                  # signed out, desktop, widths, phone (~90 s)
-browser-check run web-dashboard/tests/browser/checks --grep widths
+browser-check run web-dashboard/tests/browser/checks                  # the whole kit
+browser-check run web-dashboard/tests/browser/checks --grep smoke
 browser-check run web-dashboard/tests/browser/checks --set home=/tmp/fixture-home   # a prepared CCS_HOME (copied)
 ```
 
 ## What a run does
 
-- **Build needed.** It serves this checkout's `dist/ccs.js` and `dist/ui`, so run `bun install` and `bun run build:server` first. Build `dist/ui` with `bun run ui:build`, or for a first look copy the installed package's `dist/ui`. A wasm build can exhaust a small machine's memory, so use your machine's build lane if it has one.
+- **Build needed.** It serves this checkout's `dist/ccs.js` and `dist/ui` (it needs `dist/ui/app/index.html`), so run `bun install` and `bun run build:server` first. Build `dist/ui` with `bun run ui:build` on a build host (the VM refuses: `AAC_NO_LOCAL_RUST_BUILD=1`), or for a first look copy the installed package's `dist/ui`.
 - **Isolated home.** The server starts with `CCS_HOME` and every home-like variable pointing at a temporary folder: `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, the XDG folders, `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. Some collectors read the real home, so with only `CCS_HOME` set, real account emails and usage appear. Never point `home=` at a real home.
 - **Real sign-in.** `t.app.signIn()` goes through the real loopback setup (`POST /api/auth/setup`), or logs in once setup has happened. It runs as a `fetch` inside the page, so the session cookie lands in that page's jar.
-- **Probes.** Pages open with `?e2e`, so each `ProbeMark` reports its rectangle (`__aacProbeNow()` and `__aacProbe`). Pages are reached by URL (`?view=analytics`, `?view=accounts`): desktop has no tab probes, which exist only in the narrow tab bar.
-- **Canvas controls (browser-check 2.0).** The config's `controls(t)` hands browser-check the probes that are controls (the `CONTROL` list: buttons, fields, toggles, rows, tabs), not headings, hints, bars or panels; signed in, the hidden sign-in panel's probes are left out. So `t.audit` checks each control on screen: inside the left and right edges, not under a DOM element, at least 24 px or spaced as WCAG 2.5.8 allows, and drawn. Controls scrolled below the window or parked past an edge (the closed Details panel) are left out and named in a NOTE. A probe added to the UI that is a control belongs in `CONTROL`.
+- **Pages.** `t.app.open({ page })` opens `/app/<page>?e2e` and waits for the frame (or, with `signIn: false`, the sign-in page). With `?e2e` the controllers keep their last views and toasts on `window` (`__aacLastAccounts`, `__aacLastAnalytics`, `__aacToasts`) and controls carry `data-probe` names; checks judge the DOM, so `t.audit` checks every control itself.
 
-## Checks (`checks/smoke.check.mjs`)
+## Checks
 
-| Test | What it asserts |
+| Check | What it asserts |
 |---|---|
-| `signed out` | Sign-in fields reported inside the viewport and usable (`t.audit`); no probed control past the edge. |
-| `desktop` | Signed in at 1920x1080. Home, Analytics and Accounts: `t.audit` (canvas painted, each page's controls reported and usable) and no probe, headings included, past the edge. Lists one full frame (Home). |
-| `widths` | The same at 1360, 1430, 1600 and 2200 px, the widths where header and quota-table overflow bugs showed up. |
-| `phone` | 390x844, touch, DPR 1. The same, with the tab bar required. |
+| `checks/smoke.check.mjs` | Signed out (the sign-in form), desktop at 1920, the widths where overflow bugs showed up (1360, 1430, 1600, 2200) and a 390 px phone: Home, Analytics and Accounts audited, no sideways scroll. |
+| `checks/accounts-clicks.check.mjs` | Every account row's click (Details) and the provider header switches keep the page on screen at ten widths and on a phone; the Antigravity policy box keeps its choices inside it. |
+| `checks/claude-signins.check.mjs` | Claude sign-in renewal: the notice once, the header and rows, and Details from the Accounts rows. |
+| `checks/frame.check.mjs` | The frame's tabs, address and Back, the Duo rail and band, the new-build notice, `/` serving the frame and every classic address landing on its tab, and the offline start. |
+| `checks/page-load.check.mjs` | No tab loads or waits on the retired Slint dashboard; `load timing:` records each tab's cold and warm load. |
 
-`checks/accounts-clicks.check.mjs` clicks every account row and header toggle at ten widths and on a phone, and asserts nothing is pushed off the page.
+The other files cover Home, Accounts & Settings, Analytics, Status, the Scoreboard, sign-in, overlays, reset claims and the pages together; each says what it asserts at its top.
 
 **Status on the real pins (opt-in).** `checks/status-real-pins.check.mjs` writes every pinned thread's roster row and sheet, plus the page's words, to `real-pins-<format>.json` in the run folder. Two builds can then be compared line by line, for example the tree in `--set repo=<other tree>` against this one:
 
@@ -38,7 +38,7 @@ browser-check run web-dashboard/tests/browser/checks --grep 'status real pins' \
 - **The pins.** `realPins=1` reads this machine's T3 pins read-only (`AAC_T3_STATE_DB`). It links the real `~/.ssh` into the temporary home, so ssh's `Include ~/...` lines resolve for the other machines' pins. Teardown unlinks it before removing the home.
 - **Nothing else is real.** HOME and every other home-like variable stay temporary, the doorbell is off, and nothing is answered.
 
-`checks/status-page.check.mjs` and `checks/scoreboard-page.check.mjs` cover the Leptos pages: deck flows, the layout in each format (with `?safe=t,r,b,l` giving the measured Duo insets), the iframe drawing no chrome, and honest words when `spendByStream` or `byModel` are missing. `frames/` (its own config) shoots whole-page images for review: `browser-check run web-dashboard/tests/browser/frames --set out=<folder>`, needing only `web-dashboard/leptos/pkg` built.
+`checks/status-page.check.mjs` and `checks/scoreboard-page.check.mjs` cover the Status and Scoreboard pages: deck flows, the layout in each format (with `?safe=t,r,b,l` giving the measured Duo insets), the `?embed=1` page drawing no chrome, and honest words when `spendByStream` or `byModel` are missing. `frames/` (its own config) shoots whole-page images for review: `browser-check run web-dashboard/tests/browser/frames --set out=<folder>`, needing only `web-dashboard/leptos/pkg` built.
 
 Frames that aren't listed are saved as snaps for `browser-check diff <base run> <candidate run>`.
 
@@ -67,26 +67,20 @@ computed-padding seam. Each edge must update safe properties and content clearan
 export default async function (t) {
 	await t.app.stub('/api/accounts/dashboard', fixture);   // synthetic data, shaped like src/web-server/services/*-types.ts
 	await t.app.open({ page: 'analytics' });
-	const r = await t.app.rect('quota-head:title');             // a control's rectangle from its ProbeMark
-	await t.crop('quota-head', r, 'quota header title at 1360 px: not cut off');
-	await t.audit('analytics 1360', { controls: ['analytics-provider'] });   // controls: reported, on screen, usable, drawn
-	await t.app.noProbeOverflow();
+	await t.page.waitForSelector('.ax-page .kpi');
+	await t.crop('quota-head', '.ax-page .quota-head', 'quota header title at 1360 px: not cut off');
+	await t.audit('analytics 1360');                            // covered controls, overflow, clipped text, console
 }
 ```
 
 - **Helpers:**
-  - `t.app.open({ page, signIn, query })`
+  - `t.app.open({ page, signIn, query })` opens `/app/<page>?e2e` (and `query`), signed in unless `signIn: false`.
   - `t.app.signIn()`
-  - `t.app.probes({ require })` returns every probed rectangle, once the set has held still for two reads and has every id in `require` (up to 4 s).
-  - `t.app.rect(id)`
-  - `t.app.click(id)` clicks a control through `t.clickControl`: it waits for a late probe, wheels a control above or below the window into view, and refuses one a DOM element covers.
-  - `t.scrollToControl(id)` (browser-check) brings a control into view with real wheel turns over the page, not the header, and returns its rectangle.
-  - `t.app.probeVisible(id)`
-  - `t.app.noProbeOverflow()`: no probe reaches past the left or right edge; a probe parked wholly past it (the closed Details panel) is named in the note, not a failure.
   - `t.app.stub(path, json)`
-- **A probe reports even while its control is hidden.** A reported rectangle proves layout, not visibility. Judge visibility from pixels (`t.crop` at the rectangle, `t.painted`) or a frame.
+  - `t.app.noResets()` answers every account's reset inventory as `unavailable`, so Details on synthetic accounts reads no 503 where the server has no native reset backend (the VM). Not for checks about resets.
+- **Selectors:** controls carry `data-probe` names (`[data-probe="show:claude"]`); each tab is a `.route`, and the one on screen is `.route:not([hidden])`.
 - **Synthetic data only:** made-up names and emails, never real account data.
-- **DPR:** Slint under Playwright's DPR emulation has rendered at double scale. Judge HiDPI on a real device, or treat a DPR above 1 as unverified.
+- **DPR:** judge HiDPI on a real device; Playwright's DPR emulation is not the same as a phone's screen.
 
 `frames/duo-fixes.check.mjs` reproduces delayed Duo insets and scrolled pin sheets with the synthetic fixture server
 (`browser-check run web-dashboard/tests/browser/frames --grep 'duo regression'`). `?safe=t,r,b,l` initializes the

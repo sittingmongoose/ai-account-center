@@ -58,8 +58,8 @@ beforeEach(() => {
   process.env.CLAUDE_CONFIG_DIR = path.join(home, '.claude');
   process.env.CCS_SESSION_SECRET = 'isolated-auth-runtime-session-secret';
   fs.mkdirSync(path.join(home, '.ccs'), { recursive: true, mode: 0o700 });
-  fs.mkdirSync(path.join(home, 'ui'));
-  fs.writeFileSync(path.join(home, 'ui', 'index.html'), '<canvas></canvas>');
+  fs.mkdirSync(path.join(home, 'ui', 'app'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'ui', 'app', 'index.html'), '<main></main>');
   resetDashboardAuthStateForTests();
   resetDeviceStoreForTests();
   resetSetupCodeForTests();

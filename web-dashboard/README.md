@@ -1,80 +1,36 @@
-# AI Account Center web dashboard (Slint 1.18.1)
+# AI Account Center web dashboard (Leptos 0.9)
 
-Source: [AI Account Center](https://github.com/sittingmongoose/ai-account-center),
-a fork of [CCS](https://github.com/kaitranntt/ccs).
-
-The production account dashboard is a real Slint UI compiled from
-`ui/dashboard.slint` to Rust and WebAssembly, in the Daylight Atlas design
-(light, dark and auto themes, embedded Instrument Sans and Martian Mono, Lucide
-icons, official provider marks and the Apex Soft logo). `public/bridge.js`
-supplies browser session authentication, same-origin API requests, URL state
-(the page routes `/`, `/analytics`, `/accounts`, `/status` and `/scoreboard`, with `?view=` as an alias)
-and asynchronous updates; it does not render
-the dashboard. `public/view-model.mjs` turns the API responses into the version 2
-view model that `src/lib.rs` writes into persistent Slint models in place, so
-changed readings animate. [ui/README-ARCHITECTURE.md](ui/README-ARCHITECTURE.md)
-maps the shell, the component library, the theme tokens and the data seam.
-No React production assets are required.
-The browser probes WebGL on a separate disposable canvas before starting Slint's
-supported FemtoVG WebAssembly renderer. If WebGL is denied or unavailable,
-the page displays a readable request to enable browser hardware acceleration.
-The bridge handles only winit 0.30.13's exact browser event-loop handoff signal
-around the Slint start call, then continues session loading and UI bindings.
-Other startup errors still reach the visible failure state.
-Browser viewport dimensions and device pixel ratio are supplied before Slint's
-first render, so the renderer and scene use the same physical size on
-Retina displays. The dashboard keeps CSS dimensions in logical pixels.
-The root window declares a preferred starting size instead of fixed width/height
-constraints; browser resize and fullscreen requests update both layout and canvas.
+The production account dashboard is the app frame: a Leptos 0.9 app (client-side rendered, compiled to WebAssembly
+from `leptos/`) in the Daylight Atlas design, with Instrument Sans, Martian Mono, Lucide icons, the official provider
+marks and the Apex Soft logo. The server answers every page address with it (`/`, `/app/<tab>` and the older
+`/analytics`, `/accounts`, `/status`, `/scoreboard` addresses). Its controllers in `public/` (`frame-session.mjs`,
+`frame-dashboard.mjs`, `frame-analytics.mjs`) own the network, the session, the timers, switch approvals and every
+server call, and build each page's versioned view with the tested pure modules (`view-model.mjs`,
+`accounts-view.mjs`, `analytics-*.mjs` and the rest); the pages draw those views and send their action kinds back.
+[README-ARCHITECTURE.md](README-ARCHITECTURE.md) is the map. Until 2026-11-14 a Slint 1.18.1 canvas app drew Home,
+Analytics and Accounts; it is retired (the git history holds it).
 
 ## Build
 
-Rust **1.99.1** with `wasm32-unknown-unknown`, and wasm-pack **0.15.1**:
+Rust **1.99.1** with `wasm32-unknown-unknown`, and wasm-pack **0.15.1** (`leptos/rust-toolchain.toml` pins the
+compiler, target and formatter):
 
 ```sh
 cargo install wasm-pack --version 0.15.1 --locked
-wasm-pack build web-dashboard --release --target web --out-dir pkg --out-name ccs_account_dashboard -- --locked
+bun run ui:build      # node scripts/build-ui.js
 ```
 
-Both `slint` and `slint-build` are pinned to **=1.18.1** in Cargo.toml and locked
-in Cargo.lock. The repository builder checks the wasm-pack version before replacing
-the packaged UI. wasm-pack 0.15.1 downloads Binaryen v130; only v133 has been
-shown to validate the installed Rust 1.99 output, so its optional wasm-opt pass
-stays disabled.
-Rust release optimization and LTO remain enabled. The repository builder uses
-the pinned Binaryen 132 JavaScript API for a final compatibility transform;
-it does not run Binaryen's general optimizer.
-The release profile uses `opt-level = 2` to favor interactive performance; the
-measured download-size tradeoff is recorded below.
-`web-dashboard/rust-toolchain.toml` pins the Rust compiler, target and formatter
-used by Cargo, matching CI and the container build.
-
-`web-dashboard/.cargo/config.toml` enables 128-bit SIMD and WebAssembly 3.0 tail
-calls for the browser target only. The browser must support both: Chrome 112+,
-Firefox 121+ or Safari/iOS 18.2+. The compiler configuration is included in the
-source fingerprint and source package. A browser without the required instructions
-gets a browser-update message before the runtime downloads. Relaxed SIMD stays
-disabled pending verified support across shipping Safari/iOS versions. Memory64,
-garbage collection and exception unwinding are not enabled; they do not supply a
-general speed optimization for this Rust/Slint application.
-
-The final build replaces tail calls to imports and indirect tail calls with
-ordinary calls followed by explicit returns. This avoids the boundary path in
-[WebKit bug 325447](https://bugs.webkit.org/show_bug.cgi?id=325447), which can
-crash iOS 27 WebContent with `EXC_ARM_PAC_FAIL` while authenticating a Wasm return
-address. Rust 1.99, release optimization, SIMD, and direct internal tail calls
-remain enabled. Indirect calls can use additional stack frames, so the transform
-is specific to this dashboard; it is not a general tail-call polyfill. The
-builder validates both modules, records transformed/retained counts in the build
-manifest, and hashes/compresses the result. Wasm exception handlers and new
-unsupported instructions fail the build until reviewed. The build tool is part
-of the source fingerprint and source package.
-
-The repository UI builder stages all `public/` files with `pkg/` at the same
-relative location directly into `dist/ui/`. The public entry
-point is index.html; bridge.js imports `./pkg/ccs_account_dashboard.js`.
-Use the existing AI Account Center server and session-cookie authentication. Do not serve this
-page as file:// or configure a cross-origin API URL.
+`leptos` is pinned to **=0.9.0-rc1** and the wasm-bindgen crates to the CLI wasm-pack downloads (0.2.130); the
+builder checks both locks and the wasm-pack version before it replaces the packaged UI. The release build uses
+`opt-level = "z"`, LTO and one codegen unit; the builder strips the wasm's `name` section (about 90% of a release
+build) with `leptos/build/strip-names.cjs`. `leptos/.cargo/config.toml` keeps WebAssembly tail calls and SIMD off
+(WebKit bug 325447 crashed iOS 27 on tail calls). The builder stages `public/` into `dist/ui/`, the runtime into
+`pkg/<buildId>/` (named after the wasm's hash, cached forever), `app/index.html` (the frame page, naming that
+runtime and its stylesheet by content), `app/app.css` and the mono font, stamps the service worker with the shell
+build id, writes `.br` and `.gz` copies and records it all in `ui-build-manifest.json`. A machine that sets
+`AAC_NO_LOCAL_RUST_BUILD=1` (the shared VM) refuses to build; build on a build host. Use the existing AI Account
+Center server and session-cookie authentication. Do not serve the page as file:// or configure a cross-origin API
+URL.
 
 ## Data and controls
 
@@ -109,15 +65,15 @@ page as file:// or configure a cross-origin API URL.
   a server restart (`public/claude-open.mjs`, `tests/claude-open.test.mjs`).
 - Codex and Antigravity activation and auto-switch settings reuse authenticated
   guarded APIs. Thresholds are shown in percent used (Codex sends percent
-  remaining). Busy activation opens a Slint review dialog listing the blocking
+  remaining). Busy activation opens the frame's review dialog listing the blocking
   programs. Yes submits the server-issued, target-bound approval token; Cancel
   sends no mutation. Expired or stale approvals require a fresh Activate review.
   The active account is the selected row, marked Active.
 - Update apps is its own header button. It starts the allowlisted asynchronous
-  update job only after the user presses it, shows progress in place and the
-  result as a toast; it is never run while the dashboard starts. The button
-  keeps one width for the whole job (the rolling count sits in a box the width
-  of its total), so its label never jitters while apps update.
+  update job only after the user presses it, shows progress in place ("Updating
+  3 of 21" with a spinner, then a check) and the result as a toast; it is never
+  run while the dashboard starts. The results are listed under Accounts &
+  Settings.
 - Usage refreshes at the server-confirmed interval configured in Accounts &
   Settings (30–3600 seconds, initially 60 seconds). Refresh requests fresh usage
   before reloading. Failed refreshes keep the received samples and report the
@@ -171,151 +127,51 @@ page as file:// or configure a cross-origin API URL.
   follows the trusted local network (trusted, not on it, or trust off with plain
   guidance), and first-run setup appears only when the server reports setup mode
   (with the setup code when the server asks for one).
-- Status and Scoreboard are tabs after Accounts whose pages are Leptos pages served at `/app/status` and
-  `/app/scoreboard`; `public/shell-frame.mjs` shows each in an iframe over the canvas, in the content area the
-  shell reports, and the shell's own "Status page unavailable" note when a page cannot load. Contract:
-  [docs/status-tab.md](../docs/status-tab.md), "Shell iframe".
+- Status and Scoreboard are tabs after Accounts (`/app/status`, `/app/scoreboard`), each reading its own data.
+  Contract: [docs/status-tab.md](../docs/status-tab.md).
 - Reported usage can exceed 100%. Amounts and percentage labels preserve the
   overage; only visual progress-bar widths are bounded by their tracks.
   Displayed fractions use at most two decimal places; source precision is retained.
 
-## Rendering performance
+## Performance
 
-The FemtoVG renderer redraws the whole canvas for every frame, so the dashboard
-keeps per-frame work small, which matters most on software WebGL (Chrome's
-SwiftShader on a machine without a GPU):
-
-- Nothing animates while idle: spinners, the update-progress bar, the sign-in
-  sweep and the skeleton shimmer read `animation-tick()` only while they are
-  active, and the browser requests no frames once the page settles.
-- Static surfaces render into cached layers (`cache-rendering-hint`): the paper
-  grid, Home's sections and provider cards, the Accounts & Settings sections and
-  settings groups, the Analytics KPI cards and every Analytics card whose
-  content does not follow the pointer. The usage-trends card caches its axes,
-  gridlines and data paths in their own layer, so the crosshair only blits it.
-  A layer re-renders only while something inside it changes.
-- Hover lifts fade in a second, static shadow (`HoverShadow`) instead of
-  animating a shadow's blur or colour, which would make the renderer blur a new
-  shadow texture on every frame.
-- Value animations (meter widths, count-ups, chart draws) use the ease-out
-  curve only; a filmed refresh moves every meter monotonically to its new value.
-
-Measured on the Ubuntu VM in headless Chrome with SwiftShader at 1440 x 900
-(2026-10-02, median per animation): the page's own work per frame (WebAssembly
-and JavaScript) is 5-11 ms for scrolling and hovering and about 17 ms while
-Details slides in, and frames arrive every 47-90 ms (11-21 fps), a rate set by
-SwiftShader's rasterising rather than by the page. Before the cached layers and
-static hover shadows, a hover in Analytics took 250-300 ms a frame (4 fps) and
-Home's scrolling about 20 ms of page work a frame. Hardware-accelerated browsers
-are far faster; this software-WebGL figure is the floor.
-
-Every state push from `bridge.js` (`with_ui` and the other entry points in
-`src/lib.rs`) asks for a frame and wakes winit's event loop, so a change that
-arrives while the loop sleeps is painted at once instead of at the next pointer
-event.
-
-On 2026-10-21, six balanced fixture runs per configuration in hardware-accelerated
-Chrome on the Quadro P1000 (1440 x 900, DPR 1) compared the deployed UI with Rust
-1.99.1/wasm-pack 0.15.0 cross-builds. Medians, excluding warm-up runs:
-
-| Measurement | Deployed UI | SIMD + tail calls, `s` | SIMD + tail calls, `2` |
-| --- | ---: | ---: | ---: |
-| Hot model update | 0.697 ms | 0.694 ms | 0.530 ms |
-| Details animation CPU work/frame | 8.70 ms | 8.85 ms | 6.25 ms |
-| Scrolling CPU work/frame | 3.30 ms | 3.40 ms | 2.75 ms |
-| Authenticated startup, cache disabled | 1.323 s | 1.319 s | 1.292 s |
-| Brotli Wasm download | 3.094 MB | 3.087 MB | 3.672 MB |
-
-The speed profile cuts model-update time by 24%, Details frame work by 28% and
-scrolling frame work by 17%, at an 18.7% larger initial Wasm download. The
-content-addressed runtime remains immutable and cacheable. Startup ranges overlap,
-so these results do not establish a startup improvement. Feature flags alone
-showed no consistent CPU gain. Model timings use 2,000 warm-up pushes followed by
-seven batches of 100 alternating fixture models; frame work measures JavaScript
-and Wasm callback CPU time, not delivered FPS. These are local fixture
-measurements, not live-provider refresh or mobile Safari benchmarks. They predate
-the iOS tail-call boundary compatibility pass; they do not establish performance
-for that final module or a speed improvement on iOS.
+The frame downloads about 1.3 MB on a cold start (1 MB of it the brotli wasm) and draws Home in about half a second on
+the kit's test server; the retired Slint app downloaded about 3.9 MB and drew after about 1.5 s (Leptos finish
+measurements, `share/ai-account-center/2026-11-14-leptos-finish/`). Each tab reads only its own data, its module loads
+on first use, and nothing loops while idle.
 
 ## Validation
 
 ```sh
 node --test web-dashboard/tests/*.test.mjs
+bun run ui:validate          # pins, cargo fmt, these tests, and that dist/ui is the build of the current sources
+cargo test --locked          # in web-dashboard/leptos, on a build host
 ```
 
-The Slint compiler validates UI bindings during the actual WASM release build.
-The data tests cover unknown versus genuine zero, credit units/expiration,
-additional counters, confirmed auto-switch thresholds, complete details, the
-version 2 dashboard view models (sections, Fable, switchable providers, hidden
-providers) and the version 3 analytics model (rate mirror parity with
-`model-pricing.ts`, per-type cost reconciliation, unavailable activity and cost,
-ranges and local-time buckets, the provider filter, heatmap gaps, quota history,
-focus-chart label placement and the resets agenda), the version 2 Accounts &
-Settings model (registry sections, fixed slots, live, refused and coming actions,
-flows, lines under rows, the trash, server visibility, the sign-in block, Update
-apps results, the refresh scale), the Accounts & Settings controller against a
-fake server (every action's request and every error code's words) and the
-sign-in rules (strength hint, first-run checks, tries and pauses, ended and
-revoked sessions).
+The data tests cover unknown versus genuine zero, credit units/expiration, additional counters, confirmed
+auto-switch thresholds, complete details, the version 2 dashboard view models (sections, Fable, switchable
+providers, hidden providers) and the version 7 analytics model (rate mirror parity with `model-pricing.ts`, per-type
+cost reconciliation, unavailable activity and cost, ranges and local-time buckets, the provider filter, heatmap gaps,
+quota history, focus-chart label placement and the resets agenda), the version 3 Accounts & Settings model, the
+Accounts & Settings controller against a fake server, the frame's controllers (`frame-dashboard.test.mjs`, with
+`frame-dashboard-golden.test.mjs` replaying what bridge.js did; `frame-session.test.mjs`; `frame-analytics.test.mjs`)
+and the sign-in rules (strength hint, first-run checks, tries and pauses, ended and revoked sessions).
 
-Visual checks run with browser-check: see
-[tests/browser/README.md](tests/browser/README.md). Compare against the approved Daylight
-Atlas concept (`redesign-concepts-20261001/c-daylight-atlas/`) at 1024 x 700,
-1440 x 900, 1920 x 1080 and 2560 x 1440, light and dark.
+Browser checks run with browser-check: see [tests/browser/README.md](tests/browser/README.md).
 
 ## Supported sizes and mobile testing
 
-The dashboard is responsive from a 320 px floor to desktop widths: P (phone,
-below 600), F (foldable and small tablet, 600-899), T (tablet, 900-1279) and D
-(desktop, 1280 and up, unchanged), plus a short-height variant below 500 px
-tall for landscape phones. Safe-area insets, the on-screen keyboard height,
-the coarse/hover pointer profile, standalone PWA mode and online state reach
-Slint through the `Device` global; see
-[ui/README-ARCHITECTURE.md](ui/README-ARCHITECTURE.md).
-
-To test below D, serve a `dist/ui` build with sanitized fixture data (never
-real account data) and drive it from a second machine:
-
-- In desktop Chrome emulation, judge layouts at device scale factor 1: at
-  scale 2-3 the canvas backing store does not follow the emulated DPR, an
-  emulation artefact (real devices render at the right size and crisp). Match
-  the tier's matchMedia profile (coarse pointer, hover, standalone display
-  mode) with matching safe-area, keyboard and online values: bridge.js
-  forwards them through the `set-safe-area`, `set-input-profile`,
-  `set-keyboard` and `set-online` wasm exports into the `Device` global. Append
-  `?e2e` so bridge.js reports every probed control's window rectangle through
-  `globalThis.__aacProbe` for scripted tap and overflow checks.
-- On iOS Simulator and the Android emulator, open the fixture preview over
-  the local network (secure context), probe DPR, viewport, canvas size and
-  safe areas from JS, and screenshot each tier in light and dark. WebDriver
-  taps are unreliable on iOS Simulator, so prefer scripted pointer events
-  there plus one manual touch pass; Android Chrome over CDP takes trusted
-  touch taps. Sign-in, install and service-worker checks need the real
-  throwaway server (temporary home, test user only): Add to Home Screen and
-  install-prompt acceptance have no CLI on either platform and are manual.
-- Desktop regression stays pixel-exact: compare 1440, 1920 and 2560 against
-  the pre-mobile screenshots with fixture data; only time-based texts may
-  differ.
-
-For automated Chromium DPI checks, launch a disposable browser with
-`--force-device-scale-factor=N` and a new context with `device_scale_factor=N`
-(test N=1 and N=2). Record CSS size, `devicePixelRatio`, ResizeObserver's
-`devicePixelContentBoxSize`, canvas backing size and WebGL dimensions at startup
-and after resizing. A context-only scale override can leave the physical pixel
-box at the browser's original scale, as reported in
-[Playwright issue #18591](https://github.com/microsoft/playwright/issues/18591).
-Preserve that failing context-only result separately from the browser-scale
-comparison. Native-display checks use the display's actual browser scale.
-
-Official API documentation: https://docs.slint.dev/latest/docs/rust/slint/
+The frame is responsive from a 320 px floor to desktop widths, with its own chrome per format (`leptos/src/ui/device.rs`,
+`html[data-chrome]`): the desktop header, the phone's top and tab bars, and on the iPhone Duo the status-strip rail
+(folded and open on its side) or the status-band head (open upright). Safe-area insets, the keyboard and orientation
+are followed live. The device pass (iPhone 17 Pro, iPhone Duo and Android simulators through Simlock) is
+`share/ai-account-center/DEVICE-CHECKLIST.md`; the kit's `?safe=t,r,b,l` gives Chromium the measured Duo insets.
 
 ## Dependencies and attribution
 
-The dashboard application source follows the parent CCS project's MIT license.
-Slint 1.18.1 is used under its
-[Royalty-free license](https://github.com/slint-ui/slint/blob/v1.18.1/LICENSES/LicenseRef-Slint-Royalty-free-2.0.md).
-The standard unmodified `AboutSlint` widget is shown in the About section of the
-Accounts & Settings page.
-Instrument Sans and Martian Mono are embedded under the SIL Open Font License 1.1
-and the icons are Lucide (ISC); see `public/assets/THIRD-PARTY-NOTICES.txt`.
-See [Slint's licensing FAQ](https://github.com/slint-ui/slint/blob/master/FAQ.md#what-obligations-do-i-need-to-fulfil-to-use-the-royalty-free-license).
+The dashboard application source follows the parent CCS project's MIT license. Leptos and wasm-bindgen are used under
+their MIT or Apache-2.0 licenses. Instrument Sans and Martian Mono are used under the SIL Open Font License 1.1, the
+icons are Lucide (ISC) and the platform glyphs Simple Icons (CC0); see `public/assets/THIRD-PARTY-NOTICES.txt`.
+Historical credit: from 2026-10 to 2026-11-14 Home, Analytics and Accounts & Settings were drawn with
+[Slint](https://slint.dev) 1.18.1 under its Royalty-free license, which showed the standard AboutSlint widget in
+About while Slint shipped.

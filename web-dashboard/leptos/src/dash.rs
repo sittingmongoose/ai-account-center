@@ -1,11 +1,11 @@
 //! The dashboard's data for the frame's pages that take it (Home, Accounts & Settings, Details and the switch approval).
 //! The frame reads it itself (G5): `public/frame-dashboard.mjs` runs in this window the same server calls, timers,
-//! guards and pure modules bridge.js runs in the classic app (the accounts controller, the target-bound switch
-//! approvals, the one-use remove and restore tokens), and hands the same versioned views. No tab loads the Slint
-//! dashboard or its bridge any more; Analytics reads its own (analytics/feed.rs).
+//! guards and pure modules bridge.js ran (the accounts controller, the target-bound switch approvals, the one-use
+//! remove and restore tokens), and hands the same versioned views (tests/frame-dashboard-golden.test.mjs replays what
+//! bridge.js did). Analytics reads its own (analytics/feed.rs).
 //!
-//! `index.html` installs `window.aacLoadDashboard()` (a dynamic import, started early on `/app/home` and
-//! `/app/accounts`); it resolves to the module, and the page installs its controller (`installFrameDashboard`, which
+//! `index.html` installs `window.aacLoadDashboard()` (a dynamic import, started early when the address
+//! opens Home or Accounts); it resolves to the module, and the page installs its controller (`installFrameDashboard`, which
 //! makes it `window.aacFrameDashboard` and numbers it) only if the page is still there. A page drives and stops only
 //! the controller it installed (as analytics/feed.rs does), never one a later sign-in installed. Its views arrive as `aac-dash`
 //! events (`{key, json}`) and the pages' actions go back through `aacFrameDashboard.act(kind, value)`, which runs only
@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use wasm_bindgen::{JsCast, JsValue};
 
 /// How many times a page asked for Details: a click outside the open panel that asked for another account swaps it
-/// instead of closing it (details.rs, as bridge.js `detailsOpens` does for the canvas).
+/// instead of closing it (details.rs, as bridge.js `detailsOpens` did for the canvas).
 pub static DETAILS_ASKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The latest view of each key, as raw JSON (each page parses its own types). Empty until the first answer: the pages

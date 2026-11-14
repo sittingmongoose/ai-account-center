@@ -1,6 +1,6 @@
 # AI Account Center Codebase Summary
 
-AI Account Center is a Slint 1.18.1 account dashboard with a TypeScript backend
+AI Account Center is a Leptos 0.9 account dashboard with a TypeScript backend
 and native Swift/WPF clients. It retains existing account/private-state
 contracts from the original CCS fork.
 
@@ -13,8 +13,8 @@ contracts from the original CCS fork.
 | Codex controls | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [activation](../src/codex-auth/activate-codex-profile.ts), [auto-switch](../src/web-server/services/codex-auto-switch-service.ts) |
 | Analytics | [analytics service](../src/web-server/services/account-analytics-service.ts) |
 | Explicit app updates | [app-update service](../src/web-server/services/app-update-service.ts), [host invocation and helper sync](../src/web-server/services/app-update-hosts.ts), [update helpers](../scripts/app-updates/) |
-| Slint scenes/bindings | [dashboard.slint](../web-dashboard/ui/dashboard.slint), [analytics.slint](../web-dashboard/ui/analytics.slint), [lib.rs](../web-dashboard/src/lib.rs); map of pages, components, view models and rendering rules: [UI architecture](../web-dashboard/ui/README-ARCHITECTURE.md) |
-| Browser API bridge | [bridge.js](../web-dashboard/public/bridge.js) |
+| Leptos app frame | [lib.rs](../web-dashboard/leptos/src/lib.rs), [frame.rs](../web-dashboard/leptos/src/frame.rs) and the pages beside them; map of pages, controllers, view models and rules: [UI architecture](../web-dashboard/README-ARCHITECTURE.md) |
+| Browser controllers | [frame-dashboard.mjs](../web-dashboard/public/frame-dashboard.mjs), [frame-session.mjs](../web-dashboard/public/frame-session.mjs), [frame-analytics.mjs](../web-dashboard/public/frame-analytics.mjs) |
 | Native clients | [macos-bar](../macos-bar/), [windows-bar](../windows-bar/) |
 | Existing-host usage | [Python collectors](../scripts/account-usage/), [browser bridges](../browser-bridge/), [remote analytics scan](../src/web-server/services/analytics-remote-transport.ts) |
 | Private paths | [config-manager](../src/utils/config-manager.ts) |
@@ -38,8 +38,8 @@ The root TypeScript build compiles `src/` into `dist/` and
 [bundles](../scripts/build-codex-update-runtime.js) the Codex stop/start runtime
 into `dist/app-updates/`; the update helpers carry that bundle to Linux hosts
 without AAC, such as Nas1. The
-[Slint builder](../scripts/build-ui.js) fingerprints the crate manifest/lock,
-Rust, Slint and public browser inputs, builds locked WASM and stages `dist/ui/`.
+[UI builder](../scripts/build-ui.js) fingerprints the Leptos crate's manifest/lock,
+sources, styles and fonts, builds locked WASM and stages `dist/ui/` with the public browser files.
 The [validator](../scripts/validate-ui.js) and
 [bundle verifier](../scripts/verify-bundle.js) bind source and packaged runtime.
 There is no React/Vite production input.

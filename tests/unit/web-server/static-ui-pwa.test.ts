@@ -18,15 +18,12 @@ import { startServer } from '../../../src/web-server';
 import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 
+import { fakeRun, writeLeptosFixture } from '../../shared/fixtures/leptos-ui-fixture';
+
 const { buildUi } = require('../../../scripts/build-ui.js');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const REAL_PUBLIC = path.join(REPO_ROOT, 'web-dashboard', 'public');
-const WASM = Buffer.concat([
-  Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]),
-  Buffer.from('slint-dashboard-pwa-fixture-'.repeat(512)),
-]);
-const INDEX = `<!doctype html><canvas id="slint-dashboard"></canvas>${'<!-- page -->'.repeat(120)}<script type="module" src="/bridge.js"></script>`;
 const MANIFEST = JSON.parse(
   fs.readFileSync(path.join(REAL_PUBLIC, 'manifest.webmanifest'), 'utf8')
 );
@@ -50,21 +47,7 @@ let originalEnvironment: Record<string, string | undefined> = {};
 
 function buildFixtureUi(root: string): typeof manifest {
   const crate = path.join(root, 'web-dashboard');
-  for (const directory of ['public', 'pkg', 'tests'])
-    fs.mkdirSync(path.join(crate, directory), { recursive: true });
-  fs.writeFileSync(
-    path.join(crate, 'Cargo.toml'),
-    '[dependencies]\nslint = { version = "=1.18.1" }\n[build-dependencies]\nslint-build = "=1.18.1"\n'
-  );
-  fs.writeFileSync(
-    path.join(crate, 'Cargo.lock'),
-    '[[package]]\nname = "slint"\nversion = "1.18.1"\n[[package]]\nname = "slint-build"\nversion = "1.18.1"\n[[package]]\nname = "wasm-bindgen"\nversion = "0.2.130"\n[[package]]\nname = "wasm-bindgen-futures"\nversion = "0.4.80"\n[[package]]\nname = "js-sys"\nversion = "0.3.107"\n[[package]]\nname = "web-sys"\nversion = "0.3.107"\n'
-  );
-  fs.writeFileSync(path.join(crate, 'public', 'index.html'), INDEX);
-  fs.writeFileSync(
-    path.join(crate, 'public', 'bridge.js'),
-    "import init from './pkg/ccs_account_dashboard.js';\ninit();\n"
-  );
+  fs.mkdirSync(path.join(crate, 'public'), { recursive: true });
   // The real PWA shell files, so the real manifest, worker and icons are served.
   for (const file of ['manifest.webmanifest', 'sw.js', 'sw-route.js']) {
     fs.copyFileSync(path.join(REAL_PUBLIC, file), path.join(crate, 'public', file));
@@ -77,30 +60,8 @@ function buildFixtureUi(root: string): typeof manifest {
     path.join(REAL_PUBLIC, 'assets', 'favicon.svg'),
     path.join(crate, 'public', 'assets', 'favicon.svg')
   );
-  fs.writeFileSync(
-    path.join(crate, 'pkg', 'ccs_account_dashboard.js'),
-    `export default async function init() {}\n${'// glue\n'.repeat(200)}`
-  );
-  fs.writeFileSync(path.join(crate, 'pkg', 'ccs_account_dashboard_bg.wasm'), WASM);
-  return buildUi({
-    repoRoot: root,
-    run: (command: string, args: string[]) =>
-      command.includes('rustc')
-        ? 'rustc 1.99.1 (fixture)'
-        : command.includes('rustup')
-          ? 'wasm32-unknown-unknown\n'
-          : command.includes('wasm-pack')
-            ? 'wasm-pack 0.15.1\n'
-            : args[0]?.endsWith('tail-call-compat.mjs')
-              ? JSON.stringify({
-                  policy: 'webkit-ipint-boundaries-v1',
-                  imported: 0,
-                  indirect: 0,
-                  internal: 0,
-                })
-              : '',
-    readCommit: () => '8fb5e3de',
-  });
+  writeLeptosFixture(root);
+  return buildUi({ repoRoot: root, run: fakeRun, readCommit: () => '8fb5e3de' });
 }
 
 async function start(): Promise<void> {

@@ -8,8 +8,8 @@ Preserve history, original author metadata, copyright notices and LICENSE.
 
 The product owns account usage, dashboard authentication, existing profiles,
 guarded Codex activation/auto-switch, Analytics, explicit app-update jobs and
-native Mac/Windows bars. The TypeScript server stays; the web UI is Slint
-**1.18.1** compiled to WebAssembly. Native bars remain Swift and WPF. Every new
+native Mac/Windows bars. The TypeScript server stays; the web UI is Leptos
+**0.9** (client-side rendered) compiled to WebAssembly. Native bars remain Swift and WPF. Every new
 server piece is written in Rust as a native module like `native/aac-store`.
 Existing TypeScript modules are not ported unless the owner asks.
 
@@ -43,15 +43,16 @@ or API routing product.
 | Area | Inputs |
 | --- | --- |
 | CLI/account/backend | `src/`, `lib/`, `config/` |
-| Dashboard | `web-dashboard/src/`, `web-dashboard/ui/`, `web-dashboard/public/` |
+| Dashboard | `web-dashboard/leptos/`, `web-dashboard/public/` |
 | Build/package verification | `scripts/build-ui.js`, `scripts/validate-ui.js`, `scripts/verify-bundle.js` |
 | Native clients | `macos-bar/`, `windows-bar/` |
 | Collectors and updates | `scripts/account-usage/`, `scripts/app-updates/` |
 | Browser bridges | `browser-bridge/` |
 | Container | `docker/Dockerfile`, `docker/compose.yaml` |
 
-`dist/` and `dist/ui/` are generated. Keep Slint's manifest/lock pins and standard
-AboutSlint attribution. Internal generated module filenames may retain CCS names.
+`dist/` and `dist/ui/` are generated. Keep the Leptos and wasm-bindgen manifest/lock pins
+and the third-party credits (public/assets/THIRD-PARTY-NOTICES.txt). Internal generated
+module filenames may retain CCS names.
 
 ## Validation
 
@@ -66,7 +67,7 @@ node --test web-dashboard/tests/*.test.mjs
 ```
 
 Authorized dashboard changes need `bun run build` and `bun run ui:validate` to
-verify the actual Slint runtime/source fingerprint. Native/bridge guides describe
+verify the actual Leptos runtime/source fingerprint. Native/bridge guides describe
 their offline checks. Report precisely what ran and any limits.
 
 ## Release and documentation

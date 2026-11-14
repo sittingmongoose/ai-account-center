@@ -46,7 +46,7 @@ fi
 # Only committed builds of origin/main may be installed; refuse before the long build.
 node scripts/deploy-lineage.js preflight
 
-echo "[i] Building AI Account Center and the pinned Slint dashboard..."
+echo "[i] Building AI Account Center and the pinned Leptos dashboard..."
 bun run build:all
 if [ "$SKIP_VALIDATE" = false ]; then
   bun run validate

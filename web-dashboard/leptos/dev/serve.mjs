@@ -78,14 +78,12 @@ http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   if (p === '/__reset') { view = JSON.parse(fs.readFileSync(fixture, 'utf8')); json(res, 200, { ok: true }); return; }
-  if (/^\/app\/(home|analytics|accounts|status|scoreboard)$/.test(p)) {
+  // The frame page answers its own addresses, the Home Screen start page (/, which the frame also warms 4 s after it
+  // starts, frame.rs warm_offline_copies) and the start-cover fixture, as the product does since the classic page went.
+  if (/^\/app\/(home|analytics|accounts|status|scoreboard)$/.test(p) || p === '/' || p === '/__fixture/start-cover') {
     const html = fs.readFileSync(path.join(crate, 'index.html'), 'utf8').replaceAll('{{PKG}}', '/app/pkg').replaceAll('{{CSS}}', '/app/app.css');
     res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(html);
-  } else if (p === '/__fixture/start-cover') file(res, path.join(dashboard, 'public/index.html'));
-  // The frame warms the Home Screen start page 4 s after it starts (frame.rs warm_offline_copies): answer it as the
-  // product does, so a check that runs longer has no 404 in its console.
-  else if (p === '/' && !url.search) file(res, path.join(dashboard, 'public/index.html'));
-  else if (p === '/__fixture/offline-cover') {
+  } else if (p === '/__fixture/offline-cover') {
     const source = fs.readFileSync(path.join(dashboard, 'public/sw.js'), 'utf8');
     const html = vm.runInNewContext(source.match(/var OFFLINE_PAGE =([\s\S]*?);\r?\n/)[1]);
     res.writeHead(200, { 'Content-Type': types['.html'], 'Cache-Control': 'no-store' }).end(html);
@@ -102,7 +100,7 @@ http.createServer((req, res) => {
   else if (p.startsWith('/app/marks/')) file(res, path.join(crate, 'src/ui/marks', path.basename(p)));
   else if (p.startsWith('/app/pkg/')) file(res, path.join(crate, 'pkg', path.basename(p)));
   else if (p === '/app/app.css') file(res, path.join(crate, 'style/app.css'));
-  else if (p === '/app/MartianMono.ttf') file(res, path.join(dashboard, 'ui/fonts/MartianMono.ttf'));
+  else if (p === '/app/MartianMono.ttf') file(res, path.join(crate, 'fonts/MartianMono.ttf'));
   else if (p.startsWith('/assets/')) file(res, path.join(dashboard, 'public/assets', path.basename(p)));
   else if (p.startsWith('/api/status/files/')) ranged(req, res, path.join(crate, 'fixtures/media', path.basename(p)));
   else if (p === '/api/scoreboard' && req.method === 'GET') json(res, 200, { ...fixtureJson('scoreboard-view.json'), byModel: fixtureJson('scoreboard-by-model.json') });

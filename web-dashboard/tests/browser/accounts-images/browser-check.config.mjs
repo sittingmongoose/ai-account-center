@@ -1,4 +1,4 @@
-// Whole-page images of Accounts & Settings (native) beside its Slint twin, in each format and theme, on the kit's
+// Whole-page images of Accounts & Settings in the app frame, in each format and theme, on the kit's
 // real test server (../browser-check.config.mjs) with the fake account server of ../accounts-fixture.mjs.
 // Needs dist/ built, like the kit.
 //   browser-check run web-dashboard/tests/browser/accounts-images --set out=<folder>

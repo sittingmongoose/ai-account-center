@@ -23,9 +23,9 @@ body::before {
   background: var(--system-status-bg);
 }
 /* Before the frame starts, the Duo's side strip may already contain its clock and signal ring, under a Live
-   Activity when one is running (down to 242 pt folded). The classic canvas also leaves these safe side insets
-   empty. The frame replaces this conservative height with its measured reserve (device.rs rail_reserve), and
-   paints only its chosen rail side, including transient zero-inset readings. */
+   Activity when one is running (down to 242 pt folded). The frame replaces this conservative height with its
+   measured reserve (device.rs rail_reserve), and paints only its chosen rail side, including transient zero-inset
+   readings. */
 body::after {
   height: 252px;
   border-style: solid;
@@ -39,7 +39,7 @@ body::after {
 :root[data-chrome] body::after { display: none; }
 /* In the rail's chrome the cover is the rail's own top: the same surface and edge line over the strip's reserve, so the
    clock and signal ring sit on the rail with no block above it. It stacks with the rail, under every scrim (the lowest
-   is z-index 34), so an open sheet dims the whole column alike. Over the raised dashboard (z-index 45) it rises. */
+   is z-index 34), so an open sheet dims the whole column alike. */
 :root[data-chrome='rail'] body::after {
   display: block;
   left: auto;
@@ -56,7 +56,6 @@ body::after {
   right: auto;
   border-width: 0 1px 0 0;
 }
-:root[data-chrome='rail']:has(.slint-host.raised) body::after { z-index: 2147483646; }
 :root[data-status-embedded='1'] body::before,
 :root[data-status-embedded='1'] body::after,
 :root[data-chrome='none'] body::before,

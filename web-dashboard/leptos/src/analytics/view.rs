@@ -1,4 +1,4 @@
-//! The Analytics view, `ANALYTICS_VIEW_VERSION` 7, exactly as bridge.js hands it to Slint (`analyticsSlintModel` in
+//! The Analytics view, `ANALYTICS_VIEW_VERSION` 7, exactly as the classic app handed it to Slint (`analyticsSlintModel` in
 //! public/analytics-data.mjs, with `usageView`, `quotaView` and `agendaView`). Every word, number and pixel position is
 //! decided there; the page only lays it out. Text and lists read through `nullable` (a `null` is empty); geometry
 //! numbers default to 0 when missing, and the page never shows a number it was not given as text.
@@ -29,7 +29,7 @@ pub struct AnalyticsView {
     pub agenda: Agenda,
 }
 
-/// The page state bridge.js keeps (`analyticsPage`): the controls show it, the actions change it.
+/// The page state the Analytics controller keeps (frame-analytics.mjs, once bridge.js `analyticsPage`): the controls show it, the actions change it.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PageState {
@@ -192,7 +192,7 @@ pub struct PickItem {
     pub off: bool,
 }
 
-/// The usage trend, laid out by bridge.js in the pixels of the box the page reported (`analytics-layout trend`):
+/// The usage trend, laid out by the Analytics controller (analytics-usage.mjs) in the pixels of the box the page reported (`analytics-layout trend`):
 /// `pw` x `ph` is the plot inside the fixed pads (`TREND_PAD`).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -902,7 +902,7 @@ pub struct QRow {
     pub na: String,
 }
 
-/// An open row's focus chart, laid out by bridge.js in the pixels of the reported focus box (`w` x `h`). Shapes and
+/// An open row's focus chart, laid out by the Analytics controller in the pixels of the reported focus box (`w` x `h`). Shapes and
 /// labels name theme colours by key; labels were placed so they never overlap.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]

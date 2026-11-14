@@ -1,4 +1,4 @@
-// Whole-page images of Home drawn natively in the app frame (PLAN step 5), and the classic Slint Home on the same data,
+// Whole-page images of Home drawn natively in the app frame (PLAN step 5),
 // on the kit's real test server (../browser-check.config.mjs: a temporary home; the made-up accounts of home-fixture.mjs
 // answered in the page). Needs dist/ built, like the kit.
 //   browser-check run web-dashboard/tests/browser/home-images --set out=<folder>

@@ -1,8 +1,9 @@
 //! Home (PLAN step 5): the Claude section, the switchable Codex and Antigravity sections, and the other providers as
-//! cards, drawn from the dashboard's view model v2 (`public/view-model.mjs` `dashboardViewModel`), which bridge.js
-//! builds and sends through the seam (`dash.rs`). Every number, word and "unavailable" decision is in that view; this
-//! page lays it out and animates it. Intent goes back as the dashboard's own action kinds, so switch approvals,
-//! idle-only auto-switch, held actions during a pending switch and every server call stay in bridge.js.
+//! cards, drawn from the dashboard's view model v2 (`public/view-model.mjs` `dashboardViewModel`), which the dashboard
+//! controller (`public/frame-dashboard.mjs`) builds and sends (`dash.rs`). Every number, word and "unavailable" decision
+//! is in that view; this page lays it out and animates it. Intent goes back as the dashboard's own action kinds, so
+//! switch approvals, idle-only auto-switch, held actions during a pending switch and every server call stay in the
+//! controller.
 //!
 //! Layout follows the space the page has (container queries, `style/app.css` "Home"): each section is a table (the
 //! account, one column per window, the action slot) once it is wide enough for its columns, and a stacked row (the

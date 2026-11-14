@@ -1,16 +1,17 @@
 /**
- * Serving the packaged Slint dashboard (dist/ui).
+ * Serving the packaged dashboard (dist/ui): the Leptos app frame and the JavaScript data layer it loads.
  *
  * - Precompressed variants: scripts/build-ui.js writes .br and .gz copies and lists
  *   them in ui-build-manifest.json. They are checked once at startup (size and
  *   SHA-256) and served by content negotiation. Nothing here is compressed on
  *   the fly; /api JSON is encoded per request (api-compression.ts).
  * - Cache-Control by path: pkg/<buildId>/** is immutable; everything else revalidates.
- * - Page routes: /, /login, /analytics, /accounts, /accounts/<provider>, /status and
- *   /scoreboard answer with index.html; /app/home, /app/analytics, /app/accounts, /app/status and
- *   /app/scoreboard answer with the Leptos app's app/index.html (the app frame, or with ?embed=1 the Status or
- *   Scoreboard page inside today's shell; the page reads which one from its path); a few aliases redirect;
- *   anything else goes back to /.
+ * - Page routes: the frame's own /app/home, /app/analytics, /app/accounts, /app/status and /app/scoreboard,
+ *   and the addresses bookmarks and the installed app still use (/, /login, /analytics, /accounts,
+ *   /accounts/<provider>, /status, /scoreboard), all answer with the frame page, app/index.html. The page
+ *   reads its tab from the address (and the classic ?view= alias) and writes its own /app/<tab> address;
+ *   with ?embed=1 it shows the Status or Scoreboard content only. A few aliases redirect; anything else goes
+ *   back to /.
  */
 
 import crypto from 'crypto';
@@ -76,8 +77,9 @@ const STATIC_ICON_ALIASES: ReadonlyMap<string, string> = new Map<string, string>
   ['/favicon.ico', 'icons/apple-touch-icon-180-v2.png'],
 ]);
 
+/** The classic app's addresses: the frame opens the same tabs there (and at /accounts/<provider>). */
 const PAGES = new Set(['/', '/login', '/analytics', '/accounts', '/status', '/scoreboard']);
-/** The Leptos app: the app frame's five tabs (Status and Scoreboard also show in today's shell's iframe). */
+/** The app frame's own addresses, one per tab. */
 const APP_PAGES = new Set([
   '/app/home',
   '/app/analytics',
@@ -295,7 +297,7 @@ function setSharedHeaders(ui: StaticUi, res: http.ServerResponse, relative: stri
   res.setHeader('Cache-Control', uiCacheControl(relative));
   const type = CONTENT_TYPES.get(path.extname(relative).toLowerCase());
   if (type) res.setHeader('Content-Type', type);
-  if (relative === 'index.html' || relative === APP_ENTRY) {
+  if (relative === APP_ENTRY) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     // Only AAC's own shell may frame its pages: a service on another port or a sibling name is same-site, so the
@@ -441,7 +443,22 @@ export function resolvePageRoute(
   return { kind: 'redirect', status: 302, location: '/' };
 }
 
-/** The app.get('/{*splat}') fallback: page routes get index.html, the rest are redirected. */
+/** The frame page, or a plain refusal when the build has none (never another page in its place). */
+function serveAppEntry(ui: StaticUi, req: Request, res: Response, next: NextFunction): void {
+  if (!fs.existsSync(path.join(ui.root, APP_ENTRY))) {
+    res.status(404).type('text/plain').send('This build has no dashboard page.');
+    return;
+  }
+  serveUiFile(ui, req, res, APP_ENTRY, () => {
+    withoutVariantHeaders(res);
+    setSharedHeaders(ui, res, APP_ENTRY);
+    res.sendFile(APP_ENTRY, { root: ui.root }, (error?: Error) => {
+      if (error && !res.headersSent) next(error);
+    });
+  });
+}
+
+/** The app.get('/{*splat}') fallback: page routes get the frame page, the rest are redirected. */
 export function pageRouteHandler(ui: StaticUi, providerIds: ReadonlySet<string>): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
     const appPath =
@@ -451,17 +468,7 @@ export function pageRouteHandler(ui: StaticUi, providerIds: ReadonlySet<string>)
         res.redirect(301, appPath);
         return;
       }
-      if (!fs.existsSync(path.join(ui.root, APP_ENTRY))) {
-        res.status(404).type('text/plain').send('This build has no Status page.');
-        return;
-      }
-      serveUiFile(ui, req, res, APP_ENTRY, () => {
-        withoutVariantHeaders(res);
-        setSharedHeaders(ui, res, APP_ENTRY);
-        res.sendFile(APP_ENTRY, { root: ui.root }, (error?: Error) => {
-          if (error && !res.headersSent) next(error);
-        });
-      });
+      serveAppEntry(ui, req, res, next);
       return;
     }
     const route = resolvePageRoute(req.path, providerIds);
@@ -469,12 +476,6 @@ export function pageRouteHandler(ui: StaticUi, providerIds: ReadonlySet<string>)
       res.redirect(route.status, route.location);
       return;
     }
-    serveUiFile(ui, req, res, 'index.html', () => {
-      withoutVariantHeaders(res);
-      setSharedHeaders(ui, res, 'index.html');
-      res.sendFile('index.html', { root: ui.root }, (error?: Error) => {
-        if (error && !res.headersSent) next(error);
-      });
-    });
+    serveAppEntry(ui, req, res, next);
   };
 }

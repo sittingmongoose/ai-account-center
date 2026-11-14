@@ -1,7 +1,7 @@
 # AI Account Center System Architecture
 
 ```text
-Slint browser / native Mac or Windows bar
+Leptos browser app / native Mac or Windows bar
                  |
        authenticated account APIs
                  |
@@ -11,7 +11,7 @@ Slint browser / native Mac or Windows bar
  guarded switching   Analytics      Python / browser bridge
 ```
 
-The web dashboard is Slint 1.18.1 compiled through Rust to WebAssembly. The
+The web dashboard is a Leptos 0.9 app (the app frame) compiled through Rust to WebAssembly. The
 TypeScript server stays (new server pieces are Rust native modules such as
 `native/aac-store`; existing TypeScript is not ported unless the owner asks);
 native bars remain Swift/WPF. The primary CLI command
@@ -62,9 +62,9 @@ keep their schemas. See [provider usage flows](provider-flows.md).
 ## API and data ownership
 
 [Server middleware](../../src/web-server/index.ts) owns session/origin/auth
-boundaries and the served `dist/ui/` runtime. The
-[browser bridge](../../web-dashboard/public/bridge.js) makes same-origin requests
-and routes explicit user actions. It does not collect credentials or render a
+boundaries and the served `dist/ui/` runtime. The frame's controllers
+([dashboard](../../web-dashboard/public/frame-dashboard.mjs), sign-in session and Analytics) make same-origin
+requests and route explicit user actions; they do not collect credentials or render a
 second UI framework.
 
 [Account service](../../src/web-server/services/account-dashboard-service.ts)
@@ -237,24 +237,25 @@ unavailable/cached outcomes. Container packaging supplies no host credentials.
 
 ## Build and distribution
 
-The [builder](../../scripts/build-ui.js) fingerprints manifest/lock, Rust,
-Slint and public inputs, compiles locked WASM and stages directly into `dist/ui/`.
+The [builder](../../scripts/build-ui.js) fingerprints the Leptos crate's manifest/lock,
+Rust sources, styles and fonts and the shared registry, compiles locked WASM and stages directly into `dist/ui/`.
 [Validation](../../scripts/validate-ui.js) and
 [verification](../../scripts/verify-bundle.js) bind packaged runtime to current
 source. Native and bridge source roots have independent offline checks.
 
 The wasm-pack output is staged in `dist/ui/pkg/<buildId>/`, where `buildId` is the
-first 12 hex characters of the wasm SHA-256, and only the packaged `bridge.js`
-import is rewritten to that folder. Larger wasm and text files also ship as `.br`
+first 12 hex characters of the wasm SHA-256, and the staged frame page (`app/index.html`)
+starts the runtime from that folder. Larger wasm and text files also ship as `.br`
 and `.gz` copies listed in `ui-build-manifest.json`; folders are 0755 and files
 0644. The [static server](../../src/web-server/static-ui.ts) checks those copies
 at startup and negotiates them by `Accept-Encoding`, caches `pkg/<buildId>/**` as
-immutable and revalidates everything else, and answers the page routes `/`,
-`/login`, `/analytics`, `/accounts` and `/accounts/<provider>` with `index.html`.
+immutable and revalidates everything else, and answers every page route (`/app/<tab>`
+and the older `/`, `/login`, `/analytics`, `/accounts`, `/accounts/<provider>`, `/status`
+and `/scoreboard`) with the frame page, `app/index.html`.
 API responses are never compressed, an unmatched `/api` request is a JSON 404, and
 the build manifest itself is never served.
 
 [Docker](../../docker/README.md) builds the same source and starts only the
 dashboard on port 3000. Retired routing/runtime/tooling workflows are not part of
-the current product. Keep the [MIT license](../../LICENSE), upstream credit and
-Slint AboutSlint while changing visible branding.
+the current product. Keep the [MIT license](../../LICENSE), upstream credit and the
+third-party notices while changing visible branding.

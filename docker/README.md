@@ -1,7 +1,7 @@
 # AI Account Center in Docker
 
 The canonical image builds this checkout's TypeScript backend and pinned
-Slint 1.18.1 dashboard, and compiles both native modules (history store and
+Leptos 0.9 dashboard, and compiles both native modules (history store and
 status readers) for the image's platform; the build fails loudly if either
 module is missing. It starts the dashboard only, with no upstream npm
 installation, AI runtime installation or CLIProxy process.
@@ -133,5 +133,5 @@ configuration with the preserved volume and matching permissions. Avoid
 This is the renamed continuing fork of
 [kaitranntt/ccs](https://github.com/kaitranntt/ccs), originally authored by
 Tam Nhu Tran (Kai) and the CCS Contributors. The unchanged [MIT license](../LICENSE)
-and upstream history are retained. Slint's licensing/attribution details are in
+and upstream history are retained. The dashboard's licensing/attribution details are in
 [the dashboard guide](../web-dashboard/README.md#dependencies-and-attribution).

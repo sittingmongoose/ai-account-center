@@ -45,6 +45,10 @@ pub struct SessionView {
     pub offline_body: Option<String>,
     pub offline_meta: Option<String>,
     pub strength: Option<Strength>,
+    /// Signed in through the form just now (frame-session.mjs `signedIn`), not a session the browser already had.
+    pub fresh: bool,
+    /// How long a remembered sign-in lasts, in hours (0 or none: not known here).
+    pub session_hours: Option<f64>,
 }
 
 fn session_object() -> Option<JsValue> {
@@ -84,9 +88,7 @@ pub fn start() -> RwSignal<SessionView> {
     if call("start", None).is_none() {
         view.set(SessionView {
             state: "default".into(),
-            message: Some(
-                "This page could not start its sign-in. Reload it, or open the classic app.".into(),
-            ),
+            message: Some("This page could not start its sign-in. Reload it.".into()),
             ..Default::default()
         });
     }
@@ -208,9 +210,63 @@ fn clock(seconds: i64) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
+/// The title over the form (the classic sign-in's words): an ended session asks to sign in again.
+pub(crate) fn title(state: &str, setting_up: bool) -> &'static str {
+    if setting_up {
+        "Set up sign-in"
+    } else if state == "expired" {
+        "Sign in again"
+    } else {
+        "Sign in"
+    }
+}
+
+/// The line under the title: what the page is doing while it connects or opens, what setting up means, and otherwise
+/// which dashboard this is.
+pub(crate) fn subtitle(state: &str, setup_form: bool, host: &str) -> String {
+    match state {
+        "loading" => "Connecting to AI Account Center...".into(),
+        "success" => "Opening your dashboard.".into(),
+        "setup" if setup_form => {
+            "No sign-in is set up yet. Choose the username and password for this dashboard; each \
+            tray asks for them once."
+                .into()
+        }
+        _ if host.is_empty() => "Your accounts and subscription usage".into(),
+        _ => format!("Dashboard on {host}"),
+    }
+}
+
+/// How long a remembered sign-in lasts, from the server's lifetime in hours; unknown here (0 or none) points at Settings.
+pub(crate) fn session_line(hours: Option<f64>) -> String {
+    let hours = hours
+        .filter(|h| h.is_finite() && *h >= 1.0)
+        .map(|h| h.round() as i64)
+        .unwrap_or(0);
+    match hours {
+        0 => "Session length is set in the dashboard's Settings".into(),
+        1 => "Sessions last 1 hour".into(),
+        24 => "Sessions last 1 day".into(),
+        8760 => "Sessions last 1 year".into(),
+        h if h % 24 == 0 => format!("Sessions last {} days", h / 24),
+        h => format!("Sessions last {h} hours"),
+    }
+}
+
+/// What the form is doing while it waits on the server, said where its message goes.
+pub(crate) fn checking_line(setting_up: bool) -> &'static str {
+    if setting_up {
+        "Creating the sign-in on the server."
+    } else {
+        "Checking with the server."
+    }
+}
+
 #[component]
 pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
     let left = countdown(view);
+    // "Remember me": the hint beside it says what the choice means
+    let remember = RwSignal::new(true);
     let setup = Memo::new(move |_| view.with(|v| v.state == "setup" && v.setup_form));
     let setup_command = Memo::new(move |_| view.with(|v| v.state == "setup" && !v.setup_form));
     let limited = Memo::new(move |_| view.with(|v| v.state == "limited") && left.get() > 0);
@@ -318,8 +374,8 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
         <div class="signin-page paper-grid">
             <form class="signin-card plate" method="post" action="/api/auth/login" autocomplete="on" on:submit=on_submit on:input=on_typing on:keydown=on_key>
                 <div class="signin-brand"><Logo/><span class="brand-name">"AI Account Center"</span></div>
-                <h1 class="signin-title">{move || if setup.get() || setup_command.get() { "Set up sign-in" } else { "Sign in" }}</h1>
-                <p class="signin-host q3">{move || view.with(|v| v.host.clone())}</p>
+                <h1 class="signin-title">{move || view.with(|v| title(&v.state, setup.get() || setup_command.get()))}</h1>
+                <p class="signin-host q3">{move || view.with(|v| subtitle(&v.state, v.setup_form, &v.host))}</p>
                 {move || view.with(|v| (v.banner_title.clone(), v.banner_body.clone(), v.banner_strong.clone())).0.map(|title| {
                     let (_, body, strong) = view.with(|v| (v.banner_title.clone(), v.banner_body.clone(), v.banner_strong.clone()));
                     view! {
@@ -341,7 +397,7 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
                     <button type="button" class="btn lg" on:click=move |_| { call("recheck", None); }>"Check again"</button>
                 }>
                     <label class="field">
-                        <span>"Username"</span>
+                        <span>"Username"<Show when=move || setup.get()><span class="q3">" · letters, numbers, - and _"</span></Show></span>
                         <input name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" enterkeyhint="next"
                             prop:value=move || known_user.get() disabled=move || limited.get() || busy.get()/>
                     </label>
@@ -363,14 +419,22 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
                         })}
                         <Show when=move || view.with(|v| v.code_required)>
                             <label class="field">
-                                <span>"Setup code"</span>
-                                <input name="setup-code" type="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" enterkeyhint="go"/>
+                                <span>"Setup code"<span class="q3">" · printed in the server's terminal"</span></span>
+                                <input name="setup-code" type="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" enterkeyhint="go"
+                                    placeholder="e.g. EXAM-PLE0"/>
                             </label>
+                            <p class="signin-note q3">"Also saved on the server in ~/.ccs/auth/setup-code"</p>
                         </Show>
                     </Show>
                     <Show when=move || !setup.get()>
-                        <label class="check"><input name="remember-me" type="checkbox" checked/>"Remember me on this device"</label>
+                        <label class="check"><input name="remember-me" type="checkbox" checked
+                            on:change=move |e| remember.set(event_target_checked(&e))/>
+                            <span class="check-text"><span>"Remember me on this device"</span>
+                            <span class="check-sub">{move || if remember.get() { "Stays signed in" } else { "Signs out with the browser" }}</span></span></label>
                     </Show>
+                    {move || (busy.get() && view.with(|v| v.message.is_none())).then(|| view! {
+                        <p class="signin-message q3" role="status">{checking_line(setup.get())}</p>
+                    })}
                     {move || view.with(|v| v.message.clone()).map(|m| {
                         let tone = view.with(|v| if v.notice { None } else if v.state == "wrong" { Some("crit") } else { Some("warn") });
                         let sub = view.with(|v| v.message_sub.clone());
@@ -379,6 +443,8 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
                     <button type="submit" class="btn primary lg" disabled=move || limited.get() || busy.get()>
                         {move || if limited.get() {
                             format!("Try again in {}", clock(left.get()))
+                        } else if busy.get() && setup.get() {
+                            "Creating sign-in...".to_string()
                         } else if busy.get() {
                             "Signing in...".to_string()
                         } else if setup.get() {
@@ -389,10 +455,98 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
                     </button>
                 </Show>
                 {move || view.with(|v| v.transport_note.clone()).filter(|n| !n.is_empty()).map(|n| view! { <p class="signin-note q3">{n}</p> })}
-                <p class="signin-note"><a class="link" href="/" on:click=|_| {
-                    if let Some(s) = window().local_storage().ok().flatten() { let _ = s.set_item("aac-frame", "classic"); }
-                }>"Open the classic app"</a></p>
+                <p class="signin-note q3">{move || view.with(|v| session_line(v.session_hours))}</p>
+                <p class="signin-note q3">"The Mac and Windows trays stay signed in with their own device tokens"</p>
             </form>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_title_asks_to_set_up_or_to_sign_in_again() {
+        assert_eq!(title("setup", true), "Set up sign-in");
+        assert_eq!(title("expired", false), "Sign in again");
+        for state in [
+            "default",
+            "wrong",
+            "limited",
+            "offline",
+            "loading",
+            "connecting",
+        ] {
+            assert_eq!(title(state, false), "Sign in");
+        }
+    }
+
+    #[test]
+    fn the_line_under_the_title_says_what_the_page_is_doing_or_which_dashboard_it_is() {
+        assert_eq!(
+            subtitle("loading", false, "aac.lan"),
+            "Connecting to AI Account Center..."
+        );
+        assert_eq!(
+            subtitle("success", false, "aac.lan"),
+            "Opening your dashboard."
+        );
+        assert!(subtitle("setup", true, "aac.lan").starts_with("No sign-in is set up yet."));
+        assert!(subtitle("setup", true, "aac.lan").ends_with("each tray asks for them once."));
+        // the setup command (no form) and every other state name the dashboard
+        assert_eq!(
+            subtitle("setup", false, "aac.lan:3000"),
+            "Dashboard on aac.lan:3000"
+        );
+        assert_eq!(
+            subtitle("wrong", false, "aac.lan:3000"),
+            "Dashboard on aac.lan:3000"
+        );
+        assert_eq!(
+            subtitle("default", false, ""),
+            "Your accounts and subscription usage"
+        );
+    }
+
+    #[test]
+    fn the_session_length_reads_in_the_largest_whole_unit() {
+        assert_eq!(
+            session_line(None),
+            "Session length is set in the dashboard's Settings"
+        );
+        assert_eq!(
+            session_line(Some(0.0)),
+            "Session length is set in the dashboard's Settings"
+        );
+        assert_eq!(
+            session_line(Some(f64::NAN)),
+            "Session length is set in the dashboard's Settings"
+        );
+        assert_eq!(session_line(Some(1.0)), "Sessions last 1 hour");
+        assert_eq!(session_line(Some(12.0)), "Sessions last 12 hours");
+        assert_eq!(session_line(Some(24.0)), "Sessions last 1 day");
+        assert_eq!(session_line(Some(720.0)), "Sessions last 30 days");
+        assert_eq!(session_line(Some(8760.0)), "Sessions last 1 year");
+        assert_eq!(session_line(Some(36.0)), "Sessions last 36 hours");
+    }
+
+    #[test]
+    fn the_wait_says_what_the_server_is_doing() {
+        assert_eq!(checking_line(true), "Creating the sign-in on the server.");
+        assert_eq!(checking_line(false), "Checking with the server.");
+    }
+
+    #[test]
+    fn the_view_reads_a_fresh_sign_in_and_the_session_length() {
+        let v: SessionView = serde_json::from_str(
+            r#"{"signedIn":true,"state":"default","fresh":true,"sessionHours":720}"#,
+        )
+        .unwrap();
+        assert!(v.signed_in && v.fresh);
+        assert_eq!(v.session_hours, Some(720.0));
+        let old: SessionView =
+            serde_json::from_str(r#"{"signedIn":true,"state":"default"}"#).unwrap();
+        assert!(!old.fresh && old.session_hours.is_none());
     }
 }

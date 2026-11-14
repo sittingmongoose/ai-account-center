@@ -9,7 +9,7 @@ the repository default and source revisions are independently managed.
 
 The supported direction is account usage, safe existing-profile controls,
 truthful Analytics, explicit app updates and native Mac/Windows bars. Keep the
-TypeScript backend and pinned Slint 1.18.1 web UI. Preserve private storage,
+TypeScript backend and pinned Leptos 0.9 web UI. Preserve private storage,
 session aliases, auth/switch guards and rollback.
 
 Before implementing a change, verify current source/tests, identify the owner,

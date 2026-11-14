@@ -1,8 +1,7 @@
 //! Analytics' own data: the frame reads `/api/accounts/analytics` itself (`public/frame-analytics.mjs`), as Status reads
-//! `/api/status`, and builds the view with the same builders bridge.js uses (`ANALYTICS_VIEW_VERSION` 7). No Slint
-//! dashboard is loaded for this tab and nothing waits on its bridge.
+//! `/api/status`, and builds the view with the same builders bridge.js used (`ANALYTICS_VIEW_VERSION` 7).
 //!
-//! `index.html` installs `window.aacLoadAnalytics()` (a dynamic import, started early on `/app/analytics`); it resolves
+//! `index.html` installs `window.aacLoadAnalytics()` (a dynamic import, started early when the address opens it); it resolves
 //! to the module, and the page installs its controller (`installFrameAnalytics`, which makes it
 //! `window.aacFrameAnalytics`) only if it is still there. Its views arrive as `aac-analytics` events (`{key, json}`) and
 //! the page's actions go back through `aacFrameAnalytics.act(kind, value)`. A page drives and stops only the controller
@@ -181,7 +180,7 @@ thread_local! {
     static DASHBOARD_IDS: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The dashboard sent Home and Accounts a new view (bridge.js). When the accounts in it changed (one hidden, shown or
+/// The dashboard sent Home and Accounts a new view (frame-dashboard.mjs). When the accounts in it changed (one hidden, shown or
 /// removed), the Analytics controller reads the dashboard again while its tab is away, so it never comes back with an
 /// account drawn the old way (frame-analytics.mjs `dashboardChanged`); a view that only ticked reads nothing.
 pub(crate) fn dashboard_view(json: &str) {

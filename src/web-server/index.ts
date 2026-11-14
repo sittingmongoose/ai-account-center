@@ -3,7 +3,7 @@
  *
  * Express server for the account dashboard and native account controls.
  * Single HTTP server handles REST API, static files, and WebSocket connections.
- * The same Slint WebAssembly dashboard is served in development and production.
+ * The same Leptos WebAssembly dashboard is served in development and production.
  */
 
 import express from 'express';
@@ -234,7 +234,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       setHeaders: uiStaticHeaders(staticUi),
     })
   );
-  // Slint owns the account dashboard and login state; no React portal is served.
+  // The Leptos app frame owns the account dashboard and its sign-in; no React portal is served.
   app.get('/{*splat}', pageRouteHandler(staticUi, new Set(DASHBOARD_PROVIDER_IDS)));
   // Last: whatever failed above answers in JSON, never with a stack trace.
   app.use(

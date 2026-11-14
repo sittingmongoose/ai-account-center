@@ -1,5 +1,5 @@
-# The Slint crate one level up enables +tail-call for its own build (web-dashboard/.cargo/config.toml), and cargo
-# joins rustflags arrays from parent config files. These pages need neither feature, and WebAssembly tail calls hit
-# WebKit bug 325447 on iOS 27, so the later flag turns both off again for this crate.
+# No WebAssembly tail calls or SIMD: the app needs neither, and tail calls hit WebKit bug 325447 on iOS 27. (Until the
+# Slint crate one level up was retired, its config turned both on and cargo joined it with this one; the flags stay
+# explicit so a parent config can never turn them back on.)
 [target.wasm32-unknown-unknown]
 rustflags = ["-C", "target-feature=-tail-call,-simd128"]

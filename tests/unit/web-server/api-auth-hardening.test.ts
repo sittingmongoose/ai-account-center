@@ -140,7 +140,8 @@ beforeEach(async () => {
   );
   tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-api-auth-hardening-'));
   staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-api-auth-hardening-ui-'));
-  fs.writeFileSync(path.join(staticDir, 'index.html'), '<canvas id="slint-dashboard"></canvas>');
+  fs.mkdirSync(path.join(staticDir, 'app'));
+  fs.writeFileSync(path.join(staticDir, 'app', 'index.html'), '<main id="aac-frame-fixture"></main>');
   fs.writeFileSync(path.join(staticDir, 'dashboard.wasm'), Buffer.from([0, 97, 115, 109]));
   process.env.CCS_HOME = tempHome;
   process.env.CCS_DIR = path.join(tempHome, '.ccs');
@@ -349,7 +350,7 @@ describe('F1: API session guard whatever the URL letter case', () => {
     for (const route of ['/', '/login', '/analytics', '/accounts', '/accounts/codex']) {
       const response = await send('GET', route);
       expect(response.status).toBe(200);
-      expect(await response.text()).toContain('slint-dashboard');
+      expect(await response.text()).toContain('aac-frame-fixture');
     }
     for (const route of ['/codex/accounts', '/LOGIN', '/Analytics', '/accounts/unknown']) {
       const response = await send('GET', route);

@@ -265,7 +265,7 @@ fn TrendChart(
     let id = format!("tg{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let pw = (bw - L - R).max(40.0);
     let ph = (bh - T - B).max(40.0);
-    // the paths are laid out for the size bridge.js last saw; scale until it lays them out again
+    // the paths are laid out for the size the controller last saw; scale until it lays them out again
     let scale = Memo::new(move |_| {
         trend.with(|t| {
             (

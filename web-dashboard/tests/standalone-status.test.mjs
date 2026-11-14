@@ -7,9 +7,9 @@ const publicDir = new URL('../public/', import.meta.url);
 const read = (url) => readFileSync(url, 'utf8');
 const sw = read(new URL('sw.js', publicDir));
 const offline = vm.runInNewContext(sw.match(/var OFFLINE_PAGE =([\s\S]*?);\r?\n/)[1]);
+// The Home Screen start (/) and every tab answer with the frame page since the classic page was retired.
 const documents = [
-  ['Home Screen start', read(new URL('index.html', publicDir))],
-  ['Leptos page', read(new URL('../leptos/index.html', publicDir))],
+  ['Home Screen start and frame page', read(new URL('../leptos/index.html', publicDir))],
   ['service-worker offline start', offline],
 ];
 function meta(html, name) {
@@ -27,14 +27,8 @@ for (const [name, html] of documents) {
     assert.match(meta(html, 'viewport'), /viewport-fit=cover/);
   });
 }
-test('both entry pages load the same system-status protection before the app', () => {
-  for (const [, html] of documents.slice(0, 2)) {
-    assert.match(html, /<link[^>]+href="\/status-bar\.css"/);
-    assert.match(html, /data-status-embedded/);
-  }
-});
-test('classic desktop chrome reserves the top inset too', () => {
-  const ui = read(new URL('../ui/dashboard.slint', import.meta.url));
-  assert.match(ui, /Breakpoints\.tier-d \? Device\.safe-top \+ 62px/);
-  assert.match(ui, /height: 62px \+ Device\.safe-top/);
+test('the entry page loads the system-status protection before the app', () => {
+  const [, html] = documents[0];
+  assert.match(html, /<link[^>]+href="\/status-bar\.css"/);
+  assert.match(html, /data-status-embedded/);
 });

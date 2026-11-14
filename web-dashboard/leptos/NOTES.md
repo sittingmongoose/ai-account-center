@@ -9,8 +9,9 @@ server). Each note says what happened, why, and what to do.
   wasm-bindgen (`build/strip-names.cjs`). Don't use `strip = true` in Cargo: it also drops `target_features`, and
   wasm-bindgen then can't tell which WebAssembly features are on.
 - **Build time:** about 1.5 min for a clean release build on the VM, 25-75 s incremental. CSS changes need no build.
-- **Cargo config is inherited:** a crate under `web-dashboard/` picks up the Slint crate's `.cargo/config.toml`
-  rustflags (cargo joins arrays from parent folders). Ours turns `+tail-call` back off (WebKit bug 325447 on iOS 27).
+- **Cargo config is inherited:** a crate picks up `.cargo/config.toml` rustflags from parent folders (cargo joins the
+  arrays). While the Slint crate sat one level up, its `+tail-call,+simd128` reached this crate; ours turns both off
+  explicitly (WebKit bug 325447 on iOS 27), and still does now that the parent config is gone.
 
 ## API changes from 0.8
 - `set_interval_with_handle` / `set_timeout_with_handle` are gone: `set_interval` and `set_timeout` return the
@@ -49,21 +50,22 @@ Chrome's checks passed while these were wrong on the phone; test WebKit before c
   page links it as `app.css?v=<content hash>` (`{{CSS}}` in `index.html`), so a new build is always read.
 - **Media fills its frame:** `width/height: 100%` with `object-fit: contain`, not `max-width/max-height: 100%`, so a
   small screenshot is shown as large as the screen allows in every engine.
-- **Testing:** text entry into the Slint canvas sign-in can't be driven through the simulator's automation; a test
-  server's sign-in can be done with a fetch from a page on that origin. The Simlock-leased Duo can't change its pose
+- **Testing:** a test server's sign-in can be done with a fetch from a page on that origin; the frame's sign-in is a
+  real HTML form, so the simulator's automation can type into it too. The Simlock-leased Duo can't change its pose
   (`fold` reports no panel table), so the open panel is covered by Chromium viewports only.
 
 ## Status and Scoreboard redesign (2026-11-09)
-- **Page chrome is standalone only.** The rail, band, phone bars and desktop header draw only without `?embed=1`; in the
-  shell's iframe the shell owns the chrome and the content takes the whole box. `ui/device.rs` chooses (`html[data-chrome]`)
+- **Page chrome is standalone only.** The rail, band, phone bars and desktop header draw only without `?embed=1`; with
+  it (the retired Slint shell's iframe) the content takes the whole box. `ui/device.rs` chooses (`html[data-chrome]`)
   from the window and `env(safe-area-inset-*)`, which CSS can't branch on.
 - **A CSS grid column grows to its widest child.** Give the shell's grid `grid-template-columns: minmax(0, 1fr)`: without
   it the desktop header's nowrap width stretched the column, and a 951 px window laid out as a desktop page.
 - **Hidden copies break `url(#id)`.** Marks and the logo are drawn more than once with some copies `display: none`; a
   gradient inside a hidden copy paints nothing for the visible ones. Marks are `<img>` data URLs; the logo uses a unique id.
 - **iOS Safari inflates text** in wide, short layouts (text autosizing): set `text-size-adjust: 100%` on `html`.
-- **Tokens are generated.** `build/theme-tokens.mjs` writes the colour block of `style/app.css` from `theme.slint`;
-  `web-dashboard/tests/leptos-style.test.mjs` fails on drift and on pills, chips, dots, side bars or tinted boxes.
+- **Tokens live in the stylesheet.** The colour block of `style/app.css` was generated from `theme.slint` while Slint
+  shipped; since Slint was retired (2026-11-14) it is the source. `web-dashboard/tests/leptos-style.test.mjs` keeps
+  its light and dark sets complete and alike and fails on pills, chips, dots, side bars or tinted boxes.
 - **Dev data:** `dev/serve.mjs` serves `fixtures/status-design-view.json`, with `spend-by-stream.json` and
   `scoreboard-by-model.json` (the golden output of CONTRACT-spend-bymodel.md's reference scripts) until the server sends them.
 - **Whole-page images:** `tests/browser/frames/` shoots both pages in the five formats (`--set out=<folder>`).

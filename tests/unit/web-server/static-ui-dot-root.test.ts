@@ -3,7 +3,7 @@
  * dot directory (~/.local/lib/node_modules/...). Express 5's `send` treats any dot segment of an
  * absolute sendFile path as a hidden file and answers 404, so page routes must send relative to
  * the UI root. Regression for the 2026-11-09 Express 5 install, where /, /login and /app/status
- * all answered 404.
+ * all answered 404. Every page route answers with the frame page (app/index.html).
  */
 import { afterEach, describe, expect, it } from 'bun:test';
 import express from 'express';
@@ -47,21 +47,18 @@ function get(port: number, requestPath: string): Promise<{ status: number; body:
 }
 
 describe('page routes under a dot directory', () => {
-  it('serves index.html and the Status page when the install path has a dot segment', async () => {
+  it('serves the frame page at / and at /app/status when the install path has a dot segment', async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-dot-root-'));
     roots.push(base);
     const uiRoot = path.join(base, '.local', 'lib', 'node_modules', 'aac', 'dist', 'ui');
     fs.mkdirSync(path.join(uiRoot, 'app'), { recursive: true });
-    fs.writeFileSync(path.join(uiRoot, 'index.html'), '<!doctype html><p>shell</p>');
-    fs.writeFileSync(path.join(uiRoot, 'app', 'index.html'), '<!doctype html><p>status page</p>');
+    fs.writeFileSync(path.join(uiRoot, 'app', 'index.html'), '<!doctype html><p>frame page</p>');
     const port = await serveFrom(uiRoot);
 
-    const shell = await get(port, '/');
-    expect(shell.status).toBe(200);
-    expect(shell.body).toContain('shell');
-
-    const status = await get(port, '/app/status');
-    expect(status.status).toBe(200);
-    expect(status.body).toContain('status page');
+    for (const route of ['/', '/login', '/app/status']) {
+      const page = await get(port, route);
+      expect([route, page.status]).toEqual([route, 200]);
+      expect(page.body).toContain('frame page');
+    }
   });
 });

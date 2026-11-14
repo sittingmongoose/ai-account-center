@@ -8,7 +8,7 @@ are retired.
 
 ## Local outputs
 
-- `bun run build:all` compiles TypeScript, builds the locked Slint 1.18.1 WASM
+- `bun run build:all` compiles TypeScript, builds the locked Leptos 0.9 WASM
   dashboard and verifies `dist/ui/`.
 - [dev-install.sh](../scripts/dev-install.sh) builds and validates this checkout,
   creates a local package tarball and installs it on explicit invocation. It
@@ -26,7 +26,7 @@ are retired.
 
 [CI](../.github/workflows/ci.yml) and
 [Push CI](../.github/workflows/push-ci.yml) validate current product source and
-pinned Slint inputs. Trusted-PR checks and read-only token restrictions remain;
+pinned Leptos inputs. Trusted-PR checks and read-only token restrictions remain;
 build/unit jobs use GitHub-hosted Ubuntu runners. Linux runs source/unit checks,
 while dashboard browser verification is scoped to Mac and Windows.
 Cache inputs are root `bun.lock` and `web-dashboard/Cargo.lock`.

@@ -1,5 +1,5 @@
 //! Analytics, drawn natively in the app frame (PLAN step 7). The frame reads its data itself: `public/frame-analytics.mjs`
-//! keeps the page state, the reads and the timers and words every number with the same builders as bridge.js
+//! keeps the page state, the reads and the timers and words every number with the same builders bridge.js used
 //! (public/analytics-*.mjs, `ANALYTICS_VIEW_VERSION` 7). It sends the views (`feed.rs`: `analytics`, `analytics-motion`,
 //! `analytics-head`, `analytics-loading`) and this page lays them out and sends the page's action kinds back
 //! (`analytics-range`, `analytics-focus` ...). The charts that are laid out in pixels (the trend, daily cost and the
