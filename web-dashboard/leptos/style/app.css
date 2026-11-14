@@ -2696,6 +2696,9 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 }
 
 /* ---------- Confirmation dialogs (reset claims, src/resets.rs), over any tab ---------- */
+/* the shared confirmation dialog centres in the area beside the Duo rail, not the full viewport (drop-switching review L1) */
+:root[data-chrome='rail'] .ascrim { padding-right: calc(16px + max(var(--safe-right), var(--rail-w))); }
+:root[data-chrome='rail'][data-rail-side='left'] .ascrim { padding-left: calc(16px + max(var(--safe-left), var(--rail-w))); padding-right: calc(16px + var(--safe-right)); }
 .ascrim { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: var(--scrim);
   padding: calc(16px + var(--safe-top)) calc(16px + var(--safe-right)) calc(16px + var(--safe-bottom)) calc(16px + var(--safe-left)); }
 .adialog { width: min(600px, 100%); max-height: 100%; overflow: auto; display: grid; gap: 10px; padding: 22px 24px 20px; background: var(--paper);
