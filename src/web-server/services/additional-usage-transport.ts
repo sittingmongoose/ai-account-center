@@ -1,3 +1,4 @@
+import { runQuotaAgent, collectQuotaWithFallback } from './agent-verbs';
 import { execFile, type ChildProcess } from 'child_process';
 import path from 'path';
 import { NetworkError } from '../../errors/error-types';
@@ -228,6 +229,33 @@ export async function runAdditionalUsageSource(source: AdditionalUsageSource): P
   ) {
     throw new AdditionalUsageTransportError();
   }
+  const local =
+    process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : 'ubuntu';
+  if (!source.sshHost && source.platform !== local) throw new AdditionalUsageTransportError();
+  if (helperName(source.provider) !== 'plan_usage.py')
+    return runPythonAdditionalUsageSource(source);
+  return collectQuotaWithFallback(
+    () =>
+      helperName(source.provider) !== 'plan_usage.py'
+        ? Promise.resolve(null)
+        : runQuotaAgent(
+            {
+              platform: source.platform,
+              sshHost: source.sshHost ?? null,
+            },
+            {
+              provider: source.provider,
+              platform: source.platform,
+              ...(source.account && source.account.credential.kind !== 'discover'
+                ? { account: source.account.id, credential: source.account.credential }
+                : {}),
+            }
+          ),
+    () => runPythonAdditionalUsageSource(source)
+  );
+}
+
+async function runPythonAdditionalUsageSource(source: AdditionalUsageSource): Promise<string> {
   const accountArguments = collectorAccountArguments(source);
   const localPlatform: DashboardPlatform =
     process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : 'ubuntu';

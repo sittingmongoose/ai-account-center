@@ -127,3 +127,28 @@ the same parser; production refuses this argument. Sign-in cases run one process
 at a time against fixture files, with one Tokio worker per process. `--baseline` selects the recheck witnesses from this same
 table to demonstrate failure at `b23d68d38` without repeating the full corpus.
 These checks retain the filesystem/native/transport coverage limits above.
+
+## M2 plan quotas
+
+`python3 tests/spec/agent/quota.py /path/to/fixture-enabled/aac-agent` starts one
+loopback HTTP fake, then runs the unchanged Python `plan_usage.collect` and the
+agent against the same response queue. All homes and tokens are synthetic.
+It checks complete DTO equality or the exact whole-verb fallback, terminal
+protocol/id/type/exit, request headers and Qwen GET/POST sequence. JSON numeric
+integer/float spellings compare by numeric value. No fields or states are dropped.
+
+The table includes all four providers, HTTP 401/403/429/5xx, integer/date/invalid
+Retry-After, timeout, malformed/oversized bodies, fractional and Unicode grammar,
+Qwen international console requests, and Unix AAC-key account selection. The Rust
+unit test also consumes all 43 `plan_common` M0 vectors, explicitly delegating the
+two frozen Python/TS disagreements. Neither reference implementation is edited.
+
+The supported grammar is deliberately conservative. OMP SQLite, DPAPI and Safari
+stores, Qwen CN/CSRF sessions and optional Qwen payload layouts, Kimi booster or
+overlapping legacy/modern readings delegate. JSON fractions/exponents, non-ASCII
+text, decimal or padded numeric strings, unsupported reset spellings, and large
+Z.ai count key spellings delegate too. No fallback means an empty/zero quota.
+The production binary refuses fixture endpoint/clock overrides. The endpoint
+injection is feature-gated and permits only literal `http://127.0.0.1` with an
+explicit fixture home. Native Mac/Windows execution and live TLS providers are
+not covered. The artifact catalog stays empty pending authorized packaging.
