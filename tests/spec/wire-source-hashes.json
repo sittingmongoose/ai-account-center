@@ -49,7 +49,7 @@
   "scripts/app-updates/app_update_t3_rpc.py": "09cb91c390570ad6388e8880666f674d54c3357080b3745fa4d3a4a89a296432",
   "scripts/app-updates/app_update_terminal.py": "2f44ba8c193ceadf2dd89fb647ef2e91d43ebc997d4a52e81fea26c1a5dd3ed4",
   "scripts/app-updates/app_update_zcode.py": "ea57f60a531353566ca963304260b869a427831bc3bc8cc24f2dbe954f99f492",
-  "scripts/app-updates/app_updates.py": "85052c1da02dcbc66f252c06ca212b0f9db71f9c631ad78f52261a69b9a6f030",
+  "scripts/app-updates/app_updates.py": "17bed3f90b7d8a7c43c0833b2fcfea83e98ef227444627ce8ef26bb6cbec8128",
   "scripts/claude-history/history_index_remote_v2.py": "68e09744dc8e8dd1b5a5d80b140d91af946363d66109372273d5a8c4c64d51a7",
   "scripts/claude-signin/claude_signin.py": "73296d2bbe46b857d0a78f4bab21115da0699f9c23a4ae2d86c6de5f400a9b0f",
   "src/antigravity/account-lifecycle.ts": "a770588c0fdc3a74d604dca332103460a7f959fd01bc3ead6c31f336901ddb67",

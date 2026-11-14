@@ -1132,6 +1132,13 @@
       ]
     },
     {
+      "file": "tests/unit/app-updates/app_update_antigravity_native_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/unit/app-updates/app_update_cursor_acp_macos_test.py",
       "kind": "helper",
       "evidence": [
