@@ -49,6 +49,11 @@ function buildFixtureUi(root: string): typeof manifest {
   const publicDir = path.join(root, 'web-dashboard', 'public');
   fs.mkdirSync(publicDir, { recursive: true });
   fs.writeFileSync(path.join(publicDir, 'view-model.mjs'), 'export const rows = [];\n'.repeat(100));
+  // the classic page's upgrade module, as shipped
+  fs.copyFileSync(
+    path.join(__dirname, '../../../web-dashboard/public/bridge.js'),
+    path.join(publicDir, 'bridge.js')
+  );
   writeLeptosFixture(root);
   return buildUi({ repoRoot: root, run: fakeRun, readCommit: () => '8fb5e3de' });
 }
@@ -311,6 +316,21 @@ describe('precompressed WebAssembly and immutable pkg caching', () => {
     // Only AAC's own shell may frame it.
     expect(index.headers['content-security-policy']).toBe("frame-ancestors 'self'");
     expect(index.headers['x-frame-options']).toBe('SAMEORIGIN');
+  });
+
+  it('answers /bridge.js with the upgrade module as a script, never with the page (review M1)', async () => {
+    // A cached classic page loads /bridge.js as a module: a page there (the old redirect) left it loading forever.
+    for (const encoding of ['br, gzip', 'identity']) {
+      const response = await raw('GET', '/bridge.js', { 'Accept-Encoding': encoding });
+      expect([response.status, response.headers['cache-control']]).toEqual([200, 'no-cache']);
+      // a JavaScript type: a module script refuses anything else
+      expect(response.headers['content-type']).toMatch(/^(text|application)\/javascript\b/);
+    }
+    const body = (
+      await raw('GET', '/bridge.js', { 'Accept-Encoding': 'identity' })
+    ).body.toString();
+    expect(body).toContain('export function leaveClassic(');
+    expect(body).not.toContain('<!doctype html>');
   });
 
   it('never serves the build manifest (commit and source hash) to anyone', async () => {

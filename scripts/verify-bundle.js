@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
+const { precacheList, stampedPrecache } = require('./ui-precache');
 
 const UI_DIR = path.join(__dirname, '../dist/ui');
 // Whole dist/ui, gzipped: the Leptos runtime, the JavaScript data layer, fonts and icons.
@@ -14,7 +15,13 @@ const LEPTOS_NAME = 'aac_web';
 const LEPTOS_VERSION = '0.9.0-rc1';
 const APP_ENTRY = 'app/index.html';
 /** What the retired Slint app shipped; none of it may come back into a package. */
-const RETIRED_SLINT_FILES = ['index.html', 'bridge.js', 'renderer.mjs', 'shell-frame.mjs'];
+const RETIRED_SLINT_FILES = ['index.html', 'renderer.mjs', 'shell-frame.mjs'];
+/**
+ * The classic page's one script address, kept for the upgrade path: the small module that moves a cached classic page
+ * to the app frame (web-dashboard/public/bridge.js). It must stay that module, never the retired bridge.
+ */
+const CLASSIC_UPGRADE = 'bridge.js';
+const CLASSIC_UPGRADE_MAX_BYTES = 8 * 1024;
 const BUILD_ID = /^[a-f0-9]{12}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const VARIANT_SUFFIX = new Map([
@@ -104,7 +111,11 @@ function verifyPrecompressed(uiDir, manifest) {
   }
 }
 
-/** The installable shell: a worker stamped with the shell build id, a valid manifest and every icon it names. */
+/**
+ * The installable shell: a worker stamped with the shell build id and with the whole app to download before it may
+ * replace an installed copy (the precache list derived from these very files), a valid manifest and every icon it
+ * names.
+ */
 function verifyPwaShell(uiDir, shellBuildId) {
   for (const file of ['sw.js', 'sw-route.js']) {
     if (!fs.existsSync(path.join(uiDir, file))) throw new Error(`Missing browser asset: ${file}.`);
@@ -139,6 +150,16 @@ function verifyPwaShell(uiDir, shellBuildId) {
       throw new Error(`Missing browser asset: ${icon.src}.`);
     }
   }
+  const precache = stampedPrecache(sw);
+  const expected = precacheList(
+    listFiles(uiDir).filter((file) => !isVariantFile(file)),
+    fs.readFileSync(path.join(uiDir, 'app', 'app.css'))
+  );
+  if (precache === null || JSON.stringify(precache) !== JSON.stringify(expected)) {
+    throw new Error(
+      'The packaged sw.js must download the whole app before it replaces an installed copy.'
+    );
+  }
 }
 
 /** Packaged folders are 0755 and files 0644, whatever the builder's umask was. */
@@ -150,6 +171,23 @@ function verifyModes(dir) {
     const entryPath = path.join(dir, entry.name);
     if (entry.isDirectory()) verifyModes(entryPath);
     else if ((fs.lstatSync(entryPath).mode & 0o777) !== 0o644) throw new Error(message);
+  }
+}
+
+/** /bridge.js is the classic page's upgrade module: small, importing nothing, moving the page to the frame. */
+function verifyClassicUpgrade(uiDir) {
+  const file = path.join(uiDir, CLASSIC_UPGRADE);
+  if (!fs.existsSync(file)) throw new Error(`Missing browser asset: ${CLASSIC_UPGRADE}.`);
+  const source = fs.readFileSync(file, 'utf8');
+  if (
+    source.length > CLASSIC_UPGRADE_MAX_BYTES ||
+    /^\s*import[\s{*('"]/m.test(source) ||
+    /\bimport\s*\(/.test(source) ||
+    !source.includes('export function leaveClassic(')
+  ) {
+    throw new Error(
+      `The packaged ${CLASSIC_UPGRADE} must be the classic page's upgrade module, not the retired bridge.`
+    );
   }
 }
 
@@ -200,6 +238,7 @@ function verifyBundle(uiDir = UI_DIR) {
   }
   if (retired.length > 0)
     throw new Error(`The packaged dashboard still carries the retired Slint app: ${retired[0]}.`);
+  verifyClassicUpgrade(uiDir);
   const wasm = fs.readFileSync(path.join(uiDir, manifest.wasm.path));
   const hash = sha256(wasm);
   if (

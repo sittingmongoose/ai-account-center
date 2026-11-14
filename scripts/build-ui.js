@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { SW_PRECACHE, SW_PRECACHE_ERROR, precacheList, precacheLiteral } = require('./ui-precache');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
 const { parse } = require('smol-toml');
@@ -35,6 +36,8 @@ const APP_ENTRY = 'app/index.html';
 const APP_FONTS = ['MartianMono.ttf', 'OFL-MartianMono.txt'];
 /** The service worker's build placeholder, stamped with the shell build id. */
 const SW_BUILD_ID = '__AAC_BUILD_ID__';
+/** wasm-pack's package files that never ship (its '*' ignore rule would also hide the runtime from npm pack). */
+const RUNTIME_SKIPPED = ['.gitignore', '.npmignore', 'package.json', 'README.md'];
 const SW_BUILD_ID_ERROR = 'sw.js must name the __AAC_BUILD_ID__ placeholder exactly once.';
 const PRECOMPRESSED_EXTENSIONS = new Set([
   '.wasm',
@@ -249,10 +252,24 @@ function stagedAppFiles(leptosCrate, buildId) {
   return files;
 }
 
-/** Stamp the shell build id into the packaged sw.js only; the source keeps the placeholder. */
-function stampedSwSource(source, buildId) {
+/**
+ * Stamp the shell build id, and the precache list when one is given (ui-precache.js), into the packaged sw.js only;
+ * the source keeps the placeholders.
+ */
+function stampedSwSource(source, buildId, precache = null) {
   if (countLiteral(source, SW_BUILD_ID) !== 1) throw new Error(SW_BUILD_ID_ERROR);
-  return source.replace(SW_BUILD_ID, buildId);
+  const stamped = source.replace(SW_BUILD_ID, buildId);
+  if (precache === null) return stamped;
+  if (countLiteral(stamped, SW_PRECACHE) !== 1) throw new Error(SW_PRECACHE_ERROR);
+  return stamped.replace(SW_PRECACHE, () => precacheLiteral(precache));
+}
+
+/** The relative paths dist/ui will hold before precompression: the public files, the staged app/ files, the runtime. */
+function packagedFiles(publicDir, appFiles, pkg, buildId) {
+  const runtime = listFiles(pkg)
+    .filter((file) => !RUNTIME_SKIPPED.includes(path.posix.basename(file)))
+    .map((file) => `pkg/${buildId}/${file}`);
+  return [...new Set([...listFiles(publicDir), ...appFiles.keys(), ...runtime])];
 }
 
 /**
@@ -447,8 +464,13 @@ function buildUi(options = {}) {
   const shellBuildId = shell.sha256.slice(0, 12);
   // Fixtures without a worker are left alone.
   const swPath = path.join(publicDir, 'sw.js');
+  // The worker downloads the whole app before it may replace the installed copy (ui-precache.js).
+  const precache = precacheList(
+    packagedFiles(publicDir, appFiles, pkg, buildId),
+    appFiles.get('app/app.css')
+  );
   const sw = fs.existsSync(swPath)
-    ? stampedSwSource(fs.readFileSync(swPath, 'utf8'), shellBuildId)
+    ? stampedSwSource(fs.readFileSync(swPath, 'utf8'), shellBuildId, precache)
     : null;
   fs.rmSync(packagedUi, { recursive: true, force: true });
   fs.mkdirSync(packagedUi, { recursive: true });
@@ -457,8 +479,7 @@ function buildUi(options = {}) {
   // wasm-pack's generated '*' ignore rule would hide the runtime from npm pack.
   fs.cpSync(pkg, path.join(packagedUi, 'pkg', buildId), {
     recursive: true,
-    filter: (file) =>
-      !['.gitignore', '.npmignore', 'package.json', 'README.md'].includes(path.basename(file)),
+    filter: (file) => !RUNTIME_SKIPPED.includes(path.basename(file)),
   });
   fs.mkdirSync(path.join(packagedUi, 'app'), { recursive: true });
   for (const [relative, bytes] of appFiles)
@@ -537,6 +558,8 @@ module.exports = {
   commandRunner,
   toolPath,
   SW_BUILD_ID_ERROR,
+  SW_PRECACHE_ERROR,
+  packagedFiles,
   PRECOMPRESSED_EXTENSIONS,
   APP_ENTRY,
   LEPTOS_NAME,

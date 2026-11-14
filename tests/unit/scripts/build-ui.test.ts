@@ -18,6 +18,7 @@ const {
   SW_BUILD_ID_ERROR,
 } = require('../../../scripts/build-ui.js');
 const { verifyBundle } = require('../../../scripts/verify-bundle.js');
+const { PAGE_ADDRESSES, stampedPrecache } = require('../../../scripts/ui-precache.js');
 const { validateUi } = require('../../../scripts/validate-ui.js');
 const roots: string[] = [];
 const sha256 = (data: Buffer) => crypto.createHash('sha256').update(data).digest('hex');
@@ -74,7 +75,12 @@ function fixture(): string {
   // file exists.
   fs.writeFileSync(
     path.join(crate, 'public', 'sw.js'),
-    "importScripts('./sw-route.js');\nvar BUILD_ID = '__AAC_BUILD_ID__';\n"
+    "importScripts('./sw-route.js');\nvar BUILD_ID = '__AAC_BUILD_ID__';\nvar PRECACHE = [/*__AAC_PRECACHE__*/];\n"
+  );
+  // The classic page's upgrade module, as shipped.
+  fs.copyFileSync(
+    path.join(__dirname, '../../../web-dashboard/public/bridge.js'),
+    path.join(crate, 'public', 'bridge.js')
   );
   fs.writeFileSync(path.join(crate, 'public', 'sw-route.js'), '// routing fixture\n');
   fs.writeFileSync(path.join(crate, 'public', 'view-model.mjs'), 'export const rows = [];\n');
@@ -208,9 +214,11 @@ describe('the Leptos dashboard build', () => {
     }
     for (const file of ['.gitignore', 'package.json'])
       expect(fs.existsSync(path.join(ui, 'pkg', id, file))).toBe(false);
-    // no classic page, bridge or Slint runtime
-    for (const file of ['index.html', 'bridge.js'])
-      expect(fs.existsSync(path.join(ui, file))).toBe(false);
+    // no classic page or Slint runtime; /bridge.js is only the classic page's upgrade module
+    expect(fs.existsSync(path.join(ui, 'index.html'))).toBe(false);
+    expect(fs.readFileSync(path.join(ui, 'bridge.js'), 'utf8')).toContain(
+      'export function leaveClassic('
+    );
     expect(
       manifest.precompressed.some((entry: { path: string }) => entry.path === 'app/index.html')
     ).toBe(true);
@@ -451,9 +459,34 @@ describe('the Leptos dashboard build', () => {
     const before = fs.readFileSync(source, 'utf8');
     const manifest = build({ repoRoot: root, run: runner([]) });
     const packaged = fs.readFileSync(path.join(root, 'dist', 'ui', 'sw.js'), 'utf8');
+    const precache = stampedPrecache(packaged);
     expect(packaged).toBe(
-      `importScripts('./sw-route.js');\nvar BUILD_ID = '${manifest.shellBuildId}';\n`
+      `importScripts('./sw-route.js');\nvar BUILD_ID = '${manifest.shellBuildId}';\nvar PRECACHE = ${JSON.stringify(precache)};\n`
     );
+    // the whole app: every page address, the runtime, the versioned stylesheet, every module and the upgrade module;
+    // never the worker itself, the build record or the frame page's own file
+    expect(precache?.slice(0, 6)).toEqual([...PAGE_ADDRESSES]);
+    for (const address of [
+      `/pkg/${manifest.buildId}/aac_web.js`,
+      `/pkg/${manifest.buildId}/aac_web_bg.wasm`,
+      '/app/MartianMono.ttf',
+      '/view-model.mjs',
+      '/bridge.js',
+      '/manifest.webmanifest',
+      '/icons/fixture-192.png',
+    ])
+      expect(precache).toContain(address);
+    expect(precache?.some((address) => /^\/app\/app\.css\?v=[0-9a-f]{12}$/.test(address))).toBe(
+      true
+    );
+    for (const address of [
+      '/sw.js',
+      '/sw-route.js',
+      '/ui-build-manifest.json',
+      '/app/index.html',
+      '/app/app.css',
+    ])
+      expect(precache).not.toContain(address);
     expect(fs.readFileSync(source, 'utf8')).toBe(before);
   });
 
@@ -523,6 +556,8 @@ describe('the Leptos dashboard build', () => {
       [
         'large.mjs.br',
         'large.mjs.gz',
+        'bridge.js.br',
+        'bridge.js.gz',
         'app/index.html.br',
         'app/index.html.gz',
         'app/app.css.br',
@@ -679,6 +714,41 @@ describe('the Leptos dashboard build', () => {
             "importScripts('./sw-route.js');\nvar BUILD_ID = '__AAC_BUILD_ID__';\n"
           ),
         'stamped shell build id',
+      ],
+      [
+        'a worker that would replace the app before downloading all of it',
+        (output) => {
+          const sw = path.join(output, 'sw.js');
+          const source = fs.readFileSync(sw, 'utf8');
+          const list = stampedPrecache(source) ?? [];
+          fs.writeFileSync(
+            sw,
+            source.replace(
+              JSON.stringify(list),
+              JSON.stringify(list.filter((a: string) => a !== '/bridge.js'))
+            )
+          );
+        },
+        'download the whole app',
+      ],
+      [
+        'a packaged asset the worker would not download',
+        (output) => fs.writeFileSync(path.join(output, 'extra.mjs'), 'export {};\n'),
+        'download the whole app',
+      ],
+      [
+        'the retired bridge back at /bridge.js',
+        (output) =>
+          fs.writeFileSync(
+            path.join(output, 'bridge.js'),
+            "import { renderer } from './renderer.mjs';\nrenderer();\n"
+          ),
+        'upgrade module',
+      ],
+      [
+        'no upgrade module for cached classic pages',
+        (output) => fs.rmSync(path.join(output, 'bridge.js')),
+        'Missing browser asset: bridge.js',
       ],
       [
         'missing mono font',
