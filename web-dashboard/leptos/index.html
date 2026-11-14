@@ -14,6 +14,9 @@
     <title>AI Account Center</title>
     <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
     <script>if(self!==top||/[?&](embed|content)=1(&|$)/.test(location.search))document.documentElement.setAttribute('data-status-embedded','1');</script>
+    <!-- Chromium's install prompt can come before any module has loaded: it is kept for Settings' "Install app"
+    (public/frame-dashboard.mjs), which says so with an `aac-install` event, as is an install made meanwhile. -->
+    <script>addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__aacInstallPrompt=e;dispatchEvent(new Event('aac-install'))});addEventListener('appinstalled',function(){window.__aacInstallPrompt=null;dispatchEvent(new Event('aac-install'))});</script>
     <link rel="stylesheet" href="/status-bar.css" />
     <link rel="stylesheet" href="{{CSS}}" />
     <link rel="modulepreload" href="{{PKG}}/aac_web.js" />

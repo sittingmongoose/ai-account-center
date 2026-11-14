@@ -924,3 +924,43 @@ test('M1 (Sol): a Claude Add that already started sends no follow-up Open after 
   assert.deepEqual(sent, ['POST /api/accounts/add'], 'its Open never follows once the page has gone');
   assert.equal(ctl.emitted.length, out, 'and nothing is drawn or said');
 });
+
+test('Settings "Install app": the page-captured Chromium prompt shows the row, runs once, and the row follows (bridge.js promptInstall)', async () => {
+  const listeners = new Map();
+  const { server } = fixtureServer();
+  let prompted = 0;
+  const win = {
+    location: { protocol: 'http:', hostname: '192.0.2.10', host: '192.0.2.10:3000', origin: ORIGIN, search: '?e2e', href: '' },
+    navigator: { userAgent: 'Linux Chromium fixture', maxTouchPoints: 0 },
+    innerWidth: 1440,
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    fetch: async (path, options = {}) => respond(await server(options.method || 'GET', path, options.body ? JSON.parse(options.body) : null)),
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
+    dispatchEvent: (event) => { for (const fn of listeners.get(event.type) || []) fn(event); },
+    addEventListener: (name, fn) => listeners.set(name, [...(listeners.get(name) || []), fn]),
+    removeEventListener: (name, fn) => listeners.set(name, (listeners.get(name) || []).filter((f) => f !== fn)),
+    history: { state: null, pushState() {}, back() {} },
+    matchMedia: () => ({ matches: false }),
+  };
+  const ctl = installFrameDashboard(win);
+  try {
+    await ctl.start({ check: (await server('GET', '/api/auth/check')).payload });
+    ctl.page('accounts');
+    await flush(24);
+    assert.equal(win.__aacLastAccounts?.install, 'hidden', 'no prompt captured yet: no install row');
+    // leptos/index.html keeps the prompt and says so
+    win.__aacInstallPrompt = { prompt: async () => { prompted++; } };
+    win.dispatchEvent({ type: 'aac-install' });
+    await flush(8);
+    assert.equal(win.__aacLastAccounts?.install, 'chromium', 'the captured prompt offers Install app');
+    ctl.act('install-app', '');
+    await flush(8);
+    assert.equal(prompted, 1, 'the prompt is shown');
+    assert.equal(win.__aacInstallPrompt, null, 'and used up');
+    assert.equal(win.__aacLastAccounts?.install, 'hidden', 'the row follows');
+    ctl.act('install-app', '');
+    await flush(8);
+    assert.equal(prompted, 1, 'a second press shows nothing');
+  } finally { ctl.stop(); }
+  assert.equal((listeners.get('aac-install') || []).length, 0, 'stop removes the listener');
+});

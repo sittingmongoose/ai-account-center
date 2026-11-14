@@ -25,6 +25,7 @@ import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGE_ACTIONS } from './frame-seam.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
+import { installRow as installRowFor, isAppleMobile } from './device.mjs';
 
 /** Below this window width Details and the switch approval take one Back entry each (bridge.js belowD). */
 export const OVERLAY_HISTORY_BELOW = 1280;
@@ -704,6 +705,8 @@ export function createFrameDashboard({
     /** The window came back on screen or online: Update apps reads its state (bridge.js focus listener). */
     focused() { if (authenticated) void updateStatus(); },
     online(value) { setOnline(value); },
+    /** The install prompt was captured or used up, or the display mode changed: the "Home screen app" row follows. */
+    installChanged() { if (!stopped) renderAccounts(); },
     /** The frame signed out (the page is gone): nothing more is read or sent. */
     stop() {
       if (stopped) return;
@@ -763,13 +766,21 @@ export function installFrameDashboard(win = globalThis) {
       try { win.history.back(); } catch { consuming = false; }
     },
   };
-  // ---- the Settings "Home screen app" row (bridge.js currentInstallRow; the frame never captured an install prompt)
+  // ---- the Settings "Home screen app" row (bridge.js currentInstallRow and promptInstall). Chromium's install prompt is
+  // captured by the page itself before any module loads (leptos/index.html keeps it as `__aacInstallPrompt`).
   const installRow = () => {
     let standalone = false;
     let appleMobile = false;
     try { standalone = win.matchMedia?.('(display-mode: standalone)')?.matches === true || win.navigator?.standalone === true; } catch {}
-    try { appleMobile = /iPhone|iPad|iPod/i.test(agent) || (/Macintosh/i.test(agent) && (win.navigator?.maxTouchPoints ?? 0) > 1); } catch {}
-    return standalone ? 'hidden' : appleMobile ? 'ios' : 'hidden';
+    try { appleMobile = isAppleMobile(agent, { touchPoints: win.navigator?.maxTouchPoints ?? 0 }); } catch {}
+    return installRowFor({ standalone, deferredPrompt: !!win.__aacInstallPrompt, appleMobile });
+  };
+  /** The `install-app` action: show the captured install prompt once, then drop it (bridge.js promptInstall). */
+  const promptInstall = async () => {
+    const prompt = win.__aacInstallPrompt;
+    win.__aacInstallPrompt = null;
+    if (!prompt || typeof prompt.prompt !== 'function') return;
+    try { await prompt.prompt(); } catch {}
   };
   const controller = createFrameDashboard({
     fetch: (...args) => win.fetch(...args),
@@ -783,6 +794,7 @@ export function installFrameDashboard(win = globalThis) {
       try { win.open?.(url, '_blank', 'noopener'); } catch {}
     },
     installRow,
+    promptInstall,
     overlay,
     onAccounts: e2e ? (vm) => { win.__aacLastAccounts = vm; } : null,
     onToast: e2e ? (t) => { (win.__aacToasts ||= []).push(t); } : null,
@@ -796,10 +808,16 @@ export function installFrameDashboard(win = globalThis) {
   const onFocus = () => controller.focused();
   const onOnline = () => controller.online(true);
   const onOffline = () => controller.online(false);
+  const onInstall = () => controller.installChanged();
+  let standaloneQuery = null;
+  try { standaloneQuery = win.matchMedia?.('(display-mode: standalone)') ?? null; } catch {}
   win.addEventListener?.('popstate', onPop);
   win.addEventListener?.('focus', onFocus);
   win.addEventListener?.('online', onOnline);
   win.addEventListener?.('offline', onOffline);
+  // the page captured or lost the install prompt (leptos/index.html), or the app was installed while open
+  win.addEventListener?.('aac-install', onInstall);
+  try { standaloneQuery?.addEventListener?.('change', onInstall); } catch {}
   // It starts from the frame session's check and user (frame-session.mjs): they were read to sign in.
   const start = controller.start;
   controller.start = (options = {}) => {
@@ -817,6 +835,8 @@ export function installFrameDashboard(win = globalThis) {
     win.removeEventListener?.('focus', onFocus);
     win.removeEventListener?.('online', onOnline);
     win.removeEventListener?.('offline', onOffline);
+    win.removeEventListener?.('aac-install', onInstall);
+    try { standaloneQuery?.removeEventListener?.('change', onInstall); } catch {}
     stop();
   };
   controller.id = ++installs;
