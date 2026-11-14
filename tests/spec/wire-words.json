@@ -463,6 +463,7 @@
       "src/web-server/services/claude-desktop-live-service.ts:item.status",
       "src/web-server/services/claude-desktop-live-service.ts:status",
       "src/web-server/services/claude-desktop-usage-service.ts:status",
+      "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/opencode-console-wallet-service.ts:result.status",
       "src/web-server/services/opencode-console-wallet-service.ts:status",
       "src/web-server/services/opencode-console-wallet-service.ts:this.result.status",
@@ -1962,7 +1963,8 @@
     "word": "key",
     "cause": null,
     "sources": [
-      "scripts/account-usage/muse_native.py:state"
+      "scripts/account-usage/muse_native.py:state",
+      "src/web-server/services/cursor-account-reader.ts:status"
     ]
   },
   {
@@ -1971,7 +1973,9 @@
     "sources": [
       "src/web-server/services/account-analytics-types.ts:state",
       "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
-      "src/web-server/services/cursor-account-reader.ts:STATES"
+      "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:answer?.state",
+      "src/web-server/services/cursor-account-reader.ts:status"
     ]
   },
   {
@@ -2347,6 +2351,7 @@
       "src/web-server/services/additional-account-service.ts:status",
       "src/web-server/services/claude-desktop-live-service.ts:result.status",
       "src/web-server/services/codex-renewal-notes.ts:status",
+      "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
       "src/web-server/services/usage-failover-contract.ts:status",
       "src/web-server/services/usage-failover-service.ts:account.status",
@@ -2909,6 +2914,7 @@
       "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
       "src/web-server/services/codex-auto-switch-service.ts:row.quotaStatus",
       "src/web-server/services/codex-profile-quota-service.ts:row?.quotaStatus",
+      "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/dashboard-auth-files.ts:state",
       "src/web-server/services/dashboard-auth-state.ts:read.state",
       "src/web-server/services/dashboard-device-store.ts:read.state",
@@ -3426,6 +3432,7 @@
       "src/web-server/services/account-analytics-types.ts:state",
       "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
       "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:answer?.state",
       "src/web-server/services/cursor-account-reader.ts:state"
     ]
   },
@@ -4660,6 +4667,7 @@
       "scripts/antigravity/quota_adapter.py:status",
       "scripts/app-updates/app_update_common.py:(status, code)",
       "src/antigravity/managed-update-command.ts:status",
+      "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/usage-failover-contract.ts:status"
     ]
   },
@@ -4706,6 +4714,7 @@
       "src/web-server/services/analytics-remote-transport.ts:typeof state.sessionDigest",
       "src/web-server/services/cursor-account-reader.ts:cause",
       "src/web-server/services/cursor-account-reader.ts:typeof answer.cause",
+      "src/web-server/services/cursor-account-reader.ts:typeof status.fingerprint",
       "src/web-server/services/cursor-account-reader.ts:typeof value.cause",
       "src/web-server/services/dashboard-device-records.ts:revokedReason",
       "src/web-server/services/dashboard-device-records.ts:typeof record.revokedReason",
@@ -5157,6 +5166,7 @@
       "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
       "src/web-server/services/cursor-account-reader.ts:STATES",
       "src/web-server/services/cursor-account-reader.ts:state",
+      "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/opencode-console-wallet-service.ts:result.status",
       "src/web-server/services/opencode-console-wallet-service.ts:status",
       "src/web-server/services/signin-health-service.ts:row.state",
