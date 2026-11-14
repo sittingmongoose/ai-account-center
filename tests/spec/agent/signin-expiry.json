@@ -8827,7 +8827,8 @@
         "environment": {}
       },
       "files": [],
-      "expected": "(unset CLAUDE_SECURESTORAGE_CONFIG_DIR USE_LOCAL_OAUTH USE_STAGING_OAUTH CLAUDE_LOCAL_OAUTH_API_BASE CLAUDE_CODE_CUSTOM_OAUTH_URL && CLAUDE_CONFIG_DIR=\"$HOME/configured/cafe\u0301\" claude auth login)"
+      "expected": "(unset CLAUDE_SECURESTORAGE_CONFIG_DIR USE_LOCAL_OAUTH USE_STAGING_OAUTH CLAUDE_LOCAL_OAUTH_API_BASE CLAUDE_CODE_CUSTOM_OAUTH_URL && CLAUDE_CONFIG_DIR=\"$HOME/configured/cafe\u0301\" claude auth login)",
+      "fallback": true
     },
     {
       "source": "test_nfd_settings_home_is_discovered_through_its_nfc_directory",
@@ -8927,7 +8928,8 @@
             "fixCommand": "(unset CLAUDE_SECURESTORAGE_CONFIG_DIR USE_LOCAL_OAUTH USE_STAGING_OAUTH CLAUDE_LOCAL_OAUTH_API_BASE CLAUDE_CODE_CUSTOM_OAUTH_URL && CLAUDE_CONFIG_DIR=\"$HOME/configured/caf\u00e9\" claude auth login)"
           }
         ]
-      }
+      },
+      "fallback": true
     },
     {
       "source": "test_non_utf8_profile_name_does_not_abort_mac_collection",
@@ -9014,7 +9016,8 @@
             "fixCommand": "(unset CLAUDE_SECURESTORAGE_CONFIG_DIR USE_LOCAL_OAUTH USE_STAGING_OAUTH CLAUDE_LOCAL_OAUTH_API_BASE CLAUDE_CODE_CUSTOM_OAUTH_URL && CLAUDE_CONFIG_DIR=\"$HOME/.claude-t3/bad\udcff\" claude auth login)"
           }
         ]
-      }
+      },
+      "fallback": true
     },
     {
       "source": "test_out_of_range_or_garbage_epochs_read_as_absent",
@@ -10793,7 +10796,8 @@
         "environment": {}
       },
       "files": [],
-      "expected": ""
+      "expected": "",
+      "fallback": true
     },
     {
       "source": "test_windows_fix_command_omits_a_curly_quoted_dir",
@@ -10808,7 +10812,8 @@
         "environment": {}
       },
       "files": [],
-      "expected": ""
+      "expected": "",
+      "fallback": true
     },
     {
       "source": "test_windows_fix_command_omits_a_curly_quoted_dir",

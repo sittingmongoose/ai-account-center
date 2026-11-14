@@ -83,3 +83,47 @@ exercise real tool presence, subprocess probes or native Mac/Windows behavior.
 Keychain cases use injected responses; no real Keychain is tested. Transport
 failures use fakes, not real SSH hosts. These are explicit limits, not claims of
 exhaustive Python/TS parity. Unsupported input classes delegate to the reference.
+
+## Fix round 2: ASCII before semantic parsing
+
+The shared text allowlist is printable ASCII (`0x20..0x7e`) plus exactly HT, LF,
+VT, FF and CR (`0x09..0x0d`). Those five characters plus SP are the only trim/split
+characters. Numeric fields additionally require the decimal grammar described
+above; expiry strings retain their narrower numeric allowlist. JSON string keys
+and values, paths, selectors and raw inventory text are checked before semantic
+processing. Unknown inventory keys receive the same raw guard. Unsupported text
+returns the whole-verb fixed fallback. Unicode-aware trimming, splitting and NFC
+normalization have been removed from verb parsing; lexical ASCII path resolution
+is retained. Non-ASCII profile names and paths now delegate to Python as well.
+
+`whitespace-controls.json` freezes Unicode whitespace plus Cc/Cf control points
+(254 points), positions, fields and allowlists. Regenerate with
+`python3 tests/spec/agent/make-whitespace-table.py`. It is a compact Cartesian
+property table rather than tens of thousands of duplicated golden objects.
+
+Run on the VM (synthetic text only):
+
+```
+python3 tests/spec/agent/whitespace.py capture /tmp/aac-whitespace-input.json
+bun tests/spec/agent/whitespace-reference.ts /tmp/aac-whitespace-input.json /tmp/aac-whitespace-reference.json
+```
+
+Copy the generated reference file to the build host and run there:
+
+```
+python3 tests/spec/agent/whitespace.py /path/to/fixture-agent /path/to/aac-whitespace-reference.json
+python3 tests/spec/agent/whitespace.py /path/to/production-agent --signin-only --production
+```
+
+The first run checks all three inventory platforms, all 16 reading keys/values,
+and 12 sign-in/settings/credential/argument/selector fields at start/middle/end.
+The real TS parser computes inventory references; the original Python helper
+computes sign-in references on real fixture files. Every response must be the
+reference answer or exactly `{"fallback":"python"}`; a differing ordinary value
+or invalid terminal envelope fails. The second run omits the two fixture-only
+selector injections and checks the other ten fields without parity features.
+Inventory cases use bounded batches of 256 through a fixture-only adapter to
+the same parser; production refuses this argument. Sign-in cases run one process
+at a time against fixture files, with one Tokio worker per process. `--baseline` selects the recheck witnesses from this same
+table to demonstrate failure at `b23d68d38` without repeating the full corpus.
+These checks retain the filesystem/native/transport coverage limits above.

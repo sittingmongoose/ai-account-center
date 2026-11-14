@@ -50,7 +50,7 @@ def proven(raw):
   value=json.loads(raw,parse_int=integer,parse_float=unsupported,parse_constant=unsupported)
   def valid(v,depth=0):
    if depth>=128:return False
-   if isinstance(v,str):return not any(0xd800<=ord(c)<=0xdfff or (not c.isascii() and c.isnumeric()) for c in v)
+   if isinstance(v,str):return all(32<=ord(c)<=126 or c in '\t\n\r\v\f' for c in v)
    if isinstance(v,list):return all(valid(x,depth+1) for x in v)
    if isinstance(v,dict):return all(valid(k,depth+1) and valid(x,depth+1) and (not isinstance(x,str) or k not in ['expiresAt','refreshTokenExpiresAt'] or all(c in '0123456789 \t\r\n' for c in x)) for k,x in v.items())
    return True
@@ -59,6 +59,10 @@ def proven(raw):
 for row in table['cases']:
  if row['source'].startswith('review-'):continue
  row.pop('fallback',None)
+ if not proven(json.dumps(row['args'])): row['fallback']=True
+ for file in row['files']:
+  if not all(32<=ord(c)<=126 or c in '\t\n\r\v\f' for c in file['path']): row['fallback']=True
+  if file['path'].endswith('/.t3/userdata/settings.json') and 'text' in file and not proven(file['text'].lstrip('\ufeff')): row['fallback']=True
  for raw in row['args'].get('io',{}).get('reads',{}).values():
   if raw is not None and not proven(base64.b64decode(raw)):
    row['fallback']=True

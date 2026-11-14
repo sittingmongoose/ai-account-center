@@ -17,12 +17,12 @@ pub(crate) fn scope(run: impl FnOnce() -> Value) -> Value {
         value
     }
 }
-fn proven(value: &Value) -> bool {
+pub(crate) fn proven(value: &Value) -> bool {
     match value {
         Value::Number(n) => n
             .as_i64()
             .is_some_and(|n| n.unsigned_abs() <= 9_007_199_254_740_991),
-        Value::String(s) => !s.chars().any(|c| !c.is_ascii() && c.is_numeric()),
+        Value::String(s) => ascii(s),
         Value::Array(a) => a.iter().all(proven),
         Value::Object(o) => o
             .iter()
@@ -65,4 +65,26 @@ pub(crate) fn decimal(raw: &str) -> bool {
         reject();
     }
     valid
+}
+
+// The only whitespace admitted before parsing: the six shared ASCII characters.
+pub(crate) fn space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}')
+}
+pub(crate) fn ascii(raw: &str) -> bool {
+    let valid = raw
+        .bytes()
+        .all(|b| (0x20..=0x7e).contains(&b) || matches!(b, 9..=13));
+    if !valid {
+        reject();
+    }
+    valid
+}
+pub(crate) fn strip(raw: &str) -> &str {
+    ascii(raw);
+    raw.trim_matches(space)
+}
+pub(crate) fn words(raw: &str) -> impl Iterator<Item = &str> {
+    ascii(raw);
+    raw.split(space).filter(|s| !s.is_empty())
 }

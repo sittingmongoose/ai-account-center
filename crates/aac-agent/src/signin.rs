@@ -7,7 +7,6 @@ use std::{
     io::Read,
     path::{Component, Path, PathBuf},
 };
-use unicode_normalization::UnicodeNormalization;
 
 #[cfg(feature = "parity-fixtures")]
 thread_local! { static FIXTURE_IO: std::cell::RefCell<Value> = const { std::cell::RefCell::new(Value::Null) }; }
@@ -64,11 +63,11 @@ pub(crate) fn epoch(value: &Value) -> Option<i64> {
             .filter(|n| n.is_finite())
             .map(|n| n.trunc() as i64),
         Value::String(s)
-            if !s.trim().is_empty()
-                && s.trim().len() <= 16
-                && s.trim().bytes().all(|c| c.is_ascii_digit()) =>
+            if !crate::proof::strip(s).is_empty()
+                && crate::proof::strip(s).len() <= 16
+                && crate::proof::strip(s).bytes().all(|c| c.is_ascii_digit()) =>
         {
-            s.trim().parse().ok()
+            crate::proof::strip(s).parse().ok()
         }
         _ => None,
     }?;
@@ -150,7 +149,8 @@ pub(crate) fn capability(data: &Value, now: i64) -> (Option<i64>, &'static str) 
 }
 
 fn normalized(path: &str) -> PathBuf {
-    let text: String = path.nfc().collect();
+    crate::proof::ascii(path);
+    let text: String = path.into();
     let mut out = PathBuf::new();
     for part in Path::new(&text).components() {
         match part {
@@ -425,6 +425,8 @@ struct Root {
     spelling: String,
 }
 fn identity(root: &Root, platform: &str) -> String {
+    crate::proof::ascii(&root.spelling);
+    crate::proof::ascii(&root.name);
     if platform == "darwin" {
         return format!(
             "{}:{}",
@@ -433,7 +435,7 @@ fn identity(root: &Root, platform: &str) -> String {
             } else {
                 "hashed"
             },
-            root.spelling.nfc().collect::<String>()
+            root.spelling.clone()
         );
     }
     #[cfg(unix)]
@@ -537,7 +539,7 @@ fn roots(
         if let Some(pairs) = saved.as_array() {
             for pair in pairs {
                 let raw = pair[0].as_str().unwrap_or("");
-                let p = normalized(raw.trim());
+                let p = normalized(crate::proof::strip(raw));
                 if !allowed(&p, home, ccs) {
                     complete = false;
                     continue;
@@ -623,7 +625,7 @@ fn roots(
                             complete = false;
                             continue;
                         };
-                        let raw = raw.trim();
+                        let raw = crate::proof::strip(raw);
                         if raw.is_empty() {
                             continue;
                         }
@@ -758,7 +760,7 @@ fn service(root: &Root, suffix: &str) -> String {
     } else {
         format!(
             "Claude Code{suffix}-credentials-{}",
-            &aac_core::sha256_hex(root.spelling.nfc().collect::<String>().as_bytes())[..8]
+            &aac_core::sha256_hex(root.spelling.clone().as_bytes())[..8]
         )
     }
 }
@@ -790,7 +792,7 @@ fn native_keychain(service: &str) -> Option<Value> {
                 .ok()
                 .filter(|o| o.status.success())
                 .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
+                .map(|s| crate::proof::strip(s).to_string())
         })
         .filter(|s| {
             !s.is_empty()
@@ -880,6 +882,9 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
     }
 }
 fn run_inner(args: &Value) -> Result<Value, Failure> {
+    if !crate::proof::proven(args) {
+        return Ok(crate::proof::fallback());
+    }
     #[cfg(feature = "parity-fixtures")]
     {
         FIXTURE_IO.with(|v| *v.borrow_mut() = args.get("io").cloned().unwrap_or(Value::Null));
@@ -946,11 +951,11 @@ fn run_inner(args: &Value) -> Result<Value, Failure> {
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
             .ok_or_else(|| Failure::new(Cause::NotInstalled, "home directory unavailable"))?,
-        _ => return Err(Failure::new(Cause::Refused, "home must be absolute")),
+        _ => return Ok(crate::proof::fallback()),
     };
     let ccs = match args.get("ccsDir") {
         Some(Value::String(s)) if Path::new(s).is_absolute() => PathBuf::from(s),
-        Some(_) => return Err(Failure::new(Cause::Refused, "ccsDir must be absolute")),
+        Some(_) => return Ok(crate::proof::fallback()),
         None if fixture => home.join(".ccs"),
         None => std::env::var_os("CCS_DIR")
             .filter(|s| !s.is_empty())
@@ -962,6 +967,11 @@ fn run_inner(args: &Value) -> Result<Value, Failure> {
             })
             .unwrap_or_else(|| home.join(".ccs")),
     };
+    if !home.to_str().is_some_and(crate::proof::ascii)
+        || !ccs.to_str().is_some_and(crate::proof::ascii)
+    {
+        return Ok(crate::proof::fallback());
+    }
     let now = match args.get("nowMs") {
         None => i64::try_from(UtcMs::now()?.get())
             .map_err(|_| Failure::new(Cause::Bug, "clock unavailable"))?,
@@ -1000,6 +1010,9 @@ fn run_inner(args: &Value) -> Result<Value, Failure> {
         if args["includeKeychain"] == true {
             ambient = true;
         }
+    }
+    if env.values().any(|s| !crate::proof::ascii(s)) {
+        return Ok(crate::proof::fallback());
     }
     let (roots, mut complete) = roots(&home, &ccs, ambient, platform, &env);
     #[cfg(feature = "parity-fixtures")]

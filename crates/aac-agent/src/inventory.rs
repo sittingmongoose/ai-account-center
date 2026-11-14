@@ -8,9 +8,12 @@ pub(crate) fn parse(platform: &str, text: &str) -> Value {
     crate::proof::scope(|| parse_proven(platform, text))
 }
 fn parse_proven(platform: &str, text: &str) -> Value {
+    if !["linux", "mac", "windows"].contains(&platform) || !crate::proof::ascii(text) {
+        return crate::proof::fallback();
+    }
     for (key, value) in text.lines().filter_map(|l| l.split_once('=')) {
-        if key.trim() == "cpu" {
-            for n in value.split_whitespace() {
+        if crate::proof::strip(key) == "cpu" {
+            for n in crate::proof::words(value) {
                 crate::proof::decimal(n);
             }
         } else if [
@@ -29,15 +32,15 @@ fn parse_proven(platform: &str, text: &str) -> Value {
             "cpuLoad",
             "cpuPct",
         ]
-        .contains(&key.trim())
+        .contains(&crate::proof::strip(key))
         {
-            crate::proof::decimal(value.trim());
+            crate::proof::decimal(crate::proof::strip(value));
         }
     }
     let values: BTreeMap<_, _> = text
         .lines()
         .filter_map(|l| l.split_once('='))
-        .map(|(k, v)| (k.trim(), v.trim()))
+        .map(|(k, v)| (crate::proof::strip(k), crate::proof::strip(v)))
         .collect();
     let n = |key: &str| {
         values
@@ -49,7 +52,7 @@ fn parse_proven(platform: &str, text: &str) -> Value {
     let lines = |key: &str| {
         text.lines()
             .filter_map(|l| l.strip_prefix(key))
-            .map(str::trim)
+            .map(crate::proof::strip)
             .collect::<Vec<_>>()
     };
     let counts = lines("coreCount=");
@@ -102,7 +105,7 @@ fn parse_proven(platform: &str, text: &str) -> Value {
         values
             .get("cpu")
             .and_then(|s| {
-                s.split_whitespace()
+                crate::proof::words(s)
                     .map(str::parse::<f64>)
                     .collect::<Result<Vec<_>, _>>()
                     .ok()
@@ -144,9 +147,9 @@ fn parse_proven(platform: &str, text: &str) -> Value {
             let mount = values.get("mount").copied().unwrap_or("/");
             let mount = mount
                 .chars()
-                .map(|c| if c.is_control() { ' ' } else { c })
+                .map(|c| if c < ' ' || c == '\u{7f}' { ' ' } else { c })
                 .collect::<String>();
-            let mount = mount.trim();
+            let mount = crate::proof::strip(&mount);
             let mount = if mount.is_empty() || aac_core::scrub(mount).as_str() != mount {
                 "/".into()
             } else if mount.chars().count() > 80 {
@@ -176,6 +179,23 @@ fn parse_proven(platform: &str, text: &str) -> Value {
 }
 
 pub(crate) async fn run(args: &Value) -> Result<Value, Failure> {
+    // Batch only the parser fixture boundary; production still refuses all arguments.
+    #[cfg(feature = "parity-fixtures")]
+    if let Some(probes) = args["probes"].as_array() {
+        if probes.len() > 256 {
+            return Err(Failure::new(Cause::Refused, "fixture batch too large"));
+        }
+        return Ok(Value::Array(
+            probes
+                .iter()
+                .map(|p| match (p["platform"].as_str(), p["probe"].as_str()) {
+                    (Some(platform), Some(text)) => parse(platform, text),
+                    _ => crate::proof::fallback(),
+                })
+                .collect(),
+        ));
+    }
+
     #[cfg(feature = "parity-fixtures")]
     if let (Some(platform), Some(probe)) = (args["platform"].as_str(), args["probe"].as_str()) {
         return Ok(parse(platform, probe));
