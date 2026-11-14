@@ -11,7 +11,11 @@ import {
   parseAnalyticsRemoteResponse,
   type AnalyticsRemoteResponse,
 } from '../../../src/web-server/services/analytics-remote-transport';
-import { loadAnalyticsRemoteSources } from '../../../src/web-server/services/analytics-remote-sources';
+import {
+  loadAnalyticsRemoteCachedSources,
+  loadAnalyticsRemoteSources,
+  unfinishedText,
+} from '../../../src/web-server/services/analytics-remote-sources';
 
 const MIN_DATE = Date.parse('2026-09-01T00:00:00Z');
 const FILE_1 = 'a1'.repeat(32);
@@ -226,5 +230,176 @@ describe('what the scanner says about failures reaches the cell', () => {
     const second = await scans([answer({}), stalled]);
     expect(second.input).toBe(10);
     expect(second.cell?.detail).toContain('did not answer within its time');
+  });
+});
+
+describe('recheck 1 leftovers (RECHECK-BIG-1, FIX-ROUND-BIG-2)', () => {
+  const unreadableRoot = {
+    root: ROOT,
+    origin: 'default',
+    state: 'unreadable',
+    cause: 'permission_denied',
+    counts: { filesFound: 0, newestMtime: null },
+  };
+  const discoveryWith = (roots: unknown[]) => ({
+    kinds: {
+      codex: {
+        installed: true,
+        signals: ['home'],
+        roots,
+        counts: {
+          roots: roots.length,
+          filesFound: 0,
+          filesRead: 0,
+          filesFailed: 0,
+          newestMtime: null,
+        },
+      },
+    },
+  });
+
+  // M1: a log with no session header is named "partly read: no session id".
+  it('parses and names a log with no session id', () => {
+    const parsed = answer({
+      kinds: {
+        codex: {
+          state: 'ok',
+          partial: true,
+          readFailures: 1,
+          unfinished: [
+            {
+              name: 'log-0123456789ab.jsonl',
+              sizeBytes: 500,
+              readThroughBytes: null,
+              decodedBytes: null,
+              reason: 'no_session_id',
+            },
+          ],
+          unfinishedCount: 1,
+          fingerprints: { [FILE_1]: print },
+        },
+      },
+    });
+    expect(parsed.kinds.codex.unfinished).toHaveLength(1);
+    expect(unfinishedText(parsed.kinds.codex.unfinished ?? [], 1)).toContain(
+      'partly read: no session id'
+    );
+  });
+
+  // M5: a cached answer keeps the unreadable-folder cause of the last real scan, and a later
+  // successful scan clears it. At 106f05a5c the cached cell read only "cached remote scan".
+  it('keeps the unreadable cause on cached cells until a successful scan', async () => {
+    const unreadable = answer({
+      kinds: { codex: { state: 'not_installed', partial: true, fingerprints: {} } },
+      rows: [],
+      discovery: discoveryWith([unreadableRoot]),
+    });
+    const live = await scans([answer({}), unreadable]);
+    expect(live.cell?.state).toBe('unreadable');
+    const cached = loadAnalyticsRemoteCachedSources(MIN_DATE, {
+      cacheDir: cache,
+      localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
+    });
+    const cell = cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex');
+    expect(cell?.state).toBe('unreadable');
+    expect(cell?.cause).toBe('unreadable_folder');
+    expect(cell?.detail).toContain('permission denied');
+    const tokens = cached.results
+      .filter((entry) => entry.tool === 'codex')
+      .flatMap((entry) => entry.data.hourly)
+      .reduce((sum, hour) => sum + hour.inputTokens, 0);
+    expect(tokens).toBe(10);
+    // A successful scan with the folder readable again clears the cause.
+    const healed = answer({
+      discovery: discoveryWith([
+        {
+          root: ROOT,
+          origin: 'default',
+          state: 'ok',
+          counts: { filesFound: 1, newestMtime: null },
+        },
+      ]),
+    });
+    await scans([healed]);
+    const after = loadAnalyticsRemoteCachedSources(MIN_DATE, {
+      cacheDir: cache,
+      localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
+    });
+    const cleared = after.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex');
+    expect(cleared?.state).not.toBe('unreadable');
+    expect(cleared?.detail ?? '').not.toContain('permission denied');
+  });
+
+  // L2: presence says Cursor is installed with no local records, while the run-store reader read
+  // it. One cell, the reader's. At 106f05a5c both cells appeared.
+  it('shows one Cursor cell when presence and the reader both speak', async () => {
+    const base = parseAnalyticsRemoteResponse(
+      JSON.stringify({
+        version: 2,
+        truncated: false,
+        kinds: { cursor: { state: 'ok', fingerprints: { [FILE_1]: print } } },
+        rows: [
+          {
+            k: 'cursor',
+            f: FILE_1,
+            m: 'grok-4.7',
+            h: '2026-10-01 15:00',
+            i: 300,
+            o: 50,
+            cr: 0,
+            cw: 0,
+            c: 0,
+            n: 1,
+          },
+        ],
+        srows: [],
+        discovery: {
+          kinds: {
+            cursor: {
+              installed: true,
+              signals: ['home'],
+              roots: [
+                {
+                  root: ROOT,
+                  origin: 'default',
+                  state: 'ok',
+                  counts: { filesFound: 1, newestMtime: null },
+                },
+              ],
+              counts: { roots: 1, filesFound: 1, filesRead: 1, filesFailed: 0, newestMtime: null },
+            },
+          },
+          tools: {
+            cursor: {
+              installed: true,
+              signals: ['home'],
+              cause: 'no_local_usage_records',
+              counts: { filesFound: 1, newestMtime: null },
+            },
+          },
+        },
+      })
+    );
+    const loaded = await loadAnalyticsRemoteSources(MIN_DATE, {
+      cacheDir: cache,
+      now: () => Date.parse('2026-10-02T00:00:00Z'),
+      force: true,
+      hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null, alexis: null }),
+      localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
+      runHelper: async (_alias, _host, request) => ({
+        ...base,
+        kinds: Object.fromEntries(
+          request.kinds.map((kind) => [
+            kind,
+            base.kinds[kind] ?? { state: 'not_installed', fingerprints: {} },
+          ])
+        ) as AnalyticsRemoteResponse['kinds'],
+        rows: base.rows.filter((entry) => request.kinds.includes(entry.k)),
+        srows: base.srows.filter((entry) => request.kinds.includes(entry.k)),
+      }),
+    });
+    const cells = loaded.states.filter((entry) => entry.host === 'mac' && entry.tool === 'cursor');
+    expect(cells).toHaveLength(1);
+    expect(cells[0].state).toBe('ok');
   });
 });

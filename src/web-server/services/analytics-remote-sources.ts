@@ -176,6 +176,22 @@ export function noReaderStates(
   return states;
 }
 
+/**
+ * One cell per (host, tool): presence-only metadata (`no_reader`) never stands beside the real
+ * reader's own cell for the same tool on the same computer (RECHECK-BIG-1 L2). The reader's
+ * state wins; first-seen order is kept.
+ */
+function coalesceSourceStates(states: AnalyticsRemoteSourceState[]): AnalyticsRemoteSourceState[] {
+  const byCell = new Map<string, AnalyticsRemoteSourceState>();
+  for (const state of states) {
+    const key = `${state.host}\0${state.tool}`;
+    const kept = byCell.get(key);
+    if (!kept || (kept.state === 'no_reader' && state.state !== 'no_reader'))
+      byCell.set(key, state);
+  }
+  return [...byCell.values()];
+}
+
 /** The label a fallback answer carries into every cell of its computer. */
 function readerLabel(reader: AnalyticsReader | undefined): string | null {
   return reader?.name === 'python-fallback'
@@ -939,6 +955,8 @@ export function unfinishedText(list: AnalyticsUnfinishedLog[], count?: number): 
   const named = list.slice(0, 5).map((log) => {
     if (log.reason === 'unreadable')
       return `${log.name} (${sizeText(log.sizeBytes)}, could not be decoded)`;
+    if (log.reason === 'no_session_id')
+      return `${log.name} (${sizeText(log.sizeBytes)}, partly read: no session id)`;
     const read = log.readThroughBytes ?? 0;
     const part = log.decodedBytes
       ? `partly read: ${bytes(read)} of ${bytes(log.decodedBytes)} bytes`
@@ -1001,6 +1019,27 @@ function cachedHostSources(
       : '';
     const why = `${failed ? `${scanFailureText(failed.cause)} (${failed.at})` : detail}${unfinished}`;
     const found = { ...sourceCounts(cached.discovery?.kinds[tool]), reader: cached.reader ?? null };
+    // The last known per-root quality rides along (RECHECK-BIG-1 M5): a log folder the last real
+    // scan could not read stays named on cached cells, never plain "cached". The saved discovery
+    // is replaced by the next scan of this kind, so a successful scan clears the cause.
+    const failedRoots = (cached.discovery?.kinds[tool]?.roots ?? []).filter(
+      (root) => root.state === 'unreadable' || root.state.startsWith('link_')
+    );
+    if (failedRoots.length) {
+      if (kept.length || keptSessions.length)
+        results.push({ tool, data: toWorkerResult(kept, keptSessions, tool) });
+      states.push({
+        tool,
+        host,
+        state: 'unreadable',
+        lastScanAt: read?.lastScanAt ?? null,
+        rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
+        detail: `${rootFailureText(failedRoots)}${failed ? `; ${scanFailureText(failed.cause)} (${failed.at})` : ''}; ${kept.length || keptSessions.length ? 'showing previously read usage' : 'nothing is counted from them'}`,
+        cause: 'unreadable_folder',
+        ...found,
+      });
+      continue;
+    }
     if (kept.length || keptSessions.length) {
       results.push({ tool, data: toWorkerResult(kept, keptSessions, tool, host) });
       states.push({
@@ -1178,6 +1217,7 @@ export function loadAnalyticsRemoteCachedSources(
     );
     states.push(...noReaderStates(host, cached.discovery?.tools, cached.toolsAt ?? null));
   }
+  states.splice(0, states.length, ...coalesceSourceStates(states));
   const reconcileClaudeMirrors = mirrorReconciler(
     parts,
     results,
@@ -2031,6 +2071,7 @@ export async function loadAnalyticsRemoteSources(
     if (!LOCAL_SCANNER_KINDS.includes(tool) || localOwned.has(tool)) sharedStates.push(entry);
     else catchingUp[tool] = catchUpText(entry);
   }
+  states.splice(0, states.length, ...coalesceSourceStates(states));
   const reconcileClaudeMirrors = mirrorReconciler(
     parts,
     results,

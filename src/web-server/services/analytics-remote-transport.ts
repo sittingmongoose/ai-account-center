@@ -190,7 +190,7 @@ export interface AnalyticsUnfinishedLog {
   sizeBytes: number;
   readThroughBytes: number | null;
   decodedBytes: number | null;
-  reason: 'deadline' | 'unreadable';
+  reason: 'deadline' | 'unreadable' | 'no_session_id';
 }
 
 export interface AnalyticsRemoteRow {
@@ -824,7 +824,9 @@ export function parseUnfinished(value: unknown): AnalyticsUnfinishedLog[] | unde
       !nonNegative(entry.sizeBytes) ||
       (entry.readThroughBytes !== null && !nonNegative(entry.readThroughBytes)) ||
       (entry.decodedBytes !== null && !nonNegative(entry.decodedBytes)) ||
-      (entry.reason !== 'deadline' && entry.reason !== 'unreadable')
+      (entry.reason !== 'deadline' &&
+        entry.reason !== 'unreadable' &&
+        entry.reason !== 'no_session_id')
     )
       return undefined;
     list.push({
