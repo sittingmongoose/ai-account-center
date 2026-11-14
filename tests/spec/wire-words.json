@@ -906,6 +906,13 @@
     ]
   },
   {
+    "word": "dedupe_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/cursor-account-reader.ts:cause"
+    ]
+  },
+  {
     "word": "deferred",
     "cause": null,
     "sources": [
@@ -1952,6 +1959,15 @@
     ]
   },
   {
+    "word": "key_rejected",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-analytics-types.ts:state",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES"
+    ]
+  },
+  {
     "word": "keychain",
     "cause": null,
     "sources": [
@@ -2421,6 +2437,16 @@
     ]
   },
   {
+    "word": "no_key",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-analytics-types.ts:state",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:state"
+    ]
+  },
+  {
     "word": "no_keychain_item",
     "cause": null,
     "sources": [
@@ -2467,10 +2493,14 @@
       "src/store/activity-reports.ts:state",
       "src/store/usage-report.ts:UsageReportState",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/account-analytics-types.ts:state",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:kept.state",
       "src/web-server/services/analytics-remote-sources.ts:state",
-      "src/web-server/services/analytics-remote-sources.ts:state.state"
+      "src/web-server/services/analytics-remote-sources.ts:state.state",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:state"
     ]
   },
   {
@@ -3383,10 +3413,27 @@
     ]
   },
   {
+    "word": "read",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-analytics-types.ts:state",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:state"
+    ]
+  },
+  {
     "word": "read_failed",
     "cause": "provider_error",
     "sources": [
       "src/web-server/services/analytics-remote-sources.ts:cause"
+    ]
+  },
+  {
+    "word": "reader_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/cursor-account-reader.ts:cause"
     ]
   },
   {
@@ -4643,6 +4690,9 @@
       "src/web-server/services/analytics-remote-transport.ts:typeof entry.cause",
       "src/web-server/services/analytics-remote-transport.ts:typeof item.cause",
       "src/web-server/services/analytics-remote-transport.ts:typeof state.sessionDigest",
+      "src/web-server/services/cursor-account-reader.ts:cause",
+      "src/web-server/services/cursor-account-reader.ts:typeof answer.cause",
+      "src/web-server/services/cursor-account-reader.ts:typeof value.cause",
       "src/web-server/services/dashboard-device-records.ts:revokedReason",
       "src/web-server/services/dashboard-device-records.ts:typeof record.revokedReason",
       "src/web-server/services/signin-health-service.ts:typeof reason",
@@ -5074,6 +5124,7 @@
       "src/web-server/services/account-analytics-projection.ts:status",
       "src/web-server/services/account-analytics-service.ts:status",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/account-analytics-types.ts:state",
       "src/web-server/services/account-analytics-types.ts:status",
       "src/web-server/services/account-dashboard-projection.ts:status",
       "src/web-server/services/account-dashboard-service.ts:state",
@@ -5088,6 +5139,9 @@
       "src/web-server/services/analytics-remote-sources.ts:state.state",
       "src/web-server/services/claude-desktop-usage-service.ts:status",
       "src/web-server/services/codex-profile-quota-service.ts:status",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:state",
       "src/web-server/services/opencode-console-wallet-service.ts:result.status",
       "src/web-server/services/opencode-console-wallet-service.ts:status",
       "src/web-server/services/signin-health-service.ts:row.state",

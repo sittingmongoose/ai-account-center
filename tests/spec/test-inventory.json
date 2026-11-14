@@ -153,6 +153,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-cursor-account/tests/cursor_account.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "native/aac-status/src/computers.rs",
       "kind": "internal",
       "evidence": [],
@@ -2771,11 +2777,23 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/cursor-account.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/cursor-failure-contract-interop.test.ts",
       "kind": "helper",
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "tests/unit/web-server/cursor-key-pty.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/dashboard-auth-devices.test.ts",

@@ -227,7 +227,7 @@ describe('only the usage outside the scanned computers is added', () => {
       expect(outside.rows[0].c).toBe(0);
       expect(outside.rows[0].costBasis).toBe(uncosted === 0 ? 'reported' : 'unknown');
       expect(outside.costPartial).toBe(uncosted === 0 ? undefined : true);
-      const result = analyticsRowsResult(outside.rows, 'cursor');
+      const result = analyticsRowsResult(outside.rows, 'cursor', 'ubuntu');
       expect(result.hourly).toHaveLength(1);
       // Was USD 2.50 at the reviewed head: the list price must never touch these rows.
       expect(result.hourly[0].cost).toBe(0);

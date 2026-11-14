@@ -853,12 +853,17 @@ function toSessionAggregates(srows: AnalyticsRemoteSessionRow[]): SessionAggrega
   }));
 }
 
-/** Rows in the remote rows' shape as one tool's usage (the Cursor account reader uses it too). */
+/**
+ * Rows in the remote rows' shape as one tool's usage, read on `host`. The Cursor account's
+ * rows keep this shape for the cost-basis checks; nothing of them is merged into a provider's
+ * usage (they are the authoritative account total, never added).
+ */
 export function analyticsRowsResult(
   rows: AnalyticsRemoteRow[],
-  kind: AnalyticsRemoteKind
+  kind: AnalyticsRemoteKind,
+  host: AnalyticsRemoteHost | 'ubuntu'
 ): UsageWorkerResult {
-  return toWorkerResult(rows, [], kind);
+  return toWorkerResult(rows, [], kind, host);
 }
 
 function toWorkerResult(
