@@ -83,7 +83,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 |---|---:|
 | `src/web-server/usage/account-activity-collector.ts` | 4028 |
 | `src/web-server/services/account-analytics-activity.ts` | 2400 |
-| `src/web-server/services/analytics-remote-sources.ts` | 2196 |
+| `src/web-server/services/analytics-remote-sources.ts` | 2200 |
 | `src/web-server/status/answers.ts` | 1744 |
 | `src/web-server/services/analytics-remote-transport.ts` | 1634 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
