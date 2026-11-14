@@ -2226,3 +2226,39 @@ it('v7 partial clocks become unknown without discarding aggregates or fingerprin
   expect(answer.states.find((s) => s.host === 'mac' && s.tool === 'omp')?.lastScanAt).toBeNull();
   expect(answer.results.find((s) => s.tool === 'omp')?.data.hourly[0].inputTokens).toBe(100);
 });
+
+// REVIEW-cheap M1: hosts scan concurrently into one state list; each saves only its own notes.
+it('saves each computer its own cell notes when two computers scan at once', async () => {
+  const at = Date.parse('2026-11-14T20:00:00Z');
+  await loadAnalyticsRemoteSources(MIN_DATE, {
+    cacheDir: cache,
+    hosts: async () => ({ mac: 'fixture', windows: null, nas1: 'fixture', alexis: null }),
+    now: () => at,
+    runHelper: async (_alias, host) =>
+      parseAnalyticsRemoteResponse(
+        JSON.stringify(host === 'mac' ? response({ unansweredMounts: 1 }) : response())
+      ),
+  });
+  const saved = (host: string) =>
+    JSON.parse(fs.readFileSync(path.join(cache, 'analytics-remote-v1', `${host}.json`), 'utf8'))
+      .kinds.omp;
+  expect(saved('mac').detail).toContain('1 network folder on this computer did not answer');
+  expect(saved('nas1').detail ?? '').not.toContain('did not answer');
+});
+
+// REVIEW-cheap M2: a Read cell's saved note (a skipped network folder) survives cache answers.
+it('keeps a Read cell note on cache-only answers', async () => {
+  const at = Date.parse('2026-11-14T20:00:00Z');
+  await loadAnalyticsRemoteSources(MIN_DATE, {
+    cacheDir: cache,
+    hosts: async () => ({ mac: 'fixture', windows: null, nas1: null, alexis: null }),
+    now: () => at,
+    runHelper: async () =>
+      parseAnalyticsRemoteResponse(JSON.stringify(response({ unansweredMounts: 1 }))),
+  });
+  const cell = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).states.find(
+    (s) => s.host === 'mac' && s.tool === 'omp'
+  );
+  expect(cell?.state).toBe('ok');
+  expect(cell?.detail).toContain('1 network folder on this computer did not answer');
+});

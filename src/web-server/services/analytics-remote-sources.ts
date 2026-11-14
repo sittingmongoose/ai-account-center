@@ -1107,7 +1107,9 @@ function cachedHostSources(
         lastScanAt: read?.lastScanAt ?? null,
         rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
         detail:
-          !failed && read?.state === 'ok' ? null : `${why}; showing previously read aggregates`,
+          !failed && read?.state === 'ok'
+            ? (read.detail ?? null)
+            : `${why}; showing previously read aggregates`,
         ...(failed ? { cause: failed.cause } : read?.cause ? { cause: read.cause } : {}),
         ...found,
       });
@@ -2104,6 +2106,8 @@ export async function loadAnalyticsRemoteSources(
           }
         }
         for (const entry of states.slice(firstState)) {
+          // Hosts scan concurrently into one list: save only this computer's own notes.
+          if (entry.host !== host) continue;
           const read = kindReads[entry.tool as AnalyticsRemoteKind];
           if (read) {
             read.detail = entry.detail;
