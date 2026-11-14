@@ -312,12 +312,11 @@ async fn fetch_body(
     now: i64,
     body: Option<&[u8]>,
 ) -> Result<Value, Value> {
-    let response = client.get(url, headers, body).await.map_err(|_| {
-        error(
-            "error",
-            "The usage service is unavailable or returned an invalid response.",
-        )
-    })?;
+    // A request/body/deadline failure cannot establish Python's socket-timeout result.
+    let response = client
+        .get(url, headers, body)
+        .await
+        .map_err(|_| proof::fallback())?;
     match response.status {
         401 => {
             return Err(error(
@@ -379,7 +378,33 @@ async fn fetch_body(
     }
     Ok(v)
 }
+// One publication boundary for every textual DTO value, including future providers.
+// Changed/redacted/uncheckable text is dropped, never replaced with provider diagnostics.
+fn publish(mut value: Value) -> Value {
+    fn check(value: &mut Value) {
+        match value {
+            Value::String(raw) => {
+                let checked = aac_core::scrub(raw);
+                *raw = if checked.as_str() == raw
+                    && !matches!(checked.as_str(), "[redacted]" | "[detail exceeded limit]")
+                {
+                    checked.as_str().to_owned()
+                } else {
+                    "error".into()
+                };
+            }
+            Value::Array(rows) => rows.iter_mut().for_each(check),
+            Value::Object(row) => row.values_mut().for_each(check),
+            _ => {}
+        }
+    }
+    check(&mut value);
+    value
+}
 pub(crate) async fn run(args: &Value) -> Result<Value, Failure> {
+    run_inner(args).await.map(publish)
+}
+async fn run_inner(args: &Value) -> Result<Value, Failure> {
     let Some(obj) = args.as_object() else {
         return Ok(proof::fallback());
     };
@@ -723,4 +748,19 @@ async fn qwen(client: &impl Http, secret: &str, now: i64) -> Value {
         }
     }
     proof::scope(|| parse::qwen(&payloads))
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    #[test]
+    fn every_text_field_passes_the_shared_scrub_and_uncheckable_text_is_dropped() {
+        let raw = json!({"message":"{\"access_token\":\"fixture-dummy-token\"}","windows":[{"label":"x".repeat(4097)}],"source":"[redacted]","status":"error"});
+        let published = publish(raw);
+        assert_eq!(published["message"], "error");
+        assert_eq!(published["windows"][0]["label"], "error");
+        assert_eq!(published["status"], "error");
+        assert_eq!(published["source"], "error");
+        assert!(!published.to_string().contains("fixture-dummy-token"));
+    }
 }

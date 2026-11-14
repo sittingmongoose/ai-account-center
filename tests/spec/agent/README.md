@@ -152,3 +152,31 @@ The production binary refuses fixture endpoint/clock overrides. The endpoint
 injection is feature-gated and permits only literal `http://127.0.0.1` with an
 explicit fixture home. Native Mac/Windows execution and live TLS providers are
 not covered. The artifact catalog stays empty pending authorized packaging.
+
+### Quota fix round 1
+
+`quota-review.json` records the review's provider objects and the exact six-slice,
+one-second-interval HTTP stream schedule. Run
+`python3 tests/spec/agent/quota-review.py /path/to/fixture-agent` on the build host.
+The original Python helper and the full quota verb use the same loopback replies
+and synthetic fixture credential store. Every case validates the process exit
+and terminal envelope, compares the complete reference DTO or required exact
+fallback, and rejects reflected dummy credential text. `--baseline` expects the
+regressions to fail at `4e3e77c62`; it never uses real credentials/providers.
+
+Qwen unwrapping now uses a typed Result instead of provider-controlled status
+keys to distinguish internal errors. Unused upstream status/message fields are
+ignored. Every published textual DTO value passes `aac_core::scrub`; modified,
+redacted or uncheckable text is dropped in favor of the fixed word `error`.
+All public DTO keys are constructed locally, not copied from provider objects.
+The boundary has a dedicated regression for nested fields and scrub markers.
+
+The proved ISO string subset is exactly `YYYY-MM-DDTHH:MM:SSZ`, with seconds
+00..59. Other string shapes, including lowercase/leap-second/offset forms,
+delegate rather than extending Chrono to emulate Python. Existing numeric
+seconds/milliseconds retain their proved grammar. Boolean Z.ai response codes
+in either quota or pack envelopes delegate. Any uncertain HTTP request, body or
+deadline failure delegates; normal known HTTP status replies retain their fixed
+messages. The four-second reqwest total timeout is not claimed to equal Python's
+per-socket timeout: a continuously progressing five-second response is explicitly
+a whole-verb fallback, after which TS uses Python.

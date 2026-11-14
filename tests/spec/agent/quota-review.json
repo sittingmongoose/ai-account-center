@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "H1-credential-reflection",
+      "provider": "qwen",
+      "payload": {
+        "per5HourPercentage": 1,
+        "status": "error",
+        "message": "fixture-dummy-token"
+      },
+      "expect": "equal"
+    },
+    {
+      "name": "H1-provider-text",
+      "provider": "qwen",
+      "payload": {
+        "per5HourPercentage": 1,
+        "status": "error",
+        "message": "innocuous provider text"
+      },
+      "expect": "equal"
+    },
+    {
+      "name": "H1-uncheckable-text",
+      "provider": "qwen",
+      "payload": {
+        "per5HourPercentage": 1,
+        "status": "error",
+        "message": "{\"access_token\":\"fixture-dummy-token\"}"
+      },
+      "expect": "equal"
+    },
+    {
+      "name": "M1-lowercase-iso",
+      "provider": "opencode-go",
+      "payload": {
+        "usage": {
+          "rolling": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01t00:00:00z"
+          },
+          "weekly": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          },
+          "monthly": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      },
+      "expect": "fallback"
+    },
+    {
+      "name": "M1-leap-second",
+      "provider": "opencode-go",
+      "payload": {
+        "usage": {
+          "rolling": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:60Z"
+          },
+          "weekly": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          },
+          "monthly": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      },
+      "expect": "fallback"
+    },
+    {
+      "name": "M2-quota-false",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": false,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TOKENS_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z"
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "fallback"
+    },
+    {
+      "name": "M2-packs-false",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TOKENS_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z"
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        },
+        "code": false
+      },
+      "expect": "fallback"
+    },
+    {
+      "name": "M2-quota-true",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": true,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TOKENS_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z"
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "fallback"
+    },
+    {
+      "name": "M2-packs-true",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TOKENS_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z"
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        },
+        "code": true
+      },
+      "expect": "fallback"
+    },
+    {
+      "name": "M3-progressing-stream",
+      "provider": "opencode-go",
+      "payload": {
+        "usage": {
+          "rolling": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          },
+          "weekly": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          },
+          "monthly": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      },
+      "stream": {
+        "chunks": 6,
+        "intervalMs": 1000
+      },
+      "expect": "fallback",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "M3-disconnect",
+      "provider": "opencode-go",
+      "payload": {
+        "usage": {
+          "rolling": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          },
+          "weekly": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          },
+          "monthly": {
+            "status": "ok",
+            "percent": 25,
+            "resetsAt": "2026-01-01T00:00:00Z"
+          }
+        }
+      },
+      "disconnect": true,
+      "expect": "fallback"
+    }
+  ]
+}

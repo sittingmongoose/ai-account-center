@@ -34,6 +34,23 @@ fn reset(v: &Value) -> Value {
             )
         })
     } else if let Some(s) = v.as_str() {
+        // Only this raw ISO shape is proved against plan_common.reset_at.
+        let b = s.as_bytes();
+        if b.len() != 20
+            || b[4] != b'-'
+            || b[7] != b'-'
+            || b[10] != b'T'
+            || b[13] != b':'
+            || b[16] != b':'
+            || b[19] != b'Z'
+            || b.iter()
+                .enumerate()
+                .any(|(i, c)| ![4, 7, 10, 13, 16, 19].contains(&i) && !c.is_ascii_digit())
+            || b[17] > b'5'
+        {
+            proof::reject();
+            return Value::Null;
+        }
         match chrono::DateTime::parse_from_rfc3339(s) {
             Ok(d) => Some(d.to_utc()),
             Err(_) => {
@@ -274,6 +291,9 @@ fn kimi(p: &Value) -> Value {
     valid(json!(plan), windows)
 }
 fn zai(p: &Value) -> Value {
+    if p["code"].is_boolean() {
+        return proof::fallback();
+    }
     if p["success"] == false
         || !matches!(&p["code"], Value::Null)
             && ![json!(0), json!(200), json!("0"), json!("200")].contains(&p["code"])
@@ -417,6 +437,9 @@ fn plan_label(v: &Value) -> Value {
     }
 }
 pub(super) fn packs(p: &Value, now: i64) -> Value {
+    if p["code"].is_boolean() {
+        return proof::fallback();
+    }
     if p["success"] != true
         || !p["code"].is_null()
             && ![json!(0), json!(200), json!("0"), json!("200")].contains(&p["code"])
@@ -500,17 +523,17 @@ pub(super) fn packs(p: &Value, now: i64) -> Value {
     }
 }
 
-fn unwrap_qwen(p: &Value) -> Value {
+fn unwrap_qwen(p: &Value) -> Result<Value, Value> {
     let mut v = p.clone();
     for _ in 0..7 {
         if !v.is_object() {
             break;
         }
         if v["successResponse"] == false || v["success"] == false {
-            return error(
+            return Err(error(
                 "needs_sign_in",
                 "The Qwen console session could not access token-plan usage.",
-            );
+            ));
         }
         if [
             "per5HourPercentage",
@@ -523,7 +546,7 @@ fn unwrap_qwen(p: &Value) -> Value {
         .iter()
         .any(|k| v.get(k).is_some())
         {
-            return v;
+            return Ok(v);
         }
         let next = v
             .get("DataV2")
@@ -537,16 +560,16 @@ fn unwrap_qwen(p: &Value) -> Value {
             next
         };
     }
-    error(
+    Err(error(
         "error",
         "The Qwen console returned no valid token-plan quota response.",
-    )
+    ))
 }
 pub(super) fn qwen(payloads: &[Value]) -> Value {
-    let data = unwrap_qwen(&payloads[0]);
-    if data.get("status").is_some() {
-        return data;
-    }
+    let data = match unwrap_qwen(&payloads[0]) {
+        Ok(data) => data,
+        Err(failure) => return failure,
+    };
     // Optional subscription/config/pack layouts delegate as a unit until proven.
     if payloads[1..].iter().any(|p| !p.is_null()) {
         return proof::fallback();

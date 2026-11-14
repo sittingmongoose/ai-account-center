@@ -46,12 +46,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if code == 'timeout':
             time.sleep(4.2)
             return
-        self.send_response(code)
+        stream = code == 'stream'
+        if code == 'disconnect':
+            self.close_connection = True
+            return
+        self.send_response(200 if stream else code)
         for key, value in headers.items():
             self.send_header(key, value)
         self.end_headers()
         with contextlib.suppress(BrokenPipeError, ConnectionResetError):
-            self.wfile.write(body)
+            if stream:
+                for i in range(6):
+                    if i: time.sleep(1)
+                    self.wfile.write(body[len(body)*i//6:len(body)*(i+1)//6])
+                    self.wfile.flush()
+            else:
+                self.wfile.write(body)
 
 class LocalOpener:
     def __init__(self, opener, endpoint):
