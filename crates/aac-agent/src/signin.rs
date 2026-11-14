@@ -1,0 +1,1088 @@
+//! Read-only Claude login expiry and profile discovery. Credential values never enter replies.
+use aac_core::{Cause, Failure, UtcMs};
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs,
+    io::Read,
+    path::{Component, Path, PathBuf},
+};
+
+#[cfg(feature = "parity-fixtures")]
+thread_local! { static FIXTURE_IO: std::cell::RefCell<Value> = const { std::cell::RefCell::new(Value::Null) }; }
+fn fixture_io(section: &str, path: &Path) -> Option<Value> {
+    #[cfg(feature = "parity-fixtures")]
+    {
+        FIXTURE_IO.with(|v| {
+            v.borrow()
+                .get(section)
+                .and_then(|v| v.get(path.to_string_lossy().as_ref()))
+                .cloned()
+        })
+    }
+    #[cfg(not(feature = "parity-fixtures"))]
+    {
+        let _ = (section, path);
+        None
+    }
+}
+
+const SELECTORS: [&str; 6] = [
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+    "USE_LOCAL_OAUTH",
+    "USE_STAGING_OAUTH",
+    "CLAUDE_LOCAL_OAUTH_API_BASE",
+    "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+];
+const FIELDS: [&str; 12] = [
+    "OPENAI_API_KEY",
+    "auth_mode",
+    "last_refresh",
+    "tokens",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "account_id",
+    "agent_identity",
+    "personal_access_token",
+    "bedrock_api_key",
+    "bedrock_access_keys",
+];
+
+pub(crate) fn epoch(value: &Value) -> Option<i64> {
+    if let Value::String(s) = value
+        && s.bytes()
+            .any(|c| !c.is_ascii_digit() && !b" \t\r\n".contains(&c))
+    {
+        crate::proof::reject();
+    }
+    let number = match value {
+        Value::Number(n) => n
+            .as_f64()
+            .filter(|n| n.is_finite())
+            .map(|n| n.trunc() as i64),
+        Value::String(s)
+            if !crate::proof::strip(s).is_empty()
+                && crate::proof::strip(s).len() <= 16
+                && crate::proof::strip(s).bytes().all(|c| c.is_ascii_digit()) =>
+        {
+            crate::proof::strip(s).parse().ok()
+        }
+        _ => None,
+    }?;
+    (1_000_000_000_000..=10_000_000_000_000)
+        .contains(&number)
+        .then_some(number)
+}
+
+fn iso(ms: Option<i64>) -> Value {
+    ms.and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|d| Value::String(d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)))
+        .unwrap_or(Value::Null)
+}
+
+pub(crate) fn credentials(raw: &Value) -> Option<Value> {
+    let obj = raw.as_object()?;
+    let data = obj.get("claudeAiOauth").unwrap_or(raw).as_object()?;
+    Some(
+        json!({"access": epoch(data.get("expiresAt").unwrap_or(&Value::Null)), "refresh": epoch(data.get("refreshTokenExpiresAt").unwrap_or(&Value::Null)), "has_access": data.get("accessToken").and_then(Value::as_str).is_some_and(|s| !s.is_empty()), "has_refresh": data.get("refreshToken").and_then(Value::as_str).is_some_and(|s| !s.is_empty())}),
+    )
+}
+
+pub(crate) fn capability(data: &Value, now: i64) -> (Option<i64>, &'static str) {
+    let a = data["access"].as_i64();
+    let r = data["refresh"].as_i64();
+    let ha = data["has_access"] == true;
+    let hr = data["has_refresh"] == true;
+    if !ha && !hr {
+        return (None, "logged_out");
+    }
+    if (ha && a.is_none()) || (hr && r.is_none()) {
+        return (None, "unavailable");
+    }
+    if !hr {
+        return (
+            a,
+            if a.is_some_and(|a| a <= now) {
+                "logged_out"
+            } else {
+                "critical"
+            },
+        );
+    }
+    if !ha {
+        return (
+            None,
+            if r.is_some_and(|r| r <= now) {
+                "logged_out"
+            } else {
+                "warn"
+            },
+        );
+    }
+    let end = a.filter(|a| r.is_some_and(|r| *a >= r));
+    if let Some(end) = end {
+        return (
+            Some(end),
+            if end <= now {
+                "logged_out"
+            } else if end - now < 14_400_000 {
+                "critical"
+            } else if end - now < 86_400_000 {
+                "warn"
+            } else {
+                "ok"
+            },
+        );
+    }
+    (
+        None,
+        if r.is_some_and(|r| r <= now) {
+            "logged_out"
+        } else if r.is_some_and(|r| r - now < 86_400_000) {
+            "warn"
+        } else {
+            "ok"
+        },
+    )
+}
+
+fn normalized(path: &str) -> PathBuf {
+    crate::proof::ascii(path);
+    let text: String = path.into();
+    let mut out = PathBuf::new();
+    for part in Path::new(&text).components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() && !out.has_root() {
+                    out.push("..");
+                }
+            }
+            p => out.push(p.as_os_str()),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    } else {
+        out
+    }
+}
+
+fn real(path: &Path) -> Option<PathBuf> {
+    if let Ok(p) = fs::canonicalize(path) {
+        return Some(p);
+    }
+    let parent = path.parent()?;
+    if parent == path {
+        return None;
+    }
+    Some(real(parent)?.join(path.file_name()?))
+}
+fn allowed(path: &Path, home: &Path, ccs: &Path) -> bool {
+    let Some(p) = real(path) else {
+        return false;
+    };
+    [home, ccs]
+        .iter()
+        .filter_map(|p| real(p))
+        .any(|r| p.starts_with(r))
+}
+fn dir_state(path: &Path) -> (bool, bool) {
+    if let Some(state) = fixture_io("states", path) {
+        return (state[0] == true, state[1] == true);
+    }
+    match fs::metadata(path) {
+        Ok(m) => (m.is_dir(), false),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            let broken = path
+                .ancestors()
+                .find_map(|p| match fs::symlink_metadata(p) {
+                    Ok(m) => Some(m.is_symlink() && fs::metadata(p).is_err()),
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                        ) =>
+                    {
+                        None
+                    }
+                    Err(_) => Some(true),
+                })
+                .unwrap_or(false);
+            (false, broken)
+        }
+        Err(_) => (false, true),
+    }
+}
+fn read(path: &Path) -> Option<Value> {
+    read_with_cap(path, 65536, false)
+}
+fn read_with_cap(path: &Path, cap: usize, bom: bool) -> Option<Value> {
+    if let Some(raw) = fixture_io("reads", path) {
+        use base64::Engine;
+        return raw
+            .as_str()
+            .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+            .and_then(|b| crate::proof::json(&b, cap, bom));
+    }
+    let before = fs::symlink_metadata(path).ok()?;
+    if before.len() > cap as u64 {
+        crate::proof::reject();
+        return None;
+    }
+    if !before.is_file() {
+        return None;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path).ok()?;
+    let after = file.metadata().ok()?;
+    if !after.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (before.dev(), before.ino()) != (after.dev(), after.ino()) {
+            return None;
+        }
+    }
+    let mut bytes = Vec::new();
+    file.take(cap as u64 + 1).read_to_end(&mut bytes).ok()?;
+    crate::proof::json(&bytes, cap, bom)
+}
+fn json_bytes(bytes: &[u8]) -> Option<Value> {
+    crate::proof::json(bytes, 65536, false)
+}
+fn display(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(p) if p.as_os_str().is_empty() => "~".into(),
+        Ok(p) => format!("~/{}", p.to_string_lossy().replace('\\', "/")),
+        Err(_) => path.to_string_lossy().into(),
+    }
+}
+fn quote(raw: &str, home: &Path) -> String {
+    let h = home.to_string_lossy();
+    let suffix = if raw == h {
+        Some("")
+    } else {
+        raw.strip_prefix(h.as_ref())
+            .filter(|s| s.starts_with(['/', '\\']))
+    };
+    match suffix {
+        None => format!("'{}'", raw.replace('\'', "'\\''")),
+        Some(s) if s.contains('!') => format!("\"$HOME\"'{}'", s.replace('\'', "'\\''")),
+        Some(s) => format!(
+            "\"$HOME{}\"",
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('$', "\\$")
+                .replace('`', "\\`")
+        ),
+    }
+}
+fn win_command(overrides: &BTreeMap<&str, String>) -> String {
+    let save = SELECTORS
+        .iter()
+        .enumerate()
+        .map(|(i, n)| format!("$aac{i} = $env:{n}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let apply = SELECTORS
+        .iter()
+        .map(|n| {
+            format!(
+                "$env:{n} = {}",
+                overrides.get(n).map(String::as_str).unwrap_or("$null")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let restore = SELECTORS
+        .iter()
+        .enumerate()
+        .map(|(i, n)| format!("$env:{n} = $aac{i}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("{save}; {apply}; try {{ claude auth login }} finally {{ {restore} }}")
+}
+pub(crate) fn fix(
+    raw: &str,
+    home: &Path,
+    kind: &str,
+    platform: &str,
+    env: &BTreeMap<String, String>,
+) -> String {
+    if kind == "default" {
+        return if platform == "win32" {
+            win_command(&BTreeMap::new())
+        } else {
+            format!("(unset {} && claude auth login)", SELECTORS.join(" "))
+        };
+    }
+    let var = if kind == "storage-dir" {
+        SELECTORS[1]
+    } else {
+        SELECTORS[0]
+    };
+    let absolute = |s: &str| {
+        if platform == "win32" {
+            s.starts_with(['/', '\\']) || s.as_bytes().get(1) == Some(&b':')
+        } else {
+            s.starts_with('/')
+        }
+    };
+    let co = if kind == "storage-dir" {
+        env.get(SELECTORS[0])
+    } else {
+        None
+    };
+    if !absolute(raw) || co.is_some_and(|s| !absolute(s)) {
+        return String::new();
+    }
+    if platform == "win32" {
+        if raw
+            .chars()
+            .chain(co.into_iter().flat_map(|s| s.chars()))
+            .any(|c| ('\u{2018}'..='\u{201f}').contains(&c))
+        {
+            return String::new();
+        }
+        let home_expr = "$(if (Test-Path env:USERPROFILE) { $env:USERPROFILE } else { $env:HOMEDRIVE + $env:HOMEPATH })";
+        let word = |s: &str, combined: bool| {
+            let h = home.to_string_lossy();
+            let suffix = if s == h {
+                Some("")
+            } else {
+                s.strip_prefix(h.as_ref())
+                    .filter(|s| s.starts_with(['/', '\\']))
+            };
+            match suffix {
+                None => format!("'{}'", s.replace('\'', "''")),
+                Some(s) if combined => format!("\"{home_expr}\" + '{}'", s.replace('\'', "''")),
+                Some(s) => format!(
+                    "\"{home_expr}{}\"",
+                    s.replace('`', "``").replace('"', "`\"").replace('$', "`$")
+                ),
+            }
+        };
+        let native_raw = if kind == "dir-native" {
+            raw.replace('/', "\\")
+        } else {
+            raw.to_string()
+        };
+        let native_home = home.to_string_lossy().replace('/', "\\");
+        let rendered = if kind == "dir-native" && native_raw.starts_with(&native_home) {
+            word(
+                &format!(
+                    "{}{}",
+                    home.to_string_lossy(),
+                    &native_raw[native_home.len()..]
+                ),
+                false,
+            )
+        } else {
+            word(raw, false)
+        };
+        let mut overrides = BTreeMap::from([(var, rendered)]);
+        if let Some(co) = co {
+            overrides.insert(SELECTORS[0], word(co, true));
+        }
+        return win_command(&overrides);
+    }
+    let cleared = SELECTORS
+        .iter()
+        .filter(|n| **n != var && !(co.is_some() && **n == SELECTORS[0]))
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let co = co
+        .map(|s| format!("CLAUDE_CONFIG_DIR={} ", quote(s, home)))
+        .unwrap_or_default();
+    format!(
+        "(unset {cleared} && {var}={} {co}claude auth login)",
+        quote(raw, home)
+    )
+}
+
+#[derive(Clone)]
+struct Root {
+    name: String,
+    path: PathBuf,
+    kind: String,
+    spelling: String,
+}
+fn identity(root: &Root, platform: &str) -> String {
+    crate::proof::ascii(&root.spelling);
+    crate::proof::ascii(&root.name);
+    if platform == "darwin" {
+        return format!(
+            "{}:{}",
+            if root.kind == "default" {
+                "default"
+            } else {
+                "hashed"
+            },
+            root.spelling.clone()
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(m) = fs::metadata(&root.path)
+            && m.ino() != 0
+        {
+            return format!("{}:{}", m.dev(), m.ino());
+        }
+    }
+    real(&root.path)
+        .unwrap_or_else(|| root.path.clone())
+        .to_string_lossy()
+        .into()
+}
+fn add(roots: &mut Vec<Root>, root: Root, platform: &str) {
+    let key = identity(&root, platform);
+    if let Some(i) = roots.iter().position(|r| identity(r, platform) == key) {
+        if i > 0
+            && fs::symlink_metadata(&roots[i].path).is_ok_and(|m| m.is_symlink())
+            && !fs::symlink_metadata(&root.path).is_ok_and(|m| m.is_symlink())
+        {
+            roots[i] = root;
+        }
+    } else {
+        roots.push(root);
+    }
+}
+fn scan(base: &Path, complete: &mut bool, safe_only: bool) -> Vec<PathBuf> {
+    let (exists, failed) = dir_state(base);
+    *complete &= !failed;
+    if !exists {
+        return vec![];
+    }
+    let Ok(entries) = fs::read_dir(base) else {
+        *complete = false;
+        return vec![];
+    };
+    let mut out = vec![];
+    for (i, entry) in entries.enumerate() {
+        if i >= 1024 {
+            *complete = false;
+            break;
+        }
+        let Ok(entry) = entry else {
+            *complete = false;
+            continue;
+        };
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.')
+            || (safe_only
+                && !name
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c)))
+        {
+            continue;
+        }
+        let (is_dir, failed) = dir_state(&entry.path());
+        *complete &= !failed;
+        if is_dir {
+            out.push(entry.path());
+            if out.len() > 64 {
+                out.truncate(64);
+                *complete = false;
+                break;
+            }
+        }
+    }
+    out.sort();
+    out
+}
+fn roots(
+    home: &Path,
+    ccs: &Path,
+    ambient: bool,
+    platform: &str,
+    env: &BTreeMap<String, String>,
+) -> (Vec<Root>, bool) {
+    let default = home.join(".claude");
+    let mut complete = true;
+    let make = |name: String, path: PathBuf, kind: &str| Root {
+        spelling: path.to_string_lossy().into(),
+        name,
+        path,
+        kind: if kind == "dir" {
+            "dir-native".into()
+        } else {
+            kind.into()
+        },
+    };
+    let mut roots = vec![make("default".into(), default.clone(), "default")];
+    let (_, failed) = dir_state(&default);
+    complete &= !failed;
+    #[cfg(not(feature = "parity-fixtures"))]
+    let injected: Option<Value> = None;
+    #[cfg(feature = "parity-fixtures")]
+    let injected = FIXTURE_IO.with(|v| v.borrow().get("savedRoots").cloned());
+    if let Some(saved) = injected {
+        if let Some(pairs) = saved.as_array() {
+            for pair in pairs {
+                let raw = pair[0].as_str().unwrap_or("");
+                let p = normalized(crate::proof::strip(raw));
+                if !allowed(&p, home, ccs) {
+                    complete = false;
+                    continue;
+                }
+                let (exists, failed) = dir_state(&p);
+                complete &= !failed;
+                if failed || (!exists && !(platform == "darwin" && ambient)) {
+                    continue;
+                }
+                let selectors = pair[1].as_array();
+                if selectors.is_some_and(|s| s.iter().any(|v| v == "discover")) {
+                    continue;
+                }
+                let name = selectors
+                    .and_then(|s| {
+                        s.iter().find_map(|v| {
+                            v.as_str().and_then(|s| s.strip_prefix("claude-profile:"))
+                        })
+                    })
+                    .map(str::to_string)
+                    .unwrap_or_else(|| p.file_name().unwrap_or_default().to_string_lossy().into());
+                let name = if p == default {
+                    "default-configured".into()
+                } else {
+                    name
+                };
+                add(&mut roots, make(name, p, "dir"), platform);
+            }
+        } else {
+            complete = false;
+        }
+    } else {
+        // Sibling discovery order: saved profiles, T3 directories, configured homes.
+        for base in [ccs.join("instances"), home.join(".claude-t3")] {
+            for p in scan(&base, &mut complete, true) {
+                let name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into())
+                    .unwrap_or_default();
+                add(&mut roots, make(name, p, "dir"), platform);
+            }
+        }
+        let settings_path = home.join(".t3/userdata/settings.json");
+        let settings = read_with_cap(&settings_path, 1_048_576, true);
+        if settings.is_none()
+            && (fs::symlink_metadata(&settings_path).is_ok() || dir_state(&settings_path).1)
+        {
+            complete = false;
+        }
+        if let Some(settings) = settings {
+            if !settings.is_object() {
+                complete = false;
+            }
+            if let Some(instances) = settings.get("providerInstances").filter(|v| !v.is_null()) {
+                if let Some(instances) = instances.as_object() {
+                    if instances.len() > 64 {
+                        complete = false;
+                    }
+                    for item in instances.values().take(64) {
+                        if item.is_null() {
+                            continue;
+                        }
+                        if !item.is_object() {
+                            complete = false;
+                            continue;
+                        }
+                        if item["driver"] != "claudeAgent" {
+                            continue;
+                        }
+                        let config = &item["config"];
+                        if !config.is_null() && !config.is_object() {
+                            complete = false;
+                            continue;
+                        }
+                        let v = &config["homePath"];
+                        if v.is_null() {
+                            continue;
+                        }
+                        let Some(raw) = v
+                            .as_str()
+                            .filter(|s| s.chars().count() <= 1024 && !s.contains('\0'))
+                        else {
+                            complete = false;
+                            continue;
+                        };
+                        let raw = crate::proof::strip(raw);
+                        if raw.is_empty() {
+                            continue;
+                        }
+                        let expanded = if raw == "~" {
+                            home.to_path_buf()
+                        } else if let Some(s) =
+                            raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\"))
+                        {
+                            home.join(s)
+                        } else {
+                            PathBuf::from(raw)
+                        };
+                        let p = normalized(&expanded.to_string_lossy());
+                        if !p.is_absolute()
+                            || !(p.starts_with(home) || p.starts_with(ccs))
+                            || !allowed(&p, home, ccs)
+                        {
+                            complete = false;
+                            continue;
+                        }
+                        let (is_dir, failed) = dir_state(&p);
+                        complete &= !failed;
+                        if failed || (!is_dir && !(platform == "darwin" && ambient)) {
+                            continue;
+                        }
+                        let name = if p == default {
+                            "default-configured".into()
+                        } else {
+                            p.file_name()
+                                .map(|s| s.to_string_lossy().into())
+                                .unwrap_or_default()
+                        };
+                        add(&mut roots, make(name, p, "dir"), platform);
+                    }
+                } else {
+                    complete = false;
+                }
+            }
+        }
+    }
+    for base in [ccs.join("instances"), home.join(".claude-t3")] {
+        for p in scan(&base, &mut complete, false) {
+            let name = p
+                .file_name()
+                .map(|s| s.to_string_lossy().into())
+                .unwrap_or_default();
+            add(&mut roots, make(name, p, "dir"), platform);
+        }
+    }
+    if ambient {
+        let selector = if let Some(s) = env.get(SELECTORS[1]) {
+            (!s.is_empty()).then_some((s, "storage-dir"))
+        } else {
+            env.get(SELECTORS[0]).map(|s| (s, "dir"))
+        };
+        if let Some((raw, kind)) = selector {
+            let path = normalized(raw);
+            let (exists, failed) = dir_state(&path);
+            complete &= !failed;
+            if !failed && (exists || platform == "darwin") {
+                if allowed(&path, home, ccs) {
+                    let name = path
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into())
+                        .unwrap_or_else(|| "ambient".into());
+                    let mut root = make(name, path, kind);
+                    root.spelling = raw.clone();
+                    root.kind = kind.into();
+                    add(&mut roots, root, platform);
+                } else {
+                    complete = false;
+                }
+            }
+        }
+    }
+    if roots.len() > 64 {
+        complete = false;
+        roots.truncate(64);
+    }
+    (roots, complete)
+}
+fn apply(row: &mut Value, data: &Value, now: i64) {
+    let (end, state) = capability(data, now);
+    row["accessExpiresAt"] = if data["has_access"] == true {
+        iso(data["access"].as_i64())
+    } else {
+        Value::Null
+    };
+    row["refreshExpiresAt"] = if data["has_refresh"] == true {
+        iso(data["refresh"].as_i64())
+    } else {
+        Value::Null
+    };
+    row["loggedOutAt"] = iso(end);
+    row["state"] = state.into();
+    if state == "unavailable" {
+        row["error"] = "expiry times unreadable".into();
+    } else if let Some(o) = row.as_object_mut() {
+        o.remove("error");
+    }
+}
+fn profile(
+    root: &Root,
+    home: &Path,
+    ccs: &Path,
+    now: i64,
+    platform: &str,
+    env: &BTreeMap<String, String>,
+) -> Value {
+    let mut row = json!({"name":root.name,"configDir":display(&root.path,home),"provider":"claude","accessExpiresAt":null,"refreshExpiresAt":null,"loggedOutAt":null,"state":"unavailable","fixCommand":fix(&root.spelling,home,&root.kind,platform,env)});
+    let dir = root.path.clone();
+    if !allowed(&dir, home, ccs) {
+        row["error"] = "profile directory resolves outside the allowed roots".into();
+        row["fixCommand"] = "".into();
+        return row;
+    }
+    let file = dir.join(".credentials.json");
+    let data = allowed(&file, home, ccs)
+        .then(|| read(&file))
+        .flatten()
+        .and_then(|v| credentials(&v));
+    if let Some(data) = data {
+        apply(&mut row, &data, now);
+    } else {
+        row["error"] = "credentials file missing or unreadable".into();
+    }
+    row
+}
+fn service(root: &Root, suffix: &str) -> String {
+    if root.kind == "default" || root.spelling.is_empty() {
+        format!("Claude Code{suffix}-credentials")
+    } else {
+        format!(
+            "Claude Code{suffix}-credentials-{}",
+            &aac_core::sha256_hex(root.spelling.clone().as_bytes())[..8]
+        )
+    }
+}
+fn keychain(service: &str, fixtures: Option<&Value>) -> Option<Value> {
+    #[cfg(feature = "parity-fixtures")]
+    if let Some(fixtures) = fixtures {
+        return fixtures.get(service).filter(|v| !v.is_null()).cloned();
+    }
+    let _ = fixtures;
+    native_keychain(service)
+}
+#[cfg(not(target_os = "macos"))]
+fn native_keychain(_: &str) -> Option<Value> {
+    None
+}
+#[cfg(target_os = "macos")]
+fn native_keychain(service: &str) -> Option<Value> {
+    use security_framework::{os::macos::keychain::SecKeychain, passwords::get_generic_password};
+    let Ok(_interaction_guard) = SecKeychain::disable_user_interaction() else {
+        return Some(json!({"status":"indeterminate"}));
+    };
+    let user = std::env::var("USER")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::process::Command::new("/usr/bin/id")
+                .arg("-un")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| crate::proof::strip(s).to_string())
+        })
+        .filter(|s| {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+        })
+        .unwrap_or_else(|| "claude-code-user".into());
+    match get_generic_password(service, &user) {
+        Ok(bytes) if bytes.len() > 65536 => Some(json!({"status":"oversized"})),
+        Ok(bytes) => Some(json!({"status":"payload","text":String::from_utf8_lossy(&bytes)})),
+        Err(e) if e.code() == -25300 => None,
+        Err(_) => Some(json!({"status":"locked"})),
+    }
+}
+fn merge_keychain(row: &mut Value, candidate: &Value, now: i64) -> (bool, bool) {
+    for k in ["accessExpiresAt", "refreshExpiresAt", "loggedOutAt"] {
+        row[k] = Value::Null;
+    }
+    row["state"] = "unavailable".into();
+    match candidate["status"].as_str() {
+        Some("locked") => {
+            row["error"] = "keychain locked or access not allowed".into();
+            (false, true)
+        }
+        Some("indeterminate") => {
+            row["error"] = "keychain state could not be checked".into();
+            (false, true)
+        }
+        Some("oversized") => {
+            crate::proof::reject();
+            row["error"] = "keychain item unreadable".into();
+            (true, false)
+        }
+        _ => {
+            let data = candidate["text"]
+                .as_str()
+                .and_then(|s| json_bytes(s.as_bytes()))
+                .and_then(|v| credentials(&v));
+            if let Some(data) = data {
+                apply(row, &data, now);
+            } else {
+                row["error"] = "keychain item holds no readable credentials".into();
+            }
+            (true, false)
+        }
+    }
+}
+fn codex(home: &Path) -> Option<Value> {
+    let p = home.join(".codex/auth.json");
+    if fs::symlink_metadata(&p).is_err() && !dir_state(&p).1 {
+        return None;
+    }
+    let unavailable = json!({"name":"codex","provider":"codex","configDir":"~/.codex/auth.json","state":"unavailable","error":"auth file missing or unreadable","fixCommand":""});
+    if !allowed(&p, home, home) {
+        return Some(unavailable);
+    }
+    let Some(value) = read(&p) else {
+        return Some(unavailable);
+    };
+    let mut keys = value
+        .as_object()
+        .map(|o| {
+            o.keys()
+                .filter(|s| FIELDS.contains(&s.as_str()))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    keys.sort();
+    Some(
+        json!({"name":"codex","provider":"codex","configDir":"~/.codex/auth.json","state":"unsupported","fieldsAvailable":keys,"fixCommand":""}),
+    )
+}
+
+pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
+    let mut failure = None;
+    let value = crate::proof::scope(|| match run_inner(args) {
+        Ok(v) => v,
+        Err(e) => {
+            failure = Some(e);
+            Value::Null
+        }
+    });
+    match failure {
+        Some(e) => Err(e),
+        None => Ok(value),
+    }
+}
+fn run_inner(args: &Value) -> Result<Value, Failure> {
+    if !crate::proof::proven(args) {
+        return Ok(crate::proof::fallback());
+    }
+    #[cfg(feature = "parity-fixtures")]
+    {
+        FIXTURE_IO.with(|v| *v.borrow_mut() = args.get("io").cloned().unwrap_or(Value::Null));
+        if args["op"] == "fix" {
+            let env = args["environment"]
+                .as_object()
+                .map(|o| {
+                    o.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let raw = args["spelling"]
+                .as_str()
+                .or_else(|| args["path"].as_str())
+                .unwrap_or("");
+            let kind = match args["storageVar"].as_str() {
+                Some("CLAUDE_SECURESTORAGE_CONFIG_DIR") => "storage-dir",
+                _ if args["path"].is_null() => "default",
+                _ => "dir",
+            };
+            let kind = if kind == "dir" && args["spelling"].is_null() {
+                "dir-native"
+            } else {
+                kind
+            };
+            return Ok(Value::String(fix(
+                raw,
+                Path::new(args["home"].as_str().unwrap_or("/")),
+                kind,
+                args["platform"].as_str().unwrap_or("linux"),
+                &env,
+            )));
+        }
+    }
+    let obj = args
+        .as_object()
+        .ok_or_else(|| Failure::new(Cause::Refused, "invalid signin-expiry arguments"))?;
+    let permitted = ["home", "ccsDir", "nowMs"];
+    for k in obj.keys() {
+        #[cfg(feature = "parity-fixtures")]
+        if [
+            "platform",
+            "environment",
+            "keychain",
+            "includeKeychain",
+            "io",
+        ]
+        .contains(&k.as_str())
+        {
+            continue;
+        }
+        if !permitted.contains(&k.as_str()) {
+            return Err(Failure::new(
+                Cause::Refused,
+                "unsupported signin-expiry argument",
+            ));
+        }
+    }
+    let fixture = args.get("home").is_some();
+    let home = match args.get("home") {
+        Some(Value::String(s)) if Path::new(s).is_absolute() => PathBuf::from(s),
+        None => std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .ok_or_else(|| Failure::new(Cause::NotInstalled, "home directory unavailable"))?,
+        _ => return Ok(crate::proof::fallback()),
+    };
+    let ccs = match args.get("ccsDir") {
+        Some(Value::String(s)) if Path::new(s).is_absolute() => PathBuf::from(s),
+        Some(_) => return Ok(crate::proof::fallback()),
+        None if fixture => home.join(".ccs"),
+        None => std::env::var_os("CCS_DIR")
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("CCS_HOME")
+                    .filter(|s| !s.is_empty())
+                    .map(|p| PathBuf::from(p).join(".ccs"))
+            })
+            .unwrap_or_else(|| home.join(".ccs")),
+    };
+    if !home.to_str().is_some_and(crate::proof::ascii)
+        || !ccs.to_str().is_some_and(crate::proof::ascii)
+    {
+        return Ok(crate::proof::fallback());
+    }
+    let now = match args.get("nowMs") {
+        None => i64::try_from(UtcMs::now()?.get())
+            .map_err(|_| Failure::new(Cause::Bug, "clock unavailable"))?,
+        Some(v) => epoch(v).ok_or_else(|| Failure::new(Cause::Refused, "invalid nowMs"))?,
+    };
+    #[allow(unused_mut)]
+    let mut platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    #[allow(unused_mut)]
+    let mut env: BTreeMap<String, String> = if fixture {
+        BTreeMap::new()
+    } else {
+        SELECTORS
+            .iter()
+            .filter_map(|n| std::env::var(n).ok().map(|v| (n.to_string(), v)))
+            .collect()
+    };
+    #[allow(unused_mut)]
+    let mut ambient = !fixture;
+    #[cfg(feature = "parity-fixtures")]
+    {
+        if let Some(p) = args["platform"].as_str() {
+            platform = p;
+        }
+        if let Some(e) = args["environment"].as_object() {
+            env = e
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.into())))
+                .collect();
+        }
+        if args["includeKeychain"] == true {
+            ambient = true;
+        }
+    }
+    if env.values().any(|s| !crate::proof::ascii(s)) {
+        return Ok(crate::proof::fallback());
+    }
+    let (roots, mut complete) = roots(&home, &ccs, ambient, platform, &env);
+    #[cfg(feature = "parity-fixtures")]
+    {
+        complete &= args["io"]["discoveryIncomplete"] != true;
+    }
+    let mut rows = Vec::new();
+    let mut variants = Vec::new();
+    for (i, root) in roots.iter().enumerate() {
+        let mut row = profile(root, &home, &ccs, now, platform, &env);
+        let mut evidence = false;
+        let mut unchecked = false;
+        if ambient
+            && platform == "darwin"
+            && row["error"] != "profile directory resolves outside the allowed roots"
+        {
+            if let Some(candidate) = keychain(&service(root, ""), args.get("keychain")) {
+                (evidence, unchecked) = merge_keychain(&mut row, &candidate, now);
+            }
+            if env.get(SELECTORS[5]).is_some_and(|s| !s.is_empty())
+                && let Some(candidate) =
+                    keychain(&service(root, "-custom-oauth"), args.get("keychain"))
+            {
+                let mut variant = row.clone();
+                let (seen, _) = merge_keychain(&mut variant, &candidate, now);
+                if seen {
+                    variant["name"] = format!("{}-custom-oauth", root.name).into();
+                    variant["fixCommand"] = "".into();
+                    variants.push(variant);
+                }
+            }
+        }
+        if ambient
+            && platform == "darwin"
+            && i > 0
+            && !dir_state(&normalized(&root.spelling)).0
+            && !evidence
+            && row["state"] == "unavailable"
+        {
+            if unchecked {
+                complete = false;
+            }
+            continue;
+        }
+        rows.push(row);
+    }
+    rows.extend(variants);
+    if !complete {
+        rows.push(json!({"name":"saved-profiles","provider":"claude","configDir":"discovery","accessExpiresAt":null,"refreshExpiresAt":null,"loggedOutAt":null,"state":"unavailable","fixCommand":"","error":"profile discovery was incomplete; this machine's list may be missing homes"}));
+    }
+    if let Some(row) = codex(&home) {
+        rows.push(row);
+    }
+    let reserved: HashSet<String> = rows
+        .iter()
+        .filter_map(|r| r["name"].as_str().map(str::to_owned))
+        .collect();
+    let mut used = HashSet::new();
+    for row in &mut rows {
+        let base = row["name"].as_str().unwrap_or("unnamed").to_string();
+        if !used.insert(base.clone()) {
+            let mut n = 2;
+            while reserved.contains(&format!("{base}-{n}")) || used.contains(&format!("{base}-{n}"))
+            {
+                n += 1;
+            }
+            let name = format!("{base}-{n}");
+            used.insert(name.clone());
+            row["name"] = name.into();
+        }
+    }
+    Ok(json!({"schemaVersion":1,"generatedAt":iso(Some(now)),"profiles":rows}))
+}

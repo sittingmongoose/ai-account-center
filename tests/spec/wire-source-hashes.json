@@ -183,7 +183,7 @@
   "src/web-server/services/dashboard-tls-config.ts": "3f21eb95901de868781d16ca167018dc240b089d2ed34ff91001cd4ed37f7e2d",
   "src/web-server/services/opencode-console-wallet-service.ts": "cabab69b0b428214569a30fd6413487b9487c0b1e8430c0a1e3a3e9b89dfa881",
   "src/web-server/services/private-json-store.ts": "d5d45f5a8afbcef52bba17665fce478b56e365aed0dc31f2f7f7f955edd0f70f",
-  "src/web-server/services/signin-health-service.ts": "28532c84d0098771cd80e42c2920926bd35bb35b09ba6c2a9fa18b6859d32a30",
+  "src/web-server/services/signin-health-service.ts": "2b969739d9f4cf61ce8d796c53437175d91d6f34a081f5c6991ad1035bff55b4",
   "src/web-server/services/signin-job-types.ts": "dd24f46e4362b6e90ae1b488d29bd7aa23e1155da33361266a2cfe6a2bbb98cd",
   "src/web-server/services/signin-jobs.ts": "adf1af08d84309ded9897907cc968ed7c1636d6981868e51dbbcf7a476da538a",
   "src/web-server/services/signin-output.ts": "fa46d34149e0db164795b8b45b2d9cb4e2f7fef1da61a50ee5ee7c014e94eed9",

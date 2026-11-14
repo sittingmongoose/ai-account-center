@@ -4,11 +4,13 @@ import { getCcsDir } from '../../utils/config-manager';
 import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-markdown';
 import {
   configuredUsageHosts,
+  localUsageHost,
   localUsagePython,
   signinHelperBundle,
   usageHelperCommand,
 } from './usage-failover-transport';
 import { sshArgv } from './ssh-policy';
+import { runSignInAgent, collectSignInWithFallback } from './agent-verbs';
 import {
   readClaudeSignInRenewal,
   type ClaudeSignInRenewal,
@@ -381,29 +383,39 @@ function unavailableHost(machine: string, error: string): SignInProfile[] {
 }
 
 async function collectLocal(): Promise<string> {
-  // The packaged helper, resolved from this module like the sibling usage
-  // transports, run by this host's own installed python when it has one,
-  // scoped to the dashboard's configured CCS directory (CCS_HOME and
-  // --config-dir installs keep their saved-instance homes and venv).
-  const helper = path.resolve(__dirname, '../../../scripts/account-usage', COLLECTOR);
-  const ccsDir = getCcsDir();
-  return runCollector(localUsagePython({ ccsDir }), [helper, '--ccs-dir', ccsDir], 20_000);
+  return collectSignInWithFallback(
+    () => runSignInAgent(localUsageHost()),
+    async () => {
+      // The packaged helper, resolved from this module like the sibling usage
+      // transports, run by this host's own installed python when it has one,
+      // scoped to the dashboard's configured CCS directory (CCS_HOME and
+      // --config-dir installs keep their saved-instance homes and venv).
+      const helper = path.resolve(__dirname, '../../../scripts/account-usage', COLLECTOR);
+      const ccsDir = getCcsDir();
+      return runCollector(localUsagePython({ ccsDir }), [helper, '--ccs-dir', ccsDir], 20_000);
+    }
+  );
 }
 
 type UsageHostEntry = Awaited<ReturnType<typeof configuredUsageHosts>>[number];
 
 async function collectRemote(host: UsageHostEntry): Promise<string> {
-  // The collector runs from an in-memory stdin bundle: helper source never
-  // lands on the remote disk, and a clean host reports instead of failing.
-  const bundle = await signinHelperBundle();
-  return runCollector(
-    'ssh',
-    sshArgv(host.sshHost as string, usageHelperCommand(host.platform), {
-      interval: 5,
-      countMax: 1,
-    }),
-    30_000,
-    JSON.stringify({ request: {}, helperSource: bundle })
+  return collectSignInWithFallback(
+    () => runSignInAgent(host),
+    async () => {
+      // The collector runs from an in-memory stdin bundle: helper source never
+      // lands on the remote disk, and a clean host reports instead of failing.
+      const bundle = await signinHelperBundle();
+      return runCollector(
+        'ssh',
+        sshArgv(host.sshHost as string, usageHelperCommand(host.platform), {
+          interval: 5,
+          countMax: 1,
+        }),
+        30_000,
+        JSON.stringify({ request: {}, helperSource: bundle })
+      );
+    }
   );
 }
 

@@ -17,6 +17,8 @@ import type { QuotaManagementConfig } from './quota';
 import { DEFAULT_QUOTA_MANAGEMENT_CONFIG } from './quota';
 import { UNIFIED_CONFIG_VERSION } from './version';
 export interface UnifiedConfig {
+  /** Read-only Rust agent verbs; absent and invalid values stay off. */
+  agentVerbs?: 'off' | 'on';
   /** Config version */
   version: number;
   /** Flag indicating setup wizard has been completed */
