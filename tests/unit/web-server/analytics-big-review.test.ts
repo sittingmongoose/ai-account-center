@@ -67,11 +67,11 @@ function answer(overrides: Record<string, unknown>): AnalyticsRemoteResponse {
  * One mac host, scanned once per answer in `answers`, a scan apart. Each call (one per kind on a
  * host still catching up) gets the pass's answer for its own kinds; the others are not installed.
  */
-async function scans(answers: AnalyticsRemoteResponse[]) {
+async function scans(answers: AnalyticsRemoteResponse[], intervalMs = 600_000) {
   let clock = Date.parse('2026-10-02T00:00:00Z');
   let last: Awaited<ReturnType<typeof loadAnalyticsRemoteSources>> | undefined;
   for (const base of answers) {
-    clock += 600_000;
+    clock += intervalMs;
     last = await loadAnalyticsRemoteSources(MIN_DATE, {
       cacheDir: cache,
       now: () => clock,
@@ -307,7 +307,7 @@ describe('recheck 1 leftovers (RECHECK-BIG-1, FIX-ROUND-BIG-2)', () => {
             : { ...unreadableRoot, state: 'installed_no_logs', cause: undefined },
         ]),
       });
-      const live = await scans([answer({}), unreadable]);
+      const live = await scans([answer({}), unreadable], 60_000);
       expect(live.cell?.state).toBe('unreadable');
       const cached = loadAnalyticsRemoteCachedSources(MIN_DATE, {
         cacheDir: cache,
@@ -320,16 +320,19 @@ describe('recheck 1 leftovers (RECHECK-BIG-1, FIX-ROUND-BIG-2)', () => {
       if (failure === 'nested folder')
         expect(cell?.detail).toContain('1 folder inside its log folders');
       // The asynchronous loader at +1 s must read the persisted quality without scanning.
+      let helperCalls = 0;
       const cachedAgain = await loadAnalyticsRemoteSources(MIN_DATE, {
         cacheDir: cache,
-        now: () => Date.parse('2026-10-02T00:20:01Z'),
+        now: () => Date.parse('2026-10-02T00:02:01Z'),
         force: false,
         hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null, alexis: null }),
         localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
         runHelper: async () => {
+          helperCalls++;
           throw new Error('cached request must not scan');
         },
       });
+      expect(helperCalls).toBe(0);
       expect(
         cachedAgain.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex')
       ).toMatchObject({ state: 'unreadable', cause: 'unreadable_folder' });
