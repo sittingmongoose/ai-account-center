@@ -471,7 +471,7 @@ describe('analytics remote sources', () => {
         for (const tool of tools) {
           expect(saved.rows.find((row: { k: string }) => row.k === tool).i).toBe(100 + pass);
           expect(saved.kinds[tool].lastScanAt).toBe(
-            new Date(started + pass * 360_000).toISOString()
+            new Date(started + (pass === 1 || pass === 2 ? 0 : pass) * 360_000).toISOString()
           );
         }
       }
@@ -653,7 +653,7 @@ describe('analytics remote sources', () => {
         rebuilt.results.find((entry) => entry.tool === 'claude')?.data.session[0].inputTokens
       ).toBe(150);
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-      expect(saved.version).toBe(7);
+      expect(saved.version).toBe(8);
       expect(saved.rows.filter((row: { k: string }) => !rebuiltKinds.has(row.k))).toEqual(
         rows.filter((row) => !rebuiltKinds.has(row.k))
       );
@@ -753,7 +753,7 @@ describe('analytics remote sources', () => {
     // Version 5 could contain accumulated Claude owners; its rows/prints must rebuild.
     const file = path.join(cache, 'analytics-remote-v1/mac.json');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-    expect(saved.version).toBe(7);
+    expect(saved.version).toBe(8);
     fs.writeFileSync(
       file,
       JSON.stringify({ ...saved, version: 5, rows: [...saved.rows, ...saved.rows] })
@@ -896,13 +896,13 @@ describe('analytics remote sources', () => {
     ).toMatchObject({ state: 'cached', lastScanAt: first });
     expect(
       cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'muse')
-    ).toMatchObject({ state: 'no_usage', lastScanAt: first });
+    ).toMatchObject({ state: 'unreadable', cause: 'read_failed', lastScanAt: first });
     expect(
       cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'zcode')
     ).toMatchObject({ state: 'no_usage', lastScanAt: new Date(now).toISOString() });
     expect(
       cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'claude')
-    ).toMatchObject({ state: 'unavailable', lastScanAt: null });
+    ).toMatchObject({ state: 'unreadable', cause: 'read_failed', lastScanAt: null });
   });
 
   it('treats an omitted requested kind as a failed read and retains its earlier rows and time', async () => {
@@ -1323,7 +1323,7 @@ describe('analytics remote sources', () => {
         version: number;
         srows: unknown[];
       };
-      expect(saved.version).toBe(7);
+      expect(saved.version).toBe(8);
       expect(saved.srows).toHaveLength(1);
       fs.writeFileSync(file, JSON.stringify({ ...saved, version: 2, srows: [] }));
     }
@@ -1644,14 +1644,14 @@ describe('analytics remote sources', () => {
     const { results, states } = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
     expect(results.find((entry) => entry.tool === 'omp')?.data.hourly[0].inputTokens).toBe(100);
     const mac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
-    expect(mac?.state).toBe('cached');
-    expect(mac?.detail).toContain('timed out');
+    expect(mac?.state).toBe('ok');
+    expect(mac?.detail).toBeNull();
     // Nas1's saved aggregates come back like the other hosts', from its own cache file.
     const nas1 = states.find((entry) => entry.tool === 'omp' && entry.host === 'nas1');
-    expect(nas1).toMatchObject({ state: 'cached', rowCount: 2 });
-    expect(nas1?.detail).toContain('timed out');
-    // The six answered kinds and Devin; Cursor without a run store is left to presence.
-    expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(7);
+    expect(nas1).toMatchObject({ state: 'ok', rowCount: 2 });
+    expect(nas1?.detail).toBeNull();
+    // Missing requested kinds remain named failed reads, including Cursor.
+    expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(8);
   });
 
   it('says when logs were read but hold no usage in the last 31 days', async () => {
@@ -1759,7 +1759,7 @@ describe('analytics remote scans per kind', () => {
     );
     expect(
       warm.states.find((source) => source.host === 'mac' && source.tool === 'omp')?.state
-    ).toBe('cached');
+    ).toBe('ok');
     const file = path.join(cache, 'analytics-remote-v1', 'mac.json');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
     saved.kinds.omp.lastScanAt = new Date(now - 300_000).toISOString();
@@ -2141,4 +2141,88 @@ describe('remote rows price like the local rows of their tool', () => {
     const muse = results.find((entry) => entry.tool === 'muse')?.data.hourly[0].modelBreakdowns[0];
     expect(muse?.provider).toBeUndefined();
   });
+});
+
+it('keeps a successful scan Read during ordinary between-scan cache answers', async () => {
+  const at = Date.parse('2026-11-14T20:00:00Z');
+  let calls = 0;
+  const deps = {
+    cacheDir: cache,
+    hosts: async () => ({ mac: 'fixture', windows: null, nas1: null, alexis: null }),
+    now: () => at,
+    runHelper: async () => {
+      calls++;
+      return parseAnalyticsRemoteResponse(JSON.stringify(response()));
+    },
+  };
+  await loadAnalyticsRemoteSources(MIN_DATE, deps);
+  const before = calls;
+  const warm = await loadAnalyticsRemoteSources(MIN_DATE, { ...deps, now: () => at + 60_000 });
+  const cell = warm.states.find((s) => s.host === 'mac' && s.tool === 'omp');
+  expect(cell).toMatchObject({ state: 'ok', lastScanAt: new Date(at).toISOString(), detail: null });
+  // Cache-only API answers preserve the same successful state too.
+  expect(
+    loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).states.find(
+      (s) => s.host === 'mac' && s.tool === 'omp'
+    )?.state
+  ).toBe('ok');
+  expect(calls).toBeGreaterThanOrEqual(before);
+});
+
+it('a productive partial scan retains its last full-read clock and counts readable usage', async () => {
+  const at = Date.parse('2026-11-14T20:00:00Z');
+  let pass = 0;
+  const deps = {
+    cacheDir: cache,
+    hosts: async () => ({ mac: 'fixture', windows: null, nas1: null, alexis: null }),
+    now: () => at + pass * 360_000,
+    runHelper: async () =>
+      parseAnalyticsRemoteResponse(
+        JSON.stringify(
+          response({
+            kinds: {
+              omp: {
+                state: 'ok',
+                fingerprints: { [FILE_1]: { size: 10 + pass, mtimeMs: 20 + pass } },
+                ...(pass ? { partial: true, unreadableFolders: 1 } : {}),
+              },
+            },
+            rows: [row({ i: 100 + pass })],
+          })
+        )
+      ),
+  };
+  await loadAnalyticsRemoteSources(MIN_DATE, deps);
+  for (pass = 1; pass <= 2; pass++) {
+    const answer = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+    expect(answer.states.find((s) => s.host === 'mac' && s.tool === 'omp')).toMatchObject({
+      state: 'cached',
+      cause: 'unreadable_folder',
+      lastScanAt: new Date(at).toISOString(),
+    });
+    expect(answer.results.find((s) => s.tool === 'omp')?.data.hourly[0].inputTokens).toBe(
+      100 + pass
+    );
+    expect(
+      loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).states.find(
+        (s) => s.host === 'mac' && s.tool === 'omp'
+      )
+    ).toMatchObject({ state: 'cached', lastScanAt: new Date(at).toISOString() });
+  }
+});
+
+it('v7 partial clocks become unknown without discarding aggregates or fingerprints', async () => {
+  await loadAnalyticsRemoteSources(MIN_DATE, {
+    cacheDir: cache,
+    hosts: async () => ({ mac: 'fixture', windows: null, nas1: null, alexis: null }),
+    runHelper: async () => parseAnalyticsRemoteResponse(JSON.stringify(response())),
+  });
+  const file = path.join(cache, 'analytics-remote-v1/mac.json');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved.version = 7;
+  saved.kinds.omp.state = 'cached';
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const answer = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache });
+  expect(answer.states.find((s) => s.host === 'mac' && s.tool === 'omp')?.lastScanAt).toBeNull();
+  expect(answer.results.find((s) => s.tool === 'omp')?.data.hourly[0].inputTokens).toBe(100);
 });

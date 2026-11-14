@@ -557,6 +557,10 @@ pub fn collect(
     for base in &plan.failed_bases {
         collector.unreadable_folder("claude", base);
     }
+    for (path, cause) in &plan.search_failures {
+        collector.note_root("claude", path, "signature");
+        collector.root_failure("claude", path, "unreadable", cause);
+    }
     // Experiment log folders are read through the copy rule, like other homes' logs (DESIGN 16.5).
     plan.others
         .extend(experiments.iter().map(|p| (p.clone(), "experiment")));

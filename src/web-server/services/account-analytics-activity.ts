@@ -425,6 +425,8 @@ const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024;
 const MAX_SNAPSHOT_SESSIONS = 10_000;
 
 interface PersistedActivitySnapshot {
+  /** Added when source dates became full-read clocks instead of productive-attempt clocks. */
+  fullReadClock?: true;
   local: Array<[string, SourceData]>;
   identities?: Array<[string, LocalRequestIdentity]>;
   version: typeof SNAPSHOT_VERSION;
@@ -507,7 +509,12 @@ function loadPersistedSnapshot(scope: string): PersistedActivitySnapshot | null 
     const file = snapshotFile(scope);
     if (!file || fs.statSync(file).size > MAX_SNAPSHOT_BYTES) return null;
     const value = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
-    return validSnapshot(value) ? value : null;
+    if (!validSnapshot(value)) return null;
+    if (value.fullReadClock !== true) {
+      for (const source of [...value.sourceStates, ...(value.remote?.states ?? [])])
+        if (['cached', 'scanning', 'unreadable'].includes(source.state)) source.lastScanAt = null;
+    }
+    return value;
   } catch {
     return null;
   }
@@ -523,6 +530,7 @@ function savePersistedSnapshot(scope: string, state: ActivityState): void {
       data: source.data.map(({ cells: _cells, ...data }) => data),
     });
     const body = JSON.stringify({
+      fullReadClock: true,
       version: SNAPSHOT_VERSION,
       fetchedAt: state.fetchedAt,
       partial: state.partial,
@@ -1845,10 +1853,9 @@ export class AccountAnalyticsActivityService {
                 : pending === 'failed'
                   ? 'unavailable'
                   : 'scanning',
-          // Only productive partial reads advance the date; replayed aggregates carry their
-          // saved time. Failed files alone never advance the date, but a
-          // productive sibling may still have supplied fresh rows.
-          lastScanAt: localReadAt.get(tool) ?? old?.lastScanAt ?? null,
+          // A productive partial read can supply newer rows, but does not complete this tool.
+          // The cached label's age is always the last full read, never this attempt's time.
+          lastScanAt: old?.lastScanAt ?? null,
           rowCount: events,
           detail:
             pending === 'failed'
@@ -1890,7 +1897,7 @@ export class AccountAnalyticsActivityService {
           detail: 'no usage logs found on this host',
         });
       } else if (old) {
-        entries.push({ ...old, state: old.rowCount > 0 ? 'cached' : old.state });
+        entries.push({ ...old });
       } else {
         entries.push({
           tool,

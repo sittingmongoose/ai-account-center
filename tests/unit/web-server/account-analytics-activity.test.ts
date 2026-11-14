@@ -430,7 +430,7 @@ describe('native local analytics activity', () => {
         expect(
           answer.sources.find((entry) => entry.tool === 'claude' && entry.host === 'ubuntu')
             ?.lastScanAt
-        ).toBe(new Date(NOW + 1000).toISOString());
+        ).toBe(new Date(NOW).toISOString());
         expect(
           answer.sources.find((entry) => entry.tool === 'claude' && entry.host === 'ubuntu')?.detail
         ).toContain('local scan failed');
@@ -988,7 +988,7 @@ describe('native local analytics activity', () => {
       expect(started).toEqual(['/fixture/a']);
       expect(capped.totals?.inputTokens).toBe(524);
       expect(capped.sources.find((s) => s.tool === 'omp' && s.host === 'ubuntu')?.lastScanAt).toBe(
-        new Date(format === 'current' ? NOW + 1000 : NOW).toISOString()
+        new Date(NOW).toISOString()
       );
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
       expect(
@@ -1097,7 +1097,7 @@ describe('native local analytics activity', () => {
       if (outcome === 'failed-pending' || outcome === 'partial-empty') {
         expect(
           second.sources.find((s) => s.tool === 'omp' && s.host === 'ubuntu')?.lastScanAt
-        ).toBe(new Date(NOW).toISOString());
+        ).toBeNull();
         pass++;
         await service.get({ ...QUERY, refresh: true }, FROM, NOW);
         expect((await settled(service)).totals?.inputTokens).toBe(54);
@@ -1150,7 +1150,7 @@ describe('native local analytics activity', () => {
     expect(serialized).not.toContain('/private/project');
   });
 
-  it('dates only productive partial reads and keeps failed reads at their previous time', async () => {
+  it('keeps partial and failed reads at their last full-read time', async () => {
     for (const mode of ['empty', 'failure', 'fresh', 'replayed', 'cached'] as const) {
       let pass = 0;
       const service = new AccountAnalyticsActivityService({
@@ -1179,11 +1179,7 @@ describe('native local analytics activity', () => {
       const cell = answer.sources.find(
         (entry) => entry.tool === 'zcode' && entry.host === 'ubuntu'
       );
-      expect(cell?.lastScanAt).toBe(
-        new Date(
-          mode === 'fresh' ? NOW + 1000 : mode === 'replayed' ? NOW - 1000 : NOW
-        ).toISOString()
-      );
+      expect(cell?.lastScanAt).toBe(new Date(NOW).toISOString());
       if (mode === 'failure') expect(cell?.detail).toContain('local scan failed');
     }
     const cold = new AccountAnalyticsActivityService({
@@ -1449,7 +1445,7 @@ describe('native local analytics activity', () => {
       }
       const answer = await settled(service);
       expect(answer.sources.find((s) => s.tool === 'claude' && s.host === 'mac')).toMatchObject({
-        state: 'cached',
+        state: 'ok',
         lastScanAt: new Date(NOW).toISOString(),
         rowCount: 1,
       });
@@ -1530,11 +1526,10 @@ describe('native local analytics activity', () => {
     });
     const partial = await service.get(QUERY, FROM, NOW);
     expect(partial.status).toBe('cached');
-    // A partial scan still read this pass: it is dated now, as a remote host's partial scan is,
-    // so a tool that never finishes cannot read "Cached, 3h ago" while its records keep arriving.
+    // Partial rows can be current; no full read has completed, so its clock stays unknown.
     expect(partial.sources?.find((s) => s.tool === 'codex' && s.host === 'ubuntu')).toMatchObject({
       state: 'cached',
-      lastScanAt: new Date(NOW).toISOString(),
+      lastScanAt: null,
       detail: expect.stringContaining('partial local scan'),
     });
     expect(partial.totals?.inputTokens).toBe(100);
@@ -2867,4 +2862,60 @@ describe('native local analytics activity', () => {
     await settled(service);
     expect(requestCalls).toBe(3);
   });
+});
+
+it('does not restore a legacy productive-attempt clock as a full-read clock', async () => {
+  async function settled(service: AccountAnalyticsActivityService) {
+    for (let attempt = 0; attempt < 500; attempt++) {
+      const answer = await service.get(QUERY, FROM, NOW);
+      if (!answer.refreshing) return answer;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    throw new Error('fixture scan did not settle');
+  }
+  const scope = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-legacy-read-clock-'));
+  try {
+    const requests = () => [
+      {
+        provider: 'codex' as const,
+        request: { kind: 'codex' as const, codexHome: '/fixture', cacheDir: '/fixture/cache' },
+      },
+    ];
+    const deps = {
+      remote: async () => ({ results: [], states: [] }),
+      requests,
+      now: () => NOW,
+      scope: () => scope,
+      persistSnapshot: true,
+    };
+    const first = new AccountAnalyticsActivityService({
+      ...deps,
+      loadWorker: async () => data('gpt-5.4', 10, 0),
+    });
+    await settled(first);
+    const file = path.join(scope, 'cache/account-activity-v1/analytics-activity-snapshot-v1.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete saved.fullReadClock;
+    saved.sourceStates.find(
+      (s: { tool: string; host: string }) => s.tool === 'codex' && s.host === 'ubuntu'
+    ).state = 'cached';
+    fs.writeFileSync(file, JSON.stringify(saved));
+    let finish: (v: UsageWorkerResult) => void = () => {};
+    const second = new AccountAnalyticsActivityService({
+      ...deps,
+      loadWorker: () =>
+        new Promise<UsageWorkerResult>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    const instant = await second.get(QUERY, FROM, NOW);
+    expect(
+      instant.sources.find((s) => s.tool === 'codex' && s.host === 'ubuntu')?.lastScanAt
+    ).toBeNull();
+    expect(instant.totals?.inputTokens).toBe(10);
+    finish(data('gpt-5.4', 20, 0));
+    await settled(second);
+  } finally {
+    fs.rmSync(scope, { recursive: true, force: true });
+  }
 });

@@ -115,14 +115,14 @@ pub fn signature_homes(home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<(usiz
 
 fn signature_homes_checked(
     home: &Path,
-    failures: &mut Vec<PathBuf>,
+    failures: &mut Vec<(PathBuf, &'static str)>,
 ) -> (Vec<PathBuf>, Vec<PathBuf>, Option<(usize, usize)>) {
     let (mut codex, mut claude) = (Vec::new(), Vec::new());
     let names = match fsx::list_dir(home) {
         Ok(names) => names,
         Err(error) => {
             if error.kind() != std::io::ErrorKind::NotFound {
-                failures.push(home.to_path_buf());
+                failures.push((home.to_path_buf(), fsx::error_cause(&error)));
             }
             return (codex, claude, None);
         }
@@ -141,33 +141,35 @@ fn signature_homes_checked(
             Ok(meta) if meta.is_dir() => {}
             Ok(_) => continue,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => {
-                failures.push(path);
+            Err(error) => {
+                failures.push((path, fsx::error_cause(&error)));
                 continue;
             }
         }
-        let mut has = |entry: &str| match fsx::metadata(&path.join(entry)) {
-            Ok(_) => true,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(_) => {
-                failures.push(path.join(entry));
-                false
+        // Discover the names once before probing children. A protected, unrelated home child
+        // cannot establish that any of sessions/archived_sessions/projects even exists.
+        // Report the actual failed directory once, never three imaginary log folders.
+        let entries = match fsx::list_dir(&path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                if !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) {
+                    failures.push((path, fsx::error_cause(&error)));
+                }
+                continue;
             }
         };
+        let has = |entry: &str| entries.iter().any(|name| name == entry);
         let codex_logs = has("sessions") || has("archived_sessions");
         let codex_marker = codex_logs && CODEX_HOME_MARKERS.iter().any(|m| has(m));
         let claude_home = has("projects") && CLAUDE_DIR_MARKERS.iter().any(|m| has(m));
         if codex_logs
             && (codex_marker
-                || match fsx::list_dir(&path) {
-                    Ok(names) => names.iter().any(|n| n.starts_with("state_") && n.ends_with(".sqlite")),
-                    Err(error) => {
-                        if error.kind() != std::io::ErrorKind::NotFound {
-                            failures.push(path.clone());
-                        }
-                        false
-                    }
-                })
+                || entries
+                    .iter()
+                    .any(|n| n.starts_with("state_") && n.ends_with(".sqlite")))
         {
             codex.push(path.clone());
         }
@@ -248,6 +250,8 @@ pub struct RootPlan {
     /// Account bases (T3, AAC instances) that could not be listed: named by the reader, so the
     /// kind is partial instead of silently missing their homes (RECHECK-BIG-1 M3).
     pub failed_bases: Vec<PathBuf>,
+    /// A candidate whose signature could not be checked; not an established log folder.
+    pub search_failures: Vec<(PathBuf, &'static str)>,
 }
 
 /// Claude Code: `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`, `$XDG_CONFIG_HOME/claude/projects`,
@@ -272,13 +276,15 @@ pub fn claude_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3In
             .into_iter()
             .map(|p| (p, "ccs_instance")),
     );
-    let (_, signed, limit) = signature_homes_checked(home, &mut failed_bases);
+    let mut search_failures = Vec::new();
+    let (_, signed, limit) = signature_homes_checked(home, &mut search_failures);
     others.extend(log_dirs("claude", &signed).into_iter().map(|p| (p, "signature")));
     RootPlan {
         defaults,
         others,
         limit,
         failed_bases,
+        search_failures,
     }
 }
 
@@ -310,13 +316,15 @@ pub fn codex_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3Ins
             .into_iter()
             .map(|p| (p, "ccs_instance")),
     );
-    let (signed, _, limit) = signature_homes_checked(home, &mut failed_bases);
+    let mut search_failures = Vec::new();
+    let (signed, _, limit) = signature_homes_checked(home, &mut search_failures);
     others.extend(log_dirs("codex", &signed).into_iter().map(|p| (p, "signature")));
     RootPlan {
         defaults,
         others,
         limit,
         failed_bases,
+        search_failures,
     }
 }
 

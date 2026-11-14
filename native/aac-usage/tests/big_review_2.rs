@@ -338,7 +338,8 @@ fn cursor_directory_metadata_errors_are_partial_but_missing_targets_are_absent()
     symlink("loop", &link).unwrap();
     let answer = scan(home.path(), &["cursor"], None);
     assert_eq!(answer["kinds"]["cursor"]["partial"], true, "{answer}");
-    assert_eq!(answer["kinds"]["cursor"]["unreadableFolders"], 1, "{answer}");
+    assert_eq!(answer["kinds"]["cursor"]["readFailures"], 1, "{answer}");
+    assert!(answer["kinds"]["cursor"]["unreadableFolders"].is_null(), "{answer}");
     fs::remove_file(&link).unwrap();
     symlink("gone", &link).unwrap();
     let absent = scan(home.path(), &["cursor"], None);
@@ -364,7 +365,9 @@ fn log_reader_metadata_failures_are_partial_and_missing_targets_are_absent() {
         let failed = scan(home.path(), &[kind], None);
         assert_eq!(failed["kinds"][kind]["partial"], true, "{kind}: {failed}");
         assert!(
-            failed["kinds"][kind]["unreadableFolders"].as_u64().unwrap_or(0) > 0,
+            failed["kinds"][kind]["unreadableFolders"].as_u64().unwrap_or(0)
+                + failed["kinds"][kind]["readFailures"].as_u64().unwrap_or(0)
+                > 0,
             "{kind}: {failed}"
         );
         fs::remove_file(&link).unwrap();
@@ -388,7 +391,7 @@ fn an_omp_profile_with_unreadable_parent_is_partial_until_recovery() {
     allow(&parent, 0o755);
     assert_eq!(failed["kinds"]["omp"]["partial"], true, "{failed}");
     assert!(
-        failed["kinds"]["omp"]["unreadableFolders"].as_u64().unwrap_or(0) > 0,
+        failed["kinds"]["omp"]["readFailures"].as_u64().unwrap_or(0) > 0,
         "{failed}"
     );
     let healed = scan(home.path(), &["omp"], None);
