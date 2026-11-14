@@ -345,6 +345,10 @@ test('the Cursor account line says each state; the account total is shown beside
   assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 1_500_000, matchedTokens: 400_000 }, now), /^Cursor account read .*: 1\.5M tokens on the account, about 400K of them T3's runs already counted here; the rest is not added to these totals\.$/);
   assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 900 }, now), /900 tokens on the account, none of it matched to the local runs; it is not added to these totals/);
   assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 0 }, now), /no usage in range/);
+  // Events that were never measured are not absence of usage (recheck R1): never "no usage".
+  assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 0, unmeasured: 3 }, now), /^Cursor account read .*: no tokens logged; 3 events not logged \(token counts missing\)\.$/);
+  assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 0, unmeasured: 1 }, now), /: no tokens logged; 1 event not logged/);
+  assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 1_500_000, matchedTokens: 400_000, unmeasured: 2 }, now), /not added to these totals; 2 events not logged \(token counts missing\)\.$/);
   assert.equal(cursorAccountLine({ ...base, state: 'no_key', readAt: null }, now), 'Cursor account: no key, so Cursor used outside T3 (the app, cloud agents) is not counted.');
   assert.match(cursorAccountLine({ ...base, state: 'key_rejected', last4: 'WXYZ', readAt: null }, now), /key ending WXYZ was rejected/);
   assert.match(cursorAccountLine({ ...base, state: 'unavailable', cause: 'timeout' }, now), /not read just now \(timeout\); showing its usage as read/);

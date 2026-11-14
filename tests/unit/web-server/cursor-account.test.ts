@@ -58,6 +58,7 @@ describe('reading the account', () => {
       account: 'a'.repeat(16),
       key: { last4: 'WXYZ', fingerprint: 'sha256:0123456789abcdef' },
       events: 2,
+      unmeasured: 2,
       rows: [ROW],
     };
     let now = NOW;
@@ -73,7 +74,7 @@ describe('reading the account', () => {
         },
       });
     const first = await read();
-    expect(first).toMatchObject({ state: 'read', events: 2, key: { last4: 'WXYZ' } });
+    expect(first).toMatchObject({ state: 'read', events: 2, unmeasured: 2, key: { last4: 'WXYZ' } });
     expect(calls[0]).toEqual(['read', '--ccs-dir', path.join(dir, 'ccs')]);
     now += CURSOR_ACCOUNT_TTL_MS - 1;
     await read();
@@ -87,6 +88,8 @@ describe('reading the account', () => {
     expect(failed).toMatchObject({ state: 'unavailable', cause: 'timeout', events: 2 });
     expect(failed.readAt).toBe(new Date(NOW).toISOString());
     expect(failed.rows).toHaveLength(1);
+    // The kept read still says which events were never measured (a cache round trip).
+    expect(failed.unmeasured).toBe(2);
     // The saved read holds no key: only its last four and fingerprint.
     const saved = fs.readFileSync(path.join(dir, 'cache', 'cursor-account-v1.json'), 'utf8');
     expect(saved).not.toContain('secret');
@@ -124,6 +127,7 @@ describe('only the usage outside the scanned computers is added', () => {
     key: { last4: 'WXYZ', fingerprint: 'sha256:0123456789abcdef' },
     rows: [ROW, { ...ROW, h: '2026-11-13 14:00', m: 'grok-4.7', uncosted: 1 }],
     events: 4,
+    unmeasured: 0,
   };
 
   it("turns the reader's dedupe into rows: Cursor's cost where every event had one", async () => {
@@ -231,6 +235,40 @@ describe('only the usage outside the scanned computers is added', () => {
     }
   });
 
+  it("an all-unmeasured read carries its count, never an absence of usage (recheck R1)", async () => {
+    // The recheck's loopback case: one in-range event with tokenUsage {} — the reader answers
+    // state read, no rows, unmeasured 1. The server must keep that count, so the page can say
+    // the events were not logged instead of "no usage in range".
+    const unmeasuredRead: CursorAccountRead = {
+      state: 'read',
+      checkedAt: new Date(NOW).toISOString(),
+      readAt: new Date(NOW).toISOString(),
+      account: 'a'.repeat(16),
+      key: { last4: 'WXYZ', fingerprint: 'sha256:0123456789abcdef' },
+      rows: [],
+      events: 0,
+      unmeasured: 1,
+    };
+    const outside = await cursorAccountOutside(unmeasuredRead, [], {
+      run: async () => {
+        throw new Error('reader_failed');
+      },
+    });
+    expect(outside).toMatchObject({ state: 'read', accountTokens: 0, unmeasured: 1 });
+    // And a mixed read: measured tokens beside unmeasured events.
+    const outside2 = await cursorAccountOutside(
+      { ...read, unmeasured: 2 },
+      [],
+      {
+        run: async () => ({
+          rows: read.rows,
+          summary: { accountTokens: 2640, matchedTokens: 0, outsideTokens: 2640, localUnmatchedTokens: 0 },
+        }),
+      }
+    );
+    expect(outside2).toMatchObject({ state: 'read', accountTokens: 2640, unmeasured: 2 });
+  });
+
   it("adds nothing when the dedupe cannot run: counting T3's runs twice is worse", async () => {
     const outside = await cursorAccountOutside(read, [], {
       run: async () => {
@@ -301,6 +339,7 @@ describe('only the usage outside the scanned computers is added', () => {
             matchedTokens: 1000,
             outsideTokens: 700,
             localUnmatchedTokens: 0,
+            unmeasured: 2,
             rows: [
               {
                 k: 'cursor',
@@ -343,6 +382,7 @@ describe('only the usage outside the scanned computers is added', () => {
         accountTokens: 1700,
         outsideTokens: 700,
         last4: 'WXYZ',
+        unmeasured: 2,
       });
       expect(JSON.stringify(answer.cursorAccount)).not.toContain('rows');
     } finally {

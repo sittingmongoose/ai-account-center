@@ -1356,13 +1356,20 @@ export function cursorAccountLine(account, now = Date.now()) {
       // hold the local runs (the account's events cannot prove which residual is outside them).
       const total = finite(account.accountTokens) ? account.accountTokens : 0;
       const matched = finite(account.matchedTokens) ? account.matchedTokens : 0;
+      const unlogged = finite(account.unmeasured) ? account.unmeasured : 0;
       const local = finite(account.localUnmatchedTokens) && account.localUnmatchedTokens > 0
         ? `; ${tokC(account.localUnmatchedTokens)} local Cursor tokens are not in this account's events`
         : '';
-      if (total <= 0) return `Cursor account ${read}: no usage in range${local}.`;
+      // Events whose token counts were not logged: the tokens shown are measured ones only, and
+      // missing measurements are never absence of usage, so "no usage" is never said for them.
+      const notLogged = unlogged > 0
+        ? `; ${nf0.format(unlogged)} event${unlogged === 1 ? '' : 's'} not logged (token counts missing)`
+        : '';
+      if (total <= 0)
+        return `Cursor account ${read}: ${unlogged > 0 ? 'no tokens logged' : 'no usage in range'}${notLogged}${local}.`;
       return matched > 0
-        ? `Cursor account ${read}: ${tokC(total)} tokens on the account, about ${tokC(matched)} of them T3's runs already counted here; the rest is not added to these totals${local}.`
-        : `Cursor account ${read}: ${tokC(total)} tokens on the account, none of it matched to the local runs; it is not added to these totals${local}.`;
+        ? `Cursor account ${read}: ${tokC(total)} tokens on the account, about ${tokC(matched)} of them T3's runs already counted here; the rest is not added to these totals${notLogged}${local}.`
+        : `Cursor account ${read}: ${tokC(total)} tokens on the account, none of it matched to the local runs; it is not added to these totals${notLogged}${local}.`;
     }
     case 'no_key':
       return 'Cursor account: no key, so Cursor used outside T3 (the app, cloud agents) is not counted.';

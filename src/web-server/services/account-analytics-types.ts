@@ -360,6 +360,11 @@ export interface AccountAnalyticsCursorAccount {
   localUnmatchedTokens: number;
   /** Present when some of the account's events carried no Cursor cost: any cost figure is partial. */
   costPartial?: boolean;
+  /**
+   * In-range events whose token counts were not logged: the token numbers are measured events
+   * only, never a claim that nothing happened.
+   */
+  unmeasured: number;
 }
 
 /** Internal facts the activity reader passes to the analytics service; never serialised. */

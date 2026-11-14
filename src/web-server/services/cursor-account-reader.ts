@@ -55,6 +55,8 @@ export interface CursorAccountRead {
   key?: { last4: string; fingerprint: string } | null;
   rows: CursorAccountRow[];
   events: number;
+  /** In-range events whose `tokenUsage` had no usable counts: not logged, never measured zeros. */
+  unmeasured: number;
 }
 
 /** What Analytics shows for the account (DESIGN 17.5) beside the totals it never joins. */
@@ -73,6 +75,8 @@ export interface CursorAccountAnswer {
    * account is partial, and no list price fills the gap.
    */
   costPartial?: boolean;
+  /** In-range events whose token counts were not logged: the tokens are measured ones only. */
+  unmeasured: number;
   /** The account's own hourly rows, in the remote rows' shape; never added to any total. */
   rows: AnalyticsRemoteRow[];
 }
@@ -206,6 +210,7 @@ function loadRead(cacheDir: string): CursorAccountRead | null {
           : null,
       rows: parseCursorAccountRows(value.rows),
       events: count(value.events) ? (value.events as number) : 0,
+      unmeasured: count(value.unmeasured) ? (value.unmeasured as number) : 0,
     };
   } catch {
     return null;
@@ -276,6 +281,7 @@ export async function readCursorAccount(
       key: keyInfo,
       rows: parseCursorAccountRows(answer.rows),
       events: count(answer.events) ? (answer.events as number) : 0,
+      unmeasured: count(answer.unmeasured) ? (answer.unmeasured as number) : 0,
     };
   } else {
     // No key, a rejected key or no reader: nothing of the account counts. A failed read keeps the
@@ -297,6 +303,7 @@ export async function readCursorAccount(
       key: state === 'no_key' ? null : keyInfo,
       rows: keep?.rows ?? [],
       events: keep?.events ?? 0,
+      unmeasured: keep?.unmeasured ?? 0,
     };
   }
   saveRead(cacheDir, read);
@@ -320,6 +327,7 @@ export async function cursorAccountOutside(
     readAt: read.readAt,
     ...(read.cause ? { cause: read.cause } : {}),
     ...(read.key?.last4 ? { last4: read.key.last4 } : {}),
+    unmeasured: read.unmeasured,
   };
   const empty = {
     ...base,
