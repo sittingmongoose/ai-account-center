@@ -132,6 +132,17 @@ def main():
             print('BASELINE RED:',case['source'],case['args']['probe'].strip())
     if failures: raise SystemExit(f'{failures} baseline regression cases fail as expected')
     print(f'PASS inventory: {len(cases)} TS golden/Rust cases')
+    if '--scan-bin' in sys.argv:
+        scanner = str(pathlib.Path(sys.argv[sys.argv.index('--scan-bin') + 1]).resolve())
+        # Source tests supply their own fixture selectors. Never inherit private log roots.
+        selectors = {'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'MUSE_SESSIONS_DIR', 'PI_CODING_AGENT_DIR',
+                     'OMP_SESSION_DIRS', 'ZCODE_DB_PATH', 'ANTIGRAVITY_DATA_DIR', 'XDG_DATA_HOME',
+                     'XDG_CONFIG_HOME', 'CCS_HOME', 'CCS_DIR', 'APPDATA', 'LOCALAPPDATA'}
+        scan_env = {key: value for key, value in os.environ.items() if key not in selectors}
+        for suite in ['analytics-remote-helper', 'antigravity-usage-helper']:
+            subprocess.run(['bun', 'test', f'tests/unit/web-server/{suite}.test.ts', '--timeout', '30000'],
+                           cwd=ROOT, check=True, env={**scan_env, 'AAC_USAGE_SCAN_BIN': scanner,
+                           'AAC_AGENT_SCAN_BIN': binary, 'AAC_NO_LOCAL_RUST_BUILD': '1'})
 
 if __name__ == '__main__':
     main()

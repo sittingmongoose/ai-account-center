@@ -6,8 +6,16 @@ import * as os from 'os';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import { readAnalyticsHelper } from './analytics-remote-helper';
-import { HOST_OS, REMOTE_HOSTS, SSH_ALIASES, isSafeUsageSshAlias } from './dashboard-hosts';
+import {
+  HOST_OS,
+  REMOTE_HOSTS,
+  SSH_ALIASES,
+  isSafeUsageSshAlias,
+  helperPlatform,
+} from './dashboard-hosts';
 import { sshArgv } from './ssh-policy';
+import { runAgentVerb, localAgentReady } from './agent-verbs';
+import { createLogger } from '../../services/logging';
 import {
   UsageScanInstallError,
   binaryMarker,
@@ -1219,7 +1227,11 @@ const scannerDown = new Map<string, { cause: string; until: number }>();
 /** One install per computer at a time; a second caller waits for the first. */
 const installing = new Map<string, Promise<void>>();
 
+const scanLogger = createLogger('scan-usage');
+
 export interface AnalyticsRemoteScanDeps {
+  /** Verified opt-in agent adapter; fake transport in fixture tests. */
+  agent?: typeof runAgentVerb;
   timeoutMs?: number;
   helperPath?: string;
   /** The packaged scanners; null runs the Python helper everywhere. Default: dist/native/aac-usage. */
@@ -1242,6 +1254,67 @@ class ScannerLaunchError extends Error {
   }
 }
 
+/** The existing discovery request, shared unchanged by both executables. */
+export function usageScanRequest(
+  request: AnalyticsRemoteRequest,
+  deadlineMs: number
+): Record<string, unknown> {
+  return {
+    kinds: [...new Set(request.kinds)],
+    minDateMs: Math.floor(request.minDateMs),
+    immutableSqlite: true,
+    fingerprints: request.fingerprints,
+    extraRoots: request.extraRoots ?? {},
+    ...(request.experimentRoots && isValidExperimentRoots(request.experimentRoots)
+      ? { experimentRoots: request.experimentRoots }
+      : {}),
+    deadlineMs,
+    ...(request.presence === true ? { presence: true } : {}),
+    ...(request.cwd === false ? { cwd: false } : {}),
+  };
+}
+
+async function scanWithAgent(
+  platform: 'ubuntu' | 'mac' | 'windows',
+  sshHost: string | null,
+  request: AnalyticsRemoteRequest,
+  deadlineMs: number,
+  timeoutMs: number,
+  agent: typeof runAgentVerb = runAgentVerb
+): Promise<AnalyticsRemoteResponse | null> {
+  try {
+    const stdout = await agent(
+      { platform, sshHost },
+      'scan-usage',
+      usageScanRequest(request, deadlineMs),
+      {
+        // Include the scanner's existing watchdog grace inside the outer process deadline.
+        deadlineMs: Math.min(deadlineMs + 5000, timeoutMs),
+        timeoutMs,
+        maxBytes: MAX_RESPONSE_BYTES + 1024,
+      }
+    );
+    if (stdout !== null) {
+      const answer = parseAnalyticsRemoteResponse(stdout);
+      if (
+        answer.version !== 2 ||
+        answer.reader?.name !== 'aac-usage-scan' ||
+        request.kinds.some((kind) => !answer.kinds[kind]) ||
+        Object.keys(answer.kinds).some(
+          (kind) => !request.kinds.includes(kind as AnalyticsRemoteKind)
+        )
+      )
+        throw new ValidationError('Invalid agent scan result.');
+      scanLogger.info('agent.verbs.result', 'Agent usage scan collected', { verb: 'scan-usage' });
+      return answer;
+    }
+  } catch {
+    /* Every agent failure goes through today's scanner/helper path. */
+  }
+  scanLogger.info('agent.verbs.fallback', 'fallback: aac-usage-scan', { verb: 'scan-usage' });
+  return null;
+}
+
 /** One scanner run over ssh; ScannerLaunchError when the copy is missing or has no build here. */
 async function runScanner(
   sshHost: string,
@@ -1250,21 +1323,7 @@ async function runScanner(
   manifest: UsageScanManifest,
   timeoutMs: number
 ): Promise<AnalyticsRemoteResponse> {
-  const input = Buffer.from(
-    JSON.stringify({
-      kinds: [...new Set(request.kinds)],
-      minDateMs: Math.floor(request.minDateMs),
-      immutableSqlite: true,
-      fingerprints: request.fingerprints,
-      extraRoots: request.extraRoots ?? {},
-      ...(request.experimentRoots && isValidExperimentRoots(request.experimentRoots)
-        ? { experimentRoots: request.experimentRoots }
-        : {}),
-      deadlineMs: 20_000,
-      ...(request.presence === true ? { presence: true } : {}),
-      ...(request.cwd === false ? { cwd: false } : {}),
-    })
-  );
+  const input = Buffer.from(JSON.stringify(usageScanRequest(request, 20_000)));
   if (input.length > MAX_RESPONSE_BYTES)
     throw new ValidationError('Analytics remote request is invalid.');
   const stdout = await new Promise<string>((resolve, reject) => {
@@ -1330,6 +1389,15 @@ export async function runAnalyticsRemoteScan(
 ): Promise<AnalyticsRemoteResponse> {
   if (!isSafeUsageSshAlias(sshHost))
     throw new ValidationError('Analytics remote SSH alias is not configured safely.');
+  const agentAnswer = await scanWithAgent(
+    helperPlatform(platform),
+    sshHost,
+    request,
+    20_000,
+    deps.timeoutMs ?? SSH_TIMEOUT_MS,
+    deps.agent
+  );
+  if (agentAnswer) return agentAnswer;
   const now = deps.now ?? Date.now;
   const manifest = deps.manifest === undefined ? readUsageScanManifest() : deps.manifest;
   const python = deps.python ?? runAnalyticsRemoteHelper;
@@ -1443,6 +1511,12 @@ function localDigest(file: string): string | null {
 export function localUsageScanReady(
   scanner: ReturnType<typeof localUsageScan> = localUsageScan()
 ): { ok: true } | { ok: false; cause: 'binary_not_built' | 'binary_missing' | 'binary_damaged' } {
+  if (
+    localAgentReady(
+      process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'ubuntu'
+    )
+  )
+    return { ok: true };
   if (!scanner.ok) return scanner;
   return localDigest(scanner.file) === scanner.sha256
     ? { ok: true }
@@ -1456,26 +1530,25 @@ export function localUsageScanReady(
  */
 export async function runLocalUsageScan(
   request: AnalyticsRemoteRequest,
-  deps: { scanner?: ReturnType<typeof localUsageScan>; timeoutMs?: number } = {}
+  deps: {
+    scanner?: ReturnType<typeof localUsageScan>;
+    timeoutMs?: number;
+    agent?: typeof runAgentVerb;
+  } = {}
 ): Promise<AnalyticsRemoteResponse> {
-  const scanner = deps.scanner ?? localUsageScan();
-  if (!scanner.ok || !localUsageScanReady(scanner).ok)
-    throw new AnalyticsRemoteTransportError(false, 'helper_failed');
-  const input = Buffer.from(
-    JSON.stringify({
-      kinds: [...new Set(request.kinds)],
-      minDateMs: Math.floor(request.minDateMs),
-      immutableSqlite: true,
-      fingerprints: request.fingerprints,
-      extraRoots: request.extraRoots ?? {},
-      ...(request.experimentRoots && isValidExperimentRoots(request.experimentRoots)
-        ? { experimentRoots: request.experimentRoots }
-        : {}),
-      deadlineMs: LOCAL_SCAN_DEADLINE_MS,
-      ...(request.presence === true ? { presence: true } : {}),
-      ...(request.cwd === false ? { cwd: false } : {}),
-    })
+  const agentAnswer = await scanWithAgent(
+    process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'ubuntu',
+    null,
+    request,
+    LOCAL_SCAN_DEADLINE_MS,
+    deps.timeoutMs ?? LOCAL_SCAN_DEADLINE_MS + 20_000,
+    deps.agent
   );
+  if (agentAnswer) return agentAnswer;
+  const scanner = deps.scanner ?? localUsageScan();
+  if (!scanner.ok || localDigest(scanner.file) !== scanner.sha256)
+    throw new AnalyticsRemoteTransportError(false, 'helper_failed');
+  const input = Buffer.from(JSON.stringify(usageScanRequest(request, LOCAL_SCAN_DEADLINE_MS)));
   if (input.length > MAX_RESPONSE_BYTES)
     throw new ValidationError('Analytics remote request is invalid.');
   const stdout = await new Promise<string>((resolve, reject) => {

@@ -13,6 +13,9 @@ product bug stops the lane. No such false pass was demonstrated below.
 
 | Tool | Issue and evidence | Real false pass? | Status |
 | --- | --- | --- | --- |
+| Extra Mac parity coverage | M1 scan wave-24 fallback checks passed Rust workspace/clippy/fmt, but APFS rejects a legacy sign-in fixture containing a raw invalid-byte filename. With system Python 3.9, discovery records 67 exact agent/scanner comparisons before the unchanged local TS zcode WAL collector test fails; its zstd fixture also requires Python 3.14. Quota replay records 45 equal / 42 explicit fallback / 0 wrong ordinary replies, then fails its native-success-per-provider coverage assertion. | No false pass observed | Preserve the fixtures. Use Linux for the complete gate; investigate the existing Mac local collector and quota native-acceptance limits separately. No full Mac parity pass is claimed. |
+| Agent debug artifact size | Scan-usage cheap review L1 reproduced a 67,598,608-byte default debug agent against the existing 64 MiB artifact guard. | No | Fixed: workspace dev/test profiles disable debug symbols reproducibly; the artifact cap and release profile are unchanged. Default Cargo test commands are rerun on Nas1. |
+| Rust transport concurrency timing fixture | `clones_limit_a_computer_to_four_concurrent_channels` expects four overlapping 100 ms fake processes. On busy Nas1 during M1 scan-usage validation it observed three, with all 12 calls successful and no excess concurrency. This does not demonstrate a broken four-channel limit. | No | Open for tool batch; use a readiness barrier rather than depending on process startup timing. Rerun the unchanged fixture with tests serialized. |
 | Windows helper-sync ACL fixture | `tests/unit/web-server/app-update-helper-sync.test.ts:262`: the PowerShell ACL inspection exits 1. Reproduced using both the test and helper implementation from unchanged `bdffa10e` on AlexisGamingPC. The new helper publishes successfully; this fixture's inspection fails. | No | Open for tool batch; inspect captured PowerShell stderr and fix the check or product if demonstrated. |
 | Helper-sync test timeout | The corrupt-archive fixture exceeded Bun's default 5 seconds on the busy Windows CPU and left its killed fixture's stage directory. It passed unchanged with `--timeout 30000`. | No | Open for tool batch; set a realistic fixture timeout. |
 | Signal subprocess timing fixture | New signal tests initially counted Python startup against the termination grace and failed under load. | No | Fixed within the required bounded-signal coverage: measure from a child ready marker at termination; all 19 RPC tests complete, with one Unix-only skip on Windows. |
@@ -99,6 +102,7 @@ load (the fixture sleeps only 100 ms). This is a false failure, also observed
 in M2 part 1. Workspace tests pass with `--test-threads=1`; no transport code,
 assertion or concurrency cap was changed. Queue a deterministic synchronization
 fixture for the six-hour test-tool batch. HTTPS debug symbols also make the
-unstripped agent exceed the existing 64 MiB artifact cap; run development test
-builds with CARGO_PROFILE_DEV_DEBUG=0 and CARGO_PROFILE_TEST_DEBUG=0. The cap is
-unchanged; the production artifact size still needs release-packaging checks.
+unstripped agent exceed the existing 64 MiB artifact cap. The workspace dev/test
+profiles now disable debug symbols by default, so ordinary Cargo test commands
+need no environment overrides. The cap is unchanged; production artifact size
+still needs release-packaging checks.

@@ -7,6 +7,7 @@
  */
 import { expect } from 'bun:test';
 import { execFileSync } from 'child_process';
+import { scanUsageParity } from '../../spec/agent/scan-usage';
 
 export const SCAN_BIN = process.env.AAC_USAGE_SCAN_BIN;
 
@@ -84,16 +85,17 @@ export function rustParity(
   env: Record<string, string | undefined>
 ): void {
   if (!SCAN_BIN || request.zcodeRecords) return;
-  const run = (input: Record<string, unknown>) =>
-    JSON.parse(
-      execFileSync(SCAN_BIN, [], {
-        input: JSON.stringify(input),
-        encoding: 'utf8',
-        timeout: 30_000,
-        maxBuffer: 8 * 1024 * 1024,
-        env: { ...process.env, HOMEDRIVE: undefined, HOMEPATH: undefined, ...env },
-      })
-    ) as Record<string, unknown>;
+  const run = (input: Record<string, unknown>) => {
+    const bytes = execFileSync(SCAN_BIN, [], {
+      input: JSON.stringify(input),
+      encoding: 'utf8',
+      timeout: 30_000,
+      maxBuffer: 8 * 1024 * 1024,
+      env: { ...process.env, HOMEDRIVE: undefined, HOMEPATH: undefined, ...env },
+    });
+    scanUsageParity(input, bytes, env);
+    return JSON.parse(bytes) as Record<string, unknown>;
+  };
   // Prints the server saved from Python carry Python's path keys; the scanner keys Codex and Muse
   // by conversation. They reach the scanner as the server would key them: the print with the same
   // content, under the scanner's own key for that file.

@@ -2,9 +2,13 @@
 mod inventory;
 mod proof;
 mod quota;
+mod scan;
 mod signin;
 use aac_core::{Cause, Failure, UtcMs};
-use aac_protocol::{Control, Event, Handshake, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request};
+use aac_protocol::{
+    Control, Event, Handshake, MAX_FRAME_BYTES, MAX_SCAN_FRAME_BYTES, PROTOCOL_VERSION, Request,
+    frame_cap,
+};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Return the exact build identity used by shipping's manifest handshake.
@@ -61,12 +65,22 @@ pub async fn run(
 ) -> Result<i32, Failure> {
     let frame = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        read_line(&mut reader, MAX_FRAME_BYTES),
+        read_line(&mut reader, MAX_SCAN_FRAME_BYTES),
     )
     .await;
     let request = match frame {
         Ok(Ok(Some(bytes))) => serde_json::from_slice::<Request>(&bytes)
-            .map_err(|_| Failure::new(Cause::Damaged, "invalid agent request JSON")),
+            .map_err(|_| Failure::new(Cause::Damaged, "invalid agent request JSON"))
+            .and_then(|request| {
+                if bytes.len() >= frame_cap(&request.verb) {
+                    Err(Failure::new(
+                        Cause::OutputTooLarge,
+                        "request frame cap exceeded",
+                    ))
+                } else {
+                    Ok(request)
+                }
+            }),
         Ok(Ok(None)) => Err(Failure::new(Cause::Damaged, "missing agent request")),
         Ok(Err(failure)) => Err(failure),
         Err(_) => Err(Failure::new(
@@ -74,10 +88,11 @@ pub async fn run(
             "request read deadline exceeded",
         )),
     };
-    let (id, result) = match request {
-        Err(failure) => (String::new(), Err(failure)),
+    let (id, cap, result) = match request {
+        Err(failure) => (String::new(), MAX_FRAME_BYTES, Err(failure)),
         Ok(request) => {
             let id = request.id.clone();
+            let cap = frame_cap(&request.verb);
             let result = match request.validate() {
                 Err(failure) => Err(failure),
                 Ok(()) => {
@@ -113,7 +128,7 @@ pub async fn run(
                     }
                 }
             };
-            (id, result)
+            (id, cap, result)
         }
     };
     let (event, code) = match result {
@@ -136,7 +151,7 @@ pub async fn run(
     };
     let mut bytes = serde_json::to_vec(&event)
         .map_err(|_| Failure::new(Cause::Bug, "event encoding failed"))?;
-    if bytes.len() >= MAX_FRAME_BYTES {
+    if bytes.len() >= cap {
         return Err(Failure::new(Cause::OutputTooLarge, "event cap exceeded"));
     }
     bytes.push(b'\n');
@@ -161,6 +176,9 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     tokio::task::yield_now().await;
     if request.verb == "quota-read" {
         return quota::run(&request.args).await;
+    }
+    if request.verb == "scan-usage" {
+        return scan::run(&request.args).await;
     }
     if request.verb == "signin-expiry" {
         return signin::run(&request.args);

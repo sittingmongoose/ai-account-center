@@ -37,3 +37,10 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
+
+# Keep reproducible dev/test artifacts below the transport's existing 64 MiB guard.
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

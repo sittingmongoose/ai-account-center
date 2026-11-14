@@ -1,5 +1,51 @@
 # Agent verb parity
 
+## Scan usage
+
+The workspace dev/test profiles disable debug symbols, so default Cargo test
+commands stay below the existing 64 MiB artifact guard without environment
+overrides. Release settings and the artifact guard are unchanged.
+
+`quota-read`, `signin-expiry` and `scan-usage` share the same verified transport
+and `agentVerbs` switch. Each verb retains its own reply validation and fallback
+boundary; quota results still bind provider, platform and account before use.
+
+`aac-agent` uses the existing `native/aac-usage` library through a path dependency.
+The verb's `args` are the standalone scanner request. Its terminal `value` is the
+standalone reply, including discovery, fingerprints, identity and messages. No
+scanner code, text/numeric parser or discovery rule is copied. The shared scanner
+parser defines this already-shipped grammar; M2's separate conservative Python
+grammar and ASCII guards remain unchanged for sign-in/inventory.
+
+Build both binaries on Nas1 or Mac, then run the existing M2 harness:
+
+```
+python3 tests/spec/agent/run.py target/debug/aac-agent --scan-bin native/aac-usage/target/debug/aac-usage-scan
+```
+
+This also runs the unchanged discovery and Antigravity helper fixture suites.
+Each standalone scan in their existing parity hook now invokes the agent and
+compares the raw JSON bytes of its result value with the standalone scanner's
+stdout. Unlike the older Python comparison, this new comparison removes no
+fields, reorders nothing and rounds no floats. Exit success, terminal type,
+protocol and correlation id are checked. The historical 45-fixture suite has
+grown; the gate reports the current tests and number of exact byte comparisons.
+`_scanFixture` injects only a temporary home and environment into fixture builds;
+production rejects it. The agent process HOME is never changed by this hook.
+
+Agent scan frames retain discovery's 8 MiB cap; other verbs retain 1 MiB. Scan
+work runs off the async executor, with the scanner's existing watchdog budget
+and stalled reply, while agent cancellation/deadlines remain active. The entry
+point exits after its terminal event, ending any blocked scan thread.
+
+TS local and remote scans select the hash-pinned agent only with `agentVerbs: on`
+(default off), falling back on any execution/protocol/validation failure to the
+existing scanner/helper path with the log label `fallback: aac-usage-scan`.
+Existing Python/TypeScript fallback labels and reader/cache identities stay intact.
+The artifact catalog remains empty; no release binaries are shipped by this task.
+Transport upload/verify/rename/handshake tests use fake SSH/SCP only, including
+scan frames over 1 MiB, upload-once, corruption and handshake rejection.
+
 Run the unchanged Python suite while capturing its real `collect`/`fix_command`
 calls: `python3 tests/spec/agent/capture-signin.py`. The table lists all 90
 source tests, including helper/safety checks that still run in Python; 96 calls
