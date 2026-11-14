@@ -76,11 +76,29 @@ const WIDTHS = [1920, 1710, 1600, 1430, 1360, 1280, 1160, 1024, 900, 780];
 const EMPTY_REGISTRY = { providers: [], accounts: [], jobs: [], trash: [] };
 const FIXTURE_IDS = FIXTURE.accounts.map((a) => a.id);
 
+/** Details reads each account's reset inventory. Without the native reset backend (as on the VM) the server answers
+ * 503; this answers as a backend with nothing to report, so Details draws the dashboard's own reset rows either way. */
+const NO_RESETS = { status: 'unavailable', reason: 'Fixture: no reset backend.', grants: [], history: [] };
+
 async function openAccounts(t) {
 	await t.app.stub('/api/accounts/dashboard', FIXTURE);
 	await t.app.stub('/api/accounts/registry', EMPTY_REGISTRY);
+	await t.page.route((u) => /^\/api\/accounts\/[^/]+\/reset-claims$/.test(new URL(u).pathname), (r) =>
+		r.request().method() === 'GET' ? r.fulfill({ json: NO_RESETS }) : r.continue());
 	await t.app.open({ page: 'accounts' });
 	await t.until('the Accounts page is drawn from the dashboard', () => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row]').length >= 3, null, { timeout: 45000, hard: true });
+}
+
+/** The frame fetches its pages and modules for the offline copy 4 s after it starts (frame.rs warm_offline_copies). Let
+ * them finish before the app is opened again, so the next open doesn't abort them (net::ERR_ABORTED). */
+async function warmCopiesDone(t) {
+	await t.page.waitForFunction(() => performance.now() > 4300, null, { timeout: 15000 });
+	await t.page.evaluate(async () => {
+		await Promise.allSettled([window.aacLoadAnalytics?.(), window.aacLoadDashboard?.()]);
+		const pages = ['/', '/app/home', '/app/analytics', '/app/accounts', '/app/status', '/app/scoreboard'];
+		for (let i = 0; i < 100 && !pages.every((p) => performance.getEntriesByName(location.origin + p).length); i++)
+			await new Promise((done) => setTimeout(done, 100));
+	});
 }
 
 /** The page's rectangle of a control, after scrolling it into view. */
@@ -153,6 +171,7 @@ export const tests = {
 			await cooldownInsidePolicyBox(t, width);
 			await t.audit(`accounts ${width}`);
 			await t.snap(`accounts-clicks-${width}`);
+			await warmCopiesDone(t);
 		}
 		// The next test (and file) starts at the default width, not the last one here
 		await t.viewport(1920, 1080);
