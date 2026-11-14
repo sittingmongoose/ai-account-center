@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1276,
-    "filesAffected": 124,
-    "hotpathOccurrences": 584,
-    "hotpathFilesAffected": 65,
+    "totalOccurrences": 1110,
+    "filesAffected": 110,
+    "hotpathOccurrences": 536,
+    "hotpathFilesAffected": 60,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -144,19 +144,6 @@
         "markers": []
       },
       {
-        "file": "src/cliproxy/accounts/registry.ts",
-        "count": 17,
-        "calls": [
-          "existsSync",
-          "mkdirSync",
-          "readFileSync",
-          "renameSync",
-          "statSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
         "file": "src/web-server/rust-service-lifecycle.ts",
         "count": 15,
         "calls": [
@@ -167,6 +154,23 @@
           "realpathSync",
           "renameSync",
           "rmSync",
+          "unlinkSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/services/account-refresh-settings.ts",
+        "count": 15,
+        "calls": [
+          "closeSync",
+          "fsyncSync",
+          "lstatSync",
+          "mkdirSync",
+          "openSync",
+          "readdirSync",
+          "readFileSync",
+          "renameSync",
           "unlinkSync",
           "writeFileSync"
         ],
@@ -234,20 +238,6 @@
           "renameSync",
           "rmdirSync",
           "unlinkSync",
-          "writeFileSync"
-        ],
-        "markers": []
-      },
-      {
-        "file": "src/cliproxy/accounts/__tests__/account-registry-integrity.test.ts",
-        "count": 45,
-        "calls": [
-          "existsSync",
-          "mkdirSync",
-          "mkdtempSync",
-          "readdirSync",
-          "readFileSync",
-          "rmSync",
           "writeFileSync"
         ],
         "markers": []
@@ -334,18 +324,35 @@
         "markers": []
       },
       {
-        "file": "src/antigravity/auto-switch/store.ts",
+        "file": "src/antigravity/runtime-refresh.ts",
         "count": 25,
         "calls": [
           "closeSync",
+          "existsSync",
           "fstatSync",
           "fsyncSync",
           "lstatSync",
           "mkdirSync",
           "openSync",
           "readFileSync",
-          "realpathSync",
           "renameSync",
+          "rmSync",
+          "writeFileSync"
+        ],
+        "markers": []
+      },
+      {
+        "file": "src/web-server/services/app-update-service.ts",
+        "count": 23,
+        "calls": [
+          "chmodSync",
+          "closeSync",
+          "mkdirSync",
+          "openSync",
+          "readFileSync",
+          "renameSync",
+          "rmSync",
+          "statSync",
           "unlinkSync",
           "writeFileSync"
         ],
@@ -354,8 +361,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 180,
-    "filesAffected": 62,
+    "totalMarkers": 156,
+    "filesAffected": 49,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -484,17 +491,6 @@
         ]
       },
       {
-        "file": "src/cliproxy/ai-providers/model-id-normalizer.ts",
-        "count": 4,
-        "calls": [],
-        "markers": [
-          "* - Codex: preserve valid effort suffixes while normalizing legacy aliases.",
-          "* Canonicalize legacy aliases to `claude-sonnet-4-6` while preserving suffixes.",
-          "* Normalize known legacy iFlow model aliases to current upstream model IDs.",
-          "/** Normalize legacy Codex aliases to the current public Codex model IDs. */"
-        ]
-      },
-      {
         "file": "src/commands/bar/uninstall-subcommand.ts",
         "count": 4,
         "calls": [],
@@ -515,38 +511,47 @@
           "/** A legacy `session_timeout_hours` value maps to the nearest offered lifetime. */",
           "/** Session timeout in hours (default: 24; legacy mirror of session_lifetime_days) */"
         ]
+      },
+      {
+        "file": "src/utils/profile-compat.ts",
+        "count": 4,
+        "calls": [],
+        "markers": [
+          "* - `kimi` remains as legacy API profile name in existing user configs",
+          "* Check whether a resolved profile name came from a legacy alias.",
+          "* Order: exact input -> lowercase form (if different) -> legacy aliases.",
+          "* Resolve a legacy alias to its canonical profile name."
+        ]
       }
     ],
     "explicitShimFiles": [
       "src/bin/compat-cli.ts",
-      "src/cliproxy/__tests__/model-catalog-compat.test.ts",
-      "src/cliproxy/types/__tests__/types-backward-compat.test.ts",
       "src/utils/profile-compat.ts"
     ]
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 737,
-      "typedThrows": 219,
-      "plainThrows": 56,
-      "otherThrows": 462,
-      "adoptionRatio": 0.2972,
+      "totalThrows": 653,
+      "typedThrows": 209,
+      "plainThrows": 47,
+      "otherThrows": 397,
+      "adoptionRatio": 0.3201,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 397,
-          "typed": 163,
+          "count": 384,
+          "typed": 158,
           "plain": 7
         },
         {
           "subdomain": "antigravity",
-          "count": 166,
+          "count": 133,
           "typed": 0,
           "plain": 0
         },
         {
           "subdomain": "codex-auth",
-          "count": 102,
+          "count": 78,
           "typed": 8,
           "plain": 25
         },
@@ -569,28 +574,16 @@
           "plain": 5
         },
         {
-          "subdomain": "cliproxy/accounts",
-          "count": 7,
-          "typed": 0,
-          "plain": 7
-        },
-        {
-          "subdomain": "cliproxy/auth",
-          "count": 3,
-          "typed": 3,
+          "subdomain": "shared",
+          "count": 1,
+          "typed": 1,
           "plain": 0
         },
         {
-          "subdomain": "cliproxy",
-          "count": 2,
-          "typed": 2,
+          "subdomain": "store",
+          "count": 1,
+          "typed": 1,
           "plain": 0
-        },
-        {
-          "subdomain": "cliproxy/binary",
-          "count": 2,
-          "typed": 0,
-          "plain": 2
         }
       ]
     },
@@ -601,28 +594,18 @@
         "web-server/routes",
         "auth"
       ],
-      "numerator": 3,
-      "denominator": 3,
-      "ratio": 1,
+      "numerator": 0,
+      "denominator": 0,
+      "ratio": 0,
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 47,
-      "totalSourceFiles": 482,
-      "coverageRatio": 0.0975,
+      "filesWithCreateLogger": 44,
+      "totalSourceFiles": 435,
+      "coverageRatio": 0.1011,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
-        "auth",
         "bin",
-        "cliproxy",
-        "cliproxy/accounts",
-        "cliproxy/ai-providers",
-        "cliproxy/auth",
-        "cliproxy/binary",
-        "cliproxy/config",
-        "cliproxy/proxy",
-        "cliproxy/services",
-        "cliproxy/types",
         "config",
         "cursor",
         "management",
@@ -635,22 +618,22 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 243,
-          "withLogger": 32
-        },
-        {
-          "subdomain": "antigravity",
-          "count": 38,
-          "withLogger": 0
+          "count": 244,
+          "withLogger": 30
         },
         {
           "subdomain": "codex-auth",
-          "count": 38,
+          "count": 36,
           "withLogger": 9
         },
         {
           "subdomain": "utils",
           "count": 32,
+          "withLogger": 0
+        },
+        {
+          "subdomain": "antigravity",
+          "count": 31,
           "withLogger": 0
         },
         {
@@ -674,22 +657,22 @@
           "withLogger": 1
         },
         {
-          "subdomain": "cliproxy/accounts",
-          "count": 9,
-          "withLogger": 0
-        },
-        {
           "subdomain": "types",
           "count": 7,
           "withLogger": 0
+        },
+        {
+          "subdomain": "errors",
+          "count": 5,
+          "withLogger": 1
         }
       ]
     },
     "hotpathConsoleErrors": {
-      "totalOccurrences": 226,
+      "totalOccurrences": 223,
       "exemptOccurrences": 169,
-      "hotpathOccurrences": 57,
-      "filesAffected": 14,
+      "hotpathOccurrences": 54,
+      "filesAffected": 12,
       "topFiles": [
         {
           "file": "src/errors/error-handler.ts",
@@ -724,20 +707,12 @@
           "count": 2
         },
         {
-          "file": "src/cliproxy/accounts/registry.ts",
-          "count": 2
-        },
-        {
           "file": "src/utils/helpers.ts",
           "count": 2
         },
         {
           "file": "src/web-server/status/readers-check.ts",
           "count": 2
-        },
-        {
-          "file": "src/config/loader/normalizers.ts",
-          "count": 1
         },
         {
           "file": "src/errors/cleanup-registry.ts",
@@ -750,8 +725,8 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 68,
-      "countOver600": 29,
+      "countOver400": 59,
+      "countOver600": 23,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
@@ -775,7 +750,7 @@
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1340
+          "loc": 1337
         },
         {
           "file": "src/antigravity/registry.ts",
@@ -783,7 +758,7 @@
         },
         {
           "file": "src/web-server/services/account-analytics-service.ts",
-          "loc": 1028
+          "loc": 1026
         },
         {
           "file": "src/web-server/model-pricing-data.ts",
@@ -791,11 +766,7 @@
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 999
-        },
-        {
-          "file": "src/cliproxy/quota/quota-fetcher-codex.ts",
-          "loc": 990
+          "loc": 994
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
@@ -803,15 +774,19 @@
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 941
+          "loc": 907
         },
         {
-          "file": "src/cliproxy/model-catalog.ts",
-          "loc": 895
+          "file": "src/web-server/status/status-view.ts",
+          "loc": 870
         },
         {
-          "file": "src/cliproxy/accounts/registry.ts",
-          "loc": 871
+          "file": "src/web-server/usage/native-quota-collector.ts",
+          "loc": 811
+        },
+        {
+          "file": "src/web-server/usage/codex-quota/quota-fetcher-codex.ts",
+          "loc": 799
         }
       ]
     }

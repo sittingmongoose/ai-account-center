@@ -6,12 +6,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1276 |
-| Sync fs files affected (all) | 124 |
-| Sync fs occurrences (runtime hotpaths) | 584 |
-| Sync fs files affected (runtime hotpaths) | 65 |
-| Legacy shim markers | 180 |
-| Legacy shim files affected | 62 |
+| Sync fs occurrences (all) | 1110 |
+| Sync fs files affected (all) | 110 |
+| Sync fs occurrences (runtime hotpaths) | 536 |
+| Sync fs files affected (runtime hotpaths) | 60 |
+| Legacy shim markers | 156 |
+| Legacy shim files affected | 49 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -25,8 +25,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
 | `src/web-server/status/answer-signing.ts` | 18 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync |
 | `src/web-server/status/writer-lock.ts` | 18 | closeSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync |
-| `src/cliproxy/accounts/registry.ts` | 17 | existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync |
 | `src/web-server/rust-service-lifecycle.ts` | 15 | existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync |
+| `src/web-server/services/account-refresh-settings.ts` | 15 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync |
 
 ## Top Legacy Shim Marker Files
 
@@ -39,28 +39,26 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/commands/bar/native-app-paths.ts` | 8 |
 | `src/web-server/services/account-analytics-activity.ts` | 7 |
 | `src/codex-auth/commands/import-default-command.ts` | 5 |
-| `src/cliproxy/ai-providers/model-id-normalizer.ts` | 4 |
 | `src/commands/bar/uninstall-subcommand.ts` | 4 |
 | `src/config/schemas/auth.ts` | 4 |
+| `src/utils/profile-compat.ts` | 4 |
 
 ## Explicit Shim/Re-export Files
 
 - `src/bin/compat-cli.ts`
-- `src/cliproxy/__tests__/model-catalog-compat.test.ts`
-- `src/cliproxy/types/__tests__/types-backward-compat.test.ts`
 - `src/utils/profile-compat.ts`
 ## Maintainability Metrics
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 29.7% (219/737) |
-| typed-error adoption (P4 locked subdomains) | 100.0% (3/3), target 40% |
-| hotpath console.error/warn occurrences | 57 (226 total, 169 CLI-UX exempt) |
-| hotpath console.error/warn files | 14 |
-| files with createLogger | 47/482 |
-| subdomains with zero createLogger | 20 (antigravity, auth, bin, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, cursor, management, shared, status-native, targets, types, utils) |
-| files > 400 LOC | 68 |
-| files > 600 LOC | 29 |
+| typed-error adoption (typed/total throws) | 32.0% (209/653) |
+| typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
+| hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
+| hotpath console.error/warn files | 12 |
+| files with createLogger | 44/435 |
+| subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
+| files > 400 LOC | 59 |
+| files > 600 LOC | 23 |
 
 ### Top Hotpath console.error/warn Files
 
@@ -74,10 +72,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/targets/codex-detector.ts` | 5 |
 | `src/utils/platform-commands.ts` | 4 |
 | `src/ccs.ts` | 2 |
-| `src/cliproxy/accounts/registry.ts` | 2 |
 | `src/utils/helpers.ts` | 2 |
 | `src/web-server/status/readers-check.ts` | 2 |
-| `src/config/loader/normalizers.ts` | 1 |
 | `src/errors/cleanup-registry.ts` | 1 |
 | `src/web-server/middleware/auth-middleware.ts` | 1 |
 
@@ -90,14 +86,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/analytics-remote-sources.ts` | 2145 |
 | `src/web-server/status/answers.ts` | 1744 |
 | `src/web-server/services/analytics-remote-transport.ts` | 1634 |
-| `src/codex-auth/codex-activation-runtime.ts` | 1340 |
+| `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/antigravity/registry.ts` | 1104 |
-| `src/web-server/services/account-analytics-service.ts` | 1028 |
+| `src/web-server/services/account-analytics-service.ts` | 1026 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
-| `src/web-server/services/usage-failover-service.ts` | 999 |
-| `src/cliproxy/quota/quota-fetcher-codex.ts` | 990 |
+| `src/web-server/services/usage-failover-service.ts` | 994 |
 | `src/web-server/status/status-collectors.ts` | 957 |
-| `src/web-server/services/account-dashboard-service.ts` | 941 |
-| `src/cliproxy/model-catalog.ts` | 895 |
-| `src/cliproxy/accounts/registry.ts` | 871 |
+| `src/web-server/services/account-dashboard-service.ts` | 907 |
+| `src/web-server/status/status-view.ts` | 870 |
+| `src/web-server/usage/native-quota-collector.ts` | 811 |
+| `src/web-server/usage/codex-quota/quota-fetcher-codex.ts` | 799 |
 
