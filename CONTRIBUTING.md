@@ -9,11 +9,12 @@ authorship, copyright, license and repository history are retained.
 
 Use Node.js 22.13 or newer, including 26 (CI installs 26; Node 22 stays
 supported), Bun 1.4.4, Rust 1.99.1 with
-`wasm32-unknown-unknown`, and wasm-pack **0.15.1**. Slint/runtime compiler are pinned to
-**1.18.1** in the dashboard manifest and lockfile. TypeScript stays at **6.0.3**:
+`wasm32-unknown-unknown`, and wasm-pack **0.15.1**. Leptos is pinned to
+**0.9.0-rc1** in the dashboard crate's manifest and lockfile (`web-dashboard/leptos`). TypeScript stays at **6.0.3**:
 the newest typescript-eslint supports TypeScript < 6.1 only.
 Install the build tool with `cargo install wasm-pack --version 0.15.1 --locked`.
-The dashboard's target-specific Cargo configuration enables SIMD and tail calls.
+The dashboard crate's target-specific Cargo configuration keeps SIMD and tail calls off
+(WebKit bug 325447 on iOS 27).
 The final build preserves internal tail calls and normalizes import/indirect
 boundaries for the iOS WebKit pointer-authentication bug;
 see [browser requirements](web-dashboard/README.md#build).
@@ -53,7 +54,7 @@ Oct 20 Muse fallback).
 | Area | Paths |
 | --- | --- |
 | CLI/account/backend | `src/` |
-| Slint browser dashboard | `web-dashboard/` |
+| Leptos browser dashboard | `web-dashboard/` (`leptos/` app, `public/` data layer) |
 | Native bars | `macos-bar/`, `windows-bar/` |
 | Usage collectors | `scripts/account-usage/`, `browser-bridge/` |
 | Explicit app updates | `scripts/app-updates/` |
@@ -97,8 +98,8 @@ bun run build
 bun run ui:validate
 ```
 
-The UI gate verifies Slint pins, Rust formatting, offline browser helpers, bridge
-syntax, source fingerprint and packaged WASM. `build:server` compiles
+The UI gate verifies the Leptos and wasm-bindgen pins, Rust formatting, the
+dashboard's node tests, the source and shell fingerprints and the packaged WASM. `build:server` compiles
 TypeScript and bundles the Codex update runtime into `dist/app-updates/`; it does
 not refresh dashboard assets.
 
@@ -119,7 +120,7 @@ Use a focused task branch from `feat/activate-in-place`, conventional commit
 messages and a PR against this fork. Describe behavior, validation and
 compatibility effects. Coordinate overlapping files and preserve others' edits.
 
-CI checks the TypeScript backend and pinned Slint inputs. Retired upstream
+CI checks the TypeScript backend and pinned Leptos inputs. Retired upstream
 npm/container/Cloudflare lanes are not AI Account Center publication instructions.
 Local packaging is supported; package, release or image publication requires
 separate authorization. Do not restore upstream targets or add automation grants.
@@ -132,5 +133,6 @@ Keep suspected vulnerabilities and private data out of public issues.
 
 Keep original package author **Tam Nhu Tran (Kai)**, the **CCS Contributors**
 copyright and unchanged [MIT license](LICENSE), together with relevant third-party
-credits and Slint's license/AboutSlint obligation. Authored historical issue
+credits (web-dashboard/public/assets/THIRD-PARTY-NOTICES.txt; Slint's credit is
+kept there as history since the Slint UI was retired). Authored historical issue
 references retain their original identity; they do not define current commands.

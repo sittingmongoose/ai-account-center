@@ -56,8 +56,8 @@ sign-in page when its own login is configured.
   auto-switch policies, the usage-refresh interval and the appearance are
   live, and so is every sign-in and sign-out control the server offers. The
   settings column holds the Dashboard sign-in block, Update apps results by
-  computer, read-only connection facts and About (with the standard
-  `AboutSlint` widget).
+  computer, read-only connection facts and About (the version and the
+  credits).
 
 ## Visibility switches
 
@@ -424,8 +424,8 @@ steps are in [the Antigravity runtime guide](antigravity-runtime.md).
 
 | Component | Platform and requirements |
 | --- | --- |
-| Dashboard server / CLI | Node.js 22.13+ or 26 (CI uses 26) on Linux, macOS or Windows; local source builds also need Bun and the Slint toolchain below |
-| Browser dashboard | Mac or Windows browser with WebGL2 and hardware acceleration; served by the dashboard server |
+| Dashboard server / CLI | Node.js 22.13+ or 26 (CI uses 26) on Linux, macOS or Windows; local source builds also need Bun and the Rust/wasm-pack toolchain below |
+| Browser dashboard | A current browser on a computer or phone (Chrome, Edge, Firefox or Safari); served by the dashboard server |
 | Mac menu bar | macOS 26+, Xcode 26+ for source installation |
 | Windows tray | Native .NET 10 WPF, Windows x64; source builds require an existing .NET 10 SDK |
 | Shared Codex activation / auto-switch | Linux only (activation refuses any other platform: "In-place Codex activation currently requires Linux"); an existing configured Codex runtime and saved logins |
@@ -530,7 +530,7 @@ its local dashboard and opens the installed app.
 
 | Command | Purpose |
 | --- | --- |
-| `ai-account-center dashboard` | Run the Slint dashboard; options `--host/-H`, `--port/-p`, `--no-open` |
+| `ai-account-center dashboard` | Run the web dashboard; options `--host/-H`, `--port/-p`, `--no-open` |
 | `ai-account-center dashboard auth setup/show/disable` | Manage dashboard login; `status` aliases `show` |
 | `ai-account-center codex-auth create/login/import-default` | Manage saved Codex logins; native login uses the provider's own CLI |
 | `ai-account-center codex-auth show [name]` | Inspect saved logins; `list` and `status` are aliases |

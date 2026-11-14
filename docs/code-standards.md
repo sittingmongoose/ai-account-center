@@ -7,7 +7,7 @@ contracts.
 
 ## Boundaries
 
-Keep the backend in TypeScript, web presentation in Slint 1.18.1 and native bars
+Keep the backend in TypeScript, web presentation in Leptos 0.9 and native bars
 in Swift/WPF. Reuse existing account DTOs, browser helpers and guard services.
 Do not introduce a runtime dispatcher or resurrect React/Vite to solve a view
 change. Keep imports within the domain that owns the behavior.
@@ -54,7 +54,7 @@ depends on a value is listed in the guard's allowlist with an exact count.
 ## Verification
 
 Run focused offline tests and the relevant TypeScript gate. Dashboard changes
-need the actual [Slint build](../scripts/build-ui.js) and
+need the actual [Leptos build](../scripts/build-ui.js) and
 [UI validation](../scripts/validate-ui.js), including the source fingerprint.
 Native/bridge changes use their platform checks. Do not silently substitute
 fixtures for live provider evidence.
@@ -71,4 +71,4 @@ reuses earlier work; the output still lands in the worktree's own `pkg` and
 The [contributor guide](../CONTRIBUTING.md) defines current commands. Document
 what changed, why and what was verified. Packaging, provider refresh, remote
 writes and publication are distinct actions requiring the appropriate scope.
-Keep original authorship, LICENSE/copyright notices and Slint AboutSlint intact.
+Keep original authorship, LICENSE/copyright notices and the third-party notices intact.

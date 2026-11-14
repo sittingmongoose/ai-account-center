@@ -1,7 +1,7 @@
 # AI Account Center Product Overview
 
 AI Account Center manages existing accounts and observed subscription usage
-through a Slint dashboard and native desktop bars. This is the renamed continuing
+through a Leptos web dashboard and native desktop bars. This is the renamed continuing
 CCS fork, retaining original authorship, license, private state and history.
 
 ## Retained product

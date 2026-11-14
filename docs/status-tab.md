@@ -18,7 +18,7 @@ Agents report through the files described in
 | Answers | `src/web-server/status/answers.ts` | the owner's answers: validation, signing, private store, share copy, pm-mail doorbell |
 | Routes | `src/web-server/routes/status-routes.ts` | `/api/status`, `/api/status/answers*` |
 | Page | `web-dashboard/leptos/` (Leptos 0.9.0-rc1, client-side rendered) | drawing only: never computes a reading |
-| Shell tab | `web-dashboard/ui/shell/`, `web-dashboard/public/bridge.js` | the Status and Scoreboard tabs in the Slint shell, the iframe over the canvas |
+| Frame tab | `web-dashboard/leptos/src/frame.rs`, `web-dashboard/leptos/src/ui/chrome.rs` | the Status and Scoreboard tabs of the app frame |
 
 The reports root is `/mnt/Cursor/agent-reports` unless `AAC_AGENT_REPORTS_DIR` names another (tests and the phone test
 server always set it to a temporary fixture folder). The private store is `<ccsDir>/status/` (`getCcsDir()`).
@@ -76,9 +76,9 @@ provider refresh. quota-watch: its share report `<reports>/v1/quota/report.json`
 (every 10 s, by the same reading rules; see Spend).
 
 ## URLs
-- `/status` and `/scoreboard`: the Slint shell with that tab selected (page routes, like `/analytics`).
-- `/app/status` and `/app/scoreboard`: the Leptos pages themselves. `?embed=1` hides the page's own header when the
-  shell shows it in its iframe. Both need the same signed-in session as the dashboard.
+- `/app/status` and `/app/scoreboard`: the app frame on that tab. `/status` and `/scoreboard` (the classic app's
+  addresses) open the same tabs. `?embed=1` shows the page's content alone, without the frame's chrome. Both need
+  the same signed-in session as the dashboard.
 - `GET /api/status`: the whole view below. `Cache-Control: no-store`. The service worker never touches `/api`.
 - `POST /api/status/answers`: the owner's answers and notes, sent together from the deck's review screen.
 - `GET /api/status/answers?limit=N`: the read-only answer history (answers and notes), newest first: `{ answers: [ {
@@ -113,46 +113,14 @@ the documented keys (`400 invalid_body`). Before routing, a body that is not JSO
 100 KB `413 body_too_large`, each `{ error, code }` that never echoes input. The files route sets `Cache-Control: private, max-age=300` instead of
 `no-store`.
 
-## Shell iframe
+## In the app frame
 
-The Slint shell (`web-dashboard/ui/`, `web-dashboard/public/bridge.js`, `web-dashboard/public/shell-frame.mjs`) shows
-Status and Scoreboard as tabs after Accounts (desktop header, the F/T and short NavBar, the phone tab bar) and lays
-one iframe per page over the canvas, as the sign-in layer lays its HTML inputs.
-
-- **Lifetime**: the iframe (`/app/status?embed=1`, `/app/scoreboard?embed=1`) is created on the first visit and kept
-  while hidden, so returning is instant. It is visible only while its tab is current, the user is signed in, no
-  shell overlay covers the content area and the page has sent `aac-ready`. Sign-out (or an ended session) removes
-  both. Same origin, no `sandbox`, no `allow`. The Slint page under it draws only the paper background.
-- **Geometry**: the shell sends the `content-rect` action, `"x,y,w,h"` in CSS px of the window: below the header,
-  above the phone tab bar, the on-screen keyboard and the bottom safe area, inside the side safe areas. It is sent
-  once at start and whenever it changes (resize, rotation, fold, safe areas, keyboard, header height). The bridge
-  rounds the edges to whole pixels. `content-cover` says what the canvas draws over that area: `"all"` while a
-  header menu, sheet, popover, dialog or Details is open (the iframe hides, so a click outside the overlay reaches
-  the canvas and closes it), otherwise the toast stack and the hover card as `"x,y,w,h"` rects joined by `;`,
-  which are cut out of the iframe with `clip-path` (they stay visible and clickable), or `""`.
-- **Messages** (`window.postMessage`, target origin = the dashboard origin; the shell checks `event.origin` and
-  that `event.source` is one of its own iframes, the page checks `event.origin` and that `event.source` is its
-  parent, and each ignores anything else):
-  - shell -> page `{ "type": "aac-theme", "mode": "light" | "dark" }`: the effective theme (Auto resolved), sent
-    on the iframe's `load`, on `aac-ready` and whenever it changes. The page draws in it and ignores its own
-    `prefers-color-scheme` while embedded.
-  - shell -> page `{ "type": "aac-visible", "visible": true | false }`: whether the page is the current tab, sent
-    after each `aac-ready` and whenever that changes. A hidden iframe's document still reports itself visible, so
-    the page relies on this: while hidden it stops polling and ignores `/ws` hints (so the server's collectors can
-    idle), and on becoming visible it reads at once.
-  - page -> shell `{ "type": "aac-ready" }`: the page is mounted and drawing (send it once per document load).
-    The shell shows the iframe and sends the theme and `aac-visible` again.
-  - page -> shell `{ "type": "aac-navigate", "page": "home" | "analytics" | "accounts" | "status" | "scoreboard" }`:
-    switch the shell's tab (a link from one page to another tab).
-- **Unavailable**: every `load` of a frame starts it over (hidden until it says `aac-ready` again). A frame that
-  fires `error`, finishes loading anywhere but `/app/status` or `/app/scoreboard` (a redirect, the shell itself),
-  or sends no `aac-ready` within 20 seconds is replaced by the shell's own note
-  ("Status page unavailable", Try again) in the content area; until ready the note reads "Loading Status...". A
-  failed page gets a new iframe on Try again, when its tab is opened again and when the browser comes back online.
-  Stale data inside a page that did load is the page's own business (Sources above).
-- **Service worker**: `/app/*` is cached network-first like the shell, but offline it falls back only to its own
-  cached copy, is never mirrored to the start URL and never answers another navigation as "any shell"
-  (`public/sw-route.js` `isAppPage`). A shell that finds itself inside its own iframe does not start.
+Status and Scoreboard are two of the app frame's five tabs (`web-dashboard/leptos/src/frame.rs`; desktop header,
+phone tab bar, the Duo's rail and band). Each is built the first time its tab is shown and kept, so returning is
+instant and a draft survives a tab change; each reads only its own data, and only while its tab is shown. Until the
+Slint shell was retired (2026-11-14, Leptos finish) the pages were also shown in that shell's iframes
+(`?embed=1`, with `aac-theme`, `aac-visible`, `aac-ready` and `aac-navigate` messages); `?embed=1` still shows a page's
+content alone, without the frame's chrome.
 
 ## GET /api/status (view v1)
 
@@ -655,5 +623,5 @@ Share deliverables can be opened through the session-only [deliverable route](sh
 That guide defines the relative URL contract, sandbox, allowed roots, limits and supported hosts.
 
 The owner approved moving the web UI from Slint to Leptos on 2026-11-06 (Leptos 0.9.0-rc1, client-side rendered, served by
-this TypeScript server). The Status and Scoreboard pages are the first Leptos pages, shown inside the Slint shell by an
-iframe until the shell itself moves. The JavaScript view-model layer (`web-dashboard/public/*.mjs`) stays.
+this TypeScript server). The Status and Scoreboard pages were the first Leptos pages; every page has been drawn by the
+Leptos app frame since the Slint UI was retired on 2026-11-14. The JavaScript view-model layer (`web-dashboard/public/*.mjs`) stays.

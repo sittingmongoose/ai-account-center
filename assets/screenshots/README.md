@@ -14,7 +14,7 @@ Captured 2026-10-16 from the build deployed that day (package 8.10.0, branch
 
 | Image | Source | Size |
 | --- | --- | --- |
-| `home-light.png`, `home-dark.png`, `analytics-*.png`, `accounts.png`, `switch-review.png` | The compiled Slint dashboard in Chrome on an NVIDIA GPU (WebGL2), 1600 CSS px wide at a real 2x device scale factor (`--force-device-scale-factor`, not emulation) | 3200 px wide |
+| `home-light.png`, `home-dark.png`, `analytics-*.png`, `accounts.png`, `switch-review.png` | The compiled dashboard in Chrome on an NVIDIA GPU, 1600 CSS px wide at a real 2x device scale factor (`--force-device-scale-factor`, not emulation); taken of the Slint dashboard before it was retired on 2026-11-14 | 3200 px wide |
 | `pwa-phones.png` | The same dashboard at an iPhone viewport (402x874 CSS px, real 3x scale, touch, mobile user agent), framed with a drawn bezel and status bar | 4 screens |
 | `tray-mac-*.png` | The installed Mac menu-bar app's own offline renderer (`CCSBar --render-preview`) | 760 pt panel at 2x |
 | `tray-win-*.png` | The Windows tray's own offline renderer (`--render-fixture`) from a scratch build with the sample data embedded | 760 px panel at 2x |

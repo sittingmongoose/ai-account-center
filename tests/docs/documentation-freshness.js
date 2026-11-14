@@ -69,10 +69,10 @@ const retainedPaths = [
   'src/web-server/middleware/auth-middleware.ts',
   'src/utils/config-manager.ts',
   'src/codex-auth/codex-auth-help.ts',
-  'web-dashboard/Cargo.toml',
-  'web-dashboard/Cargo.lock',
-  'web-dashboard/ui/dashboard.slint',
-  'web-dashboard/public/bridge.js',
+  'web-dashboard/leptos/Cargo.toml',
+  'web-dashboard/leptos/Cargo.lock',
+  'web-dashboard/leptos/src/frame.rs',
+  'web-dashboard/public/frame-dashboard.mjs',
   'macos-bar/Package.swift',
   'macos-bar/Scripts/package_app.sh',
   'macos-bar/Scripts/install_user.sh',
@@ -107,9 +107,9 @@ requireText('docs/README.md', '../web-dashboard/README.md');
 requireText('docs/release-process.md', '.github/workflows/bar-release.yml');
 requireText('docs/codex-auth.md', 'src/codex-auth/codex-auth-help.ts');
 requireText('docs/system-architecture/index.md', 'src/utils/config-manager.ts');
-requireText('docs/system-architecture/index.md', 'web-dashboard/public/bridge.js');
-requireText('web-dashboard/README.md', '=1.18.1');
-requireText('web-dashboard/README.md', 'AboutSlint');
+requireText('docs/system-architecture/index.md', 'web-dashboard/public/frame-dashboard.mjs');
+requireText('web-dashboard/README.md', '=0.9.0-rc1');
+requireText('web-dashboard/README.md', 'THIRD-PARTY-NOTICES.txt');
 requireText('web-dashboard/README.md', 'dist/ui/');
 requireText('macos-bar/README.md', './Scripts/package_app.sh');
 requireText('macos-bar/README.md', './Scripts/install_user.sh');

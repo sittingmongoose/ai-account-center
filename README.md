@@ -10,7 +10,7 @@ See every quota at a glance · switch accounts before you hit a limit · let you
 
 <p>
 <img alt="TypeScript backend" src="https://img.shields.io/badge/backend-TypeScript-3178C6?logo=typescript&logoColor=white">
-<img alt="Slint UI compiled to WebAssembly" src="https://img.shields.io/badge/UI-Slint%20%E2%86%92%20WebAssembly-2379F4?logo=webassembly&logoColor=white">
+<img alt="Leptos UI compiled to WebAssembly" src="https://img.shields.io/badge/UI-Leptos%20%E2%86%92%20WebAssembly-2379F4?logo=webassembly&logoColor=white">
 <img alt="Installable PWA" src="https://img.shields.io/badge/phone-PWA-5A0FC8?logo=pwa&logoColor=white">
 <img alt="Mac menu bar app in SwiftUI" src="https://img.shields.io/badge/Mac-SwiftUI-F05138?logo=swift&logoColor=white">
 <img alt="Windows tray app in WPF on .NET 10" src="https://img.shields.io/badge/Windows-WPF%20.NET%2010-512BD4?logo=dotnet&logoColor=white">
@@ -219,7 +219,7 @@ Details: [agent usage snapshot](docs/agent-usage-snapshot.md).
 ```mermaid
 flowchart LR
   subgraph clients["Clients"]
-    web["Browser / phone PWA<br/>Slint → WebAssembly"]
+    web["Browser / phone PWA<br/>Leptos → WebAssembly"]
     mac["Mac menu bar<br/>SwiftUI"]
     win["Windows tray<br/>WPF .NET 10"]
   end
@@ -242,7 +242,7 @@ flowchart LR
 | Layer | Built with |
 | --- | --- |
 | Backend | TypeScript on Node.js 22 or 26: Express, WebSocket, structured logging |
-| Web UI | [Slint](https://slint.dev) 1.18.1, compiled from Rust to WebAssembly and drawn with WebGL2; installable PWA |
+| Web UI | [Leptos](https://leptos.dev) 0.9 (client-side rendered), compiled from Rust to WebAssembly; installable PWA |
 | Mac app | Swift and SwiftUI menu-bar app |
 | Windows app | C# and WPF on .NET 10 |
 | Collectors and helpers | Python usage collectors, analytics and update helpers over SSH; browser extensions for console sessions |
@@ -366,7 +366,7 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 | [Codex switching](docs/codex-auth.md) · [activation review](docs/activate-in-place.md) | How the guarded switch works |
 | [Antigravity on Ubuntu](docs/antigravity-runtime.md) | Profiles, sign-in and switching gates |
 | [System architecture](docs/system-architecture/index.md) | Data, credential and host boundaries |
-| [Dashboard (Slint)](web-dashboard/README.md) | The WebAssembly UI and its licensing |
+| [Dashboard (Leptos)](web-dashboard/README.md) | The WebAssembly UI and its licensing |
 | [All maintainer docs](docs/README.md) | Everything else |
 
 ---
@@ -376,7 +376,7 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 ```bash
 bun run validate      # typecheck, lint, format, fast tests
 bun run test:all      # the full suite
-bun run ui:validate   # the compiled Slint UI matches its sources
+bun run ui:validate   # the compiled Leptos UI matches its sources
 ```
 
 See [Contributing](CONTRIBUTING.md) and the [test guide](tests/README.md). Never test against your real `~/.ccs/`: point `CCS_HOME` at a temporary folder. Report bugs in [issues](https://github.com/sittingmongoose/ai-account-center/issues); keep tokens, cookies and real account details out of them ([Security](SECURITY.md)).
@@ -409,8 +409,8 @@ Contributors**. Original package author metadata and
 [MIT license](LICENSE). Upstream source and history remain at
 [kaitranntt/ccs](https://github.com/kaitranntt/ccs).
 
-Slint 1.18.1 uses its royalty-free license; the dashboard keeps the standard
-AboutSlint widget ([dashboard licensing](web-dashboard/README.md#dependencies-and-attribution)).
+The dashboard's libraries, fonts and icons keep their licences ([dashboard licensing](web-dashboard/README.md#dependencies-and-attribution));
+until 2026-11-14 it was drawn with Slint 1.18.1 under its royalty-free license.
 Provider artwork keeps its [source and attribution notices](web-dashboard/public/assets/THIRD-PARTY-NOTICES.txt).
 Original CCS routing work credited
 [claude-code-router](https://github.com/musistudio/claude-code-router), and the

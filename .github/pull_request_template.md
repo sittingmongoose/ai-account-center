@@ -9,7 +9,7 @@ Use what applies. If you skipped something, add a short note instead of forcing 
 - [ ] `bun run format && bun run lint:fix && bun run validate`
 - [ ] `bun run validate:ci-parity` before requesting review
 - [ ] `bun test tests/unit/commands tests/npm` if CLI commands or local package inputs changed
-- [ ] `bun run ui:build && bun run ui:validate` if the Slint dashboard changed
+- [ ] `bun run ui:build && bun run ui:validate` if the Leptos dashboard changed
 - [ ] Relevant offline native-app checks if macOS or Windows app behavior changed
 - [ ] Not run
 
