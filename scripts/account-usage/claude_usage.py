@@ -45,6 +45,21 @@ WINDOWS = {
     "seven_day_cowork": ("Weekly Cowork usage", 10080),
 }
 UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+# Claude takes a reset claim only from a client surface it knows. Any other
+# User-Agent is answered `ineligible` with reason `surface` (live check
+# 2026-11-14, Claude Code 2.1.325); Claude Code and T3 Code send this form.
+# If Claude later wants a newer client it answers `cli_version`, which maps
+# to "unavailable" (nothing spent), and this pin is the one line to raise.
+CLAUDE_CLAIM_USER_AGENT = "claude-cli/2.1.325 (external, cli)"
+# Why Claude refused an `ineligible` claim. Only these reasons say the grant
+# itself is gone or not needed; client, plan and program refusals mean Claude
+# did not take the reset now, and the two "could not tell" answers may still
+# have applied it, so they stay unconfirmed until AAC checks again.
+CLAIM_INELIGIBLE_OUTCOMES = {
+    "expired": "noCredit", "unknown_grant": "noCredit", "no_grant": "noCredit",
+    "already_used": "already-used", "not_limited": "nothingToReset", "cooldown": "cooldown",
+    "stamp_indeterminate": "ambiguous", "reset_unconfirmed": "ambiguous",
+}
 MAX_BYTES = 1024 * 1024
 MAX_CAPSULE_BYTES = 65536
 CHROMIUM_EPOCH = 11644473600000000
@@ -1498,6 +1513,15 @@ def reset_windows(usage):
     return windows
 
 
+def claim_outcome(answer):
+    """Map Claude's claim answer; anything unrecognized stays ambiguous, never success."""
+    result = answer.get("result") if isinstance(answer, dict) else None
+    if result == "ineligible":
+        return CLAIM_INELIGIBLE_OUTCOMES.get(answer.get("reason"), "unavailable")
+    return {"reset": "reset", "not_limited": "nothingToReset", "already_used": "already-used",
+            "cooldown": "cooldown"}.get(result, "ambiguous")
+
+
 def reset_host(request):
     # Only reaching the actual opener can make a claim ambiguous. Collection,
     # identity, binding and request-construction failures prove no POST occurred.
@@ -1574,17 +1598,15 @@ def _reset_host(request, dispatch):
             "https://api.anthropic.com/api/organizations/" + private["organization"] + "/reset_rate_limits",
             data=json.dumps(body, separators=(",", ":")).encode("ascii"), method="POST",
             headers={"Authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20",
-                     "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "CCS-ReadOnly-Usage/1.0"})
+                     "Content-Type": "application/json", "Accept": "application/json",
+                     "User-Agent": CLAUDE_CLAIM_USER_AGENT})
         try:
             dispatch["started"] = True
             with client.opener.open(req, timeout=8) as response:
                 raw = response.read(MAX_BYTES + 1)
                 if len(raw) > MAX_BYTES:
                     return {"outcome": "ambiguous"}
-                answer = json.loads(raw)
-                outcome = {"reset": "reset", "not_limited": "nothingToReset", "already_used": "already-used",
-                           "ineligible": "noCredit", "cooldown": "cooldown"}.get(answer.get("result"), "ambiguous")
-                return {"outcome": outcome}
+                return {"outcome": claim_outcome(json.loads(raw))}
         except urllib.error.HTTPError as error:
             if error.code == 429:
                 return {"outcome": "rate-limited", "retryAfterMs": (retry_after_seconds(error.headers.get("Retry-After")) or 60) * 1000}

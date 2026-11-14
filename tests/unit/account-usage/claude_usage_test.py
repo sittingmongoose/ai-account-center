@@ -2078,9 +2078,46 @@ class ResetWebInventoryTests(unittest.TestCase):
         self.assertIsNone(sent.get_header("Cookie"))
         self.assertEqual(sent.full_url, "https://api.anthropic.com/api/organizations/" + ORG + "/reset_rate_limits")
         self.assertEqual(json.loads(sent.data), request["write"]["body"])
+        # Claude answers `ineligible`/`surface` to a claim from any other client name.
+        self.assertEqual(sent.get_header("User-agent"), "claude-cli/2.1.325 (external, cli)")
         self.assertEqual([route for route, _ in self.oauth.calls], ["/api/oauth/profile", "/api/oauth/profile"])
         opener.open.assert_called_once()
         self.assertNotIn(TOKEN, json.dumps(result))
+
+    def test_ineligible_answers_say_why_instead_of_calling_every_refusal_a_missing_reset(self):
+        cases = [({"result": "ineligible", "reason": "surface"}, "unavailable"),
+                 ({"result": "ineligible", "reason": "cli_version"}, "unavailable"),
+                 ({"result": "ineligible", "reason": "paused"}, "unavailable"),
+                 ({"result": "ineligible", "reason": "not_next_grant"}, "unavailable"),
+                 ({"result": "ineligible"}, "unavailable"),
+                 ({"result": "ineligible", "reason": "something_new"}, "unavailable"),
+                 ({"result": "ineligible", "reason": "unknown_grant"}, "noCredit"),
+                 ({"result": "ineligible", "reason": "expired"}, "noCredit"),
+                 ({"result": "ineligible", "reason": "no_grant"}, "noCredit"),
+                 ({"result": "ineligible", "reason": "already_used"}, "already-used"),
+                 ({"result": "ineligible", "reason": "not_limited"}, "nothingToReset"),
+                 ({"result": "ineligible", "reason": "cooldown"}, "cooldown"),
+                 ({"result": "ineligible", "reason": "reset_unconfirmed"}, "ambiguous"),
+                 ({"result": "ineligible", "reason": "stamp_indeterminate"}, "ambiguous"),
+                 ({"result": "reset", "reason": None}, "reset"),
+                 ({"result": "not_limited"}, "nothingToReset"),
+                 ({"result": "already_used"}, "already-used"),
+                 ({"result": "cooldown"}, "cooldown"),
+                 ({"result": "unavailable"}, "ambiguous"),
+                 ({"result": "something_new"}, "ambiguous"),
+                 ([], "ambiguous")]
+        for answer, expected in cases:
+            with self.subTest(answer=answer):
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                response = mock.MagicMock()
+                response.__enter__.return_value = response
+                response.read.return_value = json.dumps(answer).encode()
+                self.oauth.opener = mock.Mock()
+                self.oauth.opener.open.return_value = response
+                self.assertEqual(usage.reset_host(request), {"outcome": expected})
+                self.oauth.opener.open.assert_called_once()
 
     def test_claim_throttling_and_lost_answers_are_independent_of_usage_throttling(self):
         for error, expected in [(urllib.error.HTTPError("fixture", 429, "synthetic", {"Retry-After": "1800"}, None),
