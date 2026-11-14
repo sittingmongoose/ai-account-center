@@ -4,10 +4,7 @@ import * as path from 'path';
 import { execFile, spawn } from 'child_process';
 import { launchApp } from '../utils/app-launcher';
 import WebSocket from 'ws';
-import {
-  codexProcessFingerprint,
-  type CodexActivationStopPlan,
-} from './codex-activation-confirmation';
+import { codexProcessFingerprint, type CodexActivationStopPlan } from './codex-process-plan';
 
 export interface CodexActivationRuntime {
   stop(approval?: CodexActivationStopPlan): Promise<void>;

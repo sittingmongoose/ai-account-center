@@ -1,4 +1,4 @@
-import type { CodexQuotaResult } from '../../cliproxy/quota/quota-types';
+import type { CodexQuotaResult } from './codex-quota/quota-types';
 import type { BalanceWindowDetail, QuotaWindowDetail } from '../services/account-dashboard-types';
 
 /** Additional windows have non-core keys so they cannot drive native rotation. */

@@ -1,15 +1,27 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/antigravity/profiles",
+    "path": "/api/auth/check",
     "role": "session"
   },
   "response": {
     "body": {
-      "activationSupported": false,
-      "hostId": "ubuntu",
-      "profiles": [],
-      "schemaVersion": 1
+      "accessMode": "login",
+      "authConfigured": true,
+      "authEnabled": true,
+      "authenticated": true,
+      "authRequired": true,
+      "connection": {
+        "peer": "127.0.0.1",
+        "trusted": false
+      },
+      "isLocalAccess": true,
+      "secureOrigin": null,
+      "secureTransport": true,
+      "setupCodeRequired": false,
+      "signedOutReason": null,
+      "trustedLocalNetwork": false,
+      "username": "fixture-admin"
     },
     "headers": {
       "cache-control": "no-store",

@@ -18,14 +18,13 @@ The panel is 760 logical pixels wide (850 tall), clamped to the monitor's work a
   expanded details add the plan summary, its models and the "AI credits (overage)" row.
 - **Selected row:** the active Codex or Antigravity account's row is a softly accent-tinted surface with a hairline
   accent outline, and its address turns semibold. Its action slot shows a filled check and "Active" with "on Ubuntu"
-  under it, as plain text with no box. The check sits in the Activate button's 24 px leading space and "Active" starts
-  on the "Activate" label's x, so both line up with the buttons above and below. On a switch the highlight glides to
-  the new row and the check draws in. With one Antigravity account and none reported active, the slot says
-  "Not reported / as active".
+  under it, as plain text with no box, at the action slot's leading edge. When the active login changes the
+  highlight glides to the new row. With one Antigravity account and none reported active, the slot says
+  "Not reported / as active". Account switching (Activate, auto-switch, its threshold and notch) was removed on
+  2026-11-14: the tray reads usage and opens Claude profiles; it switches no login.
 - **Other providers** (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go, and any provider the server adds later,
   with a neutral mark): one card per provider with up to three labelled meters; Qwen's packs button lists every pack.
-- **Footer:** Dashboard; Refresh; Settings. The Codex auto-switch toggle, its `at 95%` threshold menu and an
-  info popover sit in the Codex section header, above its accounts, styled like Antigravity's.
+- **Footer:** Dashboard; Refresh; Settings.
 
 Click any row to expand its details (every window, balance, expiry and the account's actions); nested buttons keep
 their own action, and a click on a row's action slot — a resting button or the gaps around one — never expands or
@@ -146,8 +145,8 @@ trusted-local-network rule, or no pair route) keeps today's password sign-in, ve
 Settings opens inside the panel with a visible X; the gear toggles it (and stays pressed while it is open) and Escape
 closes it before a second Escape hides the panel. The gear also works on the sign-in screen: Settings slides over it,
 and X or Escape return to it. It holds Appearance (Light / Dark / Auto), Connection, Start with Windows (the
-installer's logon task), Keyboard shortcut, read-only facts from the dashboard (refresh interval, Codex and Antigravity
-auto-switch, providers hidden in the trays, address) and About (version, third-party notices, Quit).
+installer's logon task), Keyboard shortcut, read-only facts from the dashboard (refresh interval,
+providers hidden in the trays, address) and About (version, third-party notices, Quit).
 
 **Connection** reads "Paired as Windows tray, last synced 20s ago", then this PC and the saved address, then "This
 connection: 192.168.10.31, trusted local network" (or "not trusted"), as the dashboard sees this computer right now
@@ -173,26 +172,16 @@ address.
 - **At sign-in:** the logon task starts the tray hidden in the notification area (`--background`). A background start
   while a tray already runs (the task again, or its `CCS Bar` alias) exits and leaves the running panel alone.
 
-## Codex and Antigravity switching
+## Dashboard data and safety
 
-Activate switches the shared VM's saved Codex account (`/api/codex/profiles/{profile}/activate`) or Antigravity account
-(`/api/antigravity/profiles/{id}/activate`, Ubuntu host, from commit 9cf75fbe). If running programs need to stop, a
-native confirmation lists them; only "Stop, switch, restart" sends the server's short-lived token (Antigravity:
-`/confirm`). Cancel changes nothing, and an expired or changed confirmation needs a fresh Activate. Antigravity's own
-auto-switch (`/api/antigravity/auto-switch`, `thresholdUsedPercent` as % used) appears in its section header once two
-Antigravity accounts are reported (including hidden or unavailable accounts); Codex's auto-switch (`thresholdPercent`, % remaining, shown as % used) sits in
-its section header, above its accounts.
+The dashboard still sends a fixed `codexAutoSwitch` (always off) for trays built before account switching was removed;
+this tray no longer reads or requires it, and ignores `antigravityAutoSwitch` and `antigravityCanActivate` from an
+older dashboard.
 Failed refreshes keep the last sample, label it stale and disable account controls until a fresh read. Windowless
 setup and no-quota rows reserve a message column; an unexpected render failure shows an inline refresh error.
 Row metadata names failed and unavailable readings. Provenance uses `host` (for example `nas1`) before `platform`.
 Codex Details titles its canonical windows "Weekly" and "5-hour". Qwen's usable-credit count excludes known-expired
 packs while keeping every pack listed; a positive balance without an expiry says "Expiry unavailable".
-
-Antigravity's toggle always displays the reported enabled state, even when switching is unavailable. Enabling needs
-a chosen pool; disabling remains possible without one. Its notch appears only on the watched pool's actual readings,
-never on an unavailable meter. Codex threshold changes send only the threshold, preserving the server's current toggle.
-Antigravity consent displays the offered email and verifies the completed profile, Ubuntu host, status and email.
-Confirmation lifetimes use HTTP Date with a monotonic deadline when available; older responses retain the prior check.
 
 Plain-HTTP hostnames are resolved before every credential-bearing request, including saved-password login, Re-pair,
 migration and polls. Every address must remain local; unresolved names are refused. HTTPS and literal IP handling
@@ -218,7 +207,7 @@ Builds are self-contained for Windows x64. Build and Check use an explicit `-Dot
 Build's `-OutputDirectory` and Check's `-PublishDirectory` and `-ReportDirectory` support isolated verification.
 
 `Check.ps1` runs, offline and against an isolated state folder: the check suite (formatting, data rules, injection,
-DPAPI, the authenticated HTTP fixture for the Codex and Antigravity routes, sign-in and Change against loopback
+DPAPI, the authenticated HTTP fixture for the dashboard and Claude Open routes, sign-in and Change against loopback
 fixtures with a temporary store, the reset-pending rule, fonts, icons, easing), the render checks for Light and Dark, and
 `Test-InstallScripts.ps1` (the installer parses; the task guard accepts only the two approved logon actions).
 `-Live` reads your configured dashboard instead. `scripts/Test-SingleInstance.ps1 -PublishDirectory <dir>` checks the
@@ -248,9 +237,9 @@ in command-line arguments. HTTP is accepted for local network origins; other ori
   `AAC_TRAY_STATE_DIR`.
 - `--check-live <report>`: reads the configured dashboard without mutation (provider counts, id validation).
 - `--render-fixture <dir> [light|dark]`: renders the real panel from the bundled sanitized fixture
-  (`CCSBar/Fixtures/dashboard.json`, example.com identities) to PNGs, with Settings, details, a switch, two Antigravity
+  (`CCSBar/Fixtures/dashboard.json`, example.com identities) to PNGs, with Settings, details, a new active login, two Antigravity
   accounts, a hidden provider and an unknown provider, and measures the selected-row rule (check and "Active" on the
-  Activate button's left edge and label x within 0.5 px, before and after a switch), the platter's glide, one x for
+  slot's leading edge and label x within 0.5 px, before and after the active login changes), that no switch control renders, the platter's glide, one x for
   every section's name and first meter, whole compact resets, real gear and X clicks, and two runtime rules: refreshes
   (hidden or shown) leave no theme handlers behind, and an idle panel, shown or hidden, uses no CPU. It never connects
   anywhere.
@@ -271,7 +260,7 @@ a version 1 tray, the password option while pairing is off, setup with the code,
 pairing, and `--configure-stdin` (run twice, one device record). The render checks also draw the paired Settings ›
 Connection card and Disconnect's inline confirm.
 
-No test activates a real Codex, Antigravity or Claude account, or pairs with a real dashboard. The Claude Open checks run the tray's own flow against a
+No test touches a real Codex, Antigravity or Claude account, or pairs with a real dashboard. The Claude Open checks run the tray's own flow against a
 loopback fixture dashboard with the connection in an isolated temporary store, and prove that no shell launch happens
 when the dashboard cannot be reached.
 

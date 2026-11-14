@@ -1638,26 +1638,6 @@ describe('identity-bound usage source failover', () => {
     ).toEqual(['mac']);
   });
 
-  it('preserves native Antigravity activation eligibility but cannot grant it from fallback', async () => {
-    const h = await harness();
-    const target = { ...h.target, provider: 'antigravity' as const };
-    const native: DashboardAccount = {
-      ...template(),
-      ...reading(),
-      provider: 'antigravity',
-      status: 'cached',
-      capabilities: { ...template().capabilities, antigravityCanActivate: true },
-    };
-    h.inventories.set('windows', []);
-    expect((await h.service.recover(target, native)).capabilities.antigravityCanActivate).toBe(
-      true
-    );
-    h.advance();
-    h.inventories.set('windows', [candidate({ locator: '3'.repeat(64) })]);
-    const peer = await h.service.recover(target, { ...native, status: 'unavailable', windows: [] });
-    expect(peer.capabilities.antigravityCanActivate).toBe(false);
-  });
-
   it('forwards private Claude context to its host and isolates inventories between profiles', async () => {
     const h = await harness();
     const target = (id: string): UsageFailoverTarget => ({

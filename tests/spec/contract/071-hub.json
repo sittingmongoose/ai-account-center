@@ -1,19 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/status/answers",
-    "role": "hub"
+    "method": "ALL",
+    "path": "/v0/management/fixture-missing",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "invalid_token",
-      "error": "The device token is not valid."
+      "code": "not_found",
+      "error": "AI Account Center offers only auth-files and api-call usage reads here."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 401
+    "status": 404
   }
 }

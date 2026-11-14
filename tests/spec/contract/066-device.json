@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/codex/profiles",
+    "path": "/api/status",
     "role": "device"
   },
   "response": {

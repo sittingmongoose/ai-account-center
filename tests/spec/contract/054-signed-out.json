@@ -1,13 +1,11 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/sessions/revoke-others",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles/usage",
+    "role": "signed-out"
   },
   "response": {
     "body": {
-      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

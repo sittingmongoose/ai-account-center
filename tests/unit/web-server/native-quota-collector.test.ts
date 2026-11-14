@@ -18,7 +18,7 @@ import {
   resetNativeQuotaState,
   type NativeQuotaDeps,
 } from '../../../src/web-server/usage/native-quota-collector';
-import type { CodexQuotaResult } from '../../../src/cliproxy/quota/quota-types';
+import type { CodexQuotaResult } from '../../../src/web-server/usage/codex-quota/quota-types';
 import type { CodexLocalQuota } from '../../../src/web-server/usage/codex-local-quota-collector';
 import { runWithScopedCcsHome } from '../../../src/utils/config-manager';
 
@@ -793,65 +793,11 @@ describe('quota reset invalidates cached rows', () => {
 });
 
 describe('default profile resolution from the saved registry', () => {
-  function withRegistryHome(
-    profilesYaml: string[],
-    accounts: Record<string, { paused?: boolean }>,
-    run: () => Promise<void>,
-    opts: { bareLogin?: boolean } = {}
-  ): Promise<void> {
+  it('marks the saved registry default as the default profile', async () => {
     const originalCcsHome = process.env.CCS_HOME;
-    const originalHome = process.env.HOME;
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-default-profile-'));
     process.env.CCS_HOME = tempHome;
-    process.env.HOME = tempHome;
-    if (opts.bareLogin) {
-      // The bare ~/.codex login, under the fixture HOME only.
-      const codexDir = path.join(tempHome, '.codex');
-      fs.mkdirSync(codexDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(codexDir, 'auth.json'),
-        JSON.stringify({ tokens: { access_token: 'fixture-bare', account_id: 'bare-workspace' } })
-      );
-    }
-    const ccsDir = path.join(tempHome, '.ccs');
-    const cliproxyDir = path.join(ccsDir, 'cliproxy');
-    fs.mkdirSync(path.join(cliproxyDir, 'auth'), { recursive: true });
-    fs.mkdirSync(path.join(cliproxyDir, 'auth-paused'), { recursive: true });
-    fs.writeFileSync(path.join(ccsDir, 'codex-profiles.yaml'), profilesYaml.join('\n'));
-    const entries: Record<string, Record<string, unknown>> = {};
-    for (const [email, account] of Object.entries(accounts)) {
-      entries[email] = {
-        email,
-        tokenFile: `${email}.json`,
-        ...(account.paused ? { paused: true } : {}),
-      };
-      fs.writeFileSync(
-        path.join(cliproxyDir, account.paused ? 'auth-paused' : 'auth', `${email}.json`),
-        JSON.stringify({ type: 'codex' })
-      );
-    }
-    fs.writeFileSync(
-      path.join(cliproxyDir, 'accounts.json'),
-      JSON.stringify(
-        {
-          version: 1,
-          providers: { codex: { default: Object.keys(accounts)[0], accounts: entries } },
-        },
-        null,
-        2
-      )
-    );
-    return run().finally(() => {
-      if (originalCcsHome !== undefined) process.env.CCS_HOME = originalCcsHome;
-      else delete process.env.CCS_HOME;
-      if (originalHome !== undefined) process.env.HOME = originalHome;
-      else delete process.env.HOME;
-      fs.rmSync(tempHome, { recursive: true, force: true });
-    });
-  }
-
-  function profileYaml(name: string, created: string): string[] {
-    return [
+    const profile = (name: string, created: string) => [
       `  ${name}:`,
       '    type: codex',
       `    created: "${created}"`,
@@ -859,78 +805,39 @@ describe('default profile resolution from the saved registry', () => {
       `    email: ${name}-codex@example.com`,
       `    account_id: ${name}-codex@example.com`,
     ];
-  }
-
-  function registryDeps(): NativeQuotaDeps {
-    return {
-      readCodexNativeAuth: (profile: string) => ({
-        accessToken: `token-${profile}`,
-        accountId: `${profile}-codex@example.com`,
-      }),
-      fetchCodexQuotaWithToken: async (_token: string, accountId: string) => ({
-        ...codexSuccessQuota(),
-        accountId,
-      }),
-      getCodexQuota: async () => null,
-      now: () => 1_000_000,
-      sleep: async () => {},
-    };
-  }
-
-  it('skips a paused registry default and marks the first unpaused saved profile', async () => {
-    await withRegistryHome(
+    fs.mkdirSync(path.join(tempHome, '.ccs'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempHome, '.ccs', 'codex-profiles.yaml'),
       [
         'version: "1.0"',
-        'default: paused',
+        'default: second',
         'profiles:',
-        ...profileYaml('paused', '2026-01-01T00:00:00.000Z'),
-        ...profileYaml('active', '2026-01-02T00:00:00.000Z'),
+        ...profile('first', '2026-01-01T00:00:00.000Z'),
+        ...profile('second', '2026-01-02T00:00:00.000Z'),
         '',
-      ],
-      { 'paused-codex@example.com': { paused: true }, 'active-codex@example.com': {} },
-      async () => {
-        const rows = await getCodexProfileQuotaRows(['paused', 'active'], registryDeps());
-        expect(rows.find((row) => row.profile === 'active')?.is_default).toBe(true);
-        expect(rows.find((row) => row.profile === 'paused')?.is_default).toBe(false);
-      }
+      ].join('\n')
     );
-  });
-
-  const allPausedRegistry = [
-    'version: "1.0"',
-    'default: paused',
-    'profiles:',
-    ...profileYaml('paused', '2026-01-01T00:00:00.000Z'),
-    '',
-  ];
-
-  it('resolves no default when every saved profile is paused and no bare login exists', async () => {
-    await withRegistryHome(
-      allPausedRegistry,
-      { 'paused-codex@example.com': { paused: true } },
-      async () => {
-        expect(fs.existsSync(path.join(os.homedir(), '.codex', 'auth.json'))).toBe(false);
-        const rows = await getCodexProfileQuotaRows(['paused', 'default'], registryDeps());
-        expect(rows.map((row) => row.profile)).toEqual(['default', 'paused']);
-        expect(rows.find((row) => row.profile === 'paused')?.is_default).toBe(false);
-        // Without a bare login, the bare 'default' row is not the default either.
-        expect(rows.find((row) => row.profile === 'default')?.is_default).toBe(false);
-      }
-    );
-  });
-
-  it('falls back to the bare login as default when every saved profile is paused', async () => {
-    await withRegistryHome(
-      allPausedRegistry,
-      { 'paused-codex@example.com': { paused: true } },
-      async () => {
-        const rows = await getCodexProfileQuotaRows(['paused', 'default'], registryDeps());
-        expect(rows.map((row) => row.profile)).toEqual(['default', 'paused']);
-        expect(rows.find((row) => row.profile === 'default')?.is_default).toBe(true);
-        expect(rows.find((row) => row.profile === 'paused')?.is_default).toBe(false);
-      },
-      { bareLogin: true }
-    );
+    try {
+      const rows = await getCodexProfileQuotaRows(['first', 'second'], {
+        readCodexNativeAuth: (name: string) => ({
+          accessToken: `token-${name}`,
+          accountId: `${name}-codex@example.com`,
+        }),
+        fetchCodexQuotaWithToken: async (_token: string, accountId: string) => ({
+          ...codexSuccessQuota(),
+          accountId,
+        }),
+        getCodexQuota: async () => null,
+        now: () => 1_000_000,
+        sleep: async () => {},
+      });
+      expect(rows.find((row) => row.profile === 'second')?.is_default).toBe(true);
+      expect(rows.find((row) => row.profile === 'first')?.is_default).toBe(false);
+    } finally {
+      if (originalCcsHome !== undefined) process.env.CCS_HOME = originalCcsHome;
+      else delete process.env.CCS_HOME;
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 });
 

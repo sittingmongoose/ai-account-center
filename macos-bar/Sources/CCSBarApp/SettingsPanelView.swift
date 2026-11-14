@@ -351,10 +351,6 @@ struct SettingsPanelView: View {
       }.padding(.bottom, 4)
       let dashboard = model.dashboard
       kv("Usage refresh", dashboard?.settings.map { seconds($0.refreshIntervalSeconds) } ?? "Unavailable", palette)
-      kv("Codex auto-switch", dashboard.map { d in
-        "\(d.codexAutoSwitch.enabled ? "On" : "Off") · switches at \(TrayFormat.number(100 - d.codexAutoSwitch.thresholdPercent))% used · checks every \(d.codexAutoSwitch.pollIntervalSeconds) s"
-      } ?? "Unavailable", palette)
-      kv("Antigravity auto-switch", antigravityLine(dashboard), palette)
       HStack(alignment: .firstTextBaseline, spacing: 12) {
         Text("Hidden in the tray").font(.system(size: 12.5)).foregroundStyle(palette.label2).frame(width: 170, alignment: .leading)
         Text(trayHiddenLine(dashboard)).font(.system(size: 12.5)).foregroundStyle(palette.label).lineLimit(2)
@@ -380,16 +376,6 @@ struct SettingsPanelView: View {
   }
 
   private func seconds(_ value: Int) -> String { value < 120 ? "Every \(value) s" : "Every \(value / 60) min" }
-
-  private func antigravityLine(_ dashboard: AccountDashboard?) -> String {
-    let count = dashboard?.antigravityAccountCount ?? 0
-    guard count >= 2 else { return count == 0 ? "No Antigravity accounts" : "Starts with a second account" }
-    guard let status = dashboard?.antigravityAutoSwitch else { return "Status unavailable" }
-    var line = "\(status.enabled ? "On" : "Off") · switches at \(status.thresholdUsedPercent)% used"
-    if let poll = status.pollIntervalSeconds { line += " · checks every \(poll) s" }
-    if status.requestedPoolId == nil { line += " · no quota pool chosen" }
-    return line
-  }
 
   private func hiddenLine(_ dashboard: AccountDashboard?) -> String {
     guard let dashboard else { return "Unavailable" }

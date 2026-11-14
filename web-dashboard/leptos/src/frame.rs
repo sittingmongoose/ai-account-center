@@ -4,12 +4,11 @@
 //! guards bridge.js kept, run in this window since G5). The classic Slint app and bridge.js were retired in Leptos
 //! finish (step 9): every page address opens this frame.
 //!
-//! Details (details.rs) and the switch confirmation (activation.rs) are the frame's own overlays over every tab.
+//! Details (details.rs) is the frame's own overlay over every tab.
 //!
 //! Sign-in is the frame's (session.rs); until it is done no tab is drawn.
 
 use crate::Page;
-use crate::activation::ActivationDialog;
 use crate::dash::{self, DashCtx};
 use crate::home::HomePage;
 use crate::session::{self, SessionView};
@@ -496,7 +495,6 @@ pub fn Frame(initial: Page) -> impl IntoView {
                 <DashHost ctx=ctx/>
                 <details::DetailsOverlay ctx=ctx/>
             </FrameShell>
-            <ActivationDialog/>
             <crate::media::ViewerOverlay/>
         </Show>
         <Toasts ctx=ctx/>

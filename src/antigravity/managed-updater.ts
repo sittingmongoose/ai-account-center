@@ -1,6 +1,6 @@
 import { AntigravityError } from './errors';
 import type { AntigravitySwitchDriver, StopReceipt } from './types';
-import { checkedPlan, planFingerprint } from './confirmation';
+import { checkedPlan, planFingerprint } from './process-plan';
 import { AntigravityProfileRegistry, credentialFingerprint, identityKey } from './registry';
 import type { RuntimeSocketState } from './runtime-socket-probe';
 

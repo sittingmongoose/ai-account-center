@@ -14,7 +14,7 @@ export const ROOT_COMMAND_CATALOG: readonly RootCommandEntry[] = [
   },
   {
     name: 'codex-auth',
-    summary: 'Save Codex logins and activate the shared login safely',
+    summary: 'Save Codex logins whose usage the dashboard reads',
     visibility: 'public',
   },
   {

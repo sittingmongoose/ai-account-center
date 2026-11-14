@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/antigravity/profiles/fixture-missing/confirm",
+    "path": "/api/app-updates/start",
     "role": "hub",
     "body": {}
   },

@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/sessions/revoke-others",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles/usage",
+    "role": "device"
   },
   "response": {
     "body": {

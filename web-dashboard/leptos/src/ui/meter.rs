@@ -1,5 +1,5 @@
 //! The usage meter of Home and Details (Slint `components/meter.slint`): a track with ticks at a quarter, half and three
-//! quarters, a severity fill under a white wash, the auto-switch notch, an overage segment past 100%, and a dashed
+//! quarters, a severity fill under a white wash, an overage segment past 100%, and a dashed
 //! track with words for a window that has no reading (never a zero bar).
 //!
 //! Motion (README-ARCHITECTURE.md, Motion): on its first reading a meter sweeps from 0 after its `delay` while its number
@@ -53,9 +53,6 @@ pub struct MeterView {
     pub caption: String,
     #[serde(deserialize_with = "nullable")]
     pub caption_tip: String,
-    pub notch: Option<f64>,
-    pub notch_faint: bool,
-    pub notch_off: bool,
 }
 
 /// Severity of a used share (theme.slint `severity`): calm under 80, warn from 80, crit from 95, over past 100.
@@ -219,14 +216,13 @@ pub enum MeterMode {
 }
 
 /// One meter bound to a reading that may change; `owner` names whose reading it is in the hover card ("Claude ·
-/// a@example.com"); `notch_at` moves the notch to a switch point being picked, before it is saved.
+/// a@example.com").
 #[component]
 pub fn UsageMeter(
     #[prop(into)] view: Signal<MeterView>,
     #[prop(optional)] mode: MeterMode,
     #[prop(optional)] delay: u32,
     #[prop(optional, into)] owner: String,
-    #[prop(optional, into)] notch_at: Option<Signal<Option<f64>>>,
 ) -> impl IntoView {
     let target = Memo::new(move |_| {
         view.with(|v| {
@@ -269,13 +265,6 @@ pub fn UsageMeter(
         }
     };
     let over = Memo::new(move |_| has.get() && target.get() > 100.0);
-    let notch = Memo::new(move |_| {
-        let own = view.with(|v| v.notch);
-        match (own, notch_at.and_then(|n| n.get())) {
-            (Some(_), Some(picked)) => Some(picked),
-            (own, _) => own,
-        }
-    });
     let fill_style = move || format!("width:{:.2}%", shown.get().clamp(0.0, 100.0));
     let over_style = move || {
         if !over.get() {
@@ -286,18 +275,11 @@ pub fn UsageMeter(
         let p = ((shown.get() - 100.0) / (target - 100.0).max(0.01)).clamp(0.0, 1.0);
         format!("width:{:.1}px", full * p)
     };
-    let notch_style = move || match notch.get() {
-        Some(n) if has.get() => format!("left:{:.2}%", n.clamp(0.0, 100.0)),
-        _ => "display:none".to_string(),
-    };
-    let faint = move || view.with(|v| v.notch_faint);
-    let off = move || view.with(|v| v.notch_off);
     let bar = view! {
         <div class="um-bar" class:over=move || over.get()>
             <div class="um-track" class:na=move || !has.get()>
                 <i class="um-tick" style="left:25%"></i><i class="um-tick" style="left:50%"></i><i class="um-tick" style="left:75%"></i>
                 <div class="fill" style=fill_style></div>
-                <span class="um-notch" class:faint=faint class:off=off style=notch_style></span>
             </div>
             <span class="um-ovr" style=over_style></span>
         </div>
@@ -437,7 +419,7 @@ mod tests {
     #[test]
     fn a_missing_reading_stays_missing() {
         let v: MeterView = serde_json::from_str(
-            r#"{"key":"a|five_hour","hasValue":false,"value":null,"naText":"Not reported yet","notch":null,"reset":null}"#,
+            r#"{"key":"a|five_hour","hasValue":false,"value":null,"naText":"Not reported yet","reset":null}"#,
         )
         .unwrap();
         assert!(!v.has_value);

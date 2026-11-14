@@ -28,8 +28,6 @@ enum HoverOcclusionCheck {
   }
 
   /// Tags that stay visible above Settings: the panel header and footer, and Settings itself.
-  /// (N5 moved codex-auto-info from the footer into the Codex section, so it hides with the list
-  /// under Settings and is no longer allowed here.)
   static func allowedOverSettings(_ id: String) -> Bool {
     id.hasPrefix("settings-") || ["header-menu", "footer-dashboard", "footer-refresh", "footer-settings",
       "footer-quit"].contains(id)
@@ -383,7 +381,10 @@ enum HoverOcclusionCheck {
         "codexOrder": codex.map { ["identity": $0.identity, "active": $0.isActive] }]
       report["1-list-settings-closed"] = checkList("list, Settings closed")
       var listPath: [(label: String, point: NSPoint, expect: (id: String, text: String)?)] = [("outside the panel", outside, nil)]
-      for id in ["account-row-" + codex[0].id, "activate-" + codex[0].id, "account-row-" + codex[activeIndex].id,
+      // The nested control is a Claude Open button (Codex rows lost Activate with account switching, 2026-11-14).
+      let firstOpen = tags().first(where: { $0.id.hasPrefix("claude-mac-") || $0.id.hasPrefix("claude-windows-") })?.id
+        ?? "claude-mac-(none)"
+      for id in ["account-row-" + codex[0].id, firstOpen, "account-row-" + codex[activeIndex].id,
         "account-row-" + codex[codex.count - 1].id, "footer-settings"] {
         if let point = rowPoint(id), let tag = tags().first(where: { $0.id == id }) {
           listPath.append((id, point, (id, tag.presenter.text)))
@@ -474,7 +475,7 @@ enum HoverOcclusionCheck {
         closeSettings()
       }
       // A tag already up follows the panel: the dashboard changes under it (the forced refresh at every open, the
-      // 60 s timer, a Codex auto-switch) or a Settings choice changes, and the visible tag must say the same as its
+      // 60 s timer) or a Settings choice changes, and the visible tag must say the same as its
       // presenter, naming the account Show now displays. Nothing is reset between the change and the read.
       let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: input))) as? [String: Any] ?? [:]
       func variant(activeCodex id: String) throws -> AccountDashboard {
@@ -587,8 +588,6 @@ enum HoverOcclusionCheck {
           HoverProbe.pointer = nil
         }
         let footerIDs = ["footer-dashboard", "footer-refresh", "footer-settings"]
-        // codex-auto-info used to live in the footer; N5 moved it into the Codex section, so the
-        // footer-frontmost rule no longer applies to it (it hides with the list under Settings).
         let footerControls = footerIDs
         guard let listScroll = tag("account-row-" + codex[0].id)?.view.enclosingScrollView else {
           fail("scrolled panel: the account list has no scroll view")
@@ -742,17 +741,15 @@ enum HoverOcclusionCheck {
             "wrongHighlight": badHighlight, "coveredLayer": leaks, "examples": examples]
         }
 
-        let activates = codex.filter { !$0.isActive }.map { "activate-" + $0.id }.filter { tag($0) != nil }
         let opens = Array(tags().filter { $0.id.hasPrefix("claude-mac-") || $0.id.hasPrefix("claude-windows-") }.suffix(2)).map(\.id)
-        if activates.isEmpty || opens.isEmpty { fail("scrolled panel: need Activate and Claude Open buttons, found \(activates) \(opens)") }
-        let walkTarget = activates.first ?? ""
-        let walkRow = "account-row-" + String(walkTarget.dropFirst("activate-".count))
+        if opens.isEmpty { fail("scrolled panel: need Claude Open buttons, found none") }
+        let walkTarget = opens.first ?? ""
+        let walkRow = "account-row-" + String(walkTarget.drop(while: { $0 != "-" }).dropFirst().drop(while: { $0 != "-" }).dropFirst())
         for (name, everyone) in [("tracking", false), ("every-tag", true)] {
           var section: [String: Any] = [:]
           let phase = "scrolled list (\(name))"
-          section["footerOverActivate"] = overFooter(phase, targets: activates, everyone: everyone)
           section["footerOverClaudeOpen"] = overFooter(phase, targets: opens, everyone: everyone)
-          section["walkActivateHalfUnderRefresh"] = halfUnder(phase, targetID: walkTarget, footerID: "footer-refresh", rowID: walkRow, everyone: everyone)
+          section["walkOpenHalfUnderRefresh"] = halfUnder(phase, targetID: walkTarget, footerID: "footer-refresh", rowID: walkRow, everyone: everyone)
           section["headerBand"] = headerBand(phase, scroll: listScroll, allowed: ["header-menu"], everyone: everyone)
           // A list control scrolled up behind the header menu: the menu's own tag (the clipped geometry, not raw bounds).
           if let menu = tag("header-menu"), let behind = tags().first(where: { tag in

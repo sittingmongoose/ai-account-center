@@ -1,14 +1,13 @@
 {
   "request": {
-    "method": "DELETE",
-    "path": "/api/auth/devices/me",
+    "method": "POST",
+    "path": "/api/auth/login",
     "role": "bar",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "device_required",
-      "error": "This route is for a paired tray's own token."
+      "error": "Username and password required"
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +15,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 403
+    "status": 400
   }
 }

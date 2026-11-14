@@ -1,7 +1,7 @@
 /**
  * CONTRACT-analytics.md section 10: ranges and zones, cost by type, the
- * session sample, byDayModel, request counts, anomalies, active and
- * switchable fields, and the provider list from data. Fixtures only: a
+ * session sample, byDayModel, request counts, anomalies, the active and
+ * hidden fields, and the provider list from data. Fixtures only: a
  * temporary CCS_HOME, an injected clock and injected worker data.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
@@ -1190,8 +1190,8 @@ describe('analytics contract: anomalies', () => {
   });
 });
 
-describe('analytics contract: active and switchable accounts', () => {
-  it('reports the active account of each switchable provider and switch targets', async () => {
+describe('analytics contract: active and hidden accounts', () => {
+  it('reports the live Codex and Antigravity accounts and which accounts are hidden', async () => {
     const accounts = [
       account('codex', 'codex:a'),
       account('codex', 'codex:b', { isActive: true }),
@@ -1204,7 +1204,6 @@ describe('analytics contract: active and switchable accounts', () => {
           claudePlatforms: [],
           antigravityProfileId: 'one',
           antigravityHostIds: ['ubuntu'],
-          antigravityCanActivate: true,
         },
       }),
       account('antigravity', 'antigravity:profile:two', {
@@ -1214,7 +1213,6 @@ describe('analytics contract: active and switchable accounts', () => {
           claudePlatforms: [],
           antigravityProfileId: 'two',
           antigravityHostIds: ['ubuntu'],
-          antigravityCanActivate: false,
         },
       }),
       account('claude', 'claude:one'),
@@ -1236,27 +1234,26 @@ describe('analytics contract: active and switchable accounts', () => {
     expect(result.summary.activeCodexAccountId).toBe(result.summary.activeAccountIds.codex ?? null);
     const byId = new Map(result.accounts.map((row) => [row.id, row]));
     expect(byId.get('antigravity:profile:one')?.isActive).toBe(true);
-    expect(
-      Object.fromEntries(result.accounts.map((row) => [row.id, [row.switchable, row.hidden]]))
-    ).toEqual({
-      'codex:a': [true, true],
-      'codex:b': [true, false],
-      'codex:expired': [false, false],
-      'antigravity:profile:one': [true, false],
-      'antigravity:profile:two': [false, false],
-      'claude:one': [false, false],
-      'kimi-code:usage': [false, true],
+    expect(Object.fromEntries(result.accounts.map((row) => [row.id, row.hidden]))).toEqual({
+      'codex:a': true,
+      'codex:b': false,
+      'codex:expired': false,
+      'antigravity:profile:one': false,
+      'antigravity:profile:two': false,
+      'claude:one': false,
+      'kimi-code:usage': true,
     });
-    // Quota points keep the per-sample active truth for every switchable provider.
+    for (const row of result.accounts) expect(row).not.toHaveProperty('switchable');
+    // Quota points keep the per-sample active truth for Codex and Antigravity.
     expect(byId.get('antigravity:profile:one')?.windows[0].points[0].isActive).toBe(true);
     expect(result.providers.find((row) => row.provider === 'kimi-code')?.visible).toBe(false);
   });
 
   it('prefers registry fields a newer dashboard already sends', async () => {
     const result = await analyticsService([
-      { ...account('codex', 'codex:a'), switchable: false, hidden: true } as DashboardAccount,
+      { ...account('codex', 'codex:a'), hidden: true } as DashboardAccount,
     ]).get(QUERY);
-    expect(result.accounts[0]).toMatchObject({ switchable: false, hidden: true });
+    expect(result.accounts[0]).toMatchObject({ hidden: true });
     expect(result.summary.activeAccountIds).toEqual({ codex: null, antigravity: null });
   });
 });

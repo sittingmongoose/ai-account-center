@@ -1,19 +1,25 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/claude/desktop-profiles/fixture-missing/open",
-    "role": "bar",
-    "body": {}
+    "method": "GET",
+    "path": "/api/codex/profiles",
+    "role": "bar"
   },
   "response": {
     "body": {
-      "error": "Select a configured Claude desktop account and platform."
+      "activated": null,
+      "active": {
+        "codexHome": "<fixture-home>/.codex",
+        "name": null,
+        "source": "explicit-codex-home"
+      },
+      "default": null,
+      "profiles": []
     },
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 400
+    "status": 200
   }
 }

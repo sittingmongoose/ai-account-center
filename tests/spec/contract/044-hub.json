@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/devices/revoke-all",
+    "method": "PUT",
+    "path": "/api/auth/network",
     "role": "hub",
     "body": {}
   },

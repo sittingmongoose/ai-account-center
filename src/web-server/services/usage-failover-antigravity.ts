@@ -51,7 +51,6 @@ function unavailable(account: DashboardAccount, mismatch = false): DashboardAcco
     message: mismatch
       ? IDENTITY_UNBOUND_MESSAGE
       : 'The saved Antigravity account could not be verified.',
-    capabilities: { ...account.capabilities, antigravityCanActivate: false },
   };
   if (mismatch) result.statusReason = 'identity_unbound';
   else delete result.statusReason;
@@ -116,15 +115,9 @@ function project(account: DashboardAccount, reading: DashboardAccount): Dashboar
     fetchedAt: reading.fetchedAt,
     sampledAt: reading.sampledAt,
     windows: structuredClone(reading.windows),
-    // Usage may come from any host; activation still addresses the registered
-    // Ubuntu runtime. A display fallback cannot supply a runtime identity proof.
+    // Usage may come from any host; the saved profile still belongs to the
+    // registered Ubuntu runtime.
     platform: 'ubuntu',
-    capabilities: {
-      ...account.capabilities,
-      antigravityCanActivate:
-        account.capabilities.antigravityCanActivate === true &&
-        reading.capabilities.antigravityCanActivate === true,
-    },
   };
   delete result.host;
   delete result.antigravityPlan;
@@ -132,7 +125,7 @@ function project(account: DashboardAccount, reading: DashboardAccount): Dashboar
   return result;
 }
 
-/** Apply after the native public projection. Never used by the switching monitor. */
+/** Apply after the native public projection. */
 export async function recoverAntigravityUsage(
   accounts: DashboardAccount[],
   scope: string,

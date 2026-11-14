@@ -6,7 +6,7 @@
  *
  * Forward-reference note: loadUnifiedConfigWithLockHeld and
  * writeUnifiedConfigWithLockHeld depend on mergeWithDefaults,
- * validateCompositeVariants, generateYamlHeader, and generateYamlWithComments
+ * generateYamlHeader, and generateYamlWithComments
  * which still live in unified-config-loader.ts (extracted in later phases).
  * Those are passed as callbacks to avoid a circular import. Once Phases 2–3
  * land in separate modules with no dependency on this file, they can be
@@ -222,13 +222,12 @@ export function withConfigWriteLock<T>(callback: () => T): T {
  * Load unified config directly from disk while lock is already held.
  * Falls back to empty config when file doesn't exist.
  *
- * Forward-reference: mergeWithDefaults and validateCompositeVariants are
- * passed as callbacks to avoid a circular dependency. They will be imported
+ * Forward-reference: mergeWithDefaults is
+ * passed as a callback to avoid a circular dependency. They will be imported
  * directly once all phases are complete.
  */
 export function loadUnifiedConfigWithLockHeld(
-  mergeWithDefaults: (partial: Partial<UnifiedConfig>) => UnifiedConfig,
-  validateCompositeVariants: (config: UnifiedConfig) => void
+  mergeWithDefaults: (partial: Partial<UnifiedConfig>) => UnifiedConfig
 ): UnifiedConfig {
   const yamlPath = getConfigYamlPath();
   if (!fs.existsSync(yamlPath)) {
@@ -242,9 +241,7 @@ export function loadUnifiedConfigWithLockHeld(
     throw new Error(`Invalid config format in ${yamlPath}`);
   }
 
-  const merged = mergeWithDefaults(parsed);
-  validateCompositeVariants(merged);
-  return merged;
+  return mergeWithDefaults(parsed);
 }
 
 /** Reuse an identical regular backup, including backups made by earlier versions. */

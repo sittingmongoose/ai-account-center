@@ -1,14 +1,12 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/devices/me/rotate",
-    "role": "session",
-    "body": {}
+    "method": "GET",
+    "path": "/api/auth/devices",
+    "role": "session"
   },
   "response": {
     "body": {
-      "code": "device_required",
-      "error": "This route is for a paired tray's own token."
+      "devices": []
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +14,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 403
+    "status": 200
   }
 }

@@ -1,14 +1,14 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/status/answers",
+    "path": "/v0/management/api-call",
     "role": "bar",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "invalid_body",
-      "error": "The request body is not valid for this action."
+      "code": "missing_management_key",
+      "error": "A management key is required."
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 400
+    "status": 401
   }
 }

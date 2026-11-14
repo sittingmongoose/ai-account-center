@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/diag",
+    "path": "/api/store/status",
     "role": "signed-out"
   },
   "response": {

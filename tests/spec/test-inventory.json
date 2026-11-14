@@ -496,137 +496,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "src/cliproxy/__tests__/model-catalog-compat.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/__tests__/model-catalog.test.js",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/__tests__/pool-routing-phase3.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/__tests__/provider-capabilities.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/accounts/__tests__/account-manager-discover.test.js",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/accounts/__tests__/account-registry-integrity.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/accounts/__tests__/account-registry-optional-nickname.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/ai-providers/__tests__/model-id-normalizer.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/auth/__tests__/auth-token-manager.test.js",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "src/cliproxy/auth/__tests__/auth-types-management-path.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "src/cliproxy/auth/__tests__/auth-utils.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "src/cliproxy/auth/__tests__/skip-local-auth.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "src/cliproxy/config/__tests__/backend-selection.test.js",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/config/__tests__/composite-validator.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/config/__tests__/env-builder-migration.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/config/__tests__/port-validation.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/proxy/__tests__/proxy-config-resolver.test.js",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/quota/__tests__/quota-fetcher-codex.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
-    },
-    {
-      "file": "src/cliproxy/services/__tests__/stats-fetcher.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/services/__tests__/stats-transformer.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "src/cliproxy/types/__tests__/types-backward-compat.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "src/commands/__tests__/config-command-supervisord.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -925,27 +794,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/antigravity/auto-switch/monitor.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/auto-switch/policy.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "tests/unit/antigravity/auto-switch/store.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
       "file": "tests/unit/antigravity/composition.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -1227,12 +1075,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "tests/unit/antigravity/terminal-activate.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "tests/unit/antigravity/terminal-refresh.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -1252,10 +1094,9 @@
     },
     {
       "file": "tests/unit/antigravity/transaction.test.ts",
-      "kind": "table",
-      "evidence": [
-        "table"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/antigravity/usage-cooldown.test.ts",
@@ -1449,46 +1290,10 @@
       ]
     },
     {
-      "file": "tests/unit/cliproxy/concurrent-state-locks.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "tests/unit/cliproxy/session-bridge-bg-keepalive.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
-      "file": "tests/unit/codex-auth/activate-codex-profile-identity.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety",
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/codex-auth/activate-codex-profile.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
       "file": "tests/unit/codex-auth/codex-account-identity.test.ts",
       "kind": "safety",
       "evidence": [
         "safety"
-      ]
-    },
-    {
-      "file": "tests/unit/codex-auth/codex-activation-confirmation.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety",
-        "table"
       ]
     },
     {
@@ -2670,11 +2475,10 @@
       ]
     },
     {
-      "file": "tests/unit/web-server/caller-bound-confirmations.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
+      "file": "tests/unit/web-server/caller-key.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/cgroup-foreign-check.test.ts",
@@ -2752,31 +2556,6 @@
       ]
     },
     {
-      "file": "tests/unit/web-server/codex-activation-routes.test.ts",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP",
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/codex-auto-switch-routes.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety",
-        "HTTP",
-        "table"
-      ]
-    },
-    {
-      "file": "tests/unit/web-server/codex-auto-switch-service.test.ts",
-      "kind": "safety",
-      "evidence": [
-        "safety",
-        "table"
-      ]
-    },
-    {
       "file": "tests/unit/web-server/codex-extra-usage.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -2806,6 +2585,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/codex-quota/quota-fetcher-codex.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
     },
     {
       "file": "tests/unit/web-server/codex-routes.test.ts",
@@ -3577,12 +3363,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "web-dashboard/leptos/src/activation.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "web-dashboard/leptos/src/analytics/feed.rs",
       "kind": "internal",
       "evidence": [],
@@ -3819,13 +3599,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "web-dashboard/tests/activation-confirmation.test.mjs",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
       "file": "web-dashboard/tests/analytics-history.test.mjs",
       "kind": "internal",
       "evidence": [],
@@ -3872,13 +3645,6 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
-    },
-    {
-      "file": "web-dashboard/tests/antigravity-confirmation.test.mjs",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
     },
     {
       "file": "web-dashboard/tests/antigravity-data.test.mjs",

@@ -1,14 +1,14 @@
-// The app frame's Home, Accounts & Settings, Details and switch approvals (G5): the frame reads the dashboard itself, as
+// The app frame's Home, Accounts & Settings and Details (G5): the frame reads the dashboard itself, as
 // Analytics reads its own (frame-analytics.mjs), so no tab loads the Slint dashboard or its bridge any more. This is
 // bridge.js's content-mode path moved into the top window: the same server calls, timers and guards, the same pure
-// modules (view-model.mjs, accounts-view.mjs, accounts-controller.mjs, activation-confirmation.mjs,
-// antigravity-confirmation.mjs, claude-open.mjs, account-actions.mjs, auth-view.mjs) and the same views, keys and
+// modules (view-model.mjs, accounts-view.mjs, accounts-controller.mjs, claude-open.mjs, account-actions.mjs,
+// auth-view.mjs) and the same views, keys and
 // action kinds as the seam (frame-seam.mjs VIEW_KEYS and PAGE_ACTIONS). Each function names the bridge.js one it
 // follows. The classic app (bridge.js) is unchanged. Pure apart from the injected fetch, storage, clock, timers and
 // sinks (tests/frame-dashboard.test.mjs).
 //
 // What it sends, through `emit(key, json)`: `dashboard`, `accounts`, `accounts-strength`, `details` ('' = closed),
-// `activation` ('' = closed), `update`, `busy` ("true"/"false"), `refresh-interval`, plus `toast` ({kind, title, body,
+// `update`, `busy` ("true"/"false"), `refresh-interval`, plus `toast` ({kind, title, body,
 // ms}), `chrome` ({statusLead, statusStrong, statusMore}) and `signed-out` ({state: 'expired'|'default', reason}).
 // Until the first answer nothing is sent for Home but the chrome's "Refreshing": the page shows its loading state,
 // never zeros.
@@ -17,17 +17,14 @@ import { needToasts } from './claude-signins.mjs';
 import { accountsViewModel } from './accounts-view.mjs';
 import { transportOf } from './transport.mjs';
 import { rememberSessionHours, rememberedSessionHours, forgetSignIn, signedInAt, rememberSeen, lastSeenAt, endedReason } from './auth-view.mjs';
-import { createAccountsController, MUTATING_ACTIONS } from './accounts-controller.mjs';
+import { createAccountsController } from './accounts-controller.mjs';
 import { signOutFailureText, copyText } from './account-actions.mjs';
-import { createActivationConfirmation } from './activation-confirmation.mjs';
-import { antigravityView, antigravitySettingsPatch, validAntigravityAuto } from './antigravity-data.mjs';
-import { createAntigravityConfirmation } from './antigravity-confirmation.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGE_ACTIONS } from './frame-seam.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
 import { installRow as installRowFor, isAppleMobile } from './device.mjs';
 
-/** Below this window width Details and the switch approval take one Back entry each (bridge.js belowD). */
+/** Below this window width Details takes one Back entry (bridge.js belowD). */
 export const OVERLAY_HISTORY_BELOW = 1280;
 /** The frame's own commands (frame.rs): Refresh, Update apps and Sign out from the header. */
 export const FRAME_COMMANDS = Object.freeze(new Set(['refresh', 'update-apps']));
@@ -76,7 +73,6 @@ export function createFrameDashboard({
   let data = null;
   let profiles = [];
   let antigravityInventory = null;
-  let antigravityAuto = null;
   let updateJob = null;
   let updateStatusPending = false;
   let updateCompletionId = null;
@@ -88,7 +84,6 @@ export function createFrameDashboard({
   let refreshSettingsKnown = false;
   let usageTimer = 0;
   let openDetailsId = '';
-  let activationDialogOpen = false;
   let currentPage = 'home';
   let onlineState = true;
   let sessionHours = rememberedSessionHours(storage);
@@ -252,9 +247,8 @@ export function createFrameDashboard({
 
   // ---------------------------------------------------------------- rendering (bridge.js)
   function context(extra = {}) {
-    return { profiles, platform, antigravityInventory, antigravityAuto, refreshing: !!refreshing && extra.refreshing !== false, intervalSeconds: refreshIntervalSeconds, username, host, openProgress: openProgress(claudeOpen.views(), profiles), ...extra };
+    return { profiles, platform, antigravityInventory, refreshing: !!refreshing && extra.refreshing !== false, intervalSeconds: refreshIntervalSeconds, username, host, openProgress: openProgress(claudeOpen.views(), profiles), ...extra };
   }
-  function antigravityModel() { return antigravityView(data, antigravityInventory, antigravityAuto); }
   function render() {
     if (!data || stopped) return;
     for (const item of needToasts(data, seenSignInNeeds)) toast(item.kind, item.title, item.body, 20000);
@@ -301,71 +295,6 @@ export function createFrameDashboard({
     openDetailsId = id;
     view('details', JSON.stringify(v));
   }
-  function pendingActivation() { return activationConfirmation.hasPending() || antigravityConfirmation.hasPending(); }
-
-  // ---------------------------------------------------------------- the switch approval (bridge.js)
-  function showActivationDialog(confirmation) {
-    if (!activationDialogOpen) {
-      // Details hands its Back entry to the dialog; no asynchronous Back followed by a push.
-      const replacesDetails = !!openDetailsId;
-      openDetailsId = '';
-      if (replacesDetails) view('details', '');
-      if (!replacesDetails || overlay.depth() === 0) overlay.push();
-      activationDialogOpen = true;
-    }
-    view('activation', JSON.stringify({ ...confirmation, expiresAt: `Review valid until ${new Date(confirmation.expiresAt).toLocaleString()}` }));
-  }
-  function closeActivationDialog() {
-    if (activationDialogOpen) {
-      activationDialogOpen = false;
-      overlay.consume();
-    }
-    view('activation', '');
-  }
-
-  const activationConfirmation = createActivationConfirmation({
-    activate: (target, body) => mutation(`/api/codex/profiles/${encodeURIComponent(target)}/activate`, body),
-    prompt: showActivationDialog,
-    close: closeActivationDialog,
-    busy: (inProgress) => setBusy(inProgress),
-    success: async (result) => {
-      if (data && typeof result?.name === 'string') {
-        for (const account of data.accounts) if (account.provider === 'codex') account.isActive = account.capabilities?.codexProfile === result.name;
-        render();
-      }
-      toast('ok', 'Codex account switched', `${result?.email || result?.name || 'The selected account'} is now active on Ubuntu.`);
-      await refresh(true);
-    },
-    error: (message) => failure(message, 'Codex switch failed'),
-    now,
-  });
-
-  const antigravityConfirmation = createAntigravityConfirmation({
-    activate: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/activate`, body),
-    confirm: (target, body) => mutation(`/api/antigravity/profiles/${encodeURIComponent(target)}/confirm`, body),
-    recover: () => mutation('/api/antigravity/recover', { hostId: 'ubuntu' }),
-    prompt: showActivationDialog,
-    close: closeActivationDialog,
-    busy: (inProgress) => setBusy(inProgress),
-    success: async (result) => {
-      // Selection/running proof comes from the next inventory, never an optimistic UI guess.
-      if (['completed', 'aborted', 'restored-previous', 'no-recovery-pending'].includes(result?.status)) {
-        const who = result?.email || 'The live login';
-        const what = result?.status === 'completed' ? `${who} was activated.`
-          : result?.status === 'aborted' ? `The stuck switch was undone; ${who} is still active.`
-          : result?.status === 'restored-previous' ? `${who} was restored from its saved login.`
-          : 'Nothing was stuck.';
-        toast('ok', 'Antigravity recovery finished on Ubuntu', `${what} Checking the native identity now.`);
-      } else {
-        toast('ok', 'Antigravity switched on Ubuntu', `${result?.email || 'The selected login'} was activated. Checking the native identity now.`);
-      }
-      antigravityInventory = null; render();
-      await refresh(true);
-    },
-    error: (message) => failure(message, 'Antigravity switch failed'),
-    now,
-  });
-
   // ---------------------------------------------------------------- reading (bridge.js refresh)
   /** `gate`: the first read waits for the settings and the time zone, which bridge.js applied before it. */
   async function refresh(force = false, restart = false, gate = null) {
@@ -384,11 +313,10 @@ export function createFrameDashboard({
     renderChrome(true);
     const operation = (async () => {
       try {
-        const [next, inventory, antigravityProfiles, antigravityStatus] = await Promise.all([
+        const [next, inventory, antigravityProfiles] = await Promise.all([
           request(`/api/accounts/dashboard?platform=${platform}&refresh=${force}`),
           request('/api/claude/desktop-profiles').catch(() => ({ profiles })),
           request('/api/antigravity/profiles').catch(() => null),
-          request('/api/antigravity/auto-switch').catch(() => null),
           gate,
         ]);
         if (generation !== refreshGeneration || !authenticated) return;
@@ -400,7 +328,6 @@ export function createFrameDashboard({
         if (Number.isInteger(next.settings?.refreshIntervalSeconds)) applyRefreshInterval(next.settings.refreshIntervalSeconds);
         profiles = Array.isArray(inventory?.profiles) ? inventory.profiles : profiles;
         antigravityInventory = antigravityProfiles;
-        antigravityAuto = validAntigravityAuto(antigravityStatus) ? antigravityStatus : validAntigravityAuto(next.antigravityAutoSwitch) ? next.antigravityAutoSwitch : null;
         render();
         // the page's actions and refusals follow the accounts: read them again with each refresh while it is open
         if (currentPage === 'accounts') void accounts.loadRegistry();
@@ -421,7 +348,7 @@ export function createFrameDashboard({
     pushRefreshInterval(seconds, confirmed);
     renderAccounts();
     if (usageTimer) cancelEvery(usageTimer);
-    usageTimer = gone() ? 0 : every(() => { if (authenticated && !busy && !pendingActivation()) void refresh(); }, seconds * 1000);
+    usageTimer = gone() ? 0 : every(() => { if (authenticated && !busy) void refresh(); }, seconds * 1000);
   }
   function pushRefreshInterval(seconds, confirmed) { view('refresh-interval', JSON.stringify({ seconds, confirmed })); }
   async function loadSettings() {
@@ -485,7 +412,7 @@ export function createFrameDashboard({
     lifetime?.abort();
     authenticated = false;
     refreshGeneration++; openDetailsId = ''; pushed.clear();
-    data = null; serverData = null; profiles = []; antigravityInventory = null; antigravityAuto = null;
+    data = null; serverData = null; profiles = []; antigravityInventory = null;
     claudeOpen.reset();
     accounts.reset();
   }
@@ -497,12 +424,11 @@ export function createFrameDashboard({
     emit('signed-out', JSON.stringify({ state: 'expired', reason }));
   }
   /**
-   * Sign out. It is never held by a running save or Claude Open (`busy`), only by a switch confirmation that is waiting
-   * on screen. A failure is said in the page's own words, and this browser then stays signed in.
+   * Sign out. It is never held by a running save or Claude Open (`busy`). A failure is said in the page's own words,
+   * and this browser then stays signed in.
    */
   async function signOut() {
     if (!authenticated) return { ok: false };
-    if (pendingActivation()) { toast('info', 'Finish the account switch first', 'Confirm or cancel the switch, then sign out.'); return { ok: false, held: true }; }
     if (accounts.state.signin.busy === 'logout') return { ok: false };
     accounts.state.signin.busy = 'logout'; renderAccounts();
     try { await mutation('/api/auth/logout', {}); }
@@ -524,17 +450,13 @@ export function createFrameDashboard({
   // ---------------------------------------------------------------- actions (bridge.js ccsDashboardAction)
   async function run(action, value) {
     try {
-      if (action === 'activation-cancel') { const agy = antigravityConfirmation.hasPending(); if ((agy ? antigravityConfirmation : activationConfirmation).cancel()) toast('info', 'Switch canceled', `Running ${agy ? 'Antigravity' : 'Codex'} programs were left unchanged.`); return; }
-      if (action === 'activation-confirm') { if (authenticated) await (antigravityConfirmation.hasPending() ? antigravityConfirmation : activationConfirmation).confirm(); return; }
       if (action === 'install-app') { await promptInstall(); renderAccounts(); return; }
       // One entry per Details session: a second row tapped while it is open swaps in place without stacking entries.
       if (action === 'details') { if (!openDetailsId) overlay.push(); renderDetails(value); return; }
       if (action === 'details-closed') { openDetailsId = ''; view('details', ''); overlay.consume(); return; }
       if (!authenticated) return;
-      // Accounts & Settings: a change waits while an account-switch confirmation is pending.
-      if (MUTATING_ACTIONS.has(action) && pendingActivation()) { toast('info', 'Finish the account switch first', 'Confirm or cancel the switch, then try again.'); return; }
       if (await accounts.handle(action, value)) return;
-      if (busy || pendingActivation()) return;
+      if (busy) return;
       if (action === 'refresh') { await refresh(true); return; }
       if (action === 'launch') {
         const [id, target] = value.split(':');
@@ -553,59 +475,6 @@ export function createFrameDashboard({
         try { outcome = await claudeOpen.start(id, target); }
         finally { setBusy(false); }
         if (outcome === 'opened' && authenticated) toast('info', `Opening Claude on ${target === 'mac' ? 'Mac' : 'Windows'}`, 'It opens in its own desktop profile.');
-        return;
-      }
-      if (action === 'activate') {
-        refreshGeneration++;
-        const account = data?.accounts?.find((row) => row.capabilities?.codexProfile === value);
-        if (!account || account.isActive) return;
-        await activationConfirmation.begin(value); return;
-      }
-      if (action === 'antigravity-activate') {
-        const account = antigravityModel().antigravityAccounts.find((row) => row.profile === value);
-        if (!account?.canActivate) { render(); failure('Ubuntu activation is unavailable until this login and the native runtime are verified.', 'Antigravity'); return; }
-        refreshGeneration++;
-        await antigravityConfirmation.begin(value); return;
-      }
-      if (['antigravity-automatic', 'antigravity-threshold', 'antigravity-pool', 'antigravity-cooldown'].includes(action)) {
-        const model = antigravityModel();
-        const seconds = Number(value);
-        // the cooldown is part of the same existing PUT /api/antigravity/auto-switch (60 to 3600 seconds)
-        const patch = action === 'antigravity-cooldown'
-          ? (model.antigravitySettingsAvailable && Number.isInteger(seconds) && seconds >= 60 && seconds <= 3600 ? { cooldownSeconds: seconds } : null)
-          : antigravitySettingsPatch(model, action, value);
-        if (!patch) { render(); failure('Antigravity controls need verified Ubuntu support, two accounts and a fresh reported quota pool.', 'Antigravity'); return; }
-        refreshGeneration++;
-        setBusy(true);
-        try {
-          const status = await mutation('/api/antigravity/auto-switch', patch, 'PUT');
-          if (!validAntigravityAuto(status)) throw new Error('Automatic switching settings could not be confirmed. Refresh before trying again.');
-          antigravityAuto = status; render();
-          if (action === 'antigravity-automatic') toast('info', status.enabled ? `Antigravity auto-switch on at ${status.thresholdUsedPercent}% used` : 'Antigravity auto-switch off',
-            status.enabled ? 'The active login switches when its watched pool reaches the threshold.' : 'Logins only switch when you press Activate.');
-        } finally { setBusy(false); }
-        return;
-      }
-      if (action === 'automatic') {
-        refreshGeneration++;
-        setBusy(true);
-        try {
-          const status = await mutation('/api/codex/profiles/auto-switch', { enabled: value === 'true' }, 'PUT'); if (data) data.codexAutoSwitch = status; render();
-          // The toast repeats what the server confirmed, not what was asked for.
-          const on = status?.enabled === true, used = Number.isInteger(status?.thresholdPercent) ? 100 - status.thresholdPercent : null;
-          toast('info', on ? `Codex auto-switch on${used !== null ? ` at ${used}% used` : ''}` : 'Codex auto-switch off',
-            on ? 'The active account switches when its weekly or 5-hour window reaches the threshold.' : 'Accounts only switch when you press Activate.');
-        }
-        finally { setBusy(false); }
-        return;
-      }
-      if (action === 'threshold') {
-        refreshGeneration++;
-        const used = Number(String(value).replace('%', ''));
-        if (!Number.isInteger(used) || used < 1 || used > 99) return;
-        setBusy(true);
-        try { const status = await mutation('/api/codex/profiles/auto-switch', { thresholdPercent: 100 - used }, 'PUT'); if (data) data.codexAutoSwitch = status; render(); }
-        finally { setBusy(false); }
         return;
       }
       if (action === 'refresh-interval') {
@@ -631,7 +500,6 @@ export function createFrameDashboard({
         renderUpdate(false); return;
       }
     } catch (error) {
-      if (data && (action === 'threshold' || action === 'automatic' || action.startsWith('antigravity-'))) render();
       if (action === 'refresh-interval') pushRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
       if (authenticated) failure(error?.message || 'Unable to complete the action.');
     }
@@ -639,7 +507,6 @@ export function createFrameDashboard({
 
   /** The frame's Back over an open overlay: it closes the top-most one (bridge.js popstate). */
   function back() {
-    if (activationDialogOpen) { void run('activation-cancel', ''); return true; }
     if (openDetailsId) { openDetailsId = ''; view('details', ''); return true; }
     return false;
   }
@@ -671,7 +538,6 @@ export function createFrameDashboard({
       if (currentPage === 'accounts' && !open) await accounts.loadAll();
       if (gone()) return;
       applyRefreshInterval(refreshIntervalSeconds, refreshSettingsKnown);
-      intervals.push(every(() => { activationConfirmation.expire(); antigravityConfirmation.expire(); }, 1_000));
       intervals.push(every(() => { if (authenticated && updateJob?.state === 'running') void updateStatus(); }, 3_000));
       intervals.push(every(() => { if (authenticated && updateJob?.state !== 'running') void updateStatus(); }, 30_000));
       // "Updated 1m ago" and the reset countdowns stay current between refreshes.
@@ -721,7 +587,7 @@ export function createFrameDashboard({
     },
     /** For tests and the kit. */
     state() {
-      return { started, stopped, authenticated, busy, currentPage, openDetailsId, activationDialogOpen, pending: pendingActivation(), refreshIntervalSeconds, hasData: !!data };
+      return { started, stopped, authenticated, busy, currentPage, openDetailsId, refreshIntervalSeconds, hasData: !!data };
     },
   };
 }

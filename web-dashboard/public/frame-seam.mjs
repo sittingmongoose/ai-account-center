@@ -12,9 +12,6 @@
 export const PAGE_ACTIONS = Object.freeze(new Set([
   // Details and Home rows
   'details', 'details-closed', 'launch',
-  // switching: the target-bound approvals stay in activation-confirmation.mjs and antigravity-confirmation.mjs
-  'activate', 'antigravity-activate', 'activation-confirm', 'activation-cancel',
-  'automatic', 'threshold', 'antigravity-automatic', 'antigravity-threshold', 'antigravity-pool', 'antigravity-cooldown',
   // Accounts & Settings (accounts-controller.mjs handle())
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray',
   'add', 'add-key', 'replace-key', 'signin-again', 'signin', 'session-signin', 'recheck',

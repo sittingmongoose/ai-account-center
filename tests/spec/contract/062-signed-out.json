@@ -1,12 +1,12 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/codex/profiles/fixture-missing/activate",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/status/files/fixture/missing.txt",
+    "role": "signed-out"
   },
   "response": {
     "body": {
+      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

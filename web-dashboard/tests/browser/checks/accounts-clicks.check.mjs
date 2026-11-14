@@ -20,14 +20,6 @@ const account = (id, provider, email, plan, extra = {}) => ({
 const FIXTURE = {
 	schemaVersion: 1,
 	updatedAt: at(-1),
-	// The Antigravity policy box under the section: reported pools dedupe to one chip per label
-	// and the cooldown segments must stay inside the card (2026-11-01 screenshot: five chips
-	// pushed "60 min" past the card edge).
-	antigravityAutoSwitch: {
-		enabled: false, thresholdUsedPercent: 95, pollIntervalSeconds: 60, maxQuotaAgeSeconds: 300,
-		cooldownSeconds: 300, selectedHostIds: ['ubuntu'], requestedPoolId: null,
-		outcome: 'disabled', activationInProgress: false, message: '',
-	},
 	accounts: [
 		account('claude-1', 'claude', 'one@example.invalid', 'max', {
 			windows: [quota('five_hour', 'Five-hour usage', 41, 300), quota('seven_day', 'Weekly usage', 22, 10080), quota('seven_day_fable', 'Weekly Fable usage', 9, 10080)],
@@ -109,7 +101,7 @@ const rectOf = (t, selector) => t.page.evaluate((sel) => {
 async function noSideways(t, name) {
 	const r = await t.page.evaluate(() => {
 		const w = innerWidth;
-		const bad = [...document.querySelectorAll('.route:not([hidden]) button, .route:not([hidden]) .acc-item, .details, .ag-box')]
+		const bad = [...document.querySelectorAll('.route:not([hidden]) button, .route:not([hidden]) .acc-item, .details')]
 			.filter((el) => el.getClientRects().length > 0)
 			.map((el) => ({ el, r: el.getBoundingClientRect() }))
 			.filter(({ r }) => r.width > 0 && (r.x < -1 || r.right > w + 1))
@@ -143,27 +135,12 @@ async function everyRowSurvivesItsClick(t, width) {
 	}
 }
 
-/** The reported bug lived inside the Antigravity policy box: watch-pool choices pushed the cooldown past its edge. */
-async function cooldownInsidePolicyBox(t, width) {
-	const r = await t.page.evaluate(() => {
-		const box = document.querySelector('.route:not([hidden]) .ag-box');
-		if (!box) return null;
-		box.scrollIntoView({ block: 'center' });
-		const b = box.getBoundingClientRect();
-		const params = [...box.querySelectorAll('.ag-param')].map((p) => p.getBoundingClientRect().right);
-		return { right: b.right, params };
-	});
-	if (!r) throw new Error(`the Antigravity policy box is missing at ${width}`);
-	await t.check(`${width}: the policy box's choices stay inside it`, r.params.every((right) => right <= r.right + 0.5), JSON.stringify(r));
-}
-
 export const tests = {
 	async 'provider clicks keep the page on screen'(t) {
 		for (const width of WIDTHS) {
 			await t.viewport(width, 1080);
 			await openAccounts(t);
 			await t.step(`${width}: every account row survives its own click`, () => everyRowSurvivesItsClick(t, width));
-			await cooldownInsidePolicyBox(t, width);
 			await t.audit(`accounts ${width}`);
 			await t.snap(`accounts-clicks-${width}`);
 			await warmCopiesDone(t);

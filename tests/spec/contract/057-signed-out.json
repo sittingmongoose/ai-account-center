@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/bar/auth",
+    "path": "/api/codex/profiles/quotas",
     "role": "signed-out"
   },
   "response": {

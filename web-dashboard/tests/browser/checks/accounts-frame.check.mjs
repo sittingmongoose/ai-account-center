@@ -129,7 +129,7 @@ export const tests = {
 		await t.check('three columns at 1440', await t.page.evaluate(() => document.querySelectorAll('.ac-col').length === 3));
 		await t.text(`${row('codex:one')} .acc-email`, 'codex.active@example.invalid');
 		await t.visible(`${row('codex:one')} .active-mark`, 'the active Codex account says Active');
-		await t.visible(`${row('codex:two')} [data-probe="activate:codex:two"]`, 'the other one has Activate');
+		await t.check('no account offers Activate any more', await t.page.evaluate(() => !document.querySelector('[data-probe^="activate:"]') && !document.querySelector(`.acc-item[data-row="codex:two"] .active-mark`)));
 		await t.audit('accounts 1440');
 	},
 
@@ -218,29 +218,10 @@ export const tests = {
 		const server = fakeServer();
 		await open(t, server);
 		await t.page.click(`${row('codex:one')} [data-probe="signin-again:codex:one"]`);
-		await t.until('the refusal line', () => /is the active account, so it cannot sign in again/.test(document.querySelector('.acc-item[data-row="codex:one"] .row-line.refuse')?.textContent || ''), null, { timeout: 10000 });
+		await t.until('the refusal line', () => /is the live login on its computer, so it cannot sign in again/.test(document.querySelector('.acc-item[data-row="codex:one"] .row-line.refuse')?.textContent || ''), null, { timeout: 10000 });
 		await t.page.click(`${row('codex:one')} [data-probe="remove:codex:one"]`);
-		await t.until('the remove refusal', () => /cannot be removed\. Activate another account first/.test(document.querySelector('.acc-item[data-row="codex:one"] .row-line.refuse')?.textContent || ''), null, { timeout: 10000 });
+		await t.until('the remove refusal', () => /cannot be removed\. Sign in to another account there first/.test(document.querySelector('.acc-item[data-row="codex:one"] .row-line.refuse')?.textContent || ''), null, { timeout: 10000 });
 		await t.equal('no change was sent', changes(server).length, 0);
-	},
-
-	async 'accounts: a pending switch holds changes, shows the frame\'s approval, and cancels'(t) {
-		const server = fakeServer();
-		await open(t, server);
-		await t.page.click(`${row('codex:two')} [data-probe="activate:codex:two"]`);
-		await t.until('the frame shows its switch approval (activation.rs)', () => !!document.querySelector('.adialog') && !document.querySelector('iframe.slint-frame'), null, { timeout: 15000 });
-		const before = changes(server).length;
-		const toasts = await t.page.evaluate(() => document.querySelectorAll('.toast').length);
-		// a change from the page while the switch waits: the controller holds it with a toast
-		await t.page.evaluate(() => window.aacFrameDashboard.act('remove', 'codex:two'));
-		await t.until('a toast says to finish the switch first', () => [...document.querySelectorAll('.toast')].some((el) => /Finish the account switch first/.test(el.textContent)), null, { timeout: 10000 });
-		await t.equal('the remove was not sent', changes(server).length, before);
-		await t.check('one toast more', (await t.page.evaluate(() => document.querySelectorAll('.toast').length)) > toasts);
-		await t.page.locator('.adialog .a-btns .btn', { hasText: 'Cancel' }).click();
-		await t.until('Cancel closes the approval', () => !document.querySelector('.adialog'), null, { timeout: 10000 });
-		const activations = changes(server).filter((r) => r.path.startsWith('/api/codex/profiles/'));
-		await t.equal('one activation ask, no confirmation sent', JSON.stringify(activations.map((r) => r.body)), JSON.stringify([{}]));
-		await t.noConsoleErrors('console: only the switch that asked for a confirmation', { allow: [/status of 409/] });
 	},
 
 	async 'accounts: Details opens from a row, swaps, and closes'(t) {

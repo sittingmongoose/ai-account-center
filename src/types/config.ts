@@ -3,7 +3,7 @@
  * Source: ~/.ccs/config.json
  */
 
-import type { CLIProxyProvider } from '../cliproxy/types';
+import type { CLIProxyProvider } from '../config/schemas/cliproxy';
 import type { TargetType } from '../targets/target-adapter';
 
 /**

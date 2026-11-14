@@ -25,7 +25,6 @@ import {
 import { requestLoggingMiddleware } from './middleware/request-logging-middleware';
 import { createLogger } from '../services/logging';
 import { DEFAULT_DASHBOARD_HOST, isLoopbackHost } from '../commands/config-dashboard-host';
-import { getCodexAutoSwitchService } from './services/codex-auto-switch-service';
 import { getCodexProfileRenewalService } from './services/codex-profile-renewal-service';
 import {
   startAccountAnalyticsSampling,
@@ -323,7 +322,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const stopEventLoopMonitor = startEventLoopMonitor(logger);
   let cleaned = false;
 
-  const codexAutoSwitch = getCodexAutoSwitchService();
   const codexRenewal = getCodexProfileRenewalService();
   // Account changes and sign-in jobs reach /ws clients as hints. A job goes only
   // to browser sessions, and its code only to those that connected over a
@@ -343,7 +341,6 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
     httpsServer?.close();
     detachDashboardEvents();
     stopAccountLifecycleMaintenance();
-    codexAutoSwitch.stop();
     codexRenewal.stop();
     stopAntigravityRuntime();
     stopAccountAnalyticsSampling();
@@ -407,11 +404,10 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         } catch {
           logger.error(
             'antigravity.runtime_unavailable',
-            'Antigravity switching could not initialize safely'
+            'Antigravity usage could not initialize safely'
           );
         }
       }
-      codexAutoSwitch.start();
       try {
         codexRenewal.start();
       } catch {

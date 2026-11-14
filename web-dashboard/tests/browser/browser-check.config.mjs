@@ -66,7 +66,7 @@ export default (ctx) => {
 		},
 		viewport: { width: 1920, height: 1080 },
 		// Signed out on an empty CCS_HOME, the update status call answers 401 by design
-		consoleErrors: { fail: true, allow: [/status of 401 .*\/api\/app-updates\/status/, /status of 409 .*\/activate\b/] }, // 409: a Codex switch asks for its approval first (overlay-close drives it)
+		consoleErrors: { fail: true, allow: [/status of 401 .*\/api\/app-updates\/status/] },
 		// A video with preload="metadata" stops its own request once it has the metadata (net::ERR_ABORTED).
 		failedRequests: { fail: false, allow: [/\/api\/status\/files\/.*\.(mp4|webm)\b/] },
 		// Each test starts with no API stubs: accounts-clicks' synthetic accounts must not reach smoke's empty Home, even after a test that threw

@@ -1,13 +1,12 @@
 //! Details (PLAN step 6): one account's every visible window, its balances and packs, the facts of its reading, and
-//! the row's own action slot, drawn from `detailsViewModel` (view-model.mjs) through the seam (dash.rs). A side panel
+//! the live-login mark and Claude's Open, drawn from `detailsViewModel` (view-model.mjs) through the seam (dash.rs). A side panel
 //! from 760 px of window width (right of the content, left of a Duo rail), a bottom sheet below.
 //!
 //! It opens over any tab when a row sends `details`. A row tapped while it is open swaps it in place; any other tap
-//! outside closes it, except while a switch confirmation waits (as in Slint). Closing sends `details-closed`, so the
+//! outside closes it. Closing sends `details-closed`, so the
 //! dashboard forgets it and consumes its Back entry; Back closes it from the dashboard's side.
 
 use crate::Page;
-use crate::api::Run;
 use crate::dash::nullable;
 use crate::frame::FrameCtx;
 use crate::resets::{ReadingRow, ResetCtx, ResetDialog, ResetHistory, ResetsGroup};
@@ -49,9 +48,6 @@ pub struct MeterView {
     pub sampled: String,
     #[serde(deserialize_with = "nullable")]
     pub source: String,
-    /// The auto-switch point in % used, when the row has one.
-    pub notch: Option<f64>,
-    pub notch_faint: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -140,20 +136,10 @@ pub struct DetailsView {
     #[serde(deserialize_with = "nullable")]
     pub state: String,
     pub active: bool,
-    pub switchable: bool,
-    pub can_activate: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub activate_kind: String,
-    pub can_switch: bool,
     #[serde(deserialize_with = "nullable")]
     pub active_label: String,
     #[serde(deserialize_with = "nullable")]
-    pub activate_hint: String,
-    #[serde(deserialize_with = "nullable")]
     pub platform: String,
-    pub confirm: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub confirm_runs: Vec<Run>,
     #[serde(deserialize_with = "nullable")]
     pub profile: String,
     pub can_mac: bool,
@@ -209,7 +195,7 @@ fn severity(view: &MeterView) -> &'static str {
     }
 }
 
-/// One window: its caps label, the value with "used" and the reset, the bar with the switch notch, then the exact
+/// One window: its caps label, the value with "used" and the reset, the bar, then the exact
 /// reset, the sample and where it was read.
 #[component]
 fn DetailMeter(m: MeterView) -> impl IntoView {
@@ -245,9 +231,6 @@ fn DetailMeter(m: MeterView) -> impl IntoView {
                 view! {
                     <div class="track">
                         <div class=format!("fill {sev}") style=format!("width:{width:.1}%")></div>
-                        {m.notch.filter(|n| n.is_finite()).map(|n| view! {
-                            <span class="notch" class:faint=m.notch_faint style=format!("left:{:.1}%", n.clamp(0.0, 100.0))></span>
-                        })}
                     </div>
                 }.into_any()
             } else {
@@ -281,7 +264,6 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
     let dash = ctx.dash;
     let data = Memo::new(move |_| dash.details.with(|json| parse(json)));
     let open = Memo::new(move |_| data.with(|d| d.is_some()));
-    let confirming = RwSignal::new(false);
     // The reset claims of the account on show: its inventory, the confirm dialog and the result line.
     let rc = ResetCtx::new();
     rc.watch_changes();
@@ -292,11 +274,6 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                 .unwrap_or_default()
         });
         rc.show(&id, &provider, reads);
-    });
-    // a different account, or a closed panel, drops the question
-    Effect::new(move |_| {
-        data.with(|d| d.as_ref().map(|d| d.id.clone()));
-        confirming.set(false);
     });
     let close = move || {
         if dash
@@ -311,12 +288,12 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
     };
     // Escape, and a click anywhere else (desktop: the scrim lets clicks through, as the Slint slide-over did)
     let on_close = Callback::new(move |_| {
-        if dash.activation.with_untracked(|a| a.is_empty()) && !rc.dialog_open() {
+        if !rc.dialog_open() {
             close();
         }
     });
-    // Leaving Accounts retires the panel's opening. While a switch approval waits its close is refused (above): close
-    // it once the approval has gone, so the retired panel isn't left open and hidden for the next account it shows.
+    // Leaving Accounts retires the panel's opening: close it, so the retired panel isn't left open and hidden for the
+    // next account it shows.
     let retired = RwSignal::new(false);
     let on_retire = Callback::new(move |_| retired.set(true));
     Effect::new(move |_| {
@@ -324,21 +301,18 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
             if retired.get_untracked() {
                 retired.set(false);
             }
-        } else if retired.get() && dash.activation.with(|a| a.is_empty()) {
+        } else if retired.get() {
             close();
         }
     });
     // A press outside the panel closes it once the click is handled, unless that click asked for another account
-    // (a row: the panel swaps) or a switch confirmation waits. Captured first, so a button that stops its click
+    // (a row: the panel swaps). Captured first, so a button that stops its click
     // closes it too, as the Slint canvas did. iOS sends no click for a tap on a plain area (the page under the side
     // panel, which lets taps through), so a press that ends without its click closes it a moment after the lift.
     let pressed: StoredValue<Option<(u64, u64)>> = StoredValue::new(None);
     let presses = StoredValue::new(0u64);
     let finish = move |before: u64| {
-        if asks() == before
-            && dash.activation.try_with_untracked(|a| a.is_empty()) == Some(true)
-            && !rc.dialog_open()
-        {
+        if asks() == before && !rc.dialog_open() {
             close();
         }
     };
@@ -347,11 +321,7 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
             let Some(is_open) = open.try_get_untracked() else {
                 return;
             };
-            let calm = dash
-                .activation
-                .try_with_untracked(|a| a.is_empty())
-                .unwrap_or(false)
-                && !rc.dialog_open();
+            let calm = !rc.dialog_open();
             let n = presses.try_get_value().unwrap_or(0) + 1;
             let _ = presses.try_set_value(n);
             let _ = pressed
@@ -422,17 +392,6 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                 style=move || sheet_drag_style(drag.get())
                 aria-label=move || data.with(|d| d.as_ref().map(|d| d.title.clone()).unwrap_or_default())>
                 {move || data.get().map(|d| {
-                    let d2 = d.clone();
-                    let d3 = d.clone();
-                    let state = SwitchState {
-                        active: d.active,
-                        active_label: d.active_label.clone(),
-                        platform: d.platform.clone(),
-                        can_switch: d.can_switch,
-                        can_activate: d.can_activate,
-                        hint: d.activate_hint.clone(),
-                    };
-                    let slot = d.switchable && (d.can_switch || d.active);
                     let n_meters = d.meters.len();
                     view! {
                         <div class="dt-grab"><SheetGrab offset=drag on_close=grab_close/></div>
@@ -450,12 +409,7 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                         </header>
                         <div class="dt-body">
                             <div class="dt-acts">
-                                {slot.then(|| view! {
-                                    <SwitchSlot state=state busy=busy probe=format!("details-activate:{}", d.id)
-                                        on_activate=Callback::new(move |_| {
-                                            if d2.confirm { confirming.set(true); } else { dash.act(&d2.activate_kind, &d2.profile); }
-                                        })/>
-                                })}
+                                {d.active.then(|| view! { <ActiveMark label=d.active_label.clone() platform=d.platform.clone()/> })}
                                 {(d.provider == "claude").then(|| {
                                     let mac = format!("{}:mac", d.profile);
                                     let win = format!("{}:windows", d.profile);
@@ -470,11 +424,6 @@ pub fn DetailsOverlay(ctx: FrameCtx) -> impl IntoView {
                                 <button type="button" class="btn sm ghost" data-probe="details-manage"
                                     on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); close(); ctx.go(Page::Accounts); }>"Manage in Accounts & Settings"</button>
                             </div>
-                            <Show when=move || confirming.get()>
-                                <ConfirmLine runs=d3.confirm_runs.clone() busy=busy
-                                    on_keep=Callback::new(move |_| confirming.set(false))
-                                    on_confirm=Callback::new({ let d = d3.clone(); move |_| { confirming.set(false); dash.act(&d.activate_kind, &d.profile); } })/>
-                            </Show>
                             <section class="fg">
                                 <div class="fg-cap"><h3 class="cap">"Usage windows"</h3><span class="end"><b>{n_meters}</b></span></div>
                                 {if n_meters == 0 {
@@ -580,8 +529,7 @@ mod tests {
     fn closed_details_and_nulls_read_safely() {
         assert!(parse("").is_none());
         assert!(parse("{\"id\":\"\"}").is_none());
-        let d = parse(r#"{"id":"codex:a","title":"a@example.test","meters":[{"key":"k","hasValue":true,"value":96.5,"valueText":"96.5%","notch":95,"reset":null}],"amounts":null,"facts":[{"label":"Status","value":"OK"}]}"#).unwrap();
-        assert_eq!(d.meters[0].notch, Some(95.0));
+        let d = parse(r#"{"id":"codex:a","title":"a@example.test","meters":[{"key":"k","hasValue":true,"value":96.5,"valueText":"96.5%","reset":null}],"amounts":null,"facts":[{"label":"Status","value":"OK"}]}"#).unwrap();
         assert_eq!(severity(&d.meters[0]), "crit");
         assert!(d.amounts.is_empty());
         assert_eq!(d.facts[0].value, "OK");

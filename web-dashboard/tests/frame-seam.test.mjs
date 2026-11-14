@@ -7,7 +7,7 @@ import { MUTATING_ACTIONS } from '../public/accounts-controller.mjs';
 
 test('the allowlist covers every Accounts & Settings change and never sign-in, the frame\'s commands or the canvas', () => {
   for (const kind of MUTATING_ACTIONS) assert.ok(PAGE_ACTIONS.has(kind), `${kind} is a page action`);
-  for (const kind of ['details', 'details-closed', 'launch', 'activate', 'antigravity-activate', 'activation-confirm', 'activation-cancel',
+  for (const kind of ['details', 'details-closed', 'launch',
     'flow-submit', 'flow-copy', 'flow-open-url', 'refuse', 'line-cancel', 'pw-toggle', 'pw-typing', 'refresh-interval', 'update-cancel',
     'install-app']) {
     assert.ok(PAGE_ACTIONS.has(kind), `${kind} is a page action`);
@@ -15,7 +15,10 @@ test('the allowlist covers every Accounts & Settings change and never sign-in, t
   for (const kind of ['login', 'setup', 'setup-typing', 'login-overlay', 'login-field-focus', 'login-limit-over', 'probe-rect',
     'content-rect', 'content-cover', 'overlay-open', 'overlay-close', 'navigate', 'navigate-dashboard', 'navigate-analytics',
     'theme', 'refresh', 'update-apps', 'logout', 'auth-recheck', 'analytics-refresh', 'analytics-activity-interval',
-    'analytics-metric-key', 'analytics-account', 'analytics-account-id', 'analytics-metric']) {
+    'analytics-metric-key', 'analytics-account', 'analytics-account-id', 'analytics-metric',
+    // account switching was removed with its actions
+    'activate', 'antigravity-activate', 'activation-confirm', 'activation-cancel', 'automatic', 'threshold',
+    'antigravity-automatic', 'antigravity-threshold', 'antigravity-pool', 'antigravity-cooldown']) {
     assert.equal(PAGE_ACTIONS.has(kind), false, `${kind} is not a page action`);
   }
 });

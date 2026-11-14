@@ -1,11 +1,12 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/app-updates/status",
+    "path": "/api/auth/devices/me",
     "role": "signed-out"
   },
   "response": {
     "body": {
+      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

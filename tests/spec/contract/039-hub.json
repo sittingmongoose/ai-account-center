@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "DELETE",
-    "path": "/api/auth/devices/fixture-missing",
+    "method": "POST",
+    "path": "/api/auth/devices/revoke-all",
     "role": "hub",
     "body": {}
   },

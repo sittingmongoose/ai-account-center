@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import type { CodexQuotaResult } from '../../../src/cliproxy/quota/quota-types';
+import type { CodexQuotaResult } from '../../../src/web-server/usage/codex-quota/quota-types';
 import type { DashboardAccount } from '../../../src/web-server/services/account-dashboard-types';
 import {
   codexUsageIdentity,

@@ -23,7 +23,6 @@ import { invalidateConfigCache } from '../../../src/config/config-loader-facade'
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
 import { resetAuthRateLimitsForTests } from '../../../src/web-server/routes/auth-rate-limits';
 import { setTrustedProxyResolver } from '../../../src/web-server/middleware/secure-transport';
-import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 import { resetDashboardAuthStateForTests } from '../../../src/web-server/services/dashboard-auth-state';
 import { resetDeviceStoreForTests } from '../../../src/web-server/services/dashboard-device-store';
@@ -65,7 +64,6 @@ beforeEach(() => {
   resetSetupCodeForTests();
   invalidateConfigCache();
   stubs = [
-    spyOn(CodexAutoSwitchService.prototype, 'start').mockImplementation(() => {}),
     spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {}),
   ];
 });

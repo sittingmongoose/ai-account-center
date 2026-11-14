@@ -5,7 +5,6 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { startServer } from '../../../src/web-server';
-import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import { CodexProfileRenewalService } from '../../../src/web-server/services/codex-profile-renewal-service';
 import * as analyticsSampling from '../../../src/web-server/services/account-analytics-service';
 
@@ -14,7 +13,6 @@ const staticDirs: string[] = [];
 const fixtureEnvKeys = ['CCS_HOME', 'CCS_DIR', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'] as const;
 let fixtureHome = '';
 let originalEnv: Partial<Record<(typeof fixtureEnvKeys)[number], string | undefined>> = {};
-let autoSwitchStart: ReturnType<typeof spyOn<CodexAutoSwitchService, 'start'>>;
 let renewalStart: ReturnType<typeof spyOn<CodexProfileRenewalService, 'start'>>;
 let renewalStop: ReturnType<typeof spyOn<CodexProfileRenewalService, 'stop'>>;
 let analyticsStart: ReturnType<
@@ -31,7 +29,6 @@ beforeEach(() => {
 
   // Exercise the real HTTP/session/upgrade stack while avoiding background
   // account activation and usage helpers unrelated to these server fixtures.
-  autoSwitchStart = spyOn(CodexAutoSwitchService.prototype, 'start').mockImplementation(() => {});
   renewalStart = spyOn(CodexProfileRenewalService.prototype, 'start').mockImplementation(() => {});
   renewalStop = spyOn(CodexProfileRenewalService.prototype, 'stop');
   analyticsStart = spyOn(analyticsSampling, 'startAccountAnalyticsSampling').mockImplementation(
@@ -84,7 +81,6 @@ function dispatchUpgrade(instance: Awaited<ReturnType<typeof startServer>>, url:
 }
 
 afterEach(async () => {
-  expect(autoSwitchStart).toHaveBeenCalledTimes(1);
   expect(renewalStart).toHaveBeenCalledTimes(1);
   expect(analyticsStart).toHaveBeenCalledTimes(1);
   while (instances.length > 0) {

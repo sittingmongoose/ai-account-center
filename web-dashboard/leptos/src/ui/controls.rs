@@ -1,10 +1,7 @@
-//! Small controls from the Slint component library: the toggle, the waiting spinner, a check line, the "coming" word,
-//! the switch slot (Activate, or the plain Active mark) and the inline "Activate anyway?" line. Shared by Accounts &
-//! Settings, Details and Home.
+//! Small controls from the Slint component library: the toggle, the waiting spinner, a check line, the "coming" word
+//! and the plain Active mark. Shared by Accounts & Settings, Details and Home.
 
 use super::icons::Icon;
-use super::parts::runs_view;
-use crate::api::Run;
 use leptos::prelude::*;
 
 /// A switch. It flips at once when pressed (as Slint's Toggle does) and follows the saved value again whenever that
@@ -91,79 +88,18 @@ pub fn CheckLine(
     }
 }
 
-/// What a switch slot shows for one account (the Home row's action slot).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SwitchState {
-    pub active: bool,
-    /// "on Ubuntu"; empty falls back to "on <platform>".
-    pub active_label: String,
-    pub platform: String,
-    pub can_switch: bool,
-    pub can_activate: bool,
-    pub hint: String,
-}
-
-/// Activate (accent outline) or the plain Active mark with where it is active. A tap on an Activate that can't run
-/// gives its reason; a running switch (`busy`) holds every Activate.
+/// The plain Active mark for the account that is the live login on its computer ("on Ubuntu"; empty falls back to
+/// "on <platform>"). A fact only: AI Account Center no longer switches accounts.
 #[component]
-pub fn SwitchSlot(
-    #[prop(into)] state: Signal<SwitchState>,
-    #[prop(into)] busy: Signal<bool>,
-    #[prop(optional, into)] probe: Option<String>,
-    on_activate: Callback<()>,
-    #[prop(optional)] on_reason: Option<Callback<String>>,
-) -> impl IntoView {
+pub fn ActiveMark(#[prop(into)] label: String, #[prop(into)] platform: String) -> impl IntoView {
+    let at = if label.is_empty() {
+        format!("on {platform}")
+    } else {
+        label
+    };
     view! {
         <span class="sw-slot">
-            {move || {
-                let s = state.get();
-                if s.active {
-                    let at = if s.active_label.is_empty() { format!("on {}", s.platform) } else { s.active_label.clone() };
-                    return view! {
-                        <span class="active-mark"><Icon name="check-circle"/><span class="am-text"><b>"Active"</b><span class="am-where">{at}</span></span></span>
-                    }.into_any();
-                }
-                if !s.can_switch {
-                    return ().into_any();
-                }
-                let can = s.can_activate;
-                let hint = s.hint.clone();
-                let tip = hint.clone();
-                view! {
-                    <button type="button" class="btn sm accent-line" data-probe=probe.clone()
-                        aria-disabled=move || if can && !busy.get() { "false" } else { "true" }
-                        title=(!tip.is_empty()).then_some(tip)
-                        on:click=move |e: web_sys::MouseEvent| {
-                            e.stop_propagation();
-                            if busy.get_untracked() { return; }
-                            if can { on_activate.run(()); }
-                            else if let Some(reason) = on_reason { if !hint.is_empty() { reason.run(hint.clone()); } }
-                        }>
-                        <Icon name="swap"/>"Activate"
-                    </button>
-                }.into_any()
-            }}
+            <span class="active-mark"><Icon name="check-circle"/><span class="am-text"><b>"Active"</b><span class="am-where">{at}</span></span></span>
         </span>
-    }
-}
-
-/// The inline question before activating an account already at or past its switch point (view model `confirmRuns`):
-/// "Keep current" closes it, "Activate anyway" runs the same guarded activation.
-#[component]
-pub fn ConfirmLine(
-    runs: Vec<Run>,
-    #[prop(into)] busy: Signal<bool>,
-    on_keep: Callback<()>,
-    on_confirm: Callback<()>,
-) -> impl IntoView {
-    view! {
-        <div class="confirm-line" role="group" on:click=|e: web_sys::MouseEvent| e.stop_propagation()>
-            <Icon name="alert"/>
-            <p class="cl-text">{runs_view(runs)}</p>
-            <span class="cl-acts">
-                <button type="button" class="btn sm ghost" disabled=move || busy.get() on:click=move |_| on_keep.run(())>"Keep current"</button>
-                <button type="button" class="btn sm accent-line" disabled=move || busy.get() on:click=move |_| on_confirm.run(())>"Activate anyway"</button>
-            </span>
-        </div>
     }
 }

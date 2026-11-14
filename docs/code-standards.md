@@ -24,8 +24,8 @@ Test with temporary `CCS_HOME`; preserve `~/.ccs/`, session/profile aliases and
 native host identities. Keep tokens, cookies and raw provider payloads out of
 logs, fixtures and client models.
 
-Preserve authentication/origin/session checks, target-bound activation approvals,
-idle-only auto-switch, identity-bound caches, private atomic writes, migrations
+Preserve authentication/origin/session checks, removal and reset-claim approvals,
+identity-bound caches, private atomic writes, migrations
 and rollback. Polling and startup must not launch app updates or mutate accounts.
 
 ### No personal details in the repository

@@ -93,7 +93,7 @@ const responseIsRateLimited = (response: UsageHelperResponse): boolean =>
 const tracksVerifiedPlan = (target: UsageFailoverTarget): boolean =>
   target.provider === 'muse' || target.provider === 'cursor';
 
-/** Display-only quota recovery. It cannot activate accounts or produce an activation proof. */
+/** Display-only quota recovery. It never changes which account a program uses. */
 export class UsageFailoverService {
   private readonly states = new Map<string, State>();
   private readonly inventories = new Map<
@@ -455,12 +455,7 @@ export class UsageFailoverService {
       status: stale ? 'cached' : 'ok',
       source: `Verified ${nativeMusePeer ? 'native subscription ' : ''}quota on ${HOST_LABELS[host]}${fallback ? ' (fallback)' : ''}`,
       message: stale ? 'Showing the last successful reading; live usage is unavailable.' : null,
-      capabilities: {
-        ...template.capabilities,
-        ...(template.provider === 'antigravity' && fallback
-          ? { antigravityCanActivate: false }
-          : {}),
-      },
+      capabilities: { ...template.capabilities },
     };
     if (template.status === 'needs_sign_in') {
       result.status = 'needs_sign_in';

@@ -1,12 +1,12 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/claude/desktop-profiles",
+    "path": "/api/health",
     "role": "session"
   },
   "response": {
     "body": {
-      "profiles": []
+      "status": "ok"
     },
     "headers": {
       "content-type": "application/json; charset=utf-8",

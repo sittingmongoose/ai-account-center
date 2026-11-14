@@ -1,9 +1,9 @@
 // Home's test data for the browser kit (checks/home-page.check.mjs, home-images/): a dashboard response with every
 // kind of row and card Home draws. Made-up names only; never a real account.
 //   Claude: Pro, Max with a Fable window, one past 100% (overage), one with no Fable reading, one that failed to refresh.
-//   Codex: the active account, one past the 95% switch point (it asks "Activate anyway?"), one with no 5-hour window,
-//   credits and banked resets; auto-switch on at 95% used.
-//   Antigravity: one login (no native inventory here, so it can't be activated: the section says why).
+//   Codex: the live login, one at 97% used, one with no 5-hour window, credits and banked resets. codexAutoSwitch is
+//   the retired always-off field the server still sends for older trays.
+//   Antigravity: one login (no native inventory here, so no live login is named).
 //   Cards: Cursor (a meter and spend), Kimi Code, Z.ai (resets pack), Qwen, Muse Code, OpenCode Go (spend only).
 
 export function homeAccounts(now = Date.now()) {
@@ -28,8 +28,8 @@ export function homeAccounts(now = Date.now()) {
 		updatedAt: at(-1),
 		settings: { refreshIntervalSeconds: 60 },
 		codexAutoSwitch: {
-			enabled: true, thresholdPercent: 5, pollIntervalSeconds: 60, outcome: 'healthy', message: 'The active account is below the switch point.',
-			activationInProgress: false, checkedAt: at(-1),
+			enabled: false, thresholdPercent: 5, thresholdUsedPercent: 95, pollIntervalSeconds: 60, outcome: 'disabled',
+			message: 'Account switching was removed. AI Account Center shows usage only.', activationInProgress: false,
 		},
 		accounts: [
 			claude('pro-a', 'a.very.long.example.name@example.invalid', 'pro', [

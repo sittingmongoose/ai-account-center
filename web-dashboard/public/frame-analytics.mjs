@@ -19,14 +19,12 @@ import { usageView, usageHead, apiRangeFor, apiQueryFor, payloadViewKey, trendPa
 import { quotaView, agendaView } from './analytics-quota.mjs';
 import {
   createAnalyticsPage,
-  analyticsThresholds,
   analyticsCovers,
   analyticsPollDelay,
   applyAnalyticsAction,
   applyAnalyticsLayout,
 } from './analytics-page.mjs';
 import { chromeView } from './view-model.mjs';
-import { validAntigravityAuto } from './antigravity-data.mjs';
 import { setDisplayTimeZone } from './time-format.mjs';
 import { rememberSeen, ANALYTICS_SAVED_KEY } from './auth-view.mjs';
 import { relTxt } from './analytics-usage.mjs';
@@ -75,7 +73,6 @@ export function createFrameAnalytics({
   const page = createAnalyticsPage();
   let payload = null;
   let dashboard = null;
-  let antigravityAuto = null;
   let intervalSeconds = DEFAULT_INTERVAL_SECONDS;
   let shown = false;
   let stopped = false;
@@ -150,8 +147,8 @@ export function createFrameAnalytics({
   }
 
   /**
-   * What the page reads beside the analytics: the dashboard (hidden accounts and providers, the switch thresholds, the
-   * refresh interval and the chrome line), Antigravity's automatic switching (its threshold) and the display time zone.
+   * What the page reads beside the analytics: the dashboard (hidden accounts and providers, the refresh interval and
+   * the chrome line) and the display time zone.
    * A failed read keeps what was read before. `announce`: a real refresh (the refresh interval, Refresh), which the
    * header says ("Refreshing", as bridge.js says it); the first read and a return to the tab say nothing.
    */
@@ -160,9 +157,8 @@ export function createFrameAnalytics({
       reading = true;
       renderChrome();
     }
-    const [next, auto, prefs] = await Promise.all([
+    const [next, prefs] = await Promise.all([
       read(`/api/accounts/dashboard?platform=${platform}&refresh=${force}`).catch(() => null),
-      read('/api/antigravity/auto-switch').catch(() => null),
       read('/api/accounts/preferences').catch(() => null),
     ]);
     reading = false;
@@ -171,7 +167,6 @@ export function createFrameAnalytics({
       dashboard = next;
       const seconds = next.settings?.refreshIntervalSeconds;
       if (Number.isInteger(seconds) && seconds >= 30 && seconds <= 3600) intervalSeconds = seconds;
-      antigravityAuto = validAntigravityAuto(auto) ? auto : validAntigravityAuto(next.antigravityAutoSwitch) ? next.antigravityAutoSwitch : null;
     }
     if (prefs && typeof prefs.timeZone === 'string') {
       try {
@@ -254,10 +249,9 @@ export function createFrameAnalytics({
     if (!validPayload(candidate) || at === null || now() - at > SAVED_MAX_AGE_MS || at - now() > 60_000) return false;
     payload = candidate;
     restored = true;
-    // the account list and thresholds it was drawn with (hidden accounts stay hidden) until the dashboard is read
+    // the account list it was drawn with (hidden accounts stay hidden) until the dashboard is read
     if (!dashboard && kept.dashboard?.schemaVersion === 1 && Array.isArray(kept.dashboard.accounts)) {
       dashboard = kept.dashboard;
-      antigravityAuto = validAntigravityAuto(kept.auto) ? kept.auto : null;
     }
     return true;
   }
@@ -282,7 +276,7 @@ export function createFrameAnalytics({
         if (other) views = { [other[0]]: other[1], [preset]: payload };
       }
     } catch {}
-    const extra = dashboard ? { dashboard, auto: antigravityAuto } : {};
+    const extra = dashboard ? { dashboard } : {};
     let json = JSON.stringify({ v: 1, platform, views, ...extra });
     if (json.length > SAVED_MAX_CHARS) json = JSON.stringify({ v: 1, platform, views: { [preset]: payload }, ...extra });
     if (json.length > SAVED_MAX_CHARS) return;
@@ -305,7 +299,6 @@ export function createFrameAnalytics({
       collapsed: page.collapsed,
       focusWidth: page.sizes.focus?.w,
       focusHeight: page.sizes.focus?.h,
-      thresholds: analyticsThresholds(dashboard, antigravityAuto),
     };
     // quota and agenda times read at minute precision, so they run on a minute clock (bridge.js renderAnalytics)
     const slow = { ...ctx, now: Math.floor(t / 60000) * 60000 };

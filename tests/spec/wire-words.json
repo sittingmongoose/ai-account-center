@@ -4,8 +4,7 @@
     "cause": "cancelled",
     "sources": [
       "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
-      "src/commands/antigravity-command.ts:result.status",
-      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES"
+      "src/commands/antigravity-command.ts:result.status"
     ]
   },
   {
@@ -77,46 +76,21 @@
     "sources": [
       "src/codex-auth/codex-profile-renewal.ts:outcome.reason",
       "src/codex-auth/codex-renewal-status-store.ts:outcome.reason",
-      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
-      "src/web-server/services/codex-auto-switch-service.ts:cause"
-    ]
-  },
-  {
-    "word": "activation_error",
-    "cause": "provider_error",
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:cause"
-    ]
-  },
-  {
-    "word": "activation_running",
-    "cause": null,
-    "sources": [
-      "src/codex-auth/activate-codex-profile.ts:reason",
-      "src/web-server/routes/codex-routes.ts:error.details?.reason",
-      "src/web-server/routes/codex-routes.ts:failures"
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason"
     ]
   },
   {
     "word": "activation-running",
     "cause": null,
     "sources": [
-      "src/antigravity/switch-service.ts:reason",
-      "src/antigravity/types.ts:reason",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+      "src/antigravity/types.ts:reason"
     ]
   },
   {
     "word": "active",
     "cause": null,
     "sources": [
-      "src/antigravity/auto-switch/monitor.ts:result.status",
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/terminal-activate.ts:result.status",
       "src/antigravity/types.ts:ActivationStatus",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
-      "src/web-server/routes/antigravity-activate-route.ts:result.status",
-      "src/web-server/routes/antigravity-activate-route.ts:status",
       "src/web-server/usage-hub/usage-hub-contract.ts:status",
       "src/web-server/usage-hub/usage-hub-projection.ts:status"
     ]
@@ -125,9 +99,7 @@
     "word": "active-identity-changed",
     "cause": null,
     "sources": [
-      "src/antigravity/switch-service.ts:reason",
-      "src/antigravity/types.ts:reason",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+      "src/antigravity/types.ts:reason"
     ]
   },
   {
@@ -155,13 +127,7 @@
     "word": "already-active",
     "cause": null,
     "sources": [
-      "src/antigravity/auto-switch/monitor.ts:result.status",
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/terminal-activate.ts:result.status",
-      "src/antigravity/types.ts:ActivationStatus",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
-      "src/web-server/routes/antigravity-activate-route.ts:result.status",
-      "src/web-server/routes/antigravity-activate-route.ts:status"
+      "src/antigravity/types.ts:ActivationStatus"
     ]
   },
   {
@@ -211,20 +177,6 @@
     ]
   },
   {
-    "word": "auth_file_missing",
-    "cause": "auth_required",
-    "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
-    ]
-  },
-  {
-    "word": "auth_read_failed",
-    "cause": "auth_required",
-    "sources": [
-      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
-    ]
-  },
-  {
     "word": "auth_required",
     "cause": "auth_required",
     "sources": [
@@ -235,18 +187,11 @@
     ]
   },
   {
-    "word": "auth_write_failed",
-    "cause": "auth_required",
-    "sources": [
-      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
-    ]
-  },
-  {
     "word": "available",
     "cause": null,
     "sources": [
-      "src/cliproxy/quota/codex-extra-usage.ts:credit?.status",
-      "src/web-server/services/codex-profile-quota-service.ts:status"
+      "src/web-server/services/codex-profile-quota-service.ts:status",
+      "src/web-server/usage/codex-quota/codex-extra-usage.ts:credit?.status"
     ]
   },
   {
@@ -346,18 +291,10 @@
       "scripts/app-updates/app_update_t3.py:error.code",
       "scripts/app-updates/app_updates.py:UpdateFailure",
       "src/antigravity/account-lifecycle.ts:error.code",
-      "src/antigravity/auto-switch/monitor.ts:result.status",
-      "src/antigravity/auto-switch/types.ts:status",
       "src/antigravity/switch-service.ts:error.code",
-      "src/antigravity/terminal-activate.ts:error.code",
       "src/antigravity/types.ts:ActivationStatus",
-      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode",
-      "src/codex-auth/activate-codex-profile.ts:error.code",
       "src/codex-auth/codex-activation-runtime.ts:error.code",
       "src/commands/antigravity-command.ts:error.code",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
-      "src/web-server/routes/antigravity-recover-route.ts:error.code",
-      "src/web-server/services/codex-auto-switch-service.ts:error.code",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
     ]
   },
@@ -408,9 +345,6 @@
       "scripts/account-usage/muse_console.py:status",
       "scripts/account-usage/muse_console.py:value.get('status')",
       "scripts/account-usage/muse_native.py:sample['status']",
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/runtime-composition.ts:snapshot.status",
-      "src/antigravity/runtime-composition.ts:status",
       "src/antigravity/usage-contract.ts:status",
       "src/antigravity/usage-normalization.ts:status",
       "src/antigravity/usage-service.ts:result.status",
@@ -448,7 +382,6 @@
       "src/web-server/services/account-dashboard-projection.ts:status",
       "src/web-server/services/account-dashboard-projection.ts:usage?.status",
       "src/web-server/services/account-dashboard-projection.ts:window.status",
-      "src/web-server/services/account-dashboard-service.ts:current.status",
       "src/web-server/services/account-dashboard-service.ts:status",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
       "src/web-server/services/account-dashboard-types.ts:status",
@@ -703,16 +636,7 @@
       "scripts/app-updates/app_update_t3.py:job.get('state')",
       "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
       "src/commands/antigravity-command.ts:result.status",
-      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES",
       "src/web-server/services/app-update-contract.ts:state"
-    ]
-  },
-  {
-    "word": "confirmation_stale",
-    "cause": null,
-    "sources": [
-      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode",
-      "src/web-server/services/codex-auto-switch-service.ts:error.code"
     ]
   },
   {
@@ -726,11 +650,7 @@
     "word": "confirmation-required",
     "cause": null,
     "sources": [
-      "src/antigravity/auto-switch/monitor.ts:result.status",
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/terminal-activate.ts:result.status",
-      "src/antigravity/types.ts:ActivationStatus",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES"
+      "src/antigravity/types.ts:ActivationStatus"
     ]
   },
   {
@@ -878,7 +798,7 @@
     "word": "deactivated_workspace",
     "cause": null,
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
   },
   {
@@ -900,13 +820,6 @@
     ]
   },
   {
-    "word": "decision_changed_before_activation",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:cause"
-    ]
-  },
-  {
     "word": "dedupe_failed",
     "cause": "provider_error",
     "sources": [
@@ -917,10 +830,7 @@
     "word": "deferred",
     "cause": null,
     "sources": [
-      "src/antigravity/auto-switch/monitor.ts:result.status",
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/types.ts:ActivationStatus",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES"
+      "src/antigravity/types.ts:ActivationStatus"
     ]
   },
   {
@@ -1088,9 +998,6 @@
       "scripts/account-usage/plan_usage.py:CollectionError",
       "scripts/account-usage/plan_usage.py:status",
       "scripts/antigravity/quota_adapter.py:base['status']",
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/runtime-composition.ts:snapshot.status",
-      "src/antigravity/runtime-composition.ts:status",
       "src/antigravity/usage-contract.ts:status",
       "src/antigravity/usage-normalization.ts:status",
       "src/antigravity/usage-service.ts:result.status",
@@ -1237,7 +1144,6 @@
       "src/web-server/services/app-update-service.ts:state",
       "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
       "src/web-server/services/claude-open-operations.ts:state",
-      "src/web-server/services/codex-auto-switch-service.ts:renewals.get(profile.name)?.state",
       "src/web-server/services/codex-profile-quota-service.ts:renewal?.state",
       "src/web-server/services/codex-renewal-notes.ts:entry.state",
       "src/web-server/services/signin-job-types.ts:SignInJobState",
@@ -1256,12 +1162,7 @@
     "word": "failed-rolled-back",
     "cause": "provider_error",
     "sources": [
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
-      "src/antigravity/types.ts:ActivationStatus",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
-      "src/web-server/routes/antigravity-activate-route.ts:result.status",
-      "src/web-server/routes/antigravity-activate-route.ts:status"
+      "src/antigravity/types.ts:ActivationStatus"
     ]
   },
   {
@@ -1383,9 +1284,7 @@
     "word": "foreign-replacement",
     "cause": null,
     "sources": [
-      "src/antigravity/switch-service.ts:reason",
-      "src/antigravity/types.ts:reason",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+      "src/antigravity/types.ts:reason"
     ]
   },
   {
@@ -1393,10 +1292,7 @@
     "cause": null,
     "sources": [
       "scripts/antigravity/quota_adapter.py:status",
-      "src/antigravity/auto-switch/policy.ts:quota.status",
-      "src/antigravity/auto-switch/types.ts:status",
       "src/antigravity/runtime-composition.ts:snapshot.status",
-      "src/antigravity/runtime-composition.ts:status",
       "src/antigravity/usage-contract.ts:status",
       "src/antigravity/usage-service.ts:sample.status",
       "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
@@ -1572,7 +1468,6 @@
       "src/antigravity/usage-normalization.ts:statusReason",
       "src/antigravity/usage-normalization.ts:value.statusReason",
       "src/antigravity/usage-service.ts:result.statusReason",
-      "src/web-server/services/account-dashboard-state.ts:account.statusReason",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatusReason",
       "src/web-server/services/opencode-console-wallet-service.ts:result?.statusReason",
       "src/web-server/services/usage-failover-antigravity.ts:account.statusReason",
@@ -1609,9 +1504,7 @@
     "word": "identity-verification-failed",
     "cause": "provider_error",
     "sources": [
-      "src/antigravity/switch-service.ts:reason",
-      "src/antigravity/types.ts:reason",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+      "src/antigravity/types.ts:reason"
     ]
   },
   {
@@ -1751,25 +1644,11 @@
     ]
   },
   {
-    "word": "invalid_codex_home",
-    "cause": "damaged",
-    "sources": [
-      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
-    ]
-  },
-  {
     "word": "invalid_credentials",
     "cause": "damaged",
     "sources": [
       "src/web-server/routes/auth-device-routes.ts:reason",
       "src/web-server/routes/auth-routes.ts:reason"
-    ]
-  },
-  {
-    "word": "invalid_profile",
-    "cause": "damaged",
-    "sources": [
-      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
     ]
   },
   {
@@ -1837,12 +1716,7 @@
     "word": "invalid-profile",
     "cause": "damaged",
     "sources": [
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
-      "src/antigravity/types.ts:ActivationStatus",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
-      "src/web-server/routes/antigravity-activate-route.ts:result.status",
-      "src/web-server/routes/antigravity-activate-route.ts:status"
+      "src/antigravity/types.ts:ActivationStatus"
     ]
   },
   {
@@ -2028,20 +1902,6 @@
     ]
   },
   {
-    "word": "live_login_changed_under_lock",
-    "cause": "signin_needed",
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:cause"
-    ]
-  },
-  {
-    "word": "live_login_mismatch",
-    "cause": "signin_needed",
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:cause"
-    ]
-  },
-  {
     "word": "live_unverifiable",
     "cause": null,
     "sources": [
@@ -2186,7 +2046,6 @@
       "src/web-server/scoreboard/scoreboard-sources.ts:catalog.state",
       "src/web-server/scoreboard/scoreboard-sources.ts:runs.state",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
-      "src/web-server/services/codex-auto-switch-service.ts:reason",
       "src/web-server/services/signin-jobs.ts:failure",
       "src/web-server/services/signin-process.ts:SignInSpawnFailure",
       "src/web-server/status/agent-reports-reader.ts:state",
@@ -2205,14 +2064,14 @@
     "word": "missing_access_token",
     "cause": "not_installed",
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode"
     ]
   },
   {
     "word": "missing_account_id",
     "cause": "not_installed",
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode"
     ]
   },
   {
@@ -2339,7 +2198,6 @@
       "src/antigravity/usage-service.ts:status",
       "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
       "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
-      "src/web-server/services/account-analytics-providers.ts:account.status",
       "src/web-server/services/account-dashboard-projection.ts:status",
       "src/web-server/services/account-dashboard-state.ts:account.status",
       "src/web-server/services/account-dashboard-state.ts:status",
@@ -2380,23 +2238,16 @@
       "scripts/account-usage/muse_console.py:MuseError",
       "scripts/account-usage/muse_console.py:error.code",
       "scripts/account-usage/muse_console.py:state",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
       "src/web-server/services/additional-account-service.ts:MUSE_TRANSIENT_FAILURES",
-      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode"
     ]
   },
   {
     "word": "network_timeout",
     "cause": "timeout",
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
-    ]
-  },
-  {
-    "word": "no_active_profile",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:cause"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode"
     ]
   },
   {
@@ -2432,13 +2283,6 @@
     "sources": [
       "scripts/claude-signin/claude_signin.py:row['state']",
       "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES"
-    ]
-  },
-  {
-    "word": "no_healthy_other",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:cause"
     ]
   },
   {
@@ -2596,13 +2440,6 @@
     ]
   },
   {
-    "word": "no_windows",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:reason"
-    ]
-  },
-  {
     "word": "no-installation",
     "cause": null,
     "sources": [
@@ -2623,9 +2460,7 @@
     "cause": null,
     "sources": [
       "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
-      "src/commands/antigravity-command.ts:result.status",
-      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES",
-      "src/web-server/routes/antigravity-routes.ts:status"
+      "src/commands/antigravity-command.ts:result.status"
     ]
   },
   {
@@ -2734,13 +2569,6 @@
     "cause": null,
     "sources": [
       "src/web-server/status/status-files.ts:reason"
-    ]
-  },
-  {
-    "word": "not_network",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:reason"
     ]
   },
   {
@@ -2912,7 +2740,6 @@
       "src/web-server/services/claude-account-stores.ts:read.state",
       "src/web-server/services/claude-desktop-live-service.ts:result.status",
       "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
-      "src/web-server/services/codex-auto-switch-service.ts:row.quotaStatus",
       "src/web-server/services/codex-profile-quota-service.ts:row?.quotaStatus",
       "src/web-server/services/cursor-account-reader.ts:status",
       "src/web-server/services/dashboard-auth-files.ts:state",
@@ -3106,8 +2933,8 @@
     "word": "payment_required",
     "cause": null,
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
   },
   {
@@ -3308,8 +3135,8 @@
     "word": "provider_unavailable",
     "cause": "provider_error",
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
   },
   {
@@ -3340,25 +3167,23 @@
     "word": "quota_api_forbidden",
     "cause": null,
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
   },
   {
     "word": "quota_endpoint_not_found",
     "cause": "not_installed",
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
   },
   {
     "word": "quota-changed",
     "cause": null,
     "sources": [
-      "src/antigravity/switch-service.ts:reason",
-      "src/antigravity/types.ts:reason",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+      "src/antigravity/types.ts:reason"
     ]
   },
   {
@@ -3404,16 +3229,15 @@
       "scripts/account-usage/plan_common.py:failure_code",
       "scripts/antigravity/quota_adapter.py:base['status']",
       "scripts/antigravity/quota_adapter.py:status",
-      "src/antigravity/auto-switch/types.ts:status",
       "src/antigravity/runtime-composition.ts:snapshot.status",
       "src/antigravity/runtime-composition.ts:status",
       "src/antigravity/usage-contract.ts:status",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode",
       "src/web-server/routes/account-lifecycle-routes.ts:error.code",
       "src/web-server/services/additional-account-service.ts:MUSE_TRANSIENT_FAILURES",
       "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
-      "src/web-server/services/usage-failover-service.ts:response.failureCode"
+      "src/web-server/services/usage-failover-service.ts:response.failureCode",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
   },
   {
@@ -3485,9 +3309,9 @@
     "word": "reauth_required",
     "cause": "auth_required",
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode",
-      "src/web-server/services/codex-profile-quota-service.ts:status"
+      "src/web-server/services/codex-profile-quota-service.ts:status",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
   },
   {
@@ -3531,18 +3355,10 @@
     "sources": [
       "scripts/antigravity/runtime/resident_broker.py:state['phase']",
       "src/antigravity/account-lifecycle.ts:error.code",
-      "src/antigravity/auto-switch/types.ts:status",
       "src/antigravity/registry.ts:state",
       "src/antigravity/registry.ts:state.transaction.state",
       "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
-      "src/antigravity/switch-service.ts:error.code",
-      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
-      "src/antigravity/types.ts:ActivationStatus",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
-      "src/web-server/routes/antigravity-activate-route.ts:result.status",
-      "src/web-server/routes/antigravity-activate-route.ts:status",
-      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES",
-      "src/web-server/routes/antigravity-recover-route.ts:result.status"
+      "src/antigravity/types.ts:ActivationStatus"
     ]
   },
   {
@@ -3683,14 +3499,6 @@
     ]
   },
   {
-    "word": "reset_passed",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:assessed.reason",
-      "src/web-server/services/codex-auto-switch-service.ts:reason"
-    ]
-  },
-  {
     "word": "reset-inventory-unavailable",
     "cause": "provider_error",
     "sources": [
@@ -3734,7 +3542,6 @@
       "scripts/app-updates/app_updates.py:status",
       "scripts/app-updates/app_updates.py:value['status']",
       "src/antigravity/managed-updater.ts:status",
-      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode",
       "src/web-server/services/app-update-contract.ts:STATUSES",
       "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
       "src/web-server/services/app-update-contract.ts:row.status",
@@ -3753,8 +3560,7 @@
     "cause": null,
     "sources": [
       "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
-      "src/commands/antigravity-command.ts:result.status",
-      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES"
+      "src/commands/antigravity-command.ts:result.status"
     ]
   },
   {
@@ -3829,19 +3635,10 @@
     ]
   },
   {
-    "word": "running_processes",
-    "cause": null,
-    "sources": [
-      "src/codex-auth/activate-codex-profile.ts:reason"
-    ]
-  },
-  {
     "word": "running-processes",
     "cause": null,
     "sources": [
-      "src/antigravity/switch-service.ts:reason",
-      "src/antigravity/types.ts:reason",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+      "src/antigravity/types.ts:reason"
     ]
   },
   {
@@ -4427,13 +4224,6 @@
     ]
   },
   {
-    "word": "settings_changed_before_activation",
-    "cause": null,
-    "sources": [
-      "src/web-server/services/codex-auto-switch-service.ts:cause"
-    ]
-  },
-  {
     "word": "shadowed",
     "cause": "policy_blocked",
     "sources": [
@@ -4583,8 +4373,6 @@
       "scripts/antigravity/rebuild_bundle.py:status",
       "src/web-server/scoreboard/scoreboard-service.ts:state",
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
-      "src/web-server/services/codex-auto-switch-service.ts:assessed.reason",
-      "src/web-server/services/codex-auto-switch-service.ts:reason",
       "src/web-server/status/status-view-panels.ts:source.state",
       "src/web-server/status/status-view-panels.ts:state",
       "src/web-server/status/status-view-quota.ts:state",
@@ -4606,12 +4394,7 @@
     "word": "stale-confirmation",
     "cause": null,
     "sources": [
-      "src/antigravity/auto-switch/monitor.ts:result.status",
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
-      "src/antigravity/types.ts:ActivationStatus",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
-      "src/web-server/routes/antigravity-activate-route.ts:status"
+      "src/antigravity/types.ts:ActivationStatus"
     ]
   },
   {
@@ -4701,8 +4484,6 @@
     "cause": null,
     "sources": [
       "src/antigravity/ubuntu-runtime-bridge.ts:typeof value.restartState",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:typeof error.code",
       "src/web-server/services/additional-account-service.ts:museTransientFailure",
       "src/web-server/services/additional-account-service.ts:typeof result.failureCode",
       "src/web-server/services/analytics-remote-cache-limit.ts:typeof item.cause",
@@ -4724,7 +4505,9 @@
       "src/web-server/services/usage-failover-service.ts:typeof value.primaryFailure",
       "src/web-server/status/status-docs.ts:reason",
       "src/web-server/status/status-docs.ts:typeof record.reason",
-      "src/web-server/usage/account-activity-collector.ts:typeof value.state.sessionId"
+      "src/web-server/usage/account-activity-collector.ts:typeof value.state.sessionId",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:typeof error.code"
     ]
   },
   {
@@ -4969,13 +4752,6 @@
     ]
   },
   {
-    "word": "token_expired",
-    "cause": null,
-    "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
-    ]
-  },
-  {
     "word": "too_large",
     "cause": null,
     "sources": [
@@ -5049,9 +4825,7 @@
     "word": "transaction-failed",
     "cause": "provider_error",
     "sources": [
-      "src/antigravity/switch-service.ts:reason",
-      "src/antigravity/types.ts:reason",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+      "src/antigravity/types.ts:reason"
     ]
   },
   {
@@ -5124,7 +4898,6 @@
       "scripts/antigravity/quota_adapter.py:base['status']",
       "scripts/antigravity/quota_adapter.py:status",
       "scripts/claude-history/history_index_remote_v2.py:reason",
-      "src/antigravity/auto-switch/types.ts:status",
       "src/antigravity/runtime-composition.ts:status",
       "src/antigravity/usage-contract.ts:status",
       "src/antigravity/usage-normalization.ts:status",
@@ -5239,15 +5012,15 @@
     "word": "unknown_error",
     "cause": "provider_error",
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode"
     ]
   },
   {
     "word": "unknown_upstream_error",
     "cause": "provider_error",
     "sources": [
-      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
-      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:errorCode",
+      "src/web-server/usage/codex-quota/quota-fetcher-codex.ts:parsed.errorCode"
     ]
   },
   {
@@ -5381,9 +5154,7 @@
     "word": "unreviewed-processes",
     "cause": null,
     "sources": [
-      "src/antigravity/switch-service.ts:reason",
-      "src/antigravity/types.ts:reason",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+      "src/antigravity/types.ts:reason"
     ]
   },
   {
@@ -5444,13 +5215,6 @@
     ]
   },
   {
-    "word": "unsupported_process",
-    "cause": "refused",
-    "sources": [
-      "src/codex-auth/activate-codex-profile.ts:reason"
-    ]
-  },
-  {
     "word": "unsupported-grant-id",
     "cause": "refused",
     "sources": [
@@ -5461,12 +5225,7 @@
     "word": "unsupported-runtime-probe",
     "cause": "refused",
     "sources": [
-      "src/antigravity/auto-switch/types.ts:status",
-      "src/antigravity/production-runtime.ts:status",
-      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
-      "src/antigravity/types.ts:ActivationStatus",
-      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
-      "src/web-server/routes/antigravity-routes.ts:status"
+      "src/antigravity/types.ts:ActivationStatus"
     ]
   },
   {
@@ -5562,13 +5321,6 @@
     "cause": null,
     "sources": [
       "src/antigravity/registry.ts:state"
-    ]
-  },
-  {
-    "word": "verification_failed",
-    "cause": "provider_error",
-    "sources": [
-      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
     ]
   },
   {

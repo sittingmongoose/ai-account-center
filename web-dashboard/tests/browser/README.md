@@ -27,7 +27,7 @@ an offline launch (the new copy must open; a failed download must leave the inst
 | Check | What it asserts |
 |---|---|
 | `checks/smoke.check.mjs` | Signed out (the sign-in form), desktop at 1920, the widths where overflow bugs showed up (1360, 1430, 1600, 2200) and a 390 px phone: Home, Analytics and Accounts audited, no sideways scroll. |
-| `checks/accounts-clicks.check.mjs` | Every account row's click (Details) and the provider header switches keep the page on screen at ten widths and on a phone; the Antigravity policy box keeps its choices inside it. |
+| `checks/accounts-clicks.check.mjs` | Every account row's click (Details) and the provider header switches keep the page on screen at ten widths and on a phone. |
 | `checks/claude-signins.check.mjs` | Claude sign-in renewal: the notice once, the header and rows, and Details from the Accounts rows. |
 | `checks/frame.check.mjs` | The frame's tabs, address and Back, the Duo rail and band, the new-build notice, `/` serving the frame and every classic address landing on its tab, and the offline start. |
 | `checks/page-load.check.mjs` | No tab loads or waits on the retired Slint dashboard; `load timing:` records each tab's cold and warm load. |

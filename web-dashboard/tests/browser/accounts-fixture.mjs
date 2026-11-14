@@ -134,10 +134,6 @@ export function fakeServer(over = {}) {
 			s.trash = s.trash.filter((t) => t.trashId !== m[1]);
 			return json(200, { restored: true, accountId: 'claude:old-profile' });
 		}],
-		['POST', /^\/api\/codex\/profiles\/([^/]+)\/activate$/, () => json(409, {
-			error: 'Confirm the switch', code: 'confirmation_required',
-			confirmation: { token: 'A'.repeat(43), targetProfile: 'two', expiresAt: at(5), processes: [{ label: 'codex', pid: 4242, role: 'cli' }], warning: 'Active Codex work will stop.' },
-		})],
 	];
 	return { s, routes };
 }

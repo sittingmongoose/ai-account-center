@@ -193,16 +193,12 @@ private func checkSessionAndQueries() async throws {
 private func checkWrites() async throws {
   let transport = MockTransport()
   let client = AccountsClient(connection: testConnection(), transport: transport)
-  try await client.activateCodex(profile: "gmail")
-  _ = try await client.setAutomaticSwitching(enabled: true)
-  _ = try await client.setAutomaticSwitching(enabled: false)
   // Profile ids come from the dashboard's data; the tray keeps no list of its own.
   for profile in ["alpha", "gmail", "work-2", "me"] { try await client.openClaude(profile: profile) }
   try await client.openClaude(profile: "gmail", platform: "windows")
-  _ = try await client.setAutomaticSwitching(enabled: true, thresholdPercent: 15)
   let allCalls = await transport.recorded()
   let calls = allCalls.filter { $0.url.path != "/api/auth/login" }
-  try expect(calls.count == 9, "Controls must make one request each")
+  try expect(calls.count == 5, "Controls must make one request each")
   for call in calls {
     try expect(call.url.host == "ccs.invalid", "Controls must never contact a provider directly")
     try expect(call.headers["origin"] == "http://ccs.invalid:3000", "All writes require exact configured Origin")
@@ -210,53 +206,24 @@ private func checkWrites() async throws {
     try expect(call.headers["accept"] == "application/json", "All writes require JSON response type")
     try expect(call.url.query == nil, "Controls must not pass paths or credentials in query strings")
   }
-  try expect(calls[0].url.path == "/api/codex/profiles/gmail/activate" && calls[0].method == "POST",
-    "Codex activation must reuse guarded POST endpoint")
-  let activationBody = try calls[0].jsonBody()
-  try expect(activationBody.isEmpty, "Codex activation body must not select host or path")
-  for (index, enabled) in [(1, true), (2, false)] {
-    let call = calls[index]
-    try expect(call.url.path == "/api/codex/profiles/auto-switch" && call.method == "PUT",
-      "Automatic switching must use guarded PUT endpoint")
-    let body = try call.jsonBody()
-    try expect(Set(body.keys) == Set(["enabled"]), "Automatic settings body must contain only enabled")
-    try expect(body["enabled"] as? Bool == enabled, "Enabled setting must remain a JSON boolean")
-    // NSNumber distinguishes JSON booleans from a mistakenly encoded string.
-    try expect(body["enabled"] is NSNumber, "Enabled setting must not be encoded as text")
-  }
   for (offset, profile) in ["alpha", "gmail", "work-2", "me"].enumerated() {
-    let call = calls[offset + 3]
+    let call = calls[offset]
     try expect(call.url.path == "/api/claude/desktop-profiles/\(profile)/open" && call.method == "POST",
       "Claude launcher must select an allowlisted profile through server endpoint")
     let body = try call.jsonBody()
     try expect(Set(body.keys) == Set(["platform"]) && body["platform"] as? String == "mac",
       "Mac launcher body must only select Mac platform")
   }
-  let windowsBody = try calls[7].jsonBody()
-  try expect(calls[7].url.path == "/api/claude/desktop-profiles/gmail/open" && calls[7].method == "POST",
+  let windowsBody = try calls[4].jsonBody()
+  try expect(calls[4].url.path == "/api/claude/desktop-profiles/gmail/open" && calls[4].method == "POST",
     "Windows glyph must use the guarded server launcher rather than a local Mac URI")
   try expect(Set(windowsBody.keys) == Set(["platform"]) && windowsBody["platform"] as? String == "windows",
     "Windows launch must select only the allowlisted Windows platform")
-  let thresholdBody = try calls[8].jsonBody()
-  try expect(calls[8].method == "PUT" && calls[8].url.path == "/api/codex/profiles/auto-switch",
-    "Threshold picker must reuse the guarded automatic switching endpoint")
-  try expect(Set(thresholdBody.keys) == Set(["enabled", "thresholdPercent"]),
-    "Threshold update must select only automatic switching settings")
-  try expect(thresholdBody["enabled"] as? Bool == true && thresholdBody["thresholdPercent"] as? Int == 15,
-    "A used threshold of 85 percent must be encoded as 15 percent remaining with enabled preserved")
 }
 
 private func checkRejectedProfileIdentifiers() async throws {
   let transport = MockTransport()
   let client = AccountsClient(connection: testConnection(), transport: transport)
-  let invalidCodex = ["", ".", "..", "../gmail", "gmail/activate", "gmail?x=y", "gmail#fragment",
-    "gmail%2Factivate", " gmail", "gmail ", "gmail\n", "gmail\r\n", "-gmail", "_gmail", "gmaíl",
-    String(repeating: "a", count: 65)]
-  for profile in invalidCodex {
-    try await expectError(.invalidConnection, "Unsafe Codex profile must be rejected locally") {
-      try await client.activateCodex(profile: profile)
-    }
-  }
   for profile in ["", ".", "../gmail", "gmail/open", "gmail\n", "gmail?platform=windows", "gmail#x", "-gmail",
     "gmail%2Fopen", " gmail", String(repeating: "a", count: 65)] {
     try await expectError(.invalidConnection, "Claude profile id must be a plain identifier before it enters the path") {
@@ -266,11 +233,6 @@ private func checkRejectedProfileIdentifiers() async throws {
   for platform in ["ubuntu", "Windows", "../windows", "windows\n", ""] {
     try await expectError(.invalidConnection, "Claude launch must reject arbitrary platform input") {
       try await client.openClaude(profile: "gmail", platform: platform)
-    }
-  }
-  for threshold in [-1, 0, 100, 101] {
-    try await expectError(.invalidConnection, "Remaining threshold must stay in range 1 through 99") {
-      _ = try await client.setAutomaticSwitching(enabled: true, thresholdPercent: threshold)
     }
   }
   let calls = await transport.recorded()
@@ -294,182 +256,14 @@ private func checkExpiredSession() async throws {
   try expect(deniedCalls.count == 4, "A request may make only one session-expiry retry")
 }
 
-private func confirmationObject(
-  token: String = "offline-confirmation-token",
-  targetProfile: String = "party",
-  expiresAt: String? = nil,
-  processes: [[String: Any]]? = nil
-) -> [String: Any] {
-  let expiration = expiresAt ?? ISO8601DateFormatter().string(from: Date().addingTimeInterval(300))
-  return [
-    "token": token,
-    "expiresAt": expiration,
-    "targetProfile": targetProfile,
-    "processes": processes ?? [
-      ["label": "Codex desktop", "pid": 123, "role": "main"],
-      ["label": "Codex server", "pid": 246, "role": "daemon"],
-    ],
-    "warning": "Running Codex processes will stop. Unfinished requests may be interrupted.",
-  ]
-}
-
-private func confirmationResponse(_ confirmation: [String: Any]) throws -> Data {
-  try JSONSerialization.data(withJSONObject: [
-    "error": "Codex processes are running.",
-    "code": "busy",
-    "reason": "running_processes",
-    "confirmation": confirmation,
-  ])
-}
-
-private func expectCodexConfirmation(
-  _ client: AccountsClient, profile: String
-) async throws -> CodexSwitchConfirmation {
-  do {
-    try await client.activateCodex(profile: profile)
-  } catch BarClientError.codexConfirmation(let confirmation) {
-    return confirmation
-  } catch {
-    throw CheckFailure(description: "A valid busy response must expose typed Codex confirmation")
-  }
-  throw CheckFailure(description: "A busy activation must require confirmation rather than succeed")
-}
-
-private func checkConfirmedCodexSwitch() async throws {
-  let fixture = confirmationObject()
-  let transport = MockTransport(replies: [
-    "POST /api/codex/profiles/party/activate": [MockReply(409, try confirmationResponse(fixture)), MockReply(200)],
-  ])
-  let client = AccountsClient(connection: testConnection(), transport: transport)
-  let confirmation = try await expectCodexConfirmation(client, profile: "party")
-  try expect(confirmation.token == "offline-confirmation-token" && confirmation.targetProfile == "party",
-    "Confirmation token must retain its exact target profile")
-  try expect(confirmation.warning == fixture["warning"] as? String,
-    "Confirmation must preserve the warning for the consent dialog")
-  try expect(confirmation.processes.count == 2 && confirmation.processes[0].pid == 123 &&
-    confirmation.processes[0].label == "Codex desktop" && confirmation.processes[0].role == "main",
-    "Confirmation must retain the actual processes affected by the switch")
-  try expect(confirmation.isValid(for: "party") && !confirmation.isValid(for: "gmail"),
-    "Confirmation consent must be bound to the requested profile")
-  let expiration = AccountFormatting.date(confirmation.expiresAt)
-  try expect(expiration != nil, "Confirmation expiration must retain a parseable exact server timestamp")
-  if let expiration {
-    try expect(confirmation.isValid(for: "party", now: expiration.addingTimeInterval(-1)),
-      "A confirmation must remain valid before its exact expiration")
-    try expect(!confirmation.isValid(for: "party", now: expiration) &&
-      !confirmation.isValid(for: "party", now: expiration.addingTimeInterval(1)),
-      "Confirmation must be revalidated at consent and rejected at or after expiration")
-  }
-  let beforeConsent = await transport.recorded()
-  let initialActivations = beforeConsent.filter { $0.url.path == "/api/codex/profiles/party/activate" }
-  try expect(initialActivations.count == 1,
-    "A 409 confirmation or dialog cancellation must not automatically retry activation")
-  let initialBody = try initialActivations[0].jsonBody()
-  try expect(initialBody.isEmpty, "First activation must not pre-authorize process interruption")
-  // This second invocation represents the user explicitly confirming the dialog.
-  try await client.activateCodex(profile: "party", confirmationToken: confirmation.token)
-  let afterConsent = await transport.recorded()
-  let activations = afterConsent.filter { $0.url.path == "/api/codex/profiles/party/activate" }
-  try expect(activations.count == 2, "Explicit consent must submit one guarded activation request")
-  let body = try activations[1].jsonBody()
-  try expect(Set(body.keys) == Set(["confirmationToken"]) && body["confirmationToken"] as? String == confirmation.token,
-    "Confirmed activation must send only the exact server-issued confirmation token")
-  try expect(activations[1].headers["origin"] == "http://ccs.invalid:3000" &&
-    activations[1].headers["content-type"] == "application/json",
-    "Confirmed activation must retain same-origin JSON protections")
-  try expect(afterConsent.filter { $0.url.path == "/api/auth/login" }.count == 1,
-    "Confirmation resubmission must reuse the authenticated session")
-
-  let malformed: [[String: Any]] = [
-    confirmationObject(token: ""),
-    confirmationObject(token: " \n\t"),
-    confirmationObject(token: String(repeating: "a", count: 513)),
-    confirmationObject(targetProfile: "gmail"),
-    confirmationObject(expiresAt: "not-a-date"),
-    confirmationObject(expiresAt: "2020-01-01T00:00:00Z"),
-    confirmationObject(processes: []),
-    confirmationObject(processes: [["label": "Codex", "pid": 0, "role": "main"]]),
-    confirmationObject(processes: [["label": "Codex", "pid": -2, "role": "main"]]),
-    confirmationObject(processes: [["label": " \n", "pid": 123, "role": "main"]]),
-    confirmationObject(processes: [["label": "Codex", "pid": 123, "role": " \t"]]),
-    confirmationObject(processes: [
-      ["label": "Codex", "pid": 123, "role": "main"],
-      ["label": "Broken process", "pid": 0, "role": "daemon"],
-    ]),
-  ]
-  for fixture in malformed {
-    let transport = MockTransport(replies: [
-      "POST /api/codex/profiles/party/activate": [MockReply(409, try confirmationResponse(fixture))],
-    ])
-    let client = AccountsClient(connection: testConnection(), transport: transport)
-    try await expectError(.status(409), "Invalid, mismatched, or expired confirmation must not authorize a dialog") {
-      try await client.activateCodex(profile: "party")
-    }
-    let calls = await transport.recorded()
-    try expect(calls.filter { $0.url.path == "/api/codex/profiles/party/activate" }.count == 1,
-      "Rejected confirmation must never trigger an automatic activation retry")
-  }
-  for payload in [
-    ["error": "Another activation is running.", "code": "busy", "reason": "activation_running"],
-    ["error": "Confirmation expired or processes changed.", "code": "confirmation_stale"],
-  ] {
-    let transport = MockTransport(replies: [
-      "POST /api/codex/profiles/party/activate": [MockReply(409, try JSONSerialization.data(withJSONObject: payload))],
-    ])
-    let client = AccountsClient(connection: testConnection(), transport: transport)
-    try await expectError(.status(409), "Busy or stale response without a confirmation must remain a generic conflict") {
-      try await client.activateCodex(profile: "party", confirmationToken: "offline-confirmation-token")
-    }
-    let calls = await transport.recorded()
-    try expect(calls.filter { $0.url.path == "/api/codex/profiles/party/activate" }.count == 1,
-      "A stale confirmation must require a fresh user action rather than resubmit itself")
-  }
-  let noNetwork = MockTransport()
-  let tokenClient = AccountsClient(connection: testConnection(), transport: noNetwork)
-  for token in ["", " \n\t", String(repeating: "a", count: 513)] {
-    try await expectError(.invalidConnection, "Invalid explicit confirmation token must fail before login") {
-      try await tokenClient.activateCodex(profile: "party", confirmationToken: token)
-    }
-  }
-  let invalidCalls = await noNetwork.recorded()
-  try expect(invalidCalls.isEmpty, "Invalid explicit confirmation tokens must not make network requests")
-
-  // A one-use consent token must not be replayed even if authentication expires.
-  let expiredSession = MockTransport(replies: [
-    "POST /api/codex/profiles/party/activate": [
-      MockReply(401),
-      MockReply(409, try confirmationResponse(confirmationObject(token: "fresh-offline-confirmation-token"))),
-    ],
-  ])
-  let expiredClient = AccountsClient(connection: testConnection(), transport: expiredSession)
-  try await expectError(.status(401), "Confirmed request with expired authentication must not replay its consent token") {
-    try await expiredClient.activateCodex(profile: "party", confirmationToken: "offline-confirmation-token")
-  }
-  let afterUnauthorized = await expiredSession.recorded()
-  try expect(afterUnauthorized.filter { $0.url.path == "/api/auth/login" }.count == 1 &&
-    afterUnauthorized.filter { $0.url.path == "/api/codex/profiles/party/activate" }.count == 1,
-    "A confirmed 401 must make only the initial login and one activation request")
-  // A later user action starts again without consent and receives a fresh offer.
-  let freshConfirmation = try await expectCodexConfirmation(expiredClient, profile: "party")
-  try expect(freshConfirmation.token == "fresh-offline-confirmation-token",
-    "A fresh activation after authorization failure must require fresh confirmation")
-  let afterFreshAction = await expiredSession.recorded()
-  let freshActivations = afterFreshAction.filter { $0.url.path == "/api/codex/profiles/party/activate" }
-  try expect(afterFreshAction.filter { $0.url.path == "/api/auth/login" }.count == 2 && freshActivations.count == 2,
-    "Only a fresh user action may reauthenticate and make a new unconfirmed activation")
-  let freshBody = try freshActivations[1].jsonBody()
-  try expect(freshBody.isEmpty, "A fresh action must not retain or replay the expired-session confirmation token")
-}
-
 private func checkSafeHTTPFailures() async throws {
   enum Context: CaseIterable {
-    case refresh, claudeOpen, codexActivate
+    case refresh, claudeOpen
 
     var requestKey: String {
       switch self {
       case .refresh: return "GET /api/accounts/dashboard"
       case .claudeOpen: return "POST /api/claude/desktop-profiles/gmail/open"
-      case .codexActivate: return "POST /api/codex/profiles/party/activate"
       }
     }
   }
@@ -489,7 +283,6 @@ private func checkSafeHTTPFailures() async throws {
       switch context {
       case .refresh: _ = try await client.dashboard(refresh: true)
       case .claudeOpen: try await client.openClaude(profile: "gmail")
-      case .codexActivate: try await client.activateCodex(profile: "party")
       }
     } catch BarClientError.status(let actual, let message) {
       try expect(actual == status && message?.isEmpty == false,
@@ -520,24 +313,6 @@ private func checkSafeHTTPFailures() async throws {
     }
   }
 
-  let publicCodes: [(Int, String, String?, String)] = [
-    (409, "busy", "activation_running", "Another Codex account activation is already running. Wait for it to finish."),
-    (409, "busy", "unsupported_process", "A running Codex program cannot be restarted safely. Close it and try again."),
-    (409, "busy", "running_processes", "Codex is busy. Try switching after its work finishes."),
-    (409, "confirmation_stale", nil, "The running Codex programs or account changed. Activate again to review a new warning."),
-    (400, "invalid_profile", nil, "The selected profile has no valid saved login."),
-    (400, "invalid_codex_home", nil, "Account activation needs the shared Codex configuration."),
-    (500, "restart_failed", nil, "Codex could not restart. Check its processes before retrying activation."),
-    (500, "verification_failed", nil, "The activated account could not be verified. Refresh accounts before retrying."),
-    (500, "auth_read_failed", nil, "The saved Codex login could not be read safely."),
-    (500, "auth_write_failed", nil, "The Codex login could not be installed safely."),
-  ]
-  for (status, code, reason, expected) in publicCodes {
-    var body: [String: Any] = ["error": canary, "message": canary, "code": code]
-    if let reason { body["reason"] = reason }
-    let actual = try await failure(.codexActivate, status, JSONSerialization.data(withJSONObject: body))
-    try expect(actual == expected, "Recognized public Codex codes must retain useful fixed guidance")
-  }
   for data in [
     Data("{malformed \(canary)".utf8),
     Data("<html>\(canary)</html>".utf8),
@@ -556,33 +331,6 @@ private func checkSafeHTTPFailures() async throws {
     let actual = try await failure(context, 500, spoofed)
     try expect(actual == baseline, "The server cannot select a different local action's error mapping")
   }
-
-  let settingsTransport = MockTransport(replies: [
-    "PUT /api/codex/profiles/auto-switch": [MockReply(400, canaryJSON)],
-  ])
-  let settingsClient = AccountsClient(connection: testConnection(), transport: settingsTransport)
-  do {
-    _ = try await settingsClient.setAutomaticSwitching(enabled: true, thresholdPercent: 5)
-    throw CheckFailure(description: "Rejected automatic settings unexpectedly succeeded")
-  } catch BarClientError.status(let status, let message) {
-    try expect(status == 400 && message == "The automatic switching settings were rejected. Refresh and try again.",
-      "Settings failures must use fixed, action-specific guidance")
-  }
-
-  let fixture = confirmationObject()
-  let transport = MockTransport(replies: [
-    "POST /api/codex/profiles/party/activate": [MockReply(409, try JSONSerialization.data(withJSONObject: [
-      "error": canary, "message": canary, "code": "busy", "reason": "running_processes", "confirmation": fixture,
-    ]))],
-  ])
-  let confirmation = try await expectCodexConfirmation(AccountsClient(connection: testConnection(), transport: transport), profile: "party")
-  try expect(confirmation.token == fixture["token"] as? String &&
-    confirmation.warning == fixture["warning"] as? String &&
-    confirmation.processes.count == 2 && confirmation.processes[0].pid == 123,
-    "Valid structured busy consent must survive removal of arbitrary top-level server error text")
-  let calls = await transport.recorded()
-  try expect(calls.filter { $0.url.path == "/api/codex/profiles/party/activate" }.count == 1,
-    "A sanitized busy response must still wait for explicit user consent")
 }
 
 private func checkLoginBackoffAndBadPayload() async throws {
@@ -634,8 +382,8 @@ private func checkUnknownQuotaAndExactReset() throws {
     try expect(window.clampedUsedPercent == nil && window.clampedRemainingPercent == nil,
       "Nonfinite usage and remaining values must never be displayed or used for bar geometry")
   }
-  try expect(!account.canActivate && !account.canOpenOnMac,
-    "Usage-only providers must not expose activation even if a payload contains capabilities")
+  try expect(!account.canOpenOnMac,
+    "Usage-only providers must not expose Open even if a payload contains capabilities")
   try expect(windows[0].resetAt == nil && AccountFormatting.date(nil) == nil,
     "Unknown reset must not be inferred from usage or window length")
   try expect(AccountFormatting.reset(nil) == "Reset time unavailable", "Unknown reset must be labelled unavailable")
@@ -742,7 +490,6 @@ private func safeLiveError(_ error: Error) -> String {
   }
   switch clientError {
   case .status(let status, _): return "AI Account Center returned HTTP \(status)."
-  case .codexConfirmation: return "The Codex switch requires user confirmation."
   default: return clientError.errorDescription ?? "The AI Account Center account request could not be completed."
   }
 }
@@ -826,52 +573,6 @@ private func checkProviderGrouping() throws {
     "Collapsed provider selection must not drop detail windows")
   try expect(groups[1].statusLabel == "Cached" && groups[0].statusLabel == "Live",
     "Provider status must describe the selected sample rather than claim every account is online")
-}
-
-private func checkCodexAutoStatusText() throws {
-  let object = try JSONSerialization.jsonObject(with: dashboardJSON) as! [String: Any]
-  let prototype = (object["accounts"] as! [[String: Any]])[0]
-  func account(_ id: String, _ email: String, _ profile: String) -> [String: Any] {
-    var value = prototype
-    value["id"] = id
-    value["provider"] = "codex"
-    value["email"] = email
-    value["label"] = email
-    var caps = value["capabilities"] as! [String: Any]
-    caps["codexProfile"] = profile
-    value["capabilities"] = caps
-    return value
-  }
-  func status(_ outcome: String, _ message: String, enabled: Bool = true, candidate: String? = nil) -> [String: Any] {
-    var value: [String: Any] = [
-      "enabled": enabled, "thresholdPercent": 5, "pollIntervalSeconds": 60,
-      "outcome": outcome, "message": message, "activationInProgress": false,
-    ]
-    if let candidate { value["candidate"] = candidate }
-    return value
-  }
-  func text(auto: [String: Any], accounts: [[String: Any]]) throws -> String? {
-    var payload = object
-    payload["accounts"] = accounts
-    payload["codexAutoSwitch"] = auto
-    let decoded = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: payload))
-    return AccountFormatting.codexAutoStatusText(status: decoded.codexAutoSwitch, accounts: decoded.accounts)
-  }
-  let accounts = [account("codex:a", "a@example.test", "a"), account("codex:b", "b@example.test", "b")]
-  let waiting = try text(auto: status("waiting_idle", "Waiting.", candidate: "b"), accounts: accounts)
-  try expect(waiting == "Waiting. Will switch to b@example.test when Codex goes idle. Activate b@example.test to switch now.",
-    "A blocked Codex switch must name the vetted candidate account, resolved to its identity")
-  let unknown = try text(auto: status("waiting_idle", "Waiting.", candidate: "ghost"), accounts: accounts)
-  try expect(unknown == "Waiting. Will switch to ghost when Codex goes idle. Activate ghost to switch now.",
-    "An unknown candidate profile must fall back to the profile name, never vanish")
-  let plain = try text(auto: status("no_quota", "The reading is out of date."), accounts: accounts)
-  try expect(plain == "The reading is out of date.",
-    "A blocked switch without a candidate must show the plain reason")
-  let hiddenHealthy = try text(auto: status("healthy", "Healthy."), accounts: accounts)
-  let shownWaiting = try text(auto: status("waiting_idle", "Waiting.", candidate: "b"), accounts: accounts)
-  let hiddenDisabled = try text(auto: status("waiting_idle", "Waiting.", enabled: false, candidate: "b"), accounts: accounts)
-  try expect(hiddenHealthy == nil && shownWaiting != nil && hiddenDisabled == nil,
-    "The stuck-switch line must hide for healthy or disabled switching")
 }
 
 private func checkVisibleUsageWindows() throws {
@@ -1019,10 +720,6 @@ private func checkCodexCompactFullDashboardDTO() throws {
   try expect(dashboard.schemaVersion == 1 && dashboard.accounts.count == 11 &&
     dashboard.updatedAt == "2026-10-01T10:00:00.123Z" && dashboard.settings?.validatedInterval == 120,
     "The complete offline dashboard DTO must retain its accounts, schema, update time, and refresh settings")
-  try expect(!dashboard.codexAutoSwitch.enabled && dashboard.codexAutoSwitch.thresholdPercent == 5 &&
-    dashboard.codexAutoSwitch.pollIntervalSeconds == 60 && dashboard.codexAutoSwitch.outcome == "disabled" &&
-    !dashboard.codexAutoSwitch.activationInProgress && dashboard.codexAutoSwitch.lastCheckedAt == nil,
-    "Full dashboard decoding must preserve automatic-switch settings without inventing activity")
   try expect(dashboard.accounts.allSatisfy { $0.identity.hasSuffix("@example.invalid") },
     "The full-dashboard fixture must contain only synthetic account identities")
   func account(_ id: String) throws -> DashboardAccount {
@@ -1121,161 +818,7 @@ private func checkCodexCompactFullDashboardDTO() throws {
     "Provider grouping must preserve every account, the active Codex identity, and its exact account compact cores")
 }
 
-// MARK: Antigravity switching routes (commit 9cf75fbe)
-
-private func antigravityOffer(profile: String = "agy-two", token: String = "agy_fixture_token_0123456789",
-  expires: Date = Date().addingTimeInterval(120), email: String = "antigravity-2@example.invalid",
-  processes: [[String: Any]] = [["pid": 4321, "role": "cli", "label": "FIXTURE_ONLY_SERVER_LABEL"]]) -> [String: Any] {
-  [
-    "status": "confirmation-required", "profileId": profile, "hostId": "ubuntu", "email": email,
-    "confirmation": [
-      "token": token, "expiresAt": ISO8601DateFormatter().string(from: expires), "profileId": profile,
-      "hostId": "ubuntu", "email": email, "warning": "FIXTURE_ONLY_SERVER_WARNING", "processes": processes,
-    ] as [String: Any],
-  ]
-}
-
-private func checkAntigravityClient() async throws {
-  let activated = try JSONSerialization.data(withJSONObject: [
-    "status": "active", "profileId": "agy-two", "hostId": "ubuntu", "email": "antigravity-2@example.invalid",
-  ])
-  let transport = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/activate": [MockReply(200, activated)]])
-  let client = AccountsClient(connection: testConnection(), transport: transport)
-  let result = try await client.activateAntigravity(profile: "agy-two")
-  try expect(result.status == "active" && result.profileId == "agy-two" && result.email == "antigravity-2@example.invalid",
-    "A verified Antigravity activation must report the requested profile")
-  let call = (await transport.recorded()).first { $0.url.path == "/api/antigravity/profiles/agy-two/activate" }
-  try expect(call?.method == "POST" && call?.headers["origin"] == "http://ccs.invalid:3000"
-    && call?.headers["content-type"] == "application/json",
-    "Antigravity activation must be a same-origin JSON POST")
-  let activateBody = try call?.jsonBody()
-  try expect(activateBody.map { $0.count == 1 && $0["hostId"] as? String == "ubuntu" } == true,
-    "Antigravity activation must address only the Ubuntu host and send no token")
-
-  // Running programs: a one-use offer that only an explicit confirm may answer.
-  let offerTransport = MockTransport(replies: [
-    "POST /api/antigravity/profiles/agy-two/activate": [MockReply(409, try JSONSerialization.data(withJSONObject: antigravityOffer()))],
-  ])
-  let offerClient = AccountsClient(connection: testConnection(), transport: offerTransport)
-  do {
-    _ = try await offerClient.activateAntigravity(profile: "agy-two")
-    throw CheckFailure(description: "A running-program response must not activate")
-  } catch BarClientError.antigravityConfirmation(let offer) {
-    try expect(offer.profileId == "agy-two" && offer.email == "antigravity-2@example.invalid" && offer.isValid(for: "agy-two"),
-      "The Antigravity offer must be bound to the requested profile and identity")
-    try expect(offer.processes.count == 1 && offer.processes[0].pid == 4321 && offer.processes[0].label == "Antigravity CLI",
-      "Process labels must come from the fixed client table, never the server's text")
-    try expect(!AntigravitySwitchConfirmation.warning.contains("FIXTURE_ONLY"),
-      "The confirmation warning must be the fixed client copy")
-  }
-  let offerCalls = await offerTransport.recorded()
-  try expect(offerCalls.filter { $0.url.path.hasSuffix("/activate") }.count == 1,
-    "An offer must wait for consent without a second request")
-
-  // Offers that do not describe exactly what will stop are refused with fixed guidance.
-  let rejected: [[String: Any]] = [
-    antigravityOffer(profile: "agy-other"),
-    antigravityOffer(token: "short"),
-    antigravityOffer(expires: Date().addingTimeInterval(-5)),
-    antigravityOffer(processes: [["pid": 0, "role": "cli"]]),
-    antigravityOffer(processes: [["pid": 12, "role": "FIXTURE_ONLY_ROLE"]]),
-  ]
-  for body in rejected {
-    let bad = MockTransport(replies: [
-      "POST /api/antigravity/profiles/agy-two/activate": [MockReply(409, try JSONSerialization.data(withJSONObject: body))],
-    ])
-    do {
-      _ = try await AccountsClient(connection: testConnection(), transport: bad).activateAntigravity(profile: "agy-two")
-      throw CheckFailure(description: "A malformed Antigravity offer unexpectedly activated")
-    } catch BarClientError.status(let status, let message) {
-      try expect(status == 409 && message == "Antigravity programs are running on Ubuntu. Activate again to review them.",
-        "A malformed offer must become fixed guidance, never consent")
-    }
-  }
-
-  // Confirm sends the token once and never retries it after an authentication failure.
-  let confirmed = try JSONSerialization.data(withJSONObject: ["status": "active", "profileId": "agy-two", "hostId": "ubuntu"])
-  let confirmTransport = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/confirm": [MockReply(200, confirmed)]])
-  try await AccountsClient(connection: testConnection(), transport: confirmTransport)
-    .confirmAntigravity(profile: "agy-two", confirmationToken: "agy_fixture_token_0123456789")
-  let confirmCall = (await confirmTransport.recorded()).first { $0.url.path.hasSuffix("/confirm") }
-  let confirmBody = try confirmCall?.jsonBody()
-  try expect(confirmBody.map { $0.count == 2 && $0["hostId"] as? String == "ubuntu"
-    && $0["confirmationToken"] as? String == "agy_fixture_token_0123456789" } == true,
-    "Confirm must send exactly the host and the reviewed token")
-  let expired = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/confirm": [MockReply(401)]])
-  do {
-    try await AccountsClient(connection: testConnection(), transport: expired)
-      .confirmAntigravity(profile: "agy-two", confirmationToken: "agy_fixture_token_0123456789")
-    throw CheckFailure(description: "An unauthorized confirm unexpectedly succeeded")
-  } catch BarClientError.status(let status, _) {
-    try expect(status == 401, "An unauthorized confirm must surface the expired session")
-  }
-  let expiredCalls = await expired.recorded()
-  try expect(expiredCalls.filter { $0.url.path.hasSuffix("/confirm") }.count == 1,
-    "A consumed confirmation token must never be replayed")
-  for bad in ["", "has spaces in it 1234567", String(repeating: "a", count: 257)] {
-    try await expectError(.invalidConnection, "Invalid confirmation tokens must be rejected locally") {
-      try await AccountsClient(connection: testConnection(), transport: MockTransport())
-        .confirmAntigravity(profile: "agy-two", confirmationToken: bad)
-    }
-  }
-  try await expectError(.invalidConnection, "Unsafe Antigravity profile identifiers must be rejected locally") {
-    _ = try await AccountsClient(connection: testConnection(), transport: MockTransport()).activateAntigravity(profile: "../x")
-  }
-
-  // Fixed public guidance chosen only by the dashboard's activation status word.
-  let canary = "FIXTURE_ONLY_PRIVATE_ERROR_CANARY /fixture/private"
-  let statuses: [(Int, String, String)] = [
-    (409, "busy", "Antigravity is busy on Ubuntu. Activate again when it is idle."),
-    (409, "deferred", "Antigravity activation is deferred on Ubuntu. Refresh its native status before trying again."),
-    (409, "unsupported-runtime-probe", "The Ubuntu Antigravity runtime could not be verified. Account switching is unavailable."),
-    (409, "stale-confirmation", "This Antigravity confirmation is no longer valid. Activate again to review the running programs."),
-    (400, "invalid-profile", "The selected Antigravity profile has no valid saved login."),
-    (500, "failed-rolled-back", "Antigravity could not switch accounts on Ubuntu. The previous state was restored."),
-    (500, "recovery-required", "Antigravity activation needs recovery on Ubuntu. Account switching is unavailable."),
-    (500, "FIXTURE_ONLY_UNKNOWN", "Antigravity account activation failed safely. Refresh the account list before retrying."),
-  ]
-  for (status, word, expected) in statuses {
-    let body = try JSONSerialization.data(withJSONObject: ["status": word, "error": canary, "profileId": "agy-two", "hostId": "ubuntu"])
-    let failing = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/activate": [MockReply(status, body)]])
-    do {
-      _ = try await AccountsClient(connection: testConnection(), transport: failing).activateAntigravity(profile: "agy-two")
-      throw CheckFailure(description: "A failed Antigravity activation unexpectedly succeeded")
-    } catch BarClientError.status(let actual, let message) {
-      try expect(actual == status && message == expected && !(message ?? "").contains("FIXTURE_ONLY"),
-        "Antigravity failures must map to fixed guidance without server text")
-    }
-  }
-  let wrongProfile = MockTransport(replies: ["POST /api/antigravity/profiles/agy-two/activate": [MockReply(200, try JSONSerialization.data(
-    withJSONObject: ["status": "active", "profileId": "agy-one", "hostId": "ubuntu"]))]])
-  try await expectError(.decoding, "A success for another profile must not count as this activation") {
-    _ = try await AccountsClient(connection: testConnection(), transport: wrongProfile).activateAntigravity(profile: "agy-two")
-  }
-
-  // Antigravity's own automatic switching: % used, Ubuntu only, validated locally.
-  let autoTransport = MockTransport()
-  let autoClient = AccountsClient(connection: testConnection(), transport: autoTransport)
-  _ = try await autoClient.setAntigravityAutomaticSwitching(enabled: true)
-  _ = try await autoClient.setAntigravityAutomaticSwitching(thresholdUsedPercent: 90)
-  let puts = (await autoTransport.recorded()).filter { $0.url.path == "/api/antigravity/auto-switch" }
-  try expect(puts.count == 2 && puts.allSatisfy { $0.method == "PUT" && $0.headers["origin"] == "http://ccs.invalid:3000" },
-    "Antigravity automatic settings must be same-origin PUTs")
-  let firstPut = try puts[0].jsonBody(), secondPut = try puts[1].jsonBody()
-  try expect(firstPut.count == 1 && firstPut["enabled"] as? Bool == true
-    && secondPut.count == 1 && secondPut["thresholdUsedPercent"] as? Int == 90,
-    "Each Antigravity settings change must send only the changed field")
-  for value in [0, 100] {
-    try await expectError(.invalidConnection, "Out-of-range Antigravity thresholds must be rejected locally") {
-      _ = try await autoClient.setAntigravityAutomaticSwitching(thresholdUsedPercent: value)
-    }
-  }
-  try await expectError(.invalidConnection, "An empty Antigravity settings change must be rejected locally") {
-    _ = try await autoClient.setAntigravityAutomaticSwitching()
-  }
-}
-
-// MARK: Dashboard additions: Antigravity policy, capabilities, hidden providers
+// MARK: Dashboard additions: capabilities, hidden providers
 
 /// Claude "Sign-in needed" before Open (`accounts[].signInNeeded`), fake profiles only. Read loosely: junk items are
 /// skipped and a malformed value never fails the dashboard; a computer the profile cannot open on is not named.
@@ -1327,90 +870,43 @@ private func checkDashboardAdditions() throws {
   }
   object["accounts"] = [
     account("claude-a", "claude"), account("codex-a", "codex", active: true),
-    account("agy-a", "antigravity", active: true, capabilities: ["antigravityProfileId": "agy-a", "antigravityHostIds": ["ubuntu"], "antigravityCanActivate": true]),
-    account("agy-b", "antigravity", capabilities: ["antigravityProfileId": "agy-b", "antigravityHostIds": ["ubuntu"], "antigravityCanActivate": true]),
-    account("agy-c", "antigravity", capabilities: ["antigravityProfileId": "../c", "antigravityHostIds": ["ubuntu"], "antigravityCanActivate": true]),
-    account("agy-d", "antigravity", capabilities: ["antigravityProfileId": "agy-d", "antigravityHostIds": ["mac"], "antigravityCanActivate": true]),
+    account("agy-a", "antigravity", active: true, capabilities: ["antigravityProfileId": "agy-a", "antigravityHostIds": ["ubuntu"]]),
+    account("agy-b", "antigravity", capabilities: ["antigravityProfileId": "agy-b", "antigravityHostIds": ["ubuntu"]]),
+    account("agy-c", "antigravity", capabilities: ["antigravityProfileId": "../c", "antigravityHostIds": ["ubuntu"]]),
+    account("agy-d", "antigravity", capabilities: ["antigravityProfileId": "agy-d", "antigravityHostIds": ["mac"]]),
     account("kimi-a", "kimi-code"), account("cursor-a", "cursor"),
   ]
-  object["antigravityAutoSwitch"] = [
-    "enabled": false, "thresholdUsedPercent": 95, "pollIntervalSeconds": 60, "requestedPoolId": NSNull(),
-    "outcome": "disabled", "message": "Fixture", "activationInProgress": false,
-  ] as [String: Any]
   let dashboard = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: object))
-  try expect(dashboard.antigravityAutoSwitch?.thresholdUsedPercent == 95 && dashboard.antigravityAutoSwitch?.enabled == false,
-    "A reported Antigravity policy must decode with its % used threshold")
   try expect(dashboard.hiddenProviders.isEmpty && dashboard.visibleAccounts.count == 8,
     "Without hidden providers in the DTO, every provider stays visible")
-  let byID = Dictionary(uniqueKeysWithValues: dashboard.accounts.map { ($0.id, $0) })
-  try expect(byID["agy-a"]?.canActivateAntigravity == false && byID["agy-b"]?.canActivateAntigravity == true
-    && byID["agy-c"]?.canActivateAntigravity == false && byID["agy-d"]?.canActivateAntigravity == false,
-    "Antigravity Activate needs an inactive account, a safe profile id and the Ubuntu host")
   try expect(dashboard.providerGroups.map(\.id) == ["claude", "codex", "antigravity", "cursor", "kimi-code"],
     "Tray order must place Antigravity after Codex, then the other providers")
-  try expect(dashboard.canActivateAntigravity(byID["agy-b"]!) && !dashboard.canActivateAntigravity(byID["agy-a"]!)
-    && !dashboard.canActivateAntigravity(byID["agy-d"]!),
-    "The dashboard-level Antigravity guard keeps the account-level rules")
-
-  // Activation guards: nothing is offered while an activation is already running, and Antigravity needs
-  // a second account to switch to.
-  var guarded = object
-  var guardedAccounts = guarded["accounts"] as! [[String: Any]]
-  guardedAccounts.append(account("codex-b", "codex"))
-  guarded["accounts"] = guardedAccounts
-  var codexStatus = guarded["codexAutoSwitch"] as! [String: Any]
-  codexStatus["activationInProgress"] = true
-  guarded["codexAutoSwitch"] = codexStatus
-  var agyStatus = guarded["antigravityAutoSwitch"] as! [String: Any]
-  agyStatus["activationInProgress"] = true
-  guarded["antigravityAutoSwitch"] = agyStatus
-  let busy = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: guarded))
-  let busyByID = Dictionary(uniqueKeysWithValues: busy.accounts.map { ($0.id, $0) })
-  try expect(busyByID["codex-b"]!.canActivate && !busy.canActivateCodex(busyByID["codex-b"]!)
-    && !busy.canActivateAntigravity(busyByID["agy-b"]!),
-    "Activate must wait while a Codex or Antigravity activation is already running")
-  codexStatus["activationInProgress"] = false
-  guarded["codexAutoSwitch"] = codexStatus
-  guarded["accounts"] = guardedAccounts.filter { !["agy-a", "agy-c", "agy-d"].contains($0["id"] as! String) }
-  agyStatus["activationInProgress"] = false
-  guarded["antigravityAutoSwitch"] = agyStatus
-  let single = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: guarded))
-  let singleByID = Dictionary(uniqueKeysWithValues: single.accounts.map { ($0.id, $0) })
-  try expect(single.canActivateCodex(singleByID["codex-b"]!) && singleByID["agy-b"]!.canActivateAntigravity
-    && !single.canActivateAntigravity(singleByID["agy-b"]!),
-    "A lone Antigravity account has nothing to switch to")
-  var hiddenAgy = guarded
-  hiddenAgy["accounts"] = guardedAccounts
-  hiddenAgy["providers"] = [["id": "antigravity", "visible": true, "trayVisible": false]]
-  let hiddenSection = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: hiddenAgy))
-  try expect(!hiddenSection.canActivateAntigravity(hiddenSection.accounts.first { $0.id == "agy-b" }!),
-    "A provider hidden in the tray offers no switching in the tray")
-  hiddenAgy["providers"] = [["id": "antigravity", "visible": false, "trayVisible": true]]
-  let dashboardOnly = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: hiddenAgy))
-  try expect(dashboardOnly.canActivateAntigravity(dashboardOnly.accounts.first { $0.id == "agy-b" }!),
-    "Hiding a provider on the dashboard alone leaves it, and its switching, in the tray")
-  // One of two Antigravity accounts hidden in the tray: the other keeps Activate, because the server keeps the hidden
-  // one as a switch candidate and "Show in tray" never changes what the user can operate.
-  var oneHiddenAgy = guarded
-  oneHiddenAgy["accounts"] = guardedAccounts.filter { ["agy-a", "agy-b"].contains($0["id"] as! String) }.map { row -> [String: Any] in
+  // An older dashboard still sends the retired switching fields (account switching was removed on 2026-11-14):
+  // the tray ignores them, valid or malformed, and never loses the dashboard over them.
+  var older = object
+  older["antigravityAutoSwitch"] = ["enabled": "yes", "thresholdUsedPercent": 400]
+  older["accounts"] = (object["accounts"] as! [[String: Any]]).map { row -> [String: Any] in
     var row = row
-    if row["id"] as? String == "agy-a" { row["trayHidden"] = true }
+    var caps = row["capabilities"] as! [String: Any]
+    caps["antigravityCanActivate"] = "maybe"
+    row["capabilities"] = caps
     return row
   }
+  let olderDashboard = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: older))
+  try expect(olderDashboard.accounts.count == 8 && olderDashboard.visibleAccounts.count == 8,
+    "Retired switching fields from an older dashboard must be ignored without losing the dashboard")
+  // One of two Antigravity accounts hidden in the tray: only the other is listed; the raw accounts stay.
+  var oneHiddenAgy = object
+  oneHiddenAgy["accounts"] = (object["accounts"] as! [[String: Any]]).filter { ["agy-a", "agy-b"].contains($0["id"] as! String) }
+    .map { row -> [String: Any] in
+      var row = row
+      if row["id"] as? String == "agy-a" { row["trayHidden"] = true }
+      return row
+    }
   let oneHidden = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: oneHiddenAgy))
   try expect(oneHidden.visibleAccounts.filter { $0.provider == "antigravity" }.map(\.id) == ["agy-b"]
-    && oneHidden.antigravityAccountCount == 2
-    && oneHidden.canActivateAntigravity(oneHidden.accounts.first { $0.id == "agy-b" }!),
-    "Hiding one of two Antigravity accounts in the tray keeps switching for the other")
-
-  var malformed = object
-  malformed["antigravityAutoSwitch"] = ["enabled": "yes", "thresholdUsedPercent": 400]
-  let lenient = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: malformed))
-  try expect(lenient.antigravityAutoSwitch == nil && lenient.accounts.count == 8,
-    "A malformed Antigravity policy must be ignored without losing the dashboard")
-  malformed["antigravityAutoSwitch"] = ["enabled": true, "thresholdUsedPercent": 100]
-  let outOfRange = try JSONDecoder().decode(AccountDashboard.self, from: JSONSerialization.data(withJSONObject: malformed))
-  try expect(outOfRange.antigravityAutoSwitch == nil, "An out-of-range Antigravity threshold must not be shown as a policy")
+    && oneHidden.accounts.filter { $0.provider == "antigravity" }.count == 2,
+    "Hiding one of two Antigravity accounts in the tray lists only the other")
 
   // "Show on dashboard" and "Show in tray" are independent (owner decision, 2026-10-02): the tray follows only
   // providers[].trayVisible and settings.trayHiddenProviders, plus accounts[].trayHidden, never
@@ -2694,7 +2190,6 @@ private func checkLive() async {
       "accountCount": dashboard.accounts.count,
       "providers": Array(Set(dashboard.accounts.map(\.provider))).sorted(),
       "statusCounts": statusCounts,
-      "codexAutomaticEnabled": dashboard.codexAutoSwitch.enabled,
     ])
     if !passed { exit(1) }
   } catch {
@@ -2961,11 +2456,8 @@ private func checkBearerClient() async throws {
     installId: UUID().uuidString, pairedAt: "2026-10-02T15:00:00Z")
   let client = AccountsClient(connection: connection, transport: transport)
   _ = try await client.dashboard()
-  try await client.activateCodex(profile: "work")
-  _ = try await client.setAutomaticSwitching(enabled: true)
   try await client.openClaude(profile: "alpha", platform: "windows")
   _ = try await client.claudeDesktopProfiles()
-  _ = try await client.setAntigravityAutomaticSwitching(enabled: false)
   let me = try await client.deviceSelf()
   try expect(me.id == device.id && me.rotateAfter != nil, "devices/me must read this tray's own record")
   let requests = fake.requests, auths = fake.auths
@@ -3851,14 +3343,6 @@ private func checkReviewR2() async throws {
     try expect(pairAddress == expected && setupAddress == expected && !FileManager.default.fileExists(atPath: file.path),
       "Pair/setup safety refusals save nothing")
   }
-  let transport = MockTransport()
-  let client = AccountsClient(connection: testConnection(), transport: transport)
-  _ = try await client.setAutomaticSwitching(thresholdPercent: 10)
-  let calls = await transport.recorded()
-  let threshold = try JSONSerialization.jsonObject(with: calls.last!.body!) as! [String: Any]
-  try expect(Set(threshold.keys) == ["thresholdPercent"] && threshold["thresholdPercent"] as? Int == 10,
-    "A threshold-only write must not resend enabled")
-
   let paired = BarConnection(baseURL: testConnection().baseURL, username: "fixture", deviceId: "dev_0000000000000001",
     deviceToken: "aacd_" + String(repeating: "A", count: 43), installId: UUID().uuidString, pairedAt: "2026-10-15T12:00:00Z")
   let signedOut = MockTransport(replies: [
@@ -3873,31 +3357,6 @@ private func checkReviewR2() async throws {
   let openCalls = await signedOut.recorded()
   try expect(openCalls.filter { $0.method == "POST" }.count == 1 && openCalls.count == 2, "Signed-out Open has one POST and stops polling")
 
-  let server = AccountFormatting.date("2020-01-01T00:00:00Z")!
-  let deadline = ConfirmationDeadline(expiresAt: "2020-01-01T00:01:00Z", serverDate: server, requestStarted: 90, now: 100)!
-  try expect(deadline.uptime == 149, "Server lifetime subtracts request time and Date precision")
-  let expired = ConfirmationDeadline(expiresAt: "2020-01-01T00:00:05Z", serverDate: server, requestStarted: 90, now: 100)!
-  try expect(expired.uptime == 100 && ConfirmationDeadline(expiresAt: "2020-01-01T00:01:00Z", serverDate: nil, requestStarted: 90, now: 100) == nil,
-    "Elapsed approvals are not renewed; missing server time preserves the fallback")
-  let codexOffer = Data("""
-    {"code":"busy","reason":"running_processes","confirmation":{"token":"fixture-token","expiresAt":"2020-01-01T00:01:00Z","targetProfile":"fixture","warning":"Fixture","processes":[{"label":"Codex CLI","pid":1,"role":"cli"}]}}
-    """.utf8)
-  let agOffer = Data("""
-    {"status":"confirmation-required","profileId":"fixture","hostId":"ubuntu","confirmation":{"token":"fixture_token_0001","expiresAt":"2020-01-01T00:01:00Z","profileId":"fixture","hostId":"ubuntu","email":"fixture@example.com","processes":[{"pid":1,"role":"cli"}]}}
-    """.utf8)
-  let skewed = MockTransport(replies: [
-    "POST /api/codex/profiles/fixture/activate": [MockReply(409, codexOffer, headers: ["Date": "Wed, 01 Jan 2020 00:00:00 GMT"])],
-    "POST /api/antigravity/profiles/fixture/activate": [MockReply(409, agOffer, headers: ["Date": "Wed, 01 Jan 2020 00:00:00 GMT"])],
-  ])
-  let skewedClient = AccountsClient(connection: testConnection(), transport: skewed)
-  do { try await skewedClient.activateCodex(profile: "fixture"); throw CheckFailure(description: "Missing Codex consent") }
-  catch BarClientError.codexConfirmation(let offer) {
-    try expect(offer.deadline != nil && offer.isValid(for: "fixture", now: Date.distantFuture), "Codex consent uses server Date despite wall-clock skew")
-  }
-  do { try await skewedClient.activateAntigravity(profile: "fixture"); throw CheckFailure(description: "Missing Antigravity consent") }
-  catch BarClientError.antigravityConfirmation(let offer) {
-    try expect(offer.deadline != nil && offer.isValid(for: "fixture", now: Date.distantFuture), "Antigravity consent uses server Date despite wall-clock skew")
-  }
   let note = SignedOutNote(reason: "disconnected", at: "2026-10-15T12:00:00Z", disconnectTold: false, credentialKind: "password")
   let decoded = try JSONDecoder().decode(SignedOutNote.self, from: JSONEncoder().encode(note))
   try expect(decoded.disconnectTold == false && decoded.credentialKind == "password", "Disconnect outcome and credential kind persist")
@@ -3932,26 +3391,24 @@ private func checkReviewR2() async throws {
 
 if CommandLine.arguments.contains("--check-live") {
   // Opt-in deployment check is read-only. It never refreshes usage, launches a
-  // desktop, activates a profile, or changes automatic switching settings.
+  // desktop, or changes any setting.
   await checkLive()
 } else {
 do {
   try await checkReviewR2()
-  print("PASS review R2 transport, threshold, consent lifetime, sign-out and native views")
+  print("PASS review R2 transport, sign-out and native views")
   try await checkSessionAndQueries()
   print("PASS session sharing and Mac dashboard queries")
   try await checkWrites()
-  print("PASS Origin, JSON, activation, auto-switch, and Claude launch contract")
+  print("PASS Origin, JSON, and Claude launch contract")
   try await checkRejectedProfileIdentifiers()
   print("PASS rejected profile identifiers and Claude allowlist")
   try await checkExpiredSession()
   print("PASS bounded expired-session retry")
-  try await checkConfirmedCodexSwitch()
-  print("PASS confirmed busy Codex switch, explicit consent, expiry, and rejected confirmation")
   try await checkLoginBackoffAndBadPayload()
   print("PASS failed-login backoff and malformed payload handling")
   try await checkSafeHTTPFailures()
-  print("PASS 52 private-error canary cases, local action isolation, settings guidance, and structured consent")
+  print("PASS 29 private-error canary cases and local action isolation")
   try checkUnknownQuotaAndExactReset()
   print("PASS unknown quota and exact reset timestamps")
   try checkUsageMetadata()
@@ -3960,20 +3417,16 @@ do {
   print("PASS retained optional-window Cached labels and original sample timestamps")
   try checkProviderGrouping()
   print("PASS provider grouping preserves accounts, actual active quota, and all detail windows")
-  try checkCodexAutoStatusText()
-  print("PASS stuck Codex switch line names the vetted candidate and hides when healthy")
   try checkVisibleUsageWindows()
   print("PASS provider-scoped visible windows, real zero quota, reset packs, and distinct Go accounts")
   try await checkPrivateConnectionFile()
   print("PASS private connection file and origin validation")
   try checkCodexCompactFullDashboardDTO()
   print("PASS complete Codex dashboard DTO, exact compact cores, no aliases, raw Details, and provider isolation")
-  try await checkAntigravityClient()
-  print("PASS Antigravity activation, one-use confirmation, fixed guidance, and % used automatic settings")
   try checkDashboardAdditions()
   try checkClaudeSignInNeeded()
   print("PASS Claude Sign-in needed per computer before Open, read loosely")
-  print("PASS Antigravity policy and capabilities, activation guards, tray order, and tray-hidden providers and accounts")
+  print("PASS retired switching fields ignored, tray order, and tray-hidden providers and accounts")
   try checkTrayPresentation()
   print("PASS Fable on Max only, exact Codex cells, menu-bar reading, two-decimal numbers, and no-overshoot motion")
   try checkAntigravityPlanDisplay()

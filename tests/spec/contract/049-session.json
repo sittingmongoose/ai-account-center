@@ -1,14 +1,13 @@
 {
   "request": {
-    "method": "PUT",
-    "path": "/api/auth/network",
+    "method": "POST",
+    "path": "/api/auth/sessions/revoke-others",
     "role": "session",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "invalid_body",
-      "error": "The request body is not valid for this action."
+      "signedOutBrowsers": 17
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +15,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 400
+    "status": 200
   }
 }

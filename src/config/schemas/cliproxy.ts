@@ -6,15 +6,36 @@
  */
 
 import type { TargetType } from '../../targets/target-adapter';
-import type { CLIProxyProvider, CliproxyRoutingStrategy } from '../../cliproxy/types';
-import { CLIPROXY_PROVIDER_IDS } from '../../cliproxy/provider-capabilities';
 import type { OAuthAccounts, CLIProxyAuthConfig, TokenRefreshSettings } from './auth';
 
 /**
- * Supported CLIProxy providers.
- * Derived from CLIPROXY_PROVIDER_IDS — single source of truth in provider-capabilities.ts.
+ * Provider ids a held `cliproxy` section may name. The CLIProxy manager is gone
+ * (2026-11-14); these stay only so config.yaml keeps its sections word for word.
+ * The order is the one written into a new config's `cliproxy.providers`.
  */
-export { CLIPROXY_PROVIDER_IDS as CLIPROXY_SUPPORTED_PROVIDERS };
+export const CLIPROXY_SUPPORTED_PROVIDERS = Object.freeze([
+  'gemini',
+  'codex',
+  'xai',
+  'agy',
+  'qwen',
+  'iflow',
+  'kiro',
+  'ghcp',
+  'claude',
+  'kimi',
+  'cursor',
+  'gitlab',
+  'codebuddy',
+  'kilo',
+  'qoder',
+] as const);
+
+/** A provider id in a held `cliproxy` section. */
+export type CLIProxyProvider = (typeof CLIPROXY_SUPPORTED_PROVIDERS)[number];
+
+/** Credential routing strategy named by a held `cliproxy.routing` section. */
+export type CliproxyRoutingStrategy = 'round-robin' | 'fill-first';
 
 /**
  * CLIProxy variant configuration.

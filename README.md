@@ -6,7 +6,7 @@
 
 **One dashboard for every AI coding subscription you pay for.**
 
-See every quota at a glance · switch accounts before you hit a limit · let your agents check their own burn rate
+See every quota at a glance · claim resets before you hit a limit · let your agents check their own burn rate
 
 <p>
 <img alt="TypeScript backend" src="https://img.shields.io/badge/backend-TypeScript-3178C6?logo=typescript&logoColor=white">
@@ -25,7 +25,7 @@ See every quota at a glance · switch accounts before you hit a limit · let you
 
 ## 🎬 Demo
 
-<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/demo.webp" width="100%" alt="Demo: the Home overview, a guarded Codex account switch, Analytics, Accounts and Settings, and Update apps">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/demo.webp" width="100%" alt="Demo: the Home overview, Analytics, Accounts and Settings, and Update apps">
 
 ---
 
@@ -34,12 +34,11 @@ See every quota at a glance · switch accounts before you hit a limit · let you
 | Feature | What you get |
 | --- | --- |
 | 📊 **Every quota on one screen** | 9 providers, with multiple accounts for supported providers: 5-hour, weekly and monthly limits, credits, packs and resets. |
-| 🔁 **Automatic account switching** | Codex moves to an account with room when the active one reaches your limit (95% by default). Only while Codex is idle, with rollback. |
 | 🤖 **Usage your agents can read** | Every minute, usage, burn rate and projected run-out land in a shared folder. Agents check before a long run. |
 | ⬆️ **Update every AI app at once** | One button updates Claude Code, Codex, both desktop apps, T3 Code and more, on every computer, in parallel. |
 | 📈 **Analytics** | Tokens and API-equivalent cost from the CLI logs on every computer, by provider, model, hour and session. |
 | 📱 **Phone app** | The full dashboard as an installable PWA, light or dark. |
-| 🖥️ **Native trays** | A SwiftUI menu-bar app for the Mac and a WPF tray for Windows, with Activate and Open buttons. |
+| 🖥️ **Native trays** | A SwiftUI menu-bar app for the Mac and a WPF tray for Windows, with every reading and Open for Claude profiles. |
 | 🔐 **Locked down** | Its own login, revocable per-device keys for the trays, HTTPS-proxy support, secrets kept out of logs. |
 | 🧾 **Honest numbers** | A missing reading shows as unavailable, never 0%. Cached readings say so and keep their real time. |
 
@@ -55,7 +54,7 @@ See every quota at a glance · switch accounts before you hit a limit · let you
 <tr>
 <td width="50%" valign="top">
 <img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/home-light.png" width="100%" alt="Home dashboard, light theme">
-<p><b>🏠 Home</b><br>Every account, every limit. Colors warn as a limit fills; the dark tick is the auto-switch point.</p>
+<p><b>🏠 Home</b><br>Every account, every limit. Colors warn as a limit fills; the live login on each computer is marked Active.</p>
 </td>
 <td width="50%" valign="top">
 <img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/home-dark.png" width="100%" alt="Home dashboard, dark theme">
@@ -73,24 +72,20 @@ See every quota at a glance · switch accounts before you hit a limit · let you
 </td>
 </tr>
 <tr>
-<td width="50%" valign="top">
+<td colspan="2">
 <img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/analytics-quota-history.png" width="100%" alt="Quota history for every account and the upcoming resets agenda">
 <p><b>📉 Quota history</b><br>Each account's limit over the week, plus every upcoming reset.</p>
-</td>
-<td width="50%" valign="top">
-<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/switch-review.png" width="100%" alt="Guarded Codex switch review listing the processes that will stop">
-<p><b>🛡️ Guarded switching</b><br>A manual switch while Codex is busy lists exactly what will stop first.</p>
 </td>
 </tr>
 <tr>
 <td colspan="2">
 <img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/accounts.png" width="100%" alt="Accounts and Settings page">
-<p><b>⚙️ Accounts & Settings</b><br>Add or remove accounts, choose what shows where, sign-in and device security, auto-switch policies and update results.</p>
+<p><b>⚙️ Accounts & Settings</b><br>Add or remove accounts, choose what shows where, sign-in and device security and update results.</p>
 </td>
 </tr>
 <tr>
 <td colspan="2">
-<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/pwa-phones.png" width="100%" alt="The installed phone app: Home, Codex auto-switch, Analytics and dark Home">
+<img src="https://raw.githubusercontent.com/sittingmongoose/ai-account-center/main/assets/screenshots/pwa-phones.png" width="100%" alt="The installed phone app: Home, Analytics and dark Home">
 <p><b>📱 Phone app (PWA)</b><br>Install it from Safari or Chrome. The same live data, laid out for one hand.</p>
 </td>
 </tr>
@@ -112,11 +107,11 @@ See every quota at a glance · switch accounts before you hit a limit · let you
 
 ## 🧩 Supported providers
 
-| Provider | What you see | Switch accounts | How it signs in |
+| Provider | What you see | Open the app | How it signs in |
 | --- | --- | --- | --- |
 | **Claude** | 5-hour, weekly, Fable (Max plans), extra usage | Opens each account's own desktop profile on the Mac or Windows | Desktop profile |
-| **Codex** | 5-hour, weekly, credits, banked resets | ✅ Activate + automatic (Linux) | Device code |
-| **Google Antigravity** | Gemini and Claude/GPT pools, 5-hour and weekly | ✅ Activate (Linux), automatic is opt-in | Supervised CLI login |
+| **Codex** | 5-hour, weekly, credits, banked resets; the live login on Ubuntu | — | Device code |
+| **Google Antigravity** | Gemini and Claude/GPT pools, 5-hour and weekly; the live login on Ubuntu | — | Supervised CLI login |
 | **Cursor** | Included usage, on-demand spend | — | Desktop app session |
 | **Muse Code** | 5-hour and weekly | — | Existing `muse login` on the Mac (dashboard device-code sign-in is off by default) |
 | **Kimi Code** | 5-hour and weekly | — | API key |
@@ -124,21 +119,19 @@ See every quota at a glance · switch accounts before you hit a limit · let you
 | **Z.ai Coding Plan** | Token windows, monthly requests, reset packs | — | API key |
 | **OpenCode Go** | 5-hour, weekly, monthly, console wallet | — | API key |
 
+<sub>AI Account Center reads usage; it does not switch accounts. Account switching was removed on 2026-11-14: your agents pick their own accounts by burn rate and availability.</sub>
+
 <sub>Cursor, Muse Code and Qwen hold one account each; the others take up to 16 accounts per provider.</sub>
 
 ---
 
 ## 🔍 Feature deep dives
 
-### 🔁 Automatic account switching
+### 🔑 Saved logins
 
-- **Set a limit.** Turn on Auto-switch and pick when to move (95% used by default).
-- **It watches.** Every minute it checks the active Codex account against fresh provider readings.
-- **It waits for idle.** It never cuts off running work; it switches once Codex is idle.
-- **It's a transaction.** Prove the identity → swap the login → verify → roll back if anything is off.
-- **You stay in control.** A manual switch while Codex is busy shows the review above: the exact processes that will stop.
+- **Every account is read.** Each saved Codex login and Antigravity profile on Ubuntu has its own usage, limits and resets.
 - **Logins stay fresh.** Idle saved Codex logins renew themselves about four days before they expire. The login in use is never touched.
-- **Antigravity too.** The same guarded switch works for Antigravity CLI accounts on Ubuntu. Automatic switching there is opt-in and off by default.
+- **No switching.** AI Account Center never changes which account a program uses; the live login on each computer is marked Active.
 
 ### 🤖 Usage your agents can read
 
@@ -171,7 +164,7 @@ Details: [agent usage snapshot](docs/agent-usage-snapshot.md).
 - **Parallel:** each computer updates its own apps while the others run, with live progress per computer.
 - **Safe restarts:** only CLI sessions running in a terminal are stopped and reopened. Background agents are never killed.
 - **Nothing automatic:** updates run only when you press the button. Cancel skips whatever hasn't started.
-- **Antigravity always updates.** Account switching pauses on a build it has not reviewed yet, and a running Antigravity session is never stopped for one.
+- **Antigravity always updates.** Its managed runtime pauses on a build it has not reviewed yet, and a running Antigravity session is never stopped for one.
 - **Says why.** A row that did not update names its cause (sign-in needed, blocked by policy, the wrong copy updated, T3 not ready) with what ran, which copy and the last lines of output, credentials removed.
 
 ### 📈 Analytics
@@ -193,7 +186,7 @@ Details: [agent usage snapshot](docs/agent-usage-snapshot.md).
 
 - **Mac:** SwiftUI menu-bar app (macOS 26+). The menu bar can show one live reading, used or remaining.
 - **Windows:** WPF tray app on .NET 10. Single instance; a second launch opens the running one.
-- **Same powers:** every account, Activate, open a Claude profile, auto-switch toggles and thresholds.
+- **Same readings:** every account, every limit, and Open for a Claude profile.
 - **Your choice of accounts:** "Show in tray" is separate from "Show on dashboard".
 - **Pair once:** the tray trades the dashboard password for its own revocable key, which rotates every 30 days. Changing the password never signs a tray out.
 
@@ -226,13 +219,12 @@ flowchart LR
   subgraph server["Dashboard server · TypeScript on Node.js 22 or 26"]
     api["Authenticated API + WebSocket"]
     usage["Account usage"]
-    switch["Guarded switching"]
     analytics["Analytics"]
     updates["Update apps"]
     snapshot["Agent usage snapshot"]
   end
   clients --> api
-  api --> usage & switch & analytics & updates
+  api --> usage & analytics & updates
   usage -->|"Python collectors, local and over SSH"| providers[("Provider quota<br/>(existing sign-ins)")]
   analytics -->|"read-only helper over SSH"| logs[("CLI logs on<br/>each computer")]
   updates -->|"allowlisted helpers"| apps[("Installed AI apps")]
@@ -248,7 +240,7 @@ flowchart LR
 | Collectors and helpers | Python usage collectors, analytics and update helpers over SSH; browser extensions for console sessions |
 | Packaging | Bun and npm (local tarball), Docker |
 
-The setup it was built for: a **Linux server** runs the dashboard, and a **Mac** and a **Windows PC** are reached over SSH for Claude desktop profiles, the trays, Analytics and updates. On a single Linux computer you still get the dashboard, Codex and Antigravity switching, local Analytics and every API-key provider. Codex and Antigravity switching need the dashboard on Linux. Deeper reading: [system architecture](docs/system-architecture/index.md).
+The setup it was built for: a **Linux server** runs the dashboard, and a **Mac** and a **Windows PC** are reached over SSH for Claude desktop profiles, the trays, Analytics and updates. On a single Linux computer you still get the dashboard, Codex and Antigravity usage, local Analytics and every API-key provider. Saved Codex logins and Antigravity profiles need the dashboard on Linux. Deeper reading: [system architecture](docs/system-architecture/index.md).
 
 ---
 
@@ -261,7 +253,7 @@ The setup it was built for: a **Linux server** runs the dashboard, and a **Mac**
 | The dashboard | Node.js 22.13+ or 26 (CI uses 26), [Bun](https://bun.sh/docs/installation) 1.4.4, [Rust](https://rust-lang.org/tools/install/) 1.99.1 with `wasm32-unknown-unknown` and [wasm-pack](https://github.com/wasm-bindgen/wasm-pack#installation) 0.15.1 |
 | Usage readings | Your existing provider sign-ins on the computer that owns them, and Python 3 there (`/usr/bin/python3` on Linux and Mac, `python.exe` on Windows) |
 | Mac / Windows features | SSH access from the dashboard computer, and Python 3 on the remote computer |
-| Codex / Antigravity switching | The dashboard on Linux (activation refuses other platforms) |
+| Saved Codex logins / Antigravity profiles | The dashboard on Linux |
 | Mac menu bar | macOS 26+, Xcode 26+ |
 | Windows tray | Windows x64, [.NET 10 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/10.0) |
 | Browser | Chrome/Edge 112+, Firefox 121+ or Safari/iOS 18.2+, with WebGL2 hardware acceleration |
@@ -347,9 +339,8 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 | `ai-account-center dashboard usage-hub status` | T3 Code usage hub (`generate`, `rotate`, `off`) |
 | `ai-account-center dashboard proxy set --address <ip> --origin <url>` | Trust your HTTPS reverse proxy (`status`, `off`) |
 | `ai-account-center codex-auth show` | List saved Codex logins (`create`, `login`, `import-default`, `remove`) |
-| `ai-account-center codex-auth activate <name>` | Guarded switch of the shared Codex login |
 | `ai-account-center antigravity signin <profile>` | Add or re-sign an Antigravity profile on Ubuntu |
-| `ai-account-center antigravity status` | Read-only check of what Antigravity switching needs |
+| `ai-account-center antigravity status` | Read-only check of what the Antigravity runtime needs |
 | `ai-account-center bar` | Mac: open the paired menu-bar app |
 
 `ai-account-center help <command>` has every option. The older `ccs` command runs the same commands, and **`ccs config` still opens the dashboard**.
@@ -363,8 +354,8 @@ More: [Docker guide](docker/README.md) · [phone install](docs/user-guide.md#use
 | [User guide](docs/user-guide.md) | Every page and control, sign-in flows, phone install, remote access, update and rollback, known limits |
 | [Agent setup guide](docs/agent-setup.md) | For an agent installing AAC for someone: build, the human sign-in steps, usage for agents, the T3 Code usage hub |
 | [Agent usage snapshot](docs/agent-usage-snapshot.md) | The shared-folder format and reader |
-| [Codex switching](docs/codex-auth.md) · [activation review](docs/activate-in-place.md) | How the guarded switch works |
-| [Antigravity on Ubuntu](docs/antigravity-runtime.md) | Profiles, sign-in and switching gates |
+| [Codex saved logins](docs/codex-auth.md) | Saved logins, renewal and removal |
+| [Antigravity on Ubuntu](docs/antigravity-runtime.md) | Profiles, sign-in and the managed runtime |
 | [System architecture](docs/system-architecture/index.md) | Data, credential and host boundaries |
 | [Dashboard (Leptos)](web-dashboard/README.md) | The WebAssembly UI and its licensing |
 | [All maintainer docs](docs/README.md) | Everything else |

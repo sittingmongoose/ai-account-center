@@ -393,62 +393,6 @@
   },
   {
     "method": "GET",
-    "path": "/api/antigravity/auto-switch",
-    "roles": [
-      "signed-out",
-      "session",
-      "device",
-      "bar",
-      "hub"
-    ],
-    "handlerFile": "src/web-server/routes/antigravity-routes.ts",
-    "writes": false,
-    "milestone": "M3"
-  },
-  {
-    "method": "PUT",
-    "path": "/api/antigravity/auto-switch",
-    "roles": [
-      "signed-out",
-      "session",
-      "device",
-      "bar",
-      "hub"
-    ],
-    "handlerFile": "src/web-server/routes/antigravity-routes.ts",
-    "writes": true,
-    "milestone": "M5"
-  },
-  {
-    "method": "POST",
-    "path": "/api/antigravity/profiles/:profileId/activate",
-    "roles": [
-      "signed-out",
-      "session",
-      "device",
-      "bar",
-      "hub"
-    ],
-    "handlerFile": "src/web-server/routes/antigravity-activate-route.ts",
-    "writes": true,
-    "milestone": "M5"
-  },
-  {
-    "method": "POST",
-    "path": "/api/antigravity/profiles/:profileId/confirm",
-    "roles": [
-      "signed-out",
-      "session",
-      "device",
-      "bar",
-      "hub"
-    ],
-    "handlerFile": "src/web-server/routes/antigravity-activate-route.ts",
-    "writes": true,
-    "milestone": "M5"
-  },
-  {
-    "method": "GET",
     "path": "/api/antigravity/profiles/quotas",
     "roles": [
       "signed-out",
@@ -474,20 +418,6 @@
     "handlerFile": "src/web-server/routes/antigravity-routes.ts",
     "writes": false,
     "milestone": "M3"
-  },
-  {
-    "method": "POST",
-    "path": "/api/antigravity/recover",
-    "roles": [
-      "signed-out",
-      "session",
-      "device",
-      "bar",
-      "hub"
-    ],
-    "handlerFile": "src/web-server/routes/antigravity-recover-route.ts",
-    "writes": true,
-    "milestone": "M5"
   },
   {
     "method": "POST",
@@ -864,48 +794,6 @@
       "hub"
     ],
     "handlerFile": "src/web-server/routes/claude-desktop-routes.ts",
-    "writes": true,
-    "milestone": "M5"
-  },
-  {
-    "method": "POST",
-    "path": "/api/codex/profiles/:name/activate",
-    "roles": [
-      "signed-out",
-      "session",
-      "device",
-      "bar",
-      "hub"
-    ],
-    "handlerFile": "src/web-server/routes/codex-routes.ts",
-    "writes": true,
-    "milestone": "M5"
-  },
-  {
-    "method": "GET",
-    "path": "/api/codex/profiles/auto-switch",
-    "roles": [
-      "signed-out",
-      "session",
-      "device",
-      "bar",
-      "hub"
-    ],
-    "handlerFile": "src/web-server/routes/codex-routes.ts",
-    "writes": false,
-    "milestone": "M3"
-  },
-  {
-    "method": "PUT",
-    "path": "/api/codex/profiles/auto-switch",
-    "roles": [
-      "signed-out",
-      "session",
-      "device",
-      "bar",
-      "hub"
-    ],
-    "handlerFile": "src/web-server/routes/codex-routes.ts",
     "writes": true,
     "milestone": "M5"
   },

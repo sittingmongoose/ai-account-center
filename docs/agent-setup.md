@@ -13,7 +13,7 @@ person each time you need them.
 
 ## 1. Decide where the dashboard runs
 
-Ask which computer stays on: the dashboard runs there. Codex and Antigravity switching need it on Linux; every reading
+Ask which computer stays on: the dashboard runs there. Saved Codex logins and Antigravity profiles need it on Linux; every reading
 works from macOS or Windows too. Other computers are reached over SSH for their own sign-ins, Analytics and updates
 (README, "How it works").
 

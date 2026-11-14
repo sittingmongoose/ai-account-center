@@ -1,6 +1,17 @@
+import fs from 'fs';
+import path from 'path';
 import { isNativeVersion } from './native-version';
 import { refreshRuntimeDescriptor, type RuntimeRefreshResult } from './runtime-refresh';
-import { ownsAntigravityState } from './terminal-activate';
+
+/** The private CCS directory is a real directory owned by this user. */
+export function ownsAntigravityState(ccsDir: string, uid: number | null): boolean {
+  try {
+    const stat = fs.lstatSync(path.resolve(ccsDir));
+    return stat.isDirectory() && !stat.isSymbolicLink() && uid !== null && stat.uid === uid;
+  } catch {
+    return false;
+  }
+}
 
 export interface TerminalRefreshIo {
   write(text: string): void;

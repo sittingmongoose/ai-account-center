@@ -75,7 +75,7 @@ test('every server error code has its own calm words, never the server sentence'
   assert.match(errorText(err(403, 'secure_transport_required')).body, /local network trust/);
   assert.equal(errorText(err(422, 'key_rejected'), { what: 'replace' }).body, 'The old key is still in use.');
   assert.equal(errorText(err(422, 'key_rejected')).body, 'Nothing was stored.');
-  assert.equal(errorText(err(409, 'account_active'), { what: 'signin-again' }).body, 'Activate another account first, then sign in again.');
+  assert.equal(errorText(err(409, 'account_active'), { what: 'signin-again' }).body, 'Sign in to another account on that computer first, then sign in again.');
   assert.match(errorText(err(409, 'account_default'), { provider: 'claude' }).body, /default Claude profile/);
   assert.equal(errorText(err(400, 'weak_password', { reason: 'too_long' })).title, 'Password too long');
   // no code: by status, then the network

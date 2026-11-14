@@ -8,7 +8,7 @@ Leptos browser app / native Mac or Windows bar
        TypeScript dashboard services
         /            |             \
  native profiles   observed history  existing-host collectors
- guarded switching   Analytics      Python / browser bridge
+ saved logins        Analytics      Python / browser bridge
 ```
 
 The web dashboard is a Leptos 0.9 app (the app frame) compiled through Rust to WebAssembly. The
@@ -24,7 +24,7 @@ source; there is no configurable host list.
 
 | Computer | How it is reached | What AI Account Center does there |
 | --- | --- | --- |
-| Ubuntu | Local; runs the dashboard | Dashboard, account state, guarded Codex activation and auto-switch, Antigravity, local collectors and log scans, app updates |
+| Ubuntu | Local; runs the dashboard | Dashboard, account state, saved Codex logins and Antigravity profiles, local collectors and log scans, app updates |
 | Mac | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native bar |
 | Windows | Fixed SSH alias | Claude desktop profiles, collectors, Analytics scan, app updates, native tray |
 | Nas1 | Fixed SSH alias `nas1-agent` | App updates, Analytics scan and verified usage fallback |
@@ -148,9 +148,9 @@ nothing else); a WAL database closed cleanly, with no `-wal` file, opens
 immutable, so the read never creates `-wal` or `-shm` files, and a read that a
 writer overlapped is dropped and done again on the next scan.
 
-[Codex account summaries](../../src/codex-auth/codex-auth-dashboard-service.ts),
-[guarded activation/rollback](../../src/codex-auth/activate-codex-profile.ts) and idle-only
-[auto-switch](../../src/web-server/services/codex-auto-switch-service.ts).
+[Codex account summaries](../../src/codex-auth/codex-auth-dashboard-service.ts) and
+[saved-login renewal](../../src/codex-auth/codex-profile-renewal.ts). Account switching (activation and
+auto-switch) was removed on 2026-11-14.
 [App updates](../../src/web-server/services/app-update-service.ts) are allowlisted
 jobs triggered explicitly, never from startup or routine polling. One job covers
 the five computers above (50 result rows: five computers x ten apps); each

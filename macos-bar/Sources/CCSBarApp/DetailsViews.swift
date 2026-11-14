@@ -30,7 +30,6 @@ struct AccountDetailsPopover: View {
 struct AccountDetailsBody: View {
   @ObservedObject var model: AccountsViewModel
   let account: DashboardAccount
-  @Environment(\.dismiss) private var dismiss
 
   var body: some View {
     withPalette { palette in
@@ -107,22 +106,6 @@ struct AccountDetailsBody: View {
           if account.provider == "codex" || account.provider == "antigravity" {
             if account.isActive {
               ActiveLabel(platform: account.platform)
-            } else if account.provider == "codex" && account.canActivate {
-              // Details closes on Activate, so a switch confirmation under the row is never hidden behind it.
-              ActivateButton(title: "Activate", busy: model.busyAction == account.id,
-                enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation
-                  && model.dashboard?.canActivateCodex(account) == true,
-                help: "Make \(account.identity) the active Codex account on Ubuntu", id: "details-activate-\(account.id)") {
-                model.activate(account)
-                dismiss()
-              }
-            } else if account.provider == "antigravity" && model.dashboard?.canActivateAntigravity(account) == true {
-              ActivateButton(title: "Activate", busy: model.busyAction == account.id,
-                enabled: model.busyAction == nil && !model.isRefreshing && !model.hasPendingConfirmation,
-                help: "Make \(account.identity) the active Antigravity account on Ubuntu", id: "details-activate-\(account.id)") {
-                model.activateAntigravity(account)
-                dismiss()
-              }
             }
           }
           Button {

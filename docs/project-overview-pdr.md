@@ -11,8 +11,8 @@ CCS fork, retaining original authorship, license, private state and history.
 - Existing profile/account management, per-provider and per-account "Show on
   dashboard" and "Show in tray" switches, server-driven add, sign-in again,
   replace key, remove and restore, and Claude Mac/Windows launcher controls.
-- Guarded Codex activation on Ubuntu, explicit busy review, rollback and idle-only
-  automatic switching.
+- Usage, limits and resets for every saved Codex login and Antigravity profile, with
+  the live login on Ubuntu marked Active (account switching was removed on 2026-11-14).
 - Observed quota Analytics with range presets, a Claude Code / Codex filter,
   Included usage sources and complete reset/expiration details.
 - Authentic CLI activity (Claude Code, Codex, OMP, Muse, zcode) from Ubuntu, Mac,

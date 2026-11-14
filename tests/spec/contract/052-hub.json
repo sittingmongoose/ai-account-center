@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "PUT",
-    "path": "/api/auth/session-lifetime",
-    "role": "hub",
-    "body": {}
+    "method": "GET",
+    "path": "/api/bar/auth",
+    "role": "hub"
   },
   "response": {
     "body": {

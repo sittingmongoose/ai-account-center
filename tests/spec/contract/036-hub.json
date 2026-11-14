@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/app-updates/start",
+    "method": "DELETE",
+    "path": "/api/auth/devices/me",
     "role": "hub",
     "body": {}
   },

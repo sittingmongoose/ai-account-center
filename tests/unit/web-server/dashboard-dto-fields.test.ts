@@ -1,8 +1,8 @@
 import { DASHBOARD_HOSTS } from '../../../src/web-server/services/dashboard-hosts';
 /**
- * Additive dashboard DTO fields (CONTRACT-serving-misc section 4):
- * codexAutoSwitch.thresholdUsedPercent, the Antigravity "Needs setup" row with
- * accounts[].switchable and accounts[].lifecycle, server.version/commit and the
+ * Additive dashboard DTO fields (CONTRACT-serving-misc section 4): the retired
+ * codexAutoSwitch kept for older trays, the Antigravity "Needs setup" row with
+ * accounts[].lifecycle, server.version/commit and the
  * app-update expectedResults. Fixtures only; no provider, host or real CCS dir.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
@@ -13,7 +13,6 @@ import {
   AccountDashboardService,
   type AccountDashboardDeps,
 } from '../../../src/web-server/services/account-dashboard-service';
-import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import { setDashboardBuildCommit } from '../../../src/web-server/services/dashboard-server-info';
 import {
   AppUpdateService,
@@ -22,7 +21,6 @@ import {
 import type { DashboardProvider } from '../../../src/web-server/services/account-dashboard-types';
 import { AntigravityUsageService } from '../../../src/antigravity/usage-service';
 import type { AntigravityUsageProfile } from '../../../src/antigravity/usage-contract';
-import { disabledAntigravityAutoSwitchStatus } from '../../../src/antigravity/runtime-composition';
 
 const NOW = '2026-10-02T08:00:00.000Z';
 const ADDITIONAL: DashboardProvider[] = [
@@ -111,15 +109,6 @@ function deps(extra: AccountDashboardDeps = {}): AccountDashboardDeps {
     getCachedLiveClaudeUsage: async () => null,
     getAdditionalAccounts: async () => [],
     getOptionalWalletAccounts: async () => [],
-    getAutoSwitchStatus: () => ({
-      enabled: true,
-      thresholdPercent: 5,
-      pollIntervalSeconds: 60,
-      outcome: 'healthy',
-      message: 'Fixture healthy',
-      activationInProgress: false,
-    }),
-    getAntigravityAutoSwitchStatus: disabledAntigravityAutoSwitchStatus,
     invalidateClaudeCache: () => {},
     scope: () => '/tmp/aac-dto-fixture-scope',
     now: () => Date.parse(NOW),
@@ -133,49 +122,42 @@ function deps(extra: AccountDashboardDeps = {}): AccountDashboardDeps {
   };
 }
 
-describe('codexAutoSwitch.thresholdUsedPercent', () => {
-  it('is 100 - thresholdPercent in the dashboard and in the auto-switch status', async () => {
+describe('codexAutoSwitch (retired)', () => {
+  it('is the fixed, always-off status the trays installed before the removal still require', async () => {
     const dashboard = await new AccountDashboardService(deps()).get('mac');
-    expect(dashboard.codexAutoSwitch).toMatchObject({
+    expect(dashboard.codexAutoSwitch).toEqual({
+      enabled: false,
       thresholdPercent: 5,
       thresholdUsedPercent: 95,
+      pollIntervalSeconds: 60,
+      outcome: 'disabled',
+      message: 'Account switching was removed. AI Account Center shows usage only.',
+      activationInProgress: false,
     });
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-dto-threshold-'));
-    directories.push(directory);
-    const service = new CodexAutoSwitchService({
-      ccsDir: directory,
-      readConfig: () => ({ enabled: false, thresholdPercent: 12 }),
-    });
-    expect(service.getStatus()).toMatchObject({ thresholdPercent: 12, thresholdUsedPercent: 88 });
+    expect(dashboard).not.toHaveProperty('antigravityAutoSwitch');
   });
 });
 
-describe('Antigravity "Needs setup" row, switchable and lifecycle', () => {
-  it('lists an unverified Antigravity profile as pending sign-in and never as a switch target', async () => {
+describe('Antigravity "Needs setup" row and lifecycle', () => {
+  it('lists an unverified Antigravity profile as pending sign-in', async () => {
     const dashboard = await new AccountDashboardService(deps()).get('mac');
     const party = dashboard.accounts.find((row) => row.id === 'antigravity:profile:party');
     expect(party).toMatchObject({
       provider: 'antigravity',
       email: 'party@example.com',
       status: 'needs_sign_in',
-      switchable: false,
       lifecycle: { state: 'pending_sign_in', jobId: null },
       windows: [],
       isActive: false,
     });
-    expect(party?.capabilities.antigravityCanActivate).toBe(false);
     for (const id of ['antigravity:profile:gmail', 'antigravity:profile:work']) {
       const row = dashboard.accounts.find((account) => account.id === id);
-      expect([id, row?.switchable, row?.lifecycle]).toEqual([
-        id,
-        true,
-        { state: 'ready', jobId: null },
-      ]);
+      expect([id, row?.lifecycle]).toEqual([id, { state: 'ready', jobId: null }]);
       expect(row?.status).not.toBe('needs_sign_in');
     }
   });
 
-  it('never offers a row whose reading could not be bound to its saved identity as a switch target', async () => {
+  it('marks a row whose reading could not be bound to its saved identity', async () => {
     const profiles = [
       antigravityProfile('gmail', { selected: true, runtimeVerified: true }),
       antigravityProfile('work'),
@@ -205,16 +187,15 @@ describe('Antigravity "Needs setup" row, switchable and lifecycle', () => {
       status: 'error',
       statusReason: 'identity_unbound',
       message: 'Antigravity usage could not be matched to this saved account.',
-      switchable: false,
       // Not a setup row: the saved login is verified; only this reading failed.
       lifecycle: { state: 'ready', jobId: null },
     });
     const gmail = dashboard.accounts.find((row) => row.id === 'antigravity:profile:gmail');
-    expect(gmail).toMatchObject({ status: 'unavailable', switchable: true });
+    expect(gmail).toMatchObject({ status: 'unavailable' });
     expect(gmail && 'statusReason' in gmail).toBe(false);
   });
 
-  it('keeps a bound Antigravity row whose reading failed for another reason a switch target', async () => {
+  it('keeps a bound Antigravity row whose reading failed for another reason ready', async () => {
     const profiles = [
       antigravityProfile('gmail', { selected: true, runtimeVerified: true }),
       antigravityProfile('work'),
@@ -247,7 +228,6 @@ describe('Antigravity "Needs setup" row, switchable and lifecycle', () => {
     expect(work).toMatchObject({
       status: 'error',
       message: 'Antigravity usage is temporarily unavailable.',
-      switchable: true,
       lifecycle: { state: 'ready', jobId: null },
     });
     expect(work && 'statusReason' in work).toBe(false);
@@ -266,19 +246,18 @@ describe('Antigravity "Needs setup" row, switchable and lifecycle', () => {
       })
     );
     const before = await service.get('mac');
-    expect(before.accounts.find((row) => row.id === 'antigravity:profile:work')?.switchable).toBe(
-      true
+    expect(before.accounts.find((row) => row.id === 'antigravity:profile:work')?.lifecycle).toEqual(
+      { state: 'ready', jobId: null }
     );
     usable = false;
     const after = await service.get('mac');
     expect(after.accounts.find((row) => row.id === 'antigravity:profile:work')).toMatchObject({
       status: 'needs_sign_in',
-      switchable: false,
       lifecycle: { state: 'pending_sign_in', jobId: null },
     });
   });
 
-  it('marks Codex profiles with a valid saved login switchable and every other provider not', async () => {
+  it('gives every row a lifecycle and shows an expired Codex login as needing sign-in', async () => {
     const dashboard = await new AccountDashboardService(
       deps({
         getAdditionalAccounts: async () =>
@@ -302,18 +281,13 @@ describe('Antigravity "Needs setup" row, switchable and lifecycle', () => {
       })
     ).get('mac');
     const byId = (id: string) => dashboard.accounts.find((row) => row.id === id);
-    expect(byId('codex:gmail')?.switchable).toBe(true);
     expect(byId('codex:expired')).toMatchObject({
       status: 'needs_sign_in',
-      switchable: false,
       lifecycle: { state: 'ready', jobId: null },
     });
-    expect(byId('claude:me')?.switchable).toBe(false);
     for (const row of dashboard.accounts) {
-      expect(typeof row.switchable).toBe('boolean');
+      expect(row).not.toHaveProperty('switchable');
       expect(row.lifecycle?.jobId).toBeNull();
-      if (row.provider !== 'codex' && row.provider !== 'antigravity')
-        expect([row.id, row.switchable]).toEqual([row.id, false]);
     }
   });
 });

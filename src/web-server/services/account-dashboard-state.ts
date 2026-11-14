@@ -20,52 +20,35 @@ export function isAntigravitySetupRow(account: DashboardAccount): boolean {
 }
 
 /**
- * `switchable` and `lifecycle` for one dashboard row.
- * - Codex: every profile with a valid saved login.
- * - Antigravity: every registry profile with a verified, available saved login,
- *   except one whose latest reading could not be bound to the saved account
- *   (`statusReason: 'identity_unbound'`, set by src/antigravity/usage-service.ts).
- *   Any other reading, a failed one included, keeps the row switchable:
- *   activation still does its own identity and runtime proof. A setup row is
- *   never a switch target and reads `pending_sign_in`.
- * - Every other provider: not switchable.
- * A Claude profile from Add keeps `pending_sign_in` until its first reading.
- * Running sign-in jobs are laid over this by withJobState.
+ * `lifecycle` for one dashboard row. An Antigravity setup row reads `pending_sign_in` with no usage; a Claude profile
+ * from Add keeps `pending_sign_in` until its first reading; every other row is `ready`. Running sign-in jobs are laid
+ * over this by withJobState.
  */
-export function withAccountState(
-  account: DashboardAccount,
-  codexAuthValid?: boolean
-): DashboardAccount {
+export function withAccountState(account: DashboardAccount): DashboardAccount {
   if (account.provider === 'claude' && account.lifecycle?.state === 'pending_sign_in') {
-    return { ...account, switchable: false };
+    return account;
   }
   if (isAntigravitySetupRow(account)) {
     return {
       ...account,
       status: 'needs_sign_in',
       windows: [],
-      capabilities: { ...account.capabilities, antigravityCanActivate: false },
-      switchable: false,
       lifecycle: { state: 'pending_sign_in', jobId: null },
     };
   }
-  const switchable =
-    account.provider === 'codex'
-      ? (codexAuthValid ?? account.status !== 'needs_sign_in')
-      : account.provider === 'antigravity' &&
-        typeof account.capabilities.antigravityProfileId === 'string' &&
-        account.statusReason !== 'identity_unbound';
-  return { ...account, switchable, lifecycle: { state: 'ready', jobId: null } };
+  return { ...account, lifecycle: { state: 'ready', jobId: null } };
 }
 
-/** Both switchable sections in one unit: the Codex threshold also in % used. */
-export function withThresholdUsedPercent(
-  status: Omit<CodexAutoSwitchDashboardStatus, 'thresholdUsedPercent'> & {
-    thresholdUsedPercent?: number;
-  }
-): CodexAutoSwitchDashboardStatus {
-  return { ...status, thresholdUsedPercent: 100 - status.thresholdPercent };
-}
+/** Retired Codex auto-switch, always off, for the trays installed before switching was removed. */
+export const RETIRED_CODEX_AUTO_SWITCH: Readonly<CodexAutoSwitchDashboardStatus> = Object.freeze({
+  enabled: false,
+  thresholdPercent: 5,
+  thresholdUsedPercent: 95,
+  pollIntervalSeconds: 60,
+  outcome: 'disabled',
+  message: 'Account switching was removed. AI Account Center shows usage only.',
+  activationInProgress: false,
+});
 
 /** Running sign-in jobs by account id. */
 export type AccountJobStates = ReadonlyMap<
@@ -104,7 +87,6 @@ export function pendingClaudeAccount(
     isActive: false,
     windows: [],
     capabilities: { codexProfile: null, claudeProfileId: profile.id, claudePlatforms: [] },
-    switchable: false,
     lifecycle: { state: 'pending_sign_in', jobId: null },
   };
 }

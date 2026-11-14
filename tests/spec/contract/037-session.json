@@ -1,12 +1,13 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/app-updates/status",
+    "path": "/api/auth/devices/me",
     "role": "session"
   },
   "response": {
     "body": {
-      "job": null
+      "code": "device_required",
+      "error": "This route is for a paired tray's own token."
     },
     "headers": {
       "cache-control": "no-store",
@@ -14,6 +15,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 403
   }
 }

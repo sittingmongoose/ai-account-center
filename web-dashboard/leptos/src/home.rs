@@ -1,9 +1,9 @@
-//! Home (PLAN step 5): the Claude section, the switchable Codex and Antigravity sections, and the other providers as
-//! cards, drawn from the dashboard's view model v2 (`public/view-model.mjs` `dashboardViewModel`), which the dashboard
-//! controller (`public/frame-dashboard.mjs`) builds and sends (`dash.rs`). Every number, word and "unavailable" decision
-//! is in that view; this page lays it out and animates it. Intent goes back as the dashboard's own action kinds, so
-//! switch approvals, idle-only auto-switch, held actions during a pending switch and every server call stay in the
-//! controller.
+//! Home (PLAN step 5): the Claude section, the Codex and Antigravity sections, and the other providers as cards, drawn
+//! from the dashboard's view model v3 (`public/view-model.mjs` `dashboardViewModel`), which the dashboard controller
+//! (`public/frame-dashboard.mjs`) builds and sends (`dash.rs`). Every number, word and "unavailable" decision is in
+//! that view; this page lays it out and animates it. Intent goes back as the dashboard's own action kinds, so every
+//! server call stays in the controller. The Codex and Antigravity rows mark the live login on Ubuntu; AI Account
+//! Center no longer switches accounts (2026-11-14).
 //!
 //! Layout follows the space the page has (container queries, `style/app.css` "Home"): each section is a table (the
 //! account, one column per window, the action slot) once it is wide enough for its columns, and a stacked row (the
@@ -17,15 +17,12 @@ use crate::frame::FrameCtx;
 use crate::ui::*;
 use leptos::prelude::*;
 use serde::Deserialize;
-use std::rc::Rc;
-use wasm_bindgen::JsCast;
-use wasm_bindgen::prelude::Closure;
 
 /// The view model version this page draws (view-model.mjs `VIEW_MODEL_VERSION`). Another version is refused, not
 /// half drawn.
-pub const VIEW_MODEL_VERSION: u32 = 2;
+pub const VIEW_MODEL_VERSION: u32 = 3;
 
-// ---------------------------------------------------------------- view model v2 (README-ARCHITECTURE.md)
+// ---------------------------------------------------------------- view model v3 (README-ARCHITECTURE.md)
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -57,8 +54,6 @@ pub struct SectionView {
     pub kind: String,
     #[serde(deserialize_with = "nullable")]
     pub label: String,
-    pub switchable: bool,
-    pub can_switch: bool,
     #[serde(deserialize_with = "nullable")]
     pub meta_runs: Vec<Run>,
     pub foot: FootView,
@@ -66,14 +61,13 @@ pub struct SectionView {
     pub active_id: String,
     #[serde(deserialize_with = "nullable")]
     pub empty: String,
-    pub auto: AutoView,
     #[serde(deserialize_with = "nullable")]
     pub columns: Vec<ColumnView>,
     #[serde(deserialize_with = "nullable")]
     pub rows: Vec<RowView>,
 }
 
-/// What auto-switch does about the active account (the Codex footer).
+/// A section's footer line (the Antigravity runtime's warnings).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FootView {
@@ -83,28 +77,6 @@ pub struct FootView {
     pub runs: Vec<Run>,
     #[serde(deserialize_with = "nullable")]
     pub when: String,
-}
-
-/// A switchable section's auto-switch state, in "% used".
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct AutoView {
-    pub known: bool,
-    pub shown: bool,
-    pub enabled: bool,
-    pub available: bool,
-    pub can_enable: bool,
-    pub threshold_used: Option<i64>,
-    pub min: Option<i64>,
-    pub max: Option<i64>,
-    #[serde(deserialize_with = "nullable")]
-    pub pool: String,
-    #[serde(deserialize_with = "nullable")]
-    pub off_runs: Vec<Run>,
-    #[serde(deserialize_with = "nullable")]
-    pub setting: String,
-    #[serde(deserialize_with = "nullable")]
-    pub message: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -137,18 +109,10 @@ pub struct RowView {
     #[serde(deserialize_with = "nullable")]
     pub active_label: String,
     pub setup: bool,
-    pub can_activate: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub activate_kind: String,
-    #[serde(deserialize_with = "nullable")]
-    pub activate_hint: String,
     pub can_mac: bool,
     pub can_windows: bool,
     #[serde(deserialize_with = "nullable")]
     pub amounts_runs: Vec<Run>,
-    pub confirm: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub confirm_runs: Vec<Run>,
     #[serde(deserialize_with = "nullable")]
     pub cells: Vec<MeterView>,
 }
@@ -305,19 +269,6 @@ fn breakable(text: &str) -> impl IntoView + use<> {
         .collect_view()
 }
 
-/// Runs a closure on the next frame, outside any Leptos owner (NOTES.md: owned timers die with their branch).
-fn next_frame(f: impl FnOnce() + 'static) {
-    let cb = Closure::once_into_js(f);
-    let _ = window().request_animation_frame(cb.unchecked_ref());
-}
-
-fn after(ms: i32, f: impl FnOnce() + 'static) -> i32 {
-    let cb = Closure::once_into_js(f);
-    window()
-        .set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), ms)
-        .unwrap_or(0)
-}
-
 fn on_key_activate(ev: &web_sys::KeyboardEvent) -> bool {
     matches!(ev.key().as_str(), "Enter" | " ")
 }
@@ -403,33 +354,15 @@ fn Section(id: String, index: usize, vm: Memo<Option<DashboardView>>) -> impl In
         })
     };
     let first_row = vm.with_untracked(|v| rows_before(v, index));
-    let confirm_id = RwSignal::new(String::new());
-    // The switch point being picked, before the server has it.
-    let pending = RwSignal::new(None::<i64>);
     let row_ids =
         Memo::new(move |_| sec.with(|s| s.rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>()));
     let cols = Memo::new(move |_| sec.with(|s| s.columns.len()));
-    let active = Memo::new(move |_| {
-        sec.with(|s| {
-            if s.switchable {
-                s.rows
-                    .iter()
-                    .find(|r| r.active)
-                    .map(|r| r.id.clone())
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            }
-        })
-    });
-    let sel = format!("[data-sec=\"{}\"]", id.replace('"', ""));
-    place_glide(sel.clone(), sec, active, confirm_id);
     let style = move || format!("--cols:{}", cols.get().max(1));
     let kind = move || sec.with(|s| s.kind.clone());
     let empty = move || sec.with(|s| (s.rows.is_empty()).then(|| s.empty.clone()));
     view! {
         <section class="plate hsec" data-sec=id.clone() data-kind=kind style=move || format!("--i:{index}")>
-            <SectionHead sec=sec pending=pending/>
+            <SectionHead sec=sec/>
             {move || empty().map(|text| view! { <p class="hempty">{text}</p> })}
             <Show when=move || !sec.with(|s| s.rows.is_empty())>
                 <div class=move || format!("htable cols-{}", cols.get().min(6)) style=style>
@@ -441,9 +374,8 @@ fn Section(id: String, index: usize, vm: Memo<Option<DashboardView>>) -> impl In
                         }).collect_view())}
                         <span></span>
                     </div>
-                    <div class="hglide" aria-hidden="true"></div>
                     <For each=move || row_ids.get().into_iter().enumerate() key=|(_, id)| id.clone() let:item>
-                        <Row id=item.1 sec=sec delay=meter_delay(first_row + item.0) confirm_id=confirm_id pending=pending/>
+                        <Row id=item.1 sec=sec delay=meter_delay(first_row + item.0)/>
                     </For>
                 </div>
             </Show>
@@ -461,133 +393,11 @@ fn Section(id: String, index: usize, vm: Memo<Option<DashboardView>>) -> impl In
     }
 }
 
-/// The selected-row highlight: one per switchable section, placed on the active row. A re-layout places it at once; a
-/// switch glides it there (520 ms ease-out, never past the row).
-fn place_glide(
-    sel: String,
-    sec: Memo<SectionView>,
-    active: Memo<String>,
-    confirm_id: RwSignal<String>,
-) {
-    let last = Rc::new(std::cell::RefCell::new(String::new()));
-    let place = {
-        let sel = sel.clone();
-        Rc::new(move |id: String, glide: bool| {
-            let doc = document();
-            let Some(glider) = doc
-                .query_selector(&format!("{sel} .hglide"))
-                .ok()
-                .flatten()
-                .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
-            else {
-                return;
-            };
-            let row = (!id.is_empty())
-                .then(|| {
-                    doc.query_selector(&format!(
-                        "{sel} .hrow[data-row=\"{}\"]",
-                        id.replace('"', "")
-                    ))
-                    .ok()
-                    .flatten()
-                    .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
-                })
-                .flatten();
-            let style = glider.style();
-            // A hidden tab has no layout (every row is 0 px tall): keep the last place until Home is shown again.
-            if glider.offset_parent().is_none() {
-                return;
-            }
-            match row {
-                Some(row) => {
-                    let top = row.offset_top() as f64;
-                    let height = row.offset_height() as f64;
-                    let _ = style.set_property(
-                        "transition",
-                        if glide && motion_on() {
-                            "transform 520ms cubic-bezier(.2,.8,.2,1), height 520ms cubic-bezier(.2,.8,.2,1)"
-                        } else {
-                            "none"
-                        },
-                    );
-                    let _ = style.set_property("transform", &format!("translateY({top}px)"));
-                    let _ = style.set_property("height", &format!("{}px", (height - 6.0).max(0.0)));
-                    let _ = style.set_property("opacity", "1");
-                }
-                None => {
-                    let _ = style.set_property("opacity", "0");
-                }
-            }
-        })
-    };
-    {
-        let place = place.clone();
-        Effect::new(move |_| {
-            let id = active.get();
-            sec.track();
-            confirm_id.track();
-            let previous = last.replace(id.clone());
-            let glide = !previous.is_empty() && previous != id;
-            let place = place.clone();
-            next_frame(move || place(id, glide));
-        });
-    }
-    let handle = {
-        let place = place.clone();
-        window_event_listener(leptos::ev::resize, move |_| {
-            let id = active.get_untracked();
-            let place = place.clone();
-            next_frame(move || place(id, false));
-        })
-    };
-    on_cleanup(move || handle.remove());
-    // Home shown again (a tab change): readings that came while it was hidden are placed now.
-    crate::owned::listen(&window(), crate::SHOWN_EVENT, move || {
-        let id = active.get_untracked();
-        let place = place.clone();
-        next_frame(move || place(id, false));
-    });
-}
-
 #[component]
-fn SectionHead(sec: Memo<SectionView>, pending: RwSignal<Option<i64>>) -> impl IntoView {
+fn SectionHead(sec: Memo<SectionView>) -> impl IntoView {
     let frame = use_context::<FrameCtx>();
     let id = sec.with_untracked(|s| s.id.clone());
     let is_claude = sec.with_untracked(|s| s.kind == "claude");
-    // What the head shows on its right: rebuilt only when that changes, so the auto-switch control keeps its state
-    // (a flip waiting for the server, the switch point being picked) through the minute's refresh.
-    let mode = Memo::new(move |_| {
-        sec.with(|s| {
-            if s.kind == "claude" || !s.switchable || s.rows.is_empty() {
-                0
-            } else if s.auto.shown {
-                1
-            } else {
-                2
-            }
-        })
-    });
-    let tools = move || match mode.get() {
-        1 => Some(view! { <AutoSwitch sec=sec pending=pending/> }.into_any()),
-        2 => {
-            let tip = move || {
-                sec.with(|s| {
-                    format!(
-                        "Switching moves between {} accounts, so it starts once a second account is signed in.",
-                        s.label
-                    )
-                })
-            };
-            Some(
-                view! {
-                    <div class="hauto-off" title=tip><Icon name="swap"/>
-                        <span>{move || runs_view(sec.with(|s| s.auto.off_runs.clone()))}</span></div>
-                }
-                .into_any(),
-            )
-        }
-        _ => None,
-    };
     view! {
         <header class="plate-head hhead-plate">
             <ProviderMark provider=id.clone() size=26/>
@@ -604,7 +414,6 @@ fn SectionHead(sec: Memo<SectionView>, pending: RwSignal<Option<i64>>) -> impl I
                     </button>
                 </div>
             })}
-            {tools}
         </header>
     }
 }
@@ -624,7 +433,7 @@ fn Legend() -> impl IntoView {
         esc.remove();
     });
     let hover = crate::ui::meter::media_matches("(hover: hover)");
-    let rows: [(&str, &str, &str); 6] = [
+    let rows: [(&str, &str, &str); 5] = [
         ("calm", "Calm", "under 80% of the window used"),
         ("warn", "Warning", "80 to 95%"),
         ("crit", "Critical", "95 to 100%"),
@@ -634,7 +443,6 @@ fn Legend() -> impl IntoView {
             "past 100%, drawn beyond the end of the track",
         ),
         ("na", "Unavailable", "no reading; never shown as zero"),
-        ("notch", "Notch", "the auto-switch point, in % used"),
     ];
     view! {
         <div class="hlegend" on:click=|ev| ev.stop_propagation()>
@@ -664,130 +472,8 @@ fn Legend() -> impl IntoView {
     }
 }
 
-/// The auto-switch toggle and the "% used" switch point. The point is sent 600 ms after the last step; the notch moves
-/// at once, and the picked value shows until the view reports it (or 5 s pass).
 #[component]
-fn AutoSwitch(sec: Memo<SectionView>, pending: RwSignal<Option<i64>>) -> impl IntoView {
-    let dash = expect_context::<DashCtx>();
-    let section = sec.with_untracked(|s| s.id.clone());
-    let antigravity = section == "antigravity";
-    let auto = Memo::new(move |_| sec.with(|s| s.auto.clone()));
-    let flipped = RwSignal::new(None::<bool>);
-    // The server's answer arrives with the next view: the toggle follows it.
-    Effect::new(move |_| {
-        auto.with(|a| a.enabled);
-        flipped.set(None);
-    });
-    let reported = Memo::new(move |_| auto.with(|a| a.threshold_used));
-    Effect::new(move |_| {
-        if reported.get().is_some() && pending.get_untracked() == reported.get() {
-            pending.set(None);
-        }
-    });
-    let on = move || flipped.get().unwrap_or_else(|| auto.with(|a| a.enabled));
-    let can_toggle =
-        move || auto.with(|a| a.available && (a.enabled || a.can_enable)) && !dash.busy.get();
-    let toggle = move |_| {
-        if !can_toggle() {
-            return;
-        }
-        let next = !on();
-        flipped.set(Some(next));
-        dash.act(
-            if antigravity {
-                "antigravity-automatic"
-            } else {
-                "automatic"
-            },
-            if next { "true" } else { "false" },
-        );
-    };
-    let shown = move || pending.get().or_else(|| auto.with(|a| a.threshold_used));
-    let timer = RwSignal::new(0i32);
-    let release = RwSignal::new(0i32);
-    let step = move |d: i64| {
-        let (known, min, max) =
-            auto.with_untracked(|a| (a.known, a.min.unwrap_or(1), a.max.unwrap_or(99)));
-        if !known || dash.busy.get_untracked() {
-            return;
-        }
-        let Some(now) = pending
-            .get_untracked()
-            .or_else(|| auto.with_untracked(|a| a.threshold_used))
-        else {
-            return;
-        };
-        let next = (now + d).clamp(min, max);
-        pending.set(Some(next));
-        window().clear_timeout_with_handle(timer.get_untracked());
-        window().clear_timeout_with_handle(release.get_untracked());
-        timer.set(after(600, move || {
-            let Some(value) = pending.try_get_untracked().flatten() else {
-                return;
-            };
-            dash.act(
-                if antigravity {
-                    "antigravity-threshold"
-                } else {
-                    "threshold"
-                },
-                &format!("{value}%"),
-            );
-            let _ = release.try_set(after(5000, move || {
-                let _ = pending.try_set(None);
-            }));
-        }));
-    };
-    let tip = move || {
-        auto.with(|a| {
-            if a.setting.is_empty() {
-                a.message.clone()
-            } else {
-                format!("{} · {}", a.message, a.setting)
-            }
-        })
-    };
-    let at_min = move || {
-        shown()
-            .zip(auto.with(|a| a.min))
-            .is_some_and(|(v, m)| v <= m)
-    };
-    let at_max = move || {
-        shown()
-            .zip(auto.with(|a| a.max))
-            .is_some_and(|(v, m)| v >= m)
-    };
-    let stepper_off = move || !auto.with(|a| a.known) || dash.busy.get();
-    view! {
-        <div class="hauto" title=tip>
-            <button class="htoggle" role="switch" aria-checked=move || on().to_string()
-                aria-disabled=move || (!can_toggle()).to_string() on:click=toggle>
-                <span class="hknob" aria-hidden="true"></span>"Auto-switch"
-            </button>
-            <Show when=move || auto.with(|a| a.known)>
-                <span class="hauto-at">
-                    "at"
-                    <span class="hstep" class:off=stepper_off>
-                        <button aria-label="Switch earlier" aria-disabled=move || (stepper_off() || at_min()).to_string() on:click=move |_| step(-1)><Icon name="minus"/></button>
-                        <span class="hstep-val tnum">{move || shown().map(|v| format!("{v}%")).unwrap_or_else(|| "–".into())}</span>
-                        <button aria-label="Switch later" aria-disabled=move || (stepper_off() || at_max()).to_string() on:click=move |_| step(1)><Icon name="plus"/></button>
-                    </span>
-                    "used"
-                </span>
-            </Show>
-            {move || auto.with(|a| (!a.pool.is_empty()).then(|| view! { <span class="hauto-pool">{a.pool.clone()}</span> }))}
-        </div>
-    }
-}
-
-#[component]
-fn Row(
-    id: String,
-    sec: Memo<SectionView>,
-    delay: u32,
-    confirm_id: RwSignal<String>,
-    pending: RwSignal<Option<i64>>,
-) -> impl IntoView {
+fn Row(id: String, sec: Memo<SectionView>, delay: u32) -> impl IntoView {
     let dash = expect_context::<DashCtx>();
     let frame = use_context::<FrameCtx>();
     let row = {
@@ -802,11 +488,9 @@ fn Row(
             })
         })
     };
-    let switchable = Memo::new(move |_| sec.with(|s| s.switchable));
-    let can_switch = Memo::new(move |_| sec.with(|s| s.can_switch));
+    let is_claude = sec.with_untracked(|s| s.kind == "claude");
     let label = sec.with_untracked(|s| s.label.clone());
     let reason = RwSignal::new(String::new());
-    let busy = dash.busy;
     let open_details = {
         let id = id.clone();
         move || {
@@ -828,12 +512,12 @@ fn Row(
     let email = Memo::new(move |_| row.with(|r| r.email.clone()));
     let meta = Memo::new(move |_| row.with(|r| r.meta.clone()));
     let owner = row.with_untracked(|r| format!("{label} · {}", r.email));
-    // The notch moves with the switch point being picked.
-    let notch_at = Signal::derive(move || pending.get().map(|v| v as f64));
     let cells = move || {
         (0..n_cells.get())
             .map(|i| {
-                let view = Signal::derive(move || row.with(|r| r.cells.get(i).cloned().unwrap_or_default()));
+                let view = Signal::derive(move || {
+                    row.with(|r| r.cells.get(i).cloned().unwrap_or_default())
+                });
                 let empty = move || view.with(|v| v.key.is_empty());
                 let owner = owner.clone();
                 // The column's name over the cell, shown when a section with many windows stacks (its heads would wrap).
@@ -841,7 +525,13 @@ fn Row(
                     sec.with(|s| {
                         s.columns
                             .get(i)
-                            .map(|c| if c.short_label.is_empty() { c.label.clone() } else { c.short_label.clone() })
+                            .map(|c| {
+                                if c.short_label.is_empty() {
+                                    c.label.clone()
+                                } else {
+                                    c.short_label.clone()
+                                }
+                            })
                             .unwrap_or_default()
                     })
                 };
@@ -849,29 +539,25 @@ fn Row(
                     <div class="hcell" class:empty=empty>
                         {move || (!empty()).then(|| view! {
                             <span class="cap hcell-cap">{caption}</span>
-                            <UsageMeter view=view delay=delay + i as u32 * 16 owner=owner.clone() notch_at=notch_at/>
+                            <UsageMeter view=view delay=delay + i as u32 * 16 owner=owner.clone()/>
                         })}
                     </div>
                 }
             })
             .collect_view()
     };
-    // The action slot: rebuilt only when its kind changes, so a reading's refresh never replays the Active mark's
-    // draw-on or the Activate cross-fade; a switch moves them through their classes.
+    // The action slot: Claude's Open buttons, Finish setup for a profile still signing in, or the Active mark on the
+    // live login. Rebuilt only when its kind changes, so a reading's refresh never replays the mark's draw-on.
     let slot_kind = Memo::new(move |_| {
-        if !switchable.get() {
+        if is_claude {
             0
         } else if row.with(|r| r.setup) {
             1
-        } else if can_switch.get() {
-            2
         } else {
-            3
+            2
         }
     });
     let is_active = Memo::new(move |_| row.with(|r| r.active));
-    let show_button = Memo::new(move |_| can_switch.get() && !is_active.get());
-    let hint = Memo::new(move |_| row.with(|r| r.activate_hint.clone()));
     let where_ = Memo::new(move |_| {
         row.with(|r| {
             if r.active_label.is_empty() {
@@ -881,26 +567,6 @@ fn Row(
             }
         })
     });
-    let activate = move |ev: web_sys::MouseEvent| {
-        ev.stop_propagation();
-        if busy.get_untracked() {
-            return;
-        }
-        let r = row.get_untracked();
-        if r.active || !can_switch.get_untracked() {
-            return;
-        }
-        if !r.can_activate {
-            reason.set(r.activate_hint.clone());
-            return;
-        }
-        reason.set(String::new());
-        if r.confirm {
-            confirm_id.set(r.id.clone());
-        } else {
-            dash.act(&r.activate_kind, &r.profile);
-        }
-    };
     let mark = move || {
         view! {
             <span class="hmark" class:on=move || is_active.get() aria-hidden=move || (!is_active.get()).to_string()>
@@ -909,8 +575,7 @@ fn Row(
             </span>
         }
     };
-    let slot = move || {
-        match slot_kind.get() {
+    let slot = move || match slot_kind.get() {
         0 => view! { <OpenButtons row=row reason=reason/> }.into_any(),
         1 => view! {
             <button class="btn accent-line sm hbtn" on:click=move |ev| {
@@ -919,40 +584,10 @@ fn Row(
             }><Icon name="terminal"/>"Finish setup"</button>
         }
         .into_any(),
-        2 => view! {
-            <span class="hswap">
-                <button class="btn accent-line sm hbtn hact" class:on=move || show_button.get() title=move || hint.get()
-                    aria-hidden=move || (!show_button.get()).to_string() tabindex=move || if show_button.get() { "0" } else { "-1" }
-                    aria-disabled=move || (busy.get() || !row.with(|r| r.can_activate)).to_string()
-                    on:click=activate>
-                    <Icon name="swap"/>"Activate"
-                </button>
-                {mark()}
-            </span>
-        }
-        .into_any(),
         _ => view! { <span class="hswap">{mark()}</span> }.into_any(),
-    }
-    };
-    let confirming = Memo::new(move |_| {
-        let id = confirm_id.get();
-        !id.is_empty() && row.with(|r| r.id == id && r.confirm && !r.active)
-    });
-    let keep = move |ev: web_sys::MouseEvent| {
-        ev.stop_propagation();
-        confirm_id.set(String::new());
-    };
-    let anyway = move |ev: web_sys::MouseEvent| {
-        ev.stop_propagation();
-        if busy.get_untracked() {
-            return;
-        }
-        let r = row.get_untracked();
-        confirm_id.set(String::new());
-        dash.act(&r.activate_kind, &r.profile);
     };
     view! {
-        <div class="hrow" class:active=move || switchable.get() && row.with(|r| r.active)
+        <div class="hrow" class:active=move || row.with(|r| r.active)
             class:setup=move || row.with(|r| r.setup) data-row=id.clone()
             role="button" tabindex="0" aria-label=move || row.with(|r| format!("{} details", r.email))
             on:click=on_click on:keydown=on_key>
@@ -968,16 +603,6 @@ fn Row(
             </div>
             <div class="hcells">{cells}</div>
             <div class="hslot" on:click=|ev| ev.stop_propagation()>{slot}</div>
-            <Show when=move || confirming.get()>
-                <div class="hconfirm" role="group" aria-label="Activate anyway?" on:click=|ev| ev.stop_propagation()>
-                    <Icon name="alert"/>
-                    <p>{move || runs_view(row.with(|r| r.confirm_runs.clone()))}</p>
-                    <div class="hconfirm-btns">
-                        <button class="btn ghost sm" aria-disabled=move || busy.get().to_string() on:click=keep>"Keep current"</button>
-                        <button class="btn accent-line sm" aria-disabled=move || busy.get().to_string() on:click=anyway>"Activate anyway"</button>
-                    </div>
-                </div>
-            </Show>
             {move || {
                 let why = reason.get();
                 (!why.is_empty()).then(|| view! {
@@ -1238,35 +863,30 @@ mod tests {
     fn another_version_is_refused_and_an_empty_push_waits() {
         assert_eq!(parse(""), HomeState::Waiting);
         assert!(matches!(
-            parse(r#"{"version":3,"sections":[]}"#),
+            parse(r#"{"version":2,"sections":[]}"#),
             HomeState::Refused(_)
         ));
         assert!(matches!(parse("not json"), HomeState::Refused(_)));
-        let HomeState::Ready(view) = parse(r#"{"version":2,"sections":null,"cards":[]}"#) else {
-            panic!("version 2 draws");
+        let HomeState::Ready(view) = parse(r#"{"version":3,"sections":null,"cards":[]}"#) else {
+            panic!("version 3 draws");
         };
         assert!(view.sections.is_empty());
     }
 
     #[test]
     fn the_view_model_reads_with_nulls_and_missing_values() {
-        let json = r#"{"version":2,"sections":[{"id":"codex","kind":"switchable","label":"Codex","switchable":true,"canSwitch":true,
-            "metaRuns":[{"text":"3","strong":true,"tone":""}],"foot":{"shown":true,"warn":false,"runs":[],"when":null},
-            "auto":{"known":true,"shown":true,"enabled":true,"available":true,"canEnable":true,"thresholdUsed":null,"min":50,"max":99,
-            "pool":"","offRuns":[],"setting":"","message":"Healthy"},"columns":[{"key":"five","label":"5-hour"}],
-            "rows":[{"id":"codex:a","provider":"codex","profile":"a","email":"a@example.invalid","active":true,"confirm":false,
-            "confirmRuns":null,"cells":[{"key":"codex:a|five_hour","hasValue":false,"value":null,"naText":"Unavailable","notch":95}]}]}],
+        let json = r#"{"version":3,"sections":[{"id":"codex","kind":"accounts","label":"Codex",
+            "metaRuns":[{"text":"3","strong":true,"tone":""}],"foot":{"shown":false,"warn":false,"runs":[],"when":null},
+            "columns":[{"key":"five","label":"5-hour"}],
+            "rows":[{"id":"codex:a","provider":"codex","profile":"a","email":"a@example.invalid","active":true,
+            "cells":[{"key":"codex:a|five_hour","hasValue":false,"value":null,"naText":"Unavailable"}]}]}],
             "cards":[],"chrome":{"statusLead":"Updated"}}"#;
         let HomeState::Ready(view) = parse(json) else {
             panic!("reads")
         };
         let s = &view.sections[0];
-        assert_eq!(
-            s.auto.threshold_used, None,
-            "an unknown switch point stays unknown"
-        );
+        assert_eq!(s.kind, "accounts");
+        assert!(s.rows[0].active);
         assert_eq!(s.rows[0].cells[0].value, None);
-        assert_eq!(s.rows[0].cells[0].notch, Some(95.0));
-        assert!(s.rows[0].confirm_runs.is_empty());
     }
 }

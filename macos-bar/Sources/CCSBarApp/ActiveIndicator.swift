@@ -65,7 +65,7 @@ struct ActiveLabel: View {
   }
 }
 
-/// No account in the section is reported active and this one cannot be switched to.
+/// No account in the section is reported active.
 struct NotReportedLabel: View {
   var body: some View {
     withPalette { palette in
@@ -111,61 +111,6 @@ struct ActivateButton: View {
       .alignmentProbe("slot|\(id)|icon")
       .disabled(!enabled || busy)
       .hoverHelp(help, id: id, action: enabled ? action : nil)
-    }
-  }
-}
-
-/// The inline switch confirmation under a row: the target, the programs that will stop, the warning,
-/// Cancel and "Stop, switch, restart". Nothing is sent until the explicit confirm.
-struct SwitchConfirmView: View {
-  let product: String
-  let identity: String
-  let processes: [CodexSwitchProcess]
-  let warning: String
-  let expiresAt: String
-  let onCancel: () -> Void
-  let onConfirm: () -> Void
-
-  var body: some View {
-    withPalette { palette in
-      VStack(alignment: .leading, spacing: 8) {
-        HStack(spacing: 7) {
-          Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(palette.warn).font(.system(size: 13))
-          Text("Switch \(product) to \(identity)?").font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.label)
-        }
-        if !processes.isEmpty {
-          VStack(alignment: .leading, spacing: 3) {
-            ForEach(Array(processes.enumerated()), id: \.offset) { _, process in
-              HStack(spacing: 10) {
-                Text(process.label).font(.system(size: 12)).foregroundStyle(palette.label)
-                Spacer(minLength: 8)
-                Text("PID \(process.pid)").font(.system(size: 11.5)).monospacedDigit().foregroundStyle(palette.label2)
-                Text(process.role).font(.system(size: 11.5)).foregroundStyle(palette.label2).frame(width: 96, alignment: .leading)
-              }
-            }
-          }
-          .padding(.horizontal, 10).padding(.vertical, 7)
-          .background(palette.group, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        Text(warning).font(.system(size: 12)).foregroundStyle(palette.label2).fixedSize(horizontal: false, vertical: true)
-        if let expiry = AccountFormatting.date(expiresAt) {
-          Text("Review valid until \(expiry.formatted(date: .omitted, time: .standard))")
-            .font(.system(size: 11)).foregroundStyle(palette.label3)
-        }
-        HStack(spacing: 8) {
-          Spacer()
-          Button("Cancel", action: onCancel).trayGlassButton()
-            .keyboardShortcut(.cancelAction)
-          Button(action: onConfirm) {
-            Text("Stop, switch, restart").font(.system(size: 13, weight: .semibold))
-          }
-          .trayGlassButton(prominent: true, tint: palette.critText)
-        }
-      }
-      .padding(12)
-      .background(palette.warn.opacity(0.14), in: RoundedRectangle(cornerRadius: TrayMetrics.rowRadius, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: TrayMetrics.rowRadius, style: .continuous).strokeBorder(palette.warn.opacity(0.45), lineWidth: 0.5))
-      .padding(.horizontal, 4).padding(.vertical, 4)
     }
   }
 }

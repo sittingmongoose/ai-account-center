@@ -1,15 +1,19 @@
 {
   "request": {
-    "method": "DELETE",
-    "path": "/api/auth/devices/me",
+    "method": "POST",
+    "path": "/api/auth/login",
     "role": "device",
     "body": {}
   },
   "response": {
-    "body": "",
-    "headers": {
-      "cache-control": "no-store"
+    "body": {
+      "error": "Username and password required"
     },
-    "status": 204
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 400
   }
 }

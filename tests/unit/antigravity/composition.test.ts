@@ -12,14 +12,7 @@ import {
 } from '../../../src/antigravity/runtime-composition';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
 import { AntigravitySwitchService } from '../../../src/antigravity/switch-service';
-import { defaultAntigravityAutoSwitchState } from '../../../src/antigravity/auto-switch/settings';
 import type {
-  AntigravityAutoHostCensus,
-  AntigravityAutoSwitchStore,
-  AntigravityAutoSwitchStoredState,
-} from '../../../src/antigravity/auto-switch/types';
-import type {
-  ActivateRequest,
   AntigravitySwitchDriver,
   NativeCredential,
   VerifiedIdentity,
@@ -47,33 +40,6 @@ function identity(id: FixtureProfileId, now: number): VerifiedIdentity {
     verifiedAt: new Date(now).toISOString(),
     source: 'provider-userinfo',
   };
-}
-
-class FixtureTimers {
-  private nextId = 0;
-  readonly pending = new Map<number, () => void>();
-  readonly scheduledMilliseconds: number[] = [];
-
-  set = (callback: () => void, milliseconds: number): number => {
-    const id = ++this.nextId;
-    this.pending.set(id, callback);
-    this.scheduledMilliseconds.push(milliseconds);
-    return id;
-  };
-
-  clear = (timer: unknown): void => {
-    this.pending.delete(timer as number);
-  };
-
-  async runNext(): Promise<void> {
-    const entry = this.pending.entries().next().value as [number, () => void] | undefined;
-    if (!entry) throw new Error('No owned fixture timer was scheduled.');
-    this.pending.delete(entry[0]);
-    entry[1]();
-    // The monitor's promise chain completes before this owned immediate;
-    // no elapsed real polling interval or global timer patch is needed.
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
 }
 
 function directorySnapshot(directory: string): Array<{ path: string; hash: string }> {
@@ -106,14 +72,7 @@ describe('Antigravity explicitly injected runtime composition', () => {
   let selected: FixtureProfileId;
   let driverCalls: string[];
   let quotaCalls: SavedQuotaRequest[];
-  let censusCalls: number;
-  let storeReads: number;
-  let storeWrites: number;
-  let storedState: AntigravityAutoSwitchStoredState;
-  let store: AntigravityAutoSwitchStore;
-  let timers: FixtureTimers;
   let collectQuota: AntigravityRuntimeDependencies['collectQuota'];
-  let census: AntigravityAutoHostCensus;
 
   beforeEach(() => {
     fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-agy-composition-fixture-'));
@@ -124,21 +83,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
     selected = 'gmail';
     driverCalls = [];
     quotaCalls = [];
-    censusCalls = 0;
-    storeReads = 0;
-    storeWrites = 0;
-    storedState = defaultAntigravityAutoSwitchState();
-    timers = new FixtureTimers();
-    store = {
-      read: () => {
-        storeReads++;
-        return structuredClone(storedState);
-      },
-      write: (state) => {
-        storeWrites++;
-        storedState = structuredClone(state);
-      },
-    };
     const forbiddenNativeAction = async (name: string): Promise<never> => {
       driverCalls.push(name);
       throw new Error(`Unexpected fixture-only native action: ${name}`);
@@ -171,20 +115,10 @@ describe('Antigravity explicitly injected runtime composition', () => {
       stopOwnedRestarts: async () => forbiddenNativeAction('stopOwnedRestarts'),
     };
     importer = new AntigravitySwitchService({ registry, driver, now: () => now });
-    census = {
-      hostId: 'ubuntu',
-      available: true,
-      complete: true,
-      busy: false,
-      manualActivationInProgress: false,
-      sampledAt: new Date(now).toISOString(),
-    };
     collectQuota = async (request) => sample(request);
   });
 
   afterEach(() => {
-    runtime?.stop();
-    expect(timers.pending.size).toBe(0);
     fs.rmSync(fixtureDirectory, { recursive: true, force: true });
     runtime = undefined;
   });
@@ -214,15 +148,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
       source: 'native-consumer',
       identityVerified: true,
       identityValidation: 'verified',
-      pools: [
-        {
-          id: 'model-pool',
-          idSource: 'provider-id',
-          eligibility: 'reported-quota',
-          complete: true,
-          windows: [{ key: 'model-pool', kind: 'rate_limit', remainingPercent, resetAt }],
-        },
-      ],
     };
   }
 
@@ -230,17 +155,10 @@ describe('Antigravity explicitly injected runtime composition', () => {
     runtime = createAntigravityRuntime({
       registry,
       driver,
-      store,
       now: () => now,
-      setTimer: timers.set,
-      clearTimer: timers.clear,
       collectQuota: async (request) => {
         quotaCalls.push(request);
         return collectQuota(request);
-      },
-      observeHost: async () => {
-        censusCalls++;
-        return { ...census };
       },
       ...extra,
     });
@@ -273,10 +191,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
     expect(directorySnapshot(privateCcsDirectory)).toEqual(before);
     expect(driverCalls).toEqual([]);
     expect(quotaCalls).toEqual([]);
-    expect(timers.scheduledMilliseconds).toEqual([]);
-    expect(storeReads).toBe(0);
-    expect(storeWrites).toBe(0);
-    expect(censusCalls).toBe(0);
     expect(instance.hasProfiles()).toBe(false);
     expect(registry.listProfiles()).toEqual([]);
   });
@@ -317,7 +231,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
     }
     expect(directorySnapshot(privateCcsDirectory)).toEqual(before);
     expect(selected).toBe('gmail');
-    expect(storeWrites).toBe(0);
     expectNoNativeActions();
   });
 
@@ -341,7 +254,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
       inventory: await instance.getInventory(),
       accounts: await instance.getAccounts({ refresh: false }),
       cached: instance.cachedAccounts(),
-      status: instance.getAutoSwitchStatus(),
     };
     const encoded = JSON.stringify(publicValue);
     for (const forbidden of [
@@ -362,54 +274,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
       expect(encoded).not.toContain(request.credential.bytes.toString('utf8'));
     }
     expectNoNativeActions();
-  });
-
-  test('unsupported runtime proof disables activation capability while retaining both usage readings', async () => {
-    await importFixtures();
-    const instance = construct();
-    const inventory = await instance.getInventory();
-    const accounts = await instance.getAccounts({ refresh: false });
-    expect(inventory.activationSupported).toBe(false);
-    expect(inventory.profiles).toHaveLength(2);
-    expect(accounts.map((account) => account.capabilities.antigravityCanActivate)).toEqual([
-      false,
-      false,
-    ]);
-    expect(accounts.map((account) => account.windows.length)).toEqual([1, 1]);
-    expectNoNativeActions();
-  });
-
-  test('mock-supported runtime proof enables exact Ubuntu activation capability without starting a proof', async () => {
-    await importFixtures();
-    supported = true;
-    const instance = construct();
-    expect((await instance.getInventory()).activationSupported).toBe(true);
-    const accounts = await instance.getAccounts({ refresh: false });
-    expect(accounts.map((account) => account.capabilities.antigravityCanActivate)).toEqual([
-      true,
-      true,
-    ]);
-    expect(accounts.map((account) => account.capabilities.antigravityHostIds)).toEqual([
-      ['ubuntu'],
-      ['ubuntu'],
-    ]);
-    expectNoNativeActions();
-  });
-
-  test('a failing capability probe fails closed without hiding usable account quotas', async () => {
-    await importFixtures();
-    driver.canProveRuntimeIdentity = async () => {
-      throw new Error(FAKE_PRIVATE);
-    };
-    const instance = construct();
-    expect((await instance.getInventory()).activationSupported).toBe(false);
-    const accounts = await instance.getAccounts({ refresh: false });
-    expect(accounts.map((account) => account.status)).toEqual(['ok', 'ok']);
-    expect(accounts.map((account) => account.capabilities.antigravityCanActivate)).toEqual([
-      false,
-      false,
-    ]);
-    expect(JSON.stringify(accounts)).not.toContain(FAKE_PRIVATE);
   });
 
   test('a paused native update ships in the inventory while quotas stay readable', async () => {
@@ -456,7 +320,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
       }),
     });
     const inventory = await instance.getInventory();
-    expect(inventory.activationSupported).toBe(false);
     expect(inventory.runtimeServiceProblem).toEqual({
       reason: 'missing-python-module',
       module: 'pyte',
@@ -554,7 +417,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
     const initial = await instance.getAccounts({ refresh: false });
     expect(initial.find((account) => account.email === 'party@example.com')).toMatchObject({
       status: 'ok',
-      capabilities: { antigravityCanActivate: true },
     });
     const oldRevision = registry.readCredential('party', 'ubuntu').credentialRevision;
     await importer.importNativeProfile('party', nativeCredential('party', 2));
@@ -570,7 +432,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
     expect(party).toMatchObject({
       status: 'cached',
       message: 'Showing the last saved sample while the new sign-in is read.',
-      capabilities: { antigravityCanActivate: false },
     });
     expect(party?.windows).toHaveLength(1);
     expect(party?.fetchedAt).not.toBeNull();
@@ -614,7 +475,7 @@ describe('Antigravity explicitly injected runtime composition', () => {
         windows: [],
         fetchedAt: null,
         sampledAt: null,
-        capabilities: { antigravityCanActivate: false, antigravityHostIds: [] },
+        capabilities: { antigravityHostIds: [] },
       });
       expect(cached.find((account) => account.email === 'gmail@example.com')?.windows).toHaveLength(
         1
@@ -638,10 +499,6 @@ describe('Antigravity explicitly injected runtime composition', () => {
       accounts.map((account) => account.windows)
     );
     expect(cached.map((account) => account.isActive)).toEqual([false, false]);
-    expect(cached.map((account) => account.capabilities.antigravityCanActivate)).toEqual([
-      false,
-      false,
-    ]);
     expect(driverCalls).toEqual(beforeCalls);
     expect(quotaCalls).toHaveLength(beforeQuotaCount);
     expect(await instance.readSelectedProfileId()).toBe('gmail');
@@ -676,87 +533,10 @@ describe('Antigravity explicitly injected runtime composition', () => {
     expect(quotaCalls).toHaveLength(beforeQuotaCount);
   });
 
-  test('default-off monitor start and timer cycle never collect quota, write settings, or stop programs', async () => {
-    await importFixtures();
-    const before = directorySnapshot(privateCcsDirectory);
-    const instance = construct();
-    expect(instance.getAutoSwitchStatus()).toMatchObject({ enabled: false, outcome: 'disabled' });
-    instance.start();
-    expect(timers.scheduledMilliseconds).toEqual([1000]);
-    expect(quotaCalls).toEqual([]);
-    await timers.runNext();
-    expect(instance.getAutoSwitchStatus()).toMatchObject({ enabled: false, outcome: 'disabled' });
-    expect(quotaCalls).toEqual([]);
-    expect(driverCalls).toEqual([]);
-    expect(storeWrites).toBe(0);
-    expect(censusCalls).toBe(0);
-    expect(directorySnapshot(privateCcsDirectory)).toEqual(before);
-    instance.stop();
-    expect(timers.pending.size).toBe(0);
-  });
-
-  test('enabled policy collects fresh account-bound quota instead of ranking stale cached display usage', async () => {
-    await importFixtures();
-    supported = true;
-    collectQuota = async (request) => ({
-      ...sample(request, request.profileId === 'gmail' ? 0 : 80),
-      status: 'cached',
-      retryAfterSeconds: 600,
-    });
-    const instance = construct();
-    const displayed = await instance.getAccounts({ refresh: false });
-    expect(displayed[0]).toMatchObject({ status: 'cached', windows: [{ remainingPercent: 0 }] });
-    expect(quotaCalls).toHaveLength(2);
-    instance.updateAutoSwitchSettings({ enabled: true, requestedPoolId: 'model-pool' });
-    collectQuota = async (request) => sample(request, request.profileId === 'gmail' ? 85 : 80);
-    instance.start();
-    await timers.runNext();
-    expect(quotaCalls.map((request) => request.profileId)).toEqual([
-      'gmail',
-      'party',
-      'gmail',
-      'party',
-    ]);
-    expect(instance.getAutoSwitchStatus()).toMatchObject({
-      outcome: 'healthy',
-      lastCheckedAt: new Date(now).toISOString(),
-    });
-    expect(instance.cachedAccounts()[0]).toMatchObject({
-      status: 'cached',
-      windows: [{ remainingPercent: 0 }],
-    });
-    expect(censusCalls).toBe(1);
-    expect(storeWrites).toBe(1);
-    expectNoNativeActions();
-    instance.stop();
-    expect(timers.pending.size).toBe(0);
-  });
-
-  for (const request of [
-    { profileId: 'party', hostId: 'mac', mode: 'manual' },
-    { profileId: 'party', hostId: 'windows', mode: 'manual' },
-    { profileId: 'party', hostId: 'ubuntu', mode: 'automatic' },
-    { profileId: 'party', hostId: 'ubuntu', mode: 'unexpected' },
-  ]) {
-    test(`manual API rejects host=${request.hostId} mode=${request.mode} before the switcher`, async () => {
-      await importFixtures();
-      const before = directorySnapshot(privateCcsDirectory);
-      const instance = construct();
-      await expect(instance.activate(request as ActivateRequest)).rejects.toThrow(
-        'Invalid manual activation request.'
-      );
-      expect(driverCalls).toEqual([]);
-      expect(quotaCalls).toEqual([]);
-      expect(storeWrites).toBe(0);
-      expect(directorySnapshot(privateCcsDirectory)).toEqual(before);
-    });
-  }
-
   test('construction rejects a non-Ubuntu driver without running it', () => {
     driver.hostId = 'mac' as AntigravitySwitchDriver['hostId'];
     expect(() => construct()).toThrow('Antigravity switching targets the Ubuntu CLI.');
     expect(driverCalls).toEqual([]);
     expect(quotaCalls).toEqual([]);
-    expect(timers.pending.size).toBe(0);
   });
 });

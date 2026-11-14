@@ -14,15 +14,15 @@ path for a classic page an older service worker cached: it moves that page to th
 leptos/src/lib.rs           the entry: which tab an address opens (page_from_location), ?embed=1 content-only pages
 leptos/src/frame.rs         the app frame: the five tabs, routing and Back, toasts, the offline copy, new-build notice
 leptos/src/session.rs       the sign-in page (a real HTML form), drawn from public/frame-session.mjs's view
-leptos/src/home.rs, details.rs, activation.rs   Home, Details and the switch approval, from the dashboard's views
+leptos/src/home.rs, details.rs   Home and Details, from the dashboard's views
 leptos/src/accounts/        Accounts & Settings
 leptos/src/analytics/       Analytics (feed.rs talks to public/frame-analytics.mjs)
 leptos/src/status.rs, scoreboard.rs, cards.rs, pins.rs, resets.rs, ...   Status and the Model Scoreboard
 leptos/src/ui/              components, chrome (header, tab bar, Duo rail and band), device tiers, charts, meters, icons
 leptos/style/app.css        every style and the theme tokens (light and dark)
 public/frame-session.mjs    the sign-in session: check, login, setup, limiter, ended and offline states
-public/frame-dashboard.mjs  Home and Accounts' controller: the dashboard reads, timers, accounts controller, switch
-                            approvals, Update apps, Claude Open and the Back entries
+public/frame-dashboard.mjs  Home and Accounts' controller: the dashboard reads, timers, accounts controller,
+                            Update apps, Claude Open and the Back entries
 public/frame-analytics.mjs  Analytics' controller: its reads, poll cadence and page state
 public/frame-seam.mjs       PAGE_ACTIONS, the action kinds a page may run
 public/view-model.mjs       DTO -> view model v2 for Home, Details, header, Update apps (pure, tested)
@@ -32,7 +32,7 @@ public/accounts-controller.mjs  the Accounts & Settings state machine with injec
 public/account-actions.mjs  each action's request and each error code's words (pure, tested)
 public/auth-view.mjs, transport.mjs   the sign-in page's words and rules: strength, setup checks, limiter headers
 public/claude-open.mjs      Claude Open progress: the 202 poller (injected I/O) and the row's progress line
-public/*-data.mjs, *-confirmation.mjs, visible-usage.mjs, device.mjs   truthfulness, switching and device rules
+public/*-data.mjs, visible-usage.mjs, device.mjs   truthfulness and device rules
 public/sw.js, sw-route.js   the service worker (offline copy) and its pure routing rules
 public/bridge.js            the classic page's upgrade module: forgets aac-frame=classic, opens /app/<tab>
 ```
@@ -52,20 +52,18 @@ reading in a page, never add or average across accounts, never turn a missing va
 
 - **Views go to the pages as window events**: each controller builds the same versioned JSON the classic app drew
   and dispatches it: `aac-session` (the sign-in view, `session.rs`), `aac-dash` (`{key, json}`: `dashboard`,
-  `accounts`, `accounts-strength`, `details`, `activation`, `update`, `busy`, `refresh-interval`, `chrome`;
+  `accounts`, `accounts-strength`, `details`, `update`, `busy`, `refresh-interval`, `chrome`;
   `dash.rs` keeps the latest of each as a signal) and `aac-analytics` (`analytics/feed.rs`). A page draws its
   loading state until the first view, never zeros.
 - **Intent comes back through the controller**: a page calls `aacFrameDashboard.act(kind, value)` or
   `aacFrameAnalytics.act(kind, value)` (through `dash.rs` and `feed.rs`, with the controller's id, so a page only
   drives the controller it installed). Only the kinds in `PAGE_ACTIONS` (`public/frame-seam.mjs`) run: Details and
-  rows (`details`, `details-closed`, `launch`), switching (`activate`, `antigravity-activate`,
-  `activation-confirm`, `activation-cancel`, `automatic`, `threshold`, `antigravity-automatic`,
-  `antigravity-threshold`, `antigravity-pool`, `antigravity-cooldown`), the Accounts & Settings kinds of
+  rows (`details`, `details-closed`, `launch`), the Accounts & Settings kinds of
   accounts-controller.mjs, Settings (`refresh-interval`, `update-cancel`, `install-app`) and the Analytics
   controls. The header's Refresh and Update apps are the controller's own commands (`command`); sign-in, theme and
   Sign out are the frame's. Add new kinds; never repurpose one.
-- **Versioned JSON**: `VIEW_MODEL_VERSION = 2` (view-model.mjs, `leptos/src/home.rs`), `ANALYTICS_VIEW_VERSION = 7`
-  (analytics-data.mjs, `leptos/src/analytics/view.rs`) and `ACCOUNTS_VIEW_VERSION = 3` (accounts-view.mjs,
+- **Versioned JSON**: `VIEW_MODEL_VERSION = 3` (view-model.mjs, `leptos/src/home.rs`), `ANALYTICS_VIEW_VERSION = 7`
+  (analytics-data.mjs, `leptos/src/analytics/view.rs`) and `ACCOUNTS_VIEW_VERSION = 4` (accounts-view.mjs,
   `leptos/src/accounts/model.rs`) must match: a page refuses another version in words instead of drawing half of
   it. Bump the pair together when a shape changes.
 - **What bridge.js did** is pinned by `tests/frame-dashboard-golden.test.mjs`: its server calls, views and toasts on
@@ -76,38 +74,28 @@ reading in a page, never add or average across accounts, never turn a missing va
   window with no reading: it draws the dashed "unavailable" track and `na-text` ("Unavailable", "Not reported
   yet").
 
-### View model v2 (Home)
+### View model v3 (Home)
 
 `dashboardViewModel(data, ctx)` returns `{ version, sections, cards, registry, chrome }`.
 `ctx.includeHidden` keeps every account and provider in the action model for Accounts & Settings and Details;
 Home leaves it off. The original dashboard and tray visibility choices stay in the DTO and registry.
 
-- `sections`: Claude (`kind: "claude"`), then the switchable providers Codex and Antigravity (`kind:
-  "switchable"`, `switchable: true`). Each has `columns` and `rows`; every row has one `cells` entry per column,
-  plus `active`, `activeLabel` ("on Ubuntu"), `canActivate`, `activateKind` (`activate` |
-  `antigravity-activate`), `profile`, `amountsLine` (Codex credits and banked resets), and `auto` (the
-  section's auto-switch state, always "% used").
+- `sections`: Claude (`kind: "claude"`), then Codex and Antigravity (`kind: "accounts"`). Each has `columns`
+  and `rows`; every row has one `cells` entry per column, plus `active` and `activeLabel` ("on Ubuntu": the live
+  login on that computer, a fact; nothing here switches accounts), `profile` and `amountsLine` (Codex credits and
+  banked resets). Version 3 dropped account switching: `switchable`, `canSwitch`, `auto`, a row's
+  `canActivate`/`activateKind`/`activateHint`/`confirm`/`confirmRuns` and a meter's notch are gone.
   - Lines that mix weights travel as runs, `{ text, strong, tone }` (`RunView`; tone `good` is the active
     account's name, `warn` a warning figure): `metaRuns` ("**4** accounts · desktop profiles", "**3** accounts ·
-    **codex-2** active"), a row's `amountsRuns` ("**62.5K** credits · **1** banked"), `foot.runs`,
-    `auto.offRuns` and `confirmRuns`.
-  - `canSwitch`: more than one account to switch between; rows show Activate only then.
-  - `auto.shown`: the header draws the toggle and the % used stepper (`auto.min`..`auto.max`, `auto.pool`);
-    otherwise `auto.offRuns` ("Auto-switch **off** · needs a second account").
-  - `foot` (Codex): `{ shown, warn, runs, when }`, what auto-switch does about the active account (the
-    backend's own message while it is below the point; a warning naming the next account when it is above;
-    "Checked 1m ago · every 1 min"). Active and candidate accounts include hidden rows, labelled "(hidden)";
-    a server-reported waiting outcome and candidate take precedence over the forecast.
-  - A row's `confirm`/`confirmRuns`: activating an account already at or past the section's switch point
-    asks inline first ("**99% used**, above the 95% switch point. ... Activate anyway?"); only when the
-    threshold is known. "Activate anyway" then runs the existing guarded activation.
+    **codex-2** active"), a row's `amountsRuns` ("**62.5K** credits · **1** banked") and `foot.runs`.
+  - `foot` (Antigravity): `{ shown, warn, runs, when }`, the runtime's warning (a service that cannot start, or
+    an update waiting for its review). Codex has no footer.
   - Claude columns: 5-hour, Weekly, and Fable only when a Max account exists; Fable comes from the
     `seven_day_fable` window; absent is "Not reported yet"; Pro rows get an empty cell.
-  - Codex: no 5-hour column unless an account reports the canonical `five_hour` window; Chat pass hidden;
-    the auto-switch notch is drawn at the threshold when auto-switch is on, faint on inactive rows.
+  - Codex: no 5-hour column unless an account reports the canonical `five_hour` window; Chat pass hidden.
   - Antigravity: columns are every reported rate-limit window (Gemini before Claude and GPT, 5-hour before
-    weekly); rows come from the dashboard DTO and become activatable only when the native inventory
-    (`/api/antigravity/profiles`, commit 9cf75fbe) binds and verifies them (antigravity-data.mjs).
+    weekly); rows come from the dashboard DTO, and the native inventory (`/api/antigravity/profiles`) names the
+    live login (antigravity-data.mjs).
 - `cards`: one per account of the other providers (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go), in
   registry order; up to three meters (a window with no reading is an unavailable meter), everything else as
   `AmountView`s (packs, balances, credits, spend). The plan drops the provider's own name ("High Usage"); the
@@ -119,10 +107,9 @@ Home leaves it off. The original dashboard and tray visibility choices stay in t
   cards and marked `visible: false`.
 - `chrome`: the header status line ("Updated **2m ago** · cached readings") plus username and host.
 
-`detailsViewModel(data, id, ctx)`: every visible window of one account as a labelled meter (notches copied
-from its row), amounts, facts (status, sampled, fetched, source, platform, profile, note) and the action state:
-`subLead` ("Codex · Pro"), `canSwitch`, `activeLabel`, `activateHint`, `platform`, `confirm` and `confirmRuns`,
-so Details shows the row's own action slot and asks the same inline question.
+`detailsViewModel(data, id, ctx)`: every visible window of one account as a labelled meter, amounts, facts
+(status, sampled, fetched, source, platform, profile, note) and `subLead` ("Codex · Pro"), `active`,
+`activeLabel` and `platform`, so Details marks the live login.
 
 ### Analytics v3
 
@@ -214,8 +201,8 @@ poll answers render as morphs, and the sources-grid cells are keyed by host, so 
 
 The page (W4, bound to the server in B5W) is built like the concept's `app-accounts.js` and the Dashboard sign-in
 block of `app-auth.js`.
-`accountsViewModel(serverData, ctx)` (public/accounts-view.mjs) returns `{ version, accessMessage, colA, colB, ag, policies,
-refresh, update, signin, connection, about }`; the page (`leptos/src/accounts/`, `ACCOUNTS_VIEW_VERSION = 3` in
+`accountsViewModel(serverData, ctx)` (public/accounts-view.mjs) returns `{ version, accessMessage, colA, colB,
+refresh, update, signin, connection, about }`; the page (`leptos/src/accounts/`, `ACCOUNTS_VIEW_VERSION = 4` in
 `model.rs`) draws it with lists keyed by id, so a changed row updates in place.
 
 - **Providers**: every provider of the registry, the ones with their own sign-in flows (`colA`: Claude, Codex,
@@ -224,9 +211,9 @@ refresh, update, signin, connection, about }`; the page (`leptos/src/accounts/`,
   OpenCode console wallet are browser sessions, never API keys (CONTRACT-registry-lifecycle section 7).
 - **Rows**: identity and meta (plan · label), the status word only for an exception (Stale after 30 minutes, or
   the status word), "sampled 1m ago", the source and where; fixed action slots (`actions`, one `AcAction` per
-  slot: `switch`, `button`, `icon`, `quiet`, `empty`). Switch state (active, `activeLabel`, `canActivate`, the
-  inline confirm past the switch point) comes from the Home view model computed with no provider hidden, so a
-  provider hidden on Home still switches here. The full row opens Details; nested actions never do.
+  slot: `button`, `icon`, `quiet`, `empty`). The live-login mark (`active`, `activeLabel`) comes from the Home
+  view model computed with no provider hidden, so a provider hidden on Home still shows it here. The full row
+  opens Details; nested actions never do.
 - **What is live comes from the server**: a provider's `signIn` and `capabilities` (dashboard `providers[]`) and
   each account's `actions` and `removeRefusal` (`GET /api/accounts/registry`) decide every control (`gate()` in
   accounts-view.mjs). A control is drawn live, off with its reason in plain words (a trusted connection needed,
@@ -234,9 +221,7 @@ refresh, update, signin, connection, about }`; the page (`leptos/src/accounts/`,
   act `refuse`), or "coming" only when the server has no flow or route for it yet (`not_implemented`, a tray
   toggle before the server stores it, Delete now in the trash). A computer's default Claude profile (`isDefault`,
   or a profile folder named "Claude" in any case; the server applies the same rule) is always refused, whatever
-  the server reports. While an account-switch confirmation is pending, the kinds that send a change
-  (`MUTATING_ACTIONS` in accounts-controller.mjs) and Sign out wait, with a toast; opening, closing, typing,
-  copying and cancelling a sign-in stay live. Sign out is never held by a running save or Claude Open.
+  the server reports. Sign out is never held by a running save or Claude Open.
 - **Flows** (`flowView`, `leptos/src/accounts/flow.rs`): one panel under a section, opened by Add, Sign in
   again, Replace key or a footer Sign in: the step bar, the title and body, one field (profile name, a masked API
   key with an optional label, a pasted code), the verification page and code with Copy and Open, the waiting
@@ -270,8 +255,7 @@ refresh, update, signin, connection, about }`; the page (`leptos/src/accounts/`,
   its strength meter, "Also sign out other browsers" and a toast that names the paired trays that stay signed
   in; paired trays from `GET /api/auth/devices` with Revoke and Sign out all devices, each with an inline
   confirmation; Sign out), Settings (Light/Dark/Auto, the usage refresh slider: any whole number of seconds from 30
-  to 3600 on a log scale that snaps within 3.5% of its marks, saved on release; the auto-switch policies in %
-  used; the extra usage-log host select lists each tool's hosts by label from `LOG_SOURCE_HOSTS` through
+  to 3600 on a log scale that snaps within 3.5% of its marks, saved on release; the extra usage-log host select lists each tool's hosts by label from `LOG_SOURCE_HOSTS` through
   the view's `logSources` hosts), Update apps results by computer (Mac, Windows, Ubuntu, Nas1; the Nas1 row uses the
   Ubuntu glyph; "N of `expectedResults` done", 40 when a job names no count; "Waiting for its turn" and a running
   bar while a job runs), Connection (read only) and About (the version and the credits).

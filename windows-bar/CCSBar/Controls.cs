@@ -159,11 +159,11 @@ public enum MeterKind { Compact, Labeled, Detail }
 /// <summary>What a meter shows. Value is % used; null is "unavailable", never zero. NaFallbacks are shorter forms of
 /// NaText that a narrow compact cell may use instead, longest first (a reset whose new reading is pending).</summary>
 public sealed record MeterSpec(double? Value, string Tooltip, string? Label = null, string? Reset = null, bool ResetSoon = false, string? Amount = null,
-    double? Notch = null, double NotchOpacity = 1, string NaText = "Unavailable", string? Caption = null, string[]? ResetFallbacks = null, string[]? NaFallbacks = null);
+    string NaText = "Unavailable", string? Caption = null, string[]? ResetFallbacks = null, string[]? NaFallbacks = null);
 
 /// <summary>
 /// The dashboard meter scaled to the tray: tabular SemiCondensed value with "%" in the same run, reset with a clock,
-/// a 6 px track with quarter ticks, three severity gradients that cross-fade, the auto-switch notch and an overage end
+/// a 6 px track with quarter ticks, three severity gradients that cross-fade and an overage end
 /// cap in an 8 px gutter. The value and the fill animate together with an ease-out (never past the reading).
 /// </summary>
 public sealed class Meter : Grid
@@ -196,7 +196,6 @@ public sealed class Meter : Grid
     private readonly Canvas fillHost = new() { ClipToBounds = false };
     private readonly Grid fill = new() { Width = 0, Height = 6 };
     private readonly Border calm = new() { CornerRadius = new CornerRadius(3) }, warn = new() { CornerRadius = new CornerRadius(3), Opacity = 0 }, crit = new() { CornerRadius = new CornerRadius(3), Opacity = 0 };
-    private readonly Border notch = new() { Width = 2, Height = 12, CornerRadius = new CornerRadius(1), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
     private readonly Border over = new() { CornerRadius = new CornerRadius(0, 3, 3, 0), HorizontalAlignment = HorizontalAlignment.Left, Visibility = Visibility.Collapsed };
     private string severity = "calm";
     private MeterSpec spec = new(null, "");
@@ -229,9 +228,8 @@ public sealed class Meter : Grid
         calm.Background = Theme.Gradient("calm"); warn.Background = Theme.Gradient("warn"); crit.Background = Theme.Gradient("crit");
         fill.Children.Add(calm); fill.Children.Add(warn); fill.Children.Add(crit);
         fillHost.Children.Add(fill);
-        notch.Background = Theme.Brush("Ink");
         over.Background = Theme.Brush("Over");
-        track.Children.Add(trackPlate); track.Children.Add(naOutline); track.Children.Add(ticks); track.Children.Add(fillHost); track.Children.Add(over); track.Children.Add(notch);
+        track.Children.Add(trackPlate); track.Children.Add(naOutline); track.Children.Add(ticks); track.Children.Add(fillHost); track.Children.Add(over);
         track.ClipToBounds = false;
         track.SizeChanged += (_, _) => Paint();
         var clock = Icons.Icon("clock", 12, Theme.Brush("Ink3"));
@@ -297,8 +295,6 @@ public sealed class Meter : Grid
         longReset.Text = next.Reset ?? "";
         if (Kind == MeterKind.Detail) { reset.Visibility = Visibility.Collapsed; longReset.Visibility = string.IsNullOrEmpty(next.Reset) ? Visibility.Collapsed : Visibility.Visible; }
         caption.Text = next.Caption ?? ""; caption.Visibility = string.IsNullOrEmpty(next.Caption) ? Visibility.Collapsed : Visibility.Visible;
-        notch.Visibility = next.Notch is double && next.Value is double ? Visibility.Visible : Visibility.Collapsed;
-        notch.Opacity = next.NotchOpacity;
         var nextSeverity = Theme.Severity(next.Value);
         if (next.Value is not double target)
         {
@@ -381,7 +377,6 @@ public sealed class Meter : Grid
     /// <summary>Hover feedback from the row: the track brightens.</summary>
     public void SetHover(bool hover) { if (severity != "na") trackPlate.Background = Theme.Brush(hover ? "TrackHover" : "Track"); }
 
-    internal bool NotchVisibleForCheck => notch.Visibility == Visibility.Visible;
     public double TrackWidth => track.ActualWidth;
     public double FillWidth => fill.Width;
 
@@ -393,7 +388,6 @@ public sealed class Meter : Grid
         value.Text = Formatting.PercentWith(shown, decimals);
         if (width <= 0) return;
         fill.Width = width * Math.Clamp(shown, 0, 100) / 100;
-        if (spec.Notch is double at) notch.Margin = new Thickness(width * Math.Clamp(at, 0, 100) / 100 - 1, 0, 0, 0);
         if (Target is double target && target > 100 && shown > 100)
         {
             over.Visibility = Visibility.Visible;

@@ -40,31 +40,6 @@ test('the start draws nothing before the dashboard answers: only the page\'s loa
   } finally { ctl.c.stop(); }
 });
 
-test('a pending switch holds Accounts changes and Sign out; a local action stays live; cancel releases them', async () => {
-  const { s, server } = fixtureServer();
-  const ctl = await loadController(server);
-  try {
-    await ctl.act('activate', 'other');
-    assert.ok(ctl.last('activation'), 'the approval is on screen');
-    await ctl.act('remove', 'codex:other');
-    assert.equal(ctl.toasts().at(-1).title, 'Finish the account switch first');
-    const held = await ctl.c.signOut();
-    assert.deepEqual(held, { ok: false, held: true });
-    assert.equal(s.signedIn, true, 'Sign out waited');
-    assert.equal(ctl.calls.some((c) => c.method !== 'GET' && (c.path === '/api/auth/logout' || c.path.endsWith('/remove'))), false);
-    const before = ctl.toasts().length;
-    await ctl.act('pw-toggle', '');
-    assert.equal(ctl.toasts().length, before, 'opening the password form is not held');
-    await ctl.act('activation-cancel', '');
-    assert.equal(ctl.toasts().at(-1).title, 'Switch canceled');
-    assert.equal(ctl.last('activation'), '');
-    const out = await ctl.c.signOut();
-    assert.deepEqual(out, { ok: true });
-    assert.equal(s.signedIn, false);
-    assert.deepEqual(JSON.parse(ctl.last('signed-out')), { state: 'default', reason: '' });
-  } finally { ctl.c.stop(); }
-});
-
 test('Sign out runs while a save is in flight; a failure is said in the page\'s words and keeps the session', async () => {
   let release = null;
   const { s, server } = fixtureServer({ routes: {
@@ -140,7 +115,7 @@ test('a session that ends under the page says why once, and forgets what it read
       assert.equal(ctl.c.state().hasData, false);
       // nothing runs after it
       const calls = ctl.calls.length;
-      await ctl.act('activate', 'other');
+      await ctl.act('refresh-interval', '60s');
       assert.equal(ctl.calls.length, calls);
       assert.equal(ctl.toasts().some((t) => t.title === 'Refresh failed'), false, 'no failure toast over the sign-in');
     } finally { ctl.c.stop(); }
@@ -190,21 +165,17 @@ test('Update apps: a validated 409 job is adopted and its finish reported once; 
   } finally { c.c.stop(); }
 });
 
-test('the timers bridge.js kept: the interval read waits for a switch, the approval expires, Accounts reads on entry', async () => {
+test('the timers bridge.js kept: the interval read, Accounts reads on entry', async () => {
   const { server } = fixtureServer();
   const ctl = await loadController(server);
   try {
     const dashboardReads = () => ctl.calls.filter((c) => c.path.startsWith('/api/accounts/dashboard?')).length;
-    await ctl.act('activate', 'other');
     const before = dashboardReads();
     for (const t of ctl.intervals.filter((x) => x.ms === 60_000)) t.fn();
     await flush(16);
-    assert.equal(dashboardReads(), before, 'no interval read while the approval waits');
-    for (const t of ctl.intervals.filter((x) => x.ms === 1_000)) t.fn();
-    await ctl.act('activation-cancel', '');
-    for (const t of ctl.intervals.filter((x) => x.ms === 60_000)) t.fn();
-    await flush(16);
-    assert.ok(dashboardReads() > before, 'the interval reads again once it is answered');
+    assert.ok(dashboardReads() > before, 'the interval reads the dashboard');
+    // no approval timer is left: account switching was removed
+    assert.equal(ctl.intervals.some((x) => x.ms === 1_000), false);
     const updates = () => ctl.calls.filter((c) => c.path === '/api/app-updates/status').length;
     const registry = () => ctl.calls.filter((c) => c.path === '/api/accounts/registry').length;
     const [u, r] = [updates(), registry()];
@@ -212,16 +183,16 @@ test('the timers bridge.js kept: the interval read waits for a switch, the appro
     await flush(16);
     assert.equal(updates(), u + 1);
     assert.ok(registry() > r);
-    assert.ok(JSON.parse(ctl.last('accounts')).version === 3);
+    assert.ok(JSON.parse(ctl.last('accounts')).version === 4);
     // the frame keeps the tab this device showed last (frame.rs show), for every tab: the controller leaves it alone
     assert.equal(ctl.stored.get('aac-last-page'), undefined);
   } finally { ctl.c.stop(); }
 });
 
-test('below 1280 px Details and the approval take one Back entry; Back closes the top one; desktop takes none', async () => {
+test('below 1280 px Details takes one Back entry; Back closes it; desktop takes none', async () => {
   for (const width of [1920, 900]) {
-    for (const end of ['cancel', 'back', 'success']) {
-      const { s, server } = fixtureServer();
+    {
+      const { server } = fixtureServer();
       const listeners = new Map();
       const historyCalls = [];
       let state = null;
@@ -254,39 +225,17 @@ test('below 1280 px Details and the approval take one Back entry; Back closes th
         ctl.act('details', 'codex:other'); ctl.act('details', 'codex:one'); ctl.act('details', 'codex:other');
         await flush(16);
         assert.equal(pushes(), width < 1280 ? 1 : 0, 'retargeting Details does not stack entries');
-        ctl.act('activate', 'other');
-        await flush(16);
-        assert.equal(last('details'), '', 'the approval replaces Details');
-        assert.ok(last('activation'));
-        assert.equal(pushes(), width < 1280 ? 1 : 0, 'the approval inherits the Details entry');
-        if (end === 'back' && width < 1280) {
-          // a Back press: the browser pops the entry, then popstate
-          state = null;
-          for (const fn of listeners.get('popstate') || []) fn();
-          await flush(16);
-          assert.equal(last('activation'), '', 'Back cancels the approval');
-          assert.equal(backs(), 0, 'Back already took the entry');
-        } else if (end === 'success') {
-          ctl.act('activation-confirm', '');
-          await flush(24);
-          assert.equal(s.attempts, 2);
-          assert.equal(backs(), width < 1280 ? 1 : 0);
-        } else {
-          ctl.act('activation-cancel', '');
-          await flush(16);
-          assert.equal(backs(), width < 1280 ? 1 : 0);
-        }
-        assert.equal(last('details'), '', 'Details stays closed after the approval ends');
-        ctl.act('details', 'codex:other');
-        await flush(16);
-        assert.equal(pushes(), width < 1280 ? 2 : 0, 'opening Details again gets a new entry');
         // a Back press over Details closes it
         if (width < 1280) {
           state = null;
           for (const fn of listeners.get('popstate') || []) fn();
           await flush(16);
           assert.equal(last('details'), '');
+          assert.equal(backs(), 0, 'Back already took the entry');
         }
+        ctl.act('details', 'codex:other');
+        await flush(16);
+        assert.equal(pushes(), width < 1280 ? 2 : 0, 'opening Details again gets a new entry');
       } finally { ctl.stop(); }
     }
   }
@@ -480,80 +429,6 @@ test('M1: a reply that lands after stop starts nothing: no sign-in polling, no r
   await flush(16);
   assert.equal(calls.length, before, 'no request after stop');
   assert.equal(timers.length, 0, `no timer scheduled after stop (had ${scheduled} before)`);
-});
-
-test('M1: a switch request queued behind a session rotation is never sent once the controller stops', async () => {
-  let finishRevoke;
-  const { s, server: base } = fixtureServer();
-  const server = async (method, path, body) => {
-    if (method === 'POST' && path === '/api/auth/sessions/revoke-others') {
-      await new Promise((resolve) => { finishRevoke = resolve; });
-      return { payload: { signedOutBrowsers: 1 } };
-    }
-    return base(method, path, body);
-  };
-  const ctl = await loadController(server, { page: 'accounts' });
-  // "Sign out other browsers" rotates the session: requests made meanwhile wait for the new cookie (bridge.js send).
-  // While a switch approval waits, the rotation itself is held, so the switch's first ask is what can queue behind it.
-  assert.equal(ctl.c.act('others-out', ''), true);
-  await flush();
-  assert.ok(finishRevoke, 'the rotation is in flight');
-  assert.equal(ctl.c.act('activate', 'other'), true);
-  await flush();
-  assert.equal(s.attempts, 0, 'the switch request waits behind the rotation');
-  // the session ends (here: signed out elsewhere) and the frame stops the controller
-  ctl.c.stop();
-  const [calls, out] = [ctl.calls.length, ctl.emitted.length];
-  finishRevoke();
-  await flush(24);
-  assert.equal(s.attempts, 0, 'the switch request is never sent with the next session');
-  assert.equal(ctl.calls.length, calls, 'nothing else is sent either');
-  assert.equal(ctl.emitted.length, out, 'and nothing is drawn');
-});
-
-test('M1: a switch confirmation in flight at stop is aborted and its answer acts on nothing', async () => {
-  let answer;
-  const signals = [];
-  const { s, server: base } = fixtureServer();
-  const server = async (method, path, body) => {
-    if (method === 'POST' && path === '/api/codex/profiles/other/activate' && body?.confirmationToken) {
-      s.attempts++;
-      await new Promise((resolve) => { answer = resolve; });
-      return { payload: { name: 'other', email: 'other@example.test' } };
-    }
-    return base(method, path, body);
-  };
-  const calls = [];
-  const emitted = [];
-  const c = createFrameDashboard({
-    fetch: async (path, options = {}) => {
-      const method = options.method || 'GET';
-      const body = options.body ? JSON.parse(options.body) : null;
-      calls.push({ method, path, body });
-      signals.push(options.signal);
-      return respond(await server(method, path, body));
-    },
-    setInterval: () => 1,
-    clearInterval: () => {},
-    emit: (key, json) => emitted.push({ key, json }),
-  });
-  await c.start({ check: (await base('GET', '/api/auth/check')).payload });
-  await flush(16);
-  assert.equal(c.act('activate', 'other'), true);
-  await flush(16);
-  assert.equal(c.act('activation-confirm', ''), true);
-  await flush(16);
-  assert.equal(s.attempts, 2, 'the confirmation is on its way');
-  const confirmSignal = signals.at(-1);
-  assert.ok(confirmSignal && confirmSignal.aborted === false, 'every request carries the controller\'s abort signal');
-  c.stop();
-  assert.equal(confirmSignal.aborted, true, 'stop aborts what is in flight');
-  const [n, out] = [calls.length, emitted.length];
-  // the server's answer still arrives (a fetch that ignores the abort): the stopped controller acts on none of it
-  answer();
-  await flush(24);
-  assert.equal(calls.length, n, 'no refresh or other read follows with the next session');
-  assert.equal(emitted.length, out, 'no "Codex account switched" toast, no view');
 });
 
 test('M1 (Sol): a logout queued behind a session rotation never signs out the next session', async () => {

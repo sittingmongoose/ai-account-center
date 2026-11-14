@@ -1,5 +1,14 @@
 # Antigravity accounts on Ubuntu
 
+> **Account switching was removed on 2026-11-14.** AI Account Center reads every
+> saved profile's usage and marks the live login, but no longer activates a
+> profile or switches automatically: the dashboard, trays, `antigravity activate`
+> and the activate/confirm/auto-switch routes are gone. The managed runtime below
+> stays because managed updates use it, and `ai-account-center antigravity
+> recover` stays for one release to finish a switch an older version or a managed
+> update left unfinished. Sections that describe activation are kept as history of
+> the reviewed runtime; they no longer describe a product feature.
+
 AI Account Center retains Antigravity usage without installing a launcher or
 changing the native login. The account-control runtime is staged and **disabled**
 in this source checkpoint. A passing fixture, an edited settings file or a
@@ -146,27 +155,9 @@ the plan summary, available models and a reminder that family members sharing
 a Pro/Ultra plan may share one quota pool. Retired Claude 4.6 and GPT-OSS models
 leave the plan model list for samples from 2026-11-02 onward.
 
-Manual activation requires two separately verified saved account identities and
-supported native continuity. When the CLI is running, an explicit, one-use
-confirmation binds the exact reviewed processes and saved target account.
-Unmanaged, busy, unreadable or changed sessions remain deferred.
+Activation and automatic switching were removed (see the note at the top). The
+runtime's process census, stop and restart are still used by managed updates.
 
-Automatic switching is independent of Codex. Defaults are **off**, **95% used**,
-a **60-second** check interval and no selected quota pool. Before enabling it,
-choose the exact reported model/quota pool shared by both accounts. Gemini and
-third-party model pools are separate; their 5-hour and weekly constraints are not
-combined into an invented allowance. The controls display provider labels where
-reported and preserve derived bucket-membership provenance. Unknown, cached,
-expired or rate-limited readings cannot authorize a switch.
-
-The automatic path may stop only a freshly proved, owned idle resident CLI. It
-rechecks identity, credential revision, conversation, project, terminal, input
-generation and exact restorable plan under the account lock. After stopping, it
-uses a newly earned private quiesced receipt while refreshing quota/settings.
-Changed policy resumes and proves the previous session before deferring. Input
-remains blocked through restart, proof and durable completion. A failed target
-can restore the original terminal/template once; a lost completion reply never
-authorizes stopping a potentially resumed session.
 
 ## Updates and verification limits
 
@@ -218,10 +209,12 @@ the private sign-in folder is removed after every attempt.
 - Add refuses a name already used, a 17th profile and a Google account already
   saved in another profile.
 - Sign in again keeps the same Google account (email and subject) and is
-  refused for the live login, because a later switch saves the live login back
-  into that profile. Switch to another profile first.
-- A running switch (the registry's transaction lock) refuses both, and so does
-  another sign-in for the same profile.
+  refused for the live login. Sign the Antigravity CLI in to another account
+  first.
+- A held registry transaction lock (an import, a removal or a managed update)
+  or an unfinished switch left by an older version refuses both, and so does
+  another sign-in for the same profile. `ai-account-center antigravity recover`
+  finishes such a switch.
 
 While it runs, the command marks the profile in
 `~/.ccs/antigravity-signin/<profile>.running` (its pid, process start time and
@@ -289,19 +282,18 @@ profile names, for example after a crash during a Remove.
 ### Reading status
 
 A reading that cannot be bound to the saved account it was taken for is an
-`error` row with `statusReason: 'identity_unbound'` and is not a switch target.
-Any other failed reading stays a switch target; activation makes its own proof.
+`error` row with `statusReason: 'identity_unbound'`.
 
-## Releasing account switching
+## Releasing the managed runtime (history)
 
-Switching is closed in this build by four independent gates:
+The runtime was released behind these gates (the automatic-switching row is
+gone with the feature):
 
 | Gate | Where | Closed state |
 | --- | --- | --- |
 | Dashboard native release | `src/antigravity/production-runtime.ts`, `ANTIGRAVITY_NATIVE_RELEASED` | `false`: every activation answers `unsupported-runtime-probe` |
 | Runtime release | `scripts/antigravity/runtime/release.json`, `nativeActivationReleased` and `nativeProofReceiptSha256` | `false` and `null`: install and adoption refuse, `agy` runs unmanaged |
 | Runtime installation and adoption | `~/.ccs/antigravity-switching/runtime-installation.json`, the bundle, the PATH blocks, the status-line hook and `ai-account-center-antigravity.service` | not installed |
-| Automatic switching | the `enabled` setting (`PUT /api/antigravity/auto-switch`) | `false` (default) |
 
 Both saved profiles (`gmail` and `party`) must already be in the registry;
 `ai-account-center antigravity signin <profile>` adds a missing one.
@@ -354,22 +346,11 @@ after each step.
 5. `systemctl --user restart ccs-dashboard`: the dashboard picks the installed
    runtime only at start.
 6. Verify: `ai-account-center antigravity status` shows both gates open, the
-   runtime installed and adopted and its service socket present, and
-   `GET /api/antigravity/profiles` reports `activationSupported: true`.
+   runtime installed and adopted and its service socket present.
    New shells resolve `agy` to the managed launcher
    (`command -v agy` is `~/.local/share/ai-account-center/antigravity-runtime/bin/agy`).
-7. Live test (approved for the orchestrator only): with no `agy` running,
-   `POST /api/antigravity/profiles/party/activate` with `{"hostId": "ubuntu"}`
-   answers 200 `{"status": "active"}`; then the same for `gmail`. A
-   `confirmation-required` answer (managed idle sessions) is confirmed with
-   `POST /api/antigravity/profiles/<id>/confirm` and its token. Any other
-   answer means switching stays off: roll back. The same guarded switch runs
-   locally as `ai-account-center antigravity activate <profile>` (owning user,
-   interactive terminal): it lists running programs for review first.
-8. Automatic switching, after the live test passed:
-   `PUT /api/antigravity/auto-switch` with
-   `{"enabled": true, "requestedPoolId": "<a pool both accounts report>"}`
-   (threshold default 95% used).
+7. Steps 7 and 8 (a live activation test and enabling automatic switching)
+   were removed with account switching.
 
 ### When the official CLI auto-updates past the reviewed pin
 

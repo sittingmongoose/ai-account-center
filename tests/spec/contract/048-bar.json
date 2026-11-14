@@ -1,23 +1,21 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/auth/network",
+    "path": "/api/auth/session",
     "role": "bar"
   },
   "response": {
     "body": {
-      "canTurnOn": true,
-      "connection": {
-        "peer": "127.0.0.1",
-        "trusted": false
-      },
-      "trustedNetworks": [
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "fc00::/7"
-      ],
-      "trustLocalNetwork": false
+      "expiresAt": "<timestamp>",
+      "managedBy": "config",
+      "otherBrowsers": 16,
+      "pairedDevices": 1,
+      "passwordChangedAt": null,
+      "secureOrigin": null,
+      "secureTransport": true,
+      "sessionLifetimeDays": 7,
+      "sessionTimeoutHours": 168,
+      "username": "fixture-admin"
     },
     "headers": {
       "cache-control": "no-store",

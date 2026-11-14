@@ -1,5 +1,5 @@
 import { HOST_IDS, HOST_LABELS } from './computers.mjs';
-// Dashboard view model, version 2 (Daylight Atlas). Pure functions from the public API DTOs to the
+// Dashboard view model, version 3 (Daylight Atlas; version 3 dropped account switching). Pure functions from the public API DTOs to the
 // JSON that src/lib.rs deserializes into the Slint structs in ui/models.slint. Every truthfulness rule
 // lives here or in the modules it builds on: a missing reading is unavailable, never zero; nothing is
 // added or averaged across accounts or windows; at most two decimals; the product visibility rules of
@@ -20,7 +20,7 @@ import {
 } from './antigravity-data.mjs';
 import { lazyFormat, zonedParts } from './time-format.mjs';
 
-export const VIEW_MODEL_VERSION = 2;
+export const VIEW_MODEL_VERSION = 3;
 
 /** The provider registry, derived client-side until the backend sends one (see CONTRACT notes in W1). */
 export const PROVIDER_REGISTRY = [
@@ -30,7 +30,6 @@ export const PROVIDER_REGISTRY = [
     longLabel: 'Claude',
     signIn: 'Desktop profile',
     multi: true,
-    switchable: false,
   },
   {
     id: 'codex',
@@ -38,7 +37,6 @@ export const PROVIDER_REGISTRY = [
     longLabel: 'Codex',
     signIn: 'Device-code sign-in',
     multi: true,
-    switchable: true,
   },
   {
     id: 'antigravity',
@@ -46,7 +44,6 @@ export const PROVIDER_REGISTRY = [
     longLabel: 'Google Antigravity CLI',
     signIn: 'Supervised CLI login',
     multi: true,
-    switchable: true,
   },
   {
     id: 'cursor',
@@ -54,7 +51,6 @@ export const PROVIDER_REGISTRY = [
     longLabel: 'Cursor',
     signIn: 'Desktop app session',
     multi: false,
-    switchable: false,
   },
   {
     id: 'muse',
@@ -62,7 +58,6 @@ export const PROVIDER_REGISTRY = [
     longLabel: 'Muse Code',
     signIn: 'Desktop app session',
     multi: false,
-    switchable: false,
   },
   {
     id: 'kimi-code',
@@ -70,7 +65,6 @@ export const PROVIDER_REGISTRY = [
     longLabel: 'Kimi Code',
     signIn: 'API key',
     multi: false,
-    switchable: false,
   },
   {
     id: 'qwen',
@@ -78,7 +72,6 @@ export const PROVIDER_REGISTRY = [
     longLabel: 'Qwen Token Plan',
     signIn: 'API key, web extras by browser extension',
     multi: false,
-    switchable: false,
   },
   {
     id: 'zai',
@@ -86,7 +79,6 @@ export const PROVIDER_REGISTRY = [
     longLabel: 'Z.ai Coding Plan',
     signIn: 'API key',
     multi: false,
-    switchable: false,
   },
   {
     id: 'opencode-go',
@@ -94,10 +86,8 @@ export const PROVIDER_REGISTRY = [
     longLabel: 'OpenCode Go',
     signIn: 'API key, console wallet by browser session',
     multi: true,
-    switchable: false,
   },
 ];
-const SWITCHABLE = ['codex', 'antigravity'];
 const CARD_PROVIDERS = ['cursor', 'muse', 'kimi-code', 'qwen', 'zai', 'opencode-go'];
 
 // ---------------------------------------------------------------- formatting
@@ -316,7 +306,7 @@ export function statusWord(account) {
 }
 /**
  * F6: a meter window whose reset time has passed while its reading was sampled before that reset (or at an
- * unknown time) no longer says anything about the new period. Its old percent, fill and notch are hidden and it
+ * unknown time) no longer says anything about the new period. Its old percent and fill are hidden and it
  * reads "Reset at 10:15 AM · new reading pending" until a reading sampled after the reset arrives. Amounts,
  * unlimited and switched-off windows are left alone, and nothing is ever shown as 0%.
  */
@@ -352,14 +342,12 @@ function sampledText(account, w, now) {
   return `${dateTime.format(new Date(at))} · ${relative(at, now)}`;
 }
 
-/** One window as a MeterView. `opts.notch` is a "% used" threshold or null. */
+/** One window as a MeterView. */
 export function meterView(
   account,
   w,
   {
     now = Date.now(),
-    notch = null,
-    notchFaint = false,
     naText = 'Unavailable',
     naSub = '',
     label,
@@ -404,9 +392,6 @@ export function meterView(
     ].join(' · '),
     caption: '',
     captionTip: '',
-    notch: hasValue && finite(notch) ? notch : null,
-    notchFaint: !!notchFaint,
-    notchOff: false,
   };
 }
 const emptyCell = (account, key) => ({
@@ -428,9 +413,6 @@ const emptyCell = (account, key) => ({
   source: '',
   caption: '',
   captionTip: '',
-  notch: null,
-  notchFaint: false,
-  notchOff: false,
 });
 
 /** A Z.ai row that counts all reset packs of one kind (the collector's roll-up). */
@@ -583,114 +565,6 @@ function codexAmountsRuns(account, now) {
   return parts.flatMap((part, index) => (index ? [run(' · '), ...part] : part));
 }
 const runsText = (runs) => runs.map((r) => r.text).join('');
-/** The larger of an account's 5-hour and weekly use: the Codex switch point compares this with the threshold. */
-function codexPeak(account, now = Date.now()) {
-  const values = visibleUsageWindows('codex', account?.windows)
-    .map((w) =>
-      w.key === 'five_hour' || w.key === 'seven_day' ? currentUsedPercent(account, w, now) : null
-    )
-    .filter((value) => value !== null);
-  return values.length ? Math.max(...values) : null;
-}
-/** The inline question before activating an account that is already past the switch point. */
-function confirmRuns(peak, threshold, autoOn) {
-  return [
-    run(`${valueText(peak)}% used`, true, 'warn'),
-    run(
-      `, above the ${valueText(threshold)}% switch point.${autoOn ? ' Auto-switch would move off it again on its next check.' : ''} Activate anyway?`
-    ),
-  ];
-}
-/** Codex footer: what auto-switch is doing about the active account, in the concept's words. */
-function codexFoot(accounts, auto, known, threshold, now, hiddenIds) {
-  const short = (account) =>
-    `${shortIdentity(account)}${hiddenIds.has(account.id) ? ' (hidden)' : ''}`;
-  const active = accounts.find((account) => account.isActive === true);
-  const checked = validDate(auto?.lastCheckedAt) ? relative(auto.lastCheckedAt, now) : 'never';
-  const when = `Checked ${checked}${Number.isInteger(auto?.pollIntervalSeconds) ? ` · every ${intervalLabel(auto.pollIntervalSeconds)}` : ''}`;
-  const foot = (runs, warn = false) => ({
-    shown: true,
-    warn,
-    runs,
-    words: wordsOf(runs),
-    when: known ? when : '',
-  });
-  if (!accounts.length) return { shown: false, warn: false, runs: [], words: [], when: '' };
-  if (!known) return foot([run(text(auto?.message) || 'Automatic switching status unavailable')]);
-  if (!active) return foot([run('No Codex account is active')], true);
-  const peak = codexPeak(active, now);
-  if (peak !== null && peak >= threshold) {
-    if (auto.enabled !== true)
-      return foot(
-        [
-          run(short(active), true),
-          run(
-            ` is above ${valueText(threshold)}% used; auto-switch is off, so it stays active until you switch`
-          ),
-        ],
-        true
-      );
-    // A stuck monitor must speak here, not just in Settings: the client-side "next" was never
-    // vetted and the promise of a switch "on the next check" is false while the server waits.
-    if (['waiting_idle', 'no_quota', 'no_candidate', 'error'].includes(auto.outcome)) {
-      const match =
-        typeof auto.candidate === 'string'
-          ? accounts.find((account) => account?.capabilities?.codexProfile === auto.candidate)
-          : null;
-      const name = match
-        ? `${text(match.email) || text(match.label)}${hiddenIds.has(match.id) ? ' (hidden)' : ''}`
-        : text(auto.candidate);
-      const runs = [run(text(auto.message) || 'Automatic switching is waiting')];
-      if (auto.outcome === 'waiting_idle' && name) {
-        runs.push(
-          run(
-            ` Will switch to ${name} when Codex goes idle. Press Activate on ${name} to switch now.`
-          )
-        );
-      }
-      return foot(runs, true);
-    }
-    const next = accounts
-      .filter(
-        (account) =>
-          account !== active && account.switchable !== false && account.capabilities?.codexProfile
-      )
-      .map((account) => ({ account, peak: codexPeak(account, now) }))
-      .filter((row) => row.peak !== null && row.peak < threshold)
-      .sort((a, b) => a.peak - b.peak)[0]?.account;
-    return foot(
-      next
-        ? [
-            run(short(active), true),
-            run(` is above the ${valueText(threshold)}% switch point; auto-switch moves to `),
-            run(short(next), true),
-            run(' on the next check'),
-          ]
-        : [
-            run(short(active), true),
-            run(
-              ` is above the ${valueText(threshold)}% switch point and no other account is below it`
-            ),
-          ],
-      true
-    );
-  }
-  if (auto.enabled !== true)
-    return foot([
-      run('Auto-switch is off; the active account changes only when you press Activate'),
-    ]);
-  if (text(auto.message))
-    return foot(
-      [run(text(auto.message))],
-      ['error', 'no_candidate', 'waiting_idle', 'no_quota'].includes(auto.outcome)
-    );
-  return foot([
-    run(short(active), true),
-    run(
-      ` is below the ${valueText(threshold)}% switch point${peak !== null ? ` at ${valueText(peak)}% used` : ''}`
-    ),
-  ]);
-}
 const noFoot = () => ({ shown: false, warn: false, runs: [], words: [], when: '' });
 
 const visibleMeters = (account) =>
@@ -799,9 +673,6 @@ function claudeSection(accounts, profiles, platform, now, openProgress, data = n
       active: false,
       activeLabel: '',
       setup: false,
-      canActivate: false,
-      activateKind: '',
-      activateHint: '',
       canMac: !!launcher?.mac?.canOpen,
       canWindows:
         launcher?.windows?.canOpen === true ||
@@ -809,9 +680,6 @@ function claudeSection(accounts, profiles, platform, now, openProgress, data = n
       amountsLine: '',
       amountsRuns: [],
       amountsWords: [],
-      confirm: false,
-      confirmRuns: [],
-      confirmWords: [],
       cells,
     };
   });
@@ -828,8 +696,6 @@ function claudeSection(accounts, profiles, platform, now, openProgress, data = n
     kind: 'claude',
     label: 'Claude',
     longLabel: 'Claude',
-    switchable: false,
-    canSwitch: false,
     meta: runsText(metaRuns),
     metaRuns,
     metaWords: wordsOf(metaRuns),
@@ -837,44 +703,17 @@ function claudeSection(accounts, profiles, platform, now, openProgress, data = n
     activeId: '',
     activeLabel: '',
     empty: 'No Claude accounts are reported yet.',
-    auto: {
-      known: false,
-      shown: false,
-      enabled: false,
-      available: false,
-      canEnable: false,
-      thresholdUsed: null,
-      thresholdLabel: '',
-      min: 50,
-      max: 99,
-      pool: '',
-      offRuns: [],
-      offWords: [],
-      setting: '',
-      message: '',
-      example: false,
-    },
     columns,
     rows,
   };
 }
 
-// `allAccounts` includes the ones hidden from the dashboard too: "Show on dashboard" only
-// changes which rows Home lists, never what the user can operate (the server keeps hidden accounts as switch
-// candidates).
-function codexSection(accounts, data, now, allAccounts = accounts) {
+// `allAccounts` includes the ones hidden from the dashboard too: the live account is named even when its row is
+// hidden.
+function codexSection(accounts, now, allAccounts = accounts) {
   const hiddenIds = new Set(
     allAccounts.filter((account) => !accounts.includes(account)).map((account) => account.id)
   );
-  const total = allAccounts.length;
-  const auto = data?.codexAutoSwitch;
-  const known =
-    !!auto &&
-    finite(auto.thresholdPercent) &&
-    auto.thresholdPercent >= 0 &&
-    auto.thresholdPercent <= 100;
-  const threshold = known ? 100 - auto.thresholdPercent : null;
-  const notch = known && auto.enabled === true ? threshold : null;
   // Only the canonical keys identify the columns; additional quotas with the same duration stay in Details.
   const hasFive = accounts.some((account) =>
     visibleUsageWindows('codex', account.windows).some(
@@ -893,31 +732,21 @@ function codexSection(accounts, data, now, allAccounts = accounts) {
     const windows = visibleUsageWindows('codex', account.windows);
     const five = windows.find((w) => w.key === 'five_hour');
     const weekly = windows.find((w) => w.key === 'seven_day');
-    const faint = account.isActive !== true;
     const cells = [];
     if (hasFive)
       cells.push(
         five && usedPercent(five) !== null
-          ? meterView(account, five, { now, notch, notchFaint: faint, label: '5-hour' })
+          ? meterView(account, five, { now, label: '5-hour' })
           : emptyCell(account, 'five_hour')
       );
-    const weeklyCell = meterView(account, weekly, {
-      now,
-      notch,
-      notchFaint: faint,
-      label: 'Weekly',
-    });
+    const weeklyCell = meterView(account, weekly, { now, label: 'Weekly' });
     if (!weekly) weeklyCell.key = `${account.id}|seven_day`;
     cells.push(weeklyCell);
-    const profile = account.capabilities?.codexProfile || '';
     const amountsRuns = codexAmountsRuns(account, now);
-    const peak = codexPeak(account, now);
-    const above = known && account.isActive !== true && peak !== null && peak >= threshold;
-    const cr = above ? confirmRuns(peak, threshold, auto?.enabled === true) : [];
     return {
       id: account.id,
       provider: 'codex',
-      profile,
+      profile: account.capabilities?.codexProfile || '',
       email: text(account.email) || text(account.label) || 'Account identity unavailable',
       plan: text(account.plan),
       meta: [
@@ -932,24 +761,15 @@ function codexSection(accounts, data, now, allAccounts = accounts) {
       status: statusWord(account),
       note: text(account.message),
       platform: hostLabel(account),
+      // The live ~/.codex login on Ubuntu: a fact, not a control.
       active: account.isActive === true,
       activeLabel: 'on Ubuntu',
       setup: false,
-      canActivate: account.isActive !== true && !!profile && account.switchable !== false,
-      activateKind: 'activate',
-      activateHint: !profile
-        ? 'This account has no Codex profile to activate'
-        : account.switchable === false
-          ? 'This saved Codex login is invalid. Sign in again before activating it.'
-          : `Make ${text(account.email) || 'this account'} the active Codex account`,
       canMac: false,
       canWindows: false,
       amountsLine: runsText(amountsRuns),
       amountsRuns,
       amountsWords: wordsOf(amountsRuns),
-      confirm: above,
-      confirmRuns: cr,
-      confirmWords: wordsOf(cr),
       cells,
     };
   });
@@ -960,48 +780,26 @@ function codexSection(accounts, data, now, allAccounts = accounts) {
   ];
   return {
     id: 'codex',
-    kind: 'switchable',
+    kind: 'accounts',
     label: 'Codex',
     longLabel: 'Codex',
-    switchable: true,
-    canSwitch: total > 1,
     meta: `${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}${active ? ` · ${activeName} active` : ''}`,
     metaRuns,
     metaWords: wordsOf(metaRuns),
-    foot: codexFoot(allAccounts, auto, known, threshold, now, hiddenIds),
+    foot: noFoot(),
     activeId: active?.id || '',
     activeLabel: active
       ? `${text(active.email) || text(active.label)}${hiddenIds.has(active.id) ? ' (hidden)' : ''}`
       : '',
     empty: 'No Codex accounts are reported yet.',
-    auto: {
-      known,
-      shown: true,
-      enabled: auto?.enabled === true,
-      available: known && auto?.activationInProgress !== true,
-      canEnable: known,
-      thresholdUsed: threshold,
-      thresholdLabel: known ? `${valueText(threshold)}%` : '—',
-      min: known ? Math.min(50, threshold) : 50,
-      max: 99,
-      pool: '',
-      offRuns: [],
-      offWords: [],
-      setting: known
-        ? `${valueText(threshold)}% used · checks every ${auto.pollIntervalSeconds}s`
-        : 'Setting unavailable',
-      message: text(auto?.message) || 'Automatic switching status unavailable.',
-      example: false,
-    },
     columns,
     rows,
   };
 }
 
-function antigravitySection(accounts, data, inventory, autoStatus, now, total = accounts.length) {
-  const native = antigravityView(data, inventory, autoStatus, now);
+function antigravitySection(accounts, data, inventory, now) {
+  const native = antigravityView(data, inventory);
   const bound = new Map(native.antigravityAccounts.map((row) => [row.id, row]));
-  const status = native.antigravityAutoKnown ? autoStatus : null;
   // Columns come from the canonical provider buckets; the short single-line heads ride
   // along, fed by each column's representative window (H3).
   const columns = antigravityColumns(accounts).map((col) => ({
@@ -1016,21 +814,8 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
   }));
   const rows = accounts.map((account) => {
     const nativeRow = bound.get(account.id);
+    // The live Antigravity login on Ubuntu: a fact, not a control.
     const active = nativeRow?.selected === true;
-    const notchFor = (w) =>
-      status?.enabled === true && status.requestedPoolId && w.poolId === status.requestedPoolId
-        ? status.thresholdUsedPercent
-        : null;
-    // The switch point reads the windows of the pool the policy watches.
-    const poolUse = status?.requestedPoolId
-      ? visibleMeters(account)
-          .filter((w) => w.poolId === status.requestedPoolId)
-          .map((w) => currentUsedPercent(account, w, now))
-          .filter((value) => value !== null)
-      : [];
-    const peak = poolUse.length ? Math.max(...poolUse) : null;
-    const above = !!status && !active && peak !== null && peak >= status.thresholdUsedPercent;
-    const cr = above ? confirmRuns(peak, status.thresholdUsedPercent, status.enabled === true) : [];
     const noQuota = antigravityNoQuota(account) ? 'No Antigravity quota on this plan' : '';
     const cells = noQuota
       ? columns.map(({ key }) => emptyCell(account, key))
@@ -1038,8 +823,6 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
           const w = visibleMeters(account).find((row) => row.key === key);
           const cell = meterView(account, w, {
             now,
-            notch: w ? notchFor(w) : null,
-            notchFaint: !active,
             label,
             naText: w ? 'Unavailable' : antigravityMissingWindow(account, key),
           });
@@ -1071,86 +854,36 @@ function antigravitySection(accounts, data, inventory, autoStatus, now, total = 
           : 'on Ubuntu, running unverified'
         : '',
       setup: false,
-      canActivate: nativeRow?.canActivate === true,
-      activateKind: 'antigravity-activate',
-      activateHint: nativeRow?.canActivate
-        ? `Activate ${text(account.email)} on Ubuntu; running programs are listed for review first`
-        : native.antigravityServiceProblem ||
-          'Ubuntu activation needs a verified login and runtime',
       canMac: false,
       canWindows: false,
       amountsLine: noQuota,
       amountsRuns: noQuota ? [run(noQuota)] : [],
       amountsWords: noQuota ? wordsOf([run(noQuota)]) : [],
-      confirm: above,
-      confirmRuns: cr,
-      confirmWords: wordsOf(cr),
       cells,
     };
   });
   const activeRow = rows.find((row) => row.active);
-  // Every Antigravity account counts for the "second account" rule, hidden ones included (see codexSection).
-  const policyShown = total > 1;
-  const pool =
-    native.antigravityPoolLabel && native.antigravityPoolLabel !== 'Choose quota pool'
-      ? native.antigravityPoolLabel
-      : '';
   const metaRuns = [
     run('Google Antigravity CLI · '),
     run(rows.length, true),
     run(` ${rows.length === 1 ? 'account' : 'accounts'}`),
   ];
+  const problem = native.antigravityServiceProblem || native.antigravityUpdatePaused;
   return {
     id: 'antigravity',
-    kind: 'switchable',
+    kind: 'accounts',
     label: 'Antigravity',
     longLabel: 'Google Antigravity CLI',
-    switchable: true,
-    canSwitch: policyShown,
     meta: `Google Antigravity CLI · ${rows.length} ${rows.length === 1 ? 'account' : 'accounts'}`,
     metaRuns,
     metaWords: wordsOf(metaRuns),
-    // A runtime service that cannot start outranks a paused update: switching is off either way.
-    foot:
-      native.antigravityServiceProblem || native.antigravityUpdatePaused
-        ? {
-            shown: true,
-            warn: true,
-            runs: [run(native.antigravityServiceProblem || native.antigravityUpdatePaused)],
-            words: wordsOf([
-              run(native.antigravityServiceProblem || native.antigravityUpdatePaused),
-            ]),
-            when: '',
-          }
-        : noFoot(),
+    // A runtime service that cannot start outranks a paused update.
+    foot: problem
+      ? { shown: true, warn: true, runs: [run(problem)], words: wordsOf([run(problem)]), when: '' }
+      : noFoot(),
     activeId: activeRow?.id || '',
     activeLabel: activeRow?.email || '',
     empty: 'No Antigravity accounts are reported yet.',
-    auto: {
-      known: native.antigravityAutoKnown,
-      shown: policyShown,
-      enabled: native.antigravityAutoEnabled,
-      available: native.antigravityAutoAvailable,
-      canEnable: native.antigravityCanEnable,
-      thresholdUsed: status ? status.thresholdUsedPercent : null,
-      thresholdLabel: native.antigravityThresholdLabel,
-      min: status ? Math.min(50, status.thresholdUsedPercent) : 50,
-      max: 99,
-      pool,
-      // Switching moves between Antigravity accounts, so the policy starts once a second account is signed in.
-      offRuns: policyShown
-        ? []
-        : [run('Auto-switch '), run('off', true), run(' · needs a second account')],
-      offWords: policyShown
-        ? []
-        : wordsOf([run('Auto-switch '), run('off', true), run(' · needs a second account')]),
-      setting: native.antigravityAutoSetting,
-      message:
-        total < 2
-          ? 'Automatic switching needs a second Antigravity account.'
-          : native.antigravityAutoMessage,
-      example: false,
-    },
     columns,
     rows,
   };
@@ -1267,7 +1000,7 @@ export function chromeView(
 
 /**
  * The complete Home view model.
- * ctx: { profiles, platform, antigravityInventory, antigravityAuto, now, refreshing, intervalSeconds, username, host, includeHidden }
+ * ctx: { profiles, platform, antigravityInventory, now, refreshing, intervalSeconds, username, host, includeHidden }
  */
 export function dashboardViewModel(data, ctx = {}) {
   const now = ctx.now ?? Date.now();
@@ -1281,8 +1014,6 @@ export function dashboardViewModel(data, ctx = {}) {
     : everyAccount.filter((account) => !hiddenIds.has(account?.id) && account?.hidden !== true);
   const hidden = ctx.includeHidden ? new Set() : hiddenProviders(data);
   const of = (provider) => accounts.filter((account) => account?.provider === provider);
-  const countOf = (provider) =>
-    everyAccount.filter((account) => account?.provider === provider).length;
   const sections = [];
   if (!hidden.has('claude'))
     sections.push(
@@ -1292,21 +1023,13 @@ export function dashboardViewModel(data, ctx = {}) {
     sections.push(
       codexSection(
         of('codex'),
-        data,
         now,
         everyAccount.filter((account) => account.provider === 'codex')
       )
     );
   if (!hidden.has('antigravity') && of('antigravity').length)
     sections.push(
-      antigravitySection(
-        of('antigravity'),
-        data,
-        ctx.antigravityInventory,
-        ctx.antigravityAuto,
-        now,
-        countOf('antigravity')
-      )
+      antigravitySection(of('antigravity'), data, ctx.antigravityInventory, now)
     );
   return {
     version: VIEW_MODEL_VERSION,
@@ -1333,19 +1056,9 @@ export function detailsViewModel(data, id, ctx = {}) {
   const home = dashboardViewModel(data, { ...ctx, includeHidden: true });
   const row = home.sections.flatMap((section) => section.rows).find((r) => r.id === account.id);
   const section = home.sections.find((s) => s.rows.some((r) => r.id === account.id));
-  const switchable = SWITCHABLE.includes(account.provider);
-  const notches = new Map(
-    (row?.cells || []).filter((cell) => cell.key).map((cell) => [cell.key, cell])
+  const meters = visibleMeters(account).map((w) =>
+    meterView(account, w, { now, label: fullWindowLabel(account.provider, w) })
   );
-  const meters = visibleMeters(account).map((w) => {
-    const view = meterView(account, w, { now, label: fullWindowLabel(account.provider, w) });
-    const fromRow = notches.get(view.key);
-    if (fromRow) {
-      view.notch = fromRow.notch;
-      view.notchFaint = fromRow.notchFaint;
-    }
-    return view;
-  });
   const provider = PROVIDER_REGISTRY.find((p) => p.id === account.provider);
   const state = row?.active ? `Active ${row.activeLabel}` : statusWord(account);
   const profile =
@@ -1400,17 +1113,8 @@ export function detailsViewModel(data, id, ctx = {}) {
       .join(' · '),
     state,
     active: !!row?.active,
-    switchable,
-    canActivate: !!row?.canActivate,
-    activateKind: row?.activateKind || '',
-    // the row's own action slot and inline confirmation, so Details reads and switches the same way
-    canSwitch: !!section?.canSwitch,
     activeLabel: row?.activeLabel || '',
-    activateHint: row?.activateHint || '',
     platform: hostLabel(account),
-    confirm: !!row?.confirm,
-    confirmRuns: row?.confirmRuns || [],
-    confirmWords: row?.confirmWords || wordsOf(row?.confirmRuns || []),
     profile: row?.profile || profile,
     canMac: !!row?.canMac,
     canWindows: !!row?.canWindows,

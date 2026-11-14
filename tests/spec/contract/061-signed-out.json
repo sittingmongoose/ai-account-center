@@ -1,12 +1,12 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/claude/history-snapshots/cleanup",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/scoreboard",
+    "role": "signed-out"
   },
   "response": {
     "body": {
+      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

@@ -9,7 +9,6 @@ import {
   getCachedAntigravityAccounts,
   hasAntigravityProfiles,
   readSelectedAntigravityProfileId,
-  getAntigravityAutoSwitchStatus,
 } from '../../antigravity/runtime-service';
 import { publicDashboardAccount } from '../../antigravity/usage-normalization';
 import type { AntigravityDashboardAccount } from '../../antigravity/usage-contract';
@@ -27,7 +26,6 @@ import {
   invalidateClaudeDesktopUsageCache,
   type ClaudeDesktopUsage,
 } from './claude-desktop-usage-service';
-import { getCodexAutoSwitchService } from './codex-auto-switch-service';
 import { readCodexRenewalEntries, type CodexRenewalEntries } from './codex-renewal-entries';
 import type { CodexProfileRenewalProfileStatus } from '../../codex-auth/codex-profile-renewal';
 import {
@@ -63,7 +61,7 @@ import type {
 import {
   pendingClaudeAccount,
   withAccountState,
-  withThresholdUsedPercent,
+  RETIRED_CODEX_AUTO_SWITCH,
   withJobState,
   type AccountJobStates,
 } from './account-dashboard-state';
@@ -124,12 +122,10 @@ export interface AccountDashboardDeps {
   /** Claude profiles created by Add that wait for their first sign-in. */
   listClaudePending?: () => Promise<PendingClaudeProfile[]>;
   getOptionalWalletAccounts?: (refresh: boolean) => Promise<DashboardAccount[]>;
-  getAutoSwitchStatus?: () => Omit<AccountDashboard['codexAutoSwitch'], 'thresholdUsedPercent'>;
   hasAntigravityProfiles?: () => boolean;
   getAntigravityAccounts?: (refresh: boolean) => Promise<AntigravityDashboardAccount[]>;
   getCachedAntigravityAccounts?: () => AntigravityDashboardAccount[];
   readSelectedAntigravityProfileId?: () => Promise<string | null>;
-  getAntigravityAutoSwitchStatus?: () => NonNullable<AccountDashboard['antigravityAutoSwitch']>;
   invalidateClaudeCache?: () => void;
   now?: () => number;
   responseBudgetMs?: number;
@@ -769,39 +765,15 @@ export class AccountDashboardService {
     // Validate saved credential revisions on every response, including dashboard
     // cache hits. This synchronous cache projection never starts a provider call.
     if (registeredAntigravity) {
-      const previous = state.antigravity;
       state.antigravity = (
         this.deps.getCachedAntigravityAccounts ?? (() => getCachedAntigravityAccounts(scope))
       )().map((account) => {
-        // The runtime cache never proves activation (it always reports false); the proof is
-        // the one the last refresh retained below. Only a fallback or unverifiable cached
-        // reading may veto it here, so the cache's own false is not carried into the peek.
         const publicAccount = publicDashboardAccount(account);
-        const unvetoed = {
-          ...publicAccount,
-          capabilities: { ...publicAccount.capabilities, antigravityCanActivate: true },
-        };
-        const current =
-          this.deps.getCachedAntigravityAccounts || this.deps.failover === null
-            ? unvetoed
-            : peekAntigravityUsage(unvetoed, scope, {
-                failover: this.deps.failover ?? undefined,
-              });
-        const retained = previous.find((candidate) => candidate.id === current.id);
-        return {
-          ...current,
-          capabilities: {
-            ...current.capabilities,
-            antigravityCanActivate:
-              current.capabilities.antigravityCanActivate !== false &&
-              (current.status === 'ok' || current.status === 'cached') &&
-              current.capabilities.antigravityHostIds?.includes('ubuntu') === true &&
-              retained?.email === current.email &&
-              retained?.capabilities.antigravityProfileId ===
-                current.capabilities.antigravityProfileId &&
-              retained?.capabilities.antigravityCanActivate === true,
-          },
-        };
+        return this.deps.getCachedAntigravityAccounts || this.deps.failover === null
+          ? publicAccount
+          : peekAntigravityUsage(publicAccount, scope, {
+              failover: this.deps.failover ?? undefined,
+            });
       });
     }
     const claudeIds = new Set(state.claude.map((account) => account.id));
@@ -823,13 +795,11 @@ export class AccountDashboardService {
     const jobs = (this.deps.accountJobStates ?? (() => getSignInJobRunner().accountStates()))();
     const rows = accounts.flatMap((account) => {
       let current = account;
-      let codexAuthValid: boolean | undefined;
       if (account.provider === 'codex' && summary) {
         const profile = summary.profiles.find(
           (candidate) => candidate.name === account.capabilities.codexProfile
         );
         if (!profile) return [];
-        codexAuthValid = profile.authValid;
         const previous = this.codexInventories
           .get(scope)
           ?.profiles.find((candidate) => candidate.name === profile.name);
@@ -846,7 +816,11 @@ export class AccountDashboardService {
           );
         }
       }
-      if (account.provider === 'codex' && codexAuthValid !== false) {
+      if (
+        account.provider === 'codex' &&
+        summary?.profiles.find((candidate) => candidate.name === account.capabilities.codexProfile)
+          ?.authValid !== false
+      ) {
         // A slow or failed summary must not bypass the saved auth check for a
         // previously collected fallback. It needs no asynchronous inventory.
         current = peekCodexUsage(
@@ -860,22 +834,19 @@ export class AccountDashboardService {
       return [
         {
           ...withJobState(
-            withAccountState(
-              {
-                ...current,
-                isActive:
-                  current.provider === 'codex'
-                    ? summary?.activated?.name === current.capabilities.codexProfile
-                    : current.provider === 'antigravity' &&
-                      registeredAntigravity &&
-                      selectedAntigravityProfileId !== null &&
-                      selectedAntigravityProfileId === current.capabilities.antigravityProfileId,
-              },
-              codexAuthValid
-            ),
+            withAccountState({
+              ...current,
+              isActive:
+                current.provider === 'codex'
+                  ? summary?.activated?.name === current.capabilities.codexProfile
+                  : current.provider === 'antigravity' &&
+                    registeredAntigravity &&
+                    selectedAntigravityProfileId !== null &&
+                    selectedAntigravityProfileId === current.capabilities.antigravityProfileId,
+            }),
             jobs
           ),
-          // Display only: hidden rows stay in the list, collected and switchable.
+          // Display only: hidden rows stay in the list and are still collected.
           hidden: hiddenProviders.has(current.provider) || hiddenAccountIds.has(current.id),
           // The trays' own switches; never derived from the dashboard's.
           trayHidden:
@@ -901,12 +872,7 @@ export class AccountDashboardService {
         (this.deps.providerFacts ?? lifecycleProviderFacts)(context)
       ),
       accounts: rows,
-      antigravityAutoSwitch: (
-        this.deps.getAntigravityAutoSwitchStatus ?? getAntigravityAutoSwitchStatus
-      )(),
-      codexAutoSwitch: withThresholdUsedPercent(
-        (this.deps.getAutoSwitchStatus ?? (() => getCodexAutoSwitchService().getStatus()))()
-      ),
+      codexAutoSwitch: { ...RETIRED_CODEX_AUTO_SWITCH },
       ...(server ? { server } : {}),
       ...(claudeSignIns ? { claudeSignIns } : {}),
     };

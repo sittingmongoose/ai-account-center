@@ -1,19 +1,21 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/status/deliverable",
+    "path": "/v0/management/auth-files",
     "role": "device"
   },
   "response": {
     "body": {
-      "code": "device_scope",
-      "error": "This action needs a signed-in dashboard session."
+      "code": "rate_limited",
+      "error": "Too many wrong usage hub keys. Try again later.",
+      "retryAfterSeconds": 900
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
-      "etag": "<etag>"
+      "etag": "<etag>",
+      "retry-after": "900"
     },
-    "status": 403
+    "status": 429
   }
 }

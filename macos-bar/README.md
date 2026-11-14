@@ -15,8 +15,8 @@ Text is the system font (SF Pro) with tabular digits, and every percent sign is 
 
 The layout and order are today's: header (Apex Soft mark, name, "9 of 9 reporting · cached · updated 3:15 PM", menu);
 Claude; Codex; Antigravity; the other providers (Cursor, Muse Code, Kimi Code, Qwen, Z.ai, OpenCode Go) in that order;
-and a footer that floats over the list (Dashboard, Refresh, Settings). The Codex section header carries the
-Codex auto-switch toggle and its threshold, above its accounts, styled like Antigravity's.
+and a footer that floats over the list (Dashboard, Refresh, Settings). Account switching (Activate, auto-switch and
+its threshold notch) was removed on 2026-11-14: the tray reads usage and opens Claude profiles; it switches no login.
 
 - **Usage is never invented.** A missing reading reads "Unavailable" (or "Not reported yet"), never 0. Values keep at
   most two decimals. Codex Chat pass windows, the Qwen subscription row and empty Z.ai reset-pack summaries stay
@@ -28,10 +28,10 @@ Codex auto-switch toggle and its threshold, above its accounts, styled like Anti
   tick, so a window flips when its reset passes while the panel is open.
 - **Claude Fable** has its own column for Max plans only, read from the provider's `seven_day_fable` window; a Max
   account without one shows "Not reported yet", and Pro accounts have no Fable cell.
-- **Active account (Selected row).** In Codex and Antigravity the active row sits on one accent-tinted platter that
-  glides to the new row after a switch (ease-out, no overshoot). Its action slot shows a filled check, "Active" and
-  "on Ubuntu" with no button chrome, lined up exactly with the Activate capsules above and below (the capsule's label
-  inset is the check plus its gap). `--check-native-tooltips` measures this alignment.
+- **Active account (Selected row).** In Codex and Antigravity the row of the live login sits on one accent-tinted
+  platter that glides to the new row when the active login changes (ease-out, no overshoot). Its action slot shows a
+  filled check, "Active" and "on Ubuntu" with no button chrome, lined up with the slot's capsule position (the
+  capsule's label inset is the check plus its gap). `--check-native-tooltips` measures this alignment.
 - **Antigravity plan display.** When the dashboard reports the pool windows, the section shows four columns
   in this order: Gemini 5-hour, Gemini weekly, Claude/GPT 5-hour, Claude/GPT weekly. The dashboard's optional
   `antigravityPlan` object (class, quotaPolicy, summary, models, thirdPartyModels, creditsOverage) drives the
@@ -43,12 +43,9 @@ Codex auto-switch toggle and its threshold, above its accounts, styled like Anti
   in the row's order, each titled by its full pool name with the period as a subtitle, so a long pool
   name never truncates. Without the object the section renders
   as before (plus the fourth column).
-- **Antigravity switching** uses the dashboard routes `POST /api/antigravity/profiles/:id/activate`,
-  `POST /api/antigravity/profiles/:id/confirm` and `PUT /api/antigravity/auto-switch`. Activate is offered only when the
-  dashboard reports `antigravityCanActivate` for the Ubuntu host. Running Antigravity programs produce an inline
-  confirmation listing them; only "Stop, switch, restart" sends the one-use token, once. With two reported accounts (including tray-hidden or unavailable ones) the section
-  header carries Antigravity's own auto-switch and threshold (percent used); it can be turned on once the shared quota
-  pool has been chosen in the dashboard.
+- **Antigravity "Finish setup".** An Antigravity account that still needs its supervised login shows "Finish setup",
+  which opens the dashboard. A lone Antigravity account with no active login reported reads "Not reported"; with two
+  or more, the section header says "Active account not reported yet".
 - **Hidden providers and accounts.** The tray follows the dashboard's "Show in tray" switch, which is independent of
   "Show on dashboard": a provider with `providers[].trayVisible: false` (or listed in `settings.trayHiddenProviders`) is
   left out of the panel, a missing field means visible, and a provider hidden only on the dashboard stays in the tray.
@@ -56,16 +53,16 @@ Codex auto-switch toggle and its threshold, above its accounts, styled like Anti
   (`accounts[].hidden`) never hides it here, so the two per-account switches stay independent. Settings › From the
   dashboard lists both.
 - **Meters** are 6 pt tracks with quarter ticks, a severity fill (calm, warning from 80 %, critical from 95 %, and an
-  overage cap above 100 %) and the auto-switch notch. Widths and numbers ease out and never pass the reading.
+  overage cap above 100 %). Widths and numbers ease out and never pass the reading.
   Reported usage above 100 % stays in the text; only the bar is capped. A reset label never truncates: when value
   and reset share a tight cell the clock glyph drops first, then the countdown's largest unit ("6d", "5h", "47m")
   stands alone; the tooltip keeps the full reset.
 - **Motion.** The first open of a session staggers the blocks in and sweeps every meter from zero while the numbers
   count up; later opens animate only readings that changed since the panel last closed. The menu-bar percentage rolls
   to its new value, Refresh spins while it works, the gear turns as Settings slides in, and the active check draws in
-  after a switch. Reduce Motion shows the settled state.
+  when the active login changes. Reduce Motion shows the settled state.
 - **Details.** Clicking anywhere on an account or provider row opens its details popover (every window with its exact
-  reset, balances and expiries, and Activate or Active). Nested buttons act on their own and never open details.
+  reset, balances and expiries, and Active). Nested buttons act on their own and never open details.
 - **Settings** opens inside the panel, sliding over the list: the gear toggles it, the glass X and Escape close it.
   It holds Appearance (Light / Dark / Auto, stored on this Mac), the connection, the Menu bar group (any provider in
   the data, or Nothing for the icon alone; the Claude account; Used or Remaining of the account's 5-hour window, else
@@ -86,8 +83,7 @@ Codex auto-switch toggle and its threshold, above its accounts, styled like Anti
   7 pt decaying error shake, collapsible regions, the scale-bar sweep while busy, and a success hand-off in which the
   list loads in with the first-open stagger and every meter sweeps from zero. Reduce Motion shows each state settled.
 
-Controls are limited to opening configured Claude profiles on Mac or Windows, safely activating native Codex and
-Antigravity profiles on the shared Ubuntu runtime, and the two automatic-switching policies. Footer controls open the
+Controls are limited to opening configured Claude profiles on Mac or Windows. Footer controls open the
 dashboard, refresh and toggle Settings; the header menu offers Settings, About and Quit.
 
 Claude "Open on Mac" and "Open on Windows" both POST `/api/claude/desktop-profiles/:id/open` with
@@ -121,7 +117,7 @@ and deadline.
   in `.noindex` folders so search never offers an old copy.
 - The panel closes when you click outside it, switch apps or Spaces, press Escape, or click the menu-bar glyph
   again. Escape works from any field in the panel and closes the innermost thing first: an open Details, packs or info
-  popover, then Settings, then an unanswered switch confirmation, then the panel.
+  popover, then Settings, then the panel.
 - A shortcut needs the app running. If you quit it, open it again from Spotlight or Launchpad: that starts it and opens
   the panel.
 
@@ -156,14 +152,14 @@ python3 Scripts/migration_check.py
   the slot. It also checks the disclosure chevron's reserved trailing column lies fully inside every account and
   provider row's own frame — the frame the hover highlight and the active row's platter cover.
 - `--check-meter-geometry` checks every rendered meter against its own track's laid-out width: the fill is the reading
-  within 0.5 pt, ticks sit at 25/50/75, and the notch sits at the switch threshold.
+  within 0.5 pt, ticks sit at 25/50/75, and no meter draws a notch.
 - `--check-hover-occlusion` checks which hover tag actually presents under the pointer, with the real panel hosted
   offscreen and a stand-in pointer (the real pointer never moves and no event reaches the system). With Settings open,
   each Settings control (the X, Show, Claude account and Value) presents exactly its own tag with the expected text,
   and no point of a grid over the panel presents a tag from the account list hidden underneath. It also walks the
   pointer across rows and Settings controls (each stop shows its own tag, nothing stale), checks both Settings
   transitions and the panel's close, and checks the rows still tag after Settings closes and after a reopen. A
-  height-limited, scrolled panel follows: a footer button over an Activate or Open button (and the gear over Settings'
+  height-limited, scrolled panel follows: a footer button over a Claude Open button (and the gear over Settings'
   Value) presents only the footer's tag with no row highlight, nothing scrolled up under the header presents, a row
   that scrolls away from under a still pointer drops its tag, and a row under a still pointer tags once Settings
   closes or the panel opens. The fixture has three Codex accounts with full emails, the first not active.
@@ -261,20 +257,14 @@ dashboard's tray routes. A password change on the dashboard does nothing to the 
 The accounts contract is `GET /api/accounts/dashboard?platform=mac&refresh=true`
 and schema version 1. Menu opening forces a server-backed refresh; background
 reads use the dashboard’s saved usage refresh interval (60 seconds by default).
-Adjust it in dashboard Settings; manual Refresh bypasses the normal sample cache. The dashboard service owns Codex automatic switching,
-so closing this app does not disable it.
+Adjust it in dashboard Settings; manual Refresh bypasses the normal sample cache.
 
-When manual activation finds running Codex programs, an inline confirmation under the row lists their names, PIDs and roles, and warns that stopping them interrupts active work. Only "Stop, switch, restart" sends the server's one-use token. Cancel makes no further request. Expired or stale offers require a fresh Activate to review the current programs; confirmed requests are never replayed automatically after an authentication failure. Automatic switching still waits for idle.
-
-The Used-threshold menu shows the confirmed stored setting: 85/90/95/98 percent
-used map to 15/10/5/2 percent remaining. Selecting a threshold preserves the
-server's current enabled state by sending only the threshold, without resending the sampled toggle. The private `~/.ccs/bar/native-status.json` contains only
-connection status, timestamp, provider/account counts and automatic-switch
-settings, allowing read-only verification of the installed GUI process itself.
+The dashboard still sends a fixed `codexAutoSwitch` (always off) for trays built before switching was removed; this
+tray no longer reads it. The private `~/.ccs/bar/native-status.json` contains only connection status, timestamp and
+provider/account counts, allowing read-only verification of the installed GUI process itself.
 
 After connection deployment, `.build/release/ccs-bar-check --check-live` performs
-one read-only native client check and prints schema/provider/status counts and
-the Codex automatic-switch setting. It does not activate accounts or print
+one read-only native client check and prints schema/provider/status counts. It does not change settings or print
 credentials. `CCSBar --render-preview <fixture.json> <preview.png>` exports an
 isolated SwiftUI layout image from a sanitized dashboard fixture without
 capturing the desktop or making network requests.
@@ -296,10 +286,6 @@ A final remote sign-out clears the dashboard facts in Settings. Retained amounts
 with that window's original sample time, or "Sample time unavailable". Provenance uses the reported `host` (such as
 `nas1`) before falling back to `platform`. Known-expired Qwen packs remain listed but do not count as "with credit";
 positive credit without an expiry says "Expiry unavailable". Undated, unidentified all-zero Z.ai pack rows are hidden.
-
-Antigravity header controls and notches count every reported account, including hidden ones, while the rows stay
-filtered by tray visibility. A notch belongs only to the watched pool. Confirmation lifetimes use the response's
-HTTP Date and a monotonic deadline when available; responses without server time retain the older expiry check.
 
 `swift build` followed by `swift run ccs-bar-check` also launches the built `CCSBar --check-review-r2` for offline
 row, tooltip and view-model checks. These use sanitized data and temporary connection paths, without network access.

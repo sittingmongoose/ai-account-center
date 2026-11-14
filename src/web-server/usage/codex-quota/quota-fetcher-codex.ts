@@ -1,0 +1,799 @@
+/**
+ * Quota Fetcher for Codex (ChatGPT) Accounts
+ *
+ * Fetches quota information from ChatGPT backend API.
+ * Used for displaying rate limit windows and reset times.
+ */
+
+import type { CodexQuotaResult, CodexQuotaWindow, CodexCoreUsageSummary } from './quota-types';
+import {
+  codexResetTimestamp,
+  normalizeCodexExtraUsage,
+  normalizeCodexResetCreditDetails,
+} from './codex-extra-usage';
+import { sanitizeCodexFeatureLabel } from './quota-label-sanitizer';
+import { createLogger } from '../../../services/logging';
+import { DeadlineExceededError, withDeadline } from '../../../utils/settle-deadline';
+
+const logger = createLogger('usage:quota:codex');
+
+/** ChatGPT backend API base URL */
+const CODEX_API_BASE = 'https://chatgpt.com/backend-api';
+const CODEX_QUOTA_TIMEOUT_MS = 12000;
+/** Extra time for a cooperative abort to land before the attempt is settled anyway. */
+const CODEX_QUOTA_SETTLE_GRACE_MS = 1000;
+const CODEX_RESET_CREDITS_TIMEOUT_MS = 3000;
+const CODEX_QUOTA_MAX_ATTEMPTS = 2;
+const CODEX_ERROR_DETAIL_MAX_LENGTH = 240;
+
+/**
+ * User agent matching Codex CLI for API compatibility.
+ * Update when Codex CLI releases new versions to maintain compatibility.
+ */
+const USER_AGENT = 'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal';
+
+/** Raw API response structure */
+interface CodexUsageResponse {
+  plan_type?: string;
+  planType?: string;
+  rate_limit?: CodexRateLimitWindow;
+  rateLimit?: CodexRateLimitWindow;
+  code_review_rate_limit?: CodexRateLimitWindow | null;
+  codeReviewRateLimit?: CodexRateLimitWindow | null;
+  additional_rate_limits?: CodexAdditionalRateLimit[] | null;
+  additionalRateLimits?: CodexAdditionalRateLimit[] | null;
+  chatpass?: { windows?: CodexWindowData[] } | null;
+}
+
+/** Rate limit window from API */
+interface CodexRateLimitWindow {
+  primary_window?: CodexWindowData;
+  primaryWindow?: CodexWindowData;
+  secondary_window?: CodexWindowData;
+  secondaryWindow?: CodexWindowData;
+}
+
+/**
+ * Additional rate limit entry from API (introduced for features like GPT-5.3 Codex Spark).
+ * Each entry surfaces its own primary/secondary windows under a feature-specific limit name.
+ */
+interface CodexAdditionalRateLimit {
+  limit_name?: unknown;
+  limitName?: unknown;
+  metered_feature?: string;
+  meteredFeature?: string;
+  rate_limit?: CodexRateLimitWindow;
+  rateLimit?: CodexRateLimitWindow;
+}
+
+/** Individual window data */
+interface CodexWindowData {
+  used_percent?: number;
+  usedPercent?: number;
+  reset_after_seconds?: number | null;
+  resetAfterSeconds?: number | null;
+  limit_window_seconds?: number | null;
+  limitWindowSeconds?: number | null;
+  reset_at?: number | null;
+  resetAt?: number | null;
+}
+
+interface ParsedCodexErrorBody {
+  errorCode?: string;
+  errorDetail?: string;
+  message?: string;
+}
+
+type CodexWindowKind =
+  'usage-5h' | 'usage-weekly' | 'code-review-5h' | 'code-review-weekly' | 'code-review' | 'unknown';
+
+function getCodexWindowKind(label: string): CodexWindowKind {
+  const lower = (label || '').toLowerCase();
+  const isCodeReview = lower.includes('code review') || lower.includes('code_review');
+  const isPrimary = lower.includes('primary');
+  const isSecondary = lower.includes('secondary');
+
+  if (isCodeReview) {
+    if (isPrimary) return 'code-review-5h';
+    if (isSecondary) return 'code-review-weekly';
+    return 'code-review';
+  }
+
+  if (isPrimary) return 'usage-5h';
+  if (isSecondary) return 'usage-weekly';
+  return 'unknown';
+}
+
+function getUnknownCodexWindowLabels(windows: CodexQuotaWindow[]): string[] {
+  const unknownLabels = windows
+    .filter((window) => {
+      // Windows with explicit category metadata are always classified.
+      if (window.category) return false;
+      return getCodexWindowKind(window.label) === 'unknown';
+    })
+    .map((window) => window.label)
+    .filter((label): label is string => typeof label === 'string' && label.trim().length > 0);
+  return Array.from(new Set(unknownLabels));
+}
+
+function shouldLogCodexWindowWarnings(verbose: boolean): boolean {
+  if (verbose) return true;
+  const debugFlag = process.env['CCS_DEBUG'];
+  return debugFlag === '1' || debugFlag === 'true';
+}
+
+/**
+ * Build explicit 5h + weekly usage summary from raw Codex windows.
+ * Prefers explicit `category`/`cadence` metadata when present.
+ * Falls back to label sniffing for legacy cached windows.
+ */
+export function buildCodexCoreUsageSummary(windows: CodexQuotaWindow[]): CodexCoreUsageSummary {
+  if (!windows || windows.length === 0) {
+    return { fiveHour: null, weekly: null };
+  }
+
+  let fiveHourWindow: CodexQuotaWindow | null = null;
+  let weeklyWindow: CodexQuotaWindow | null = null;
+  const nonCodeReviewWindows: CodexQuotaWindow[] = [];
+
+  // Determine if any window carries category metadata. If so, prefer category-based
+  // selection so 'additional' windows (e.g. Spark) do not pollute the main usage summary.
+  const hasCategoryMetadata = windows.some((window) => Boolean(window.category));
+
+  if (hasCategoryMetadata) {
+    for (const window of windows) {
+      if (window.category === 'usage') {
+        if (window.cadence === '5h' && !fiveHourWindow) fiveHourWindow = window;
+        else if (window.cadence === 'weekly' && !weeklyWindow) weeklyWindow = window;
+        nonCodeReviewWindows.push(window);
+      }
+      // 'code-review' and 'additional' windows are intentionally excluded from the main
+      // usage summary — they represent feature-specific quotas, not core usage.
+    }
+  } else {
+    for (const window of windows) {
+      const kind = getCodexWindowKind(window.label);
+      if (kind === 'usage-5h') {
+        if (!fiveHourWindow) fiveHourWindow = window;
+        nonCodeReviewWindows.push(window);
+        continue;
+      }
+      if (kind === 'usage-weekly') {
+        if (!weeklyWindow) weeklyWindow = window;
+        nonCodeReviewWindows.push(window);
+        continue;
+      }
+      if (kind === 'unknown') {
+        nonCodeReviewWindows.push(window);
+      }
+    }
+  }
+
+  // A recognized cadence must never be reused for the other core window, and
+  // an explicit unsupported duration cannot be guessed from time until reset.
+  const fallbackWindows = nonCodeReviewWindows.filter(
+    (window) =>
+      window !== fiveHourWindow &&
+      window !== weeklyWindow &&
+      !window.cadence &&
+      window.limitWindowSeconds === undefined
+  );
+  if ((!fiveHourWindow || !weeklyWindow) && fallbackWindows.length > 0) {
+    const withReset = fallbackWindows
+      .filter(
+        (w) =>
+          typeof w.resetAfterSeconds === 'number' &&
+          isFinite(w.resetAfterSeconds) &&
+          w.resetAfterSeconds >= 0
+      )
+      .sort((a, b) => (a.resetAfterSeconds || 0) - (b.resetAfterSeconds || 0));
+
+    if (!fiveHourWindow) {
+      fiveHourWindow = withReset[0] || fallbackWindows[0] || null;
+    }
+
+    if (!weeklyWindow) {
+      weeklyWindow =
+        withReset.length > 1
+          ? withReset[withReset.length - 1]
+          : fallbackWindows.find((w) => w !== fiveHourWindow) || null;
+    }
+  }
+
+  const mapWindow = (window: CodexQuotaWindow | null): CodexCoreUsageSummary['fiveHour'] => {
+    if (!window) return null;
+    return {
+      label: window.label,
+      remainingPercent: window.remainingPercent,
+      resetAfterSeconds: window.resetAfterSeconds,
+      resetAt: window.resetAt,
+    };
+  };
+
+  return {
+    fiveHour: mapWindow(fiveHourWindow),
+    weekly: mapWindow(weeklyWindow),
+  };
+}
+
+/**
+ * Build CodexQuotaWindow array from API response
+ * Handles both snake_case and camelCase field names
+ */
+function buildCodexQuotaWindows(payload: CodexUsageResponse): CodexQuotaWindow[] {
+  const windows: CodexQuotaWindow[] = [];
+
+  // Get rate limit object (handles both cases)
+  const rateLimit = payload.rate_limit || payload.rateLimit;
+  const codeReviewRateLimit = payload.code_review_rate_limit || payload.codeReviewRateLimit;
+  const additionalRateLimits = payload.additional_rate_limits || payload.additionalRateLimits;
+
+  // Helper to extract window data
+  const addWindow = (
+    label: string,
+    windowData: CodexWindowData | undefined,
+    meta: {
+      category: NonNullable<CodexQuotaWindow['category']>;
+      cadence?: NonNullable<CodexQuotaWindow['cadence']>;
+      featureLabel?: string;
+    }
+  ): void => {
+    if (!windowData) return;
+
+    // Clamp usedPercent to [0, 100] range
+    const rawUsedPercent = windowData.used_percent ?? windowData.usedPercent;
+    if (typeof rawUsedPercent !== 'number' || !Number.isFinite(rawUsedPercent)) return;
+    const usedPercent = Math.max(0, Math.min(100, rawUsedPercent));
+    const resetAfterSeconds =
+      windowData.reset_after_seconds ?? windowData.resetAfterSeconds ?? null;
+    const rawWindowSeconds = windowData.limit_window_seconds ?? windowData.limitWindowSeconds;
+    const limitWindowSeconds =
+      typeof rawWindowSeconds === 'number' &&
+      Number.isFinite(rawWindowSeconds) &&
+      rawWindowSeconds > 0
+        ? rawWindowSeconds
+        : undefined;
+    // Position is a legacy fallback only. Pro accounts may expose their weekly
+    // window as primary, while other plans still have separate 5h/week windows.
+    const cadence =
+      limitWindowSeconds === undefined
+        ? meta.cadence
+        : limitWindowSeconds === 18_000
+          ? '5h'
+          : limitWindowSeconds === 604_800
+            ? 'weekly'
+            : undefined;
+
+    // Prefer the exact upstream reset over a timestamp derived from the fetch time.
+    let resetAt = codexResetTimestamp(windowData.reset_at ?? windowData.resetAt);
+    if (
+      resetAt === null &&
+      typeof resetAfterSeconds === 'number' &&
+      Number.isFinite(resetAfterSeconds) &&
+      resetAfterSeconds > 0 &&
+      Number.isFinite(new Date(Date.now() + resetAfterSeconds * 1000).getTime())
+    ) {
+      resetAt = new Date(Date.now() + resetAfterSeconds * 1000).toISOString();
+    }
+
+    const window: CodexQuotaWindow = {
+      label,
+      usedPercent,
+      remainingPercent: Math.max(0, 100 - usedPercent),
+      resetAfterSeconds,
+      resetAt,
+      category: meta.category,
+      ...(cadence ? { cadence } : {}),
+      ...(limitWindowSeconds !== undefined ? { limitWindowSeconds } : {}),
+    };
+    if (meta.featureLabel) {
+      window.featureLabel = meta.featureLabel;
+    }
+    windows.push(window);
+  };
+
+  // Add main rate limit windows
+  if (rateLimit) {
+    addWindow('Primary', rateLimit.primary_window || rateLimit.primaryWindow, {
+      category: 'usage',
+      cadence: '5h',
+    });
+    addWindow('Secondary', rateLimit.secondary_window || rateLimit.secondaryWindow, {
+      category: 'usage',
+      cadence: 'weekly',
+    });
+  }
+
+  // Add code review rate limit windows
+  if (codeReviewRateLimit) {
+    addWindow(
+      'Code Review (Primary)',
+      codeReviewRateLimit.primary_window || codeReviewRateLimit.primaryWindow,
+      { category: 'code-review', cadence: '5h', featureLabel: 'Code Review' }
+    );
+    addWindow(
+      'Code Review (Secondary)',
+      codeReviewRateLimit.secondary_window || codeReviewRateLimit.secondaryWindow,
+      { category: 'code-review', cadence: 'weekly', featureLabel: 'Code Review' }
+    );
+  }
+
+  // Add additional rate limit windows (e.g. GPT-5.3 Codex Spark)
+  if (Array.isArray(additionalRateLimits)) {
+    for (const entry of additionalRateLimits) {
+      if (!entry) continue;
+      const entryRateLimit = entry.rate_limit || entry.rateLimit;
+      if (!entryRateLimit) continue;
+
+      const featureLabel = sanitizeCodexFeatureLabel(entry.limit_name ?? entry.limitName);
+      addWindow(
+        `${featureLabel} (Primary)`,
+        entryRateLimit.primary_window || entryRateLimit.primaryWindow,
+        { category: 'additional', cadence: '5h', featureLabel }
+      );
+      addWindow(
+        `${featureLabel} (Secondary)`,
+        entryRateLimit.secondary_window || entryRateLimit.secondaryWindow,
+        { category: 'additional', cadence: 'weekly', featureLabel }
+      );
+    }
+  }
+
+  if (Array.isArray(payload.chatpass?.windows)) {
+    payload.chatpass.windows.slice(0, 32).forEach((window, index) => {
+      addWindow(`Chat pass (${index + 1})`, window, {
+        category: 'additional',
+        featureLabel: 'Chat pass',
+      });
+    });
+  }
+
+  return windows;
+}
+
+function buildCodexFailureResult(
+  accountId: string,
+  options: {
+    error: string;
+    httpStatus?: number;
+    errorCode?: string;
+    errorDetail?: string;
+    actionHint?: string;
+    retryable?: boolean;
+    needsReauth?: boolean;
+    isForbidden?: boolean;
+  }
+): CodexQuotaResult {
+  return {
+    success: false,
+    windows: [],
+    planType: null,
+    lastUpdated: Date.now(),
+    accountId,
+    error: options.error,
+    httpStatus: options.httpStatus,
+    errorCode: options.errorCode,
+    errorDetail: options.errorDetail,
+    actionHint: options.actionHint,
+    retryable: options.retryable,
+    needsReauth: options.needsReauth,
+    isForbidden: options.isForbidden,
+  };
+}
+
+function sanitizeCodexErrorDetail(bodyText: string): string | undefined {
+  const trimmed = bodyText.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (/^<!doctype html/i.test(trimmed) || /^<html/i.test(trimmed) || /^<[^>]+>/.test(trimmed)) {
+    return '[HTML error response omitted]';
+  }
+
+  let sanitized = trimmed
+    .replace(
+      /"(access[_-]?token|refresh[_-]?token|authorization|cookie|set-cookie|api[_-]?key|session[_-]?token|token)"\s*:\s*"[^"]*"/gi,
+      '"$1":"[redacted]"'
+    )
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, 'Bearer [redacted]')
+    .replace(/\s+/g, ' ');
+
+  if (sanitized.length > CODEX_ERROR_DETAIL_MAX_LENGTH) {
+    sanitized = `${sanitized.slice(0, CODEX_ERROR_DETAIL_MAX_LENGTH - 14)}...[truncated]`;
+  }
+
+  return sanitized;
+}
+
+function parseCodexErrorBody(bodyText: string): ParsedCodexErrorBody {
+  const trimmed = bodyText.trim();
+  if (!trimmed) {
+    return {};
+  }
+
+  const sanitizedDetail = sanitizeCodexErrorDetail(trimmed);
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+
+    const topLevelMessage =
+      typeof parsed.message === 'string'
+        ? parsed.message
+        : typeof parsed.detail === 'string'
+          ? parsed.detail
+          : undefined;
+    const topLevelCode = typeof parsed.code === 'string' ? parsed.code : undefined;
+
+    if (parsed.error && typeof parsed.error === 'object') {
+      const error = parsed.error as Record<string, unknown>;
+      const errorCode = typeof error.code === 'string' ? error.code : topLevelCode;
+      const errorMessage =
+        typeof error.message === 'string'
+          ? error.message
+          : typeof error.error === 'string'
+            ? error.error
+            : topLevelMessage;
+      return {
+        errorCode,
+        errorDetail: sanitizedDetail,
+        message: errorMessage,
+      };
+    }
+
+    if (parsed.detail && typeof parsed.detail === 'object') {
+      const detail = parsed.detail as Record<string, unknown>;
+      return {
+        errorCode:
+          typeof detail.code === 'string'
+            ? detail.code
+            : typeof detail.type === 'string'
+              ? detail.type
+              : topLevelCode,
+        errorDetail: sanitizedDetail,
+        message:
+          typeof detail.message === 'string'
+            ? detail.message
+            : typeof detail.error === 'string'
+              ? detail.error
+              : topLevelMessage,
+      };
+    }
+
+    return {
+      errorCode: topLevelCode,
+      errorDetail: sanitizedDetail,
+      message: topLevelMessage,
+    };
+  } catch {
+    return {
+      errorDetail: sanitizedDetail,
+      message: trimmed,
+    };
+  }
+}
+
+function buildCodexHttpFailureResult(
+  accountId: string,
+  status: number,
+  bodyText: string
+): CodexQuotaResult {
+  const parsed = parseCodexErrorBody(bodyText);
+
+  if (status === 401) {
+    return buildCodexFailureResult(accountId, {
+      error: 'Token expired or invalid',
+      httpStatus: 401,
+      errorCode: parsed.errorCode || 'reauth_required',
+      errorDetail: parsed.errorDetail,
+      actionHint: 'Sign in to this Codex account again.',
+      needsReauth: true,
+      retryable: false,
+    });
+  }
+
+  if (status === 402) {
+    if (parsed.errorCode === 'deactivated_workspace') {
+      return buildCodexFailureResult(accountId, {
+        error: 'Workspace deactivated (HTTP 402)',
+        httpStatus: 402,
+        errorCode: parsed.errorCode,
+        errorDetail: parsed.errorDetail,
+        actionHint:
+          'Remove and re-add this account from an active ChatGPT workspace before retrying.',
+        retryable: false,
+      });
+    }
+
+    return buildCodexFailureResult(accountId, {
+      error: parsed.message || 'Payment or workspace access required (HTTP 402)',
+      httpStatus: 402,
+      errorCode: parsed.errorCode || 'payment_required',
+      errorDetail: parsed.errorDetail,
+      actionHint: 'Confirm the ChatGPT workspace/subscription is active, then retry.',
+      retryable: false,
+    });
+  }
+
+  if (status === 403) {
+    return buildCodexFailureResult(accountId, {
+      error: 'Quota API access forbidden (HTTP 403)',
+      httpStatus: 403,
+      errorCode: parsed.errorCode || 'quota_api_forbidden',
+      errorDetail: parsed.errorDetail,
+      actionHint: 'This account cannot access the Codex quota endpoint.',
+      isForbidden: true,
+      retryable: false,
+    });
+  }
+
+  if (status === 404) {
+    return buildCodexFailureResult(accountId, {
+      error: 'Codex quota endpoint not found (HTTP 404)',
+      httpStatus: 404,
+      errorCode: parsed.errorCode || 'quota_endpoint_not_found',
+      errorDetail: parsed.errorDetail,
+      actionHint: 'The upstream Codex quota endpoint changed or is unavailable.',
+      retryable: false,
+    });
+  }
+
+  if (status === 429) {
+    return buildCodexFailureResult(accountId, {
+      error: 'Rate limited - try again later',
+      httpStatus: 429,
+      errorCode: parsed.errorCode || 'rate_limited',
+      errorDetail: parsed.errorDetail,
+      actionHint: 'Retry after a short delay.',
+      retryable: true,
+    });
+  }
+
+  if (status >= 500) {
+    return buildCodexFailureResult(accountId, {
+      error: `Codex quota service unavailable (HTTP ${status})`,
+      httpStatus: status,
+      errorCode: parsed.errorCode || 'provider_unavailable',
+      errorDetail: parsed.errorDetail,
+      actionHint: 'Retry later. This looks like a temporary upstream problem.',
+      retryable: true,
+    });
+  }
+
+  return buildCodexFailureResult(accountId, {
+    error: parsed.message || `Codex quota request failed (HTTP ${status})`,
+    httpStatus: status,
+    errorCode: parsed.errorCode || 'unknown_upstream_error',
+    errorDetail: parsed.errorDetail,
+    actionHint: 'Inspect the upstream response details and retry if appropriate.',
+    retryable: false,
+  });
+}
+
+/** Fetch quota with a saved native Codex login's access token. */
+export async function fetchCodexQuotaWithToken(
+  accessToken: string,
+  chatgptAccountId: string,
+  verbose = false
+): Promise<CodexQuotaResult> {
+  const accountId = chatgptAccountId.trim();
+  const token = accessToken.trim();
+  if (!token) {
+    return buildCodexFailureResult(accountId, {
+      error: 'Missing native Codex access token',
+      errorCode: 'missing_access_token',
+      actionHint: 'Authenticate this native Codex profile again.',
+      needsReauth: true,
+      retryable: false,
+    });
+  }
+  if (!accountId) {
+    return buildCodexFailureResult(accountId, {
+      error: 'Missing ChatGPT-Account-Id in native Codex credentials',
+      errorCode: 'missing_account_id',
+      actionHint: 'Authenticate this native Codex profile again to refresh workspace metadata.',
+      retryable: false,
+    });
+  }
+
+  return runCodexUsageFetch(token, accountId, accountId, verbose);
+}
+
+/**
+ * Optional banked-reset details. Settles within its own deadline, including
+ * the body read, and returns null on any failure: the usage response still
+ * carries the authoritative reset count.
+ */
+async function readCodexResetCreditDetails(
+  accessToken: string,
+  chatgptAccountId: string
+): Promise<NonNullable<CodexQuotaResult['resetCredits']>['credits'] | null> {
+  const controller = new AbortController();
+  const work = (async () => {
+    const response = await fetch(`${CODEX_API_BASE}/wham/rate-limit-reset-credits`, {
+      method: 'GET',
+      signal: controller.signal,
+      redirect: 'error',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'ChatGPT-Account-Id': chatgptAccountId,
+        'User-Agent': USER_AGENT,
+      },
+    });
+    if (!response.ok) {
+      // Release the connection instead of leaving an unread body on it.
+      await response.body?.cancel();
+      return null;
+    }
+    return normalizeCodexResetCreditDetails(await response.json());
+  })();
+  try {
+    return await withDeadline(
+      work,
+      CODEX_RESET_CREDITS_TIMEOUT_MS,
+      () => controller.abort(),
+      'Codex reset-credit request'
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Shared request and normalization for a saved native Codex login. */
+async function runCodexUsageFetch(
+  accessToken: string,
+  chatgptAccountId: string,
+  accountId: string,
+  verbose: boolean
+): Promise<CodexQuotaResult> {
+  const url = `${CODEX_API_BASE}/wham/usage`;
+  let lastErrorMsg = 'Unknown error';
+
+  for (let attempt = 1; attempt <= CODEX_QUOTA_MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CODEX_QUOTA_TIMEOUT_MS);
+    // The abort normally ends the attempt. This backstop settles it even when
+    // the abort is lost, so one request cannot hold a profile's refresh forever.
+    const settleBy = Date.now() + CODEX_QUOTA_TIMEOUT_MS + CODEX_QUOTA_SETTLE_GRACE_MS;
+    const settle = <T>(work: Promise<T>) =>
+      withDeadline(work, settleBy - Date.now(), () => controller.abort(), 'Codex quota request');
+
+    try {
+      const response = await settle(
+        fetch(url, {
+          method: 'GET',
+          signal: controller.signal,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'ChatGPT-Account-Id': chatgptAccountId,
+            'User-Agent': USER_AGENT,
+          },
+        })
+      );
+
+      if (verbose)
+        logger.info('quota.fetch.status', `Codex API status: ${response.status}`, {
+          provider: 'codex',
+          status: response.status,
+          attempt,
+        });
+
+      if (!response.ok) {
+        // The status is already known. An error body that never arrives must not turn a 429
+        // or 401 into a timeout, which would retry at once and lose its cooldown or re-login.
+        const bodyText = await settle(response.text()).catch(() => '');
+        return buildCodexHttpFailureResult(accountId, response.status, bodyText);
+      }
+
+      const data = (await settle(response.json())) as CodexUsageResponse;
+      const windows = buildCodexQuotaWindows(data);
+      const unknownWindowLabels = getUnknownCodexWindowLabels(windows);
+      if (unknownWindowLabels.length > 0 && shouldLogCodexWindowWarnings(verbose)) {
+        logger.warn(
+          'quota.fetch.unknown_window_labels',
+          'Codex quota detected unknown window labels; window classification may need an update for upstream API changes',
+          {
+            provider: 'codex',
+            labels: unknownWindowLabels,
+          }
+        );
+      }
+      const coreUsage = buildCodexCoreUsageSummary(windows);
+      const extras = normalizeCodexExtraUsage(data);
+      // Optional read-only metadata must never make ordinary quota collection fail.
+      if (extras.resetCredits && (extras.resetCredits.available ?? 0) > 0) {
+        const credits = await readCodexResetCreditDetails(accessToken, chatgptAccountId);
+        if (credits) extras.resetCredits.credits = credits;
+      }
+
+      // Extract plan type
+      const planTypeRaw = data.plan_type || data.planType;
+      let planType: 'free' | 'plus' | 'pro' | 'team' | null = null;
+      if (planTypeRaw) {
+        const normalized = planTypeRaw.toLowerCase();
+        if (normalized === 'free') planType = 'free';
+        else if (normalized === 'plus') planType = 'plus';
+        else if (normalized === 'pro') planType = 'pro';
+        else if (normalized === 'team') planType = 'team';
+      }
+
+      if (verbose)
+        logger.info('quota.fetch.windows', `Codex windows found: ${windows.length}`, {
+          provider: 'codex',
+          count: windows.length,
+        });
+
+      return {
+        success: true,
+        windows,
+        coreUsage,
+        ...extras,
+        planType,
+        lastUpdated: Date.now(),
+        accountId,
+      };
+    } catch (err) {
+      const isAbortError =
+        err instanceof DeadlineExceededError || (err instanceof Error && err.name === 'AbortError');
+      lastErrorMsg = isAbortError
+        ? 'Request timeout'
+        : err instanceof Error
+          ? err.message
+          : 'Unknown error';
+
+      if (verbose) {
+        logger.warn(
+          'quota.fetch.failed',
+          `Codex quota error (attempt ${attempt}): ${lastErrorMsg}`,
+          {
+            provider: 'codex',
+            attempt,
+            errorCode: isAbortError ? 'network_timeout' : 'network_error',
+            err:
+              err instanceof Error
+                ? { name: err.name, message: err.message }
+                : { message: String(err) },
+          }
+        );
+      }
+
+      // Retry timeout once; other failures return immediately.
+      if (isAbortError && attempt < CODEX_QUOTA_MAX_ATTEMPTS) {
+        continue;
+      }
+
+      return {
+        success: false,
+        windows: [],
+        planType: null,
+        lastUpdated: Date.now(),
+        error: lastErrorMsg,
+        accountId,
+        errorCode: isAbortError ? 'network_timeout' : 'network_error',
+        actionHint: isAbortError
+          ? 'Retry later. The Codex quota endpoint timed out.'
+          : 'Retry later or inspect network connectivity.',
+        retryable: true,
+      };
+    } finally {
+      // Fetch resolves at the headers. Keep the deadline armed while json()/text()
+      // consumes the body so a stalled stream cannot hold a profile's shared
+      // in-flight refresh forever and leave its old usage on the dashboard.
+      clearTimeout(timeoutId);
+    }
+  }
+
+  return {
+    success: false,
+    windows: [],
+    planType: null,
+    lastUpdated: Date.now(),
+    error: lastErrorMsg,
+    accountId,
+    errorCode: 'unknown_error',
+    retryable: true,
+  };
+}
+
+// Export for testing
+export { buildCodexQuotaWindows, getUnknownCodexWindowLabels };

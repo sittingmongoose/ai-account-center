@@ -14,7 +14,7 @@ import {
   prepareAppServerLog,
   readRolloutLifecycle,
 } from '../../../src/codex-auth/codex-activation-runtime';
-import type { CodexActivationStopPlan } from '../../../src/codex-auth/codex-activation-confirmation';
+import type { CodexActivationStopPlan } from '../../../src/codex-auth/codex-process-plan';
 
 const home = '/fixture/.codex';
 function processFixture(

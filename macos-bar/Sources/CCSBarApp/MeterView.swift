@@ -30,15 +30,13 @@ struct CountingPercent: View, Animatable {
   }
 }
 
-/// The 6 pt track with quarter ticks, the severity fill, an optional auto-switch notch and an
+/// The 6 pt track with quarter ticks, the severity fill and an
 /// overage end cap that grows into the meter's reserved gutter. Every horizontal measure derives from
 /// the track's actual laid-out width, so the meter stays accurate at any column width.
 struct MeterTrack: View {
   let key: String
   let shown: Double?
   let severity: MeterSeverity
-  var notch: Double? = nil
-  var notchOpacity: Double = 1
   var hovered = false
   var dashed = false
   @Environment(\.colorScheme) private var scheme
@@ -54,7 +52,7 @@ struct MeterTrack: View {
           Capsule().strokeBorder(palette.label4, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
         } else {
           Capsule().fill(hovered ? palette.trackHover : palette.track)
-          // Ticks and the notch sit on leading padding, not offset: offset is invisible to the
+          // Ticks sit on leading padding, not offset: offset is invisible to the
           // alignment probes, while the pixels are identical either way.
           ForEach([0.25, 0.5, 0.75], id: \.self) { mark in
             Rectangle().fill(palette.tick).frame(width: 1, height: 4)
@@ -73,13 +71,6 @@ struct MeterTrack: View {
               .offset(x: width - 3)
           }
         }
-        if let notch {
-          RoundedRectangle(cornerRadius: 1).fill(palette.label)
-            .frame(width: 2, height: 12)
-            .alignmentProbe("meter|\(key)|notch")
-            .opacity(notchOpacity)
-            .padding(.leading, width * min(100, max(0, notch)) / 100 - 1)
-        }
       }
       .alignmentProbe("meter|\(key)|track")
     }
@@ -96,14 +87,12 @@ struct MeterView: View {
   var sampledAt: String? = nil
   /// F6: the reset time when this window's reading was taken before its reset (or at an unknown time), from
   /// `DashboardAccount.pendingReset`. The parent works it out, so a timer tick that flips it redraws this meter. The
-  /// meter then shows no number, no fill and no notch, never 0%: "Reset at 10:15 AM · new reading pending".
+  /// meter then shows no number and no fill, never 0%: "Reset at 10:15 AM · new reading pending".
   var pendingReset: Date? = nil
   var labelText: String? = nil
   /// A second line under `labelText` (Details splits a pool label into pool name and period), so a
   /// long pool name never truncates.
   var labelSubtitle: String? = nil
-  var notch: Double? = nil
-  var notchOpacity: Double = 1
   var showAmount = false
   var unavailableText = "Unavailable"
   var unavailableHelp = "Unavailable: no reading was reported, which is not the same as zero."
@@ -122,8 +111,8 @@ struct MeterView: View {
       let severity = MeterSeverity.of(target)
       VStack(alignment: .leading, spacing: 0) {
         top(palette, severity)
-        MeterTrack(key: key, shown: target == nil ? nil : (shown ?? target), severity: severity, notch: target == nil ? nil : notch,
-          notchOpacity: notchOpacity, hovered: hovered, dashed: target == nil)
+        MeterTrack(key: key, shown: target == nil ? nil : (shown ?? target), severity: severity,
+          hovered: hovered, dashed: target == nil)
           .padding(.top, labelText == nil ? 6 : 5)
         if labelText != nil { foot(palette).padding(.top, 4) }
       }
@@ -224,7 +213,6 @@ struct MeterView: View {
       parts.append(unavailableHelp)
     }
     parts.append(window.resetAt == nil ? "No reset reported" : TrayFormat.longReset(window.resetAt))
-    if let notch { parts.append("Notch: auto-switch at \(TrayFormat.number(notch))% used") }
     return parts.joined(separator: " · ")
   }
 

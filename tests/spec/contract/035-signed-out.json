@@ -1,12 +1,13 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/app-updates/cancel",
+    "path": "/api/auth/devices/me/rotate",
     "role": "signed-out",
     "body": {}
   },
   "response": {
     "body": {
+      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

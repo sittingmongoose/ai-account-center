@@ -30,19 +30,17 @@ pub static DETAILS_ASKS: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 /// show their loading state, never zeros.
 #[derive(Clone, Copy)]
 pub struct DashCtx {
-    /// View model v2 (`set_dashboard`).
+    /// View model v3 (`set_dashboard`).
     pub dashboard: RwSignal<String>,
-    /// Accounts & Settings v3 (`set_accounts`).
+    /// Accounts & Settings v4 (`set_accounts`).
     pub accounts: RwSignal<String>,
     /// The change-password strength (`set_accounts_strength`).
     pub strength: RwSignal<String>,
     /// Details (`show_details`); empty while closed.
     pub details: RwSignal<String>,
-    /// The switch approval (`show_activation_confirmation`); empty while closed.
-    pub activation: RwSignal<String>,
     /// Update apps (`set_update_status`).
     pub update: RwSignal<String>,
-    /// A switch or a save runs (`set_busy`).
+    /// A save runs (`set_busy`).
     pub busy: RwSignal<bool>,
     /// `{"seconds": 60, "confirmed": true}` (`set_refresh_interval`).
     pub refresh_interval: RwSignal<String>,
@@ -64,7 +62,6 @@ impl DashCtx {
             accounts: RwSignal::new(String::new()),
             strength: RwSignal::new(String::new()),
             details: RwSignal::new(String::new()),
-            activation: RwSignal::new(String::new()),
             update: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
             refresh_interval: RwSignal::new(String::new()),
@@ -90,9 +87,6 @@ impl DashCtx {
             "details" => {
                 let _ = self.details.try_set(json);
             }
-            "activation" => {
-                let _ = self.activation.try_set(json);
-            }
             "update" => {
                 let _ = self.update.try_set(json);
             }
@@ -116,7 +110,6 @@ impl DashCtx {
             self.accounts,
             self.strength,
             self.details,
-            self.activation,
             self.update,
             self.refresh_interval,
             self.chrome,

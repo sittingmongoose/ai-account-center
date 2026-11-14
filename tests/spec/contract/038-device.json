@@ -1,33 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/check",
-    "role": "device"
+    "method": "POST",
+    "path": "/api/auth/devices/pair",
+    "role": "device",
+    "body": {}
   },
   "response": {
     "body": {
-      "accessMode": "login",
-      "authConfigured": true,
-      "authEnabled": true,
-      "authenticated": false,
-      "authRequired": true,
-      "connection": {
-        "peer": "127.0.0.1",
-        "trusted": false
-      },
-      "isLocalAccess": true,
-      "secureOrigin": null,
-      "secureTransport": true,
-      "setupCodeRequired": false,
-      "signedOutReason": null,
-      "trustedLocalNetwork": false,
-      "username": null
+      "code": "invalid_body",
+      "error": "The request body is not valid for this action."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 200
+    "status": 400
   }
 }

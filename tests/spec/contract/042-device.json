@@ -1,23 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/devices/me",
-    "role": "device"
+    "method": "POST",
+    "path": "/api/auth/logout",
+    "role": "device",
+    "body": {}
   },
   "response": {
     "body": {
-      "id": "<device-id>",
-      "idleExpiresAt": "<timestamp>",
-      "name": "Fixture device",
-      "pairedAt": "<timestamp>",
-      "platform": "mac",
-      "rotateAfter": "<timestamp>"
+      "code": "device_scope",
+      "error": "This action needs a signed-in dashboard session."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 200
+    "status": 403
   }
 }

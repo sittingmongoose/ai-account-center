@@ -1,12 +1,11 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/status/files/fixture/missing.txt",
+    "path": "/api/usage/history",
     "role": "signed-out"
   },
   "response": {
     "body": {
-      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

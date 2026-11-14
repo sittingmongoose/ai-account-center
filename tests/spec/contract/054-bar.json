@@ -1,20 +1,18 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/sessions/revoke-others",
-    "role": "bar",
-    "body": {}
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles/usage",
+    "role": "bar"
   },
   "response": {
     "body": {
-      "signedOutBrowsers": 1
+      "error": "Select a valid Claude desktop platform."
     },
     "headers": {
-      "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

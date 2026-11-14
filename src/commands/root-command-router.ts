@@ -40,7 +40,7 @@ export const ROOT_COMMAND_ROUTES: readonly NamedCommandRoute[] = [
         printCodexAuthHelp();
         return;
       }
-      if (['use', 'switch'].includes(args[0])) {
+      if (['use', 'switch', 'activate'].includes(args[0])) {
         const { printRetiredCodexAuthCommand } = await import('../codex-auth/codex-auth-help');
         printRetiredCodexAuthCommand(args[0]);
         process.exitCode = 1;
@@ -52,16 +52,7 @@ export const ROOT_COMMAND_ROUTES: readonly NamedCommandRoute[] = [
         return;
       }
       if (
-        ![
-          'create',
-          'login',
-          'activate',
-          'show',
-          'list',
-          'status',
-          'remove',
-          'import-default',
-        ].includes(args[0])
+        !['create', 'login', 'show', 'list', 'status', 'remove', 'import-default'].includes(args[0])
       ) {
         showRetiredCommandMessage(`codex-auth ${args[0]}`);
         return;
@@ -152,16 +143,9 @@ export async function requiresRuntimeServices(args: string[]): Promise<boolean> 
   }
   if (command === 'codex-auth') {
     return (
-      [
-        'create',
-        'login',
-        'activate',
-        'show',
-        'list',
-        'status',
-        'remove',
-        'import-default',
-      ].includes(subcommand) && !rest.some((arg) => ['--help', '-h'].includes(arg))
+      ['create', 'login', 'show', 'list', 'status', 'remove', 'import-default'].includes(
+        subcommand
+      ) && !rest.some((arg) => ['--help', '-h'].includes(arg))
     );
   }
   if (command === 'antigravity') {

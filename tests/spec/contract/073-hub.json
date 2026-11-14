@@ -1,19 +1,21 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/status/deliverable",
+    "path": "/v0/management/auth-files",
     "role": "hub"
   },
   "response": {
     "body": {
-      "code": "invalid_token",
-      "error": "The device token is not valid."
+      "code": "rate_limited",
+      "error": "Too many wrong usage hub keys. Try again later.",
+      "retryAfterSeconds": 900
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
-      "etag": "<etag>"
+      "etag": "<etag>",
+      "retry-after": "900"
     },
-    "status": 401
+    "status": 429
   }
 }

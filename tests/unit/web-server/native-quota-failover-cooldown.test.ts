@@ -12,7 +12,7 @@ import {
   holdIdentityUsageCooldown,
   readIdentityUsageCooldown,
 } from '../../../src/web-server/services/usage-failover-cooldown';
-import type { CodexQuotaResult } from '../../../src/cliproxy/quota/quota-types';
+import type { CodexQuotaResult } from '../../../src/web-server/usage/codex-quota/quota-types';
 
 function auth(workspace = 'fixture-workspace', token = 'fixture-private-token') {
   const payload = {

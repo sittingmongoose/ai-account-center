@@ -1,21 +1,24 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/auth/setup",
+    "path": "/api/claude/history-snapshots/cleanup",
     "role": "bar",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "already_configured",
-      "error": "Dashboard sign-in is already set up."
+      "deleted": 0,
+      "failed": 0,
+      "kept": 0,
+      "profiles": 0,
+      "skipped": 0,
+      "targets": 0
     },
     "headers": {
-      "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 409
+    "status": 200
   }
 }

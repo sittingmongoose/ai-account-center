@@ -1,11 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dashboardViewModel, detailsViewModel } from '../public/view-model.mjs';
-import {
-  antigravityColumns,
-  antigravityMissingWindow,
-  antigravityView,
-} from '../public/antigravity-data.mjs';
+import { antigravityColumns, antigravityMissingWindow } from '../public/antigravity-data.mjs';
 
 const now = Date.parse('2026-11-02T00:00:00Z');
 const window = (key, usedPercent = 25) => ({
@@ -215,52 +211,3 @@ test('details carry optional plan summary, models, overage hint and family note 
   );
 });
 
-test('plan metadata leaves the two provider membership pools intact', () => {
-  const rows = ['a', 'b'].map((id) =>
-    account(
-      id,
-      { class: 'pro', quotaPolicy: 'five-hour-weekly' },
-      ['gemini', '3p'].flatMap((pool) =>
-        ['5h', 'weekly'].map((period) => ({
-          ...window(`${pool}-${period}`),
-          poolId: `${pool}:reported`,
-          poolIdSource: 'provider-bucket-membership',
-          poolLabel: pool === 'gemini' ? 'Gemini models' : 'Claude and GPT models',
-        }))
-      )
-    )
-  );
-  const inventory = {
-    schemaVersion: 1,
-    hostId: 'ubuntu',
-    activationSupported: true,
-    profiles: rows.map((row, index) => ({
-      id: index ? 'b' : 'a',
-      email: row.email,
-      hostId: 'ubuntu',
-      available: true,
-      selected: index === 0,
-      runtimeVerified: true,
-      verifiedAt: row.sampledAt,
-    })),
-  };
-  const status = {
-    enabled: false,
-    thresholdUsedPercent: 95,
-    pollIntervalSeconds: 60,
-    maxQuotaAgeSeconds: 300,
-    cooldownSeconds: 300,
-    selectedHostIds: ['ubuntu'],
-    requestedPoolId: null,
-    outcome: 'setup_required',
-    activationInProgress: false,
-  };
-  assert.deepEqual(antigravityView(data(rows), inventory, status, now).antigravitySharedPoolIds, [
-    '3p:reported',
-    'gemini:reported',
-  ]);
-  assert.deepEqual(
-    rows.map((row) => new Set(row.windows.map((window) => window.poolId)).size),
-    [2, 2]
-  );
-});

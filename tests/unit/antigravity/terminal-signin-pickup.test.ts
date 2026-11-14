@@ -8,7 +8,6 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { AntigravityAccountLifecycle } from '../../../src/antigravity/account-lifecycle';
-import { defaultAntigravityAutoSwitchState } from '../../../src/antigravity/auto-switch/settings';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
 import {
   createAntigravityRuntime,
@@ -91,7 +90,6 @@ describe('terminal sign-in pickup', () => {
     );
     const revisionBefore = registry.readCredential('party', 'ubuntu').credentialRevision;
 
-    let storedState = defaultAntigravityAutoSwitchState();
     const runtime = createAntigravityRuntime({
       registry,
       driver: {
@@ -126,24 +124,8 @@ describe('terminal sign-in pickup', () => {
           throw new Error('unused');
         },
       },
-      store: {
-        read: () => structuredClone(storedState),
-        write: (value) => {
-          storedState = structuredClone(value);
-        },
-      },
       now: () => NOW,
-      setTimer: (callback, ms) => setTimeout(callback, ms),
-      clearTimer: (timer) => clearTimeout(timer as never),
       collectQuota: async (request) => quotaSnapshot(request),
-      observeHost: async () => ({
-        hostId: 'ubuntu',
-        available: true,
-        complete: true,
-        busy: false,
-        manualActivationInProgress: false,
-        sampledAt: new Date(NOW).toISOString(),
-      }),
     });
     try {
       expect((await runtime.getAccounts({ refresh: true }))[0].status).toBe('ok');
@@ -219,7 +201,7 @@ describe('terminal sign-in pickup', () => {
       expect(cached[0].status).toBe('ok');
       expect(cached[0].email).toBe('party@example.com');
     } finally {
-      runtime.stop();
+      // The runtime holds no timers to stop.
     }
   });
 });

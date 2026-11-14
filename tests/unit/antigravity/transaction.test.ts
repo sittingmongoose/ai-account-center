@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  AntigravityConfirmationStore,
   AntigravityProfileRegistry,
   AntigravitySwitchService,
   credentialFingerprint,
@@ -52,24 +51,6 @@ function fixtureIdentity(
     plan: 'fixture-plan',
     verifiedAt: new Date(NOW).toISOString(),
     source,
-  };
-}
-
-function runningPlan(birth = 'fixture-birth-1', checkpoint = 'b'.repeat(64)): ProcessPlan {
-  return {
-    complete: true,
-    continuity: { fingerprint: checkpoint, restorable: true },
-    processes: [
-      {
-        role: 'cli',
-        identity: {
-          pid: 41001,
-          startTime: birth,
-          ownerId: 'fixture-owner',
-          fingerprint: 'a'.repeat(64),
-        },
-      },
-    ],
   };
 }
 
@@ -202,70 +183,6 @@ async function setup(): Promise<{
   return { directory, registry, driver, service };
 }
 
-test('idle manual switch proves running identity, preserves current backup and exposes only safe fields', async () => {
-  const { registry, driver, service } = await setup();
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('active');
-  expect(response.email).toBe('second@example.com');
-  expect(driver.events).not.toContain('stop');
-  expect(driver.events).toContain('runtime-proof');
-  expect(
-    registry
-      .readCredential('first', 'ubuntu')
-      .credential.bytes.equals(credential('first@example.com').bytes)
-  ).toBe(true);
-  expect(service.listProfiles().find((profile) => profile.id === 'second')?.hosts[0].active).toBe(
-    true
-  );
-  expect(JSON.stringify(response)).not.toContain('fixture-only-secret');
-});
-
-test('idle manual switch completes when no broker session exists to prove from', async () => {
-  const { registry, driver, service } = await setup();
-  driver.proveUnavailable = true;
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('active');
-  expect(response.email).toBe('second@example.com');
-  expect(registry.hasRecovery()).toBe(false);
-  expect(service.listProfiles().find((profile) => profile.id === 'second')?.hosts[0].active).toBe(
-    true
-  );
-  expect(JSON.stringify(response)).not.toContain('fixture-only-secret');
-});
-
-test('idle manual switch rolls back when no broker session exists and install is wrong', async () => {
-  const { registry, driver, service } = await setup();
-  driver.proveUnavailable = true;
-  driver.wrongStoredIdentity = true;
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('failed-rolled-back');
-  expect(registry.hasRecovery()).toBe(false);
-  expect(fixtureIdentity(driver.current).email).toBe('first@example.com');
-});
-
-test('already-active account verifies without a broker session', async () => {
-  const { driver, service } = await setup();
-  driver.proveUnavailable = true;
-  const response = await service.activate({
-    profileId: 'first',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('already-active');
-});
-
 async function stuckSwitch(live: NativeCredential) {
   const result = await setup();
   result.driver.current = live;
@@ -307,9 +224,7 @@ test('recover aborts the stuck switch when the live login is the previous accoun
   expect(response.profileId).toBe('first');
   expect(registry.hasRecovery()).toBe(false);
   // Abort clears only the stuck transaction; the active record is untouched.
-  expect(
-    service.listProfiles().every((profile) => profile.hosts[0].active === false)
-  ).toBe(true);
+  expect(service.listProfiles().every((profile) => profile.hosts[0].active === false)).toBe(true);
   expect(savedRevisions(registry)).toBe(before);
 });
 
@@ -321,9 +236,7 @@ test('recover restores the previous saved revision when the live login is unknow
   expect(response.profileId).toBe('first');
   expect(registry.hasRecovery()).toBe(false);
   expect(
-    driver.current.bytes.equals(
-      registry.readCredential('first', 'ubuntu').credential.bytes
-    )
+    driver.current.bytes.equals(registry.readCredential('first', 'ubuntu').credential.bytes)
   ).toBe(true);
   expect(savedRevisions(registry)).toBe(before);
 });
@@ -359,380 +272,6 @@ test('recover is a no-op when no switch is stuck', async () => {
   expect(driver.events).toEqual([]);
 });
 
-test('broker completion runs only when a session was stopped and restarted', async () => {
-  const idle = await setup();
-  expect(
-    (
-      await idle.service.activate({ profileId: 'second', hostId: 'ubuntu', mode: 'manual' })
-    ).status
-  ).toBe('active');
-  expect(idle.driver.events.some((event) => event.startsWith('complete:'))).toBe(false);
-  const stopped = await setup();
-  stopped.driver.plan = runningPlan();
-  const review = await stopped.service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(
-    (
-      await stopped.service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'manual',
-        confirmationToken: review.confirmation!.token,
-      })
-    ).status
-  ).toBe('active');
-  expect(stopped.driver.events).toContain('complete:second@example.com');
-});
-
-test('running manual switch first requires review without stopping or writing', async () => {
-  const { directory, driver, service } = await setup();
-  driver.plan = runningPlan();
-  const before = fs.readdirSync(path.join(directory, '.ccs', 'antigravity-profiles'));
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('confirmation-required');
-  expect(response.confirmation?.processes).toEqual([
-    { pid: 41001, role: 'cli', label: 'Antigravity CLI' },
-  ]);
-  expect(driver.events).not.toContain('install');
-  expect(driver.events).not.toContain('stop');
-  expect(fs.readdirSync(path.join(directory, '.ccs', 'antigravity-profiles'))).toEqual(before);
-  expect(JSON.stringify(response)).not.toMatch(
-    /startTime|ownerId|fingerprint|fixture-only-secret|restartState/
-  );
-});
-
-test('confirmed switch checkpoints and resumes exact session; native shutdown refresh is backed up', async () => {
-  const { registry, driver, service } = await setup();
-  driver.plan = runningPlan();
-  driver.afterStopCredential = credential('first@example.com', 'shutdown-refresh');
-  const review = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-    confirmationToken: review.confirmation!.token,
-  });
-  expect(response.status).toBe('active');
-  expect(driver.events.indexOf('stop')).toBeLessThan(driver.events.indexOf('install'));
-  expect(driver.events.indexOf('install')).toBeLessThan(driver.events.indexOf('restart'));
-  expect(
-    registry
-      .readCredential('first', 'ubuntu')
-      .credential.bytes.equals(driver.afterStopCredential.bytes)
-  ).toBe(true);
-});
-
-test.each(['pid-birth', 'checkpoint', 'new-writer'] as const)(
-  'confirmation rejects changed %s and is consumed once',
-  async (change) => {
-    const { driver, service } = await setup();
-    driver.plan = runningPlan();
-    const review = await service.activate({
-      profileId: 'second',
-      hostId: 'ubuntu',
-      mode: 'manual',
-    });
-    if (change === 'pid-birth') driver.plan = runningPlan('fixture-birth-2');
-    if (change === 'checkpoint') driver.plan = runningPlan('fixture-birth-1', 'c'.repeat(64));
-    if (change === 'new-writer') driver.plan = idlePlan();
-    const request = {
-      profileId: 'second',
-      hostId: 'ubuntu' as const,
-      mode: 'manual' as const,
-      confirmationToken: review.confirmation!.token,
-    };
-    expect((await service.activate(request)).status).toBe('stale-confirmation');
-    driver.plan = runningPlan();
-    expect((await service.activate(request)).status).toBe('stale-confirmation');
-    expect(driver.events).not.toContain('stop');
-    expect(driver.events).not.toContain('install');
-  }
-);
-
-test('native/runtime identity verification must be supported before any action', async () => {
-  const { driver, service } = await setup();
-  driver.canProbe = false;
-  driver.plan = runningPlan();
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'manual',
-      })
-    ).status
-  ).toBe('unsupported-runtime-probe');
-  expect(driver.events).not.toContain('stop');
-  expect(driver.events).not.toContain('install');
-});
-
-test('nonrestorable exact session or unknown writers cannot receive a stop confirmation', async () => {
-  const { driver, service } = await setup();
-  driver.plan = {
-    ...runningPlan(),
-    continuity: { fingerprint: 'c'.repeat(64), restorable: false },
-  };
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'manual',
-      })
-    ).status
-  ).toBe('busy');
-  driver.plan = { ...idlePlan(), complete: false };
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'manual',
-      })
-    ).reason
-  ).toBe('unreviewed-processes');
-});
-
-test('automatic switching never stops a running process or consumes manual permission', async () => {
-  const { driver, service } = await setup();
-  driver.plan = runningPlan();
-  let callbacks = 0;
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'automatic',
-    expectedActiveIdentityKey: identityKey(fixtureIdentity(driver.current)),
-    revalidateAutomatic: async () => {
-      callbacks++;
-      return true;
-    },
-  });
-  expect(response.status).toBe('busy');
-  expect(callbacks).toBe(0);
-  expect(driver.events).not.toContain('stop');
-  expect(driver.events).not.toContain('install');
-});
-
-test('automatic activation rejects missing or stale decision identity and callback', async () => {
-  const { driver, service } = await setup();
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'automatic',
-      })
-    ).status
-  ).toBe('deferred');
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'automatic',
-        expectedActiveIdentityKey: 'wrong',
-        revalidateAutomatic: async () => true,
-      })
-    ).reason
-  ).toBe('active-identity-changed');
-  expect(driver.events).not.toContain('install');
-});
-
-test('automatic policy is revalidated immediately before install and late disable cancels without an active claim', async () => {
-  const { registry, driver, service } = await setup();
-  let checks = 0;
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'automatic',
-    expectedActiveIdentityKey: identityKey(fixtureIdentity(driver.current)),
-    revalidateAutomatic: async () => ++checks < 3,
-  });
-  expect(response.status).toBe('deferred');
-  expect(checks).toBe(3);
-  expect(driver.events).not.toContain('install');
-  expect(registry.hasRecovery()).toBe(false);
-  expect(service.listProfiles().some((profile) => profile.hosts[0].active)).toBe(false);
-});
-
-test('automatic idle switch rechecks settings under lock and does not terminate anything', async () => {
-  const { driver, service } = await setup();
-  let checks = 0;
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'automatic',
-    expectedActiveIdentityKey: identityKey(fixtureIdentity(driver.current)),
-    revalidateAutomatic: async () => {
-      checks++;
-      driver.events.push('policy');
-      return true;
-    },
-  });
-  expect(response.status).toBe('active');
-  expect(checks).toBe(3);
-  expect(driver.events[driver.events.indexOf('install') - 1]).toBe('policy');
-  expect(driver.events).not.toContain('stop');
-});
-
-test('a new writer after review invalidates confirmation before stopping or writing', async () => {
-  const { driver, service } = await setup();
-  driver.plan = runningPlan();
-  const review = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  driver.inspectHook = (count) => (count === 2 ? runningPlan() : runningPlan('new-birth'));
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-    confirmationToken: review.confirmation!.token,
-  });
-  expect(response.status).toBe('stale-confirmation');
-  expect(driver.events).not.toContain('stop');
-});
-
-test('wrong stored identity rolls back exact credential and never claims the target active', async () => {
-  const { registry, driver, service } = await setup();
-  driver.wrongStoredIdentity = true;
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('failed-rolled-back');
-  expect(fixtureIdentity(driver.current).email).toBe('first@example.com');
-  expect(registry.hasRecovery()).toBe(false);
-  expect(service.listProfiles().find((profile) => profile.id === 'second')?.hosts[0].active).toBe(
-    false
-  );
-});
-
-test('a keyring/file identity alone cannot satisfy runtime proof', async () => {
-  const { registry, driver, service } = await setup();
-  driver.runtimeSource = 'provider-userinfo';
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('recovery-required');
-  expect(registry.hasRecovery()).toBe(true);
-});
-
-test('failed exact session restoration is recovery-required even if credential rollback succeeds', async () => {
-  const { driver, service } = await setup();
-  driver.plan = runningPlan();
-  const review = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  driver.restoreSession = false;
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'manual',
-        confirmationToken: review.confirmation!.token,
-      })
-    ).status
-  ).toBe('recovery-required');
-});
-
-test('foreign credential replacement is preserved and blocks subsequent switches', async () => {
-  const { registry, driver, service } = await setup();
-  driver.wrongRuntimeIdentity = true;
-  driver.rollbackAllowed = false;
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('recovery-required');
-  expect(response.reason).toBe('foreign-replacement');
-  expect(fixtureIdentity(driver.current).email).toBe('second@example.com');
-  expect(registry.hasRecovery()).toBe(true);
-  const before = driver.events.length;
-  expect(
-    (
-      await service.activate({
-        profileId: 'first',
-        hostId: 'ubuntu',
-        mode: 'manual',
-      })
-    ).status
-  ).toBe('recovery-required');
-  expect(driver.events.length).toBe(before);
-});
-
-test('a native install throwing after write does not invent a rollback receipt or report success', async () => {
-  const { registry, driver, service } = await setup();
-  driver.installThrowsAfterWrite = true;
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'manual',
-      })
-    ).status
-  ).toBe('recovery-required');
-  expect(driver.events).not.toContain('rollback');
-  expect(registry.hasRecovery()).toBe(true);
-});
-
-test('unknown partial stop is recovery-required; private driver errors do not escape', async () => {
-  const { registry, driver, service } = await setup();
-  driver.plan = runningPlan();
-  const review = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  driver.stopThrows = true;
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-    confirmationToken: review.confirmation!.token,
-  });
-  expect(response.status).toBe('recovery-required');
-  expect(JSON.stringify(response)).not.toContain('SECRET');
-  expect(driver.events).not.toContain('install');
-  expect(registry.hasRecovery()).toBe(true);
-});
-
-test('same selected account requires runtime proof but never installs stale saved credentials', async () => {
-  const { driver, service } = await setup();
-  driver.current = credential('first@example.com', 'fresh-live');
-  expect(
-    (
-      await service.activate({
-        profileId: 'first',
-        hostId: 'ubuntu',
-        mode: 'manual',
-      })
-    ).status
-  ).toBe('already-active');
-  expect(driver.events).not.toContain('install');
-  expect(fixtureIdentity(driver.current).email).toBe('first@example.com');
-});
-
 test('inventory distinguishes selected native credential from unproven running account', async () => {
   const { service } = await setup();
   const first = (await service.readInventory()).find((profile) => profile.id === 'first')!;
@@ -741,36 +280,13 @@ test('inventory distinguishes selected native credential from unproven running a
   expect(first.hosts[0].verification).toBe('stored-only');
 });
 
-test('host scope is strictly Ubuntu; caller-supplied unsupported host performs no driver action', async () => {
-  const { driver, service } = await setup();
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'macos' as 'ubuntu',
-        mode: 'manual',
-      })
-    ).status
-  ).toBe('invalid-profile');
-  expect(driver.events).toEqual([]);
-});
-
 test('cross-process lock excludes another registry instance and is never silently broken', async () => {
-  const { directory, registry, service } = await setup();
+  const { directory, registry } = await setup();
   const other = new AntigravityProfileRegistry(path.join(directory, '.ccs'));
   await registry.withLock(async () => {
     await expect(other.withLock(async () => undefined)).rejects.toMatchObject({
       code: 'busy',
     });
-    expect(
-      (
-        await service.activate({
-          profileId: 'second',
-          hostId: 'ubuntu',
-          mode: 'manual',
-        })
-      ).reason
-    ).toBe('activation-running');
   });
 });
 
@@ -825,80 +341,10 @@ test('corrupt newest registry is not treated as empty and no auth/account files 
     mode: 0o600,
   });
   const before = fs.readdirSync(registryDirectory);
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'manual',
-      })
-    ).status
-  ).toBe('invalid-profile');
+  await expect(
+    service.importNativeProfile('third', credential('third@example.com'))
+  ).rejects.toThrow();
   expect(fs.readdirSync(registryDirectory)).toEqual(before);
-});
-
-test('confirmation expiry and wrong target credential are one-shot and never authorize a later retry', async () => {
-  const store = new AntigravityConfirmationStore();
-  const binding = {
-    profileId: 'second',
-    currentIdentityKey: 'first',
-    targetIdentityKey: 'second',
-    credentialFingerprint: 'd'.repeat(64),
-    planFingerprint: 'e'.repeat(64),
-  };
-  const expired = store.issue(binding, 'second@example.com', runningPlan(), NOW);
-  expect(store.consume(expired.token, binding, NOW + 60_000)).toBe(false);
-  expect(store.consume(expired.token, binding, NOW + 1000)).toBe(false);
-  const changed = store.issue(binding, 'second@example.com', runningPlan(), NOW);
-  expect(
-    store.consume(changed.token, { ...binding, credentialFingerprint: 'f'.repeat(64) }, NOW)
-  ).toBe(false);
-  expect(store.consume(changed.token, binding, NOW)).toBe(false);
-});
-
-test('target credential refreshed after review requires fresh process approval', async () => {
-  const { driver, service } = await setup();
-  driver.plan = runningPlan();
-  const review = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  await service.importNativeProfile('second', credential('second@example.com', 'refreshed-target'));
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'manual',
-        confirmationToken: review.confirmation!.token,
-      })
-    ).status
-  ).toBe('stale-confirmation');
-  expect(driver.events).not.toContain('stop');
-  expect(driver.events).not.toContain('install');
-});
-
-test('unverified or stale provider identity never writes metadata or touches a program', async () => {
-  const { directory, driver, service } = await setup();
-  const registryDirectory = path.join(directory, '.ccs', 'antigravity-profiles');
-  const before = fs.readdirSync(registryDirectory);
-  driver.validateCredential = async (value) => ({
-    ...fixtureIdentity(value),
-    verifiedAt: new Date(NOW - 600_000).toISOString(),
-  });
-  expect(
-    (
-      await service.activate({
-        profileId: 'second',
-        hostId: 'ubuntu',
-        mode: 'manual',
-      })
-    ).status
-  ).toBe('invalid-profile');
-  expect(fs.readdirSync(registryDirectory)).toEqual(before);
-  expect(driver.events).not.toContain('stop');
-  expect(driver.events).not.toContain('install');
 });
 
 test('foreign replacement of the lock directory is preserved during release', async () => {
@@ -927,105 +373,4 @@ test('replacement of the immutable credential directory is not adopted as owned 
   fs.mkdirSync(instances, { mode: 0o700 });
   expect(() => registry.readCredential('first', 'ubuntu')).toThrow();
   expect(fs.readdirSync(instances)).toEqual([]);
-});
-
-test('partial reviewed stop cannot proceed to install or return active', async () => {
-  const { driver, service } = await setup();
-  driver.plan = runningPlan();
-  const review = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  driver.partialStop = true;
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-    confirmationToken: review.confirmation!.token,
-  });
-  expect(response.status).toBe('failed-rolled-back');
-  expect(driver.events).not.toContain('install');
-});
-
-test('a broker that cannot honour the stop is never offered as stop-and-switch', async () => {
-  const { directory, driver, service } = await setup();
-  driver.plan = runningPlan();
-  const approvals: Array<{
-    plan: ProcessPlan;
-    expected: VerifiedIdentity;
-    fingerprint: string;
-  }> = [];
-  driver.approveOwnedIdlePlan = async (plan, expected, fingerprint) => {
-    approvals.push({ plan, expected, fingerprint });
-    return false;
-  };
-  const registryDirectory = path.join(directory, '.ccs', 'antigravity-profiles');
-  const before = fs.readdirSync(registryDirectory);
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('busy');
-  expect(response.reason).toBe('running-processes');
-  expect(response.confirmation).toBeUndefined();
-  expect(approvals.length).toBe(1);
-  expect(approvals[0].plan).toEqual(runningPlan());
-  expect(approvals[0].expected.email).toBe('first@example.com');
-  expect(approvals[0].fingerprint).toBe(credentialFingerprint(driver.current));
-  expect(driver.events).not.toContain('stop');
-  expect(driver.events).not.toContain('install');
-  expect(fs.readdirSync(registryDirectory)).toEqual(before);
-});
-
-test('a broker approval probe that fails answers busy, never invalid-profile', async () => {
-  const { directory, driver, service } = await setup();
-  driver.plan = runningPlan();
-  driver.approveOwnedIdlePlan = async () => {
-    throw new Error('runtime-proof-unavailable');
-  };
-  const registryDirectory = path.join(directory, '.ccs', 'antigravity-profiles');
-  const before = fs.readdirSync(registryDirectory);
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(response.status).toBe('busy');
-  expect(response.reason).toBe('running-processes');
-  expect(response.confirmation).toBeUndefined();
-  expect(driver.events).not.toContain('stop');
-  expect(driver.events).not.toContain('install');
-  expect(fs.readdirSync(registryDirectory)).toEqual(before);
-});
-
-test('a broker that can honour the stop still offers review and completes the confirmed switch', async () => {
-  const { driver, service } = await setup();
-  driver.plan = runningPlan();
-  let approvals = 0;
-  driver.approveOwnedIdlePlan = async () => {
-    approvals++;
-    return true;
-  };
-  const review = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-  });
-  expect(review.status).toBe('confirmation-required');
-  expect(review.confirmation?.processes).toEqual([
-    { pid: 41001, role: 'cli', label: 'Antigravity CLI' },
-  ]);
-  expect(approvals).toBe(1);
-  const response = await service.activate({
-    profileId: 'second',
-    hostId: 'ubuntu',
-    mode: 'manual',
-    confirmationToken: review.confirmation!.token,
-  });
-  expect(response.status).toBe('active');
-  // One probe at offer time plus the re-approval under the confirmed switch.
-  expect(approvals).toBe(2);
-  expect(driver.events).toContain('stop');
 });

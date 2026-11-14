@@ -91,7 +91,7 @@ test('accounts hidden from the dashboard one by one leave Analytics; the tray sw
 test('focus chart labels never overlap each other and stay inside the chart', () => {
   const accounts = quotaAccounts(analytics, { now, dashboard });
   for (const [id, compare] of [['codex:b', false], ['codex:b', true], ['claude:max', false]]) {
-    const f = focusChart(accounts.find(a => a.id === id), analytics, { now, width: 900, height: 270, compare, thresholds: { codex: 95 }, accounts });
+    const f = focusChart(accounts.find(a => a.id === id), analytics, { now, width: 900, height: 270, compare, accounts });
     for (const l of f.labels) {
       assert.ok(l.px >= -0.5 && l.px + l.pw <= f.w + 0.5 && l.py >= -0.5 && l.py + l.ph <= f.h + 0.5, `${l.text} inside`);
     }
@@ -104,17 +104,18 @@ test('focus chart labels never overlap each other and stay inside the chart', ()
   }
 });
 
-test('focus charts: the threshold only for switchable providers, compare overlays without adding, Fable stays its own series', () => {
+test('focus charts: no switch threshold, compare overlays without adding, Fable stays its own series', () => {
   const accounts = quotaAccounts(analytics, { now, dashboard });
   const codexB = accounts.find(a => a.id === 'codex:b');
-  const one = focusChart(codexB, analytics, { now, width: 900, height: 270, compare: false, thresholds: { codex: 95 }, accounts });
-  assert.ok(one.labels.some(l => l.text === 'AUTO-SWITCH 95% USED'));
+  const one = focusChart(codexB, analytics, { now, width: 900, height: 270, compare: false, accounts });
+  // Account switching was removed: no chart marks an auto-switch point.
+  assert.equal(one.labels.some(l => l.text.startsWith('AUTO-SWITCH')), false);
+  assert.equal(one.legend.some(l => l.kind === 'thr'), false);
   assert.ok(one.legend.some(l => l.kind === 'active'));
-  const cmp = focusChart(codexB, analytics, { now, width: 900, height: 270, compare: true, thresholds: { codex: 95 }, accounts });
+  const cmp = focusChart(codexB, analytics, { now, width: 900, height: 270, compare: true, accounts });
   assert.equal(cmp.legend.filter(l => l.kind === 'series').length, 2);
   assert.match(cmp.foot, /never added together/);
-  const claude = focusChart(accounts.find(a => a.id === 'claude:max'), analytics, { now, width: 900, height: 270, thresholds: { codex: 95 }, accounts });
-  assert.equal(claude.labels.some(l => l.text.startsWith('AUTO-SWITCH')), false);
+  const claude = focusChart(accounts.find(a => a.id === 'claude:max'), analytics, { now, width: 900, height: 270, accounts });
   assert.deepEqual(claude.legend.filter(l => l.kind === 'series').map(l => l.name), ['Fable weekly', 'Weekly usage']);
 });
 
@@ -155,7 +156,7 @@ test('F6: a current reading from before a passed reset is no current reading in 
 test('phone focus charts (350x180, 600x220): labels never overlap and the lookup stays valid', () => {
   const accounts = quotaAccounts(analytics, { now, dashboard });
   for (const [width, height] of [[350, 180], [600, 220]]) {
-    const f = focusChart(accounts.find(a => a.id === 'codex:b'), analytics, { now, width, height, thresholds: { codex: 95 }, accounts });
+    const f = focusChart(accounts.find(a => a.id === 'codex:b'), analytics, { now, width, height, accounts });
     assert.equal(f.w >= 320 && f.h >= 160, true);
     assert.ok(f.plot.w > 0 && f.plot.h > 0);
     for (const l of f.labels) {

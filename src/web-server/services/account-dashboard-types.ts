@@ -1,6 +1,5 @@
 import type { HelperPlatform } from './dashboard-hosts';
 import type { ClaudeSignInRenewal } from './claude-signin-renewal';
-import type { AntigravityAutoSwitchStatus } from '../../antigravity/auto-switch/types';
 import type { AntigravityPlan } from '../../antigravity/plan';
 /** Public account-only contract shared by the dashboard and native clients. */
 export type DashboardProvider =
@@ -114,18 +113,12 @@ export interface DashboardAccount {
     claudePlatforms: ClaudeDashboardPlatform[];
     antigravityProfileId?: string;
     antigravityHostIds?: Array<'ubuntu'>;
-    antigravityCanActivate?: boolean;
   };
-  /**
-   * The provider is switchable and this account can be a switch target. Always
-   * set on GET /api/accounts/dashboard rows; optional for other producers.
-   */
-  switchable?: boolean;
   /** Always set on GET /api/accounts/dashboard rows; optional for other producers. */
   lifecycle?: DashboardAccountLifecycle;
   /**
    * Display only: the provider is hidden or this id is in hiddenAccountIds.
-   * A hidden account is still collected and still an auto-switch candidate.
+   * A hidden account is still collected.
    * Always set on GET /api/accounts/dashboard rows. The dashboard follows
    * this; the trays never do.
    */
@@ -173,7 +166,6 @@ export interface DashboardProviderEntry {
   trayVisible: boolean;
   /** Every account of this provider in accounts[], hidden ones included. */
   accountCount: number;
-  switchable: boolean;
   signIn: {
     kind: DashboardSignInKind;
     label: string;
@@ -189,8 +181,6 @@ export interface DashboardProviderEntry {
     signInAgain: boolean;
     replaceKey: boolean;
     remove: boolean;
-    activate: boolean;
-    autoSwitch: boolean;
     openApp: ClaudeDashboardPlatform[];
     recheck: boolean;
   };
@@ -215,22 +205,18 @@ export interface AccountDashboardSettings {
   visibilityAvailable?: boolean;
 }
 
+/**
+ * Retired with account switching (2026-11-14): always "off". Sent only because the trays installed before the
+ * removal refuse a dashboard without it. Remove once every tray in use is built from a release without switching.
+ */
 export interface CodexAutoSwitchDashboardStatus {
-  enabled: boolean;
-  /** Switch when the active account has this % remaining (5 means at 95% used). */
+  enabled: false;
   thresholdPercent: number;
-  /** The same threshold in % used: 100 - thresholdPercent. */
   thresholdUsedPercent: number;
   pollIntervalSeconds: number;
-  outcome: string;
+  outcome: 'disabled';
   message: string;
-  activationInProgress: boolean;
-  lastCheckedAt?: string;
-  lastSwitchedAt?: string;
-  /** Profile the monitor chose but could not switch to yet. Present only for waiting_idle. */
-  candidate?: string;
-  /** True when the blocked message warns about paid credits being spent. */
-  usingCredits?: boolean;
+  activationInProgress: false;
 }
 
 /** The running server: package version and the build's commit. No paths or hosts. */
@@ -246,7 +232,7 @@ export interface AccountDashboard {
   /** Every supported provider in display order, even at 0 accounts. Always set by the service. */
   providers?: DashboardProviderEntry[];
   accounts: DashboardAccount[];
-  antigravityAutoSwitch?: AntigravityAutoSwitchStatus;
+  /** Retired; see CodexAutoSwitchDashboardStatus. */
   codexAutoSwitch: CodexAutoSwitchDashboardStatus;
   server?: DashboardServerInfo;
   /**

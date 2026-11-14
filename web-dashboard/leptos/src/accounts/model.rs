@@ -1,4 +1,4 @@
-//! The Accounts & Settings view, version 3 (`public/accounts-view.mjs` `accountsViewModel`). Every word and every
+//! The Accounts & Settings view, version 4 (`public/accounts-view.mjs` `accountsViewModel`). Every word and every
 //! enabled, refused or "coming" decision is made there; these types only read it. Text and lists read through
 //! `nullable` (a `null` becomes empty), numbers stay strict.
 
@@ -7,7 +7,7 @@ use crate::dash::nullable;
 use serde::Deserialize;
 
 /// The version this page draws; any other is refused, not half-drawn (src/accounts.rs does the same).
-pub const ACCOUNTS_VIEW_VERSION: u64 = 3;
+pub const ACCOUNTS_VIEW_VERSION: u64 = 4;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -19,9 +19,6 @@ pub struct AccountsView {
     pub col_a: Vec<Provider>,
     #[serde(deserialize_with = "nullable")]
     pub col_b: Vec<Provider>,
-    pub ag: AgPolicy,
-    #[serde(deserialize_with = "nullable")]
-    pub policies: Vec<Policy>,
     #[serde(deserialize_with = "nullable")]
     pub install: String,
     pub refresh: Refresh,
@@ -35,7 +32,7 @@ pub struct AccountsView {
     pub about: About,
 }
 
-/// One fixed action slot (`action()` in accounts-view.mjs). kind: switch | button | icon | quiet | empty.
+/// One fixed action slot (`action()` in accounts-view.mjs). kind: button | icon | quiet | empty.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Action {
@@ -88,8 +85,6 @@ pub struct Provider {
     pub tray_coming: bool,
     #[serde(deserialize_with = "nullable")]
     pub tray_tip: String,
-    pub switchable: bool,
-    pub can_switch: bool,
     pub slots: u32,
     #[serde(deserialize_with = "nullable")]
     pub how: String,
@@ -98,7 +93,6 @@ pub struct Provider {
     pub foot: Vec<Action>,
     #[serde(deserialize_with = "nullable")]
     pub empty: String,
-    pub ag: bool,
     pub flow: Flow,
     #[serde(deserialize_with = "nullable")]
     pub trash: Vec<TrashRow>,
@@ -130,16 +124,8 @@ pub struct Row {
     pub active: bool,
     #[serde(deserialize_with = "nullable")]
     pub active_label: String,
-    pub can_activate: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub activate_kind: String,
     #[serde(deserialize_with = "nullable")]
     pub profile: String,
-    #[serde(deserialize_with = "nullable")]
-    pub activate_hint: String,
-    pub confirm: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub confirm_runs: Vec<Run>,
     #[serde(deserialize_with = "nullable")]
     pub actions: Vec<Action>,
     pub line: Line,
@@ -239,60 +225,6 @@ pub struct Choice {
     pub value: String,
     #[serde(deserialize_with = "nullable")]
     pub label: String,
-}
-
-/// The Antigravity policy box (`antigravityPolicy`). Numbers are -1 when the server did not report them.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AgPolicy {
-    pub shown: bool,
-    pub live: bool,
-    pub known: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub note_strong: String,
-    #[serde(deserialize_with = "nullable")]
-    pub note: String,
-    pub enabled: bool,
-    pub toggle_enabled: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub toggle_tip: String,
-    pub threshold: i32,
-    pub min: i32,
-    pub max: i32,
-    pub step_enabled: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub pools: Vec<Choice>,
-    #[serde(deserialize_with = "nullable")]
-    pub pool: String,
-    pub pool_enabled: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub cooldowns: Vec<Choice>,
-    #[serde(deserialize_with = "nullable")]
-    pub cooldown: String,
-    pub cooldown_enabled: bool,
-}
-
-/// One auto-switch policy row in Settings (`policies`).
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(default, rename_all = "camelCase")]
-pub struct Policy {
-    #[serde(deserialize_with = "nullable")]
-    pub provider: String,
-    #[serde(deserialize_with = "nullable")]
-    pub name: String,
-    pub known: bool,
-    pub enabled: bool,
-    pub toggle_enabled: bool,
-    pub threshold: i32,
-    pub min: i32,
-    pub max: i32,
-    pub step_enabled: bool,
-    pub wait: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub sub: String,
-    pub warn: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub tip: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]

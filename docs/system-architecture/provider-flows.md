@@ -66,9 +66,7 @@ revision metadata; the helper verifies them again after collection. Successful
 observations persist under private `account-usage-failover/` storage with their
 original sample times. Temporary source failures can therefore display cached
 usage after restart. Identity changes invalidate the associated reading, and
-fallback cannot grant account activation or switching authority. A dated primary
-reading can preserve independently established native activation eligibility.
-Renewal of credentials for an unchanged verified identity can preserve core
+fallback never changes which account a program uses. Renewal of credentials for an unchanged verified identity can preserve core
 quota, while Claude browser extras still require their original revision and
 capsule context. Primary sign-in warnings remain visible alongside fallback
 usage. Obsolete observation files are pruned to 256 recognized private records.
@@ -128,8 +126,7 @@ independent pairs of lists: `hiddenProviders` and `hiddenAccountIds` for the
 dashboard, `trayHiddenProviders` and `trayHiddenAccountIds` for the Mac and
 Windows trays. Changing one pair never changes the other, so an account can be
 shown in both, hidden only from the dashboard, hidden only from the trays, or
-hidden from both. Hidden accounts are still collected and still auto-switch
-candidates; the dashboard marks each row `hidden` (dashboard) and `trayHidden`
+hidden from both. Hidden accounts are still collected; the dashboard marks each row `hidden` (dashboard) and `trayHidden`
 (trays) and lists every provider in `providers[]` with `visible` and
 `trayVisible`. The dashboard follows only `visible` and `hidden`; the trays
 follow only `trayVisible` and `trayHidden`. An unreadable file is never treated as

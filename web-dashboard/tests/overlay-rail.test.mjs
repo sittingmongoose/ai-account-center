@@ -18,9 +18,8 @@ test('the popover sheet ends at the rail', () => {
 	assert.match(css, /:root\[data-chrome='rail'\]\[data-rail-side='left'\] \.pop/, 'pop sheet left offset');
 });
 
-test('the viewer and the switch approval clear the rail even when the strip inset is missing', () => {
+test('the viewer clears the rail even when the strip inset is missing', () => {
 	assert.match(css, /:root\[data-chrome='rail'\] \.viewer/, 'viewer rail padding');
-	assert.match(css, /:root\[data-chrome='rail'\] \.ascrim/, 'ascrim rail padding');
 });
 
 test('popover and tip placement clear the rail', () => {

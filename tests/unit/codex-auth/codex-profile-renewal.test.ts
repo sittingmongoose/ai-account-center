@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as lockfile from 'proper-lockfile';
 import {
   getCodexProfileRenewalStatus,
   renewCodexProfile,
@@ -13,15 +12,10 @@ import {
 } from '../../../src/codex-auth/codex-token-refresh';
 import { acquireCodexActivationLock } from '../../../src/codex-auth/codex-activation-lock';
 import {
-  activateCodexProfile,
-  CodexActivationError,
-  type CodexActivationRuntime,
-} from '../../../src/codex-auth/activate-codex-profile';
-import {
   getCodexProfileQuotaRows,
   resetNativeQuotaState,
 } from '../../../src/web-server/usage/native-quota-collector';
-import type { CodexQuotaResult } from '../../../src/cliproxy/quota/quota-types';
+import type { CodexQuotaResult } from '../../../src/web-server/usage/codex-quota/quota-types';
 import {
   ALPHA,
   BRAVO,
@@ -320,66 +314,6 @@ describe('activation lock', () => {
     expect(Date.parse(attempt.nextAttemptAt ?? '')).toBe(NOW + 15 * 60_000);
     expect(http.calls).toHaveLength(0);
     expect(fs.readFileSync(box.profileAuth('alpha')).equals(before)).toBe(true);
-  });
-
-  it('skips while a real activation is running', async () => {
-    let stopped!: () => void;
-    let resume!: () => void;
-    const inStop = new Promise<void>((done) => (stopped = done));
-    const gate = new Promise<void>((done) => (resume = done));
-    const runtime: CodexActivationRuntime = {
-      async stop() {
-        stopped();
-        await gate;
-      },
-      async start() {},
-    };
-    const activation = activateCodexProfile('bravo', { codexHome: box.codexHome, runtime });
-    await inStop;
-    const http = fakeFetch(() => ok());
-    const attempt = await renewCodexProfile('alpha', box.options({ fetch: http.fetch }));
-    resume();
-    await activation;
-    expect(attempt.reason).toBe('activation_busy');
-    expect(http.calls).toHaveLength(0);
-  });
-
-  it('makes an activation wait (or fail busy) while a renewal holds the lock, then installs the renewed login', async () => {
-    let entered!: () => void;
-    let respond!: () => void;
-    const inRequest = new Promise<void>((done) => (entered = done));
-    const gate = new Promise<void>((done) => (respond = done));
-    const http = fakeFetch(async () => {
-      entered();
-      await gate;
-      return ok();
-    });
-    const renewal = renewCodexProfile('alpha', box.options({ fetch: http.fetch }));
-    await inRequest;
-
-    // A contender that does not wait is refused at once.
-    const realLock = lockfile.lock;
-    const noWait = spyOn(lockfile, 'lock').mockImplementation(((file, options) =>
-      realLock(file, { ...options, retries: 0 })) as typeof lockfile.lock);
-    const runtime: CodexActivationRuntime = { async stop() {}, async start() {} };
-    let busy: unknown;
-    try {
-      await activateCodexProfile('alpha', { codexHome: box.codexHome, runtime });
-    } catch (error) {
-      busy = error;
-    } finally {
-      noWait.mockRestore();
-    }
-    expect(busy).toBeInstanceOf(CodexActivationError);
-    expect((busy as CodexActivationError).code).toBe('busy');
-
-    // A normal activation waits for the renewal and then copies the renewed login.
-    const activation = activateCodexProfile('alpha', { codexHome: box.codexHome, runtime });
-    respond();
-    expect((await renewal).reason).toBe('renewed');
-    await activation;
-    const live = readJson(path.join(box.codexHome, 'auth.json'));
-    expect(live.tokens.refresh_token).toBe('rt-FAKE-alpha-rotated');
   });
 });
 

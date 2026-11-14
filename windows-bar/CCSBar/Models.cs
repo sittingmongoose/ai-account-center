@@ -155,9 +155,7 @@ public sealed class AccountDashboard
     public int SchemaVersion { get; set; }
     public string UpdatedAt { get; set; } = "";
     public List<DashboardAccount> Accounts { get; set; } = new();
-    // Kept absent until DashboardClient validates the required policy.
-    public AutoSwitchStatus CodexAutoSwitch { get; set; } = null!;
-    public AntigravityAutoStatus? AntigravityAutoSwitch { get; set; }
+    // codexAutoSwitch and antigravityAutoSwitch (retired with account switching, 2026-11-14) are no longer read.
     public AccountRefreshSettings? Settings { get; set; }
     /// <summary>The dashboard's provider list (B3a): label, order, and the "Show on dashboard" and "Show in tray" switches.</summary>
     public List<DashboardProvider>? Providers { get; set; }
@@ -300,7 +298,6 @@ public sealed class AccountCapabilities
     public List<string> ClaudePlatforms { get; set; } = new();
     public string? AntigravityProfileId { get; set; }
     public List<string>? AntigravityHostIds { get; set; }
-    public bool AntigravityCanActivate { get; set; }
 }
 
 /// <summary>The Open progress of one Claude profile, exactly as GET /api/claude/desktop-profiles reports it
@@ -359,36 +356,6 @@ public sealed class AntigravityPlan
     public bool? CreditsOverage { get; set; }
 
     [JsonIgnore] public bool IsProOrUltra => Class is "pro" or "pro-trial" or "ultra" or "ultra-5x" or "ultra-20x";
-}
-
-/// <summary>Antigravity's own automatic switching (thresholdUsedPercent is % USED, unlike Codex).</summary>
-public sealed class AntigravityAutoStatus
-{
-    public string? RequestedPoolId { get; set; }
-    public bool Enabled { get; set; }
-    public double ThresholdUsedPercent { get; set; } = 95;
-    public int PollIntervalSeconds { get; set; } = 60;
-    public string Outcome { get; set; } = "";
-    public string Message { get; set; } = "";
-    public bool ActivationInProgress { get; set; }
-    public string? LastCheckedAt { get; set; }
-    public string? LastSwitchedAt { get; set; }
-}
-
-public sealed class AutoSwitchStatus
-{
-    public bool Enabled { get; set; }
-    public double ThresholdPercent { get; set; } = 5;
-    public int PollIntervalSeconds { get; set; } = 60;
-    public string Outcome { get; set; } = "";
-    public string Message { get; set; } = "";
-    public bool ActivationInProgress { get; set; }
-    public string? LastCheckedAt { get; set; }
-    public string? LastSwitchedAt { get; set; }
-    /// <summary>Profile the monitor chose but could not switch to yet. Present only for waiting_idle.</summary>
-    public string? Candidate { get; set; }
-    /// <summary>True when the blocked message warns about paid credits being spent.</summary>
-    public bool UsingCredits { get; set; }
 }
 
 public static class Formatting
@@ -740,23 +707,6 @@ public static class Formatting
         return rounded == Math.Round(rounded) ? 0 : Math.Round(rounded, 1) == rounded ? 1 : 2;
     }
     public static string PercentWith(double value, int decimals) => value.ToString("F" + decimals, CultureInfo.CurrentCulture) + "%";
-
-    private static readonly IReadOnlySet<string> BlockedAutoSwitch = new HashSet<string> { "waiting_idle", "no_quota", "no_candidate", "error" };
-
-    /// <summary>Why Codex automatic switching is stuck, in plain words — or null when the switch is
-    /// healthy, disabled or unreported and no line should show.</summary>
-    public static string? CodexAutoStatusText(AutoSwitchStatus? status, List<DashboardAccount>? accounts)
-    {
-        if (status is null || !status.Enabled) return null;
-        if (!BlockedAutoSwitch.Contains(status.Outcome)) return null;
-        if (status.Outcome == "waiting_idle" && !string.IsNullOrWhiteSpace(status.Candidate))
-        {
-            var match = accounts?.Find(account => account.Provider == "codex" && account.Capabilities.CodexProfile == status.Candidate);
-            var identity = match?.Email ?? match?.Label ?? status.Candidate;
-            return $"{status.Message} Will switch to {identity} when Codex goes idle. Activate {identity} to switch now.";
-        }
-        return status.Message;
-    }
 
     /// <summary>Notification-area tooltip (max 127 characters): the active Codex account's weekly % left.</summary>
     public static string TrayTooltip(AccountDashboard? dashboard, bool stale = false, bool configured = true, string? signInState = null)

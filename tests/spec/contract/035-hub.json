@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/app-updates/cancel",
+    "path": "/api/auth/devices/me/rotate",
     "role": "hub",
     "body": {}
   },

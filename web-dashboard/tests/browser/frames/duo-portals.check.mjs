@@ -33,7 +33,6 @@ async function analytics(t, width = 669, height = 951, safe = '82,0,34,0', home 
   const side = {
     '/api/accounts/dashboard': { schemaVersion: 1, updatedAt: new Date().toISOString(), accounts: [], settings: {} },
     '/api/accounts/preferences': { timeZone: 'UTC' },
-    '/api/antigravity/auto-switch': { enabled: false },
   };
   await t.page.route((u) => u.pathname in side, (r) => r.fulfill({ json: side[new URL(r.request().url()).pathname] }));
   await t.goto(`/app/${home ? 'home' : 'analytics'}?safe=${safe}`);
@@ -275,26 +274,19 @@ export const tests = {
   },
 };
 
-for (const kind of ['pin', 'viewer', 'details', 'activation']) {
+for (const kind of ['pin', 'viewer', 'details']) {
   tests[`duo portals: ${kind} reflows on pose change and retires on route departure`] = async (
     t
   ) => {
     await pin(t, fixture(true), true, true);
     if (kind === 'viewer')
       await t.page.locator('.c2-sheet-host [data-focus-role="media-enlarge"]').first().click();
-    if (kind === 'details' || kind === 'activation')
-      await bridge(
-        t,
-        kind,
-        kind === 'details'
-          ? { id: 'fixture', title: 'Synthetic account', meters: [], amounts: [], facts: [] }
-          : { product: 'Codex', targetProfile: 'fixture', canConfirm: false, processes: [] }
-      );
+    if (kind === 'details')
+      await bridge(t, kind, { id: 'fixture', title: 'Synthetic account', meters: [], amounts: [], facts: [] });
     const selector = {
       pin: '.c2-sheet-host .sheet',
       viewer: '.viewer',
       details: '.details',
-      activation: '.adialog',
     }[kind];
     await t.page.waitForSelector(selector);
     await pose(t, 669, 951, '82px 0px 34px 0px');
@@ -440,131 +432,6 @@ const overlayState = (t) =>
     active: document.activeElement?.outerHTML.slice(0, 160),
   }));
 
-// The real activation-confirmation controller in the dashboard controller's place, with synthetic activate responses:
-// odd calls answer a 409 review, even calls (the confirmation) wait until the test settles them. It takes the page's
-// approval actions from the frame's dashboard controller (public/frame-dashboard.mjs, whose other actions still run)
-// and hands its views to the page as that controller does (`aac-dash` events).
-async function approvalController(t) {
-  await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().hasData === true);
-  await t.page.evaluate(async () => {
-    const { createActivationConfirmation } = await import('/activation-confirmation.mjs');
-    window.__events = [];
-    const send = (v) =>
-      dispatchEvent(new CustomEvent('aac-dash', { detail: { key: 'activation', json: v ? JSON.stringify(v) : '' } }));
-    let calls = 0;
-    window.__controller = createActivationConfirmation({
-      activate: async (target) => {
-        window.__events.push({ kind: 'activate', call: ++calls });
-        if (calls % 2) throw { status: 409, payload: { confirmation: { token: 'a'.repeat(43), targetProfile: target,
-          expiresAt: new Date(Date.now() + 60000).toISOString(), processes: [{ label: 'Synthetic busy process', pid: 1234, role: 'fixture' }] } } };
-        return new Promise((resolve, reject) => { window.__settle = { resolve, reject }; });
-      },
-      prompt: (v) => { window.__events.push({ kind: 'prompt', busy: v.inProgress, error: v.error }); send(v); },
-      close: () => { window.__events.push({ kind: 'close' }); send(null); },
-      busy: () => {}, success: () => {}, error: () => {},
-    });
-    window.__acts = [];
-    const dashboard = window.aacFrameDashboard;
-    const act = dashboard.act.bind(dashboard);
-    dashboard.act = (kind, value) => {
-      window.__acts.push(kind);
-      if (kind === 'activation-confirm') { void window.__controller.confirm(); return true; }
-      if (kind === 'activation-cancel') { window.__events.push({ kind: 'cancel', accepted: window.__controller.cancel() }); return true; }
-      return act(kind, value);
-    };
-  });
-}
-const inFrame = (t, code) => t.page.evaluate(code);
-
-tests['duo portals: a late approval result after Back cannot revive the retired modal'] = async (
-  t
-) => {
-  await t.newContext({
-    viewport: { width: 466, height: 678 },
-    screen: { width: 466, height: 678 },
-    deviceScaleFactor: 1,
-    serviceWorkers: 'block',
-  });
-  await t.page.route(
-    (u) => u.pathname === '/' && !u.search,
-    (r) => r.fulfill({ status: 204 })
-  );
-  await t.goto('/app/home?safe=0,84,34,0');
-  await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().hasData === true);
-  await t.page.getByRole('link', { name: 'Accounts', exact: true }).filter({ visible: true }).click();
-  await approvalController(t);
-  await inFrame(t, "window.__controller.begin('synthetic-review-profile')");
-  await t.page.waitForSelector('.adialog .btn.primary[aria-disabled="false"]');
-  await t.page.locator('.adialog').evaluate((el) => {
-    window.__approval = el;
-  });
-  await t.page.locator('.adialog .btn.primary').click();
-  await t.page.waitForFunction(() =>
-    document.querySelector('.adialog .a-status')?.textContent.includes('Stopping')
-  );
-  const busy = await overlayState(t);
-  await t.check(
-    'a busy update changes the same approval in place: no new portal, focus kept inside',
-    busy.roots === 1 &&
-      busy.inOverlay &&
-      (await t.page.evaluate(() => document.querySelector('.adialog') === window.__approval)),
-    JSON.stringify(busy)
-  );
-  await t.page.goBack();
-  await t.page.waitForFunction(
-    () => location.pathname === '/app/home' && !document.querySelector('.overlay-root')
-  );
-  await settled(t);
-  const retiredState = await overlayState(t);
-  await t.check(
-    'Back retires the busy approval and releases its lock',
-    !retiredState.roots && !retiredState.locked,
-    JSON.stringify(retiredState)
-  );
-  // The same request now fails: the controller publishes its error and then its settled view.
-  await inFrame(t, "window.__settle.reject({ status: 500, message: 'Synthetic stop timeout' })");
-  await settled(t);
-  await inFrame(t, 'Promise.resolve()');
-  await settled(t);
-  const after = await overlayState(t);
-  const events = await inFrame(t, 'window.__events');
-  await t.check(
-    'Astra/Sol: the late failure stays retired on Home: no overlay, no lock, focus not taken',
-    !after.roots && !after.locked && !after.inOverlay,
-    JSON.stringify(after)
-  );
-  await t.check(
-    'the settled approval is cancelled and closed, never while its request ran',
-    events.some((e) => e.kind === 'cancel' && e.accepted) &&
-      events.slice(events.findLastIndex((e) => e.kind === 'prompt')).some((e) => e.kind === 'close') &&
-      !events.some((e) => e.kind === 'cancel' && !e.accepted),
-    JSON.stringify(events)
-  );
-  await t.shot(
-    'late-approval-after-back',
-    'After Back while busy, the switch request fails: Home stays clear, with no approval over it.'
-  );
-  // A new Activate on Accounts opens a fresh approval, focused, with its own lock.
-  await t.page.getByRole('link', { name: 'Accounts', exact: true }).filter({ visible: true }).click();
-  await inFrame(t, "window.__controller.begin('synthetic-review-profile')");
-  await t.page.waitForSelector('.adialog .btn.primary[aria-disabled="false"]');
-  await frames(t);
-  const fresh = await overlayState(t);
-  await t.check(
-    'the next Activate opens a fresh, modal approval',
-    fresh.roots === 1 && fresh.locked && fresh.inOverlay,
-    JSON.stringify(fresh)
-  );
-  await t.page.locator('.adialog .btn').first().click();
-  await t.page.waitForSelector('.adialog', { state: 'detached' });
-  const cancelled = await overlayState(t);
-  await t.check(
-    'Cancel closes it and releases the lock',
-    !cancelled.roots && !cancelled.locked,
-    JSON.stringify(cancelled)
-  );
-};
-
 for (const route of ['Tab', 'focus'])
   tests[`duo portals: folding a nonmodal Provider with page focus (${route}) moves focus into the sheet`] =
     async (t) => {
@@ -677,62 +544,5 @@ tests['duo portals: an open exact-token explanation follows a live model update'
     'Sol L1: the open explanation shows the current count or is dismissed, never the old one',
     !current.tips.some((tip) => !tip.hidden && tip.text === '32,022,027 tokens'),
     JSON.stringify(current)
-  );
-};
-
-tests['duo portals: Details under an approval closes after Back and opens again on Accounts'] = async (
-  t
-) => {
-  await t.newContext({
-    viewport: { width: 466, height: 678 },
-    screen: { width: 466, height: 678 },
-    deviceScaleFactor: 1,
-    serviceWorkers: 'block',
-  });
-  await t.goto('/app/home?safe=0,84,34,0');
-  await t.page.waitForFunction(() => window.aacFrameDashboard?.state?.().hasData === true);
-  await t.page.getByRole('link', { name: 'Accounts', exact: true }).filter({ visible: true }).click();
-  await approvalController(t);
-  const details = (id) => ({ id, title: `Synthetic account ${id}`, meters: [], amounts: [], facts: [] });
-  await bridge(t, 'details', details('one'));
-  await t.page.waitForSelector('.details');
-  // A switch from the panel asks for approval over it; Details refuses to close while it waits.
-  await inFrame(t, "window.__controller.begin('synthetic-review-profile')");
-  await t.page.waitForSelector('.adialog .btn.primary[aria-disabled="false"]');
-  await t.page.goBack();
-  await t.page.waitForFunction(
-    () => location.pathname === '/app/home' && !document.querySelector('.overlay-root')
-  );
-  await settled(t);
-  await inFrame(t, 'Promise.resolve()');
-  await settled(t);
-  const home = await overlayState(t);
-  const acts = await inFrame(t, 'window.__acts');
-  await t.check(
-    'Back retires both: no overlay or lock over Home',
-    !home.roots && !home.locked,
-    JSON.stringify(home)
-  );
-  await t.check(
-    'once the approval is cancelled, the retired Details closes and tells the dashboard',
-    acts.includes('activation-cancel') && acts.includes('details-closed'),
-    JSON.stringify(acts)
-  );
-  // Forward to Accounts (no press, which would close a stale panel by itself): the next account's Details shows,
-  // so the retired panel wasn't left open and hidden.
-  await t.page.goForward();
-  await t.page.waitForFunction(() => location.pathname === '/app/accounts');
-  await frames(t);
-  await bridge(t, 'details', details('two'));
-  await frames(t);
-  const shown = await t.page.evaluate(() => {
-    const d = document.querySelector('.details');
-    const r = d?.getBoundingClientRect();
-    return { present: !!d, w: r?.width || 0, h: r?.height || 0, title: d?.textContent.includes('two') };
-  });
-  await t.check(
-    'the next Details request on Accounts is visible',
-    shown.present && shown.w > 0 && shown.h > 0 && shown.title,
-    JSON.stringify(shown)
   );
 };

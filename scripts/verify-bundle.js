@@ -272,12 +272,12 @@ function verifyBundle(uiDir = UI_DIR) {
 
 const CODEX_RUNTIME_FILE = path.join(__dirname, '../dist/app-updates/app_update_codex_runtime.cjs');
 const CODEX_RUNTIME_EXPORTS = ['createCodexActivationRuntime', 'lockfile'];
-// The only first-party modules the runtime may carry. Account activation
-// (activate-codex-profile, auth.json replacement) is not among them.
+// The only first-party modules the runtime may carry. No auth.json writer (the
+// removed account activation included) may ever be among them.
 const CODEX_RUNTIME_SOURCES = new Set([
   'src/codex-auth/codex-update-runtime-entry.ts',
   'src/codex-auth/codex-activation-runtime.ts',
-  'src/codex-auth/codex-activation-confirmation.ts',
+  'src/codex-auth/codex-process-plan.ts',
   'src/utils/app-launcher.ts',
 ]);
 const CODEX_RUNTIME_PACKAGES = new Set([

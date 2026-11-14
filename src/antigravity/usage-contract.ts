@@ -2,8 +2,6 @@ import type {
   DashboardAccount,
   DashboardAccountWindow,
 } from '../web-server/services/account-dashboard-types';
-import type { ActivateRequest, ActivationResult } from './types';
-import type { AntigravityRecoveryResult } from './switch-service';
 import type { AntigravityReportedPlan } from './plan';
 
 /** Host scope is deliberately fixed: desktop controls target the Ubuntu CLI. */
@@ -51,7 +49,6 @@ export interface AntigravityDashboardAccount extends DashboardAccount {
   capabilities: DashboardAccount['capabilities'] & {
     antigravityProfileId: string;
     antigravityHostIds: AntigravityHostId[];
-    antigravityCanActivate?: boolean;
   };
 }
 
@@ -68,7 +65,7 @@ export interface AntigravityPublicProfile {
 
 /**
  * Present only when the installed Antigravity CLI no longer matches the
- * reviewed native pin: switching is paused until the new build is reviewed.
+ * reviewed native pin: managed updates are paused until the new build is reviewed.
  * Mirrors NativeUpdatePaused in native-version.ts.
  */
 export interface AntigravityNativeUpdatePaused {
@@ -96,29 +93,12 @@ export interface AntigravityInventory {
   schemaVersion: 1;
   hostId: AntigravityHostId;
   profiles: AntigravityPublicProfile[];
-  activationSupported?: boolean;
   nativeUpdatePaused?: AntigravityNativeUpdatePaused;
   runtimeServiceProblem?: AntigravityRuntimeServiceProblem;
-}
-
-export interface AntigravityAutoSettings {
-  enabled: boolean;
-  thresholdUsedPercent: number;
-  pollIntervalSeconds: number;
-  maxQuotaAgeSeconds: number;
-  cooldownSeconds: number;
-  selectedHostIds: AntigravityHostId[];
-  requestedPoolId: string | null;
 }
 
 export interface AntigravityApiDependencies {
   getInventory(): Promise<AntigravityInventory>;
   getAccounts(options: { refresh: boolean }): Promise<AntigravityDashboardAccount[]>;
-  /** mode is supplied by the server; request bodies cannot enable automatic mode. */
-  activate(request: ActivateRequest): Promise<ActivationResult>;
-  /** Finish or undo a stuck switch; proof-driven, saved profiles untouched. */
-  recover(): Promise<AntigravityRecoveryResult>;
-  getAutoSwitchStatus(): unknown;
-  updateAutoSwitchSettings(patch: Partial<AntigravityAutoSettings>): unknown;
   invalidateUsage?(): void;
 }

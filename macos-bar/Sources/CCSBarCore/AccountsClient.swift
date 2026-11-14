@@ -146,17 +146,14 @@ public actor AccountsClient {
     return request
   }
 
-  private func request(_ path: String, method: String = "GET", body: Data? = nil, confirmationProfile: String? = nil,
-    antigravityProfile: String? = nil, retryUnauthorized: Bool = true, headers: [String: String] = [:]) async throws -> Data {
-    try await exchange(path, method: method, body: body, confirmationProfile: confirmationProfile,
-      antigravityProfile: antigravityProfile, retryUnauthorized: retryUnauthorized, headers: headers).data
+  private func request(_ path: String, method: String = "GET", body: Data? = nil,
+    retryUnauthorized: Bool = true, headers: [String: String] = [:]) async throws -> Data {
+    try await exchange(path, method: method, body: body, retryUnauthorized: retryUnauthorized, headers: headers).data
   }
 
   /// One request with its status, for the callers whose next step depends on it (the Claude Open's 200 or 202).
-  private func exchange(_ path: String, method: String = "GET", body: Data? = nil, confirmationProfile: String? = nil,
-    antigravityProfile: String? = nil, retryUnauthorized: Bool = true,
+  private func exchange(_ path: String, method: String = "GET", body: Data? = nil, retryUnauthorized: Bool = true,
     headers: [String: String] = [:]) async throws -> (data: Data, status: Int) {
-    let requestStarted = ProcessInfo.processInfo.systemUptime
     var data: Data
     var response: HTTPURLResponse
     if let token = deviceToken {
@@ -182,82 +179,22 @@ public actor AccountsClient {
         }
       }
     }
-    if response.statusCode == 409, let profile = confirmationProfile,
-      let conflict = try? JSONDecoder().decode(CodexSwitchConflict.self, from: data),
-      conflict.code == "busy", conflict.reason == "running_processes",
-      var confirmation = conflict.confirmation {
-      // Older responses without Date retain the existing wall-clock check.
-      confirmation.deadline = ConfirmationDeadline(expiresAt: confirmation.expiresAt,
-        serverDate: ConfirmationDeadline.serverDate(response), requestStarted: requestStarted)
-      if confirmation.isValid(for: profile) { throw BarClientError.codexConfirmation(confirmation) }
-    }
-    if response.statusCode == 409, let profile = antigravityProfile,
-      let offer = AntigravitySwitchConfirmation.parse(data, profile: profile,
-        serverDate: ConfirmationDeadline.serverDate(response), requestStarted: requestStarted) {
-      throw BarClientError.antigravityConfirmation(offer)
-    }
     guard (200..<300).contains(response.statusCode) else {
       let publicCode = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
       throw BarClientError.status(response.statusCode, Self.publicError(status: response.statusCode, path: path,
-        codexActivation: confirmationProfile != nil, code: publicCode?["code"] as? String,
-        reason: publicCode?["reason"] as? String,
-        antigravityActivation: antigravityProfile != nil, activationStatus: publicCode?["status"] as? String))
+        code: publicCode?["code"] as? String))
     }
     return (data, response.statusCode)
   }
 
   /// Only fixed client copy and recognized public codes may reach the UI.
   /// Server error/message strings can contain private paths or credential data.
-  private static func publicError(status: Int, path: String, codexActivation: Bool,
-    code: String?, reason: String?, antigravityActivation: Bool = false, activationStatus: String? = nil) -> String {
-    if antigravityActivation {
-      // Only the dashboard's fixed activation status words select a message; its text never does.
-      switch activationStatus {
-      case "busy": return "Antigravity is busy on Ubuntu. Activate again when it is idle."
-      case "deferred": return "Antigravity activation is deferred on Ubuntu. Refresh its native status before trying again."
-      case "unsupported-runtime-probe": return "The Ubuntu Antigravity runtime could not be verified. Account switching is unavailable."
-      case "stale-confirmation": return "This Antigravity confirmation is no longer valid. Activate again to review the running programs."
-      case "confirmation-required": return "Antigravity programs are running on Ubuntu. Activate again to review them."
-      case "invalid-profile": return "The selected Antigravity profile has no valid saved login."
-      case "failed-rolled-back": return "Antigravity could not switch accounts on Ubuntu. The previous state was restored."
-      case "recovery-required": return "Antigravity activation needs recovery on Ubuntu. Account switching is unavailable."
-      default: break
-      }
-      if status == 500 { return "Antigravity account activation failed safely. Refresh the account list before retrying." }
-    }
-    if path == "api/antigravity/auto-switch" {
-      if status == 400 { return "The Antigravity switching settings were rejected. Refresh and try again." }
-      if status == 500 { return "Antigravity automatic switching settings could not be saved safely." }
-    }
-    if codexActivation {
-      if status == 409 && code == "busy" {
-        if reason == "activation_running" { return "Another Codex account activation is already running. Wait for it to finish." }
-        if reason == "unsupported_process" { return "A running Codex program cannot be restarted safely. Close it and try again." }
-        return "Codex is busy. Try switching after its work finishes."
-      }
-      if status == 409 && code == "confirmation_stale" {
-        return "The running Codex programs or account changed. Activate again to review a new warning."
-      }
-      if status == 400 && code == "invalid_profile" { return "The selected profile has no valid saved login." }
-      if status == 400 && code == "invalid_codex_home" { return "Account activation needs the shared Codex configuration." }
-      if status == 500 {
-        switch code {
-        case "restart_failed": return "Codex could not restart. Check its processes before retrying activation."
-        case "verification_failed": return "The activated account could not be verified. Refresh accounts before retrying."
-        case "auth_read_failed": return "The saved Codex login could not be read safely."
-        case "auth_write_failed": return "The Codex login could not be installed safely."
-        default: break
-        }
-      }
-    }
+  private static func publicError(status: Int, path: String, code: String?) -> String {
     if path.hasPrefix("api/claude/desktop-profiles/") && path.hasSuffix("/open") {
       // The guarded history copy could not be confirmed, so Claude was not opened (CONTRACT-serving-misc 4.4).
       if status == 409 && code == "history_unconfirmed" { return ClaudeOpenFlow.historyUnconfirmed }
       if [502, 503].contains(status) { return "Claude could not be opened on the selected computer. Check its profile setup and connection." }
       if status == 404 { return "The selected Claude profile is not available on that computer." }
-    }
-    if path == "api/codex/profiles/auto-switch" && status == 400 {
-      return "The automatic switching settings were rejected. Refresh and try again."
     }
     if status == 503 && code == "auth_store_unavailable" {
       return "The dashboard cannot check paired trays right now. Try again shortly."
@@ -284,57 +221,9 @@ public actor AccountsClient {
     try await get("api/accounts/dashboard?platform=mac&refresh=\(refresh ? "true" : "false")", as: AccountDashboard.self)
   }
 
-  public func activateCodex(profile: String, confirmationToken: String? = nil) async throws {
-    guard isProfileIdentifier(profile) else { throw BarClientError.invalidConnection }
-    var body: [String: String] = [:]
-    if let confirmationToken {
-      guard !confirmationToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, confirmationToken.count <= 512
-      else { throw BarClientError.invalidConnection }
-      body["confirmationToken"] = confirmationToken
-    }
-    _ = try await request("api/codex/profiles/\(profile)/activate", method: "POST",
-      body: JSONSerialization.data(withJSONObject: body), confirmationProfile: profile, retryUnauthorized: confirmationToken == nil)
-  }
-
-  /// Manual Antigravity activation on the shared Ubuntu runtime. Running programs come back as
-  /// `BarClientError.antigravityConfirmation`, which only an explicit Confirm may answer.
-  @discardableResult
-  public func activateAntigravity(profile: String) async throws -> AntigravityActivationResult {
-    guard isProfileIdentifier(profile) else { throw BarClientError.invalidConnection }
-    let data = try await request("api/antigravity/profiles/\(profile)/activate", method: "POST",
-      body: JSONSerialization.data(withJSONObject: ["hostId": "ubuntu"]), antigravityProfile: profile)
-    guard let result = AntigravityActivationResult.parse(data, profile: profile) else { throw BarClientError.decoding }
-    return result
-  }
-
-  /// Sends a reviewed one-use token once. It is never replayed after an authentication failure.
-  @discardableResult
-  public func confirmAntigravity(profile: String, confirmationToken: String) async throws -> AntigravityActivationResult {
-    guard isProfileIdentifier(profile), AntigravitySwitchConfirmation.isToken(confirmationToken)
-    else { throw BarClientError.invalidConnection }
-    let data = try await request("api/antigravity/profiles/\(profile)/confirm", method: "POST",
-      body: JSONSerialization.data(withJSONObject: ["hostId": "ubuntu", "confirmationToken": confirmationToken]),
-      antigravityProfile: profile, retryUnauthorized: false)
-    guard let result = AntigravityActivationResult.parse(data, profile: profile) else { throw BarClientError.decoding }
-    return result
-  }
-
-  /// Antigravity's own policy: `thresholdUsedPercent` is percent USED (Codex stores percent remaining).
-  @discardableResult
-  public func setAntigravityAutomaticSwitching(enabled: Bool? = nil, thresholdUsedPercent: Int? = nil) async throws -> Data {
-    var body: [String: Any] = [:]
-    if let enabled { body["enabled"] = enabled }
-    if let thresholdUsedPercent {
-      guard (1...99).contains(thresholdUsedPercent) else { throw BarClientError.invalidConnection }
-      body["thresholdUsedPercent"] = thresholdUsedPercent
-    }
-    guard !body.isEmpty else { throw BarClientError.invalidConnection }
-    return try await request("api/antigravity/auto-switch", method: "PUT", body: JSONSerialization.data(withJSONObject: body))
-  }
-
   /// Claude "Open on Mac" and "Open on Windows". `Prefer: respond-async` opts into the 202 progress answer; without
   /// it the server waits and answers 200. The POST is sent once: an expired session is never re-sent as a second
-  /// Open, exactly as a one-use confirmation token is not.
+  /// Open.
   /// The profile id comes from the dashboard's own data (`capabilities.claudeProfileId`); the tray keeps no list of
   /// its own, and only checks that the id is a plain identifier before it goes into the path.
   @discardableResult
@@ -416,17 +305,5 @@ public actor AccountsClient {
   @discardableResult
   public func write(_ path: String, method: String = "POST", body: [String: String] = [:]) async throws -> Data {
     try await request(path, method: method, body: JSONSerialization.data(withJSONObject: body))
-  }
-
-  @discardableResult
-  public func setAutomaticSwitching(enabled: Bool? = nil, thresholdPercent: Int? = nil) async throws -> Data {
-    var body: [String: Any] = [:]
-    if let enabled { body["enabled"] = enabled }
-    if let thresholdPercent {
-      guard (1...99).contains(thresholdPercent) else { throw BarClientError.invalidConnection }
-      body["thresholdPercent"] = thresholdPercent
-    }
-    guard !body.isEmpty else { throw BarClientError.invalidConnection }
-    return try await request("api/codex/profiles/auto-switch", method: "PUT", body: JSONSerialization.data(withJSONObject: body))
   }
 }

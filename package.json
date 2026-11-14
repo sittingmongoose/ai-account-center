@@ -1,7 +1,7 @@
 {
   "name": "@sittingmongoose/ai-account-center",
   "version": "8.10.0",
-  "description": "AI Account Center - account usage, safe Codex switching, analytics and native desktop bars",
+  "description": "AI Account Center - account usage and limits, reset claims, analytics and native desktop bars",
   "keywords": [
     "cli",
     "claude",

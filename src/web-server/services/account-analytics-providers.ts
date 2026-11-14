@@ -8,10 +8,7 @@ export interface AnalyticsProviderEntry {
   id: DashboardProvider;
   label: string;
   order: number;
-  switchable: boolean;
 }
-
-const SWITCHABLE: ReadonlySet<DashboardProvider> = new Set(['codex', 'antigravity']);
 
 /**
  * The provider table the dashboard projection already uses: Claude, Codex,
@@ -25,7 +22,7 @@ export function defaultAnalyticsProviderTable(): AnalyticsProviderEntry[] {
     ['codex', 'Codex'],
     ...ADDITIONAL_PROVIDERS,
   ];
-  return rows.map(([id, label], order) => ({ id, label, order, switchable: SWITCHABLE.has(id) }));
+  return rows.map(([id, label], order) => ({ id, label, order }));
 }
 
 export function defaultAnalyticsProviderIds(): string[] {
@@ -41,7 +38,6 @@ export interface DashboardRegistryFacts {
   table: AnalyticsProviderEntry[];
   visible: (provider: DashboardProvider) => boolean;
   hidden: (account: DashboardAccount) => boolean;
-  switchable: (account: DashboardAccount) => boolean;
 }
 
 /**
@@ -76,7 +72,6 @@ export function dashboardRegistryFacts(
           : row.label,
       order:
         typeof entry?.order === 'number' && Number.isFinite(entry.order) ? entry.order : row.order,
-      switchable: typeof entry?.switchable === 'boolean' ? entry.switchable : row.switchable,
       visible: typeof entry?.visible === 'boolean' ? entry.visible : !hiddenProviders.has(row.id),
     };
   });
@@ -90,19 +85,6 @@ export function dashboardRegistryFacts(
       const own = (account as unknown as { hidden?: unknown }).hidden;
       if (typeof own === 'boolean') return own;
       return !(byId.get(account.provider)?.visible ?? true) || hiddenAccountIds.has(account.id);
-    },
-    switchable: (account) => {
-      const own = (account as unknown as { switchable?: unknown }).switchable;
-      if (typeof own === 'boolean') return own;
-      if (!(byId.get(account.provider)?.switchable ?? false)) return false;
-      if (account.provider === 'codex')
-        return account.capabilities.codexProfile !== null && account.status !== 'needs_sign_in';
-      if (account.provider === 'antigravity')
-        return (
-          typeof account.capabilities.antigravityProfileId === 'string' &&
-          (account.capabilities.antigravityCanActivate === true || account.isActive)
-        );
-      return false;
     },
   };
 }

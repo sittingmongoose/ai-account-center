@@ -1,6 +1,5 @@
 //! One provider card (Slint `ProviderSection`): the head with its mark, kind line, count and the provider's Show on
-//! dashboard / Show in tray switches; one row per account; the Claude trash; the Antigravity policy box; the flow
-//! panel; and the footer with how the provider signs in and its add or check actions.
+//! dashboard / Show in tray switches; one row per account; the Claude trash; the flow panel; and the footer with how the provider signs in and its add or check actions.
 //!
 //! A row lays out by the card's own width (container queries in app.css): a table row with every column on wide
 //! cards, two lines on medium ones, and three on narrow ones (the remove control lifted beside the name). The action
@@ -9,7 +8,7 @@
 use super::Page;
 use super::actions::{ActionControl, ReasonLine, RowLine, icon_name};
 use super::flow::FlowPanel;
-use super::model::{AgPolicy, Provider, Row};
+use super::model::{Provider, Row};
 use crate::ui::*;
 use leptos::prelude::*;
 
@@ -73,8 +72,6 @@ pub fn ProviderCard(page: Page, id: String) -> impl IntoView {
                 .unwrap_or_default()
         })
     });
-    let switchable = Memo::new(move |_| prov.with(|p| p.as_ref().is_some_and(|p| p.switchable)));
-    let can_switch = Memo::new(move |_| prov.with(|p| p.as_ref().is_some_and(|p| p.can_switch)));
     let empty = Memo::new(move |_| {
         prov.with(|p| {
             p.as_ref()
@@ -85,7 +82,6 @@ pub fn ProviderCard(page: Page, id: String) -> impl IntoView {
     });
     let trash =
         Memo::new(move |_| prov.with(|p| p.as_ref().map(|p| p.trash.clone()).unwrap_or_default()));
-    let ag = Memo::new(move |_| prov.with(|p| p.as_ref().is_some_and(|p| p.ag)));
     let flow =
         Memo::new(move |_| prov.with(|p| p.as_ref().map(|p| p.flow.clone()).unwrap_or_default()));
     let foot = Memo::new(move |_| {
@@ -129,10 +125,10 @@ pub fn ProviderCard(page: Page, id: String) -> impl IntoView {
                     </span>
                 </div>
             </div>
-            <div class="acc-rows" class:switchable=move || switchable.get()>
+            <div class="acc-rows">
                 <For each=move || row_ids.get() key=|id| id.clone() children=move |rid| {
                     let row = Memo::new(move |_| prov.with(|p| p.as_ref().and_then(|p| p.rows.iter().find(|r| r.id == rid).cloned())));
-                    view! { <RowItem page=page row=row can_switch=can_switch/> }
+                    view! { <RowItem page=page row=row/> }
                 }/>
                 {move || { let e = empty.get(); (!e.is_empty()).then(|| view! { <p class="acc-empty q3">{e}</p> }) }}
             </div>
@@ -155,9 +151,6 @@ pub fn ProviderCard(page: Page, id: String) -> impl IntoView {
                         }
                     }).collect_view()}
                 </div>
-            </Show>
-            <Show when=move || ag.get()>
-                <AgPolicyBox page=page/>
             </Show>
             <FlowPanel page=page provider=provider.clone() flow=flow/>
             <div class="prov-foot">
@@ -186,18 +179,11 @@ pub fn ProviderCard(page: Page, id: String) -> impl IntoView {
     }
 }
 
-/// One account row with its lines: the inline "Activate anyway?", the remove / restore / refusal line, and the reason
-/// a tap on an off control opened.
+/// One account row with its lines: the remove / restore / refusal line, and the reason a tap on an off control
+/// opened. The live login on its computer carries the Active mark.
 #[component]
-fn RowItem(page: Page, row: Memo<Option<Row>>, can_switch: Memo<bool>) -> impl IntoView {
+fn RowItem(page: Page, row: Memo<Option<Row>>) -> impl IntoView {
     let reason = RwSignal::new(String::new());
-    let confirming = RwSignal::new(false);
-    // a row that no longer asks (its reading moved under the switch point) closes its question
-    Effect::new(move |_| {
-        if !row.with(|r| r.as_ref().is_some_and(|r| r.confirm)) {
-            confirming.set(false);
-        }
-    });
     let get = move || row.get().unwrap_or_default();
     let id = Memo::new(move |_| row.with(|r| r.as_ref().map(|r| r.id.clone()).unwrap_or_default()));
     let active = Memo::new(move |_| row.with(|r| r.as_ref().is_some_and(|r| r.active)));
@@ -209,20 +195,6 @@ fn RowItem(page: Page, row: Memo<Option<Row>>, can_switch: Memo<bool>) -> impl I
         !id.is_empty() && page.selected.get() == id
     });
     let set_reason = Callback::new(move |r: String| reason.set(r));
-    let activate = move |r: &Row| {
-        if r.confirm {
-            confirming.set(true);
-        } else {
-            page.send(&r.activate_kind, &r.profile);
-        }
-    };
-    let confirm_runs = Memo::new(move |_| {
-        row.with(|r| {
-            r.as_ref()
-                .map(|r| r.confirm_runs.clone())
-                .unwrap_or_default()
-        })
-    });
     view! {
         <div class="acc-item" class:active=move || active.get() class:sel=move || selected.get()
             class:gone=move || row.with(|r| r.as_ref().is_some_and(|r| r.gone))
@@ -265,28 +237,15 @@ fn RowItem(page: Page, row: Memo<Option<Row>>, can_switch: Memo<bool>) -> impl I
                 <div class="acc-acts">
                     {move || {
                         let r = get();
+                        r.active.then(|| view! { <ActiveMark label=r.active_label.clone() platform="Ubuntu"/> })
+                    }}
+                    {move || {
+                        let r = get();
                         let n = r.actions.len();
                         // the remove control has its own cell (beside the name on narrow cards)
-                        r.actions.iter().cloned().enumerate().filter(|(i, a)| !(i + 1 == n && a.icon == "trash")).map(|(_, a)| {
-                            if a.kind == "switch" {
-                                let r2 = r.clone();
-                                let state = SwitchState {
-                                    active: r.active,
-                                    active_label: r.active_label.clone(),
-                                    platform: "Ubuntu".into(),
-                                    can_switch: can_switch.get(),
-                                    can_activate: a.enabled,
-                                    hint: r.activate_hint.clone(),
-                                };
-                                view! {
-                                    <SwitchSlot state=state busy=page.busy probe=a.probe.clone()
-                                        on_activate=Callback::new(move |_| activate(&r2))
-                                        on_reason=set_reason/>
-                                }.into_any()
-                            } else {
-                                view! { <ActionControl a=a page=page reason=set_reason/> }.into_any()
-                            }
-                        }).collect_view()
+                        r.actions.iter().cloned().enumerate().filter(|(i, a)| !(i + 1 == n && a.icon == "trash"))
+                            .map(|(_, a)| view! { <ActionControl a=a page=page reason=set_reason/> })
+                            .collect_view()
                     }}
                 </div>
                 <div class="acc-trash">
@@ -296,15 +255,6 @@ fn RowItem(page: Page, row: Memo<Option<Row>>, can_switch: Memo<bool>) -> impl I
                     }}
                 </div>
             </div>
-            <Show when=move || confirming.get() && row.with(|r| r.as_ref().is_some_and(|r| r.confirm))>
-                <ConfirmLine runs=confirm_runs.get_untracked() busy=page.busy
-                    on_keep=Callback::new(move |_| confirming.set(false))
-                    on_confirm=Callback::new(move |_| {
-                        confirming.set(false);
-                        let r = row.get_untracked().unwrap_or_default();
-                        page.send(&r.activate_kind, &r.profile);
-                    })/>
-            </Show>
             <RowLine line=line page=page/>
             <ReasonLine reason=reason/>
         </div>
@@ -318,69 +268,6 @@ fn email_parts(email: String) -> impl IntoView {
             view! { {local.to_string()}<wbr/>{format!("@{domain}")} }.into_any()
         }
         None => view! { {email} }.into_any(),
-    }
-}
-
-/// The Antigravity policy box: the note, the Auto-switch toggle, "Switch at % used", the watched pool and the cooldown.
-/// The % stepper sends 600 ms after the last step and shows the pending value until the server reports it (or 5 s).
-#[component]
-fn AgPolicyBox(page: Page) -> impl IntoView {
-    let ag = Memo::new(move |_| {
-        page.view
-            .with(|v| v.as_ref().map(|v| v.ag.clone()).unwrap_or_default())
-    });
-    let reported = Signal::derive(move || ag.with(|a| a.threshold));
-    let bounds = Signal::derive(move || ag.with(|a| (a.min, a.max)));
-    let enabled = Signal::derive(move || ag.with(|a| a.step_enabled && a.known && a.live));
-    let busy = page.busy;
-    let note = move || {
-        let a: AgPolicy = ag.get();
-        view! { <p class="ag-note">{(!a.note_strong.is_empty()).then(|| view! { <b>{a.note_strong.clone()}</b>" " })}{a.note.clone()}</p> }
-    };
-    view! {
-        <div class="ag-box" data-probe="ag-policy">
-            {note}
-            <div class="ag-ctls" class:off=move || !ag.with(|a| a.live)>
-                <div class="ag-param">
-                    <span class="cap">"Auto-switch"</span>
-                    <span class="ag-auto">
-                    <Toggle aria="Auto-switch"
-                        on=Signal::derive(move || ag.with(|a| a.enabled))
-                        enabled=Signal::derive(move || ag.with(|a| a.toggle_enabled) && !busy.get())
-                        tip=Signal::derive(move || ag.with(|a| a.toggle_tip.clone()))
-                        probe="ag-auto"
-                        on_toggle=Callback::new(move |on: bool| page.send("antigravity-automatic", if on { "true" } else { "false" }))/>
-                    <span class="q3">{move || if ag.with(|a| a.enabled) { "On" } else { "Off" }}</span>
-                    </span>
-                </div>
-                <div class="ag-param">
-                    <span class="cap">"Switch at % used"</span>
-                    <Stepper reported=reported bounds=bounds enabled=Signal::derive(move || enabled.get() && !busy.get())
-                        probe="ag-threshold"
-                        send=Callback::new(move |v: i32| page.send("antigravity-threshold", &format!("{v}%")))/>
-                </div>
-                <div class="ag-param grow">
-                    <span class="cap">"Watch pool"</span>
-                    {move || {
-                        let a = ag.get();
-                        let on = a.pool_enabled && !busy.get();
-                        if a.pools.is_empty() {
-                            view! { <span class="ag-none q3">"No quota pool reported yet"</span> }.into_any()
-                        } else {
-                            view! { <Choices items=a.pools value=a.pool enabled=on send=Callback::new(move |v: String| page.send("antigravity-pool", &v))/> }.into_any()
-                        }
-                    }}
-                </div>
-                <div class="ag-param">
-                    <span class="cap">"Cooldown"</span>
-                    {move || {
-                        let a = ag.get();
-                        let on = a.cooldown_enabled && !busy.get();
-                        view! { <Choices items=a.cooldowns value=a.cooldown enabled=on send=Callback::new(move |v: String| page.send("antigravity-cooldown", &v))/> }
-                    }}
-                </div>
-            </div>
-        </div>
     }
 }
 
@@ -411,77 +298,5 @@ pub(crate) fn Choices(
                 }
             }).collect_view()}
         </div>
-    }
-}
-
-/// The "% used" stepper: [-] 95% [+]. Steps queue a value that is sent 600 ms after the last one; it shows until the
-/// server reports it, or for 5 s.
-#[component]
-pub(crate) fn Stepper(
-    #[prop(into)] reported: Signal<i32>,
-    #[prop(into)] bounds: Signal<(i32, i32)>,
-    #[prop(into)] enabled: Signal<bool>,
-    probe: &'static str,
-    send: Callback<i32>,
-) -> impl IntoView {
-    let pending = RwSignal::new(-1_i32);
-    let serial = RwSignal::new(0_u64);
-    Effect::new(move |_| {
-        let r = reported.get();
-        if pending.get_untracked() == r {
-            pending.set(-1);
-        }
-    });
-    let shown = move || {
-        let p = pending.get();
-        if p >= 0 { p } else { reported.get() }
-    };
-    let step = move |d: i32| {
-        let (min, max) = bounds.get_untracked();
-        let base = {
-            let p = pending.get_untracked();
-            if p >= 0 { p } else { reported.get_untracked() }
-        };
-        if base < 0 {
-            return;
-        }
-        let next = (base + d).clamp(min, max);
-        pending.set(next);
-        serial.update(|s| *s += 1);
-        let mine = serial.get_untracked();
-        // plain browser timers: a reactive owner rebuilt meanwhile would cancel Leptos timers (NOTES.md)
-        let fire = wasm_bindgen::closure::Closure::once_into_js(move || {
-            if serial.try_get_untracked() != Some(mine) {
-                return;
-            }
-            let value = pending.get_untracked();
-            if value >= 0 {
-                send.run(value);
-                let release = wasm_bindgen::closure::Closure::once_into_js(move || {
-                    if serial.try_get_untracked() == Some(mine) {
-                        let _ = pending.try_set(-1);
-                    }
-                });
-                let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(
-                    wasm_bindgen::JsCast::unchecked_ref(&release),
-                    5000,
-                );
-            }
-        });
-        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(
-            wasm_bindgen::JsCast::unchecked_ref(&fire),
-            600,
-        );
-    };
-    view! {
-        <span class="stepper" class:off=move || !enabled.get() data-probe=probe>
-            <button type="button" class="st-btn" aria-label="Lower threshold"
-                disabled={move || !enabled.get() || shown() <= bounds.get().0 || shown() < 0}
-                on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); step(-1); }><Icon name="minus"/></button>
-            <span class="st-val tnum">{move || { let v = shown(); if v < 0 { "–".to_string() } else { format!("{v}%") } }}</span>
-            <button type="button" class="st-btn" aria-label="Raise threshold"
-                disabled={move || !enabled.get() || shown() >= bounds.get().1 || shown() < 0}
-                on:click=move |e: web_sys::MouseEvent| { e.stop_propagation(); step(1); }><Icon name="plus"/></button>
-        </span>
     }
 }

@@ -159,7 +159,7 @@ const registry = (accounts, trash = []) => ({ providers: [], accounts, jobs: [],
 test('the page is versioned and lists every provider from the registry, sign-in flows first', () => {
   const vm = accountsViewModel(data([account()], { providers: providers() }), { now });
   assert.equal(vm.version, ACCOUNTS_VIEW_VERSION);
-  assert.equal(vm.version, 3);
+  assert.equal(vm.version, 4);
   assert.deepEqual(
     vm.colA.map((p) => p.id),
     ['claude', 'codex', 'antigravity']
@@ -229,7 +229,7 @@ test('rows show the status only for an exception, the last sample and the source
   assert.equal(row(vm, 'codex:one').srcSub, 'Ubuntu');
 });
 
-test('Codex rows: Activate, Sign in again and Remove are live from the server; the active row is refused inline', () => {
+test('Codex rows: Sign in again and Remove are live from the server; the live login is refused inline', () => {
   const accounts = [
     account({ isActive: true }),
     account({
@@ -245,29 +245,26 @@ test('Codex rows: Activate, Sign in again and Remove are live from the server; t
   ]);
   const vm = accountsViewModel(data(accounts, { providers: providers() }), { now, registry: r });
   const codex = provider(vm, 'codex');
-  assert.equal(codex.slots, 3);
-  assert.equal(codex.canSwitch, true);
+  assert.equal(codex.slots, 2);
+  assert.equal('canSwitch' in codex, false);
   for (const row of codex.rows)
     assert.deepEqual(
       row.actions.map((a) => a.kind),
-      ['switch', 'button', 'icon']
+      ['button', 'icon']
     );
   const active = row(vm, 'codex:one'),
     other = row(vm, 'codex:two');
   assert.equal(active.active, true);
-  assert.equal(other.actions[0].act, 'activate');
-  assert.equal(other.actions[0].enabled, true);
-  assert.equal(active.actions[0].enabled, false);
   assert.deepEqual(
-    other.actions.slice(1).map((a) => [a.act, a.enabled, a.coming, a.refused]),
+    other.actions.map((a) => [a.act, a.enabled, a.coming, a.refused]),
     [
       ['signin-again', true, false, false],
       ['remove', true, false, false],
     ]
   );
-  // the active account: both open their reason under the row instead of calling the server
+  // the live login: both open their reason under the row instead of calling the server
   assert.deepEqual(
-    active.actions.slice(1).map((a) => [a.act, a.value, a.refused]),
+    active.actions.map((a) => [a.act, a.value, a.refused]),
     [
       ['refuse', 'codex:one\naccount_active_signin', true],
       ['refuse', 'codex:one\naccount_active', true],
@@ -279,8 +276,8 @@ test('Codex rows: Activate, Sign in again and Remove are live from the server; t
   // no "coming" anywhere on a live Codex section
   assert.ok(codex.rows.flatMap((x) => x.actions).every((a) => !a.coming));
   // every live control is named for the harness
-  assert.equal(other.actions[1].probe, 'signin-again:codex:two');
-  assert.equal(other.actions[2].probe, 'remove:codex:two');
+  assert.equal(other.actions[0].probe, 'signin-again:codex:two');
+  assert.equal(other.actions[1].probe, 'remove:codex:two');
 });
 
 test('a provider whose sign-in needs a trusted connection says so; one with no flow on the server is "coming"', () => {
@@ -316,7 +313,7 @@ test('a provider whose sign-in needs a trusted connection says so; one with no f
   assert.equal(add.enabled, false);
   assert.equal(add.coming, false);
   assert.match(add.tip, /trusted connection/);
-  assert.match(row(vm, 'codex:two').actions[1].tip, /local network trust/);
+  assert.match(row(vm, 'codex:two').actions[0].tip, /local network trust/);
   // Antigravity: Add is coming and the footer reads "Needs setup"
   const agp = provider(vm, 'antigravity');
   assert.equal(agp.foot[0].coming, true);
@@ -341,26 +338,6 @@ test('a provider whose sign-in needs a trusted connection says so; one with no f
     ).reason,
     'The Codex command-line tool is not installed on the dashboard computer.'
   );
-});
-
-test('activating an account past the switch point asks first, as on Home', () => {
-  const vm = accountsViewModel(
-    data([
-      account({ isActive: true }),
-      account({
-        id: 'codex:two',
-        email: 'two@example.test',
-        label: 'two',
-        windows: [window({ usedPercent: 99, remainingPercent: 1 })],
-        capabilities: { codexProfile: 'two' },
-      }),
-    ]),
-    { now }
-  );
-  const other = row(vm, 'codex:two');
-  assert.equal(other.confirm, true);
-  assert.equal(other.activateKind, 'activate');
-  assert.equal(other.confirmRuns[0].text, '99% used');
 });
 
 test("Claude rows open on Mac or Windows; Remove is live, and a computer's default profile is refused with its reason", () => {
@@ -522,7 +499,7 @@ test('the Claude trash lists each profile with Restore; Delete now is live with 
   assert.equal(provider(vm, 'codex').trash.length, 0);
 });
 
-test('Antigravity: one account shows no Activate slot, and the policy waits for a second account', () => {
+test('Antigravity: an account row has Sign in again and Remove, and no switch slot or policy', () => {
   const ag = account({
     id: 'antigravity:one',
     provider: 'antigravity',
@@ -531,57 +508,17 @@ test('Antigravity: one account shows no Activate slot, and the policy waits for 
     plan: 'Google AI Pro',
     capabilities: {},
   });
-  const auto = {
-    enabled: false,
-    thresholdUsedPercent: 90,
-    pollIntervalSeconds: 60,
-    maxQuotaAgeSeconds: 300,
-    cooldownSeconds: 900,
-    selectedHostIds: ['ubuntu'],
-    requestedPoolId: null,
-    outcome: 'setup_required',
-    message: 'Needs two accounts',
-    activationInProgress: false,
-  };
-  const vm = accountsViewModel(data([ag]), { now, antigravityAuto: auto });
+  const vm = accountsViewModel(data([ag]), { now });
   const r = row(vm, 'antigravity:one');
   assert.deepEqual(
-    r.actions.map((a) => a.kind),
-    ['empty', 'button', 'icon']
-  );
-  assert.deepEqual(
     r.actions.map((a) => a.act || a.kind),
-    ['empty', 'signin-again', 'remove']
+    ['signin-again', 'remove']
   );
   // an existing account signs in again; only the first sign-in says "Sign in"
-  assert.equal(r.actions[1].label, 'Sign in again');
-  assert.equal(provider(vm, 'antigravity').ag, true);
-  assert.equal(vm.ag.live, false);
-  assert.equal(vm.ag.known, true);
-  assert.equal(vm.ag.toggleEnabled, false);
-  assert.equal(vm.ag.threshold, 90);
-  assert.equal(vm.ag.cooldown, '900');
-  assert.deepEqual(
-    vm.ag.cooldowns.map((c) => c.label),
-    ['5 min', '15 min', '30 min', '60 min']
-  );
-  assert.equal(vm.ag.noteStrong, 'Auto-switch is off until a second account is signed in.');
-  const policy = vm.policies.find((p) => p.provider === 'antigravity');
-  assert.equal(policy.wait, true);
-  assert.equal(policy.sub, 'Off until a second account is signed in');
-  // an unusual cooldown is shown as its own choice instead of being rounded
-  assert.equal(
-    accountsViewModel(data([ag]), {
-      now,
-      antigravityAuto: { ...auto, cooldownSeconds: 120 },
-    }).ag.cooldowns.at(-1).label,
-    '2 min'
-  );
-  // without a reported status the controls stay off and say why
-  const unknown = accountsViewModel(data([ag]), { now });
-  assert.equal(unknown.ag.known, false);
-  assert.equal(unknown.ag.threshold, -1);
-  assert.match(unknown.ag.noteStrong, /unavailable/);
+  assert.equal(r.actions[0].label, 'Sign in again');
+  assert.equal('ag' in provider(vm, 'antigravity'), false);
+  assert.equal('ag' in vm, false);
+  assert.equal('policies' in vm, false);
 });
 
 test('Antigravity: Add, Sign in and Remove are served through the terminal fallback, never coming', () => {
@@ -623,16 +560,14 @@ test('Antigravity: Add, Sign in and Remove are served through the terminal fallb
     assert.deepEqual(
       actions.map((a) => [a.act || a.kind, a.enabled, a.coming]),
       [
-        ['antigravity-activate', false, false],
         ['signin-again', true, false],
         ['remove', true, false],
       ]
     );
-    assert.match(actions[1].tip, /terminal on Ubuntu/);
+    assert.match(actions[0].tip, /terminal on Ubuntu/);
     // saved profiles sign in again, like every other existing signed-in account
-    assert.equal(actions[1].label, 'Sign in again');
+    assert.equal(actions[0].label, 'Sign in again');
   }
-  // Activate stays disabled here (no canActivate from the server): the live gate is untouched
 });
 
 test('Antigravity: Add is live and the section explains the supervised login when the dashboard host can run it', () => {
@@ -663,12 +598,10 @@ test('Antigravity: Add is live and the section explains the supervised login whe
     ['add', true, false]
   );
   assert.match(section.foot[0].tip, /under supervision/);
-  // the saved profile signs in again through the same supervised job (with one
-  // account there is nothing to switch, so the Activate slot stays empty)
+  // the saved profile signs in again through the same supervised job
   assert.deepEqual(
     row(vm, 'antigravity:profile:gmail').actions.map((a) => [a.act || a.kind, a.enabled, a.coming]),
     [
-      ['empty', false, false],
       ['signin-again', true, false],
       ['remove', true, false],
     ]
@@ -696,10 +629,10 @@ test('Antigravity: the live login gets a refuse control that says why, and the t
   ]);
   const vm = accountsViewModel(data([ag1], { providers: p }), { now, registry: r });
   const actions = row(vm, 'antigravity:profile:gmail').actions;
-  assert.equal(actions[1].act, 'refuse');
-  assert.equal(actions[1].enabled, true);
-  assert.equal(actions[1].label, 'Sign in again');
-  assert.match(actions[1].tip, /active account/);
+  assert.equal(actions[0].act, 'refuse');
+  assert.equal(actions[0].enabled, true);
+  assert.equal(actions[0].label, 'Sign in again');
+  assert.match(actions[0].tip, /live login/);
   // the terminal flow: title, command in the body, Copy + Close
   const view = flowView('antigravity', { type: 'terminal', step: 'run', provider: 'antigravity', accountId: ag1.id, email: ag1.email, command: 'ai-account-center antigravity signin gmail' });
   assert.equal(view.open, true);
@@ -987,7 +920,7 @@ test('"Show on dashboard" and "Show in tray" are saved on the server; the tray t
     { now }
   );
   assert.equal(provider(broken, 'kimi-code').toggleEnabled, false);
-  // a hidden Codex keeps its switch slots on this page
+  // a hidden Codex keeps its row actions on this page
   const codex = accountsViewModel(
     data(
       [
@@ -1002,71 +935,9 @@ test('"Show on dashboard" and "Show in tray" are saved on the server; the tray t
     ),
     { now }
   );
-  assert.equal(row(codex, 'codex:two').actions[0].enabled, true);
-});
-
-test('policies: Codex in % used from the server, live controls', () => {
-  const vm = accountsViewModel(data([account()]), { now });
-  const codex = vm.policies.find((p) => p.provider === 'codex');
-  assert.equal(codex.threshold, 95);
-  assert.equal(codex.enabled, true);
-  assert.equal(codex.toggleEnabled, true);
-  const unknown = accountsViewModel(data([account()], { codexAutoSwitch: null }), {
-    now,
-  }).policies.find((p) => p.provider === 'codex');
-  assert.equal(unknown.known, false);
-  assert.equal(unknown.threshold, -1);
-});
-
-test('policies: Codex blocked switch says why on the row and names the candidate', () => {
-  const two = account({
-    id: 'codex:two',
-    label: 'two',
-    email: 'two@example.test',
-    capabilities: { codexProfile: 'two', claudeProfileId: null, claudePlatforms: [] },
-  });
-  const vm = accountsViewModel(
-    data([account(), two], {
-      codexAutoSwitch: {
-        enabled: true,
-        thresholdPercent: 5,
-        pollIntervalSeconds: 60,
-        outcome: 'waiting_idle',
-        message: 'Waiting for Codex to finish active work before switching accounts.',
-        activationInProgress: false,
-        candidate: 'two',
-      },
-    }),
-    { now }
-  );
-  const codex = vm.policies.find((p) => p.provider === 'codex');
-  assert.match(codex.sub, /Waiting for Codex to finish active work/);
-  assert.match(codex.sub, /Will switch to two@example\.test when Codex goes idle\./);
-  assert.match(codex.sub, /Press Activate on two@example\.test to switch now\./);
-  assert.equal(codex.warn, false);
-  const burning = accountsViewModel(
-    data([account(), two], {
-      codexAutoSwitch: {
-        enabled: true,
-        thresholdPercent: 5,
-        pollIntervalSeconds: 60,
-        outcome: 'waiting_idle',
-        message: 'Waiting while paid credits burn.',
-        activationInProgress: false,
-        candidate: 'two',
-        usingCredits: true,
-      },
-    }),
-    { now }
-  ).policies.find((p) => p.provider === 'codex');
-  assert.equal(burning.warn, true);
-});
-
-test('policies: Codex healthy switch adds no sub-line', () => {
-  const vm = accountsViewModel(data([account()]), { now });
-  assert.equal(
-    vm.policies.find((p) => p.provider === 'codex').sub,
-    ''
+  assert.deepEqual(
+    row(codex, 'codex:two').actions.map((a) => a.act || a.kind),
+    ['signin-again', 'remove']
   );
 });
 
@@ -2181,12 +2052,12 @@ test('the line under a row: a remove to confirm with its effects, a refusal with
     ]
   );
   for (const [code, words] of [
-    ['account_active', /active account/],
+    ['account_active', /live login/],
     ['account_active_signin', /cannot sign in again/],
     ['account_default', /saved default/],
     ['account_protected', /default Claude profile/],
     ['last_account', /last account/],
-    ['activation_running', /switch runs/],
+    ['activation_running', /another change/],
     ['signin_running', /sign-in runs/],
     ['app_running', /open in Claude/],
     ['app_state_unknown', /could not be checked/],
@@ -2525,7 +2396,7 @@ test('accountsViewModel: the install field ships hidden until the PWA wiring fee
 });
 
 
-test('server hidden flags preserve Accounts activation state and independent dashboard and tray choices', () => {
+test('server hidden flags preserve the Accounts live-login mark and independent dashboard and tray choices', () => {
   const active = account({ isActive: true, hidden: true });
   const other = account({ id: 'codex:two', hidden: true, capabilities: { codexProfile: 'two' } });
   const dto = data([active, other], { settings: { hiddenProviders: ['codex'], hiddenAccountIds: [active.id, other.id],
@@ -2533,8 +2404,7 @@ test('server hidden flags preserve Accounts activation state and independent das
   const before = structuredClone(dto);
   const vm = accountsViewModel(dto, { now });
   assert.equal(row(vm, active.id).active, true);
-  assert.equal(row(vm, other.id).actions[0].act, 'activate');
-  assert.equal(row(vm, other.id).actions[0].enabled, true);
+  assert.equal(row(vm, other.id).active, false);
   assert.deepEqual(dto, before);
 });
 

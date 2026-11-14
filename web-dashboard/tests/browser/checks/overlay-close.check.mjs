@@ -191,7 +191,7 @@ export const tests = {
 		}
 	},
 
-	async 'overlay-close: Details, the switch approval and the account menu close in every pose'(t) {
+	async 'overlay-close: Details and the account menu close in every pose'(t) {
 		for (const p of POSES) {
 			await t.step(p.name, async () => {
 				await poseContext(t, p);
@@ -200,11 +200,6 @@ export const tests = {
 				await t.page.click(row);
 				await t.until('Details shows the account', () => document.querySelector('.details .dt-title')?.textContent === 'codex.second@example.invalid', null, { timeout: 10000 });
 				await assertClose(t, `${p.name} details`, '[data-probe="details-close"]', '.details', p.safe);
-				await t.page.click('.acc-item[data-row="codex:two"] [data-probe="activate:codex:two"]');
-				await t.until('the approval shows', () => !!document.querySelector('.adialog'), null, { timeout: 15000 });
-				// Measure the last (rightmost) button, but close with Escape (the approval's cancel): in this fixture
-				// "Yes" gets a fresh 409 confirmation and the controller shows the dialog again (pkg F recheck #2 R1).
-				await assertClose(t, `${p.name} approval`, '.adialog .a-btns .btn:last-of-type', '.adialog', p.safe, 'escape');
 				const btn = await accountButton(t);
 				await t.page.click(btn);
 				await t.page.waitForSelector('.acct-menu', { timeout: 5000 });
