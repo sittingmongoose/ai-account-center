@@ -524,7 +524,7 @@ function loadCache(file: string, at: () => string = () => new Date().toISOString
     value.discovery = parseAnalyticsDiscovery(value.discovery);
     // A kind's unfinished list is a diagnostic: a malformed one is dropped.
     for (const read of Object.values(value.kinds ?? {})) {
-      if (!read) continue;
+      if (!read || typeof read !== 'object') continue;
       if (
         !Number.isSafeInteger(read.unreadableFolders) ||
         (read.unreadableFolders ?? 0) <= 0 ||
