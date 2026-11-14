@@ -346,10 +346,20 @@ export interface AccountAnalyticsCursorAccount {
   cause?: string;
   /** The key's last four characters, never more. */
   last4?: string;
+  /** The account feed's own total: authoritative for the account, never added to the page's totals. */
   accountTokens: number;
+  /**
+   * Estimate of how much of the account the scanned computers' runs cover. The account's events
+   * carry no run id, so this is a model-and-time overlap, reported as an estimate and never
+   * summed with the account total.
+   */
   matchedTokens: number;
+  /** The estimate's remainder (`accountTokens` - `matchedTokens`); shown as an estimate, never counted. */
   outsideTokens: number;
+  /** Local Cursor tokens the account's events do not show (another account on a computer, say). */
   localUnmatchedTokens: number;
+  /** Present when some of the account's events carried no Cursor cost: any cost figure is partial. */
+  costPartial?: boolean;
 }
 
 /** Internal facts the activity reader passes to the analytics service; never serialised. */

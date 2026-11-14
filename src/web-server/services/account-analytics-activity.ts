@@ -21,7 +21,6 @@ import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
   LOCAL_SCANNER_KINDS,
   analyticsRemoteTargets,
-  analyticsRowsResult,
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
   localScannerOwned,
@@ -120,11 +119,13 @@ interface ActivityState {
   /** When the published grid first showed a still-scanning cell; null once settled. Bounds the converge cadence. */
   scanningSince: number | null;
   /**
-   * The Cursor account through AAC's key (DESIGN 17): what the page says about it, and the part of
-   * its usage outside the scanned computers, merged with the other Cursor usage at publish. Kept
-   * apart from `remote`, which is carried between collections and would count it again.
+   * The Cursor account through AAC's key (DESIGN 17): what the page says about it. Its feed is
+   * the authoritative account total and the local runs are an overlapping breakdown of it, so
+   * no part of it is merged into the providers' usage: the account's events cannot be split
+   * reliably into the local runs' and the rest (review M1). Kept apart from `remote`, which is
+   * carried between collections.
    */
-  cursorAccount: { status: AccountAnalyticsCursorAccount; result: UsageWorkerResult | null } | null;
+  cursorAccount: { status: AccountAnalyticsCursorAccount } | null;
   /** Rates memoised for the current snapshot; replaced whenever the snapshot is. */
   pricing: AccountAnalyticsPricingLookup;
   /** Recent cost of projecting this snapshot, reserved out of the response budget. */
@@ -1303,14 +1304,13 @@ export class AccountAnalyticsActivityService {
     }
     if (generation !== state.generation) return;
     // The Cursor account (DESIGN 17), deduped against every scanned computer's Cursor runs.
+    // Only its numbers are kept for the page: nothing of the account is added to the providers'
+    // usage, which already holds the local runs the account's events overlap.
     try {
       const account = await this.finishCursorAccount(accountRead, remoteAnswer, deadline);
       if (account) {
-        const { rows, ...status } = account;
-        state.cursorAccount = {
-          status,
-          result: rows.length ? analyticsRowsResult(rows, 'cursor') : null,
-        };
+        const { rows: _rows, ...status } = account;
+        state.cursorAccount = { status };
       }
     } catch {
       /* The account never fails a collection; the last answer stands. */
@@ -1416,10 +1416,9 @@ export class AccountAnalyticsActivityService {
     // A kind the local scanner owns comes from its answer alone; the collector's rows for it go,
     // in the same step that adds the scanner's (DESIGN 16.0 B).
     for (const kind of answer?.local?.owned ?? []) merged.delete(kind);
-    // The Cursor account's usage outside the scanned computers (DESIGN 17.4): never the whole
-    // account, which would count T3's runs twice.
-    if (state.cursorAccount?.result)
-      merged.set('cursor', [...(merged.get('cursor') ?? []), state.cursorAccount.result]);
+    // The Cursor account (DESIGN 17.4) adds nothing here: its feed is the authoritative
+    // account total, the local runs already in `merged` are an overlapping breakdown of it, and
+    // the account's events cannot prove which residual is outside them (review M1).
     const retainingClaude = args.retainedClaudeRemote !== undefined;
     if (retainingClaude) {
       answer = {

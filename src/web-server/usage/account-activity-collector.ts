@@ -1130,6 +1130,8 @@ export function aggregateRows(
     /** OMP logged cost per model; those tokens are not priced again. */
     loggedCost: Map<string, number>;
     unlogged: Map<string, { input: number; output: number; write: number; read: number }>;
+    /** Some row's source reported no cost at all: the bucket's cost is partial, never priced. */
+    costUnknown: boolean;
     requestCount: number;
     firstActivity: string;
     lastActivity: string;
@@ -1143,6 +1145,7 @@ export function aggregateRows(
     models: new Map(),
     loggedCost: new Map(),
     unlogged: new Map(),
+    costUnknown: false,
     requestCount: 0,
     firstActivity: '',
     lastActivity: '',
@@ -1171,7 +1174,15 @@ export function aggregateRows(
       'cacheReadTokens',
     ] as const)
       model[field] += entry[field];
-    if (entry.costUsd !== undefined && entry.costUsd > 0) {
+    if (entry.costBasis === 'unknown') {
+      // The source gave no cost: the tokens count, the cost stays unknown, no list price is
+      // ever applied, and the bucket says its cost is partial.
+      bucket.costUnknown = true;
+    } else if (
+      entry.costUsd !== undefined &&
+      (entry.costUsd > 0 || entry.costBasis === 'reported')
+    ) {
+      // A source-reported cost is complete even at 0; only a positive logged cost adds here.
       bucket.loggedCost.set(modelKey, (bucket.loggedCost.get(modelKey) ?? 0) + entry.costUsd);
     } else {
       const pending = bucket.unlogged.get(modelKey) ?? { input: 0, output: 0, write: 0, read: 0 };
@@ -1222,6 +1233,7 @@ export function aggregateRows(
     const fallbackCost = modelBreakdowns.reduce((sum, item) => sum + (item.fallbackCost ?? 0), 0);
     modelBreakdowns.sort((left, right) => right.cost - left.cost);
     return {
+      ...(bucket.costUnknown && { costPartial: true }),
       source,
       inputTokens: modelBreakdowns.reduce((sum, item) => sum + item.inputTokens, 0),
       outputTokens: modelBreakdowns.reduce((sum, item) => sum + item.outputTokens, 0),

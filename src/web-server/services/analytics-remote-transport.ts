@@ -205,6 +205,13 @@ export interface AnalyticsRemoteRow {
   cw: number;
   c: number;
   n: number;
+  /**
+   * This row's cost basis, set by the reader whose source reports cost itself (the Cursor
+   * account): `reported` — `c` is the source's own cost, complete even at 0, never priced
+   * again; `unknown` — the source gave none: the tokens count, no list price is applied, and
+   * the totals are marked partial. Absent: the logged-cost-else-list-price rule of `c`.
+   */
+  costBasis?: 'reported' | 'unknown';
 }
 
 /**

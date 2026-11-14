@@ -11,6 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { handleCursorKeyCommand } from '../../../src/commands/cursor-key-command';
 import { AccountAnalyticsActivityService } from '../../../src/web-server/services/account-analytics-activity';
+import { analyticsRowsResult } from '../../../src/web-server/services/analytics-remote-sources';
 import type { AccountAnalyticsQuery } from '../../../src/web-server/services/account-analytics-types';
 import {
   CURSOR_ACCOUNT_TTL_MS,
@@ -134,7 +135,7 @@ describe('only the usage outside the scanned computers is added', () => {
         run: async (args, input) => {
           asked = { args, body: JSON.parse(input) };
           return {
-            rows: [ROW],
+            rows: [ROW, { ...ROW, uncosted: 1, cents: 0 }],
             summary: {
               accountTokens: 2640,
               matchedTokens: 1320,
@@ -155,6 +156,8 @@ describe('only the usage outside the scanned computers is added', () => {
       outsideTokens: 1320,
       matchedTokens: 1320,
     });
+    // An hour whose events all had a cost carries Cursor's own cost, reported even at 0; an
+    // hour where any event had none is a row of unknown cost, marked partial, never priced.
     expect(outside.rows).toEqual([
       {
         k: 'cursor',
@@ -167,8 +170,65 @@ describe('only the usage outside the scanned computers is added', () => {
         cw: 0,
         c: 0.125,
         n: 2,
+        costBasis: 'reported',
+      },
+      {
+        k: 'cursor',
+        f: 'cursor-account',
+        m: 'claude-5-sonnet',
+        h: '2026-11-13 15:00',
+        i: 300,
+        o: 20,
+        cr: 1000,
+        cw: 0,
+        c: 0,
+        n: 2,
+        costBasis: 'unknown',
       },
     ]);
+    expect(outside.costPartial).toBe(true);
+  });
+
+  it('a reported zero cost stays zero and a missing cost stays unknown, never list-priced (review M2)', async () => {
+    // The review's probe: an outside account row for gpt-4o with 1,000,000 input tokens and no
+    // cost became USD 2.50 through the aggregation's list prices, for both a reported zero
+    // (`cents=0, uncosted=0`) and a missing cost (`uncosted=1`). Neither may be priced again.
+    for (const uncosted of [0, 1]) {
+      const row = {
+        h: '2026-11-13 15:00',
+        m: 'gpt-4o',
+        i: 1_000_000,
+        o: 0,
+        cr: 0,
+        cw: 0,
+        n: 1,
+        cents: 0,
+        uncosted,
+      };
+      const outside = await cursorAccountOutside(
+        { ...read, rows: [row] },
+        [],
+        {
+          run: async () => ({
+            rows: [row],
+            summary: {
+              accountTokens: 1_000_000,
+              matchedTokens: 0,
+              outsideTokens: 1_000_000,
+              localUnmatchedTokens: 0,
+            },
+          }),
+        }
+      );
+      expect(outside.rows[0].c).toBe(0);
+      expect(outside.rows[0].costBasis).toBe(uncosted === 0 ? 'reported' : 'unknown');
+      expect(outside.costPartial).toBe(uncosted === 0 ? undefined : true);
+      const result = analyticsRowsResult(outside.rows, 'cursor');
+      expect(result.hourly).toHaveLength(1);
+      // Was USD 2.50 at the reviewed head: the list price must never touch these rows.
+      expect(result.hourly[0].cost).toBe(0);
+      expect(result.hourly[0].costPartial).toBe(uncosted === 0 ? undefined : true);
+    }
   });
 
   it("adds nothing when the dedupe cannot run: counting T3's runs twice is worse", async () => {
@@ -185,7 +245,7 @@ describe('only the usage outside the scanned computers is added', () => {
     });
   });
 
-  it('the activity totals hold the local runs plus the outside part, and the answer names the account', async () => {
+  it('the activity totals hold the local runs only; the account is shown beside them, never added (review M1)', async () => {
     const hourly = (model: string, input: number): UsageWorkerResult =>
       ({
         daily: [],
@@ -271,13 +331,16 @@ describe('only the usage outside the scanned computers is added', () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
         answer = await service.get(query, NOW - 86_400_000, NOW);
       }
-      // The dedupe got the scanned Cursor rows; the totals are 1,000 local + 700 outside, not 1,700 + 1,000.
+      // The dedupe got the scanned Cursor rows; the totals are the 1,000 local tokens only. The
+      // account's 1,700 (authoritative) and its 700 estimated outside part are shown beside the
+      // totals, never added: the account's events overlap the local runs and cannot be split.
       expect(local).toEqual([
         { h: '2026-11-13 14:00', m: 'grok-4.7', i: 1000, o: 0, cr: 0, cw: 0 },
       ]);
-      expect(answer.totals?.inputTokens).toBe(1700);
+      expect(answer.totals?.inputTokens).toBe(1000);
       expect(answer.cursorAccount).toMatchObject({
         state: 'read',
+        accountTokens: 1700,
         outsideTokens: 700,
         last4: 'WXYZ',
       });

@@ -820,8 +820,16 @@ function toCompact(rows: AnalyticsRemoteRow[]): CompactEntry[] {
       // The tool that logged the row; its routing provider prices it.
       target: row.k,
       ...remoteRowProvider(row.k, row.p),
-      // The helper never mixes logged and unlogged events in one row.
-      ...(row.c > 0 ? { costUsd: row.c } : {}),
+      // The helper never mixes logged and unlogged events in one row. A row whose source
+      // reported its cost carries it whole (a reported 0 stays 0); a row whose source gave
+      // none never takes a list price and marks its bucket partial.
+      ...(row.costBasis === 'unknown'
+        ? { costBasis: 'unknown' as const }
+        : row.costBasis === 'reported'
+          ? { costUsd: row.c, costBasis: 'reported' as const }
+          : row.c > 0
+            ? { costUsd: row.c }
+            : {}),
     },
     events: Math.floor(row.n),
   }));

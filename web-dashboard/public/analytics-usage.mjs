@@ -1351,8 +1351,18 @@ export function cursorAccountLine(account, now = Date.now()) {
   const read = finite(at) ? `read ${relTxt(at, now)}` : 'never read';
   switch (account.state) {
     case 'read': {
-      const outside = finite(account.outsideTokens) ? account.outsideTokens : 0;
-      return `Cursor account ${read}: ${outside > 0 ? `${tokC(outside)} tokens used outside the scanned computers are counted` : 'all its usage is T3\'s runs, already counted'}${finite(account.localUnmatchedTokens) && account.localUnmatchedTokens > 0 ? `; ${tokC(account.localUnmatchedTokens)} local Cursor tokens are not in this account's events` : ''}.`;
+      // The account feed is the authoritative account total; the local runs are an overlapping
+      // breakdown of it. Nothing of the account is added to the page's totals, which already
+      // hold the local runs (the account's events cannot prove which residual is outside them).
+      const total = finite(account.accountTokens) ? account.accountTokens : 0;
+      const matched = finite(account.matchedTokens) ? account.matchedTokens : 0;
+      const local = finite(account.localUnmatchedTokens) && account.localUnmatchedTokens > 0
+        ? `; ${tokC(account.localUnmatchedTokens)} local Cursor tokens are not in this account's events`
+        : '';
+      if (total <= 0) return `Cursor account ${read}: no usage in range${local}.`;
+      return matched > 0
+        ? `Cursor account ${read}: ${tokC(total)} tokens on the account, about ${tokC(matched)} of them T3's runs already counted here; the rest is not added to these totals${local}.`
+        : `Cursor account ${read}: ${tokC(total)} tokens on the account, none of it matched to the local runs; it is not added to these totals${local}.`;
     }
     case 'no_key':
       return 'Cursor account: no key, so Cursor used outside T3 (the app, cloud agents) is not counted.';

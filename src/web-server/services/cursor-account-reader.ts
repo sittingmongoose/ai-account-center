@@ -57,7 +57,7 @@ export interface CursorAccountRead {
   events: number;
 }
 
-/** What Analytics shows for the account (DESIGN 17.5) and the part it adds (17.4). */
+/** What Analytics shows for the account (DESIGN 17.5) beside the totals it never joins. */
 export interface CursorAccountAnswer {
   state: CursorAccountState;
   checkedAt: string | null;
@@ -68,7 +68,12 @@ export interface CursorAccountAnswer {
   matchedTokens: number;
   outsideTokens: number;
   localUnmatchedTokens: number;
-  /** The account's usage outside the scanned computers, in the remote rows' shape. */
+  /**
+   * Present when some of the account's events carried no Cursor cost: any cost figure for the
+   * account is partial, and no list price fills the gap.
+   */
+  costPartial?: boolean;
+  /** The account's own hourly rows, in the remote rows' shape; never added to any total. */
   rows: AnalyticsRemoteRow[];
 }
 
@@ -299,8 +304,10 @@ export async function readCursorAccount(
 }
 
 /**
- * The account's usage that no local run accounts for (DESIGN 17.4), as rows of tool `cursor`; with
- * the four totals. `local` are the scanned computers' Cursor hourly rows.
+ * The account's usage beside the local runs (DESIGN 17.4). The account feed is the authoritative
+ * account total; the local runs are an overlapping breakdown of it, never added to it, so no
+ * part of the answer is added to Analytics' totals. `local` are the scanned computers' Cursor
+ * hourly rows; the reader's summary reports the account total and the overlap estimate.
  */
 export async function cursorAccountOutside(
   read: CursorAccountRead,
@@ -330,7 +337,7 @@ export async function cursorAccountOutside(
       JSON.stringify({ account: read.rows, local })
     )) as typeof answer;
   } catch {
-    // Without the dedupe nothing of the account is added: counting it twice is worse.
+    // Without the dedupe the account's numbers cannot be trusted either: only the states remain.
     return { ...empty, state: 'unavailable', cause: 'dedupe_failed' };
   }
   const summary = answer?.summary ?? {};
@@ -344,10 +351,11 @@ export async function cursorAccountOutside(
     o: row.o,
     cr: row.cr,
     cw: row.cw,
-    // Cursor's own cost where every event in the hour had one; otherwise the list-price estimate
-    // (a row never mixes logged and unlogged cost).
+    // Cursor's own cost where every event in the hour had one, kept whole even at 0. An hour
+    // where any event had none is a row of unknown cost: never priced, marked partial.
     c: row.uncosted === 0 ? row.cents / 100 : 0,
     n: row.n,
+    costBasis: row.uncosted === 0 ? ('reported' as const) : ('unknown' as const),
   }));
   return {
     ...base,
@@ -355,6 +363,7 @@ export async function cursorAccountOutside(
     matchedTokens: total('matchedTokens'),
     outsideTokens: total('outsideTokens'),
     localUnmatchedTokens: total('localUnmatchedTokens'),
+    ...(rows.some((row) => row.costBasis === 'unknown') ? { costPartial: true } : {}),
     rows,
   };
 }

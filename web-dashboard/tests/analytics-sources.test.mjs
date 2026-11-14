@@ -340,10 +340,11 @@ test('round 2 cells: Cursor runs read where a run store is, Devin CLI read, expe
   assert.match(inc.line, /Includes .*Cursor/);
 });
 
-test('the Cursor account line says each state; only usage outside the scanned computers counts (DESIGN 17.5)', () => {
+test('the Cursor account line says each state; the account total is shown beside the totals, never added to them (DESIGN 17.5)', () => {
   const base = { checkedAt: at(1), readAt: at(1), accountTokens: 0, matchedTokens: 0, outsideTokens: 0, localUnmatchedTokens: 0 };
-  assert.match(cursorAccountLine({ ...base, state: 'read', outsideTokens: 1_500_000, matchedTokens: 400 }, now), /^Cursor account read .*: 1\.5M tokens used outside the scanned computers are counted\.$/);
-  assert.match(cursorAccountLine({ ...base, state: 'read' }, now), /all its usage is T3's runs, already counted/);
+  assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 1_500_000, matchedTokens: 400_000 }, now), /^Cursor account read .*: 1\.5M tokens on the account, about 400K of them T3's runs already counted here; the rest is not added to these totals\.$/);
+  assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 900 }, now), /900 tokens on the account, none of it matched to the local runs; it is not added to these totals/);
+  assert.match(cursorAccountLine({ ...base, state: 'read', accountTokens: 0 }, now), /no usage in range/);
   assert.equal(cursorAccountLine({ ...base, state: 'no_key', readAt: null }, now), 'Cursor account: no key, so Cursor used outside T3 (the app, cloud agents) is not counted.');
   assert.match(cursorAccountLine({ ...base, state: 'key_rejected', last4: 'WXYZ', readAt: null }, now), /key ending WXYZ was rejected/);
   assert.match(cursorAccountLine({ ...base, state: 'unavailable', cause: 'timeout' }, now), /not read just now \(timeout\); showing its usage as read/);
