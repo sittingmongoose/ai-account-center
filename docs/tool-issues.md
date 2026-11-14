@@ -91,3 +91,14 @@ tree into the isolated Nas1 copy makes all 410 on/shadow goldens pass without
 any checker/golden change. The obsolete shared tree is unchanged and stays a
 tool/environment follow-up: source copies must use the pinned dependencies.
 No golden or checker is weakened or skipped.
+
+M2 quota Nas1 check (2026-11-14): unchanged
+`clones_limit_a_computer_to_four_concurrent_channels` occasionally observes a
+maximum of three child processes instead of four under parallel test/compile
+load (the fixture sleeps only 100 ms). This is a false failure, also observed
+in M2 part 1. Workspace tests pass with `--test-threads=1`; no transport code,
+assertion or concurrency cap was changed. Queue a deterministic synchronization
+fixture for the six-hour test-tool batch. HTTPS debug symbols also make the
+unstripped agent exceed the existing 64 MiB artifact cap; run development test
+builds with CARGO_PROFILE_DEV_DEBUG=0 and CARGO_PROFILE_TEST_DEBUG=0. The cap is
+unchanged; the production artifact size still needs release-packaging checks.

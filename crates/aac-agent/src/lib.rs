@@ -1,6 +1,7 @@
 //! Read-only host agent with bounded, deadline-controlled NDJSON requests.
 mod inventory;
 mod proof;
+mod quota;
 mod signin;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{Control, Event, Handshake, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request};
@@ -158,6 +159,9 @@ fn safe_id(id: &str) -> String {
 
 async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     tokio::task::yield_now().await;
+    if request.verb == "quota-read" {
+        return quota::run(&request.args).await;
+    }
     if request.verb == "signin-expiry" {
         return signin::run(&request.args);
     }

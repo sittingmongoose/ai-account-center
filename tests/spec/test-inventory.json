@@ -91,6 +91,20 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-agent/src/quota.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "crates/aac-agent/src/quota/parse.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
       "file": "crates/aac-agent/tests/agent.rs",
       "kind": "internal",
       "evidence": [],

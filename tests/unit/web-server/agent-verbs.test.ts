@@ -5,6 +5,8 @@ import os from 'os';
 import path from 'path';
 import {
   agentLauncher,
+  runQuotaAgent,
+  collectQuotaWithFallback,
   runSignInAgent,
   collectSignInWithFallback,
 } from '../../../src/web-server/services/agent-verbs';
@@ -138,5 +140,70 @@ describe('agent verb opt-in', () => {
     expect(agentLauncher(artifact, 'mac')).toContain(
       '$HOME/.cache/ai-account-center/bin/aac-agent'
     );
+  });
+});
+
+describe('plan quota agent', () => {
+  it('keeps the same provider, platform and credential selector on the wire', async () => {
+    const args = {
+      provider: 'zai',
+      platform: 'ubuntu',
+      account: 'zai:acct:12345678',
+      credential: { kind: 'aac-key', keyId: '12345678' },
+    };
+    const value = {
+      platform: 'ubuntu',
+      id: args.account,
+      provider: 'zai',
+      status: 'ok',
+      windows: [],
+      capabilities: {},
+    };
+    const result = await runQuotaAgent(
+      host,
+      args,
+      [artifact],
+      async (_file, _args, options) => {
+        const request = JSON.parse(options.input!);
+        expect(request.verb).toBe('quota-read');
+        expect(request.args).toEqual(args);
+        return ok(JSON.stringify({ type: 'result', protocol: 1, id: request.id, value }));
+      },
+      'on'
+    );
+    expect(JSON.parse(result!)).toEqual(value);
+  });
+  it('falls back once for unavailable, failed and invalid agents', async () => {
+    for (const run of [
+      async () => {
+        throw new Error('spawn');
+      },
+      async () => ({ ...ok(''), timedOut: true }),
+      async () => ok('{}'),
+      async () =>
+        ok(
+          JSON.stringify({
+            type: 'result',
+            protocol: 1,
+            id: 'quota-read',
+            value: { fallback: 'python' },
+          })
+        ),
+      async () =>
+        ok(
+          JSON.stringify({ type: 'result', protocol: 1, id: 'quota-read', value: { status: 'ok' } })
+        ),
+    ]) {
+      let calls = 0;
+      const result = await collectQuotaWithFallback(
+        () => runQuotaAgent(host, { provider: 'qwen' }, [artifact], run, 'on'),
+        async () => {
+          calls++;
+          return 'python';
+        }
+      );
+      expect(result).toBe('python');
+      expect(calls).toBe(1);
+    }
   });
 });

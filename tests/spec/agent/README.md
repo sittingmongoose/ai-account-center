@@ -127,3 +127,56 @@ the same parser; production refuses this argument. Sign-in cases run one process
 at a time against fixture files, with one Tokio worker per process. `--baseline` selects the recheck witnesses from this same
 table to demonstrate failure at `b23d68d38` without repeating the full corpus.
 These checks retain the filesystem/native/transport coverage limits above.
+
+## M2 plan quotas
+
+`python3 tests/spec/agent/quota.py /path/to/fixture-enabled/aac-agent` starts one
+loopback HTTP fake, then runs the unchanged Python `plan_usage.collect` and the
+agent against the same response queue. All homes and tokens are synthetic.
+It checks complete DTO equality or the exact whole-verb fallback, terminal
+protocol/id/type/exit, request headers and Qwen GET/POST sequence. JSON numeric
+integer/float spellings compare by numeric value. No fields or states are dropped.
+
+The table includes all four providers, HTTP 401/403/429/5xx, integer/date/invalid
+Retry-After, timeout, malformed/oversized bodies, fractional and Unicode grammar,
+Qwen international console requests, and Unix AAC-key account selection. The Rust
+unit test also consumes all 43 `plan_common` M0 vectors, explicitly delegating the
+two frozen Python/TS disagreements. Neither reference implementation is edited.
+
+The supported grammar is deliberately conservative. OMP SQLite, DPAPI and Safari
+stores, Qwen CN/CSRF sessions and optional Qwen payload layouts, Kimi booster or
+overlapping legacy/modern readings delegate. JSON fractions/exponents, non-ASCII
+text, decimal or padded numeric strings, unsupported reset spellings, and large
+Z.ai count key spellings delegate too. No fallback means an empty/zero quota.
+The production binary refuses fixture endpoint/clock overrides. The endpoint
+injection is feature-gated and permits only literal `http://127.0.0.1` with an
+explicit fixture home. Native Mac/Windows execution and live TLS providers are
+not covered. The artifact catalog stays empty pending authorized packaging.
+
+### Quota fix round 1
+
+`quota-review.json` records the review's provider objects and the exact six-slice,
+one-second-interval HTTP stream schedule. Run
+`python3 tests/spec/agent/quota-review.py /path/to/fixture-agent` on the build host.
+The original Python helper and the full quota verb use the same loopback replies
+and synthetic fixture credential store. Every case validates the process exit
+and terminal envelope, compares the complete reference DTO or required exact
+fallback, and rejects reflected dummy credential text. `--baseline` expects the
+regressions to fail at `4e3e77c62`; it never uses real credentials/providers.
+
+Qwen unwrapping now uses a typed Result instead of provider-controlled status
+keys to distinguish internal errors. Unused upstream status/message fields are
+ignored. Every published textual DTO value passes `aac_core::scrub`; modified,
+redacted or uncheckable text is dropped in favor of the fixed word `error`.
+All public DTO keys are constructed locally, not copied from provider objects.
+The boundary has a dedicated regression for nested fields and scrub markers.
+
+The proved ISO string subset is exactly `YYYY-MM-DDTHH:MM:SSZ`, with seconds
+00..59. Other string shapes, including lowercase/leap-second/offset forms,
+delegate rather than extending Chrono to emulate Python. Existing numeric
+seconds/milliseconds retain their proved grammar. Boolean Z.ai response codes
+in either quota or pack envelopes delegate. Any uncertain HTTP request, body or
+deadline failure delegates; normal known HTTP status replies retain their fixed
+messages. The four-second reqwest total timeout is not claimed to equal Python's
+per-socket timeout: a continuously progressing five-second response is explicitly
+a whole-verb fallback, after which TS uses Python.
