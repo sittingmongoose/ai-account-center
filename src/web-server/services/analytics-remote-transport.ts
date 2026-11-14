@@ -1263,22 +1263,7 @@ async function runScanner(
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = execFile(
       'ssh',
-      [
-        '-T',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'ConnectTimeout=5',
-        '-o',
-        'ConnectionAttempts=1',
-        '-o',
-        'ServerAliveInterval=5',
-        '-o',
-        'ServerAliveCountMax=6',
-        '--',
-        sshHost,
-        scanCommand(platform, manifest),
-      ],
+      sshArgv(sshHost, scanCommand(platform, manifest), { interval: 5, countMax: 6 }),
       { encoding: 'utf8', timeout: timeoutMs, maxBuffer: MAX_RESPONSE_BYTES, windowsHide: true },
       (error, result, stderr) => {
         if (error) {
