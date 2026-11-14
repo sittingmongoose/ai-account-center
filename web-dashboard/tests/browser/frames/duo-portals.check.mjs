@@ -654,8 +654,12 @@ tests['duo portals: an open exact-token explanation follows a live model update'
   model.types[0].tip = '32,022,028 tokens';
   model.tipIn = model.tipIn.replaceAll('32,022,027', '32,022,028');
   model.tokTip = model.tokTip.replaceAll('333,816,956', '333,816,957');
-  // One more input token: every formatted total, cost and share stays the same; only the exact count changes.
-  await bridge(t, 'analytics', view);
+  // One more input token: every formatted total, cost and share stays the same; only the exact count changes. The
+  // view arrives as the Analytics controller sends it (an `aac-analytics` event), as in analytics() above.
+  await t.page.evaluate(
+    (json) => dispatchEvent(new CustomEvent('aac-analytics', { detail: { key: 'analytics', json } })),
+    JSON.stringify(view)
+  );
   await frames(t);
   const current = await t.page.evaluate(() => ({
     input: document.querySelector('.pop .md-type [data-tip]')?.getAttribute('data-tip'),
