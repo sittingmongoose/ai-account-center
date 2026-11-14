@@ -139,9 +139,9 @@ export const tests = {
     await t.goto('/__upgrade/ready');
     await control(t, { oldWorker: false });
     await t.equal('the new worker downloads the whole app and waits', await installOutcome(t), 'installed');
-    const listed = precache();
+    const listed = precache() ?? []; // none on a build whose worker downloads nothing ahead
     const stored = await t.page.evaluate(async (name) => (await (await caches.open(name)).keys()).map((r) => { const u = new URL(r.url); return `${u.pathname}${u.search}`; }), newCache());
-    await t.check(`its copy holds all ${listed.length} addresses before it may replace anything`, listed.every((a) => stored.includes(a)), JSON.stringify(listed.filter((a) => !stored.includes(a))));
+    await t.check(`its copy holds all ${listed.length} addresses before it may replace anything`, listed.length > 0 && listed.every((a) => stored.includes(a)), JSON.stringify(listed.filter((a) => !stored.includes(a))));
     const active = await nextLaunch(t, manifest().shellBuildId);
     await t.check('the next launch activates it', !!active, JSON.stringify(active));
     await t.equal('with its own copy whole, the older copy goes', JSON.stringify(active?.names ?? []), JSON.stringify([newCache()]));
