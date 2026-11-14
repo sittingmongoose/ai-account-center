@@ -17,6 +17,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::for_os(OperatingSystem::Linux)
+    }
+    fn for_os(os: OperatingSystem) -> Self {
         let root = tempfile::tempdir().unwrap();
         for tool in ["ssh", "scp"] {
             let path = root.path().join(tool);
@@ -27,7 +30,7 @@ impl Fixture {
         let config = ComputerConfig {
             id: ComputerId::new("fixture").unwrap(),
             label: "Fixture".into(),
-            os: OperatingSystem::Linux,
+            os,
             transport: TransportConfig::Ssh {
                 host: "fixture.invalid".into(),
                 user: Some("fixture".into()),
@@ -313,7 +316,7 @@ async fn corrupt_upload_does_not_replace_an_existing_agent_or_retry() {
 
 #[tokio::test]
 async fn every_handshake_dimension_is_checked() {
-    for field in ["name", "version", "target"] {
+    for field in ["name", "version", "target", "protocol"] {
         let fixture = Fixture::new();
         let (artifact, mut scenario) = fixture.artifact();
         scenario["wrongHandshake"] = json!(field);
@@ -323,6 +326,30 @@ async fn every_handshake_dimension_is_checked() {
             matches!(client.ensure(&fixture.options()).await, Err(error) if error.cause == Cause::AgentMismatch)
         );
     }
+}
+
+#[tokio::test]
+async fn windows_shipping_uses_the_reported_localappdata_path() {
+    let fixture = Fixture::for_os(OperatingSystem::Windows);
+    let (artifact, mut scenario) = fixture.artifact();
+    let hash = scenario["hash"].as_str().unwrap();
+    let path = format!("R:\\redirected-cache\\ai-account-center\\bin\\aac-agent-{hash}.part");
+    scenario["partPath"] = json!(path);
+    fixture.scenario(scenario);
+    let client = AgentClient::new(fixture.computer.clone(), artifact);
+    client.ensure(&fixture.options()).await.unwrap();
+    let traces = fixture.traces();
+    let upload = traces.iter().find(|trace| trace["tool"] == "scp").unwrap();
+    assert!(
+        upload["argv"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .ends_with(&path.replace('\\', "/"))
+    );
 }
 
 #[tokio::test]

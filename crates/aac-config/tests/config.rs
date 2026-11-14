@@ -26,13 +26,14 @@ fn precedence_and_private_root_match_legacy_ccs_home() {
     )
     .unwrap();
     opts.environment
-        .insert("CCS_DASHBOARD_PORT".into(), "2000".into());
+        .insert("CCS_DASHBOARD_USERNAME".into(), "env-user".into());
     opts.environment
         .insert("CCS_HOME".into(), root.path().to_string_lossy().into());
-    opts.cli = json!({"dashboard":{"port":3000}});
+    opts.cli = json!({"dashboard":{"port":3000},"dashboard_auth":{"username":"flag-user"}});
     let config = Config::load(&opts).unwrap();
     assert_eq!(config.private_dir(), private);
     assert_eq!(config.values()["dashboard"]["port"], 3000);
+    assert_eq!(config.values()["dashboard_auth"]["username"], "flag-user");
     assert_eq!(config.values()["dashboard"]["host"], "yaml-host");
     assert_eq!(
         config.values()["account_refresh"]["refreshIntervalSeconds"],
@@ -40,10 +41,10 @@ fn precedence_and_private_root_match_legacy_ccs_home() {
     );
     opts.cli = json!({});
     assert_eq!(
-        Config::load(&opts).unwrap().values()["dashboard"]["port"],
-        2000
+        Config::load(&opts).unwrap().values()["dashboard_auth"]["username"],
+        "env-user"
     );
-    opts.environment.remove("CCS_DASHBOARD_PORT");
+    opts.environment.remove("CCS_DASHBOARD_USERNAME");
     assert_eq!(
         Config::load(&opts).unwrap().values()["dashboard"]["port"],
         1000
@@ -158,4 +159,36 @@ fn corrupt_oversized_and_symlink_settings_are_honest_failures() {
         std::os::unix::fs::symlink(&opts.computers_seed, &file).unwrap();
         assert!(Config::load(&opts).is_err());
     }
+}
+
+#[test]
+fn existing_settings_filenames_and_auth_environment_are_preserved() {
+    let root = tempfile::tempdir().unwrap();
+    let mut opts = options(root.path());
+    let private = root.path().join(".ccs");
+    std::fs::create_dir(&private).unwrap();
+    for (file, _, _) in SETTINGS_FILES {
+        std::fs::write(
+            private.join(file),
+            serde_json::to_vec(&json!({"origin":file})).unwrap(),
+        )
+        .unwrap();
+    }
+    opts.environment
+        .insert("CCS_DASHBOARD_AUTH_ENABLED".into(), "1".into());
+    let config = Config::load(&opts).unwrap();
+    assert_eq!(config.values()["dashboard_auth"]["enabled"], true);
+    assert_eq!(
+        config.values()["agent_usage_snapshot"]["origin"],
+        "agent-usage-snapshot.json"
+    );
+    for (file, section, _) in SETTINGS_FILES {
+        assert_eq!(config.values()[*section]["origin"], *file);
+    }
+    opts.environment
+        .insert("CCS_DASHBOARD_AUTH_ENABLED".into(), "false".into());
+    assert_eq!(
+        Config::load(&opts).unwrap().values()["dashboard_auth"]["enabled"],
+        false
+    );
 }

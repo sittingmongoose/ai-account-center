@@ -121,10 +121,28 @@ impl AgentClient {
             ));
         }
         let part = if self.computer.config.os == OperatingSystem::Windows {
-            format!(
-                "AppData/Local/ai-account-center/bin/aac-agent-{}.part",
-                self.artifact.hash
-            )
+            let prepared: serde_json::Value =
+                serde_json::from_slice(&prepared.stdout).map_err(|_| {
+                    Failure::new(Cause::AgentMismatch, "invalid agent cache path reply")
+                })?;
+            let path = prepared
+                .get("partPath")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| Failure::new(Cause::AgentMismatch, "missing agent cache path"))?;
+            let path = path.replace('\\', "/");
+            if path.len() > 4096
+                || path.chars().any(char::is_control)
+                || !path.ends_with(&format!("/aac-agent-{}.part", self.artifact.hash))
+                || !(path.starts_with('/')
+                    || (path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                        && path.as_bytes().get(1) == Some(&b':')))
+            {
+                return Err(Failure::new(
+                    Cause::AgentMismatch,
+                    "invalid agent cache upload path",
+                ));
+            }
+            path
         } else {
             format!(
                 ".cache/ai-account-center/bin/aac-agent-{}.part",
@@ -232,8 +250,8 @@ impl AgentClient {
         if self.computer.config.os == OperatingSystem::Windows {
             let script = format!(
                 r#"$ErrorActionPreference='Stop'; $d=Join-Path $env:LOCALAPPDATA 'ai-account-center\bin'; $f=Join-Path $d 'aac-agent.exe'; $p=Join-Path $d 'aac-agent-{hash}.part'; $h='{hash}'; $mode='{mode}';
-if ($mode -eq 'prepare') {{ New-Item -ItemType Directory -Force -Path $d | Out-Null; exit 0 }}
-if ($mode -eq 'commit') {{ if (!(Test-Path -LiteralPath $p -PathType Leaf) -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() -ne $h) {{ exit 87 }}; Move-Item -LiteralPath $p -Destination $f -Force }}
+if ($mode -eq 'prepare') {{ New-Item -ItemType Directory -Force -Path $d | Out-Null; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); @{{partPath=$p}} | ConvertTo-Json -Compress; exit 0 }}
+if ($mode -eq 'commit') {{ if (!(Test-Path -LiteralPath $p -PathType Leaf) -or (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() -ne $h) {{ exit 87 }}; if (Test-Path -LiteralPath $f) {{ [System.IO.File]::Replace($p,$f,$null) }} else {{ [System.IO.File]::Move($p,$f) }} }}
 if (!(Test-Path -LiteralPath $f -PathType Leaf) -or (Get-FileHash -LiteralPath $f -Algorithm SHA256).Hash.ToLowerInvariant() -ne $h) {{ exit 87 }}
 if ($mode -eq 'run') {{ & $f }} else {{ & $f --version }}; exit $LASTEXITCODE"#
             );

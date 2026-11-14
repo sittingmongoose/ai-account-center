@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Offline SSH/SCP script. Records argv and simulates a private remote cache in this fixture."""
 import hashlib
+import base64
 import json
 import os
 from pathlib import Path
@@ -37,12 +38,21 @@ elif mode == "shipping":
             (root / "upload.part").write_bytes(b"damaged upload")
         sys.exit(0)
     command = shlex.split(argv[-1])
-    script = command[-1]
-    match = re.search(r"case '(probe|prepare|commit|run)'", script)
+    windows = command[0] == "powershell.exe"
+    if windows:
+        outer = base64.b64decode(command[-1]).decode("utf-16-le")
+        encoded = re.findall(r"'([^']*)'", outer)[-1]
+        script = base64.b64decode(encoded).decode("utf-16-le")
+        match = re.search(r"\$mode='(probe|prepare|commit|run)'", script)
+    else:
+        script = command[-1]
+        match = re.search(r"case '(probe|prepare|commit|run)'", script)
     if not match:
         raise RuntimeError("unexpected launcher command")
     stage = match[1]
     if stage == "prepare":
+        if windows:
+            print(json.dumps({"partPath": scenario["partPath"]}))
         sys.exit(0)
     if stage == "commit":
         part = root / "upload.part"

@@ -31,33 +31,37 @@ pub const SETTINGS_FILES: &[(&str, &str, usize)] = &[
     (
         "dashboard-preferences.json",
         "dashboard_preferences",
-        1024 * 1024,
+        64 * 1024,
     ),
     (
         "dashboard-preferences-extra-sources.json",
         "dashboard_preferences_extra_sources",
-        1024 * 1024,
+        64 * 1024,
     ),
     ("account-refresh-settings.json", "account_refresh", 4096),
     ("account-visibility.json", "account_visibility", 32 * 1024),
     (
         "account-usage-sources.json",
         "account_usage_sources",
-        1024 * 1024,
+        32 * 1024,
     ),
     (
         "account-usage-accounts.json",
         "account_usage_accounts",
-        1024 * 1024,
+        64 * 1024,
     ),
-    ("agent-usage-settings.json", "agent_usage", 1024 * 1024),
+    (
+        "agent-usage-snapshot.json",
+        "agent_usage_snapshot",
+        64 * 1024,
+    ),
 ];
 
 /// Environment overrides understood by this read-only foundation. Unlisted keys are ignored;
 /// new subsystem-specific settings are added as their owners migrate, rather than guessed.
 pub const ENVIRONMENT: &[(&str, &str)] = &[
-    ("CCS_DASHBOARD_PORT", "dashboard.port"),
-    ("CCS_DASHBOARD_HOST", "dashboard.host"),
+    ("CCS_DASHBOARD_AUTH_ENABLED", "dashboard_auth.enabled"),
+    ("CCS_DASHBOARD_USERNAME", "dashboard_auth.username"),
     ("CCS_SESSION_SECRET", "dashboard_auth.session_secret"),
     (
         "CCS_DASHBOARD_PASSWORD_HASH",
@@ -209,15 +213,7 @@ impl Config {
         for (env, key) in ENVIRONMENT {
             if let Some(value) = options.environment.get(*env) {
                 let value = match *env {
-                    "CCS_DASHBOARD_PORT" => {
-                        let port: u16 = value
-                            .parse()
-                            .map_err(|_| Failure::new(Cause::Refused, "invalid dashboard port"))?;
-                        if port == 0 {
-                            return Err(Failure::new(Cause::Refused, "invalid dashboard port"));
-                        }
-                        json!(port)
-                    }
+                    "CCS_DASHBOARD_AUTH_ENABLED" => json!(value == "true" || value == "1"),
                     "AAC_STORE" => json!(value.trim().to_lowercase() != "off"),
                     _ => json!(value),
                 };
