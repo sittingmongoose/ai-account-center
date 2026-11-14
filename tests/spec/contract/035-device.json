@@ -1,20 +1,20 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/app-updates/cancel",
+    "path": "/api/auth/devices/me/rotate",
     "role": "device",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "device_scope",
-      "error": "This action needs a signed-in dashboard session."
+      "rotateAfter": "<timestamp>",
+      "token": "<device-token>"
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 403
+    "status": 200
   }
 }

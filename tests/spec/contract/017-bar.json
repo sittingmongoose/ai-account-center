@@ -181,9 +181,7 @@
         {
           "accountCount": 0,
           "capabilities": {
-            "activate": false,
             "add": false,
-            "autoSwitch": false,
             "multiAccount": true,
             "openApp": [
               "mac",
@@ -211,16 +209,13 @@
             "secureTransportRequired": false,
             "unavailableReason": "not_implemented"
           },
-          "switchable": false,
           "trayVisible": true,
           "visible": true
         },
         {
           "accountCount": 0,
           "capabilities": {
-            "activate": true,
             "add": false,
-            "autoSwitch": true,
             "multiAccount": true,
             "openApp": [],
             "recheck": false,
@@ -244,16 +239,13 @@
             "secureTransportRequired": true,
             "unavailableReason": "tool_missing"
           },
-          "switchable": true,
           "trayVisible": true,
           "visible": true
         },
         {
           "accountCount": 1,
           "capabilities": {
-            "activate": true,
             "add": false,
-            "autoSwitch": true,
             "multiAccount": true,
             "openApp": [],
             "recheck": false,
@@ -277,16 +269,13 @@
             "secureTransportRequired": true,
             "unavailableReason": "tool_missing"
           },
-          "switchable": true,
           "trayVisible": true,
           "visible": true
         },
         {
           "accountCount": 1,
           "capabilities": {
-            "activate": false,
             "add": false,
-            "autoSwitch": false,
             "multiAccount": false,
             "openApp": [
               "mac"
@@ -313,16 +302,13 @@
             "secureTransportRequired": false,
             "unavailableReason": null
           },
-          "switchable": false,
           "trayVisible": true,
           "visible": true
         },
         {
           "accountCount": 1,
           "capabilities": {
-            "activate": false,
             "add": false,
-            "autoSwitch": false,
             "multiAccount": false,
             "openApp": [],
             "recheck": true,
@@ -350,16 +336,13 @@
             "secureTransportRequired": true,
             "unavailableReason": "not_implemented"
           },
-          "switchable": false,
           "trayVisible": true,
           "visible": true
         },
         {
           "accountCount": 1,
           "capabilities": {
-            "activate": false,
             "add": true,
-            "autoSwitch": false,
             "multiAccount": true,
             "openApp": [],
             "recheck": true,
@@ -383,16 +366,13 @@
             "secureTransportRequired": true,
             "unavailableReason": null
           },
-          "switchable": false,
           "trayVisible": true,
           "visible": true
         },
         {
           "accountCount": 1,
           "capabilities": {
-            "activate": false,
             "add": false,
-            "autoSwitch": false,
             "multiAccount": false,
             "openApp": [],
             "recheck": true,
@@ -416,16 +396,13 @@
             "secureTransportRequired": false,
             "unavailableReason": null
           },
-          "switchable": false,
           "trayVisible": true,
           "visible": true
         },
         {
           "accountCount": 1,
           "capabilities": {
-            "activate": false,
             "add": true,
-            "autoSwitch": false,
             "multiAccount": true,
             "openApp": [],
             "recheck": true,
@@ -449,16 +426,13 @@
             "secureTransportRequired": true,
             "unavailableReason": null
           },
-          "switchable": false,
           "trayVisible": true,
           "visible": true
         },
         {
           "accountCount": 1,
           "capabilities": {
-            "activate": false,
             "add": true,
-            "autoSwitch": false,
             "multiAccount": true,
             "openApp": [],
             "recheck": true,
@@ -486,7 +460,6 @@
             "secureTransportRequired": true,
             "unavailableReason": null
           },
-          "switchable": false,
           "trayVisible": true,
           "visible": true
         }

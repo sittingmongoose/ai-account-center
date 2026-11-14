@@ -1,14 +1,14 @@
 {
   "request": {
-    "method": "DELETE",
-    "path": "/api/auth/devices/fixture-missing",
+    "method": "POST",
+    "path": "/api/auth/devices/revoke-all",
     "role": "session",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "unknown_device",
-      "error": "That device is not paired."
+      "revokedDevices": 1,
+      "signedOutBrowsers": 78
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 404
+    "status": 200
   }
 }

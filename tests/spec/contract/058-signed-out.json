@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/claude/desktop-profiles/fixture-missing/open",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/codex/profiles",
+    "role": "signed-out"
   },
   "response": {
     "body": {

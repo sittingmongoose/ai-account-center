@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/antigravity/recover",
+    "method": "DELETE",
+    "path": "/api/auth/devices/fixture-missing",
     "role": "hub",
     "body": {}
   },

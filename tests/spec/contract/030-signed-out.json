@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/antigravity/profiles/fixture-missing/activate",
+    "path": "/api/app-updates/cancel",
     "role": "signed-out",
     "body": {}
   },

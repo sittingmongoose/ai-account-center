@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/logout",
+    "method": "PUT",
+    "path": "/api/auth/session-lifetime",
     "role": "hub",
     "body": {}
   },

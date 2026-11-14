@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/antigravity/profiles/quotas",
+    "path": "/api/app-updates/status",
     "role": "signed-out"
   },
   "response": {

@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/claude/desktop-profiles/fixture-missing/open",
-    "role": "hub",
-    "body": {}
+    "method": "GET",
+    "path": "/api/codex/profiles",
+    "role": "hub"
   },
   "response": {
     "body": {

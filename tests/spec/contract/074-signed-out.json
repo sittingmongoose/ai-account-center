@@ -1,19 +1,22 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/status",
-    "role": "signed-out"
+    "method": "POST",
+    "path": "/v0/management/reset-quota",
+    "role": "signed-out",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "auth_required",
-      "error": "Authentication required"
+      "code": "rate_limited",
+      "error": "Too many wrong usage hub keys. Try again later.",
+      "retryAfterSeconds": 900
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
-      "etag": "<etag>"
+      "etag": "<etag>",
+      "retry-after": "900"
     },
-    "status": 401
+    "status": 429
   }
 }

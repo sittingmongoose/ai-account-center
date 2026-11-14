@@ -1,12 +1,14 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/status/answers",
-    "role": "session"
+    "method": "ALL",
+    "path": "/v0/management/fixture-missing",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {
-      "answers": []
+      "code": "missing_management_key",
+      "error": "A management key is required."
     },
     "headers": {
       "cache-control": "no-store",
@@ -14,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 401
   }
 }

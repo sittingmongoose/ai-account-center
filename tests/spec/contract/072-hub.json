@@ -1,20 +1,20 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/status/answers",
+    "path": "/v0/management/api-call",
     "role": "hub",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "invalid_token",
-      "error": "The device token is not valid."
+      "code": "invalid_request",
+      "error": "auth_index must be a string from auth-files."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 401
+    "status": 400
   }
 }

@@ -1,28 +1,19 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/session",
-    "role": "session"
+    "method": "POST",
+    "path": "/api/claude/desktop-profiles/fixture-missing/open",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {
-      "expiresAt": "<timestamp>",
-      "managedBy": "config",
-      "otherBrowsers": 15,
-      "pairedDevices": 1,
-      "passwordChangedAt": null,
-      "secureOrigin": null,
-      "secureTransport": true,
-      "sessionLifetimeDays": 7,
-      "sessionTimeoutHours": 168,
-      "username": "fixture-admin"
+      "error": "Select a configured Claude desktop account and platform."
     },
     "headers": {
-      "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

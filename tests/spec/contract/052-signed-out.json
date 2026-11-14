@@ -1,13 +1,11 @@
 {
   "request": {
-    "method": "PUT",
-    "path": "/api/auth/session-lifetime",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/bar/auth",
+    "role": "signed-out"
   },
   "response": {
     "body": {
-      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

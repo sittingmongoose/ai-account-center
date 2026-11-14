@@ -1,21 +1,19 @@
 {
   "request": {
-    "method": "PUT",
-    "path": "/api/auth/session-lifetime",
-    "role": "bar",
-    "body": {}
+    "method": "GET",
+    "path": "/api/bar/auth",
+    "role": "bar"
   },
   "response": {
     "body": {
-      "code": "invalid_body",
-      "error": "The request body is not valid for this action."
+      "status": "ok"
     },
     "headers": {
-      "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
-      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
+      "x-ccs-bar-token": "<bar-proof>"
     },
-    "status": 400
+    "status": 200
   }
 }

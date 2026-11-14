@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/app-updates/status",
+    "path": "/api/auth/devices/me",
     "role": "hub"
   },
   "response": {

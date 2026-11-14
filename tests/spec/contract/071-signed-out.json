@@ -1,13 +1,14 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/status/answers",
-    "role": "signed-out"
+    "method": "ALL",
+    "path": "/v0/management/fixture-missing",
+    "role": "signed-out",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "auth_required",
-      "error": "Authentication required"
+      "code": "missing_management_key",
+      "error": "A management key is required."
     },
     "headers": {
       "cache-control": "no-store",

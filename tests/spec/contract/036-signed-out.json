@@ -1,12 +1,13 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/app-updates/start",
+    "method": "DELETE",
+    "path": "/api/auth/devices/me",
     "role": "signed-out",
     "body": {}
   },
   "response": {
     "body": {
+      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

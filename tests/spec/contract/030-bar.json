@@ -1,13 +1,13 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/antigravity/profiles/fixture-missing/activate",
+    "path": "/api/app-updates/cancel",
     "role": "bar",
     "body": {}
   },
   "response": {
     "body": {
-      "error": "Select an Antigravity profile on Ubuntu and provide a valid confirmation when required."
+      "job": null
     },
     "headers": {
       "cache-control": "no-store",
@@ -15,6 +15,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 400
+    "status": 200
   }
 }

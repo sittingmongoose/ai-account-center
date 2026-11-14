@@ -1,12 +1,12 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/bar/auth",
+    "path": "/api/codex/profiles/quotas",
     "role": "session"
   },
   "response": {
     "body": {
-      "status": "ok"
+      "profiles": []
     },
     "headers": {
       "content-type": "application/json; charset=utf-8",

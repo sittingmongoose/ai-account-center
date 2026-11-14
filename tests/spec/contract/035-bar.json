@@ -1,13 +1,14 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/app-updates/cancel",
+    "path": "/api/auth/devices/me/rotate",
     "role": "bar",
     "body": {}
   },
   "response": {
     "body": {
-      "job": null
+      "code": "device_required",
+      "error": "This route is for a paired tray's own token."
     },
     "headers": {
       "cache-control": "no-store",
@@ -15,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 403
   }
 }

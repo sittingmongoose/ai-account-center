@@ -1,13 +1,18 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/antigravity/profiles/fixture-missing/confirm",
+    "path": "/api/app-updates/start",
     "role": "session",
     "body": {}
   },
   "response": {
     "body": {
-      "error": "Select an Antigravity profile on Ubuntu and provide a valid confirmation when required."
+      "job": {
+        "hosts": {},
+        "id": "fixture-update",
+        "results": [],
+        "state": "running"
+      }
     },
     "headers": {
       "cache-control": "no-store",
@@ -15,6 +20,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 400
+    "status": 202
   }
 }

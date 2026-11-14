@@ -1,14 +1,12 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/antigravity/profiles/quotas",
+    "path": "/api/app-updates/status",
     "role": "session"
   },
   "response": {
     "body": {
-      "accounts": [],
-      "hostId": "ubuntu",
-      "schemaVersion": 1
+      "job": null
     },
     "headers": {
       "cache-control": "no-store",

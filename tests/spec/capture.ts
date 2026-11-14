@@ -193,8 +193,6 @@ await stub('src/web-server/agent-usage/agent-usage-snapshot.ts', { startAgentUsa
 await stub('src/antigravity/production-runtime.ts', {
   getInstalledAntigravityRuntimeFactory: () => null,
 });
-const auto = await import('../../src/web-server/services/codex-auto-switch-service');
-spyOn(auto.CodexAutoSwitchService.prototype, 'start').mockImplementation(noop);
 const renewal = await import('../../src/web-server/services/codex-profile-renewal-service');
 spyOn(renewal.CodexProfileRenewalService.prototype, 'start').mockImplementation(noop);
 await stub('src/store/store-service.ts', {

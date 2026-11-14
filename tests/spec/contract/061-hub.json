@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/claude/history-snapshots/cleanup",
-    "role": "hub",
-    "body": {}
+    "method": "GET",
+    "path": "/api/scoreboard",
+    "role": "hub"
   },
   "response": {
     "body": {

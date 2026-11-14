@@ -1,23 +1,20 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/claude/history-snapshots/cleanup",
-    "role": "session",
-    "body": {}
+    "method": "GET",
+    "path": "/api/scoreboard",
+    "role": "session"
   },
   "response": {
     "body": {
-      "deleted": 0,
-      "failed": 0,
-      "kept": 0,
-      "profiles": 0,
-      "skipped": 0,
-      "targets": 0
+      "rows": [],
+      "version": 1
     },
     "headers": {
+      "cache-control": "private, no-cache",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
-      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
+      "vary": "Cookie"
     },
     "status": 200
   }

@@ -1,20 +1,15 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/app-updates/start",
+    "method": "DELETE",
+    "path": "/api/auth/devices/me",
     "role": "device",
     "body": {}
   },
   "response": {
-    "body": {
-      "code": "device_scope",
-      "error": "This action needs a signed-in dashboard session."
-    },
+    "body": "",
     "headers": {
-      "cache-control": "no-store",
-      "content-type": "application/json; charset=utf-8",
-      "etag": "<etag>"
+      "cache-control": "no-store"
     },
-    "status": 403
+    "status": 204
   }
 }

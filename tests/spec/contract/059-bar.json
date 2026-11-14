@@ -1,18 +1,30 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/claude/desktop-profiles/usage",
+    "path": "/api/diag",
     "role": "bar"
   },
   "response": {
     "body": {
-      "error": "Select a valid Claude desktop platform."
+      "computers": [],
+      "jobs": [],
+      "scheduler": {
+        "cause": "jobs_not_migrated",
+        "lastSuccessAt": null,
+        "status": "unavailable"
+      },
+      "store": {
+        "cause": "store_owned_by_ts",
+        "lastSuccessAt": null,
+        "status": "unavailable"
+      }
     },
     "headers": {
+      "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 400
+    "status": 200
   }
 }

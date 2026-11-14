@@ -1,12 +1,12 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/session",
-    "role": "signed-out"
+    "method": "POST",
+    "path": "/api/claude/desktop-profiles/fixture-missing/open",
+    "role": "signed-out",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

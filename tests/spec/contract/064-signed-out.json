@@ -1,12 +1,13 @@
 {
   "request": {
-    "method": "PUT",
-    "path": "/api/codex/profiles/auto-switch",
+    "method": "POST",
+    "path": "/api/status/answers",
     "role": "signed-out",
     "body": {}
   },
   "response": {
     "body": {
+      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

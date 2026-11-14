@@ -1,23 +1,13 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/diag",
+    "path": "/api/store/status",
     "role": "session"
   },
   "response": {
     "body": {
-      "computers": [],
-      "jobs": [],
-      "scheduler": {
-        "cause": "jobs_not_migrated",
-        "lastSuccessAt": null,
-        "status": "unavailable"
-      },
-      "store": {
-        "cause": "store_owned_by_ts",
-        "lastSuccessAt": null,
-        "status": "unavailable"
-      }
+      "fixture": true,
+      "state": "ready"
     },
     "headers": {
       "cache-control": "no-store",
