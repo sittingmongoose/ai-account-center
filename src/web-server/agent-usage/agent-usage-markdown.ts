@@ -366,6 +366,16 @@ export function renderSnapshotMarkdown(
       `- **${account.label}**${who.length ? ` (${who.join(', ')})` : ''}, ${facts.join(', ')}: ` +
         `${STATUS_WORDS[account.status]}, ${age}`
     );
+    if (account.status === 'cached') {
+      const reasons = {
+        read_failed: 'last provider read failed or was skipped',
+        rate_limited: 'provider refresh is rate limited',
+        refresh_pending: 'next provider read is pending',
+        source_changed: 'saved sign-in changed; next provider read is pending',
+        outcome_unknown: 'last provider read outcome was not recorded',
+      };
+      lines.push(`  - ${reasons[account.cacheReason ?? 'outcome_unknown']}`);
+    }
     if (account.status === 'ok' || account.status === 'cached')
       for (const window of account.windows) lines.push(`  - ${windowText(window, now)}`);
     lines.push('');

@@ -205,7 +205,7 @@ describe('identity-bound usage source failover', () => {
       const cached = restarted.peek(h.target, template());
       expect(cached.sampledAt).toBe(row.sampledAt);
       expect(cached.windows).toEqual(row.windows);
-      expect(cached.status).toBe('cached');
+      expect(cached.status).toBe('ok');
       const before = h.collected().length;
       await service.collect(h.target, template());
       expect(h.collected()).toHaveLength(before);
@@ -2066,5 +2066,92 @@ describe('the entitlement class rides the failover row', () => {
     // survive a reading that no longer carries one.
     const cleared = await h.service.collect(h.target, carried);
     expect(cleared.planClass).toBeUndefined();
+  });
+});
+
+describe('failover quota freshness', () => {
+  it('preserves a successful request interval through peek and process restart', async () => {
+    const h = await harness();
+    h.collections.set('mac', { sample: reading(), failureCode: null, refreshAfterSeconds: 300 });
+    const first = await h.service.collect(h.target, template());
+    h.advance(60_000);
+    for (const service of [h.service, new UsageFailoverService(h.deps)]) {
+      const next = service.peek(h.target, template());
+      expect(next.status).toBe('ok');
+      expect(next.sampledAt).toBe(first.sampledAt);
+      expect(next.message).toBeNull();
+      expect((await service.collect(h.target, template())).status).toBe('ok');
+    }
+    expect(h.collected()).toHaveLength(1);
+  });
+
+  it('keeps a failed later read cached through peek, TTL and restart', async () => {
+    const h = await harness();
+    const first = await h.service.collect(h.target, template());
+    h.advance();
+    h.collections.set('mac', { sample: null, failureCode: 'rate_limited', retryAfterSeconds: 600 });
+    h.collections.set('windows', new Error('offline'));
+    const failed = await h.service.collect(h.target, template());
+    expect(failed).toMatchObject({
+      status: 'cached',
+      cacheReason: 'rate_limited',
+      sampledAt: first.sampledAt,
+    });
+    for (const service of [h.service, new UsageFailoverService(h.deps)]) {
+      expect(service.peek(h.target, template())).toMatchObject({
+        status: 'cached',
+        cacheReason: 'rate_limited',
+        sampledAt: first.sampledAt,
+      });
+      expect(service.peek(h.target, first).status).toBe('cached');
+    }
+  });
+});
+
+it('expires a successful failover observation when its next read is overdue', async () => {
+  const h = await harness();
+  h.collections.set('mac', { sample: reading(), failureCode: null, refreshAfterSeconds: 300 });
+  const first = await h.service.collect(h.target, template());
+  h.advance(301_000);
+  expect(h.service.peek(h.target, template())).toMatchObject({
+    status: 'cached',
+    cacheReason: 'refresh_pending',
+    sampledAt: first.sampledAt,
+  });
+  expect(h.collected()).toHaveLength(1);
+});
+
+it('revokes persisted success before a new failover attempt can be interrupted', async () => {
+  const h = await harness();
+  const first = await h.service.collect(h.target, template());
+  h.advance();
+  const original = h.deps.transport;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  h.deps.transport = async (host, request) => {
+    if (request.action === 'collect') await pending;
+    return original(host, request);
+  };
+  const refreshed = h.service.collect(h.target, template());
+  await Promise.resolve();
+  expect(new UsageFailoverService(h.deps).peek(h.target, template())).toMatchObject({
+    status: 'cached',
+    cacheReason: 'read_failed',
+    sampledAt: first.sampledAt,
+  });
+  release();
+  await refreshed;
+});
+
+it('does not promote a retained primary failure back to ok during peek', async () => {
+  const h = await harness();
+  const first = await h.service.collect(h.target, template());
+  const retained: DashboardAccount = { ...first, status: 'cached', cacheReason: 'read_failed' };
+  expect(h.service.peek(h.target, retained)).toMatchObject({
+    status: 'cached',
+    cacheReason: 'read_failed',
+    sampledAt: first.sampledAt,
   });
 });

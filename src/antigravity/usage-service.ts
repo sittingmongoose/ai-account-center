@@ -229,7 +229,9 @@ export class AntigravityUsageService {
           ...clone(cache.lastGood),
           isActive: profile.selected,
           status: 'cached',
-          message: 'Showing the last successful Antigravity usage reading.',
+          cacheReason: 'read_failed',
+          message:
+            'The latest read returned an older sample; showing the last successful Antigravity usage reading.',
         };
       } else cache.result = result;
       cache.lastGood = clone(cache.result);
@@ -240,6 +242,7 @@ export class AntigravityUsageService {
             ...clone(cache.lastGood),
             isActive: profile.selected,
             status: 'cached',
+            cacheReason: reportedBackoff ? 'rate_limited' : 'read_failed',
             message:
               'Live Antigravity usage is temporarily unavailable; showing the last saved sample.',
           }
@@ -346,6 +349,7 @@ export class AntigravityUsageService {
         ...clone(carried),
         isActive: profile.selected,
         status: 'cached',
+        cacheReason: 'source_changed',
         message: 'Showing the last saved sample while the new sign-in is read.',
       };
     });

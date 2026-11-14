@@ -593,7 +593,7 @@ describe('consolidated account dashboard', () => {
     await pending;
     await Promise.resolve();
     const next = await service.get();
-    expect(next.accounts.find((account) => account.provider === 'cursor')?.status).toBe('cached');
+    expect(next.accounts.find((account) => account.provider === 'cursor')?.status).toBe('ok');
   });
 
   it('bounds a slow live identity check instead of doubling the response budget', async () => {
@@ -846,6 +846,7 @@ describe('consolidated account dashboard', () => {
   it('carries dynamic keys, labels, minutes, clears and the session release untouched', async () => {
     const result = await new AccountDashboardService(
       deps({
+        now: () => Date.parse('2026-10-01T12:00:00Z'),
         getLiveClaudeUsage: async (profileId) => ({
           profileId,
           email: `${profileId}@example.com`,
@@ -1551,3 +1552,94 @@ describe('Codex saved-login renewal in the dashboard', () => {
     await refresh;
     expect(finished).toBe(true);
   });
+
+describe('usage freshness between dashboard refreshes', () => {
+  it('keeps successful quota fresh on normal Home, Accounts and snapshot reads', async () => {
+    let now = Date.parse('2026-10-01T12:00:00Z');
+    let calls = 0;
+    const service = new AccountDashboardService(
+      deps({
+        now: () => now,
+        getAdditionalAccounts: async () => {
+          calls++;
+          return [additional()];
+        },
+        getLiveClaudeUsage: async (id) => liveClaude(id),
+      })
+    );
+    const first = await service.get('windows');
+    now += 30_000;
+    for (const next of [await service.get('windows'), await service.peek('windows')]) {
+      for (const id of ['codex:gmail', 'claude:gmail', 'cursor:usage']) {
+        const row = next.accounts.find((account) => account.id === id)!;
+        expect(row.status).toBe('ok');
+        expect(row.sampledAt).toBe(first.accounts.find((account) => account.id === id)!.sampledAt);
+      }
+    }
+    expect(calls).toBe(1);
+  });
+
+  it('marks an overdue read-only snapshot as pending without calling a provider', async () => {
+    let now = Date.parse('2026-10-01T12:00:00Z');
+    let calls = 0;
+    const service = new AccountDashboardService(
+      deps({
+        now: () => now,
+        getAdditionalAccounts: async () => {
+          calls++;
+          return [additional()];
+        },
+      })
+    );
+    await service.get('windows');
+    now += 61_000;
+    const next = await service.peek('windows');
+    expect(next.accounts.find((a) => a.id === 'cursor:usage')).toMatchObject({
+      status: 'cached',
+      cacheReason: 'refresh_pending',
+    });
+    expect(calls).toBe(1);
+  });
+
+  it('retains the real sample and explains a timed out collection', async () => {
+    let now = Date.parse('2026-10-01T12:00:00Z');
+    let blocked = false;
+    const service = new AccountDashboardService(
+      deps({
+        now: () => now,
+        responseBudgetMs: 10,
+        getAdditionalAccounts: async () => (blocked ? new Promise(() => {}) : [additional()]),
+      })
+    );
+    const first = await service.get('windows');
+    now += 61_000;
+    blocked = true;
+    const next = await service.get('windows', true);
+    expect(next.accounts.find((a) => a.id === 'cursor:usage')).toMatchObject({
+      status: 'cached',
+      cacheReason: 'read_failed',
+      sampledAt: first.accounts.find((a) => a.id === 'cursor:usage')!.sampledAt,
+    });
+  });
+});
+
+
+it('keeps a timed-out Antigravity collection retained in its synchronous projection', async () => {
+  let now = Date.parse('2026-10-01T12:00:00Z');
+  let blocked = false;
+  const account: AntigravityDashboardAccount = {
+    ...additional('antigravity'), id: 'antigravity:profile:fixture', platform: 'ubuntu',
+    sampledAt: new Date(now).toISOString(), fetchedAt: new Date(now).toISOString(),
+    capabilities: {codexProfile: null, claudeProfileId: null, claudePlatforms: [], antigravityProfileId: 'fixture', antigravityHostIds: ['ubuntu']},
+  };
+  const service = new AccountDashboardService(deps({
+    now: () => now, responseBudgetMs: 10, hasAntigravityProfiles: () => true,
+    failover: null, getAntigravityAccounts: async () => blocked ? new Promise(() => {}) : [account],
+    getCachedAntigravityAccounts: () => [account],
+  }));
+  expect((await service.get('windows')).accounts.find((a) => a.id === account.id)?.status).toBe('ok');
+  now += 61_000; blocked = true;
+  expect((await service.get('windows', true)).accounts.find((a) => a.id === account.id)).toMatchObject({
+    status: 'cached', cacheReason: 'read_failed', sampledAt: account.sampledAt,
+  });
+});

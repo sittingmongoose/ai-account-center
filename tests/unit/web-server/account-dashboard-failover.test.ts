@@ -266,7 +266,7 @@ describe('account dashboard shared usage failover integration', () => {
     expect(collections).toBe(1);
   });
 
-  it('expires previously fresh Claude optional balances when the dashboard serves the whole row from cache', async () => {
+  it('expires old Claude optional balances while successful quota stays fresh between reads', async () => {
     let now = NOW;
     let collections = 0;
     const sampledAt = new Date(NOW - 86_400_000 + 10).toISOString();
@@ -298,7 +298,7 @@ describe('account dashboard shared usage failover integration', () => {
     expect(initial.windows[1].status).toBeUndefined();
     now += 100;
     const cached = (await service.peek('mac')).accounts[0];
-    expect(cached.status).toBe('cached');
+    expect(cached.status).toBe('ok');
     expect(cached.windows.map((window) => window.key)).toEqual(['five_hour']);
     expect(cached.sampledAt).toBe(sampledAt);
     expect(cached.fetchedAt).toBe(sampledAt);

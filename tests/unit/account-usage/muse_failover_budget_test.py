@@ -75,13 +75,26 @@ class MuseFailoverBudgetTests(unittest.TestCase):
         self.assertEqual(first["refreshAfterSeconds"], 300)
         self.clock += 1
         cached = self.collect()
-        self.assertEqual(cached["sample"]["status"], "cached")
+        self.assertEqual(cached["sample"]["status"], "ok")
         self.assertEqual(cached["sample"]["sampledAt"], first["sample"]["sampledAt"])
         self.assertEqual(cached["observedPlanAt"], first["observedPlanAt"])
         self.assertEqual(cached["refreshAfterSeconds"], 299)
         self.assertEqual(self.native_client.get.call_count, 1)
         self.assertEqual(len(self.portal_calls), 3)
         self.assertNotIn("sk-do-not-persist", (self.root / muse.CACHE_NAME).read_text())
+
+    def test_interrupted_portal_read_keeps_previous_sample_with_failure_not_success(self):
+        first = self.collect()
+        self.clock += 301
+        self.native_client.get.side_effect = KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.collect()
+        self.clock += 1
+        retained = self.collect()
+        self.assertEqual(retained["sample"]["status"], "cached")
+        self.assertEqual(retained["sample"]["sampledAt"], first["sample"]["sampledAt"])
+        self.assertEqual(retained["failureCode"], "network_error")
+        self.assertEqual(self.native_client.get.call_count, 2)
 
     def test_portal_429_retains_sample_and_remaining_retry_without_more_requests(self):
         first = self.collect()

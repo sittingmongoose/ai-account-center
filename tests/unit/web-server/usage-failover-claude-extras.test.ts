@@ -254,7 +254,7 @@ describe('private Claude failover optional extras', () => {
         'five_hour',
       ]);
     }
-    const fresh = reading(NOW - DAY - 1, {
+    const fresh = reading(NOW, {
       windows: [window('five_hour'), window('prepaid_balance', 0)],
     });
     expect(projectClaudeFailoverExtras(fresh, NOW)).toBe(fresh);
@@ -480,4 +480,11 @@ describe('the entitlement class on a reading', () => {
     expect(result?.plan).toBe('Ultra');
     expect(result?.planClass ?? null).toBeNull();
   });
+});
+
+
+it('expires optional balances from the sample clock while the account remains successful', () => {
+  const sample = reading(NOW - DAY - 1, { windows: [window('five_hour'), window('prepaid_balance')] });
+  expect(projectClaudeFailoverExtras(sample, NOW).windows.map((w) => w.key)).toEqual(['five_hour']);
+  expect(sample.status).toBe('ok');
 });

@@ -71,6 +71,19 @@ class ReaderTests(unittest.TestCase):
             aac.main()
         return out.getvalue()
 
+    def test_retained_reading_explains_age_and_safe_reason_with_legacy_fallback(self):
+        now = aac.now_utc()
+        data = snapshot(now)
+        data["accounts"][0].update(status="cached", cacheReason="rate_limited")
+        data["accounts"][1].update(status="cached", cacheReason="PRIVATE_ERROR")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            (self.folder / "usage.json").write_text(json.dumps(data), encoding="utf-8")
+            aac.main(["--dir", str(self.folder)])
+        self.assertIn("provider refresh is rate limited", out.getvalue())
+        self.assertIn("last provider read outcome was not recorded", out.getvalue())
+        self.assertNotIn("PRIVATE_ERROR", out.getvalue())
+
     def test_summary_names_each_account_and_its_pace(self):
         text = self.run_reader()
         self.assertIn("Gmail  one@example.com  profile gmail  [Pro, Ubuntu VM, ACTIVE]", text)

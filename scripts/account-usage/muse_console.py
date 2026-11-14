@@ -556,6 +556,7 @@ def matches(state, email, plan, team, access):
 
 def state_sample(state, cached, now=None):
     now = time.time() if now is None else now
+    cached = cached and state["lastError"] is not None
     message = None
     if cached and state["lastError"] == "rate_limited":
         message = "Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically."
@@ -648,6 +649,7 @@ def quota_sample(root, cookies, expected_email, expected_plan, requested, access
             # Revoke restoration before I/O, including if identity lookup is
             # interrupted. Dated plan metadata remains valid historical proof.
             state["restoreAllowed"] = False
+            state["lastError"] = "network_error"
             write_usage_state(root, state)
         verified_plan = identity_loader is None
         try:

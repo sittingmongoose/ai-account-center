@@ -11,6 +11,7 @@ Snapshot 2026-10-15 12:00 UTC. The AI Account Center dashboard rewrites it about
 ## Claude
 
 - **Party** (party@example.com, profile party), Ubuntu VM: cached earlier reading, sampled 30m ago
+  - last provider read outcome was not recorded
   - 5-hour: 55% used, 45% left, resets 2026-10-15 16:00 UTC (in 4h 0m), earlier reading from 30m ago
 
 ## Z.ai

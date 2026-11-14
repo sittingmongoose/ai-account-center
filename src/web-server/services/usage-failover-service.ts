@@ -19,6 +19,7 @@ import {
   stripClaudeFailoverExtras,
 } from './usage-failover-claude-extras';
 import { readUsageCache, writeUsageCache } from './usage-failover-cache';
+import { readAccountRefreshSettings } from './account-refresh-settings';
 import {
   isBoundMusePeer,
   parseMuseUsagePeer,
@@ -55,7 +56,7 @@ interface State {
   saved: SavedReading | null;
   nextAttempt: number;
   pending: Promise<void> | null;
-  fresh: boolean;
+  fresh: boolean | null;
   primarySignIn: Set<'mac' | 'windows'>;
   primaryFailure: string | null;
   observedPlan: string | null;
@@ -171,7 +172,7 @@ export class UsageFailoverService {
       saved: null,
       nextAttempt: 0,
       pending: null,
-      fresh: false,
+      fresh: null,
       primarySignIn: new Set(),
       primaryFailure: null,
       observedPlan: null,
@@ -227,6 +228,14 @@ export class UsageFailoverService {
                 fallback: value.saved.fallback === true,
               };
           }
+          // Only new caches record the outcome of the last attempt. An old
+          // saved sample alone cannot prove that a later read succeeded.
+          state.fresh =
+            value.fresh === true && state.saved?.reading.status === 'ok'
+              ? true
+              : value.fresh === false
+                ? false
+                : null;
           if (typeof value.nextAttempt === 'number' && Number.isFinite(value.nextAttempt))
             state.nextAttempt = Math.min(value.nextAttempt, this.now() + 86400_000);
         }
@@ -256,6 +265,7 @@ export class UsageFailoverService {
       primary: state.primary,
       saved: state.saved,
       nextAttempt: state.nextAttempt,
+      fresh: state.fresh,
       primaryFailure: state.primaryFailure,
       primarySignIn: [...state.primarySignIn],
       observedPlan: state.observedPlan,
@@ -433,7 +443,15 @@ export class UsageFailoverService {
     }
     const { reading, host, fallback } = state.saved;
     if (!emailMatches(target.expectedEmail, reading.email)) return this.withSignIn(template, state);
-    const stale = cached || reading.status === 'cached';
+    const refreshDue =
+      state.fresh === true &&
+      this.now() >=
+        Math.max(
+          state.nextAttempt,
+          Date.parse(reading.fetchedAt ?? '') +
+            readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds * 1000
+        );
+    const stale = cached || reading.status === 'cached' || refreshDue;
     const nativeMusePeer =
       target.provider === 'muse' &&
       !sameUsageIdentity(state.identity, state.saved.candidate.identity);
@@ -454,7 +472,24 @@ export class UsageFailoverService {
         : undefined,
       status: stale ? 'cached' : 'ok',
       source: `Verified ${nativeMusePeer ? 'native subscription ' : ''}quota on ${HOST_LABELS[host]}${fallback ? ' (fallback)' : ''}`,
-      message: stale ? 'Showing the last successful reading; live usage is unavailable.' : null,
+      cacheReason: stale
+        ? refreshDue
+          ? 'refresh_pending'
+          : state.fresh === null
+            ? 'outcome_unknown'
+            : state.primaryFailure === 'rate_limited'
+              ? 'rate_limited'
+              : 'read_failed'
+        : undefined,
+      message: stale
+        ? refreshDue
+          ? 'The next usage read is pending; showing the last successful reading.'
+          : state.fresh === null
+            ? 'The previous usage read outcome was not recorded; showing the saved reading.'
+            : state.primaryFailure === 'rate_limited'
+              ? 'Usage refresh is rate limited; showing the last successful reading.'
+              : 'The usage read failed or was skipped; showing the last successful reading.'
+        : null,
       capabilities: { ...template.capabilities },
     };
     if (template.status === 'needs_sign_in') {
@@ -540,10 +575,11 @@ export class UsageFailoverService {
     if (
       hasUsage(template) &&
       (!state.saved ||
-        Date.parse(template.sampledAt ?? '') >= Date.parse(state.saved.reading.sampledAt ?? ''))
+        Date.parse(template.sampledAt ?? '') > Date.parse(state.saved.reading.sampledAt ?? '') ||
+        (template.status === 'cached' && template.sampledAt === state.saved.reading.sampledAt))
     )
       return this.withSignIn(template, state);
-    return this.project(target, template, state, true);
+    return this.project(target, template, state, !state.fresh);
   }
   collect(target: UsageFailoverTarget, template: DashboardAccount): Promise<DashboardAccount> {
     return this.run(target, template, false);
@@ -595,7 +631,8 @@ export class UsageFailoverService {
       hasUsage(template) &&
       template.status === 'ok' &&
       (!state.saved ||
-        Date.parse(template.sampledAt ?? '') >= Date.parse(state.saved.reading.sampledAt ?? ''))
+        Date.parse(template.sampledAt ?? '') > Date.parse(state.saved.reading.sampledAt ?? '') ||
+        (state.fresh && template.sampledAt === state.saved.reading.sampledAt))
     )
       return this.withSignIn(template, state);
     return this.project(target, template, state, !state.fresh);
@@ -609,6 +646,8 @@ export class UsageFailoverService {
     state.nextAttempt = this.now() + 15_000;
     state.fresh = false;
     state.primaryFailure = template.status === 'needs_sign_in' ? 'needs_sign_in' : null;
+    // A process exit during I/O must not preserve the previous successful outcome.
+    this.persist(target, state);
     const primaries: Array<{ host: UsageHost; candidate: UsageCandidate }> = [];
     let missingPrimary = false;
     for (const source of target.primarySources) {

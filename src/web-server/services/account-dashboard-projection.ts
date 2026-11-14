@@ -140,13 +140,16 @@ export function codexAccount(
     platform: 'ubuntu',
     source: row?.quotaSource === 'local' ? 'Codex local quota' : 'Codex saved login on Ubuntu',
     status: note?.status ?? status,
+    cacheReason: status === 'cached' ? 'read_failed' : undefined,
     message:
       note?.message ??
       (status === 'needs_sign_in'
         ? 'This saved Codex login needs to be renewed.'
-        : status === 'error' || status === 'unavailable'
-          ? 'Codex usage is temporarily unavailable.'
-          : null),
+        : status === 'cached'
+          ? 'The Codex usage read failed or was skipped; showing the last successful reading.'
+          : status === 'error' || status === 'unavailable'
+            ? 'Codex usage is temporarily unavailable.'
+            : null),
     fetchedAt: timestamp(row?.fetchedAt),
     // A local fallback reading is fetched now but was written when its session file
     // last changed (staleAsOf, set once that is over five minutes ago).
@@ -203,12 +206,15 @@ export function claudeAccount(
     platform,
     source: `Claude desktop on ${platform === 'mac' ? 'Mac' : 'Windows'}`,
     status,
+    cacheReason: status === 'cached' ? 'outcome_unknown' : undefined,
     message:
       status === 'needs_sign_in'
         ? 'No usage sample is available. This profile may need its first sign-in on this computer.'
         : status === 'unavailable'
           ? 'Claude desktop usage is temporarily unavailable.'
-          : null,
+          : status === 'cached'
+            ? 'Live Claude usage was not read; showing the earlier desktop history sample.'
+            : null,
     fetchedAt: timestamp(usage?.fetchedAt),
     sampledAt: timestamp(usage?.sampledAt),
     isActive: false,
@@ -244,6 +250,7 @@ export function applyClaudeLiveUsage(
     // stale one, and JSON.stringify drops explicit-undefined keys on publish.
     planClass: planClass ?? undefined,
     status: 'ok',
+    cacheReason: undefined,
     source: 'Claude Desktop live quota on Windows',
     plan: livePlan(live.plan) ?? account.plan,
     message: null,
@@ -385,6 +392,7 @@ export function additionalAccounts(
       status: ['ok', 'cached', 'unavailable', 'error', 'needs_sign_in'].includes(row.status)
         ? row.status
         : 'unavailable',
+      cacheReason: row.cacheReason,
       message: text(row.message, 300),
       fetchedAt: timestamp(row.fetchedAt),
       sampledAt: timestamp(row.sampledAt),

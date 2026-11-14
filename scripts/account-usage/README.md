@@ -259,3 +259,22 @@ values remain OS kinds. Alexis sources persist as `platform: "windows"` plus
 `sshHost: "alexis-windows"`, just as Nas1 persists as Ubuntu plus its alias. Python
 `PLATFORMS`/`HOST_LABELS` validate OS protocols, not the computer inventory. Claude
 history/profile helpers still cover the owner's own Mac/Windows desktop profiles.
+
+## Successful intervals and retained readings
+
+Quota status describes the provider read, not the storage used to serve it.
+A successful sample remains `ok` between scheduled reads, including Muse's
+five-minute request budget. Its real `sampledAt` is preserved. `cached` is
+reserved for an earlier sample kept after a later read failed or was skipped;
+its explanation names the failure or pending read and its age remains the
+original observation age. Optional retained windows keep their own cached
+status and timestamps even when the rest of the account is current.
+
+The failover observation cache records the latest read outcome so a process
+restart preserves success and failure honestly. Older observations without an
+outcome stay cached with an unknown-outcome explanation until checked again.
+Muse reserves a failed/interrupted outcome before network I/O, so a process
+exit cannot turn an earlier sample into a successful current read.
+
+The version 1 agent feed adds only an optional fixed `cacheReason` code; see
+`scripts/agent-usage/README.md`. It never publishes raw provider messages.
