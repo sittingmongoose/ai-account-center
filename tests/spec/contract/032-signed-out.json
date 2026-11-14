@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/antigravity/recover",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/antigravity/profiles/quotas",
+    "role": "signed-out"
   },
   "response": {
     "body": {

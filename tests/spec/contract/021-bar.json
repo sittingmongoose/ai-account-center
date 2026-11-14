@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/accounts/signin-jobs/fixture-missing",
-    "role": "bar"
+    "method": "POST",
+    "path": "/api/accounts/signin-jobs/fixture-missing/cancel",
+    "role": "bar",
+    "body": {}
   },
   "response": {
     "body": {

@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "PUT",
-    "path": "/api/codex/profiles/auto-switch",
+    "method": "POST",
+    "path": "/api/codex/profiles/fixture-missing/activate",
     "role": "signed-out",
     "body": {}
   },

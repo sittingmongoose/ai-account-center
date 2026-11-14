@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/status/answers",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/status/files/fixture/missing.txt",
+    "role": "signed-out"
   },
   "response": {
     "body": {

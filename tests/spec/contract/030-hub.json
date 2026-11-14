@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/antigravity/profiles/quotas",
-    "role": "hub"
+    "method": "POST",
+    "path": "/api/antigravity/profiles/fixture-missing/activate",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {

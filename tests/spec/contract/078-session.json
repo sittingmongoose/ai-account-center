@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/v0/management/auth-files",
-    "role": "session"
+    "method": "ALL",
+    "path": "/v0/management/fixture-missing",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {

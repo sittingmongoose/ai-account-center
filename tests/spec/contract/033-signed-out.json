@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/app-updates/cancel",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/antigravity/profiles",
+    "role": "signed-out"
   },
   "response": {
     "body": {

@@ -1,19 +1,17 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/codex/profiles/fixture-missing/activate",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles",
+    "role": "device"
   },
   "response": {
     "body": {
-      "code": "invalid_profile",
-      "error": "The selected profile has no valid saved login."
+      "profiles": []
     },
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 400
+    "status": 200
   }
 }

@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/accounts/analytics?fixture=invalid",
+    "path": "/api/accounts/analytics/capture",
     "role": "device"
   },
   "response": {

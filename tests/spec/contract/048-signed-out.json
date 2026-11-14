@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/password",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/auth/network",
+    "role": "signed-out"
   },
   "response": {
     "body": {

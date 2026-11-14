@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "DELETE",
-    "path": "/api/auth/devices/fixture-missing",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/app-updates/status",
+    "role": "device"
   },
   "response": {
     "body": {

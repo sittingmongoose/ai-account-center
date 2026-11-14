@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/devices/revoke-all",
-    "role": "hub",
-    "body": {}
+    "method": "GET",
+    "path": "/api/auth/devices/me",
+    "role": "hub"
   },
   "response": {
     "body": {

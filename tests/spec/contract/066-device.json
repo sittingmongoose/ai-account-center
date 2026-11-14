@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/scoreboard",
+    "path": "/api/codex/profiles",
     "role": "device"
   },
   "response": {

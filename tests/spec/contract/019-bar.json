@@ -1,14 +1,13 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/accounts/signin-jobs/fixture-missing/cancel",
+    "method": "PUT",
+    "path": "/api/accounts/settings",
     "role": "bar",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "unknown_job",
-      "error": "That sign-in has ended and is no longer listed."
+      "error": "Choose a whole number of seconds from 30 to 3600."
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +15,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 404
+    "status": 400
   }
 }

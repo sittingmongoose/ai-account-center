@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/app-updates/cancel",
-    "role": "hub",
-    "body": {}
+    "method": "GET",
+    "path": "/api/antigravity/profiles",
+    "role": "hub"
   },
   "response": {
     "body": {

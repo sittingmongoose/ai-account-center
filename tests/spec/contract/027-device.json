@@ -1,19 +1,19 @@
 {
   "request": {
-    "method": "PUT",
-    "path": "/api/antigravity/auto-switch",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/accounts/visibility",
+    "role": "device"
   },
   "response": {
     "body": {
-      "error": "Provide valid Antigravity automatic switching settings for Ubuntu."
+      "code": "device_scope",
+      "error": "This action needs a signed-in dashboard session."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 400
+    "status": 403
   }
 }

@@ -1,14 +1,17 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/accounts/dashboard?fixture=invalid",
-    "role": "session"
+    "method": "PUT",
+    "path": "/api/accounts/analytics/capture",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {
-      "error": "Select a valid desktop platform and refresh value."
+      "code": "invalid_body",
+      "error": "Send {\"cwd\": true} or {\"cwd\": false}."
     },
     "headers": {
+      "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"

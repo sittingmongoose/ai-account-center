@@ -1,19 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/devices",
-    "role": "device"
+    "method": "POST",
+    "path": "/api/auth/devices/pair",
+    "role": "device",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "device_scope",
-      "error": "This action needs a signed-in dashboard session."
+      "code": "invalid_body",
+      "error": "The request body is not valid for this action."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 403
+    "status": 400
   }
 }

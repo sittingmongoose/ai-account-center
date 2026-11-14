@@ -1,13 +1,15 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/app-updates/cancel",
-    "role": "bar",
-    "body": {}
+    "method": "GET",
+    "path": "/api/antigravity/profiles",
+    "role": "bar"
   },
   "response": {
     "body": {
-      "job": null
+      "activationSupported": false,
+      "hostId": "ubuntu",
+      "profiles": [],
+      "schemaVersion": 1
     },
     "headers": {
       "cache-control": "no-store",

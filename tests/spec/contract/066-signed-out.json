@@ -1,12 +1,11 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/scoreboard",
+    "path": "/api/codex/profiles",
     "role": "signed-out"
   },
   "response": {
     "body": {
-      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

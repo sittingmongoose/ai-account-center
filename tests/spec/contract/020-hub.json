@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/accounts/signin-jobs/fixture-missing/code",
-    "role": "hub",
-    "body": {}
+    "method": "GET",
+    "path": "/api/accounts/signin-command",
+    "role": "hub"
   },
   "response": {
     "body": {

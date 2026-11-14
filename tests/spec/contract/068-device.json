@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/status/answers",
+    "path": "/api/scoreboard",
     "role": "device"
   },
   "response": {

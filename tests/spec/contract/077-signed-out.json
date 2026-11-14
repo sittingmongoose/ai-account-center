@@ -1,14 +1,12 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/v0/management/api-call",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/usage/history",
+    "role": "signed-out"
   },
   "response": {
     "body": {
-      "code": "missing_management_key",
-      "error": "A management key is required."
+      "error": "Authentication required"
     },
     "headers": {
       "cache-control": "no-store",

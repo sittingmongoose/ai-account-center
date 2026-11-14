@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/claude/desktop-profiles/usage",
+    "path": "/api/bar/auth",
     "role": "hub"
   },
   "response": {

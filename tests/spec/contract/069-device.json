@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/status/answers",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/status/files/fixture/missing.txt",
+    "role": "device"
   },
   "response": {
     "body": {

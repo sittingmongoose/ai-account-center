@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/accounts/dashboard?fixture=invalid",
-    "role": "hub"
+    "method": "PUT",
+    "path": "/api/accounts/analytics/capture",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {

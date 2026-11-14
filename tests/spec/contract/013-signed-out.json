@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/accounts/dashboard?fixture=invalid",
-    "role": "signed-out"
+    "method": "PUT",
+    "path": "/api/accounts/analytics/capture",
+    "role": "signed-out",
+    "body": {}
   },
   "response": {
     "body": {

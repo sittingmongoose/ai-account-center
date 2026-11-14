@@ -390,6 +390,54 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-usage/src/read/antigravity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/src/util.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/agy_header.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/big_review.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/big_review_2.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/discovery.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/readers.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/resume.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "src/cliproxy/__tests__/model-catalog-compat.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -1684,6 +1732,12 @@
       ]
     },
     {
+      "file": "tests/unit/scripts/build-usage-scan.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/scripts/check-line-endings.test.ts",
       "kind": "helper",
       "evidence": [
@@ -2298,7 +2352,33 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/analytics-big-review.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-capture-cache-limit.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-cursor-devin.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/analytics-explicit-refresh.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/analytics-local-scanner.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -2325,6 +2405,12 @@
         "helper",
         "table"
       ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-resume.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/analytics-scan-failures.test.ts",
@@ -3323,6 +3409,13 @@
       "kind": "HTTP",
       "evidence": [
         "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/usage-scan-transport.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
       ]
     },
     {

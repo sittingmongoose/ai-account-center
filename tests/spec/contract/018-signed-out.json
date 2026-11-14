@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/accounts/signin-command",
+    "path": "/api/accounts/settings",
     "role": "signed-out"
   },
   "response": {

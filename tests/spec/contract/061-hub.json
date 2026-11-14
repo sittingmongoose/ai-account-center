@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/codex/profiles/auto-switch",
-    "role": "hub"
+    "method": "POST",
+    "path": "/api/claude/history-snapshots/cleanup",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {

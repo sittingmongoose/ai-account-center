@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/accounts/trash/fixture-missing/restore",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/accounts/signin-jobs/fixture-missing",
+    "role": "signed-out"
   },
   "response": {
     "body": {

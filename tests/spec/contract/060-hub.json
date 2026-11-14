@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/codex/profiles/fixture-missing/activate",
-    "role": "hub",
-    "body": {}
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles",
+    "role": "hub"
   },
   "response": {
     "body": {

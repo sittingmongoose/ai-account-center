@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/management/reset-quota",
+    "role": "hub",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "rate_limited",
+      "error": "Too many wrong usage hub keys. Try again later.",
+      "retryAfterSeconds": 900
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "retry-after": "900"
+    },
+    "status": 429
+  }
+}

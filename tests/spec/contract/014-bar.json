@@ -1,16 +1,13 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/accounts/preferences",
+    "path": "/api/accounts/analytics?fixture=invalid",
     "role": "bar"
   },
   "response": {
     "body": {
-      "snapshotCleanup": {
-        "auto": true
-      },
-      "timeZone": "America/New_York",
-      "usageLogSources": []
+      "code": "invalid_query",
+      "error": "Select a valid platform, time range, provider, account, and refresh flag."
     },
     "headers": {
       "cache-control": "no-store",
@@ -18,6 +15,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

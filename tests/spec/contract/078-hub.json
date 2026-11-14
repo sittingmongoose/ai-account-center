@@ -1,21 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/v0/management/auth-files",
-    "role": "hub"
+    "method": "ALL",
+    "path": "/v0/management/fixture-missing",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "rate_limited",
-      "error": "Too many wrong usage hub keys. Try again later.",
-      "retryAfterSeconds": 900
+      "code": "not_found",
+      "error": "AI Account Center offers only auth-files and api-call usage reads here."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
-      "etag": "<etag>",
-      "retry-after": "900"
+      "etag": "<etag>"
     },
-    "status": 429
+    "status": 404
   }
 }

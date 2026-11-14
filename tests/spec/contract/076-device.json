@@ -1,20 +1,20 @@
 {
   "request": {
-    "method": "ALL",
-    "path": "/v0/management/fixture-missing",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/usage/burn",
+    "role": "device"
   },
   "response": {
     "body": {
-      "code": "invalid_management_key",
-      "error": "The management key is not valid."
+      "at": "<timestamp>",
+      "rule": "Points used per hour across resets, from hourly rollups. A rate under 50% coverage is shown with its coverage only.",
+      "series": []
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 401
+    "status": 200
   }
 }

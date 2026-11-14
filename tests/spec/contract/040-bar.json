@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/devices/me",
-    "role": "bar"
+    "method": "POST",
+    "path": "/api/auth/devices/me/rotate",
+    "role": "bar",
+    "body": {}
   },
   "response": {
     "body": {

@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/codex/profiles",
-    "role": "hub"
+    "method": "PUT",
+    "path": "/api/codex/profiles/auto-switch",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {

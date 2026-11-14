@@ -1,33 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/check",
-    "role": "hub"
+    "method": "POST",
+    "path": "/api/app-updates/start",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {
-      "accessMode": "login",
-      "authConfigured": true,
-      "authEnabled": true,
-      "authenticated": false,
-      "authRequired": true,
-      "connection": {
-        "peer": "127.0.0.1",
-        "trusted": false
-      },
-      "isLocalAccess": true,
-      "secureOrigin": null,
-      "secureTransport": true,
-      "setupCodeRequired": false,
-      "signedOutReason": null,
-      "trustedLocalNetwork": false,
-      "username": null
+      "code": "invalid_token",
+      "error": "The device token is not valid."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 200
+    "status": 401
   }
 }

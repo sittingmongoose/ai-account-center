@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/session-lifetime",
-    "role": "device"
+    "method": "PUT",
+    "path": "/api/auth/network",
+    "role": "device",
+    "body": {}
   },
   "response": {
     "body": {

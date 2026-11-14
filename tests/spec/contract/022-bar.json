@@ -1,14 +1,14 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/accounts/trash/fixture-missing/purge",
+    "path": "/api/accounts/signin-jobs/fixture-missing/code",
     "role": "bar",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "invalid_account",
-      "error": "That account id is not valid."
+      "code": "unknown_job",
+      "error": "That sign-in has ended and is no longer listed."
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 400
+    "status": 404
   }
 }

@@ -1,27 +1,18 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/check",
-    "role": "session"
+    "method": "POST",
+    "path": "/api/app-updates/start",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {
-      "accessMode": "login",
-      "authConfigured": true,
-      "authEnabled": true,
-      "authenticated": true,
-      "authRequired": true,
-      "connection": {
-        "peer": "127.0.0.1",
-        "trusted": false
-      },
-      "isLocalAccess": true,
-      "secureOrigin": null,
-      "secureTransport": true,
-      "setupCodeRequired": false,
-      "signedOutReason": null,
-      "trustedLocalNetwork": false,
-      "username": "fixture-admin"
+      "job": {
+        "hosts": {},
+        "id": "fixture-update",
+        "results": [],
+        "state": "running"
+      }
     },
     "headers": {
       "cache-control": "no-store",
@@ -29,6 +20,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 202
   }
 }

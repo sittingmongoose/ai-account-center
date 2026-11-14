@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/codex/profiles",
-    "role": "signed-out"
+    "method": "PUT",
+    "path": "/api/codex/profiles/auto-switch",
+    "role": "signed-out",
+    "body": {}
   },
   "response": {
     "body": {

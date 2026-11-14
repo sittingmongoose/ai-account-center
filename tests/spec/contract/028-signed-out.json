@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/antigravity/profiles/fixture-missing/activate",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/antigravity/auto-switch",
+    "role": "signed-out"
   },
   "response": {
     "body": {

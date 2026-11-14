@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/status/answers",
-    "role": "hub",
-    "body": {}
+    "method": "GET",
+    "path": "/api/status/files/fixture/missing.txt",
+    "role": "hub"
   },
   "response": {
     "body": {

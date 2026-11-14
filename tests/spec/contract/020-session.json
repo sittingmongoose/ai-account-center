@@ -1,14 +1,13 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/accounts/signin-jobs/fixture-missing/code",
-    "role": "session",
-    "body": {}
+    "method": "GET",
+    "path": "/api/accounts/signin-command",
+    "role": "session"
   },
   "response": {
     "body": {
-      "code": "unknown_job",
-      "error": "That sign-in has ended and is no longer listed."
+      "code": "invalid_body",
+      "error": "The request could not be completed."
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +15,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 404
+    "status": 400
   }
 }

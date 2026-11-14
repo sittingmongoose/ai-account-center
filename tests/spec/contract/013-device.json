@@ -1,17 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/accounts/dashboard?fixture=invalid",
-    "role": "device"
+    "method": "PUT",
+    "path": "/api/accounts/analytics/capture",
+    "role": "device",
+    "body": {}
   },
   "response": {
     "body": {
-      "error": "Select a valid desktop platform and refresh value."
+      "code": "device_scope",
+      "error": "This action needs a signed-in dashboard session."
     },
     "headers": {
+      "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 400
+    "status": 403
   }
 }

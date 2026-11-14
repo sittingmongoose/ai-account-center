@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/devices/revoke-all",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/auth/devices/me",
+    "role": "signed-out"
   },
   "response": {
     "body": {

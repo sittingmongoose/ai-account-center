@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/accounts/trash/fixture-missing/purge",
+    "path": "/api/accounts/signin-jobs/fixture-missing/code",
     "role": "hub",
     "body": {}
   },

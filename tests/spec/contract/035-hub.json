@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/app-updates/status",
-    "role": "hub"
+    "method": "POST",
+    "path": "/api/app-updates/cancel",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {

@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/sessions/revoke-others",
+    "method": "PUT",
+    "path": "/api/auth/session-lifetime",
     "role": "signed-out",
     "body": {}
   },
