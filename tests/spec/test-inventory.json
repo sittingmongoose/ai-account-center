@@ -496,6 +496,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-usage/tests/unreadable.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "src/commands/__tests__/config-command-supervisord.test.ts",
       "kind": "internal",
       "evidence": [],
@@ -1819,6 +1825,12 @@
     },
     {
       "file": "tests/unit/status/status-docs.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/store/activity-coverage-clock.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
