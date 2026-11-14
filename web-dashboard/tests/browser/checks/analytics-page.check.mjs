@@ -122,14 +122,14 @@ async function stubSettled(t) {
 }
 
 /**
- * Holds the page's data reads (analytics, dashboard, preferences, Antigravity switching) until `release()`, so a visit
+ * Holds the page's data reads (analytics, dashboard, preferences) until `release()`, so a visit
  * can be checked before any of them has answered. Returns the release and how many reads are held.
  */
 async function holdData(t, answer = settled) {
 	let release;
 	const gate = new Promise((resolve) => { release = resolve; });
 	const held = { count: 0, answered: 0 };
-	const data = new Set(['/api/accounts/analytics', '/api/accounts/dashboard', '/api/accounts/preferences', '/api/antigravity/auto-switch']);
+	const data = new Set(['/api/accounts/analytics', '/api/accounts/dashboard', '/api/accounts/preferences']);
 	await t.page.route((u) => data.has(new URL(u).pathname), async (r) => {
 		held.count++;
 		await gate;
@@ -137,9 +137,7 @@ async function holdData(t, answer = settled) {
 		const url = new URL(r.request().url());
 		if (url.pathname === '/api/accounts/analytics') return r.fulfill({ json: answer(url.searchParams.get('range') || '7d') });
 		if (url.pathname === '/api/accounts/dashboard') return r.fulfill({ json: DASHBOARD });
-		if (url.pathname === '/api/accounts/preferences') return r.fulfill({ json: { timeZone: 'UTC' } });
-		// Antigravity switching off: nothing for the page to mark
-		return r.fulfill({ json: { enabled: false } });
+		return r.fulfill({ json: { timeZone: 'UTC' } });
 	});
 	return { release: () => release(), held };
 }

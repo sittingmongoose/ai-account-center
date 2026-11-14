@@ -11,7 +11,6 @@ import {
   createAnalyticsPage,
   analyticsCovers,
   analyticsPollDelay,
-  analyticsThresholds,
   applyAnalyticsAction,
   applyAnalyticsLayout,
 } from '../public/analytics-page.mjs';
@@ -73,7 +72,6 @@ function defaultRoutes(overrides = {}) {
     if (url.pathname === '/api/accounts/dashboard') return { status: 200, body: dashboard() };
     if (url.pathname === '/api/accounts/preferences')
       return { status: 200, body: { timeZone: 'UTC' } };
-    if (url.pathname === '/api/antigravity/auto-switch') return { status: 404, body: null };
     return null;
   };
 }
@@ -618,7 +616,7 @@ test('each installed controller has its own id, and a new one stops the one befo
   assert.equal(listeners.size, 0);
 });
 
-test('analytics-page: covers, poll delay, thresholds and layout', () => {
+test('analytics-page: covers, poll delay and layout', () => {
   const page = createAnalyticsPage();
   const payload = { range: { from: new Date(NOW - 7 * D).toISOString(), preset: '7d' } };
   assert.equal(analyticsCovers(payload, page, NOW), true);
@@ -660,17 +658,6 @@ test('analytics-page: covers, poll delay, thresholds and layout', () => {
   );
   assert.equal(analyticsPollDelay({ activity: { status: 'loading', totals: {} } }), 60000);
   assert.equal(analyticsPollDelay({ activity: { status: 'ready', refreshing: false } }), 0);
-
-  assert.deepEqual(analyticsThresholds(dashboard(), null), { codex: 90, antigravity: null });
-  const ag = { enabled: true, thresholdUsedPercent: 80 };
-  const two = dashboard({
-    accounts: [
-      { id: 'a', provider: 'antigravity' },
-      { id: 'b', provider: 'antigravity' },
-    ],
-  });
-  assert.deepEqual(analyticsThresholds(two, ag), { codex: 90, antigravity: 80 });
-  assert.deepEqual(analyticsThresholds(null, ag), { codex: null, antigravity: null });
 
   const p = createAnalyticsPage();
   assert.equal(applyAnalyticsLayout(p, 'trend,800,300'), true);

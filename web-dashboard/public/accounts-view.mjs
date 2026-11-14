@@ -8,23 +8,18 @@ import { HOST_IDS, HOST_LABELS, hostIcon } from './computers.mjs';
 // and per account `actions` and `removeRefusal` in GET /api/accounts/registry. A control is "coming" only where
 // the server has no flow for it yet (`not_implemented`, or a route that does not exist on this server); any other
 // reason it is off is said in plain words. Nothing here ever shows an example value as real data.
-import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, hostLabel, planLabel, relative, intervalLabel, run, statusWord, duration, claudeSignInNeeded, updateTotal, isCatalogPending } from './view-model.mjs';
-import { antigravityView } from './antigravity-data.mjs';
-import { visibleUsageWindows } from './visible-usage.mjs';
+import { PROVIDER_REGISTRY, dashboardViewModel, platformLabel, hostLabel, planLabel, relative, run, statusWord, duration, claudeSignInNeeded, updateTotal, isCatalogPending } from './view-model.mjs';
 import { unavailableText, jobErrorText, PROVIDER_LABELS } from './account-actions.mjs';
 import { strength as passwordStrength } from './auth-view.mjs';
 import { lazyFormat } from './time-format.mjs';
 import { transportOf, transportNote, TRANSPORT_TEXT, TRUSTED_NOTE } from './transport.mjs';
 export { transportOf, transportNote, TRUSTED_NOTE };
 
-export const ACCOUNTS_VIEW_VERSION = 3;
+export const ACCOUNTS_VIEW_VERSION = 4;
 
 /** Server routes the page binds; `true` once the route exists on the round-2 base (kept for the docs and tests). */
 export const LIVE = Object.freeze({
-  activate: true,            // POST /api/codex/profiles/:name/activate, POST /api/antigravity/profiles/:id/activate
   openClaude: true,          // POST /api/claude/desktop-profiles/:id/open
-  antigravityPolicy: true,   // PUT /api/antigravity/auto-switch (toggle, threshold, pool, cooldown)
-  codexPolicy: true,         // PUT /api/codex/profiles/auto-switch
   refreshInterval: true,     // PUT /api/accounts/settings
   add: true,                 // POST /api/accounts/add (per provider: providers[].capabilities.add)
   signInAgain: true,         // POST /api/accounts/:id/signin-again
@@ -49,9 +44,9 @@ export const LIVE = Object.freeze({
 export const ACCOUNT_KINDS = {
   claude: { kind: 'desktop', kindLabel: 'Desktop profile', icon: 'laptop', src: 'Claude desktop profile', slots: 3, actsMin: 206,
     how: 'Each account is its own Claude desktop profile; open it on Mac or Windows to sign in.' },
-  codex: { kind: 'device', kindLabel: 'Device-code sign-in', icon: 'code', src: 'Codex CLI device login', slots: 3, actsMin: 262,
+  codex: { kind: 'device', kindLabel: 'Device-code sign-in', icon: 'code', src: 'Codex CLI device login', slots: 2, actsMin: 156,
     how: 'Device-code sign-in: approve a short code in any browser.' },
-  antigravity: { kind: 'cli', kindLabel: 'Supervised CLI login', icon: 'terminal', src: 'Antigravity CLI, supervised', slots: 3, actsMin: 262,
+  antigravity: { kind: 'cli', kindLabel: 'Supervised CLI login', icon: 'terminal', src: 'Antigravity CLI, supervised', slots: 2, actsMin: 156,
     how: 'The dashboard host runs and supervises the CLI login.' },
   cursor: { kind: 'app', kindLabel: 'Desktop app session', icon: 'app-window', src: 'Cursor desktop app', slots: 2, actsMin: 150,
     how: 'Sign in inside Cursor on any computer the dashboard reads. Re-check uses whichever of those computers is signed in.' },
@@ -68,7 +63,6 @@ export const ACCOUNT_KINDS = {
 };
 /** Providers with their own sign-in flows sit in the first column on ultra-wide screens. */
 const COL_A = ['claude', 'codex', 'antigravity'];
-const SWITCHABLE = ['codex', 'antigravity'];
 
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const validDate = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
@@ -83,7 +77,7 @@ const providerLabel = id => PROVIDER_LABELS[id] || PROVIDER_REGISTRY.find(row =>
 
 // ---------------------------------------------------------------- actions
 /**
- * One fixed action slot. kind: switch | button | icon | quiet | empty. style: Button kinds. `refused` draws the
+ * One fixed action slot. kind: button | icon | quiet | empty. style: Button kinds. `refused` draws the
  * control dimmed but keeps it clickable: the click opens the reason under the row instead of calling the server.
  * `probe` names the control for the end-to-end harness (it is only reported while the page runs with ?e2e).
  */
@@ -91,7 +85,6 @@ export function action(fields = {}) {
   return { kind: 'button', act: '', value: '', label: '', icon: '', platform: '', style: 'default', enabled: false, coming: false, refused: false, busy: false, tip: '', probe: '', span: 1, ...fields };
 }
 const coming = (fields, tip) => action({ ...fields, enabled: false, coming: true, tip });
-const emptySlot = () => action({ kind: 'empty' });
 
 /** The server's facts for one provider (`providers[]` in the dashboard response), or null on an older server. */
 function providerEntry(data, id) {
@@ -195,15 +188,15 @@ const REMOVE_TIP = {
   app: 'Remove stops reading this account; the app keeps its session.',
 };
 const REFUSAL_TIP = {
-  account_active: 'This is the active account. Activate another account first.',
+  account_active: 'This is the live login on its computer. Sign in to another account there first.',
   account_default: 'This is the default account. Make another account the default first.',
   account_protected: "This is this computer's default Claude profile. It can't be removed here.",
   last_account: 'This is the last account of this provider.',
-  activation_running: 'An account switch is running.',
+  activation_running: 'Another change to these saved logins is running.',
   signin_running: 'A sign-in for this account is running.',
 };
 
-function rowActions(provider, account, homeRow, canSwitch, ctx) {
+function rowActions(provider, account, homeRow, ctx) {
   const def = ACCOUNT_KINDS[provider];
   const entry = providerEntry(ctx.data, provider);
   const reg = ctx.registry.get(account.id) || null;
@@ -229,15 +222,11 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
       const g = gate(entry, 'signInAgain', provider);
       const fields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
       const again = homeRow?.active
-        ? action({ ...fields, act: 'refuse', value: `${account.id}\naccount_active_signin`, enabled: true, refused: true, tip: 'This is the active account. Activate another account first, then sign in again.' })
+        ? action({ ...fields, act: 'refuse', value: `${account.id}\naccount_active_signin`, enabled: true, refused: true, tip: 'This is the live login on Ubuntu. Sign in to another account there first, then sign in again.' })
         : !g.live ? gated(fields, g)
           : reg && reg.actions?.signInAgain === false ? action({ ...fields, enabled: false, tip: 'A sign-in is not possible for this account now.' })
             : action({ ...fields, enabled: true, tip: 'Run the device-code login for this profile again; its history stays.' });
-      return [
-        action({ kind: 'switch', act: 'activate', value: homeRow?.profile || '', enabled: LIVE.activate && !!homeRow?.canActivate, tip: homeRow?.activateHint || '', probe: `activate:${account.id}` }),
-        again,
-        removeControl(provider, account, reg, entry),
-      ];
+      return [again, removeControl(provider, account, reg, entry)];
     }
     case 'cli': {
       const signinFields = { act: 'signin-again', value: account.id, label: 'Sign in again', icon: 'login', probe: `signin-again:${account.id}` };
@@ -246,17 +235,11 @@ function rowActions(provider, account, homeRow, canSwitch, ctx) {
       // flag needs the runtime; without it the registry still records the live login).
       const isLive = homeRow?.active === true || reg?.removeRefusal === 'account_active';
       const signin = isLive
-        ? action({ ...signinFields, act: 'refuse', value: `${account.id}\naccount_active_signin`, enabled: true, refused: true, tip: 'This is the active account. Activate another account first, then sign in again.' })
+        ? action({ ...signinFields, act: 'refuse', value: `${account.id}\naccount_active_signin`, enabled: true, refused: true, tip: 'This is the live login on Ubuntu. Sign in to another account there first, then sign in again.' })
         : !reg ? action({ ...signinFields, enabled: false, tip: 'Checking what this account can do' })
           : reg.actions?.signInAgain !== true ? action({ ...signinFields, enabled: false, tip: 'Signing in is not possible for this account now.' })
             : action({ ...signinFields, enabled: true, tip: 'Sign in from a terminal on Ubuntu; the dashboard shows the command in a panel below.' });
-      return [
-        canSwitch || homeRow?.active
-          ? action({ kind: 'switch', act: 'antigravity-activate', value: homeRow?.profile || '', enabled: LIVE.activate && !!homeRow?.canActivate, tip: homeRow?.activateHint || '', probe: `activate:${account.id}` })
-          : emptySlot(),
-        signin,
-        removeControl(provider, account, reg, entry),
-      ];
+      return [signin, removeControl(provider, account, reg, entry)];
     }
     case 'apikey': {
       if (isConsole(account)) {
@@ -625,12 +608,12 @@ export function lineView(rowId, label, l, ctx = {}) {
   };
 }
 const REFUSAL_LINE = {
-  account_active: 'is the active account, so it cannot be removed. Activate another account first.',
-  account_active_signin: 'is the active account, so it cannot sign in again. Activate another account first, then sign in again.',
+  account_active: 'is the live login on its computer, so it cannot be removed. Sign in to another account there first.',
+  account_active_signin: 'is the live login on its computer, so it cannot sign in again. Sign in to another account there first, then sign in again.',
   account_default: 'is the saved default. Make another account the default first.',
   account_protected: "is this computer's default Claude profile. It can't be removed here.",
   last_account: 'is the last account of this provider, so it stays.',
-  activation_running: 'cannot be removed while an account switch runs. Try again when it finishes.',
+  activation_running: 'cannot be removed while another change to these saved logins runs. Try again when it finishes.',
   signin_running: 'cannot be removed while its sign-in runs. Finish or cancel the sign-in first.',
   app_running: 'is open in Claude on one of the computers. Quit it there first.',
   app_state_unknown: 'could not be checked: whether Claude is open is unknown. Try again later.',
@@ -653,93 +636,6 @@ function trashRows(entries, ctx, now) {
       line: lineView(entry.trashId, text(entry.label) || 'this profile', ctx.lines?.[`trash:${entry.trashId}`], { restore: true }),
     };
   });
-}
-
-// ---------------------------------------------------------------- the Antigravity policy box and the policies
-const COOLDOWNS = [300, 900, 1800, 3600];
-const minutes = seconds => seconds % 60 === 0 ? `${seconds / 60} min` : intervalLabel(seconds);
-/** Reported quota pools of the Antigravity accounts, labelled as the provider reports them. */
-function reportedPoolLabels(accounts) {
-  const pools = new Map();
-  for (const account of accounts) for (const w of visibleUsageWindows('antigravity', account.windows)) {
-    if (typeof w.poolId === 'string' && w.poolId && !pools.has(w.poolId)) pools.set(w.poolId, text(w.poolLabel) || `Quota pool ${pools.size + 1}`);
-  }
-  return pools;
-}
-function antigravityPolicy(data, ctx, section, accounts) {
-  const native = antigravityView(data, ctx.antigravityInventory, ctx.antigravityAuto, ctx.now);
-  const status = native.antigravityAutoKnown ? ctx.antigravityAuto : null;
-  const live = !!section?.auto?.shown;
-  const settings = LIVE.antigravityPolicy && native.antigravitySettingsAvailable === true;
-  // Pools: the selectable choices once both accounts share a fresh pool; before that the reported pools, greyed.
-  let pools = native.antigravityPoolChoices.filter(choice => choice.id !== null).map(choice => ({ value: choice.label, label: choice.label, icon: '' }));
-  let pool = native.antigravityPoolChoices.find(choice => choice.id === status?.requestedPoolId && choice.id !== null)?.label || '';
-  if (!pools.length) {
-    // Each account reports the same pools under its own pool ids, so the labels repeat:
-    // one chip per label (five chips once pushed the cooldown buttons off the card).
-    const reported = reportedPoolLabels(accounts);
-    pools = [...new Set(reported.values())].map(label => ({ value: label, label, icon: '' }));
-    pool = status?.requestedPoolId && reported.has(status.requestedPoolId) ? reported.get(status.requestedPoolId) : '';
-  }
-  const cooldown = status && finite(status.cooldownSeconds) ? status.cooldownSeconds : null;
-  const cooldowns = COOLDOWNS.map(seconds => ({ value: String(seconds), label: minutes(seconds), icon: '' }));
-  if (cooldown !== null && !COOLDOWNS.includes(cooldown)) cooldowns.push({ value: String(cooldown), label: minutes(cooldown), icon: '' });
-  const toggleEnabled = settings && section.auto.available && (section.auto.enabled || section.auto.canEnable);
-  return {
-    shown: accounts.length > 0,
-    live,
-    known: !!status,
-    noteStrong: !status ? 'Automatic switching status is unavailable.' : live ? '' : 'Auto-switch is off until a second account is signed in.',
-    note: !status ? 'The server did not report the Antigravity policy; the controls stay off.'
-      : live ? text(status.message) || 'Switching moves between the Antigravity accounts above.'
-        : 'Switching moves between Antigravity accounts.',
-    enabled: status?.enabled === true && live,
-    toggleEnabled,
-    toggleTip: !status ? 'The server did not report the Antigravity policy' : !live ? 'Starts once a second Antigravity account is signed in'
-      : toggleEnabled ? '' : section.auto.message || 'Needs verified Ubuntu support and a fresh reported quota pool on both accounts',
-    threshold: status ? status.thresholdUsedPercent : -1,
-    min: status ? Math.min(50, status.thresholdUsedPercent) : 50,
-    max: 99,
-    stepEnabled: settings,
-    pools, pool, poolEnabled: settings && native.antigravityPoolAvailable === true,
-    cooldowns, cooldown: cooldown === null ? '' : String(cooldown), cooldownEnabled: settings,
-  };
-}
-function policies(data, home, ag) {
-  const auto = data?.codexAutoSwitch;
-  const codexKnown = !!auto && finite(auto.thresholdPercent) && auto.thresholdPercent >= 0 && auto.thresholdPercent <= 100;
-  const codex = home.sections.find(section => section.id === 'codex');
-  const codexUsed = codexKnown ? 100 - auto.thresholdPercent : -1;
-  // A stuck switch must say why in plain words, on the row itself, not only on hover.
-  const codexBlocked = codexKnown && auto?.enabled === true
-    && ['waiting_idle', 'no_quota', 'no_candidate', 'error'].includes(auto?.outcome);
-  const candidateAccount = auto?.outcome === 'waiting_idle' && typeof auto?.candidate === 'string'
-    ? (Array.isArray(data?.accounts) ? data.accounts : [])
-      .find(account => account?.provider === 'codex' && account?.capabilities?.codexProfile === auto.candidate)
-    : null;
-  const candidateLabel = candidateAccount
-    ? (text(candidateAccount.email) || text(candidateAccount.label) || '')
-    : text(auto?.candidate);
-  const codexSub = !codexKnown ? 'The server did not report the Codex policy.'
-    : !codexBlocked ? ''
-    : [text(auto?.message),
-      auto?.outcome === 'waiting_idle' && candidateLabel ? `Will switch to ${candidateLabel} when Codex goes idle. Press Activate on ${candidateLabel} to switch now.` : '',
-    ].filter(Boolean).join(' ');
-  const agSection = home.sections.find(section => section.id === 'antigravity');
-  const rows = [{
-    provider: 'codex', name: 'Codex', known: codexKnown, enabled: auto?.enabled === true,
-    toggleEnabled: LIVE.codexPolicy && codexKnown && auto?.activationInProgress !== true,
-    threshold: codexUsed, min: codexKnown ? Math.min(50, codexUsed) : 50, max: 99, stepEnabled: LIVE.codexPolicy && codexKnown,
-    wait: false, sub: codexSub, warn: auto?.usingCredits === true,
-    tip: codex?.auto?.message || text(auto?.message) || '',
-  }];
-  rows.push({
-    provider: 'antigravity', name: 'Antigravity', known: ag.known, enabled: ag.enabled, toggleEnabled: ag.toggleEnabled,
-    threshold: ag.threshold, min: ag.min, max: ag.max, stepEnabled: ag.stepEnabled && ag.live,
-    wait: !ag.live, sub: !ag.known ? 'The server did not report the Antigravity policy.' : ag.live ? '' : 'Off until a second account is signed in',
-    tip: ag.toggleTip || agSection?.auto?.message || '',
-  });
-  return rows;
 }
 
 // ---------------------------------------------------------------- Update apps results
@@ -1127,9 +1023,6 @@ export function accountsViewModel(data, ctx = {}) {
   // Every provider's rows and switch state, even for a provider or account hidden on Home.
   const home = dashboardViewModel(data, { ...c, refreshing: false, includeHidden: true });
   const homeRows = new Map(home.sections.flatMap(section => section.rows.map(row => [row.id, row])));
-  const agAccounts = accounts.filter(account => account.provider === 'antigravity');
-  const agSection = home.sections.find(section => section.id === 'antigravity');
-  const ag = antigravityPolicy(data, c, agSection, agAccounts);
   // GET /api/auth/network (read with the block, and after Turn off) is newer than the check read at sign-in
   const trustNote = (networkKnown(c.signin?.network) ? c.signin.network.connection?.trusted === true : c.check?.connection?.trusted === true) ? TRUSTED_NOTE : '';
   const visWaiting = prefix => (Array.isArray(c.visPending) ? c.visPending : []).some(key => String(key).startsWith(prefix));
@@ -1142,8 +1035,6 @@ export function accountsViewModel(data, ctx = {}) {
     for (const reg of registryAccounts) if (reg.provider === entry.id && !mine.some(account => account.id === reg.id)) {
       mine.push({ id: reg.id, provider: reg.provider, email: reg.email, label: reg.label, plan: null, platform: reg.platform, status: 'needs_sign_in', windows: [], capabilities: {}, lifecycle: reg.lifecycle });
     }
-    const section = home.sections.find(s => s.id === entry.id);
-    const canSwitch = SWITCHABLE.includes(entry.id) && !!section?.canSwitch;
     const hiddenServer = serverHidden.has(entry.id);
     const rows = mine.map(account => {
       const homeRow = homeRows.get(account.id);
@@ -1156,14 +1047,11 @@ export function accountsViewModel(data, ctx = {}) {
       const sampledTip = opening?.text || sampledLineTip;
       const email = text(account.email) || text(account.label) || 'Account identity unavailable';
       const meta = [planLabel(text(account.plan), account.provider), text(account.label) && text(account.label) !== email ? text(account.label) : ''].filter(Boolean).join(' · ');
-      const switchable = SWITCHABLE.includes(entry.id);
       const line = c.lines?.[account.id];
       return {
         id: account.id, provider: entry.id, email, meta, srcInline: src, status, sampled, sampledTip, src, srcSub,
-        active: switchable && !!homeRow?.active, activeLabel: homeRow?.activeLabel || '',
-        canActivate: !!homeRow?.canActivate, activateKind: homeRow?.activateKind || '', profile: homeRow?.profile || '',
-        activateHint: homeRow?.activateHint || '', confirm: !!homeRow?.confirm, confirmRuns: homeRow?.confirmRuns || [],
-        actions: rowActions(entry.id, account, homeRow, canSwitch, c),
+        active: !!homeRow?.active, activeLabel: homeRow?.activeLabel || '', profile: homeRow?.profile || '',
+        actions: rowActions(entry.id, account, homeRow, c),
         line: lineView(account.id, email, line),
         gone: line?.kind === 'removing',
         ...accountSwitches(account.id, {
@@ -1187,10 +1075,9 @@ export function accountsViewModel(data, ctx = {}) {
       trayEnabled: trayKnown && visibilityOk && !visWaiting('tray:'),
       trayComing: !trayKnown,
       trayTip: trayKnown ? 'Saved on the dashboard: the Mac and Windows trays follow this choice.' : 'Showing or hiding a provider in the trays is not on this server yet.',
-      switchable: SWITCHABLE.includes(entry.id), canSwitch, slots: def.slots, actsMin: def.actsMin,
+      slots: def.slots, actsMin: def.actsMin,
       how: needs || def.how, needs: !!needs, foot: footActions(entry.id, mine, c),
       empty: count ? '' : `No ${entry.label} accounts yet.`,
-      ag: entry.id === 'antigravity' && ag.shown,
       flow: flowView(entry.id, c.flows?.[entry.id], { now, trustNote, busyAct: c.busyAct }),
       trash: entry.id === 'claude' ? trashRows(ctx.registry?.trash, c, now) : [],
       rows,
@@ -1201,8 +1088,6 @@ export function accountsViewModel(data, ctx = {}) {
     accessMessage: c.check?.accessMode === 'open' ? 'Accounts & Settings needs dashboard sign-in: run `ai-account-center dashboard auth setup` on the dashboard computer.' : '',
     colA: providers.filter(p => p.column === 'a'),
     colB: providers.filter(p => p.column === 'b'),
-    ag,
-    policies: policies(data, home, ag),
     // The Settings "Home screen app" row (DESIGN-MOBILE.md 6.6): "chromium" | "ios" | "hidden". The
     // default is "hidden"; the phase-6 PWA wiring feeds this from device.mjs installRow().
     install: 'hidden',

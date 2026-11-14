@@ -1,13 +1,13 @@
 //! The settings cards (Slint `ac-settings.slint`): Sign-in & connection, Settings, History snapshots, Usage log sources
-//! and About. Every word and state comes from the view (`signinFacts`, `policies`, `timezoneView`, `cleanupView`,
+//! and About. Every word and state comes from the view (`signinFacts`, `timezoneView`, `cleanupView`,
 //! `logSourcesView`); the controls send the same kinds and values the Slint page sent.
 //!
 //! The change-password fields are real password inputs (so a password manager can fill and save them) and stay here
 //! until they are submitted; they are cleared when the form closes.
 
 use super::Page;
-use super::model::{Fact, Policy, Signin};
-use super::provider::{Choices, Stepper};
+use super::model::{Fact, Signin};
+use super::provider::Choices;
 use super::{Act, CardHead};
 use crate::ui::*;
 use leptos::prelude::*;
@@ -352,10 +352,6 @@ pub fn SettingsCard(page: Page) -> impl IntoView {
         page.view
             .with(|v| v.as_ref().map(|v| v.install.clone()).unwrap_or_default())
     });
-    let policies = Memo::new(move |_| {
-        page.view
-            .with(|v| v.as_ref().map(|v| v.policies.clone()).unwrap_or_default())
-    });
     let shown = RwSignal::new(0_u32);
     view! {
         <section class="plate ac-card set" data-probe="settings-card">
@@ -410,50 +406,7 @@ pub fn SettingsCard(page: Page) -> impl IntoView {
                     {move || tz.get().options.into_iter().map(|o| { let v = o.clone(); view! { <option value=v>{o}</option> } }).collect_view()}
                 </select>
             </div>
-            <div class="set-item">
-                <p class="si-head"><span class="si-label">"Auto-switch policies"</span></p>
-                <div class="policies">
-                    <For each={move || policies.get().into_iter().map(|p| p.provider).collect::<Vec<_>>()} key=|p| p.clone() children=move |provider| {
-                        let p = Memo::new(move |_| policies.with(|ps| ps.iter().find(|x| x.provider == provider).cloned().unwrap_or_default()));
-                        view! { <PolicyRow page=page p=p/> }
-                    }/>
-                </div>
-            </div>
         </section>
-    }
-}
-
-/// One policy: the provider, its Auto-switch toggle and "at [%] used" (Codex: `automatic`, `threshold`; Antigravity:
-/// `antigravity-automatic`, `antigravity-threshold`), with the stuck-switch sentence under it.
-#[component]
-fn PolicyRow(page: Page, p: Memo<Policy>) -> impl IntoView {
-    let busy = page.busy;
-    let ag = Memo::new(move |_| p.with(|p| p.provider == "antigravity"));
-    let reason = RwSignal::new(String::new());
-    view! {
-        <div class="policy" class:off=move || !p.with(|p| p.toggle_enabled) title=move || p.with(|p| p.tip.clone())>
-            <div class="pol-line">
-                <span class="pol-name"><ProviderMark provider=p.with_untracked(|p| p.provider.clone()) size=18/><b>{move || p.with(|p| p.name.clone())}</b></span>
-                <Toggle aria=format!("{} auto-switch", p.with_untracked(|p| p.name.clone()))
-                    on=Signal::derive(move || p.with(|p| p.enabled))
-                    enabled=Signal::derive(move || p.with(|p| p.toggle_enabled) && !busy.get())
-                    tip=Signal::derive(move || p.with(|p| p.tip.clone()))
-                    probe=format!("policy:{}", p.with_untracked(|p| p.provider.clone()))
-                    on_toggle=Callback::new(move |on: bool| page.send(if ag.get_untracked() { "antigravity-automatic" } else { "automatic" }, if on { "true" } else { "false" }))
-                    on_reason=Callback::new(move |_| reason.set(p.with_untracked(|p| p.tip.clone())))/>
-                <span class="pol-at">
-                    <span class="q3">"at"</span>
-                    <Stepper reported=Signal::derive(move || p.with(|p| p.threshold))
-                        bounds=Signal::derive(move || p.with(|p| (p.min, p.max)))
-                        enabled=Signal::derive(move || p.with(|p| p.step_enabled && p.known) && !busy.get())
-                        probe="policy-threshold"
-                        send=Callback::new(move |v: i32| page.send(if ag.get_untracked() { "antigravity-threshold" } else { "threshold" }, &format!("{v}%")))/>
-                    <span class="q3">"used"</span>
-                </span>
-            </div>
-            {move || p.with(|p| (!p.sub.is_empty()).then(|| view! { <p class="pol-sub" class:w-warn=p.warn class:q3=!p.warn>{p.sub.clone()}</p> }))}
-            {move || (!reason.get().is_empty()).then(|| view! { <p class="pol-sub q3 touch-only">{reason.get()}</p> })}
-        </div>
     }
 }
 

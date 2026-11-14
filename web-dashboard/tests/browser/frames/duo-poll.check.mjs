@@ -291,7 +291,7 @@ export const tests = {
   },
 };
 
-for (const kind of ['details', 'activation']) {
+for (const kind of ['details']) {
   tests[`duo polling: poll never steals focus from open ${kind}`] = async (t) => {
     const view = fixture();
     await open(t, view, false, true);

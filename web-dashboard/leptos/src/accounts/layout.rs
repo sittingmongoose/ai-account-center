@@ -135,18 +135,12 @@ pub fn cards(view: &AccountsView, width: f64) -> Vec<(CardKey, f64)> {
         if !p.trash.is_empty() {
             h += 34.0 + p.trash.len() as f64 * 50.0;
         }
-        if p.ag {
-            h += if col >= 520.0 { 120.0 } else { 220.0 };
-        }
         h += if col >= 440.0 { 52.0 } else { 84.0 };
         out.push((CardKey::Provider(p.id.clone()), h));
     }
     let narrow = col < 440.0;
     out.push((CardKey::Signin, if narrow { 980.0 } else { 860.0 }));
-    out.push((
-        CardKey::Settings,
-        250.0 + view.policies.len() as f64 * if narrow { 84.0 } else { 52.0 },
-    ));
+    out.push((CardKey::Settings, 250.0));
     out.push((CardKey::Cleanup, 150.0));
     out.push((
         CardKey::Logs,

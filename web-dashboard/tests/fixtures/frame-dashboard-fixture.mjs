@@ -6,14 +6,11 @@ import assert from 'node:assert/strict';
 import { createFrameDashboard } from '../../public/frame-dashboard.mjs';
 
 export const ORIGIN = 'http://192.0.2.10:3000';
-export const TOKEN = 'A'.repeat(43);
-// one clock for both servers of a differential test: their answers must match to the second
-export const EXPIRES = new Date(Date.now() + 300_000).toISOString();
 export const flush = async (rounds = 8) => { for (let i = 0; i < rounds; i++) await new Promise((resolve) => setImmediate(resolve)); };
 
 /** A dashboard server with a session and the routes Home and Accounts read and change. Fresh state per call. */
 export function fixtureServer(over = {}) {
-  const s = { signedIn: true, revoked: false, attempts: 0, auto: { enabled: false, thresholdPercent: 5 }, interval: 60, ...over };
+  const s = { signedIn: true, revoked: false, auto: { enabled: false, thresholdPercent: 5 }, interval: 60, ...over };
   const updated = new Date(Date.now() - 30_000).toISOString();
   const accounts = [
     { id: 'codex:one', provider: 'codex', email: 'one@example.test', isActive: true, status: 'ok', windows: [], capabilities: { codexProfile: 'one' } },
@@ -29,7 +26,6 @@ export function fixtureServer(over = {}) {
     'GET /api/accounts/preferences': () => ({ payload: { timeZone: 'UTC' } }),
     'GET /api/claude/desktop-profiles': () => ({ payload: { profiles: [] } }),
     'GET /api/antigravity/profiles': () => ({ status: 404, payload: { code: 'not_found' } }),
-    'GET /api/antigravity/auto-switch': () => ({ status: 404, payload: { code: 'not_found' } }),
     'GET /api/app-updates/status': () => ({ payload: { job: null } }),
     'POST /api/app-updates/start': () => ({ status: 409, payload: { error: 'Already running', job } }),
     'GET /api/accounts/registry': () => ({ payload: { providers: [], accounts: [], jobs: [], trash: [] } }),
@@ -37,12 +33,6 @@ export function fixtureServer(over = {}) {
     'GET /api/auth/devices': () => ({ payload: { devices: [] } }),
     'GET /api/auth/network': () => ({ payload: { trustLocalNetwork: true, connection: { peer: '192.168.10.20', trusted: true }, canTurnOn: false } }),
     'POST /api/auth/logout': () => { s.signedIn = false; return { payload: { success: true } }; },
-    'PUT /api/codex/profiles/auto-switch': (body) => { s.auto = { ...s.auto, ...body }; return { payload: s.auto }; },
-    'POST /api/codex/profiles/other/activate': (body) => {
-      s.attempts++;
-      if (body?.confirmationToken) return { payload: { name: 'other', email: 'other@example.test' } };
-      return { status: 409, payload: { code: 'confirmation_required', error: 'Confirm the switch', confirmation: { token: TOKEN, targetProfile: 'other', expiresAt: EXPIRES, processes: [{ label: 'codex', pid: 42, role: 'cli' }], warning: 'Active Codex work will stop.' } } };
-    },
     'POST /api/accounts/codex%3Aother/remove': () => ({ payload: { confirmation: { token: 't'.repeat(43), effects: ['Its saved login is deleted from Ubuntu.'] } } }),
     ...over.routes,
   };
@@ -125,30 +115,3 @@ export function sameOut(actual, expected, message) {
 export const writes = (calls) => calls.filter((c) => c.method !== 'GET');
 export const reads = (calls) => calls.map((c) => `${c.method} ${c.path}`);
 
-/** Two verified Antigravity logins on Ubuntu with a reported quota pool (antigravity-bridge.test.mjs's fixture). */
-export function antigravityServer() {
-  const now = Date.now();
-  const token = 'FixtureTokenForAntigravity12345';
-  const profiles = ['gmail', 'party'].map((id, index) => ({ id, email: `${id}@example.com`, plan: 'Pro', hostId: 'ubuntu', available: true, selected: index === 0, runtimeVerified: index === 0, verifiedAt: new Date(now).toISOString() }));
-  let auto = { enabled: false, thresholdUsedPercent: 95, pollIntervalSeconds: 60, maxQuotaAgeSeconds: 300, cooldownSeconds: 300, selectedHostIds: ['ubuntu'], requestedPoolId: null, outcome: 'setup_required', message: 'Fixture setup', activationInProgress: false };
-  const confirms = [];
-  const built = fixtureServer({
-    accounts: () => profiles.map((p) => ({
-      id: `antigravity:profile:${p.id}`, provider: 'antigravity', providerLabel: 'Antigravity', email: p.email, platform: 'ubuntu', status: 'ok', sampledAt: new Date(now).toISOString(), source: 'Fixture native consumer', isActive: p.selected,
-      capabilities: { antigravityProfileId: p.id, antigravityHostIds: ['ubuntu'], antigravityCanActivate: true },
-      windows: [300, 10080].map((minutes) => ({ key: `gemini-${minutes}`, label: `Gemini ${minutes}`, kind: 'rate_limit', windowMinutes: minutes, usedPercent: 0, resetAt: new Date(now + minutes * 60000).toISOString(), poolId: 'reported@gemini', poolIdSource: 'provider-bucket-membership', poolLabel: 'Gemini models' })),
-    })),
-    routes: {
-      'GET /api/antigravity/profiles': () => ({ payload: { schemaVersion: 1, hostId: 'ubuntu', activationSupported: true, profiles: structuredClone(profiles) } }),
-      'GET /api/antigravity/auto-switch': () => ({ payload: auto }),
-      'PUT /api/antigravity/auto-switch': (body) => { auto = { ...auto, ...body }; return { payload: auto }; },
-      'POST /api/antigravity/profiles/party/activate': () => ({ status: 409, payload: { status: 'confirmation-required', profileId: 'party', hostId: 'ubuntu', email: 'party@example.com', confirmation: { token, profileId: 'party', hostId: 'ubuntu', email: 'party@example.com', expiresAt: EXPIRES, processes: [{ pid: 456, role: 'cli', label: 'Antigravity CLI' }] } } }),
-      'POST /api/antigravity/profiles/party/confirm': (body) => {
-        confirms.push(body);
-        profiles[0].selected = false; profiles[0].runtimeVerified = false; profiles[1].selected = true; profiles[1].runtimeVerified = true;
-        return { payload: { status: 'active', profileId: 'party', hostId: 'ubuntu', email: 'party@example.com' } };
-      },
-    },
-  });
-  return { ...built, token, confirms };
-}

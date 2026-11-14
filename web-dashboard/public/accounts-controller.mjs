@@ -38,9 +38,8 @@ const label = provider => PROVIDER_LABELS[provider] || 'This provider';
 const dayFmt = lazyFormat({ month: 'short', day: 'numeric' });
 const REFUSALS = new Set(['account_active', 'account_default', 'account_protected', 'last_account', 'activation_running', 'signin_running', 'app_running', 'app_state_unknown']);
 /**
- * The actions that send a change. While an account-switch confirmation is pending, the dashboard controller holds
- * these (frame-dashboard.mjs, as bridge.js did); the local ones (open or close a flow, copy the code, type, cancel a
- * sign-in) stay live.
+ * The actions that send a change; the local ones (open or close a flow, copy the code, type, cancel a sign-in) are
+ * not among them.
  */
 export const MUTATING_ACTIONS = Object.freeze(new Set([
   'accounts-show', 'accounts-tray', 'account-show', 'account-tray', 'signin-again', 'signin', 'session-signin', 'recheck', 'flow-submit', 'flow-retry',

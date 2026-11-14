@@ -108,7 +108,7 @@ test('the view model is versioned and lists Claude, Codex and Antigravity sectio
     { now }
   );
   assert.equal(vm.version, VIEW_MODEL_VERSION);
-  assert.equal(vm.version, 2);
+  assert.equal(vm.version, 3);
   assert.deepEqual(
     vm.sections.map((row) => row.id),
     ['claude', 'codex', 'antigravity']
@@ -247,7 +247,7 @@ test('a surface-scoped Fable window never replaces the global Fable quota, in ei
   assert.equal(onlyRow.cells[2].naText, 'Not reported yet');
 });
 
-test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, the notch follows auto-switch', () => {
+test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, the live login is marked', () => {
   const chat = window({ key: 'extra_additional_1', label: 'Chat pass · weekly', usedPercent: 50 });
   const active = account({
     id: 'codex:a',
@@ -275,26 +275,19 @@ test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, th
     codex.columns.map((c) => c.key),
     ['weekly']
   );
-  assert.equal(codex.switchable, true);
-  assert.equal(codex.kind, 'switchable');
+  assert.equal(codex.kind, 'accounts');
   assert.equal(JSON.stringify(codex).includes('Chat pass'), false);
   assert.equal(codex.rows[0].cells[0].valueText, '92.13');
-  assert.equal(codex.rows[0].cells[0].notch, 95);
-  assert.equal(codex.rows[0].cells[0].notchFaint, false);
-  assert.equal(codex.rows[1].cells[0].notchFaint, true);
-  assert.equal(codex.auto.thresholdLabel, '95%');
-  assert.equal(codex.auto.thresholdUsed, 95);
   assert.equal(codex.activeId, 'codex:a');
   assert.equal(codex.rows[0].active, true);
   assert.equal(codex.rows[0].activeLabel, 'on Ubuntu');
-  assert.equal(codex.rows[0].canActivate, false);
-  assert.equal(codex.rows[1].canActivate, true);
-  assert.equal(codex.rows[1].activateKind, 'activate');
+  assert.equal(codex.rows[1].active, false);
   assert.equal(codex.rows[1].profile, 'b');
-  // auto-switch off: no notch
-  const off = data([active, other]);
-  off.codexAutoSwitch = { ...off.codexAutoSwitch, enabled: false };
-  assert.equal(section(dashboardViewModel(off, { now }), 'codex').rows[0].cells[0].notch, null);
+  // Account switching was removed: no switch controls, point or auto-switch view.
+  for (const key of ['switchable', 'canSwitch', 'auto']) assert.equal(key in codex, false, key);
+  for (const key of ['canActivate', 'activateKind', 'activateHint', 'confirm', 'confirmRuns'])
+    assert.equal(key in codex.rows[1], false, key);
+  assert.equal('notch' in codex.rows[0].cells[0], false);
   // one account reports the canonical five-hour window: the column appears, the other row gets an empty cell
   const plus = account({
     id: 'codex:c',
@@ -321,7 +314,7 @@ test('Codex: no 5-hour column unless one is reported, Chat pass stays hidden, th
   assert.equal(codex.rows[1].cells[0].valueText, '0');
 });
 
-test('Antigravity is the same switchable section, read-only until the native inventory verifies it', () => {
+test('Antigravity is the same kind of section, with no live login until the native inventory names one', () => {
   const windows = [
     window({ key: 'gemini-weekly', label: 'Gemini Models · Weekly', usedPercent: 0.0886 }),
     window({
@@ -349,17 +342,15 @@ test('Antigravity is the same switchable section, read-only until the native inv
     ),
     'antigravity'
   );
-  assert.equal(ag.switchable, true);
+  assert.equal(ag.kind, 'accounts');
   assert.deepEqual(
     ag.columns.map((c) => c.label),
     ['Gemini 5-hour', 'Gemini weekly', 'Claude and GPT 5-hour', 'Claude and GPT weekly']
   );
   assert.equal(ag.rows[0].cells[1].valueText, '0.09');
-  assert.equal(ag.rows[0].canActivate, false);
   assert.equal(ag.rows[0].active, false);
-  assert.equal(ag.rows[0].activateKind, 'antigravity-activate');
-  assert.equal(ag.auto.available, false);
-  assert.match(ag.auto.message, /second Antigravity account/);
+  assert.equal('canActivate' in ag.rows[0], false);
+  assert.equal('auto' in ag, false);
 });
 
 test('meters keep raw overage and at most two decimals; packs, balances and spend are amounts, never meters', () => {
@@ -785,7 +776,7 @@ test('refresh interval labels round-trip and Update apps reflects the job truthf
   );
 });
 
-test('Home headers, footer and the inline confirmation read the data truthfully (W2)', () => {
+test('Home headers, amounts and the Antigravity warnings read the data truthfully (W2)', () => {
   const runs = (list) => list.map((r) => (r.strong ? `*${r.text}*` : r.text)).join('');
   const a = account({
     id: 'codex:a',
@@ -822,103 +813,16 @@ test('Home headers, footer and the inline confirmation read the data truthfully 
     windows: [window({ usedPercent: 16 })],
     capabilities: { codexProfile: 'c' },
   });
-  const vm = dashboardViewModel(
-    data([a, b, c, claude('m', 'max', [window()])], {
-      codexAutoSwitch: {
-        enabled: true,
-        thresholdPercent: 5,
-        pollIntervalSeconds: 60,
-        outcome: 'healthy',
-        message: 'The active Codex account has enough remaining quota.',
-        activationInProgress: false,
-        lastCheckedAt: at(-1),
-      },
-    }),
-    { now }
-  );
+  const vm = dashboardViewModel(data([a, b, c, claude('m', 'max', [window()])]), { now });
   const codex = section(vm, 'codex');
   assert.equal(runs(codex.metaRuns), '*3* accounts · *a* active');
   assert.equal(codex.metaRuns.find((r) => r.text === 'a').tone, 'good');
   assert.equal(runs(section(vm, 'claude').metaRuns), '*1* account · desktop profiles');
-  assert.equal(codex.canSwitch, true);
-  assert.equal(codex.auto.shown, true);
-  assert.equal(codex.auto.min, 50);
-  assert.equal(codex.auto.max, 99);
-  // the footer keeps the backend's own words while the active account is below the switch point
-  assert.deepEqual(codex.foot, {
-    shown: true,
-    warn: false,
-    runs: [
-      { text: 'The active Codex account has enough remaining quota.', strong: false, tone: '' },
-    ],
-    words: ['The', 'active', 'Codex', 'account', 'has', 'enough', 'remaining', 'quota.'].map(
-      (text) => ({ text, strong: false, tone: '' })
-    ),
-    when: 'Checked 1m ago · every 1 min',
-  });
-  // activating an account past the switch point asks first, with its real figure; below it, it does not
-  assert.equal(codex.rows[1].confirm, true);
-  assert.equal(codex.rows[2].confirm, false);
-  assert.equal(codex.rows[0].confirm, false);
-  assert.equal(
-    runs(codex.rows[1].confirmRuns),
-    '*99% used*, above the 95% switch point. Auto-switch would move off it again on its next check. Activate anyway?'
-  );
+  // Account switching was removed: Codex has no footer of its own.
+  assert.deepEqual(codex.foot, { shown: false, warn: false, runs: [], words: [], when: '' });
   assert.equal(runs(codex.rows[1].amountsRuns), '*62.5K* credits · *1* banked');
   assert.equal(codex.rows[1].amountsLine, '62.5K credits · 1 banked');
-  // the active account past the point: the footer warns and names the account auto-switch moves to
-  const hot = data([account({ ...a, windows: [window({ usedPercent: 97 })] }), b, c]);
-  let foot = section(dashboardViewModel(hot, { now }), 'codex').foot;
-  assert.equal(foot.warn, true);
-  assert.equal(
-    runs(foot.runs),
-    '*a* is above the 95% switch point; auto-switch moves to *c* on the next check'
-  );
-  // a stuck monitor speaks on Home too: the server's reason plus the vetted candidate, never the unvetted "next"
-  hot.codexAutoSwitch = {
-    ...hot.codexAutoSwitch,
-    outcome: 'waiting_idle',
-    message: 'Waiting for Codex to finish active work before switching accounts.',
-    candidate: 'c',
-  };
-  foot = section(dashboardViewModel(hot, { now }), 'codex').foot;
-  assert.equal(foot.warn, true);
-  assert.match(
-    runs(foot.runs),
-    /Waiting for Codex to finish active work before switching accounts\./
-  );
-  assert.match(
-    runs(foot.runs),
-    /Will switch to c@example\.test when Codex goes idle\. Press Activate on c@example\.test to switch now\./
-  );
-  assert.doesNotMatch(runs(foot.runs), /on the next check/);
-  hot.codexAutoSwitch = {
-    ...hot.codexAutoSwitch,
-    outcome: 'no_quota',
-    message: 'The reading is out of date.',
-    candidate: undefined,
-  };
-  foot = section(dashboardViewModel(hot, { now }), 'codex').foot;
-  assert.equal(foot.warn, true);
-  assert.match(runs(foot.runs), /The reading is out of date\./);
-  hot.codexAutoSwitch = { ...hot.codexAutoSwitch, enabled: false };
-  foot = section(dashboardViewModel(hot, { now }), 'codex').foot;
-  assert.equal(
-    runs(foot.runs),
-    '*a* is above 95% used; auto-switch is off, so it stays active until you switch'
-  );
-  // unknown auto-switch status: no confirm is invented and the footer says so
-  const unknown = section(
-    dashboardViewModel(data([a, b], { codexAutoSwitch: null }), { now }),
-    'codex'
-  );
-  assert.equal(unknown.rows[1].confirm, false);
-  assert.equal(unknown.auto.known, false);
-  assert.equal(runs(unknown.foot.runs), 'Automatic switching status unavailable');
-  assert.equal(unknown.foot.when, '');
-  // one account: nothing to switch between
-  assert.equal(section(dashboardViewModel(data([a]), { now }), 'codex').canSwitch, false);
-  // one Antigravity account: the policy waits for a second one and says so instead of drawing a control
+  // one Antigravity account
   const ag = section(
     dashboardViewModel(
       data([
@@ -934,9 +838,6 @@ test('Home headers, footer and the inline confirmation read the data truthfully 
     ),
     'antigravity'
   );
-  assert.equal(ag.canSwitch, false);
-  assert.equal(ag.auto.shown, false);
-  assert.equal(runs(ag.auto.offRuns), 'Auto-switch *off* · needs a second account');
   assert.equal(runs(ag.metaRuns), 'Google Antigravity CLI · *1* account');
   assert.deepEqual(ag.foot, { shown: false, warn: false, runs: [], words: [], when: '' });
   const paused = section(
@@ -958,7 +859,7 @@ test('Home headers, footer and the inline confirmation read the data truthfully 
   assert.equal(paused.foot.warn, true);
   assert.equal(
     runs(paused.foot.runs),
-    'Antigravity updated to 1.2.17; switching paused until reviewed'
+    'Antigravity updated to 1.2.17; its runtime is paused until reviewed'
   );
   const failed = section(
     dashboardViewModel(
@@ -991,16 +892,11 @@ test('Home headers, footer and the inline confirmation read the data truthfully 
   assert.equal(failed.foot.warn, true);
   assert.equal(
     runs(failed.foot.runs),
-    'Runtime service failed: missing Python module pyte (Python 3.14; runtime built for 3.13); switching is off until the runtime bundle is rebuilt'
-  );
-  assert.equal(failed.rows[0].canActivate, false);
-  assert.equal(
-    failed.rows[0].activateHint,
-    'Runtime service failed: missing Python module pyte (Python 3.14; runtime built for 3.13); switching is off until the runtime bundle is rebuilt'
+    'Runtime service failed: missing Python module pyte (Python 3.14; runtime built for 3.13); managed updates wait until the runtime bundle is rebuilt'
   );
 });
 
-test('hiding one of two accounts from the dashboard keeps switching for the other (Codex and Antigravity)', () => {
+test('hiding one of two accounts from the dashboard leaves only its row (Codex and Antigravity)', () => {
   const ag = (id) =>
     account({
       id: `antigravity:${id}`,
@@ -1021,7 +917,7 @@ test('hiding one of two accounts from the dashboard keeps switching for the othe
   const vm = dashboardViewModel(byList, { now });
   const codex = section(vm, 'codex');
   const agy = section(vm, 'antigravity');
-  // Home lists only the shown rows, but the "two accounts" rule counts every account, as the server does
+  // Home lists only the shown rows
   assert.deepEqual(
     codex.rows.map((row) => row.id),
     ['codex:a']
@@ -1030,12 +926,7 @@ test('hiding one of two accounts from the dashboard keeps switching for the othe
     agy.rows.map((row) => row.id),
     ['antigravity:x']
   );
-  assert.equal(codex.canSwitch, true);
-  assert.equal(agy.canSwitch, true);
-  assert.equal(agy.auto.shown, true);
-  assert.deepEqual(agy.auto.offRuns, []);
-  assert.notEqual(agy.auto.message, 'Automatic switching needs a second Antigravity account.');
-  // the row's own flag (accounts[].hidden) leaves Home the same way and keeps switching too
+  // the row's own flag (accounts[].hidden) leaves Home the same way
   const byFlag = dashboardViewModel(
     data(accounts.map((a) => (a.id === 'antigravity:y' ? { ...a, hidden: true } : a))),
     { now }
@@ -1044,7 +935,6 @@ test('hiding one of two accounts from the dashboard keeps switching for the othe
     section(byFlag, 'antigravity').rows.map((row) => row.id),
     ['antigravity:x']
   );
-  assert.equal(section(byFlag, 'antigravity').canSwitch, true);
   // hidden only from the tray: Home keeps both rows
   const trayOnly = dashboardViewModel(
     data(accounts.map((a) => (a.id === 'antigravity:y' ? { ...a, trayHidden: true } : a))),
@@ -1146,7 +1036,7 @@ test('provider cards carry the concept footer, plan note and shared pack expiry 
   assert.equal(k.flag, 'Sign-in needed');
 });
 
-test('Details carries the row slot and the same inline confirmation (W2)', () => {
+test('Details carries the row\'s live-login mark and platform (W2)', () => {
   const a = account({
     id: 'codex:a',
     email: 'a@example.test',
@@ -1161,16 +1051,14 @@ test('Details carries the row slot and the same inline confirmation (W2)', () =>
     capabilities: { codexProfile: 'b' },
   });
   const details = detailsViewModel(data([a, b]), 'codex:b', { now });
-  assert.equal(details.canSwitch, true);
-  assert.equal(details.confirm, true);
   assert.equal(details.platform, 'Ubuntu');
-  assert.equal(details.confirmRuns[0].text, '99% used');
   assert.equal(details.subLead, 'Codex · Pro');
+  assert.equal(details.active, false);
+  for (const key of ['switchable', 'canSwitch', 'canActivate', 'activateKind', 'confirm', 'confirmRuns'])
+    assert.equal(key in details, false, key);
   const active = detailsViewModel(data([a, b]), 'codex:a', { now });
   assert.equal(active.active, true);
   assert.equal(active.activeLabel, 'on Ubuntu');
-  assert.equal(active.confirm, false);
-  assert.equal(detailsViewModel(data([a]), 'codex:a', { now }).canSwitch, false);
 });
 
 test('F6: a reading sampled before a reset that has passed shows "Reset at … · new reading pending", never the old percent or 0%', async () => {
@@ -1195,7 +1083,6 @@ test('F6: a reading sampled before a reset that has passed shows "Reset at … �
   assert.equal(cell.hasValue, false);
   assert.equal(cell.valueText, '');
   assert.equal(cell.value, 0);
-  assert.equal(cell.notch, null);
   assert.match(cell.naText, /^Reset at \S/);
   assert.equal(cell.naSub, 'New reading pending');
   assert.match(cell.resetExact, /^Reset at .* · new reading pending$/);
@@ -1225,7 +1112,7 @@ test('F6: a reading sampled before a reset that has passed shows "Reset at … �
   assert.equal(meter.naSub, 'New reading pending');
 });
 
-test('F6: a Codex window pending its reset has no notch and does not count toward the switch point', () => {
+test('F6: a Codex window pending its reset shows no stale reading', () => {
   const pendingWeek = window({ usedPercent: 99, remainingPercent: 1, resetAt: at(-5) });
   const active = account({
     id: 'codex:a',
@@ -1245,10 +1132,8 @@ test('F6: a Codex window pending its reset has no notch and does not count towar
   const codex = section(vm, 'codex');
   const weekly = codex.rows[0].cells.at(-1);
   assert.equal(weekly.hasValue, false);
-  assert.equal(weekly.notch, null);
   assert.equal(weekly.naSub, 'New reading pending');
-  // the footer no longer says the active account is above the switch point on the stale 99%
-  assert.doesNotMatch(codex.foot.runs.map((r) => r.text).join(''), /above/);
+  assert.doesNotMatch(JSON.stringify(weekly), /99/);
 });
 
 test('a limit of 100 with no unit only restates the percent, so cards show no "N of 100" caption', () => {
@@ -1364,7 +1249,6 @@ test('sections carry words next to runs for the touch layouts', () => {
   assert.deepEqual(claudeSection.metaWords, wordsOf(claudeSection.metaRuns));
   assert.ok(claudeSection.metaWords.length > claudeSection.metaRuns.length);
   assert.deepEqual(claudeSection.foot.words, []);
-  assert.deepEqual(claudeSection.rows[0].confirmWords, []);
 });
 
 test('antigravity columns carry single-line short labels for the stacked 2x2 grid', () => {
@@ -1401,7 +1285,7 @@ test('antigravity columns carry single-line short labels for the stacked 2x2 gri
 });
 
 
-test('hidden server rows retain actions in the inclusive model and Details without changing Home or the DTO', () => {
+test('hidden server rows stay in the inclusive model and Details without changing Home or the DTO', () => {
   const active = account({ isActive: true, hidden: true });
   const other = account({ id: 'codex:two', hidden: true, capabilities: { codexProfile: 'two' } });
   const dto = data([active, other], { settings: {
@@ -1412,14 +1296,13 @@ test('hidden server rows retain actions in the inclusive model and Details witho
   assert.equal(section(dashboardViewModel(dto, { now }), 'codex'), undefined);
   const inclusive = section(dashboardViewModel(dto, { now, includeHidden: true }), 'codex');
   assert.equal(inclusive.rows[0].active, true);
-  assert.equal(inclusive.rows[1].canActivate, true);
+  assert.equal(inclusive.rows[1].id, other.id);
   assert.equal(detailsViewModel(dto, active.id, { now }).active, true);
-  assert.equal(detailsViewModel(dto, other.id, { now }).canActivate, true);
-  assert.equal(detailsViewModel(dto, other.id, { now }).canSwitch, true);
+  assert.equal(detailsViewModel(dto, other.id, { now }).active, false);
   assert.deepEqual(dto, before);
 });
 
-test('Codex Home keeps hidden active and next accounts in the footer and prefers a server candidate', () => {
+test('Codex Home names a hidden live account in its header', () => {
   const active = account({ isActive: true, hidden: true, windows: [window({ usedPercent: 98 })] });
   const next = account({ id: 'codex:next', email: 'next@example.test', hidden: true,
     capabilities: { codexProfile: 'next' }, windows: [window({ usedPercent: 12 })] });
@@ -1431,29 +1314,19 @@ test('Codex Home keeps hidden active and next accounts in the footer and prefers
   assert.equal(home.activeId, active.id);
   assert.match(home.meta, /one \(hidden\) active/);
   assert.match(home.activeLabel, /one@example.test \(hidden\)/);
-  assert.match(home.foot.runs.map(r => r.text).join(''), /one \(hidden\).*moves to next \(hidden\)/);
-  dto.codexAutoSwitch = { ...dto.codexAutoSwitch, outcome: 'waiting_idle', candidate: 'visible', message: 'Waiting for idle.' };
-  assert.match(section(dashboardViewModel(dto, { now }), 'codex').foot.runs.map(r => r.text).join(''), /Will switch to visible@example.test/);
-  dto.codexAutoSwitch = { ...dto.codexAutoSwitch, candidate: 'next' };
-  assert.match(section(dashboardViewModel(dto, { now }), 'codex').foot.runs.map(r => r.text).join(''), /next@example.test \(hidden\)/);
-  dto.codexAutoSwitch = { ...dto.codexAutoSwitch, outcome: 'no_candidate', candidate: undefined, message: 'No valid candidate.' };
-  assert.equal(section(dashboardViewModel(dto, { now }), 'codex').foot.runs.map(r => r.text).join(''), 'No valid candidate.');
+  assert.equal(home.foot.shown, false);
 });
 
-test('Codex activation names Ubuntu even with fallback readings and refuses invalid saved logins', () => {
+test('the live Codex login is named on Ubuntu even with fallback readings', () => {
   for (const host of ['mac', 'nas1']) {
     const active = account({ isActive: true, platform: 'mac', host });
-    const invalid = account({ id: 'codex:invalid', switchable: false, capabilities: { codexProfile: 'invalid' } });
     const legacy = account({ id: 'codex:legacy', capabilities: { codexProfile: 'legacy' } });
-    const dto = data([active, invalid, legacy]);
+    const dto = data([active, legacy]);
     const rows = section(dashboardViewModel(dto, { now }), 'codex').rows;
     assert.equal(rows[0].activeLabel, 'on Ubuntu');
     assert.equal(detailsViewModel(dto, active.id, { now }).state, 'Active on Ubuntu');
     assert.equal(rows[0].platform, host === 'mac' ? 'Mac' : 'Nas1');
-    assert.equal(rows[1].canActivate, false);
-    assert.match(rows[1].activateHint, /invalid.*Sign in again/);
-    assert.equal(detailsViewModel(dto, invalid.id, { now }).canActivate, false);
-    assert.equal(rows[2].canActivate, true);
+    assert.equal(rows[1].active, false);
   }
 });
 

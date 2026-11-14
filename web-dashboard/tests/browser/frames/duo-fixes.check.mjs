@@ -451,21 +451,8 @@ tests['duo interactions: Details and approval use body with nested locks'] = asy
     )
   );
   await t.focused('[data-probe="details-close"]');
-  await bridge(t, 'activation', {
-    product: 'Codex',
-    targetProfile: 'fixture',
-    canConfirm: false,
-    processes: [],
-  });
-  await t.page.waitForSelector('.adialog');
   await t.check(
-    'approval lives outside the shell',
-    await t.page.evaluate(() => !document.querySelector('.adialog').closest('.shell'))
-  );
-  await bridge(t, 'activation', null);
-  await t.page.waitForSelector('.adialog', { state: 'detached' });
-  await t.check(
-    'closing approval retains Details scroll lock',
+    'open Details holds the scroll lock',
     await t.page.evaluate(() => document.body.style.position === 'fixed')
   );
   await t.page.keyboard.press('Escape');

@@ -34,16 +34,6 @@ const analytics = (url) => {
 };
 const ANSWERS = { '/api/accounts/dashboard': accounts, '/api/claude/desktop-profiles': homeProfiles, '/api/accounts/analytics': analytics, '/api/status': status, '/api/scoreboard': scoreboard };
 
-// Home's switch flow without switching anything: a Codex Activate first asks for the approval (409, the made-up
-// processes below), and the approval's one-use token then "switches". Nothing reaches the real server.
-const TOKEN = 'Abcdefghijklmnopqrstuvwxyz0123456789_-ABCDE';
-function activate(profile, body) {
-	if (body?.confirmationToken === TOKEN) return [200, { name: profile, email: `${profile}@example.invalid` }];
-	return [409, { error: 'Codex processes are running.', code: 'confirmation_required', confirmation: {
-		token: TOKEN, targetProfile: profile, expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(), warning: 'Active Codex work will stop. The listed processes will be stopped and Codex will restart with the selected account.',
-		processes: [{ label: 'codex (made-up terminal session)', pid: 4242, role: 'cli' }, { label: 'Codex app (made-up)', pid: 4311, role: 'app' }] } }];
-}
-
 const { fakeServer, updateJob } = await import('../accounts-fixture.mjs');
 const rich = process.env.AAC_FIXTURE_ACCOUNTS === 'rich' ? fakeServer({ rich: true, update: updateJob() }) : null;
 /** Whether a rich account route answers this request. */
@@ -61,18 +51,6 @@ function richAnswer(method, pathname, body) {
 const server = http.createServer((req, res) => {
 	const url = new URL(req.url, 'http://x');
 	const pathname = url.pathname;
-	const switching = req.method === 'POST' && pathname.match(/^\/api\/codex\/profiles\/([A-Za-z0-9_-]+)\/activate$/);
-	if (switching) {
-		let raw = '';
-		req.on('data', (d) => (raw += d)).on('end', () => {
-			let body = null;
-			try { body = JSON.parse(raw); } catch {}
-			const [status, json] = activate(switching[1], body);
-			res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-			res.end(JSON.stringify(json));
-		});
-		return;
-	}
 	if (richMatch(req.method, pathname)) {
 		let raw = '';
 		req.on('data', (d) => (raw += d)).on('end', () => {

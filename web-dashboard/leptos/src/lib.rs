@@ -8,7 +8,6 @@
 //! the retired Slint shell's iframe, which sent the theme as `{type: "aac-theme", mode}`).
 
 mod accounts;
-mod activation;
 mod analytics;
 pub mod api;
 mod blocks;

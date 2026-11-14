@@ -3,11 +3,14 @@
 // deleted; before that, the four differential scripts it and the controller were driven through were recorded from the
 // real bridge.js, framed as `/?content=1`, into fixtures/bridge-golden.json (frozen clock, synthetic data). Each step
 // here must give the same server calls (method, path and body, in order) and the same views, toasts and header lines.
+// Account switching was removed on 2026-11-14: its steps (Activate, the approval, auto-switch) and the Antigravity
+// scenario were dropped, and the kept steps were re-recorded from this controller; every difference from the
+// bridge.js recording was a switching field, a view version or the action slot Activate used to take.
 import './fixtures/frozen-clock.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { TOKEN, flush, fixtureServer, antigravityServer, loadController, sameOut, sameView, writes, reads } from './fixtures/frame-dashboard-fixture.mjs';
+import { flush, fixtureServer, loadController, sameOut, sameView, reads } from './fixtures/frame-dashboard-fixture.mjs';
 
 const golden = JSON.parse(readFileSync(new URL('./fixtures/bridge-golden.json', import.meta.url), 'utf8'));
 
@@ -44,20 +47,17 @@ test('golden: the start reads what bridge.js read', async () => {
   } finally { ctl.c.stop(); }
 });
 
-test('golden: Details, a Codex switch with its one-use approval, auto-switch, the interval and Update apps', async () => {
-  const { s, server } = fixtureServer();
+test('golden: Details, the interval, a Claude Open, Remove and Update apps', async () => {
+  const { server } = fixtureServer();
   const ctl = await loadController(server);
   try {
     await sameSteps(ctl, golden.home.steps);
-    // the approval went once, with the token, after the 409; the second confirm sent nothing
-    assert.equal(s.attempts, golden.home.attempts);
-    assert.equal(s.attempts, 2);
-    assert.deepEqual(writes(ctl.calls).filter((c) => c.path === '/api/codex/profiles/other/activate').map((c) => c.body), [{}, { confirmationToken: TOKEN }]);
-    assert.equal(JSON.stringify(ctl.emitted).includes(TOKEN), false, 'the token never reaches a view');
+    // nothing reaches the removed switching routes
+    assert.equal(ctl.calls.some((c) => /\/activate$|\/auto-switch$/.test(c.path)), false);
   } finally { ctl.c.stop(); }
 });
 
-test('golden: Accounts & Settings, its reads on entry and a held Remove while a switch waits', async () => {
+test('golden: Accounts & Settings, its reads on entry and a Remove that asks first', async () => {
   const { server } = fixtureServer();
   const ctl = await loadController(server);
   try {
@@ -66,21 +66,7 @@ test('golden: Accounts & Settings, its reads on entry and a held Remove while a 
     const accountsViews = entered.out.filter((x) => x[0] === 'view' && x[1] === 'accounts').map((x) => x[2]);
     sameView(accountsViews.at(-1), golden.accounts.entered.accountsView, 'the same Accounts view');
     await sameSteps(ctl, golden.accounts.steps);
-    // Remove waited for the switch, then asked once it was cancelled
+    // Remove asked once
     assert.equal(ctl.calls.filter((c) => c.path === '/api/accounts/codex%3Aother/remove').length, 1);
-  } finally { ctl.c.stop(); }
-});
-
-test('golden: Antigravity, its separate approval, the held Codex switch and the confirmed auto settings', async () => {
-  const b = antigravityServer();
-  const ctl = await loadController(b.server);
-  try {
-    await sameSteps(ctl, golden.antigravity.steps);
-    // one confirmation, with its own token, and never a Codex write while the Antigravity approval waited
-    assert.deepEqual(b.confirms, golden.antigravity.confirms);
-    assert.deepEqual(b.confirms, [{ hostId: 'ubuntu', confirmationToken: b.token }]);
-    assert.equal(writes(ctl.calls).some((c) => c.path.startsWith('/api/codex')), false);
-    assert.deepEqual(writes(ctl.calls).filter((c) => c.method === 'PUT').map((c) => c.body), [{ requestedPoolId: 'reported@gemini' }, { enabled: true }, { thresholdUsedPercent: 85 }, { cooldownSeconds: 600 }]);
-    assert.equal(JSON.stringify(ctl.emitted).includes(b.token), false, 'the token never reaches a view');
   } finally { ctl.c.stop(); }
 });

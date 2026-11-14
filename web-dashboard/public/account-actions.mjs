@@ -234,15 +234,15 @@ export function errorText(error, ctx = {}) {
     case 'key_store_unavailable': return t('Key not stored', 'The key could not be stored safely. Nothing was saved.');
     case 'not_aac_owned': return t('Key belongs to another app', 'This account reads a key another app saved. Add a key here to manage it from the dashboard.');
     case 'use_replace_key': return t('Use Replace key', 'This account signs in with a key; replace the key instead.');
-    case 'account_active': return t('This is the active account', ctx.what === 'signin-again'
-      ? 'Activate another account first, then sign in again.'
-      : 'Activate another account first, then remove it.');
+    case 'account_active': return t('This is the live login', ctx.what === 'signin-again'
+      ? 'Sign in to another account on that computer first, then sign in again.'
+      : 'Sign in to another account on that computer first, then remove it.');
     case 'account_default': return t('This is the default account', p === 'claude'
       ? "This is this computer's default Claude profile. It can't be removed here."
       : 'Make another account the default first.');
     case 'account_protected': return t('Protected profile', "This is this computer's default Claude profile. It can't be removed here.");
     case 'last_account': return t('Last account', `This is the last ${label(p)} account, so it stays.`);
-    case 'activation_running': return t('A switch is running', 'Wait for the account switch to finish, then try again.');
+    case 'activation_running': return t('Another change is running', 'Another change to these saved logins is running. Wait for it to finish, then try again.');
     case 'signin_running': return t('A sign-in is running', 'Wait for the sign-in to finish or cancel it, then try again.');
     case 'job_running': return t('A sign-in is already running', `Finish or cancel the open ${label(p)} sign-in first.`);
     case 'too_many_jobs': return t('Too many sign-ins running', 'Finish or cancel one of them first.');

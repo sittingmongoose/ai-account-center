@@ -1,6 +1,6 @@
 // The Analytics page's state rules, used by frame-analytics.mjs (the app frame's Analytics controller, which fetches
 // and builds the page itself; the retired classic app's bridge.js shared them): the page state, which ranges a response covers, how often a page still being
-// read polls, the switch thresholds the quota charts mark, and what each page action changes. Pure; the view itself is
+// read polls, and what each page action changes. Pure; the view itself is
 // built by analytics-usage.mjs, analytics-quota.mjs and analytics-data.mjs (tests/analytics-page.test.mjs).
 import { RANGES, parseIsoDay, addDays, dayStart, apiRangeFor, payloadViewKey, H, D } from './analytics-usage.mjs';
 import { QUOTA_PROVIDERS } from './analytics-quota.mjs';
@@ -15,15 +15,6 @@ export function createAnalyticsPage() {
     // chart boxes reported by the page's layout (analytics-layout): the charts are laid out in these pixels
     sizes: { trend: null, daily: null, heat: null, focus: null },
   };
-}
-
-/** The switch thresholds the quota charts mark: Codex auto-switch, and Antigravity's when it has accounts to switch. */
-export function analyticsThresholds(dashboard, antigravityAuto) {
-  const auto = dashboard?.codexAutoSwitch;
-  const codex = auto?.enabled === true && Number.isFinite(auto?.thresholdPercent) ? 100 - auto.thresholdPercent : null;
-  const agAccounts = (dashboard?.accounts || []).filter(account => account.provider === 'antigravity').length;
-  const antigravity = antigravityAuto?.enabled === true && agAccounts > 1 && Number.isFinite(antigravityAuto?.thresholdUsedPercent) ? antigravityAuto.thresholdUsedPercent : null;
-  return { codex, antigravity };
 }
 
 /** True when the response in hand already holds the hours of the page range (no fetch is needed to draw it). */

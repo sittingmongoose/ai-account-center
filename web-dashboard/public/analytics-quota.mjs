@@ -25,7 +25,8 @@ export const QUOTA_PROVIDERS = [
   ['muse', 'Muse Code'], ['kimi-code', 'Kimi Code'], ['qwen', 'Qwen Token Plan'], ['zai', 'Z.ai Coding Plan'],
   ['opencode-go', 'OpenCode Go'],
 ];
-const SWITCHABLE = ['codex', 'antigravity'];
+/** Providers whose live login on Ubuntu is known (the dashboard's isActive). */
+const LIVE_LOGIN = ['codex', 'antigravity'];
 export const sev = v => !finite(v) ? 'na' : v > 100 ? 'over' : v >= 95 ? 'crit' : v >= 80 ? 'warn' : 'calm';
 const SEV_INT = { na: -1, calm: 0, warn: 1, crit: 2, over: 3 };
 const unitAmount = (value, unit) => {
@@ -98,7 +99,7 @@ export function quotaAccounts(payload, ctx = {}) {
     }));
     return {
       id: a.id, provider: a.provider, email: text(a.email) || text(a.label) || 'Identity unavailable', label: text(a.label), plan: text(a.plan),
-      active: SWITCHABLE.includes(a.provider) && a.isActive === true, windows, analytics: history.get(a.id) || null,
+      active: LIVE_LOGIN.includes(a.provider) && a.isActive === true, windows, analytics: history.get(a.id) || null,
     };
   });
 }
@@ -193,7 +194,7 @@ const tagOf = acc => acc.email.split('@')[0];
 /**
  * The focus chart of one account in pixels: shapes (paths with a stroke or fill key), placed labels, dots,
  * legend and the hover stops (nearest stop per 4 px column in `lut`). ctx: { now, width, height, compare,
- * thresholds: { codex, antigravity } (% used or null), accounts (the quota accounts) }.
+ * accounts (the quota accounts) }.
  */
 export function focusChart(acc, payload, ctx) {
   const now = ctx.now;
@@ -238,7 +239,6 @@ export function focusChart(acc, payload, ctx) {
   const xf = t => fStart + ((t - tf0) / (tf1 - tf0)) * (plotW - obsW - gap);
   const obsV = series.flatMap(s => histories.get(s).filter(p => p.t >= t0).map(p => p.v || 0)).concat(series.map(s => s.w.used || 0));
   const ymax = Math.max(100, ...obsV);
-  const thr = SWITCHABLE.includes(acc.provider) && finite(ctx.thresholds?.[acc.provider]) ? ctx.thresholds[acc.provider] : null;
   const Y = v => pad.t + plotH - (v / ymax) * plotH;
   const ticks = [0, 25, 50, 75, 100].filter(v => v <= ymax);
 
@@ -322,10 +322,6 @@ export function focusChart(acc, payload, ctx) {
   fg.push({ d: `M${pt(bx - 5)} ${pt(pad.t + plotH + 6)}l4 -10M${pt(bx + 1)} ${pt(pad.t + plotH + 6)}l4 -10`, stroke: 'ink-3', sw: 1.25 });
   fg.push({ d: `M${pt(obsEnd)} ${pad.t - 6}V${pt(pad.t + plotH)}`, stroke: 'ink-2', sw: 1 });
   seg(obsEnd, pad.t - 6, obsEnd, pad.t + plotH);
-  if (finite(thr)) {
-    fg.push({ d: dashLine(pad.l, Y(thr), pad.l + plotW, Y(thr), 6, 4), stroke: 'ink', sw: 1.25, op: 0.7 });
-    seg(pad.l, Y(thr), pad.l + plotW, Y(thr));
-  }
   const marks = new Set(), ends = [], resetsAt = [], runouts = [];
   const lines = [], legend = [];
   for (const s of series) {
@@ -397,11 +393,6 @@ export function focusChart(acc, payload, ctx) {
       put(txt, [{ x: obsEnd - 10, y: ys[n], a: 'end' }, { x: obsEnd - 10, y: ys[n] + LH, a: 'end' }, { x: obsEnd - 10, y: ys[n] - LH, a: 'end' }], 'series-ink', OBS, { shade: e.s.shade });
     });
   }
-  if (finite(thr)) {
-    const yt = Y(thr), txt = `AUTO-SWITCH ${valueText(thr)}% USED`;
-    put(txt, [{ x: obsEnd - 8, y: yt + 14, a: 'end' }, { x: obsEnd - 8, y: yt - 5, a: 'end' }, { x: pad.l + 8, y: yt + 14 }, { x: pad.l + 8, y: yt - 5 }, { x: pad.l + obsW / 2, y: yt + 14, a: 'middle' }], 'ink-2', OBS)
-      || put(txt, [{ x: pad.l + plotW - 8, y: yt + 14, a: 'end' }, { x: pad.l + plotW - 8, y: yt - 5, a: 'end' }], 'ink-2', FC);
-  }
   for (const r of runouts) {
     const yr = Y(100), txt = `RUNS OUT ${timeTxt(r.at).toUpperCase()}`;
     const c = [];
@@ -419,7 +410,6 @@ export function focusChart(acc, payload, ctx) {
     put(txt, [{ x: x0 + 6, y: PLOT.y0 + 13 }, { x: x0 + 6, y: PLOT.y1 - 5 }, { x: x0 + 6, y: PLOT.y0 + 27 }], 'accent-text', { ...OBS, x0: Math.max(OBS.x0, x0), x1: Math.min(OBS.x1, x1) });
   }
   legend.push({ name: 'Projection', kind: 'proj', shade: 0, dash: 0, width: 1.75 });
-  if (finite(thr)) legend.push({ name: 'Auto-switch', kind: 'thr', shade: 0, dash: 0, width: 1.25 });
   if (bands.length) legend.push({ name: 'Active', kind: 'active', shade: 0, dash: 0, width: 0 });
 
   // ---- hover stops: every observed sample time and "now", then the forecast an hour at a time ----
@@ -486,7 +476,7 @@ function fullName(provider, w) {
 /**
  * The compact quota history: one row per account, grouped by provider in the registry order, rows by identity
  * (active state never selects or reorders a row). ctx: { now, dashboard, hidden, open: Set, compare: Set,
- * collapsed: Set, focusWidth, thresholds }.
+ * collapsed: Set, focusWidth }.
  */
 export function quotaView(payload, ctx = {}) {
   const now = ctx.now ?? Date.now();
@@ -505,7 +495,7 @@ export function quotaView(payload, ctx = {}) {
       const v = w ? w.used : null;
       const nextR = meters(acc).filter(x => x.resetAt && x.resetAt > now).sort((a, b) => a.resetAt - b.resetAt)[0];
       const spark = sparkRuns(acc, w, axis.t0, now);
-      if (open.has(acc.id)) focus.push(focusChart(acc, payload, { now, width: ctx.focusWidth, height: ctx.focusHeight, compare: compare.has(acc.id), thresholds: ctx.thresholds, accounts }));
+      if (open.has(acc.id)) focus.push(focusChart(acc, payload, { now, width: ctx.focusWidth, height: ctx.focusHeight, compare: compare.has(acc.id), accounts }));
       return {
         id: acc.id, provider, label: acc.email, active: acc.active, plan: planLabel(acc.plan, provider),
         win: w && w.short !== common ? w.short : '',
