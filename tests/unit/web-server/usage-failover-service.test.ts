@@ -2155,3 +2155,37 @@ it('does not promote a retained primary failure back to ok during peek', async (
     sampledAt: first.sampledAt,
   });
 });
+
+it('does not extend fresh quota through a later provider cooldown on optional metadata', async () => {
+  const h = await harness();
+  h.collections.set('mac', {
+    sample: reading(),
+    failureCode: 'rate_limited',
+    retryAfterSeconds: 600,
+  });
+  const first = await h.service.collect(h.target, template());
+  expect(first.status).toBe('ok');
+  h.advance(61_000);
+  const held = h.service.peek(h.target, template());
+  expect(held).toMatchObject({
+    status: 'cached',
+    cacheReason: 'rate_limited',
+    sampledAt: first.sampledAt,
+  });
+  expect((await h.service.collect(h.target, first)).status).toBe('cached');
+  expect(h.collected()).toHaveLength(1);
+});
+
+it('does not extend the last seconds of a successful helper budget to a new interval', async () => {
+  const h = await harness();
+  h.collections.set('mac', { sample: reading(), failureCode: null, refreshAfterSeconds: 1 });
+  const first = await h.service.collect(h.target, template());
+  expect(first.status).toBe('ok');
+  h.advance(1_001);
+  expect(h.service.peek(h.target, template())).toMatchObject({
+    status: 'cached',
+    cacheReason: 'refresh_pending',
+    sampledAt: first.sampledAt,
+  });
+  expect(h.collected()).toHaveLength(1);
+});

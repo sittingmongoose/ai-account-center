@@ -57,6 +57,7 @@ interface State {
   nextAttempt: number;
   pending: Promise<void> | null;
   fresh: boolean | null;
+  freshUntil: number;
   primarySignIn: Set<'mac' | 'windows'>;
   primaryFailure: string | null;
   observedPlan: string | null;
@@ -173,6 +174,7 @@ export class UsageFailoverService {
       nextAttempt: 0,
       pending: null,
       fresh: null,
+      freshUntil: 0,
       primarySignIn: new Set(),
       primaryFailure: null,
       observedPlan: null,
@@ -236,6 +238,8 @@ export class UsageFailoverService {
               : value.fresh === false
                 ? false
                 : null;
+          if (typeof value.freshUntil === 'number' && Number.isFinite(value.freshUntil))
+            state.freshUntil = Math.min(value.freshUntil, this.now() + 86400_000);
           if (typeof value.nextAttempt === 'number' && Number.isFinite(value.nextAttempt))
             state.nextAttempt = Math.min(value.nextAttempt, this.now() + 86400_000);
         }
@@ -266,12 +270,20 @@ export class UsageFailoverService {
       saved: state.saved,
       nextAttempt: state.nextAttempt,
       fresh: state.fresh,
+      freshUntil: state.freshUntil,
       primaryFailure: state.primaryFailure,
       primarySignIn: [...state.primarySignIn],
       observedPlan: state.observedPlan,
       observedPlanAt: state.observedPlanAt,
       observedPlanPeer: state.observedPlanPeer,
     });
+  }
+  private freshUntil(target: UsageFailoverTarget, refreshAfterSeconds = 0): number {
+    const seconds =
+      refreshAfterSeconds > 0
+        ? Math.min(86400, refreshAfterSeconds)
+        : readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds;
+    return this.now() + seconds * 1000;
   }
   private async request(
     host: UsageHost,
@@ -443,14 +455,8 @@ export class UsageFailoverService {
     }
     const { reading, host, fallback } = state.saved;
     if (!emailMatches(target.expectedEmail, reading.email)) return this.withSignIn(template, state);
-    const refreshDue =
-      state.fresh === true &&
-      this.now() >=
-        Math.max(
-          state.nextAttempt,
-          Date.parse(reading.fetchedAt ?? '') +
-            readAccountRefreshSettings(target.ccsDir).refreshIntervalSeconds * 1000
-        );
+    const refreshDue = state.fresh === true && this.now() >= state.freshUntil;
+    const held = state.primaryFailure === 'rate_limited' && state.nextAttempt > this.now();
     const stale = cached || reading.status === 'cached' || refreshDue;
     const nativeMusePeer =
       target.provider === 'muse' &&
@@ -474,7 +480,9 @@ export class UsageFailoverService {
       source: `Verified ${nativeMusePeer ? 'native subscription ' : ''}quota on ${HOST_LABELS[host]}${fallback ? ' (fallback)' : ''}`,
       cacheReason: stale
         ? refreshDue
-          ? 'refresh_pending'
+          ? held
+            ? 'rate_limited'
+            : 'refresh_pending'
           : state.fresh === null
             ? 'outcome_unknown'
             : state.primaryFailure === 'rate_limited'
@@ -483,7 +491,9 @@ export class UsageFailoverService {
         : undefined,
       message: stale
         ? refreshDue
-          ? 'The next usage read is pending; showing the last successful reading.'
+          ? held
+            ? 'Usage refresh is rate limited; showing the last successful reading.'
+            : 'The next usage read is pending; showing the last successful reading.'
           : state.fresh === null
             ? 'The previous usage read outcome was not recorded; showing the saved reading.'
             : state.primaryFailure === 'rate_limited'
@@ -606,6 +616,8 @@ export class UsageFailoverService {
     const until = holdUsageCooldown(target.ccsDir, key, requestedUntil, this.now());
     this.cooldowns.set(key, until);
     state.nextAttempt = Math.max(state.nextAttempt, until);
+    state.fresh = false;
+    state.primaryFailure = 'rate_limited';
     this.persist(target, state);
     return until;
   }
@@ -632,7 +644,9 @@ export class UsageFailoverService {
       template.status === 'ok' &&
       (!state.saved ||
         Date.parse(template.sampledAt ?? '') > Date.parse(state.saved.reading.sampledAt ?? '') ||
-        (state.fresh && template.sampledAt === state.saved.reading.sampledAt))
+        (state.fresh &&
+          this.now() < state.freshUntil &&
+          template.sampledAt === state.saved.reading.sampledAt))
     )
       return this.withSignIn(template, state);
     return this.project(target, template, state, !state.fresh);
@@ -790,6 +804,7 @@ export class UsageFailoverService {
             fallback: false,
           };
           state.fresh = template.status === 'ok';
+          if (state.fresh) state.freshUntil = this.freshUntil(target);
         }
         if (template.status === 'ok') {
           state.primaryFailure = null;
@@ -998,6 +1013,11 @@ export class UsageFailoverService {
           fallback,
         };
         state.fresh = reading.status === 'ok';
+        if (state.fresh)
+          state.freshUntil = this.freshUntil(
+            target,
+            response.failureCode === null ? response.refreshAfterSeconds : 0
+          );
       }
       if (blocked) return 'done';
       if (
