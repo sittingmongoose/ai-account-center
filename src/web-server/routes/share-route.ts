@@ -2,6 +2,8 @@
 import fs from 'fs';
 import path from 'path';
 import { createApiRouter } from './api-router';
+import { readWithRust, rustReadsEnabled } from '../rust-service';
+import { sendRustFile } from '../rust-file-response';
 import { requireBrowserSession } from './status-routes';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import { openRegularFile } from '../status/share-read';
@@ -92,6 +94,17 @@ export function createShareRouter(root: () => string = machineShareRoot) {
       refuse(400, 'invalid_path', 'Use a share-relative file path.');
       return;
     }
+    if (
+      await sendRustFile(req, res, '/api/status/deliverable', {
+        kind: 'deliverable',
+        root: root(),
+        writer: null,
+        path: relative,
+        range: req.get('Range') ?? null,
+        head: req.method === 'HEAD',
+      })
+    )
+      return;
     const extension = path.extname(relative).toLowerCase();
     const type = TYPES[extension];
     if (!type) {
@@ -144,7 +157,41 @@ export function createShareRouter(root: () => string = machineShareRoot) {
       if (range) res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
       res.setHeader('Content-Length', String(Math.max(0, end - start + 1)));
       if (req.method === 'HEAD' || stat.size === 0) res.end();
-      else await sendFileBytes(handle, res, start, end);
+      else {
+        const length = Math.max(0, end - start + 1);
+        const input = { root: root(), writer: null, path: relative, start, length, head: false };
+        if (rustReadsEnabled(res) && length <= 40 * 1024) {
+          const buffer = Buffer.alloc(length);
+          let bytesRead = 0;
+          while (bytesRead < length) {
+            const read = await handle.read(
+              buffer,
+              bytesRead,
+              length - bytesRead,
+              start + bytesRead
+            );
+            if (read.bytesRead === 0) break;
+            bytesRead += read.bytesRead;
+          }
+          if (bytesRead !== length) {
+            res.destroy();
+            return;
+          }
+          const expected = { size: stat.size, bytes: buffer.toString('base64') };
+          const result = (await readWithRust(
+            req,
+            res,
+            '/api/status/deliverable',
+            expected,
+            input
+          )) as typeof expected;
+          res.end(Buffer.from(result.bytes, 'base64'));
+        } else {
+          if (rustReadsEnabled(res))
+            await readWithRust(req, res, '/api/status/deliverable', null, input);
+          await sendFileBytes(handle, res, start, end);
+        }
+      }
     } catch {
       if (res.headersSent) res.destroy();
       else refuse(404, 'not_found', 'This file is not available.');

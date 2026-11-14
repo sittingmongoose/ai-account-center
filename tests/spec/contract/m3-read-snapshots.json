@@ -1,0 +1,1303 @@
+[
+  {
+    "name": "status-populated",
+    "route": "/api/status",
+    "body": {
+      "version": 1,
+      "generatedAt": "2026-11-06T16:30:00.000Z",
+      "refresh": {
+        "pollSeconds": 30
+      },
+      "headline": {
+        "tone": "warn",
+        "runs": [
+          {
+            "text": "1 question",
+            "strong": true,
+            "tone": "warn"
+          },
+          {
+            "text": " for you"
+          },
+          {
+            "text": " · 1 of 2 items landed"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "1 blocked",
+            "tone": "warn"
+          },
+          {
+            "text": " · "
+          },
+          {
+            "text": "5 sources not current",
+            "tone": "warn"
+          }
+        ],
+        "counts": {
+          "openCards": 1,
+          "questions": 1,
+          "decisions": 0,
+          "blockedItems": 1,
+          "workingThreads": 1,
+          "staleSources": 5,
+          "loopingPinned": 0,
+          "waitingPinned": 0
+        },
+        "strip": {
+          "items": [
+            {
+              "key": "questions",
+              "section": "questions",
+              "value": "1",
+              "label": "question for you",
+              "short": "question",
+              "tone": "warn",
+              "detail": "1 question for you."
+            },
+            {
+              "key": "pinned",
+              "value": "–",
+              "label": "pinned threads",
+              "short": "pinned",
+              "tone": "quiet",
+              "section": "pinned",
+              "detail": "Pinned threads are unavailable: this server doesn't send them yet."
+            },
+            {
+              "key": "blocked",
+              "value": "1",
+              "label": "blocked",
+              "short": "blocked",
+              "tone": "warn",
+              "section": null,
+              "detail": "Blocked: B Item B."
+            },
+            {
+              "key": "done",
+              "value": "1/2",
+              "label": "items done",
+              "short": "done",
+              "tone": null,
+              "section": null,
+              "detail": "1 of 2 items landed or done (dropped items are not counted)."
+            },
+            {
+              "key": "sources",
+              "value": "5",
+              "label": "sources not current",
+              "short": "not current",
+              "tone": "warn",
+              "section": null,
+              "detail": "Not current: pm-mail registry: Waiting for the first reading; Machines: Waiting for the first reading; Browsers and recordings: Waiting for the first reading; Simlock: Waiting for the first reading; Account usage: Waiting for the dashboard’s first account sample."
+            }
+          ],
+          "worst": null
+        }
+      },
+      "sources": [
+        {
+          "id": "agent-reports",
+          "label": "Agent reports",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 60,
+          "state": "ok",
+          "detail": "1 thread and 1 card read 4:30 PM."
+        },
+        {
+          "id": "pm-mail",
+          "label": "pm-mail registry",
+          "asOf": null,
+          "ageSeconds": null,
+          "staleAfterSeconds": 120,
+          "state": "missing",
+          "detail": "Waiting for the first reading."
+        },
+        {
+          "id": "machines",
+          "label": "Machines",
+          "asOf": null,
+          "ageSeconds": null,
+          "staleAfterSeconds": 180,
+          "state": "missing",
+          "detail": "Waiting for the first reading."
+        },
+        {
+          "id": "browsers",
+          "label": "Browsers and recordings",
+          "asOf": null,
+          "ageSeconds": null,
+          "staleAfterSeconds": 180,
+          "state": "missing",
+          "detail": "Waiting for the first reading."
+        },
+        {
+          "id": "simlock",
+          "label": "Simlock",
+          "asOf": null,
+          "ageSeconds": null,
+          "staleAfterSeconds": 180,
+          "state": "missing",
+          "detail": "Waiting for the first reading."
+        },
+        {
+          "id": "usage",
+          "label": "Account usage",
+          "state": "missing",
+          "asOf": null,
+          "ageSeconds": null,
+          "staleAfterSeconds": null,
+          "detail": "Waiting for the dashboard’s first account sample."
+        },
+        {
+          "id": "quota-watch",
+          "label": "Quota watch (estimates)",
+          "state": "unconfigured",
+          "asOf": null,
+          "ageSeconds": null,
+          "staleAfterSeconds": null,
+          "detail": "Per-stream quota attribution is not connected on this server."
+        }
+      ],
+      "cards": {
+        "source": "agent-reports",
+        "open": [
+          {
+            "id": "vm.fixture--question",
+            "media": [],
+            "label": "S-question",
+            "writer": "vm.fixture",
+            "seq": 1,
+            "project": "proj",
+            "stream": "S",
+            "askedBy": "fixture",
+            "title": "Question question",
+            "now": "Plain words.",
+            "nowAsOf": null,
+            "oldAnswer": null,
+            "whatChanged": null,
+            "options": [
+              {
+                "key": "A",
+                "label": "First",
+                "gets": "Simple",
+                "costs": null,
+                "media": [],
+                "sections": [],
+                "stance": null
+              },
+              {
+                "key": "B",
+                "label": "Second",
+                "gets": null,
+                "costs": "More work",
+                "media": [],
+                "sections": [],
+                "stance": null
+              }
+            ],
+            "recommendation": {
+              "key": "A",
+              "why": "Simpler.",
+              "confidence": null,
+              "flip": null
+            },
+            "multiple": false,
+            "urgency": "today",
+            "blocks": null,
+            "sections": [],
+            "batch": null,
+            "evidence": [],
+            "replies": [],
+            "kind": "question",
+            "neededBy": null,
+            "exception": null,
+            "reversible": null,
+            "verdict": null,
+            "group": null,
+            "agreement": null,
+            "doubt": null,
+            "appliesTo": null,
+            "changesCanon": [],
+            "related": [],
+            "askedAt": "2026-11-06T16:20:00.000Z",
+            "ageSeconds": 600,
+            "askerState": "working",
+            "cardSha256": "9564ea44bb1c8f10ca9f325a64acd33a14e601a49c76fce327f58337fcc156cc",
+            "notes": [],
+            "problem": null,
+            "answerable": true
+          }
+        ],
+        "answerHistoryProblem": null,
+        "answered": [],
+        "batches": [],
+        "complete": true
+      },
+      "projects": [
+        {
+          "id": "proj",
+          "label": "Project",
+          "streams": [
+            {
+              "id": "S",
+              "label": "Stream S",
+              "owner": "lead",
+              "goal": "Ship it",
+              "writer": "vm.fixture",
+              "board": null,
+              "source": "tasks",
+              "asOf": "2026-11-06T16:29:00.000Z",
+              "ageSeconds": 60,
+              "stale": false,
+              "problem": null,
+              "counts": {
+                "total": 3,
+                "todo": 0,
+                "working": 0,
+                "review": 0,
+                "fixing": 0,
+                "blocked": 1,
+                "ready": 0,
+                "landed": 1,
+                "done": 0,
+                "dropped": 1
+              },
+              "completion": {
+                "done": 1,
+                "of": 2
+              },
+              "items": [
+                {
+                  "id": "A",
+                  "title": "Item A",
+                  "state": "landed",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                },
+                {
+                  "id": "B",
+                  "title": "Item B",
+                  "state": "blocked",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                },
+                {
+                  "id": "C",
+                  "title": "Item C",
+                  "state": "dropped",
+                  "owner": null,
+                  "branch": null,
+                  "head": null,
+                  "reviews": [],
+                  "landed": null,
+                  "blockedOn": null,
+                  "note": null,
+                  "why": null,
+                  "updatedAt": "2026-11-06T16:28:00.000Z",
+                  "ageSeconds": 120
+                }
+              ]
+            }
+          ],
+          "counts": {
+            "total": 3,
+            "todo": 0,
+            "working": 0,
+            "review": 0,
+            "fixing": 0,
+            "blocked": 1,
+            "ready": 0,
+            "landed": 1,
+            "done": 0,
+            "dropped": 1
+          },
+          "completion": {
+            "done": 1,
+            "of": 2
+          }
+        }
+      ],
+      "threads": {
+        "source": "agent-reports",
+        "also": [
+          "pm-mail"
+        ],
+        "rows": [
+          {
+            "name": "fixture",
+            "writer": "vm.fixture",
+            "machine": "vm",
+            "project": "proj",
+            "stream": "S",
+            "state": "working",
+            "doing": "Building",
+            "blockedOn": null,
+            "progress": null,
+            "model": "claude-opus-5-5",
+            "effort": "high",
+            "account": null,
+            "source": "report",
+            "lastSeen": "2026-11-06T16:29:00.000Z",
+            "ageSeconds": 60,
+            "stale": false,
+            "clockAheadSeconds": null,
+            "problem": null,
+            "registrySource": null
+          }
+        ]
+      },
+      "machines": {
+        "source": "machines",
+        "also": [
+          "browsers"
+        ],
+        "rows": [
+          {
+            "id": "vm",
+            "label": "Ubuntu VM",
+            "state": "stale",
+            "asOf": null,
+            "ageSeconds": null,
+            "detail": "Waiting for the first reading.",
+            "cpu": null,
+            "memory": null,
+            "disk": [],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "mac",
+            "label": "Mac",
+            "state": "stale",
+            "asOf": null,
+            "ageSeconds": null,
+            "detail": "Waiting for the first reading.",
+            "cpu": null,
+            "memory": null,
+            "disk": [],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "windows",
+            "label": "Windows PC",
+            "state": "stale",
+            "asOf": null,
+            "ageSeconds": null,
+            "detail": "Waiting for the first reading.",
+            "cpu": null,
+            "memory": null,
+            "disk": [],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "nas1",
+            "label": "Nas1",
+            "state": "stale",
+            "asOf": null,
+            "ageSeconds": null,
+            "detail": "Waiting for the first reading.",
+            "cpu": null,
+            "memory": null,
+            "disk": [],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          },
+          {
+            "id": "alexis",
+            "label": "Alexis PC",
+            "state": "stale",
+            "asOf": null,
+            "ageSeconds": null,
+            "detail": "Waiting for the first reading.",
+            "cpu": null,
+            "memory": null,
+            "disk": [],
+            "browsers": null,
+            "recordings": null,
+            "gpuPct": null,
+            "sessions": [],
+            "slotsSource": {
+              "id": "browsers",
+              "label": "Browsers and recordings",
+              "state": "missing",
+              "asOf": null,
+              "ageSeconds": null,
+              "detail": "Waiting for the first reading."
+            },
+            "warnings": []
+          }
+        ]
+      },
+      "simlock": {
+        "source": "simlock",
+        "capacity": [],
+        "leases": []
+      },
+      "usage": {
+        "source": "usage",
+        "warnings": [],
+        "accounts": []
+      },
+      "spend": {
+        "source": "quota-watch",
+        "estimate": true,
+        "asOf": null,
+        "generatedAt": null,
+        "writer": null,
+        "methodId": null,
+        "method": null,
+        "periods": [],
+        "budgets": [],
+        "unattributed": [],
+        "machinesNotScanned": [],
+        "overLimitBudgets": 0
+      }
+    },
+    "owner": "rust"
+  },
+  {
+    "name": "scoreboard-populated",
+    "route": "/api/scoreboard",
+    "body": {
+      "version": 1,
+      "generatedAt": "2026-11-06T16:30:00.000Z",
+      "refresh": {
+        "pollSeconds": 60
+      },
+      "sources": [
+        {
+          "id": "scoreboard-runs",
+          "label": "Agent runs",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 180,
+          "state": "ok",
+          "detail": "1 run from 1 writer read 4:30 PM (1 observed, 0 benchmark)."
+        },
+        {
+          "id": "scoreboard-catalog",
+          "label": "Scoreboard catalog",
+          "asOf": "2026-11-06T16:30:00.000Z",
+          "ageSeconds": 0,
+          "staleAfterSeconds": 180,
+          "state": "ok",
+          "detail": "Catalog read 4:30 PM."
+        }
+      ],
+      "catalog": {
+        "minRuns": 5,
+        "models": [
+          {
+            "model": "anthropic/claude-opus-5-5",
+            "label": "Opus 5.5",
+            "family": "Claude",
+            "runtimes": [
+              "claude-code"
+            ],
+            "efforts": [
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "prices": null,
+            "notes": null
+          }
+        ],
+        "taskTypes": [
+          {
+            "id": "build",
+            "label": "Build",
+            "description": "Implementation work outside WorkNodes.",
+            "unit": "task",
+            "measures": [
+              "speed",
+              "quality",
+              "thoroughness",
+              "laziness",
+              "cheating",
+              "cost",
+              "reliability",
+              "overclaim"
+            ],
+            "byProcess": false
+          }
+        ],
+        "measures": [
+          {
+            "id": "speed",
+            "label": "Speed",
+            "better": "lower",
+            "unit": "s/unit",
+            "description": "Median wall seconds per unit of work, in the task type's unit.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "quality",
+            "label": "Quality",
+            "better": "higher",
+            "unit": "share",
+            "description": "Share of the work a later blind review passed without overturning. Fix rounds on one item count once.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "thoroughness",
+            "label": "Thoroughness",
+            "better": "higher",
+            "unit": "share",
+            "description": "Median of files read over files assigned and records judged over records assigned.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "laziness",
+            "label": "Laziness",
+            "better": "lower",
+            "unit": "share",
+            "description": "Share of runs flagged incomplete-read or scope-cut, or that read under 90% of what was assigned.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "cheating",
+            "label": "Cheating",
+            "better": "lower",
+            "unit": "share",
+            "description": "Share of runs flagged shortcut, cheating, fabricated, test-weakened or false-claim. Each one is listed with its evidence.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "cost",
+            "label": "Cost",
+            "better": "lower",
+            "unit": "credits/unit",
+            "description": "Measured credits or quota per accepted unit. Estimates are shown apart and labelled.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "reliability",
+            "label": "Reliability",
+            "better": "higher",
+            "unit": "share",
+            "description": "Share of runs that started and did not end failed or cancelled for infrastructure reasons.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "overclaim",
+            "label": "Over-claimed passes",
+            "better": "lower",
+            "unit": "share",
+            "description": "Share of runs that reported passing checks which a later review overturned.",
+            "metric": null,
+            "preliminaryUnless": null
+          },
+          {
+            "id": "facts-kept",
+            "label": "Facts kept",
+            "better": "higher",
+            "unit": "share",
+            "description": "Scout: share of the known plan-changing facts that reached the final decisions.",
+            "metric": {
+              "of": "factsKept",
+              "per": "factsTotal"
+            },
+            "preliminaryUnless": null
+          },
+          {
+            "id": "verdict-drift",
+            "label": "Verdict drift",
+            "better": "lower",
+            "unit": "share",
+            "description": "Scout: share of verdicts that differ from the reference model's.",
+            "metric": {
+              "of": "verdictsChanged",
+              "per": "verdictsTotal"
+            },
+            "preliminaryUnless": null
+          },
+          {
+            "id": "silent-misses",
+            "label": "Silent misses",
+            "better": "lower",
+            "unit": "share",
+            "description": "Planning: share of the agreed obligations a run missed without flagging them.",
+            "metric": {
+              "of": "silent",
+              "per": "goldAgreed"
+            },
+            "preliminaryUnless": "answerKeyFinal"
+          }
+        ],
+        "uses": [
+          {
+            "id": "planning",
+            "label": "Scout, planning wizard, WorkNode creation",
+            "description": "Which models to use for planning work.",
+            "taskTypes": [
+              "scout",
+              "plan",
+              "worknode-create"
+            ],
+            "weights": {
+              "quality": 3,
+              "cheating": 3,
+              "thoroughness": 2,
+              "facts-kept": 3,
+              "speed": 1,
+              "cost": 1,
+              "silent-misses": 3
+            }
+          },
+          {
+            "id": "building",
+            "label": "Building WorkNodes",
+            "description": "Which models to use to build, fix, test and review WorkNodes.",
+            "taskTypes": [
+              "worknode-build",
+              "build",
+              "fix",
+              "test",
+              "review",
+              "audit-read"
+            ],
+            "weights": {
+              "quality": 3,
+              "cheating": 3,
+              "overclaim": 2,
+              "laziness": 2,
+              "reliability": 1,
+              "speed": 1,
+              "cost": 1
+            }
+          },
+          {
+            "id": "pm-users",
+            "label": "Advice for Puppet Master users",
+            "description": "For each kind of task, in plain words: Recommended, Fine, Avoid for this, Not enough data yet.",
+            "taskTypes": [
+              "*"
+            ],
+            "weights": {
+              "quality": 3,
+              "cheating": 3,
+              "reliability": 2,
+              "speed": 1,
+              "cost": 2,
+              "silent-misses": 3
+            }
+          }
+        ],
+        "benchmarks": []
+      },
+      "uses": [
+        {
+          "id": "planning",
+          "label": "Scout, planning wizard, WorkNode creation",
+          "description": "Which models to use for planning work.",
+          "taskTypes": []
+        },
+        {
+          "id": "building",
+          "label": "Building WorkNodes",
+          "description": "Which models to use to build, fix, test and review WorkNodes.",
+          "taskTypes": [
+            {
+              "id": "build",
+              "label": "Build",
+              "description": "Implementation work outside WorkNodes.",
+              "unit": "task",
+              "measures": [
+                "speed",
+                "quality",
+                "thoroughness",
+                "laziness",
+                "cheating",
+                "cost",
+                "reliability",
+                "overclaim"
+              ],
+              "byProcess": false,
+              "rows": [
+                {
+                  "key": "anthropic/claude-opus-5-5|claude-code|high",
+                  "model": "anthropic/claude-opus-5-5",
+                  "label": "Opus 5.5",
+                  "inCatalog": true,
+                  "runtime": "claude-code",
+                  "effort": "high",
+                  "process": null,
+                  "n": {
+                    "observed": 1,
+                    "benchmark": 0
+                  },
+                  "basis": null,
+                  "benchmark": null,
+                  "ranked": false,
+                  "rank": null,
+                  "verdict": "not-enough-data",
+                  "verdictLabel": "Not enough data yet",
+                  "why": "too little data (n = 1)",
+                  "observed": {
+                    "source": "observed",
+                    "benchmark": null,
+                    "benchmarkLabel": null,
+                    "n": 1,
+                    "imported": 0,
+                    "reviews": 0,
+                    "ranked": false,
+                    "rank": null,
+                    "score": null,
+                    "verdict": "not-enough-data",
+                    "verdictLabel": "Not enough data yet",
+                    "why": "too little data (n = 1)",
+                    "preliminary": false,
+                    "measures": {
+                      "speed": {
+                        "value": 100,
+                        "unit": "s/task",
+                        "n": 1,
+                        "low": 100,
+                        "high": 100,
+                        "interval": "range",
+                        "of": null,
+                        "per": null,
+                        "preliminary": false,
+                        "perTask": {
+                          "value": 100,
+                          "n": 1,
+                          "low": 100,
+                          "high": 100
+                        }
+                      },
+                      "quality": {
+                        "value": null,
+                        "unit": "share",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false,
+                        "disputed": 0,
+                        "cannotVerify": 0,
+                        "rounds": {
+                          "value": null,
+                          "n": 0,
+                          "low": null,
+                          "high": null
+                        },
+                        "firstTry": 0,
+                        "overturns": []
+                      },
+                      "thoroughness": {
+                        "value": null,
+                        "unit": "share",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false,
+                        "files": {
+                          "value": null,
+                          "n": 0,
+                          "low": null,
+                          "high": null
+                        },
+                        "records": {
+                          "value": null,
+                          "n": 0,
+                          "low": null,
+                          "high": null
+                        }
+                      },
+                      "laziness": {
+                        "value": null,
+                        "unit": "share",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false
+                      },
+                      "cheating": {
+                        "value": 0,
+                        "unit": "share",
+                        "n": 1,
+                        "low": 0,
+                        "high": 0.7301,
+                        "interval": "wilson90",
+                        "of": 0,
+                        "per": 1,
+                        "preliminary": false
+                      },
+                      "cost": {
+                        "value": null,
+                        "unit": "credits/task",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false,
+                        "quota": [],
+                        "usd": null,
+                        "estimate": null
+                      },
+                      "reliability": {
+                        "value": 1,
+                        "unit": "share",
+                        "n": 1,
+                        "low": 0.2699,
+                        "high": 1,
+                        "interval": "wilson90",
+                        "of": 1,
+                        "per": 1,
+                        "preliminary": false
+                      },
+                      "overclaim": {
+                        "value": null,
+                        "unit": "share",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false
+                      }
+                    },
+                    "flags": [],
+                    "runs": [
+                      {
+                        "id": "vm.fixture--read",
+                        "writer": "vm.fixture",
+                        "source": "observed",
+                        "benchmark": null,
+                        "project": "proj",
+                        "stream": null,
+                        "task": {
+                          "id": "read",
+                          "type": "build",
+                          "title": "Task read"
+                        },
+                        "model": "anthropic/claude-opus-5-5",
+                        "label": "Opus 5.5",
+                        "runtime": "claude-code",
+                        "effort": "high",
+                        "process": null,
+                        "outcome": "done",
+                        "endedAt": "2026-11-06T15:30:00.000Z",
+                        "wallSeconds": 100,
+                        "imported": null,
+                        "review": null,
+                        "flags": 0,
+                        "evidence": []
+                      }
+                    ]
+                  },
+                  "benchmarks": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "pm-users",
+          "label": "Advice for Puppet Master users",
+          "description": "For each kind of task, in plain words: Recommended, Fine, Avoid for this, Not enough data yet.",
+          "taskTypes": [
+            {
+              "id": "build",
+              "label": "Build",
+              "description": "Implementation work outside WorkNodes.",
+              "unit": "task",
+              "measures": [
+                "speed",
+                "quality",
+                "thoroughness",
+                "laziness",
+                "cheating",
+                "cost",
+                "reliability",
+                "overclaim"
+              ],
+              "byProcess": false,
+              "rows": [
+                {
+                  "key": "anthropic/claude-opus-5-5|claude-code|high",
+                  "model": "anthropic/claude-opus-5-5",
+                  "label": "Opus 5.5",
+                  "inCatalog": true,
+                  "runtime": "claude-code",
+                  "effort": "high",
+                  "process": null,
+                  "n": {
+                    "observed": 1,
+                    "benchmark": 0
+                  },
+                  "basis": null,
+                  "benchmark": null,
+                  "ranked": false,
+                  "rank": null,
+                  "verdict": "not-enough-data",
+                  "verdictLabel": "Not enough data yet",
+                  "why": "too little data (n = 1)",
+                  "observed": {
+                    "source": "observed",
+                    "benchmark": null,
+                    "benchmarkLabel": null,
+                    "n": 1,
+                    "imported": 0,
+                    "reviews": 0,
+                    "ranked": false,
+                    "rank": null,
+                    "score": null,
+                    "verdict": "not-enough-data",
+                    "verdictLabel": "Not enough data yet",
+                    "why": "too little data (n = 1)",
+                    "preliminary": false,
+                    "measures": {
+                      "speed": {
+                        "value": 100,
+                        "unit": "s/task",
+                        "n": 1,
+                        "low": 100,
+                        "high": 100,
+                        "interval": "range",
+                        "of": null,
+                        "per": null,
+                        "preliminary": false,
+                        "perTask": {
+                          "value": 100,
+                          "n": 1,
+                          "low": 100,
+                          "high": 100
+                        }
+                      },
+                      "quality": {
+                        "value": null,
+                        "unit": "share",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false,
+                        "disputed": 0,
+                        "cannotVerify": 0,
+                        "rounds": {
+                          "value": null,
+                          "n": 0,
+                          "low": null,
+                          "high": null
+                        },
+                        "firstTry": 0,
+                        "overturns": []
+                      },
+                      "thoroughness": {
+                        "value": null,
+                        "unit": "share",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false,
+                        "files": {
+                          "value": null,
+                          "n": 0,
+                          "low": null,
+                          "high": null
+                        },
+                        "records": {
+                          "value": null,
+                          "n": 0,
+                          "low": null,
+                          "high": null
+                        }
+                      },
+                      "laziness": {
+                        "value": null,
+                        "unit": "share",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false
+                      },
+                      "cheating": {
+                        "value": 0,
+                        "unit": "share",
+                        "n": 1,
+                        "low": 0,
+                        "high": 0.7301,
+                        "interval": "wilson90",
+                        "of": 0,
+                        "per": 1,
+                        "preliminary": false
+                      },
+                      "cost": {
+                        "value": null,
+                        "unit": "credits/task",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false,
+                        "quota": [],
+                        "usd": null,
+                        "estimate": null
+                      },
+                      "reliability": {
+                        "value": 1,
+                        "unit": "share",
+                        "n": 1,
+                        "low": 0.2699,
+                        "high": 1,
+                        "interval": "wilson90",
+                        "of": 1,
+                        "per": 1,
+                        "preliminary": false
+                      },
+                      "overclaim": {
+                        "value": null,
+                        "unit": "share",
+                        "n": 0,
+                        "low": null,
+                        "high": null,
+                        "interval": null,
+                        "of": null,
+                        "per": null,
+                        "preliminary": false
+                      }
+                    },
+                    "flags": [],
+                    "runs": [
+                      {
+                        "id": "vm.fixture--read",
+                        "writer": "vm.fixture",
+                        "source": "observed",
+                        "benchmark": null,
+                        "project": "proj",
+                        "stream": null,
+                        "task": {
+                          "id": "read",
+                          "type": "build",
+                          "title": "Task read"
+                        },
+                        "model": "anthropic/claude-opus-5-5",
+                        "label": "Opus 5.5",
+                        "runtime": "claude-code",
+                        "effort": "high",
+                        "process": null,
+                        "outcome": "done",
+                        "endedAt": "2026-11-06T15:30:00.000Z",
+                        "wallSeconds": 100,
+                        "imported": null,
+                        "review": null,
+                        "flags": 0,
+                        "evidence": []
+                      }
+                    ]
+                  },
+                  "benchmarks": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "recent": [
+        {
+          "id": "vm.fixture--read",
+          "writer": "vm.fixture",
+          "source": "observed",
+          "benchmark": null,
+          "project": "proj",
+          "stream": null,
+          "task": {
+            "id": "read",
+            "type": "build",
+            "title": "Task read"
+          },
+          "model": "anthropic/claude-opus-5-5",
+          "label": "Opus 5.5",
+          "runtime": "claude-code",
+          "effort": "high",
+          "process": null,
+          "outcome": "done",
+          "endedAt": "2026-11-06T15:30:00.000Z",
+          "wallSeconds": 100,
+          "imported": null,
+          "review": null,
+          "flags": 0,
+          "evidence": []
+        }
+      ],
+      "unscored": {
+        "total": 0,
+        "scanLimit": 0,
+        "unreadable": 0,
+        "noModel": 0,
+        "noTaskType": 0,
+        "unknownModel": 0,
+        "unknownTaskType": 0,
+        "unknownModels": [],
+        "examples": []
+      }
+    },
+    "owner": "rust"
+  },
+  {
+    "name": "store-disabled",
+    "route": "/api/store/status",
+    "body": {
+      "state": "unavailable",
+      "reason": "disabled"
+    },
+    "owner": "rust"
+  },
+  {
+    "name": "store-unsupported-stub",
+    "route": "/api/store/status",
+    "body": {
+      "state": "ready",
+      "fixture": true
+    },
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "status-media",
+    "route": "/api/status/files/{*path}",
+    "body": {
+      "size": 12,
+      "bytes": "iVBORw0KGgoBAgME"
+    },
+    "owner": "rust",
+    "input": {
+      "root": "<fixture>/agent-reports",
+      "writer": "vm.fixture",
+      "path": "media/image.png",
+      "start": 0,
+      "length": 12,
+      "head": false
+    }
+  },
+  {
+    "name": "deliverable",
+    "route": "/api/status/deliverable",
+    "body": {
+      "size": 28,
+      "bytes": "PGgxPkZpeHR1cmUgZGVsaXZlcmFibGU8L2gxPg=="
+    },
+    "owner": "rust",
+    "input": {
+      "root": "<fixture>/machine",
+      "writer": null,
+      "path": "share/concept.html",
+      "start": 0,
+      "length": 28,
+      "head": false
+    }
+  },
+  {
+    "name": "deliverable-range",
+    "route": "/api/status/deliverable",
+    "body": {
+      "size": 28,
+      "bytes": "aDE+Rml4"
+    },
+    "owner": "rust",
+    "input": {
+      "root": "<fixture>/machine",
+      "writer": null,
+      "path": "share/concept.html",
+      "start": 1,
+      "length": 6,
+      "head": false
+    }
+  }
+]

@@ -1,4 +1,4 @@
-# Optional Rust service (M3 skeleton)
+# Optional Rust service (M3 read routes)
 
 The TypeScript dashboard remains the public HTTP server. `ServerOptions.rustService`
 (or `AAC_RUST_SERVICE`) selects `off`, `shadow` or `on`; the default is `off`.
@@ -10,12 +10,42 @@ Starting the dashboard never builds, downloads or installs this binary.
 | --- | --- |
 | `off` | All routes use TypeScript. No Rust process is started. |
 | `shadow` | TypeScript answers first. A bounded background request compares status and canonical JSON; differences are logged without response bodies. |
-| `on` | The three read routes below use Rust after their existing TS guards. Missing/unhealthy service, deadline, response cap or invalid DTO uses the TS handler and logs `rust.service.fallback`. |
+| `on` | The owned read routes below use Rust after their existing TS guards. Missing/unhealthy service, deadline, response cap or invalid DTO uses the TS handler and logs `rust.service.fallback`. |
 
 The one ownership table is [`rust-service-routes.json`](../src/web-server/rust-service-routes.json),
 imported by TS and embedded by Rust. GET `/api/health`, `/api/accounts/settings`
-and `/api/diag` are `rust`; its wildcard marks all other routes `ts-fallback`.
-HEAD uses the same read handler. Writes remain with TS.
+and `/api/diag` are `rust`. The table also names `/api/store/status`, `/api/status`,
+`/api/scoreboard`, `/api/status/files/*` and `/api/status/deliverable` as conservative
+read candidates. Its final wildcard marks all other routes `ts-fallback`.
+HEAD uses the same guarded read handlers. The table's final wildcard keeps writes and
+other routes with TS.
+
+Status and Scoreboard receive immutable accepted reader states. In on mode, Rust
+composes their panels, cards, source explanations, spend, summary strip, measures,
+rankings and existing native by-model/group fields without building the TS view.
+TS retains source collection, store queries/ingest, shared model-identity normalization
+and Intl date/collation facts. Missing facts and unsupported numeric domains request
+TS fallback. Shadow mode serves the TS result and compares the Rust result in the
+background; off mode does not prepare the Rust input.
+
+Store status comes through the sole existing native writer's `status` call. The service
+validates that immutable snapshot through its aac-store dependency. Transient cache,
+lock and transaction information cannot be reconstructed by another reader. No second
+Engine, redb writer, log writer or store lock is opened. The existing native crates stay
+as path dependencies under `native/`.
+
+File reads in on mode use an independently confined read-only descriptor before the
+TS filesystem path is opened. Rust applies the existing MIME, size and range policy;
+the front door validates the bounded reply and retains its original authentication,
+origin, query, response encoding and security headers. File HEAD reads metadata only.
+Bodies over 1 MiB and unsupported secure-descriptor hosts use logged TS streaming
+fallback. Shadow compares small byte snapshots through the original TS file path.
+
+Read inputs are capped at 4 MiB and replies at 2 MiB. The part 1 routes without an input
+body retain their 64 KiB reply cap. Missing/unhealthy service, unproven shape, invalid
+reply, deadline or cap always leaves the original lazy TS handler available. Raw read
+views preserve JS field order and ETags; the writer snapshot and shadow byte readers
+retain their per-read equality check.
 
 `/api/health` remains public liveness only: `{"status":"ok"}`. Settings keeps its
 existing signed-in-session and query checks, and reads the bounded, existing
@@ -74,7 +104,7 @@ routes. The secret is still mandatory. The socket boundary trusts the OS account
 and its private run folder; it does not isolate mutually hostile processes running
 as that same account.
 
-Requests have a 500 ms total deadline, a 64 KiB response cap and a maximum of 16
+Requests have a 500 ms total deadline, the response caps above and a maximum of 16
 in flight per front door. TS owns HTTP encoding, cookies, caching, compression,
 ETags and all existing auth/origin/session checks. On Windows, where this service
 is not built, the TS fallback remains available. A failed boot is retried on the
@@ -91,12 +121,13 @@ against both TCP tables; unsigned requests are tested over the real Unix socket.
 
 On the VM use `AAC_NO_LOCAL_RUST_BUILD=1` and a temporary `CCS_HOME`. After
 `bun run build:server`, copy the Nas1-built binary into the ignored
-`dist/native/aac-http`, then run:
+`dist/native/aac-http` and native fixture modules as described in the contract harness, then run:
 
 ```sh
+export AAC_RUST_SERVICE_BINARY="$PWD/dist/native/aac-http"
 AAC_RUST_SERVICE=off node tests/spec/run.mjs
 AAC_RUST_SERVICE=on node tests/spec/run.mjs
-AAC_RUST_SERVICE=shadow bun tests/spec/capture.ts
+AAC_RUST_SERVICE=shadow node tests/spec/run.mjs
 ```
 
 `settings-numeric-forms.json` and `settings-parity.ts` compare 65 numeric/document
@@ -116,3 +147,22 @@ roles retain their golden responses. The same sandbox injects real socket faults
 checks spoofed caller headers, route guards, attachment, unhealthy fallback,
 response caps/deadlines and a real shadow difference. No live home or provider is
 used. See [the contract harness](../tests/spec/README.md) for capture limits.
+
+`read-route-parity.ts` adds a separate real-reader golden document under `tests/spec/contract/`.
+It builds populated Status and Scoreboard fixtures through the real TS readers, reads fixture
+media, and checks exact serialized candidate bytes in off/on/shadow modes. It also checks
+unsupported-store fallback, candidate mismatch and the input cap. The original M0 stub cases
+remain unchanged; the extra fixture does not claim all source states have been ported.
+
+For the optional native-field fixture, point `AAC_STATUS_MODULE` at the aac-status Node
+module built on Nas1, then run `bun tests/spec/read-route-parity.ts`. This adds an eighth
+case which invokes the real TS native adapters and compares their by-model/group output
+with the service's path dependency. No module is built or installed by the harness.
+
+
+`read-view-parity.ts`, `read-file-parity.ts` and `read-http-parity.ts` add 39 raw
+state/timezone cases, 29 guarded file cases and five actual native-store HTTP routes.
+The HTTP fixture keeps its sole writer open and asserts zero TS view-builder calls in
+on mode. The number corpus checks 1,773 JS precision/fixed forms, including exact
+binary half ties. All fixtures use temporary private roots; no collector is refreshed
+against a live provider. See the harness README for release-binary RSS/latency commands.

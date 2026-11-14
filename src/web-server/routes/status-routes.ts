@@ -1,4 +1,8 @@
 import { sendRevalidatedView } from './revalidated-view';
+import { composeWithRust, readWithRust, rustReadsEnabled } from '../rust-service';
+import { sendRustFile } from '../rust-file-response';
+import { rustStatusInput, isRustStatusView } from '../rust-read-input';
+import { buildStatusView } from '../status/status-view';
 import type { NextFunction, Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
 import { hasOnlyKeys, sendError } from './account-route-guards';
@@ -136,12 +140,28 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
   const router = createApiRouter();
   router.use(requireBrowserSession);
 
-  router.get('/', (req, res) => {
+  router.get('/', async (req, res) => {
     if (req.originalUrl.includes('?')) {
       sendError(res, 400, 'unexpected_query', 'This request does not take a query string.');
       return;
     }
-    sendRevalidatedView(res, service().view());
+    const current = service();
+    if (typeof current.readInputs !== 'function') {
+      sendRevalidatedView(res, current.view());
+      return;
+    }
+    const input = current.readInputs();
+    sendRevalidatedView(
+      res,
+      await composeWithRust(
+        req,
+        res,
+        '/api/status',
+        () => rustStatusInput(input),
+        () => buildStatusView(input),
+        isRustStatusView
+      )
+    );
   });
 
   router.get('/answers', (req, res) => {
@@ -210,6 +230,17 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       return;
     }
     const params = req.params as unknown as Record<string, string>;
+    if (
+      await sendRustFile(req, res, '/api/status/files/{*path}', {
+        kind: 'media',
+        root: service().reader.root,
+        writer: params[0],
+        path: params[1],
+        range: req.get('Range') ?? null,
+        head: req.method === 'HEAD',
+      })
+    )
+      return;
     const media = await openCardFile(service().reader.root, params[0], params[1]);
     if (!media.ok) {
       const [status, error] = FILE_REFUSALS[media.reason];
@@ -238,7 +269,46 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
         res.end();
         return;
       }
-      await sendFileBytes(media.handle, res, start, end);
+      const length = Math.max(0, end - start + 1);
+      const input = {
+        root: service().reader.root,
+        writer: params[0],
+        path: params[1],
+        start,
+        length,
+        head: false,
+      };
+      if (rustReadsEnabled(res) && length <= 40 * 1024) {
+        const buffer = Buffer.alloc(length);
+        let bytesRead = 0;
+        while (bytesRead < length) {
+          const read = await media.handle.read(
+            buffer,
+            bytesRead,
+            length - bytesRead,
+            start + bytesRead
+          );
+          if (read.bytesRead === 0) break;
+          bytesRead += read.bytesRead;
+        }
+        if (bytesRead !== length) {
+          res.destroy();
+          return;
+        }
+        const expected = { size: media.size, bytes: buffer.toString('base64') };
+        const result = (await readWithRust(
+          req,
+          res,
+          '/api/status/files/{*path}',
+          expected,
+          input
+        )) as typeof expected;
+        res.end(Buffer.from(result.bytes, 'base64'));
+      } else {
+        if (rustReadsEnabled(res))
+          await readWithRust(req, res, '/api/status/files/{*path}', null, input);
+        await sendFileBytes(media.handle, res, start, end);
+      }
     } finally {
       await media.handle.close().catch(() => undefined);
     }

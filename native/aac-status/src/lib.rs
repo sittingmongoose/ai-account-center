@@ -14,9 +14,18 @@
 
 pub mod computers;
 pub mod error;
+pub mod http_views;
 pub mod ops;
 pub mod pinned;
 pub mod pins;
+#[allow(missing_docs)]
+pub mod read_context;
+#[allow(missing_docs)]
+pub mod read_measures;
+#[allow(missing_docs)]
+pub mod read_scoreboard;
+#[allow(missing_docs)]
+pub mod read_status;
 pub mod reset;
 pub mod reset_claude_source;
 pub mod reset_inventory;

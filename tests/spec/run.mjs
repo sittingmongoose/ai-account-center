@@ -13,6 +13,21 @@ for (const [program, args] of [
       ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
     ],
   ],
+  [
+    'bun',
+    [
+      'tests/spec/read-route-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
+  ['node', ['tests/spec/read-number-vectors.mjs']],
+  ...['read-view-parity', 'read-file-parity', 'read-http-parity'].map((name) => [
+    'bun',
+    [
+      `tests/spec/${name}.ts`,
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ]),
   ['bun', ['tests/spec/capture.ts']],
 ])
   execFileSync(program, args, {

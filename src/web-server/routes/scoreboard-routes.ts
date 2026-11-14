@@ -1,4 +1,7 @@
 import { sendRevalidatedView } from './revalidated-view';
+import { composeWithRust, RustService } from '../rust-service';
+import { rustScoreboardInput, isRustScoreboardView } from '../rust-read-input';
+import type { ScoreboardView } from '../scoreboard/scoreboard-view';
 import type { Request, Router } from 'express';
 import { createApiRouter } from './api-router';
 import { sendError } from './account-route-guards';
@@ -66,7 +69,27 @@ export function createScoreboardRouter(
       return;
     }
     try {
-      sendRevalidatedView(res, await service().view(parsed.filters));
+      const bridge: unknown = res.locals.rustService;
+      const composer =
+        bridge instanceof RustService && bridge.mode !== 'off'
+          ? {
+              mode: bridge.mode,
+              compose: (
+                input: Parameters<typeof rustScoreboardInput>[0],
+                finish: Record<string, unknown>,
+                legacy: () => Promise<ScoreboardView>
+              ) =>
+                composeWithRust(
+                  req,
+                  res,
+                  '/api/scoreboard',
+                  () => rustScoreboardInput(input, finish),
+                  legacy,
+                  isRustScoreboardView
+                ) as Promise<ScoreboardView>,
+            }
+          : undefined;
+      sendRevalidatedView(res, await service().view(parsed.filters, composer));
     } catch {
       sendError(res, 500, 'scoreboard_failed', 'The scoreboard could not be built.');
     }

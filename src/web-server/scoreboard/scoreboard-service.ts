@@ -23,6 +23,7 @@ import {
   buildScoreboardView,
   type ScoreboardFilters,
   type ScoreboardView,
+  type ScoreboardInputs,
 } from './scoreboard-view';
 import { composeByModel, composeGroups } from './by-model';
 import { openStatusHandle } from '../../status-native/pinned';
@@ -51,6 +52,15 @@ export interface ScoreboardServiceDeps {
   readersCheck?: ReadersCheckWriter;
   /** The history store (the server passes `getAacStore`); absent or null keeps the share-only path. */
   store?: () => AacStore | null;
+}
+
+export interface ScoreboardComposer {
+  mode: string;
+  compose(
+    input: ScoreboardInputs,
+    finish: Record<string, unknown>,
+    legacy: () => Promise<ScoreboardView>
+  ): Promise<ScoreboardView>;
 }
 
 interface Cached {
@@ -142,21 +152,20 @@ export class ScoreboardService {
   }
 
   /** Share only: every run read, no filters. */
-  private async buildFromShare(): Promise<ScoreboardView> {
+  private async buildFromShare(composer?: ScoreboardComposer): Promise<ScoreboardView> {
     await this.bounded(Promise.all([this.catalog.scan(), this.runs.scan()]));
     const runs = this.runs.snapshot();
     this.recordCheck(runs);
     const catalog = this.catalog.snapshot();
-    const view = buildScoreboardView({
+    const input: ScoreboardInputs = {
       now: this.now(),
       timeZone: this.timeZone(),
       root: this.root,
       catalog,
       runs,
       seedFailures: this.seedFailures,
-    });
-    return this.finish({
-      ...view,
+    };
+    const finish = {
       filters: {
         ...ALL_RUNS,
         available: false,
@@ -164,7 +173,12 @@ export class ScoreboardService {
       },
       identity: null,
       history: { store: 'off', runs: null, importing: false },
-    });
+    };
+    const legacy = () =>
+      this.finish({ ...buildScoreboardView(input), ...finish } as ScoreboardView);
+    return composer
+      ? composer.compose(input, { ...finish, native: this.native !== null }, legacy)
+      : legacy();
   }
 
   /** The store query of a filter: local days in the dashboard's zone. */
@@ -180,7 +194,10 @@ export class ScoreboardService {
   }
 
   /** From the history store, filtered there (Rust); reviews outside the filter still join. */
-  private async buildFromStore(filters: ScoreboardFilters): Promise<ScoreboardView> {
+  private async buildFromStore(
+    filters: ScoreboardFilters,
+    composer?: ScoreboardComposer
+  ): Promise<ScoreboardView> {
     await this.bounded(this.catalog.scan());
     const query = this.query(filters);
     const runs = await this.runsStore.state(query);
@@ -199,7 +216,7 @@ export class ScoreboardService {
       : [];
     if (!filtered) this.recordCheck(runs);
     const catalog = this.catalog.snapshot();
-    const view = buildScoreboardView({
+    const input: ScoreboardInputs = {
       now: this.now(),
       timeZone: this.timeZone(),
       root: this.root,
@@ -207,12 +224,11 @@ export class ScoreboardService {
       runs,
       joinReviews,
       seedFailures: this.seedFailures,
-    });
+    };
     const status = await this.store()
       ?.runs<{ runs: number }>('runsStatus')
       .catch(() => null);
-    return this.finish({
-      ...view,
+    const finish = {
       filters: {
         ...filters,
         available: true,
@@ -224,7 +240,12 @@ export class ScoreboardService {
         runs: status?.runs ?? null,
         importing: this.runsStore.last?.more ?? false,
       },
-    });
+    };
+    const legacy = () =>
+      this.finish({ ...buildScoreboardView(input), ...finish } as ScoreboardView);
+    return composer
+      ? composer.compose(input, { ...finish, native: this.native !== null }, legacy)
+      : legacy();
   }
 
   /** One ingest pass now, unless one ran within the cache time. Never rejects. */
@@ -236,9 +257,12 @@ export class ScoreboardService {
   }
 
   /** The view now. Overlapping reads of the same filters share one build. */
-  async view(filters: ScoreboardFilters = ALL_RUNS): Promise<ScoreboardView> {
+  async view(
+    filters: ScoreboardFilters = ALL_RUNS,
+    composer?: ScoreboardComposer
+  ): Promise<ScoreboardView> {
     const storeOn = this.store() !== null;
-    const key = storeOn ? JSON.stringify(filters) : 'share';
+    const key = `${composer?.mode ?? 'ts'}:${storeOn ? JSON.stringify(filters) : 'share'}`;
     if (storeOn) await this.freshen(this.runsStore.last === null);
     const generation = storeOn ? (this.runsStore.last?.generation ?? 0) : 0;
     const hit = this.cached.get(key);
@@ -251,8 +275,8 @@ export class ScoreboardService {
       // the share-only view, which says the filters are unavailable.
       building = (
         storeOn
-          ? this.buildFromStore(filters).catch(() => this.buildFromShare())
-          : this.buildFromShare()
+          ? this.buildFromStore(filters, composer).catch(() => this.buildFromShare(composer))
+          : this.buildFromShare(composer)
       )
         .then((view) => {
           this.cached.delete(key);

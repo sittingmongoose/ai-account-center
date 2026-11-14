@@ -1,6 +1,8 @@
 # M0 behaviour contracts
 
-Run from the repository root, with no provider refresh:
+Run from the repository root, with no provider refresh. After the server-only build,
+copy the prebuilt native fixture modules described under M3 part 2 below; on/shadow
+also require the prebuilt service. The runner never compiles Rust locally:
 
 ```sh
 export AAC_NO_LOCAL_RUST_BUILD=1 TMPDIR="$HOME/aac-tmp"
@@ -144,3 +146,57 @@ This covers settings, boot input, principal headers and raw route-table entries;
 the route list is intentionally an array. Helper tests prove bad object
 envelopes never invoke the DTO deserializer, and actual socket tests refuse
 sequence/unknown/duplicate principal envelopes with 401.
+
+## M3 part 2 checkpoint
+
+`read-route-parity.ts` builds populated Status and Scoreboard views through the real readers,
+plus bounded media and deliverable file inputs, and pins them in `contract/m3-read-snapshots.json`.
+The full runner checks this document in addition to the original 410 role documents. In off
+mode it uses `--ts-only`; on/shadow require the Nas1-built binary and assert actual candidate
+reply counts, exact serialized bytes, mismatch refusal and explicit fallback for unsupported
+inputs. This is a transitional snapshot protocol: TS still builds the reference for each read,
+and only equal Rust candidates are admitted. Large views/files keep TS ownership.
+
+An explicit `AAC_STATUS_MODULE` enables an eighth real-native-field parity case. It must
+point at a compatible module already built on Nas1 or the Mac; the harness fails if it
+cannot load or compose. The committed seven-case golden remains independent of optional
+native module availability.
+
+
+## M3 part 2 read views
+
+The full runner also checks real Status/Scoreboard reader states, exact JS number
+rounding vectors, guarded HTTP media/deliverable reads and an actual native fixture
+store. Copy prebuilt `aac-http`, `aac-store.linux-x64.node` and
+`aac-status.linux-x64.node` into `dist/native/` after the server-only build. Rust
+builds run on Nas1 or the Mac, never the VM. No real store/share or provider is used.
+
+```sh
+export AAC_RUST_SERVICE_BINARY="$PWD/dist/native/aac-http"
+export AAC_STATUS_MODULE="$PWD/dist/native/aac-status.linux-x64.node"
+AAC_RUST_SERVICE=off node tests/spec/run.mjs
+AAC_RUST_SERVICE=on node tests/spec/run.mjs
+AAC_RUST_SERVICE=shadow node tests/spec/run.mjs
+```
+
+The four `contract/m3-read-*.json` corpora supplement the M0 stubs. Raw views check
+39 state/timezone combinations and serialized field order. Files check 29 HTTP
+cases, including ranges, HEAD, MIME/security headers, role/origin/query refusals,
+links and large-file fallback. Native HTTP checks all five routes with the same
+writer kept open, by-model/group composition, ETag revalidation and no TS view
+builder calls in on mode. Only observed fixture paths, timestamps, generated IDs
+and hashes are normalized. The original role goldens retain their bytes.
+
+For repeatable fixture measurements, use the release `aac-http` binary and run:
+
+```sh
+AAC_M3_BUILD_PROFILE=release AAC_M3_MEASURE_OUTPUT=/absolute/result.json \
+  bun tests/spec/read-http-parity.ts --measure
+```
+
+Each fresh mode worker takes 40 warm HTTP samples per route after five warmups,
+including full body consumption, and records TS plus its own Rust child RSS.
+A separate Scoreboard case clears only the view cache before each request to
+measure uncached composition with the existing ingested fixture store. Collector
+scheduling, store ownership and TS front-door overhead remain in the measurement.
+These are fixture measurements, not production capacity claims.

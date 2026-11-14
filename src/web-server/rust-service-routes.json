@@ -2,5 +2,10 @@
   { "method": "GET", "path": "/api/health", "owner": "rust" },
   { "method": "GET", "path": "/api/accounts/settings", "owner": "rust" },
   { "method": "GET", "path": "/api/diag", "owner": "rust" },
+  { "method": "GET", "path": "/api/store/status", "owner": "rust" },
+  { "method": "GET", "path": "/api/scoreboard", "owner": "rust" },
+  { "method": "GET", "path": "/api/status", "owner": "rust" },
+  { "method": "GET", "path": "/api/status/files/{*path}", "owner": "rust" },
+  { "method": "GET", "path": "/api/status/deliverable", "owner": "rust" },
   { "method": "*", "path": "*", "owner": "ts-fallback" }
 ]
