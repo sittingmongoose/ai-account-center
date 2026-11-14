@@ -125,3 +125,24 @@ fn wire_vocabulary_sources_are_pinned_to_the_generated_table() {
         );
     }
 }
+
+#[test]
+fn regression_m1_scrub_checks_the_text_it_returns() {
+    let address = "fixture@\0example.invalid".to_owned();
+    let prefix = format!("sk-\0{}", "A".repeat(24));
+    let body = format!("sk-{}\u{001b}{}", "A".repeat(12), "B".repeat(12));
+    for text in [address, prefix, body] {
+        let scrubbed = scrub(&text);
+        assert_eq!(
+            scrub(scrubbed.as_str()),
+            scrubbed,
+            "scrub must be idempotent"
+        );
+        assert_eq!(scrubbed.as_str(), "[redacted]");
+        let decoded: Scrubbed = serde_json::from_value(json!(text)).unwrap();
+        assert_eq!(decoded, scrubbed);
+        let failure = Failure::new(Cause::ProviderError, &text);
+        assert_eq!(failure.detail, scrubbed);
+        assert_eq!(format!("{failure}"), "ProviderError: [redacted]");
+    }
+}
