@@ -323,6 +323,17 @@ describe('the key and the reader binary', () => {
     // The key as an argument is refused: help, nothing stored.
     expect(await handleCursorKeyCommand(['set', 'key_TEST_0123456789abcdef_NOT_REAL'], io)).toBe(2);
     expect(seen).toHaveLength(3);
+    // Ctrl-C at the hidden prompt (the reader rejects with `cancelled`): nothing stored.
+    expect(
+      await handleCursorKeyCommand(['set'], {
+        ...io,
+        readStdin: async () => {
+          throw new Error('cancelled');
+        },
+      })
+    ).toBe(130);
+    expect(out.join('')).toContain('Cancelled');
+    expect(seen).toHaveLength(3);
   });
 
   it('uses the packaged reader only when its digest matches the manifest', () => {

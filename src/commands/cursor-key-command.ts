@@ -8,8 +8,9 @@
  *
  * The key is made for AAC on the Cursor dashboard. It is a `credential`: a 0600 file in
  * `~/.ccs/account-usage/keys/` (DPAPI on Windows), never in the history store, logs, argv or the
- * environment. This command hands stdin straight to the reader binary, which stores it; nothing
- * prints more than its last four characters and fingerprint.
+ * environment. Typed into a terminal, it is read with echo off, so it never reaches the
+ * terminal's scrollback or a recording of it. This command hands stdin straight to the reader
+ * binary, which stores it; nothing prints more than its last four characters and fingerprint.
  */
 import { getCcsDir } from '../utils/config-manager';
 import { runCursorAccount } from '../web-server/services/cursor-account-reader';
@@ -24,8 +25,10 @@ export interface CursorKeyCommandIo {
 }
 
 const MAX_STDIN = 4096;
+/** A Cursor key is 8 to 512 characters (the key store's own rule); nothing longer can be one. */
+const MAX_KEY_TYPED = 512;
 
-function readStdin(): Promise<string> {
+function readStdinPiped(): Promise<string> {
   return new Promise((resolve, reject) => {
     let text = '';
     process.stdin.setEncoding('utf8');
@@ -36,6 +39,73 @@ function readStdin(): Promise<string> {
     process.stdin.on('end', () => resolve(text));
     process.stdin.on('error', reject);
   });
+}
+
+/**
+ * The key typed by hand at a terminal: the terminal is asked not to echo (raw mode), the input
+ * is bounded, and Enter finishes it; Ctrl-C cancels. The terminal is restored on every exit path,
+ * and a newline is printed so the next message starts on its own line. Not a terminal: the
+ * piped reader, which still ends on EOF.
+ */
+function readStdinHidden(): Promise<string> {
+  if (!process.stdin.isTTY) return readStdinPiped();
+  try {
+    process.stdin.setRawMode(true);
+  } catch {
+    return readStdinPiped();
+  }
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    const stop = (error: Error | null, value?: string) => {
+      stdin.off('data', onData);
+      stdin.off('end', onEnd);
+      stdin.off('error', onError);
+      for (const signal of ['SIGINT', 'SIGTERM'] as const)
+        process.off(signal, onSignal as (...args: unknown[]) => void);
+      try {
+        stdin.setRawMode(false);
+      } catch {
+        /* The terminal is already gone; nothing to restore. */
+      }
+      stdin.pause();
+      process.stderr.write('\n');
+      if (error) reject(error);
+      else resolve(value ?? '');
+    };
+    let text = '';
+    const onSignal = () => stop(new Error('cancelled'));
+    const onData = (chunk: string | Buffer) => {
+      // With `setEncoding` the chunk is text, but Bun can still deliver bytes; a Cursor key is
+      // ASCII either way.
+      const input = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      for (const char of input) {
+        if (char === '\r' || char === '\n') return stop(null, text);
+        if (char === '\u0003') return stop(new Error('cancelled'));
+        if (char === '\u0004') return stop(null, text);
+        if (char === '\u007f' || char === '\b') {
+          text = text.slice(0, -1);
+          continue;
+        }
+        text += char;
+        if (text.length > MAX_KEY_TYPED) return stop(new Error('too_long'));
+      }
+    };
+    const onEnd = () => stop(null, text);
+    const onError = (error: Error) => stop(error);
+    stdin.on('data', onData);
+    stdin.on('end', onEnd);
+    stdin.on('error', onError);
+    // Raw mode keeps the terminal from raising SIGINT itself, so every way out goes through
+    // `stop`; an external signal still restores the terminal first.
+    process.once('SIGINT', onSignal as (...args: unknown[]) => void);
+    process.once('SIGTERM', onSignal as (...args: unknown[]) => void);
+    process.stderr.write('Paste the key, then Enter (it is not shown): ');
+    stdin.resume();
+  });
+}
+
+function readStdin(): Promise<string> {
+  return process.stdin.isTTY ? readStdinHidden() : readStdinPiped();
 }
 
 const defaultIo: CursorKeyCommandIo = {
@@ -51,7 +121,8 @@ export function cursorKeyCommandHelp(): string {
     'Usage: ai-account-center dashboard cursor-key <command>',
     '',
     'Commands:',
-    '  set      Paste the API key made for AAC on the Cursor dashboard, then Enter (stdin)',
+    '  set      Paste the API key made for AAC on the Cursor dashboard, then Enter (stdin;',
+    '           typed input is not shown; piped input reads to the end)',
     '  status   Show whether a key is kept, with its last four characters',
     '  remove   Forget the key',
     '',
@@ -82,7 +153,11 @@ export async function handleCursorKeyCommand(
       let secret: string;
       try {
         secret = (await io.readStdin()).trim();
-      } catch {
+      } catch (error) {
+        if (error instanceof Error && error.message === 'cancelled') {
+          io.err('[X] Cancelled; nothing was kept.\n');
+          return 130;
+        }
         io.err('[X] The key is longer than any Cursor key; nothing was kept.\n');
         return 1;
       }
