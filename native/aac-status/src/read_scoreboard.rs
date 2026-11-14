@@ -1,7 +1,9 @@
 //! Model Scoreboard base view, measures, grouping, ranking and source explanations. Input is
 //! the existing accepted reader state; no share scan, store write or provider refresh occurs.
 use crate::{
-    read_context::{Context, Envelope, age, array, js_number, js_whitespace, number, plural, s, significant},
+    read_context::{
+        Context, Envelope, age, array, js_number, js_whitespace, number, plural, round_word, s, significant,
+    },
     read_measures::{Index, decisive, measures, outcome},
 };
 use serde_json::{Value as V, json};
@@ -239,7 +241,7 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
                     format!(
                         "{} is {}% (n = {}).",
                         s(&m.def["label"]),
-                        (number(&m.value["value"]).unwrap_or(0.0) * 100.0 + 0.5).floor(),
+                        round_word(number(&m.value["value"]).unwrap_or(0.0) * 100.0)?,
                         js_number(number(&m.value["n"])?)
                     ),
                 )

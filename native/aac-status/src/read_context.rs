@@ -79,8 +79,38 @@ impl Context {
         }
     }
 }
+/// ECMAScript Math.round on the input binary64 value. Do not add 0.5: that
+/// addition can itself round across a half boundary. Outside (-0.5, 0), subtracting
+/// floor is exact (Sterbenz, or a zero floor); compare that exact fraction instead.
+/// Integral binary64 values stay unchanged, including magnitudes >= 2^52. Ties go
+/// toward positive infinity, and the negative-zero and nonfinite cases match JS.
+pub fn math_round(value: f64) -> f64 {
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
+    if (-0.5..0.0).contains(&value) {
+        return -0.0;
+    }
+    let lower = value.floor();
+    if value - lower < 0.5 { lower } else { lower + 1.0 }
+}
+
+/// Integer wording is proved identical to JS String within this decimal domain.
+/// Wider/nonfinite words request the existing logged fallback, never host formatting.
+pub fn round_word(value: f64) -> Option<String> {
+    let rounded = math_round(value);
+    if !rounded.is_finite() || rounded.abs() > 1e12 {
+        return None;
+    }
+    Some(if rounded == 0.0 {
+        "0".into()
+    } else {
+        rounded.to_string()
+    })
+}
+
 pub fn age(now: i64, at: Option<i64>) -> V {
-    at.map(|t| json!((((now - t) as f64 / 1000.0) + 0.5).floor().max(0.0)))
+    at.map(|t| json!(math_round((now - t) as f64 / 1000.0).max(0.0)))
         .unwrap_or(V::Null)
 }
 pub fn plural(n: usize, word: &str) -> String {

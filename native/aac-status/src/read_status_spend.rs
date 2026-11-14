@@ -69,7 +69,7 @@ fn rounded_value(value: &V, unit: &V) -> V {
     number(value)
         .map(|n| {
             let scale = if unit == "percent" { 10.0 } else { 100.0 };
-            json!((n * scale + 0.5).floor() / scale)
+            json!(math_round(n * scale) / scale)
         })
         .unwrap_or(V::Null)
 }
@@ -99,12 +99,12 @@ fn amount(value: &V, unit: &V, m: &str) -> Option<String> {
         None
     }
 }
-fn coverage(value: &V, noun: &str) -> V {
-    match number(value) {
+fn coverage(value: &V, noun: &str) -> Option<V> {
+    Some(match number(value) {
         None => json!(format!("coverage of the {noun} not known")),
         Some(n) if n >= 0.5 => V::Null,
-        Some(n) => json!(format!("covers {}% of the {noun}", (n * 100.0 + 0.5).floor())),
-    }
+        Some(n) => json!(format!("covers {}% of the {noun}", round_word(n * 100.0)?)),
+    })
 }
 fn budget_text(b: &V) -> Option<String> {
     let Some(used) = number(&b["use"]) else {
@@ -136,9 +136,10 @@ fn budget_text(b: &V) -> Option<String> {
         format!("points of the {}", meter(s(&b["meter"])))
     };
     let digits = if b["unit"] == "credits" { 2 } else { 1 };
-    let pct = number(&b["percent"])
-        .map(|p| format!(" ({}%)", (p + 0.5).floor()))
-        .unwrap_or_default();
+    let pct = match number(&b["percent"]) {
+        Some(p) => format!(" ({}%)", round_word(p)?),
+        None => String::new(),
+    };
     Some(format!(
         "{lower}≈ {} of {} {what}{per}{pct}.",
         fixed(used, digits)?,
@@ -199,17 +200,21 @@ pub(super) fn compose(i: &Inputs) -> Option<V> {
             "week" => "This week".to_owned(),
             _ => {
                 let hours = match (i.at(&p["start"]), i.at(&p["end"])) {
-                    (Some(a), Some(b)) => (((b - a) as f64 / 3_600_000.0) + 0.5).floor(),
+                    (Some(a), Some(b)) => math_round((b - a) as f64 / 3_600_000.0),
                     _ => 0.0,
                 };
                 if hours != 0.0 {
-                    format!("Last {}", plural(hours as usize, "hour"))
+                    format!(
+                        "Last {} hour{}",
+                        round_word(hours)?,
+                        if hours == 1.0 { "" } else { "s" }
+                    )
                 } else {
                     "Window".into()
                 }
             }
         };
-        periods.push(json!({"id":id,"label":label,"period":p["period"],"start":p["start"],"end":p["end"],"coverage":p["coverage"],"coverageText":coverage(&p["coverage"],id),"streams":streams}));
+        periods.push(json!({"id":id,"label":label,"period":p["period"],"start":p["start"],"end":p["end"],"coverage":p["coverage"],"coverageText":coverage(&p["coverage"],id)?,"streams":streams}));
     }
     let mut budgets = Vec::new();
     for b in doc["budgets"].as_array()? {
@@ -223,7 +228,7 @@ pub(super) fn compose(i: &Inputs) -> Option<V> {
         } else {
             "window"
         };
-        budgets.push(json!({"stream":b["stream"],"streamLabel":stream_label(&b["stream"],&labels),"desc":b["desc"],"accounts":b["accounts"],"unit":b["unit"],"meter":b["meter"],"meterLabel":meter(s(&b["meter"])),"per":b["per"],"limit":b["limit"],"use":b["use"],"known":b["known"],"percent":b["percent"],"period":b["period"],"coverage":b["coverage"],"coverageText":coverage(&b["coverage"],noun),"overLimit":over,"estimate":b["estimate"],"text":budget_text(b)?}));
+        budgets.push(json!({"stream":b["stream"],"streamLabel":stream_label(&b["stream"],&labels),"desc":b["desc"],"accounts":b["accounts"],"unit":b["unit"],"meter":b["meter"],"meterLabel":meter(s(&b["meter"])),"per":b["per"],"limit":b["limit"],"use":b["use"],"known":b["known"],"percent":b["percent"],"period":b["period"],"coverage":b["coverage"],"coverageText":coverage(&b["coverage"],noun)?,"overLimit":over,"estimate":b["estimate"],"text":budget_text(b)?}));
     }
     let mut unattributed = Vec::new();
     for u in doc["unattributed"].as_array()? {

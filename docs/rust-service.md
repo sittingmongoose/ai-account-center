@@ -163,6 +163,16 @@ with the service's path dependency. No module is built or installed by the harne
 `read-view-parity.ts`, `read-file-parity.ts` and `read-http-parity.ts` add 39 raw
 state/timezone cases, 29 guarded file cases and five actual native-store HTTP routes.
 The HTTP fixture keeps its sole writer open and asserts zero TS view-builder calls in
-on mode. The number corpus checks 1,773 JS precision/fixed forms, including exact
-binary half ties. All fixtures use temporary private roots; no collector is refreshed
+on mode. The number corpus checks 120,992 JS precision/fixed/Math.round forms, including
+both adjacent binary doubles at decimal half boundaries. All fixtures use temporary private roots; no collector is refreshed
 against a live provider. See the harness README for release-binary RSS/latency commands.
+
+
+All newly ported Math.round sites use one binary64 helper: compare the exact
+fraction with 0.5, preserve ties toward positive infinity and negative zero, and
+leave already-integral values unchanged. Adding 0.5 before floor is forbidden
+because the addition can cross a rounding boundary. toFixed/toPrecision continue
+to round the exact binary significand within their admitted domain. Integer words
+outside the proven decimal formatting domain request logged TS fallback. The
+production bridge/Status-validator regression is driven by the Node-generated
+number table; it catches the pre-fix 0.049999999999999996 -> 0.1 wrong answer.

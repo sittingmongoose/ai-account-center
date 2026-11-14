@@ -279,6 +279,10 @@ try {
       },
     ],
   };
+  if (!tsOnly) {
+    const { checkRoundingParity } = await import('./read-rounding-parity');
+    await checkRoundingParity(service, complex);
+  }
   const row = base.reports.cards[0];
   const done = {
     state: 'done',

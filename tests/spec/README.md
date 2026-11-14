@@ -173,7 +173,6 @@ builds run on Nas1 or the Mac, never the VM. No real store/share or provider is 
 
 ```sh
 export AAC_RUST_SERVICE_BINARY="$PWD/dist/native/aac-http"
-export AAC_STATUS_MODULE="$PWD/dist/native/aac-status.linux-x64.node"
 AAC_RUST_SERVICE=off node tests/spec/run.mjs
 AAC_RUST_SERVICE=on node tests/spec/run.mjs
 AAC_RUST_SERVICE=shadow node tests/spec/run.mjs
@@ -200,3 +199,31 @@ A separate Scoreboard case clears only the view cache before each request to
 measure uncached composition with the existing ingested fixture store. Collector
 scheduling, store ownership and TS front-door overhead remain in the measurement.
 These are fixture measurements, not production capacity claims.
+
+
+### M3 part 2 rounding regression
+
+`read-numbers.json` now carries 120,992 Node-generated reference forms. It retains
+the original precision/fixed cases and adds both neighboring doubles and the
+center at every terminal x5 digit for decimal magnitudes 1e-23 through 1e12,
+plus integer prefixes and the 2^51/2^52/2^53 transitions. Both signs, signed zero,
+subnormals, scaled overflow, and the exact operation order of all seven rounding
+expressions are included. Math.round rows retain input, operand and result bits.
+The Rust test compares those bits, including negative zero, rather than applying
+a tolerance. Fixed strings and toPrecision numeric results also require equality;
+unsupported domains must refuse.
+
+`read-view-parity.ts` invokes `read-rounding-parity.ts` on the accepted complex
+fixture. It sends table-driven boundary batches through production
+`RustService.compose` and `isRustStatusView`, requiring exact public serialized
+bytes plus real served/legacy/fallback counters. The reviewed CPU/usage value is
+checked in three timezones; GiB, quota values/words, coverage and budget percent
+wording are also exercised. An unproven integer word requires explicit logged TS
+fallback. The same table-driven test was run against unchanged bc3c1f496 Rust
+sources and failed with 0.1 != 0 before the fix.
+
+
+Keep global `AAC_STATUS_MODULE`/`AAC_STORE_MODULE` overrides unset for the full
+runner. The real-native HTTP harness selects `dist/native/` modules explicitly;
+M0 keeps its saved unavailable reset-backend fixture. Scope `AAC_STATUS_MODULE`
+to the optional native-field command rather than exporting it into M0 capture.
