@@ -1,14 +1,14 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1248,
-    "filesAffected": 120,
-    "hotpathOccurrences": 556,
-    "hotpathFilesAffected": 61,
+    "totalOccurrences": 1268,
+    "filesAffected": 123,
+    "hotpathOccurrences": 576,
+    "hotpathFilesAffected": 64,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 120,
+        "count": 123,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -176,7 +176,7 @@
     "topFilesOverall": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
-        "count": 120,
+        "count": 123,
         "calls": [
           "chmodSync",
           "closeSync",
@@ -608,8 +608,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 47,
-      "totalSourceFiles": 477,
-      "coverageRatio": 0.0985,
+      "totalSourceFiles": 482,
+      "coverageRatio": 0.0975,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "auth",
@@ -635,7 +635,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 239,
+          "count": 243,
           "withLogger": 32
         },
         {
@@ -655,7 +655,7 @@
         },
         {
           "subdomain": "commands",
-          "count": 28,
+          "count": 29,
           "withLogger": 1
         },
         {
@@ -750,28 +750,32 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 66,
+      "countOver400": 67,
       "countOver600": 29,
       "topOver400": [
         {
           "file": "src/web-server/usage/account-activity-collector.ts",
-          "loc": 3922
+          "loc": 4028
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 2198
+          "loc": 2393
+        },
+        {
+          "file": "src/web-server/services/analytics-remote-sources.ts",
+          "loc": 2145
         },
         {
           "file": "src/web-server/status/answers.ts",
           "loc": 1744
         },
         {
-          "file": "src/codex-auth/codex-activation-runtime.ts",
-          "loc": 1340
+          "file": "src/web-server/services/analytics-remote-transport.ts",
+          "loc": 1561
         },
         {
-          "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 1156
+          "file": "src/codex-auth/codex-activation-runtime.ts",
+          "loc": 1340
         },
         {
           "file": "src/antigravity/registry.ts",
@@ -808,10 +812,6 @@
         {
           "file": "src/cliproxy/accounts/registry.ts",
           "loc": 871
-        },
-        {
-          "file": "src/web-server/status/status-view.ts",
-          "loc": 870
         }
       ]
     }
