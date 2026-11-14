@@ -2114,6 +2114,29 @@ class ResetWebInventoryTests(unittest.TestCase):
             sent = self.oauth.opener.open.call_args.args[0]
             self.assertEqual(sent.get_header("User-agent"), "claude-cli/2.1.400 (external, cli)")
 
+    def test_version_reader_never_puts_entry_text_in_the_header_and_stops_at_its_cap(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for name in ("2.1.999\r\nX-Injected: 1", "2.1.998\n", " 2.1.997", "2.1.996 (external, cli)"):
+                os.mkdir(os.path.join(folder, name))
+            agent = usage.claude_claim_user_agent([folder])
+            self.assertEqual(agent, "claude-cli/2.1.325 (external, cli)")
+            self.assertRegex(agent, r"^claude-cli/\d+\.\d+\.\d+ \(external, cli\)$")
+            os.mkdir(os.path.join(folder, "2.1.500"))
+            with mock.patch.object(usage, "MAX_CLAUDE_VERSION_ENTRIES", 0):
+                self.assertEqual(usage.claude_claim_user_agent([folder]), "claude-cli/2.1.325 (external, cli)")
+            self.assertEqual(usage.claude_claim_user_agent([folder]), "claude-cli/2.1.500 (external, cli)")
+
+    def test_version_discovery_failure_is_before_dispatch_so_nothing_is_sent(self):
+        for failure in (RuntimeError("synthetic"), usage.UsageUnavailable()):
+            with self.subTest(failure=type(failure).__name__):
+                self.oauth.responses = [profile()]
+                self.web.get.side_effect = [self.web_account, self.payload]
+                request = self.claim_request()
+                self.oauth.opener = mock.Mock()
+                with mock.patch.object(usage, "claude_version_dirs", side_effect=failure):
+                    self.assertEqual(usage.reset_host(request), {"outcome": "not-sent"})
+                self.oauth.opener.open.assert_not_called()
+
     def test_ineligible_answers_say_why_instead_of_calling_every_refusal_a_missing_reset(self):
         cases = [({"result": "ineligible", "reason": "surface"}, "unavailable"),
                  ({"result": "ineligible", "reason": "cli_version"}, "unavailable"),
