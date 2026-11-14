@@ -4013,6 +4013,12 @@
       ]
     },
     {
+      "file": "web-dashboard/tests/classic-upgrade.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "web-dashboard/tests/claude-open.test.mjs",
       "kind": "internal",
       "evidence": [],
@@ -4184,6 +4190,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/sw-update.test.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
     },
     {
       "file": "web-dashboard/tests/time-format.test.mjs",
