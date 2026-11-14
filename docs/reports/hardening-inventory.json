@@ -734,11 +734,11 @@
         },
         {
           "file": "src/web-server/services/account-analytics-activity.ts",
-          "loc": 2393
+          "loc": 2400
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 2145
+          "loc": 2196
         },
         {
           "file": "src/web-server/status/answers.ts",
