@@ -4,6 +4,7 @@
 // frame-dashboard-golden.test.mjs. Synthetic data only; controller and data proof, not visual QA.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { addressCases } from './fixtures/address-cases.mjs';
 import { readFile } from 'node:fs/promises';
 import { createFrameDashboard, installFrameDashboard, DASHBOARD_ACTIONS, FRAME_COMMANDS } from '../public/frame-dashboard.mjs';
 import { PAGE_ACTIONS } from '../public/frame-seam.mjs';
@@ -377,30 +378,8 @@ test('the frame asks for the module of the tab its address opens at once, classi
   assert.ok(source, 'index.html names the start tab');
   // eslint-disable-next-line no-new-func
   const startPage = new Function(`${source.replace('const startPage = ', 'return ')};`)();
-  // lib.rs the_classic_addresses_open_the_same_tabs, case for case
-  for (const [path, search, tab] of [
-    ['/', '', 'home'],
-    ['/login', '', 'home'],
-    ['/analytics', '', 'analytics'],
-    ['/analytics/', '', 'analytics'],
-    ['/accounts', '', 'accounts'],
-    ['/accounts/claude', '', 'accounts'],
-    ['/accounts/opencode-go', '', 'accounts'],
-    ['/accounts/Claude', '', 'home'],
-    ['/accounts/-x', '', 'home'],
-    ['/status', '', 'status'],
-    ['/scoreboard', '', 'scoreboard'],
-    ['/nowhere', '', 'home'],
-    ['/', '?view=analytics', 'analytics'],
-    ['/', '?e2e&view=accounts', 'accounts'],
-    ['/analytics', '?view=status', 'status'],
-    ['/', '?view=bogus', 'home'],
-    ['/', '?classic=1', 'home'],
-    ['/', '?content=1', 'home'],
-    ['/app/scoreboard', '?view=home', 'scoreboard'],
-    ['/app/home', '', 'home'],
-    ['/app/', '', 'status'],
-  ])
+  // lib.rs the_classic_addresses_open_the_same_tabs, case for case (encoded aliases included)
+  for (const [path, search, tab] of addressCases())
     assert.equal(startPage(path, search), tab, `${path}${search}`);
 });
 

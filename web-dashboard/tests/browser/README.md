@@ -6,7 +6,14 @@ These are browser checks for the web dashboard (the Leptos app frame, compiled t
 browser-check run web-dashboard/tests/browser/checks                  # the whole kit
 browser-check run web-dashboard/tests/browser/checks --grep smoke
 browser-check run web-dashboard/tests/browser/checks --set home=/tmp/fixture-home   # a prepared CCS_HOME (copied)
+browser-check run web-dashboard/tests/browser/upgrade                 # updating an installed app (below)
 ```
+
+**Upgrade kit** (`upgrade/`): the previous release's service worker and the classic start page an older worker may
+have kept (`upgrade/fixtures/previous`, never edited) against this checkout's packaged `dist/ui` and
+`dist/web-server`, on a fixture server with synthetic APIs and service workers allowed. It covers a slow first launch
+from the cached classic page (it must reach the frame by itself, at its tab), and update, close the last client, then
+an offline launch (the new copy must open; a failed download must leave the installed copy in charge).
 
 ## What a run does
 

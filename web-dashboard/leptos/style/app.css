@@ -2772,7 +2772,8 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
   border: 1px solid var(--rule); border-radius: var(--r-sheet); box-shadow: var(--shadow-pop); }
 .adialog h2 { font-size: 20px; line-height: 1.25; font-weight: 640; font-variation-settings: 'wght' 640; letter-spacing: -.01em; }
 .a-target { color: var(--accent-text); font-size: 13px; font-weight: 560; font-variation-settings: 'wght' 560; }
-.a-warn { color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+/* pretty: a dialog's warning never strands its last word on a line of its own (folded Duo, review L3) */
+.a-warn { color: var(--ink-2); font-size: 12.5px; line-height: 1.5; text-wrap: pretty; }
 .a-procs { max-height: 220px; overflow: auto; display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper-2); }
 .a-procs li { display: grid; font-size: 12.5px; }
 .a-procs li b { color: var(--ink); font-weight: 600; font-variation-settings: 'wght' 600; overflow-wrap: anywhere; }

@@ -152,6 +152,20 @@
     }
   }
 
+  /** The frame page's own addresses in the precache list (`/` and `/app/<tab>`): they must come back as the page. */
+  var PAGE_ADDRESS = /^\/(app\/[a-z]+)?$/;
+
+  /**
+   * Whether an install-time download may stand in the new copy (sw.js precache): a cacheable 200 that was not
+   * redirected, a page address answered with HTML and anything else with something that is not HTML. A missing asset
+   * is redirected to the page by the server, so it fails here rather than being stored as the page.
+   */
+  function precacheable(address, response) {
+    if (!cacheable(response) || response.redirected === true) return false;
+    var page = PAGE_ADDRESS.test(String(address || '').split('?')[0]);
+    return page === isHtmlDocument(response);
+  }
+
   return {
     BUILD_ID_PATTERN: BUILD_ID_PATTERN,
     NAVIGATION_TIMEOUT_MS: NAVIGATION_TIMEOUT_MS,
@@ -166,5 +180,6 @@
     navigationFallbackLookups: navigationFallbackLookups,
     shouldMirrorStartUrl: shouldMirrorStartUrl,
     isHtmlDocument: isHtmlDocument,
+    precacheable: precacheable,
   };
 });

@@ -27,7 +27,7 @@ build) with `leptos/build/strip-names.cjs`. `leptos/.cargo/config.toml` keeps We
 (WebKit bug 325447 crashed iOS 27 on tail calls). The builder stages `public/` into `dist/ui/`, the runtime into
 `pkg/<buildId>/` (named after the wasm's hash, cached forever), `app/index.html` (the frame page, naming that
 runtime and its stylesheet by content), `app/app.css` and the mono font, stamps the service worker with the shell
-build id, writes `.br` and `.gz` copies and records it all in `ui-build-manifest.json`. A machine that sets
+build id and the whole app it must download before replacing an installed copy (`scripts/ui-precache.js`), writes `.br` and `.gz` copies and records it all in `ui-build-manifest.json`. A machine that sets
 `AAC_NO_LOCAL_RUST_BUILD=1` (the shared VM) refuses to build; build on a build host. Use the existing AI Account
 Center server and session-cookie authentication. Do not serve the page as file:// or configure a cross-origin API
 URL.

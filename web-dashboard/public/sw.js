@@ -1,13 +1,16 @@
 // The app shell's service worker (DESIGN-MOBILE.md 6.5): offline and fast start.
-// scripts/build-ui.js stamps BUILD_ID (a hash of the shell inputs) into the
-// packaged copy; any shell change then installs a new worker, which activates
-// on the next launch (no skipWaiting, no update prompt) and drops the previous
-// build's caches. Routing rules live in the pure sw-route.js (tested); this
-// file only runs them against fetch/cache.
+// scripts/build-ui.js stamps BUILD_ID (a hash of the shell inputs) and PRECACHE (every address the app needs offline:
+// its page addresses and every packaged asset) into the packaged copy; any shell change then installs a new worker.
+// Installing downloads the whole replacement first: if any part fails, the install fails and the worker in charge,
+// with its cache, stays. The new worker activates on the next launch (no skipWaiting, no update prompt) and only
+// then, with its own copy complete, drops the previous build's caches, so the installed app always has one usable
+// copy offline (review M1). Routing rules live in the pure sw-route.js (tested); this file only runs them against
+// fetch/cache.
 importScripts('./sw-route.js');
 
 var BUILD_ID = '__AAC_BUILD_ID__';
 var CACHE = AacSwRoute.cacheName(BUILD_ID);
+var PRECACHE = [/*__AAC_PRECACHE__*/];
 
 // First visit while offline: neither the network nor the cache has the shell.
 // Once the app has loaded, the in-app Offline screen (phase 5) takes over.
@@ -281,20 +284,75 @@ self.addEventListener('fetch', function (event) {
   // intercepted, so no respondWith here.
 });
 
+// Install: the whole replacement, or nothing. Each address is asked for fresh from the server (`no-cache`: the HTTP
+// cache may answer only after the server confirms it) and must come back as what it is (precacheable): a page address
+// as the frame page, an asset as itself, never a redirect to the page. One failure rejects the install, and the
+// worker in charge keeps serving its own complete copy; the browser tries again on a later visit.
+function precache() {
+  if (PRECACHE.length === 0) return Promise.resolve();
+  return caches.open(CACHE).then(function (cache) {
+    return Promise.all(
+      PRECACHE.map(function (address) {
+        return fetch(new Request(address, { cache: 'no-cache' })).then(function (response) {
+          if (!AacSwRoute.precacheable(address, response))
+            throw new Error('The new app copy is incomplete: ' + address + '.');
+          return cache.put(address, response);
+        });
+      })
+    );
+  }).catch(function (error) {
+    // A part failed: the partial copy goes (no worker uses this build's cache yet: a new stamp, a new cache) and the
+    // install fails.
+    var fail = function () {
+      throw error;
+    };
+    return caches.delete(CACHE).then(fail, fail);
+  });
+}
+
+self.addEventListener('install', function (event) {
+  event.waitUntil(precache());
+});
+
+/** Whether this build's cache holds every address of PRECACHE (an older build's cache may go only then). */
+function copyComplete() {
+  if (PRECACHE.length === 0) return Promise.resolve(true);
+  return caches
+    .open(CACHE)
+    .then(function (cache) {
+      return Promise.all(
+        PRECACHE.map(function (address) {
+          return cache.match(address);
+        })
+      );
+    })
+    .then(function (found) {
+      return found.every(Boolean);
+    })
+    .catch(function () {
+      return false;
+    });
+}
+
+// Activate (the next launch): the older builds' caches go only once this build's copy is complete. Should the browser
+// have dropped part of it since the install, they stay, still answering the offline fallbacks (caches.match reads
+// every cache), until a later build's complete copy replaces them.
 self.addEventListener('activate', function (event) {
   event.waitUntil(
-    caches
-      .keys()
-      .then(function (names) {
-        return Promise.all(
-          names
-            .filter(function (name) {
-              return name !== CACHE && name.indexOf('aac-shell-') === 0;
-            })
-            .map(function (name) {
-              return caches.delete(name);
-            })
-        );
+    copyComplete()
+      .then(function (complete) {
+        if (!complete) return undefined;
+        return caches.keys().then(function (names) {
+          return Promise.all(
+            names
+              .filter(function (name) {
+                return name !== CACHE && name.indexOf('aac-shell-') === 0;
+              })
+              .map(function (name) {
+                return caches.delete(name);
+              })
+          );
+        });
       })
       .then(function () {
         return self.clients.claim();

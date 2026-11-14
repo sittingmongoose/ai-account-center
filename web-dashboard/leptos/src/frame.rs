@@ -96,10 +96,7 @@ impl FrameCtx {
         self.route.set(page);
         crate::set_active(page);
         window().scroll_to_with_x_and_y(0.0, 0.0);
-        // the tab this device showed last, for the next fresh sign-in (`reopen_last_page`)
-        if let Some(s) = window().local_storage().ok().flatten() {
-            let _ = s.set_item(LAST_PAGE_KEY, page.id());
-        }
+        remember_page(page);
     }
 
     /// A page tells the chrome what to say for its tab; the id lets it take that back when it is unmounted.
@@ -202,7 +199,23 @@ pub(crate) fn reopen_target(fresh: bool, on: Page, stored: Option<&str>) -> Opti
     Page::from_id(stored?).filter(|p| *p != Page::Home)
 }
 
-/// Follows the session: once per fresh sign-in, the last tab opens (`reopen_target`).
+/// The tab a signed-in session lands on: the last tab after a fresh sign-in on Home (`reopen_target`), else the tab
+/// the address opened. It is what the frame shows, so it is what the device remembers (review L2: a directly opened
+/// tab counts as shown, as the classic controller's first `page()` did).
+pub(crate) fn landing_page(fresh: bool, on: Page, stored: Option<&str>) -> Page {
+    reopen_target(fresh, on, stored).unwrap_or(on)
+}
+
+/// The tab this device showed last, for the next fresh sign-in (`reopen_last_page`). Only a signed-in frame writes it:
+/// while the sign-in form waits, the stored tab is kept for it.
+fn remember_page(page: Page) {
+    if let Some(s) = window().local_storage().ok().flatten() {
+        let _ = s.set_item(LAST_PAGE_KEY, page.id());
+    }
+}
+
+/// Follows the session: once per sign-in, the frame lands on `landing_page` and remembers it; after a fresh sign-in
+/// on Home that is the last tab.
 fn reopen_last_page(ctx: FrameCtx, view: RwSignal<SessionView>) {
     Effect::new(move |done: Option<bool>| {
         let (signed_in, fresh) = view.with(|v| (v.signed_in, v.fresh));
@@ -218,8 +231,10 @@ fn reopen_last_page(ctx: FrameCtx, view: RwSignal<SessionView>) {
             .ok()
             .flatten()
             .and_then(|s| s.get_item(LAST_PAGE_KEY).ok().flatten());
-        if let Some(page) = reopen_target(fresh, ctx.route.get_untracked(), stored.as_deref()) {
-            ctx.go(page);
+        let on = ctx.route.get_untracked();
+        match landing_page(fresh, on, stored.as_deref()) {
+            page if page != on => ctx.go(page),
+            page => remember_page(page),
         }
         true
     });
@@ -671,6 +686,27 @@ mod tests {
         // a session the browser already had, or an address that named another tab, is kept
         assert_eq!(reopen_target(false, Page::Home, Some("analytics")), None);
         assert_eq!(reopen_target(true, Page::Status, Some("analytics")), None);
+    }
+
+    #[test]
+    fn a_signed_in_frame_remembers_the_tab_it_lands_on() {
+        // a tab opened directly is remembered, as a clicked one is (review L2)
+        assert_eq!(
+            landing_page(false, Page::Accounts, Some("home")),
+            Page::Accounts
+        );
+        assert_eq!(landing_page(false, Page::Status, None), Page::Status);
+        // a fresh sign-in on Home lands on the remembered tab, which stays remembered
+        assert_eq!(
+            landing_page(true, Page::Home, Some("accounts")),
+            Page::Accounts
+        );
+        // a session the browser already had shows the address's tab, Home included
+        assert_eq!(
+            landing_page(false, Page::Home, Some("accounts")),
+            Page::Home
+        );
+        assert_eq!(landing_page(true, Page::Home, None), Page::Home);
     }
 
     #[test]
