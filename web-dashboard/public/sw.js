@@ -300,6 +300,13 @@ function precache() {
         });
       })
     );
+  }).catch(function (error) {
+    // A part failed: the partial copy goes (no worker uses this build's cache yet: a new stamp, a new cache) and the
+    // install fails.
+    var fail = function () {
+      throw error;
+    };
+    return caches.delete(CACHE).then(fail, fail);
   });
 }
 

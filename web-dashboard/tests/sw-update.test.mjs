@@ -163,6 +163,7 @@ test('one failed, redirected or wrong-kind answer fails the install and leaves t
 		const { handlers } = loadWorker(async (address) => (address === '/bridge.js' ? fail() : served(address)), storage);
 		await assert.rejects(lifecycle(handlers, 'install'), undefined, label);
 		assert.ok(storage.named.has(OLD), `${label}: the installed copy stays`);
+		assert.equal(storage.named.has(NEW), false, `${label}: the partial new copy goes`);
 		assert.ok(await storage.named.get(OLD).match('/'), `${label}: its start page stays`);
 	}
 });
