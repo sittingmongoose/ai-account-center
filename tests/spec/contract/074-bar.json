@@ -1,13 +1,12 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/usage/burn",
+    "path": "/api/usage/at",
     "role": "bar"
   },
   "response": {
     "body": {
       "at": "<timestamp>",
-      "rule": "Points used per hour across resets, from hourly rollups. A rate under 50% coverage is shown with its coverage only.",
       "series": []
     },
     "headers": {

@@ -10,6 +10,10 @@ const root = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const spec = path.join(root, 'tests/spec');
 const fixture = JSON.parse(fs.readFileSync(path.join(spec, 'fixture.json'), 'utf8'));
 const regenerate = process.argv.includes('--regenerate');
+const rustMode = process.env.AAC_RUST_SERVICE ?? 'off';
+const rustBinary = path.join(root, 'dist/native/aac-http');
+if (rustMode !== 'off')
+  assert.ok(fs.existsSync(rustBinary), 'on/shadow contract checks require the Nas1-built binary');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-contract-'));
 const ccs = path.join(home, '.ccs');
 fs.mkdirSync(ccs, { recursive: true });
@@ -82,6 +86,17 @@ const awaitFsRead = (await import('fs')).readFileSync;
 assert.throws(() => awaitFsRead('/home/fixture-forbidden/.codex/auth.json'), /Outside fixture/);
 // Fail closed at process boundaries: helpers, SSH and provider programs cannot run.
 const cp = await import('node:child_process');
+const realSpawn = cp.spawn.bind(cp);
+const fixtureSpawn = (...args: any[]) => {
+  if (
+    rustMode !== 'off' &&
+    args[0] === rustBinary &&
+    Array.isArray(args[1]) &&
+    args[1].length === 0
+  )
+    return realSpawn(...(args as Parameters<typeof realSpawn>));
+  throw new Error('Fixture process boundary');
+};
 for (const name of [
   'spawn',
   'spawnSync',
@@ -91,14 +106,21 @@ for (const name of [
   'execFileSync',
   'fork',
 ] as const)
-  spyOn(cp, name).mockImplementation((() => {
-    throw new Error('Fixture process boundary');
-  }) as never);
+  spyOn(cp, name).mockImplementation(
+    (name === 'spawn'
+      ? fixtureSpawn
+      : () => {
+          throw new Error('Fixture process boundary');
+        }) as never
+  );
 const blockedProcesses = { ...cp };
 for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork'])
-  (blockedProcesses as any)[name] = () => {
-    throw new Error('Fixture process boundary');
-  };
+  (blockedProcesses as any)[name] =
+    name === 'spawn'
+      ? fixtureSpawn
+      : () => {
+          throw new Error('Fixture process boundary');
+        };
 for (const module of ['child_process', 'node:child_process'])
   mock.module(module, () => ({ ...blockedProcesses, default: blockedProcesses }));
 const tls = await import('node:https');
@@ -238,7 +260,12 @@ fs.mkdirSync(ui);
 fs.mkdirSync(path.join(ui, 'app'));
 fs.writeFileSync(path.join(ui, 'app', 'index.html'), '<div id="aac-app-fixture"></div>');
 const { startServer } = await import('../../src/web-server');
-const instance = await startServer({ port: 0, host: '127.0.0.1', staticDir: ui });
+const instance = await startServer({
+  port: 0,
+  host: '127.0.0.1',
+  staticDir: ui,
+  rustServiceBinary: rustBinary,
+});
 const base = `http://127.0.0.1:${(instance.server.address() as any).port}`;
 const { apiRoutes } = await import('../../src/web-server/routes');
 const { pairDevice } = await import('../../src/web-server/services/dashboard-device-store');
@@ -359,6 +386,10 @@ try {
   // Guards also cover middleware-only routes and top-level static/upgrade registration changes.
   const routeSources = [
     path.join(root, 'src/web-server/index.ts'),
+    path.join(root, 'src/web-server/rust-service.ts'),
+    path.join(root, 'src/web-server/rust-service-lifecycle.ts'),
+    path.join(root, 'src/web-server/rust-service-transport.ts'),
+    path.join(root, 'src/web-server/rust-service-routes.json'),
     ...fs
       .readdirSync(path.join(root, 'src/web-server/routes'))
       .filter((f) => f.endsWith('.ts'))
@@ -485,7 +516,105 @@ try {
     inventory.length * roles.length,
     'Stale or missing golden files'
   );
-  console.log(`${inventory.length} routes x ${roles.length} roles captured`);
+  if (rustMode === 'on')
+    assert.equal(
+      instance.rustService.stats.served,
+      9,
+      'must actually serve health/settings/diag from Rust after TS role guards'
+    );
+  if (rustMode === 'shadow') {
+    for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 9; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    assert.equal(instance.rustService.stats.shadowed, 9);
+    assert.equal(instance.rustService.stats.served, 0);
+    assert.equal(instance.rustService.stats.differences, 0);
+  }
+  if (rustMode === 'off') assert.equal(instance.rustService.stats.served, 0);
+  // Caller headers cannot create a principal or bypass the TS session/query/origin guards.
+  const forged = {
+    'x-aac-principal': JSON.stringify({ kind: 'session', id: 'forged', role: 'admin' }),
+    'x-aac-boot-secret': 'f'.repeat(64),
+  };
+  for (const route of ['/api/accounts/settings', '/api/diag'])
+    assert.equal((await fetch(base + route, { headers: forged })).status, 401);
+  const auth = await import('../../src/web-server/middleware/auth-middleware');
+  for (const ip of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) auth.loginRateLimiter.resetKey(ip);
+  await (
+    await import('../../src/web-server/routes/auth-rate-limits')
+  ).resetAuthRateLimitsForTests();
+  const login = await fetch(base + '/api/auth/login', {
+    method: 'POST',
+    headers: { origin: base, 'content-type': 'application/json' },
+    body: JSON.stringify({ username: 'fixture-admin', password: 'fixture-password-only' }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie')!.split(';')[0];
+  const headers = { cookie, ...forged };
+  assert.equal(
+    await (await fetch(base + '/api/health', { headers: forged })).text(),
+    '{"status":"ok"}'
+  );
+  assert.equal(
+    await (await fetch(base + '/api/accounts/settings', { headers })).text(),
+    '{"refreshIntervalSeconds":60}'
+  );
+  assert.equal(
+    (await fetch(base + '/api/accounts/settings?unexpected=1', { headers })).status,
+    400
+  );
+  assert.equal(
+    (
+      await fetch(base + '/api/accounts/settings', {
+        headers: { ...headers, origin: 'https://fixture-attacker.invalid' },
+        method: 'PUT',
+        body: '{}',
+      })
+    ).status,
+    403
+  );
+  assert.equal(
+    await (await fetch(base + '/api/accounts/settings/', { headers })).text(),
+    '{"refreshIntervalSeconds":60}'
+  );
+  assert.equal(
+    (await fetch(base + '/api/accounts/settings', { headers, method: 'HEAD' })).status,
+    200
+  );
+  if (rustMode !== 'off') {
+    const { RustService } = await import('../../src/web-server/rust-service');
+    const attached = new RustService('on');
+    const descriptor = path.join(ccs, 'run/aac-http.json');
+    const before = fs.readFileSync(descriptor, 'utf8');
+    await attached.start(rustBinary);
+    assert.equal(
+      fs.readFileSync(descriptor, 'utf8'),
+      before,
+      'healthy boot is attached without replacing secret'
+    );
+    attached.stop();
+    assert.equal(
+      (await fetch(base + '/api/health')).status,
+      200,
+      'attachment cleanup leaves owner alive'
+    );
+    // Remove only our fixture socket to prove a real connection failure takes the TS fallback.
+    fs.unlinkSync(JSON.parse(before).socketPath);
+    const fallbacks = instance.rustService.stats.fallbacks;
+    assert.equal(
+      await (await fetch(base + '/api/accounts/settings', { headers })).text(),
+      '{"refreshIntervalSeconds":60}'
+    );
+    for (let i = 0; i < 100 && instance.rustService.stats.fallbacks === fallbacks; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    assert.ok(
+      instance.rustService.stats.fallbacks > fallbacks,
+      'unhealthy service logs and serves TS'
+    );
+  }
+  await (await import('./rust-proxy')).checkRustProxyBoundary(home);
+  console.log(
+    `${inventory.length} routes x ${roles.length} roles captured; rustService=${rustMode}, routing and boundary checks passed`
+  );
 } finally {
   instance.cleanup();
   instance.wss.close();

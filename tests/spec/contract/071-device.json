@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/status",
+    "path": "/api/status/deliverable",
     "role": "device"
   },
   "response": {

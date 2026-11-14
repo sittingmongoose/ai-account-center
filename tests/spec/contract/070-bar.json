@@ -1,23 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/status/deliverable",
-    "role": "bar"
+    "method": "POST",
+    "path": "/api/status/answers",
+    "role": "bar",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "invalid_path",
-      "error": "Use a share-relative file path."
+      "code": "invalid_body",
+      "error": "The request body is not valid for this action."
     },
     "headers": {
       "cache-control": "no-store",
-      "content-security-policy": "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'",
       "content-type": "application/json; charset=utf-8",
-      "cross-origin-resource-policy": "same-origin",
       "etag": "<etag>",
-      "referrer-policy": "no-referrer",
-      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
-      "x-content-type-options": "nosniff"
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
     "status": 400
   }

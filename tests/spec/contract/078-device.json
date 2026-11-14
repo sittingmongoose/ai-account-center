@@ -1,21 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/v0/management/auth-files",
-    "role": "device"
+    "method": "POST",
+    "path": "/v0/management/api-call",
+    "role": "device",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "rate_limited",
-      "error": "Too many wrong usage hub keys. Try again later.",
-      "retryAfterSeconds": 900
+      "code": "invalid_management_key",
+      "error": "The management key is not valid."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
-      "etag": "<etag>",
-      "retry-after": "900"
+      "etag": "<etag>"
     },
-    "status": 429
+    "status": 401
   }
 }

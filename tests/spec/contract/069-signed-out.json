@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
+    "method": "GET",
     "path": "/api/status/answers",
-    "role": "signed-out",
-    "body": {}
+    "role": "signed-out"
   },
   "response": {
     "body": {

@@ -26,6 +26,7 @@ Do not restore retired features to satisfy outdated prose.
 | Product scope | [Product overview](project-overview-pdr.md) |
 | Current work | [Project direction](project-roadmap.md) |
 | Local packaging and retained automation | [Release process](release-process.md) |
+| Optional Rust service, routing and offline checks | [Rust service](rust-service.md) |
 | Structured diagnostics | [Logging contract](logging-contract.md) |
 | History database (usage readings built; later phases designed) | [Store](store.md) |
 | Source-tree measurements | [Hardening method](hardening-debt-burndown.md) |

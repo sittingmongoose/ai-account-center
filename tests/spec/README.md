@@ -82,3 +82,23 @@ test file (including Rust files with inline tests and browser checks). Evidence
 labels may overlap, but each file has one primary kind. An internal test is marked
 `uncovered` until a behaviour-level mapping is demonstrated; classification is
 not a claim of behavioural coverage.
+
+## M3 service parity
+
+The M3 skeleton adds signed-in diagnostics (five new goldens). All original 405
+request/role documents retain their bytes; numeric filenames after the insertion
+shift because the runtime inventory remains sorted.
+
+After `bun run build:server`, copy an `aac-http` binary built on Nas1 into
+`dist/native/aac-http`. Never build Rust on the VM. Run the same full spec with
+`AAC_RUST_SERVICE=off` and `AAC_RUST_SERVICE=on`, plus `AAC_RUST_SERVICE=shadow bun
+tests/spec/capture.ts`. The on/shadow fixture allows only that exact binary, with
+no arguments, through the closed process seam and requires actual Rust reply
+counts. Existing role/session/origin checks stay real. The signed-out health
+request carries an internal public-only envelope; it confers no private access.
+
+`rust-proxy.ts` adds real fixture-socket fault injection: boot mismatch, invalid
+JSON, oversized replies, non-200 status, total deadline, header replacement and
+shadow divergence. Capture also verifies attachment, broken-socket fallback and
+unchanged read/write guards. Source fingerprints now include the three TS bridge
+modules and the shared ownership table. See [service details](../../docs/rust-service.md).

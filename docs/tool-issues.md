@@ -72,3 +72,10 @@ R9 inherited Windows test-tool issues (not product bugs):
 R9 stopping bar, before review: a tool finding stops work only when demonstrated
 on real inputs to make a real check falsely pass or reveal a product bug.
 Other findings stay in this list for the six-hour tool batch; none are dropped.
+
+M3 service skeleton optional documentation check (2026-11-14):
+`node tests/docs/documentation-freshness.js` falsely treats the inline Markdown
+example on `docs/secret-policy.md:57` as a relative link to a file named `url`.
+The example is byte-identical on base `c5c2763db`; no real link or product failure
+was demonstrated. Queue the parser fix for the six-hour tool batch. Required
+M3 runtime/spec checks remain independent of this extra check.

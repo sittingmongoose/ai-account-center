@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/v0/management/reset-quota",
-    "role": "bar",
-    "body": {}
+    "method": "GET",
+    "path": "/v0/management/auth-files",
+    "role": "bar"
   },
   "response": {
     "body": {

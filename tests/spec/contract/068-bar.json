@@ -1,12 +1,12 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/status/answers",
+    "path": "/api/status/files/fixture/missing.txt",
     "role": "bar"
   },
   "response": {
     "body": {
-      "answers": []
+      "error": "The request could not be completed safely."
     },
     "headers": {
       "cache-control": "no-store",
@@ -14,6 +14,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 500
   }
 }

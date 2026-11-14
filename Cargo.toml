@@ -12,6 +12,8 @@ repository = "https://github.com/sittingmongoose/ai-account-center"
 publish = false
 
 [workspace.dependencies]
+aac-api = { path = "crates/aac-api" }
+aac-diag = { path = "crates/aac-diag" }
 aac-core = { path = "crates/aac-core" }
 aac-protocol = { path = "crates/aac-protocol" }
 aac-files = { path = "crates/aac-files" }
