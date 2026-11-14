@@ -179,12 +179,15 @@ fn extras(request: &Request, kind: &str) -> Vec<PathBuf> {
 /// The experiment log folders of a kind: the request's (DESIGN 16.0 B) and those discovery finds
 /// below home (16.5), each once. Discovery runs at the first kind that asks, within 2 s; a bound
 /// that cut this kind's search is returned as (kept, seen).
+/// One kind's experiment folders: those to read, the search bound it hit, those it could not look in.
+type ExperimentDirs = (Vec<PathBuf>, Option<(usize, Option<usize>)>, Vec<PathBuf>);
+
 fn experiment_dirs(
     found: &mut Option<discover::ExperimentRoots>,
     request: &Request,
     home: &Path,
     kind: &str,
-) -> (Vec<PathBuf>, Option<(usize, Option<usize>)>) {
+) -> ExperimentDirs {
     let discovered = found.get_or_insert_with(|| discover::experiment_roots(home, Duration::from_secs(2)));
     let mut list = paths_of(&request.experiment_roots, kind);
     for path in discovered.found.get(kind).cloned().unwrap_or_default() {
@@ -192,7 +195,11 @@ fn experiment_dirs(
             list.push(path);
         }
     }
-    (list, discovered.limits.get(kind).copied())
+    (
+        list,
+        discovered.limits.get(kind).copied(),
+        discovered.failed.get(kind).cloned().unwrap_or_default(),
+    )
 }
 
 fn paths_of(map: &Map<String, Value>, kind: &str) -> Vec<PathBuf> {
@@ -340,9 +347,12 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
         collector.fresh.entry(kind.clone()).or_default();
         let cut_before = collector.truncated;
         let experiment_list = if ["claude", "codex", "omp", "muse"].contains(&kind.as_str()) {
-            let (list, limit) = experiment_dirs(&mut found, request, home, kind);
+            let (list, limit, failed) = experiment_dirs(&mut found, request, home, kind);
             if let Some((read, seen)) = limit {
                 collector.search_limit(kind, read, seen);
+            }
+            for folder in &failed {
+                collector.unreadable_folder(kind, folder);
             }
             if mounts_under_home {
                 collector.usage_partial.insert(kind.clone());
@@ -611,6 +621,18 @@ pub fn unfinished_logs(collector: &Collector, kind: &str) -> (Vec<Value>, usize)
                 *size,
                 json!({"name": util::display_name(path), "sizeBytes": size, "readThroughBytes": null,
                        "decodedBytes": null, "reason": "unreadable"}),
+            ));
+        }
+    }
+    // Logs with no valid session header: named, never counted (RECHECK-BIG-1 M1).
+    let mut headerless = std::collections::HashSet::new();
+    for (path, size) in &collector.no_session_logs {
+        if headerless.insert(path.clone()) {
+            found.push((
+                1,
+                *size,
+                json!({"name": util::display_name(path), "sizeBytes": size, "readThroughBytes": null,
+                       "decodedBytes": null, "reason": "no_session_id"}),
             ));
         }
     }

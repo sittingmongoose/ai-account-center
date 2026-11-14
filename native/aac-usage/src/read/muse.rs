@@ -5,8 +5,11 @@ use super::{LineBox, Outcome, read_file_with};
 use crate::collector::Collector;
 use crate::discover::Env;
 use crate::fsx;
-use crate::util;
+use crate::util::{self, path_text};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 fn holds_no_logs(name: &str) -> bool {
@@ -147,33 +150,132 @@ fn file_key(path: &Path) -> String {
     util::filekey_text("muse", &format!("aac-session-file-v1:{}", session_of(path)))
 }
 
-/// Read one session's owner log; true when the scan stopped early.
-fn read_owner(collector: &mut Collector, path: &Path) -> bool {
-    let key = file_key(path);
-    let Some(filekey) = collector.note_file_as("muse", path, key.clone(), None) else {
-        if collector.is_pending("muse", &key) {
-            collector.confirm_file("muse", &key);
+/// What trying one copy of a session did (RECHECK-BIG-1 M4: a failed copy is not the end).
+enum Attempt {
+    /// Read whole, or confirmed unchanged: this copy owns the session.
+    Done,
+    /// The scan stopped early.
+    Cut,
+    /// This copy could not be read; try the next one.
+    Failed,
+}
+
+/// Try one copy of a session under the session's key.
+fn read_owner(collector: &mut Collector, path: &Path, key: &str) -> Attempt {
+    // A copy that cannot even be printed is rejected by name; the next copy is tried.
+    if util::fingerprint(path).is_none() {
+        if !super::gone(path) {
+            collector.read_failure("muse", key.to_string());
         }
-        return false;
+        return Attempt::Failed;
+    }
+    let Some(filekey) = collector.note_file_as("muse", path, key.to_string(), None) else {
+        if collector.is_pending("muse", key) {
+            collector.confirm_file("muse", key);
+            return Attempt::Done;
+        }
+        // It printed above, so only the file cap refuses it here.
+        collector.truncated = true;
+        return Attempt::Cut;
     };
     let line_box = LineBox {
         session: Some(session_of(path)).filter(|s| !s.is_empty()),
         ..LineBox::default()
     };
     match read_file_with(collector, "muse", path, &filekey, parse_line, None, line_box) {
-        Outcome::Cut => true,
+        Outcome::Cut => Attempt::Cut,
         Outcome::Unreadable => {
             // Named as failed (FIX-ROUND-BIG 3); a prefix it may have emitted is not kept.
             collector.read_failure("muse", filekey.clone());
-            collector.drop_file_rows(&std::collections::HashSet::from([filekey]));
-            false
+            collector.drop_file_rows(&HashSet::from([filekey]));
+            Attempt::Failed
         }
         Outcome::Ok => {
             collector.sent_through("muse", &filekey, path);
             collector.confirm_file("muse", &filekey);
-            false
+            Attempt::Done
         }
     }
+}
+
+/// A file's whole content digest, read in blocks; None when it cannot be read.
+fn content_digest(path: &Path) -> Option<String> {
+    let mut file = fsx::open_regular(path).ok()?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 1 << 16];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => digest.update(&buffer[..read]),
+            Err(_) => return None,
+        }
+    }
+    let mut text = String::with_capacity(64);
+    for byte in digest.finalize().iter() {
+        text.push_str(&format!("{byte:02x}"));
+    }
+    Some(text)
+}
+
+/// Every copy once, before any owner is elected (RECHECK-BIG-1 M2): first by the file itself
+/// (device and inode, so a hard link under any folder name is the same file), then by content
+/// for plain copies. The first copy by path is kept, so the choice is the same on every scan.
+fn dedupe_copies(collector: &mut Collector, mut found: Vec<PathBuf>) -> Vec<PathBuf> {
+    found.sort_by_key(|p| path_text(p));
+    let mut identities: HashSet<(u64, u64)> = HashSet::new();
+    let mut unique: Vec<PathBuf> = Vec::new();
+    for path in found {
+        match fsx::identity(&path) {
+            Some(id) if !identities.insert(id) => continue,
+            _ => unique.push(path),
+        }
+    }
+    // Content decides only where sizes already agree; files stat cannot size stay as they are.
+    let mut by_size: HashMap<u64, Vec<PathBuf>> = HashMap::new();
+    let mut order: Vec<Option<u64>> = Vec::new();
+    let mut no_size: Vec<PathBuf> = Vec::new();
+    for path in unique {
+        match std::fs::metadata(&path) {
+            Ok(meta) => {
+                let size = meta.len();
+                if !by_size.contains_key(&size) {
+                    order.push(Some(size));
+                }
+                by_size.entry(size).or_default().push(path);
+            }
+            Err(_) => {
+                order.push(None);
+                no_size.push(path);
+            }
+        }
+    }
+    let mut kept: Vec<PathBuf> = Vec::new();
+    let mut no_size = no_size.into_iter();
+    for slot in order {
+        match slot {
+            None => kept.extend(no_size.next()),
+            Some(size) => {
+                let group = by_size.remove(&size).unwrap_or_default();
+                if group.len() == 1 {
+                    kept.extend(group);
+                    continue;
+                }
+                let mut digests: HashSet<String> = HashSet::new();
+                for path in group {
+                    if collector.expired() {
+                        collector.truncated = true;
+                        kept.push(path);
+                        continue;
+                    }
+                    match content_digest(&path) {
+                        Some(digest) if !digests.insert(digest.clone()) => continue,
+                        _ => kept.push(path),
+                    }
+                }
+            }
+        }
+    }
+    kept
 }
 
 /// Python's `_collect_muse`, with one rule for copies (FIX-ROUND-BIG 2): every `session.jsonl`
@@ -223,15 +325,30 @@ pub fn collect(
             return "ok";
         }
     }
-    for path in super::owners(&found, &|p| session_of(p), &|p| {
+    // Copies of one file count once whatever folder names them (M2), then each session's owner
+    // is its longest copy that actually reads (M4): candidates are tried best first.
+    let candidates = dedupe_copies(collector, found);
+    if collector.expired() {
+        collector.truncated = true;
+        return "ok";
+    }
+    for group in super::ranked_groups(&candidates, &|p| session_of(p), &|p| {
         std::fs::metadata(p).ok().map(|m| m.len())
     }) {
-        if collector.expired() {
-            collector.truncated = true;
-            return "ok";
-        }
-        if read_owner(collector, &path) {
-            return "ok";
+        let Some(first) = group.first() else {
+            continue;
+        };
+        let key = file_key(first);
+        for path in &group {
+            if collector.expired() {
+                collector.truncated = true;
+                return "ok";
+            }
+            match read_owner(collector, path, &key) {
+                Attempt::Done => break,
+                Attempt::Cut => return "ok",
+                Attempt::Failed => continue,
+            }
         }
     }
     "ok"

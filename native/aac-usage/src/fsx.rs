@@ -212,14 +212,17 @@ pub fn read_regular(path: &Path, limit: u64) -> Option<Vec<u8>> {
     (bytes.len() as u64 <= limit).then_some(bytes)
 }
 
-/// A folder's entry names, sorted (Python's `sorted(os.listdir(...))`), or why it cannot be listed.
+/// A folder's entry names, sorted (Python's `sorted(os.listdir(...))`), or why it cannot be
+/// listed. An entry that fails mid-listing fails the listing: a short list passed off as whole
+/// would silently lose the logs behind it (RECHECK-BIG-1 M3).
 pub fn list_dir(directory: &Path) -> io::Result<Vec<String>> {
     if avoided(directory) {
         return Err(io::Error::new(io::ErrorKind::TimedOut, "did not answer"));
     }
-    let mut names: Vec<String> = fs::read_dir(directory)?
-        .filter_map(|entry| entry.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
-        .collect();
+    let mut names: Vec<String> = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        names.push(entry?.file_name().to_string_lossy().into_owned());
+    }
     names.sort();
     Ok(names)
 }
@@ -297,8 +300,15 @@ pub fn regular(path: &Path) -> bool {
 
 /// Sub-folders of base (a link to a folder counts), by name, at most T3_MAX_HOMES.
 pub fn child_dirs(base: &Path) -> Vec<PathBuf> {
-    let Some(names) = sorted_names(base) else {
-        return Vec::new();
+    child_dirs_checked(base).0
+}
+
+/// `child_dirs`, with whether the base itself could not be listed for a reason other than not
+/// being there: an unreadable account base is named, not silently empty (RECHECK-BIG-1 M3).
+pub fn child_dirs_checked(base: &Path) -> (Vec<PathBuf>, bool) {
+    let names = match list_dir(base) {
+        Ok(names) => names,
+        Err(error) => return (Vec::new(), error.kind() != io::ErrorKind::NotFound),
     };
     let mut found = Vec::new();
     for name in names {
@@ -310,7 +320,7 @@ pub fn child_dirs(base: &Path) -> Vec<PathBuf> {
             found.push(path);
         }
     }
-    found
+    (found, false)
 }
 
 /// Python's `_same_or_inside` (case-insensitive on Windows, like `os.path.normcase`).

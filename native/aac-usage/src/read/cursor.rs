@@ -19,16 +19,27 @@ pub const MAX_STORES_PER_PROJECT: usize = 256;
 pub const MAX_STORES: usize = 2048;
 
 /// Sub-folders of `base` by name, at most `limit`; links count only when they stay inside `base`.
-fn folders(base: &Path, limit: usize) -> (Vec<PathBuf>, bool) {
-    let Ok(entries) = std::fs::read_dir(base) else {
-        return (Vec::new(), false);
+/// The third value says the listing itself failed (a folder that is simply not there does not):
+/// an enumeration error is named, never an empty success (RECHECK-BIG-1 M3).
+fn folders(base: &Path, limit: usize) -> (Vec<PathBuf>, bool, bool) {
+    let entries = match std::fs::read_dir(base) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), false, false),
+        Err(_) => return (Vec::new(), false, true),
     };
     let mut names: Vec<String> = Vec::new();
-    for entry in entries.flatten() {
-        if names.len() > limit {
-            break;
+    let mut failed = false;
+    for entry in entries {
+        match entry {
+            Ok(entry) => {
+                if names.len() > limit {
+                    break;
+                }
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => failed = true,
         }
-        names.push(entry.file_name().to_string_lossy().into_owned());
     }
     let cut = names.len() > limit;
     names.sort();
@@ -40,27 +51,34 @@ fn folders(base: &Path, limit: usize) -> (Vec<PathBuf>, bool) {
             crate::fsx::is_dir(path) && (!crate::fsx::is_link(path) || crate::fsx::link_inside(path, base).is_some())
         })
         .collect();
-    (found, cut)
+    (found, cut, failed)
 }
 
-/// Every run store under a home's `.cursor/projects`, bounded; true when a bound cut the list.
-pub fn stores(home: &Path) -> (Vec<PathBuf>, bool) {
-    let (projects, mut cut) = folders(&home.join(".cursor").join("projects"), MAX_PROJECTS);
+/// Every run store under a home's `.cursor/projects`, bounded: the stores, whether a bound cut
+/// the list, and the folders that could not be listed (RECHECK-BIG-1 M3).
+pub fn stores(home: &Path) -> (Vec<PathBuf>, bool, Vec<PathBuf>) {
+    let projects_dir = home.join(".cursor").join("projects");
+    let (projects, mut cut, failed) = folders(&projects_dir, MAX_PROJECTS);
+    let mut failures: Vec<PathBuf> = if failed { vec![projects_dir] } else { Vec::new() };
     let mut found = Vec::new();
     for project in projects {
-        let (agents, cut_here) = folders(&project.join("sdk-agent-store"), MAX_STORES_PER_PROJECT);
+        let store_base = project.join("sdk-agent-store");
+        let (agents, cut_here, failed) = folders(&store_base, MAX_STORES_PER_PROJECT);
         cut |= cut_here;
+        if failed {
+            failures.push(store_base);
+        }
         for store in agents {
             let db = store.join("index.db");
             if crate::fsx::is_file(&db) {
                 found.push(db);
                 if found.len() >= MAX_STORES {
-                    return (found, true);
+                    return (found, true, failures);
                 }
             }
         }
     }
-    (found, cut)
+    (found, cut, failures)
 }
 
 /// The run's four disjoint token kinds (input, output, cache read, cache write) by the run's own
@@ -269,21 +287,27 @@ pub fn t3_threads(home: &Path, collector: &Collector) -> HashMap<String, (String
 /// order and each run counts once, in the first store that holds it.
 pub fn collect(collector: &mut Collector, home: &Path) -> &'static str {
     let projects = home.join(".cursor").join("projects");
+    // Noted before its probe, like every other root, so a probe failure is reported on it.
+    collector.note_root("cursor", &projects, "default");
     if collector
         .gate_dirs("cursor", std::slice::from_ref(&projects))
         .is_empty()
     {
         return "not_installed";
     }
-    let (mut dbs, cut) = stores(home);
+    let (mut dbs, cut, failures) = stores(home);
+    // A store folder that could not be listed is named and the kind is partial, so what an
+    // earlier scan read there is kept (RECHECK-BIG-1 M3).
+    for folder in &failures {
+        collector.unreadable_folder("cursor", folder);
+    }
     if cut {
         collector.search_limit("cursor", dbs.len(), None);
     }
     if dbs.is_empty() {
-        return "not_installed";
+        return if failures.is_empty() { "not_installed" } else { "ok" };
     }
     dbs.sort();
-    collector.note_root("cursor", &projects, "default");
     collector.count_root("cursor", &util::realpath(&projects), &dbs);
     collector.run_stores += dbs.len();
     let mut changed = false;

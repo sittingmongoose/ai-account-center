@@ -62,11 +62,17 @@ fn cache_count(value: &Sql) -> Option<u64> {
 /// "not_installed" without the database, else "ok" (or "error" when it cannot be read).
 pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static str {
     let db = database(home, env);
+    let parent = db.parent().unwrap_or(&db).to_path_buf();
+    // Noted before its probe, so a probe failure is reported on this root (RECHECK-BIG-1 M3).
+    collector.note_root("devin", &parent, "default");
     // Probed first (FIX-ROUND-BIG 9): a database that does not answer is named, never read.
     if collector.gate_files("devin", std::slice::from_ref(&db)).is_empty() {
+        // The probe names the database; the report names its folder. Carry the cause over.
+        if let Some((state, cause)) = collector.root_failures.get(&("devin".to_string(), db.clone())).copied() {
+            collector.root_failure("devin", &parent, state, cause);
+        }
         return "not_installed";
     }
-    collector.note_root("devin", db.parent().unwrap_or(&db), "default");
     collector.count_root(
         "devin",
         &util::realpath(db.parent().unwrap_or(&db)),
@@ -74,6 +80,8 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
     );
     let filekey = util::filekey("devin", &db);
     let Some(current) = sqlite::print_of(&db) else {
+        // Probed readable above, so this is a read failure to name, not an absence (M3).
+        collector.read_failure("devin", filekey);
         return "error";
     };
     if sqlite::note_db(collector, "devin", &filekey, current) {

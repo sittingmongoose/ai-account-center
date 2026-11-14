@@ -553,6 +553,10 @@ pub fn collect(
     if let Some((read, total)) = plan.limit {
         collector.search_limit("claude", read, Some(total));
     }
+    // An account base that could not be listed: named, and the kind is partial (RECHECK-BIG-1 M3).
+    for base in &plan.failed_bases {
+        collector.unreadable_folder("claude", base);
+    }
     // Experiment log folders are read through the copy rule, like other homes' logs (DESIGN 16.5).
     plan.others
         .extend(experiments.iter().map(|p| (p.clone(), "experiment")));

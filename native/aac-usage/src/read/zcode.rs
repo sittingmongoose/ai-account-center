@@ -71,8 +71,11 @@ fn text(value: &Sql) -> Option<Value> {
 
 fn scan_db(collector: &mut Collector, db: &Path, immutable: bool) -> &'static str {
     let filekey = util::filekey("zcode", db);
+    // Only probed databases reach here, so a print that cannot be taken is a named read
+    // failure, never an absence (RECHECK-BIG-1 M3).
     let Some(current) = print_of(db) else {
-        return "not_installed";
+        collector.read_failure("zcode", filekey);
+        return "error";
     };
     if immutable && current.wal_size.unwrap_or(0) > 0 {
         // An immutable open never reads the write-ahead log.

@@ -633,8 +633,12 @@ pub fn roots(home: &Path, env: &Env, collector: &mut Collector) -> (Vec<PathBuf>
         listed.push((home.join(".config").join("antigravity"), "default"));
     }
     let instances = home.join(".t3").join("userdata").join("providers").join("antigravity");
+    let (instance_dirs, unreadable) = fsx::child_dirs_checked(&instances);
+    if unreadable {
+        collector.unreadable_folder("antigravity", &instances);
+    }
     listed.extend(
-        fsx::child_dirs(&instances)
+        instance_dirs
             .into_iter()
             .map(|p| (p.join("antigravity-acp"), "t3_instance")),
     );
@@ -685,9 +689,14 @@ fn walk(collector: &mut Collector, directory: &Path, start: &Path, depth: usize,
     if !state.dirs.insert(id) {
         return true;
     }
-    let Some(names) = fsx::sorted_names(directory) else {
-        state.unreadable += 1;
-        return true;
+    let names = match fsx::list_dir(directory) {
+        Ok(names) => names,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
+        Err(_) => {
+            state.unreadable += 1;
+            collector.unreadable_folder("antigravity", directory);
+            return true;
+        }
     };
     for name in names {
         if collector.expired() || state.dirs.len() > crate::fsx::WALK_MAX_DIRS {

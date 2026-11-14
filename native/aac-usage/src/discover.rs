@@ -5,7 +5,7 @@
 //! origin; its path never leaves this computer (`root_id` is a digest with home written as `~`).
 
 use crate::collector::Collector;
-use crate::fsx::{self, child_dirs, home_path, is_dir, is_link, link_inside, skipped, sorted_names};
+use crate::fsx::{self, home_path, is_dir, is_link, link_inside, skipped, sorted_names};
 use crate::util::{self, path_text, realpath};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -161,14 +161,30 @@ pub fn log_dirs(kind: &str, homes: &[PathBuf]) -> Vec<PathBuf> {
 /// T3 Code's homes of kind: account bases, managed Codex shadows, and settings `homePath` (and
 /// `shadowHomePath` for Codex) of every instance of the driver, enabled or not (a disabled
 /// instance's home still holds the logs it wrote).
-pub fn t3_root_origins(home: &Path, kind: &str, instances: &[T3Instance]) -> Vec<(PathBuf, &'static str)> {
+pub fn t3_root_origins(
+    home: &Path,
+    kind: &str,
+    instances: &[T3Instance],
+) -> (Vec<(PathBuf, &'static str)>, Vec<PathBuf>) {
     let mut homes = Vec::new();
+    let mut failed: Vec<PathBuf> = Vec::new();
+    let mut add_base = |base: PathBuf, homes: &mut Vec<PathBuf>| {
+        let (dirs, unreadable) = fsx::child_dirs_checked(&base);
+        if unreadable {
+            failed.push(base);
+        }
+        homes.extend(dirs);
+    };
     if kind == "claude" {
-        homes.extend(child_dirs(&home.join(".claude-t3")));
+        add_base(home.join(".claude-t3"), &mut homes);
     } else {
-        homes.extend(child_dirs(&home.join(".codex-t3")));
+        add_base(home.join(".codex-t3"), &mut homes);
         let managed = home.join(".t3").join("userdata").join("providers").join("codex");
-        homes.extend(child_dirs(&managed).into_iter().map(|dir| dir.join("shadow")));
+        let (dirs, unreadable) = fsx::child_dirs_checked(&managed);
+        if unreadable {
+            failed.push(managed);
+        }
+        homes.extend(dirs.into_iter().map(|dir| dir.join("shadow")));
     }
     let (driver, keys): (&str, &[&str]) = if kind == "claude" {
         ("claudeAgent", &["homePath"])
@@ -182,7 +198,10 @@ pub fn t3_root_origins(home: &Path, kind: &str, instances: &[T3Instance]) -> Vec
             }
         }
     }
-    log_dirs(kind, &homes).into_iter().map(|p| (p, "t3_instance")).collect()
+    (
+        log_dirs(kind, &homes).into_iter().map(|p| (p, "t3_instance")).collect(),
+        failed,
+    )
 }
 
 pub struct RootPlan {
@@ -192,6 +211,9 @@ pub struct RootPlan {
     pub others: Vec<(PathBuf, &'static str)>,
     /// The signature search's bound, when home has more children than it looks at.
     pub limit: Option<(usize, usize)>,
+    /// Account bases (T3, AAC instances) that could not be listed: named by the reader, so the
+    /// kind is partial instead of silently missing their homes (RECHECK-BIG-1 M3).
+    pub failed_bases: Vec<PathBuf>,
 }
 
 /// Claude Code: `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`, `$XDG_CONFIG_HOME/claude/projects`,
@@ -205,9 +227,14 @@ pub fn claude_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3In
     let config = env_dir(env, "XDG_CONFIG_HOME", home).unwrap_or_else(|| home.join(".config"));
     defaults.push((config.join("claude").join("projects"), "default"));
     defaults.extend(extra.iter().map(|p| (p.clone(), "extra")));
-    let mut others = t3_root_origins(home, "claude", instances);
+    let (mut others, mut failed_bases) = t3_root_origins(home, "claude", instances);
+    let instances_base = home.join(".ccs").join("instances");
+    let (instance_homes, unreadable) = fsx::child_dirs_checked(&instances_base);
+    if unreadable {
+        failed_bases.push(instances_base);
+    }
     others.extend(
-        log_dirs("claude", &child_dirs(&home.join(".ccs").join("instances")))
+        log_dirs("claude", &instance_homes)
             .into_iter()
             .map(|p| (p, "ccs_instance")),
     );
@@ -217,6 +244,7 @@ pub fn claude_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3In
         defaults,
         others,
         limit,
+        failed_bases,
     }
 }
 
@@ -237,9 +265,14 @@ pub fn codex_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3Ins
                 .map(move |p| (p, *origin))
         })
         .collect();
-    let mut others = t3_root_origins(home, "codex", instances);
+    let (mut others, mut failed_bases) = t3_root_origins(home, "codex", instances);
+    let instances_base = home.join(".ccs").join("codex-instances");
+    let (instance_homes, unreadable) = fsx::child_dirs_checked(&instances_base);
+    if unreadable {
+        failed_bases.push(instances_base);
+    }
     others.extend(
-        log_dirs("codex", &child_dirs(&home.join(".ccs").join("codex-instances")))
+        log_dirs("codex", &instance_homes)
             .into_iter()
             .map(|p| (p, "ccs_instance")),
     );
@@ -249,6 +282,7 @@ pub fn codex_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3Ins
         defaults,
         others,
         limit,
+        failed_bases,
     }
 }
 
@@ -767,18 +801,25 @@ const EXPERIMENT_KINDS: [&str; 4] = ["codex", "claude", "omp", "muse"];
 
 /// Whether a folder named after a kind holds that kind's logs, within 3 levels and 400 entries:
 /// Codex `rollout-*.jsonl[.zst]`, OMP `<time>_<id>.jsonl`, Muse `<id>/session.jsonl`, Claude any
-/// `.jsonl`.
-fn holds_logs(kind: &str, dir: &Path) -> bool {
+/// `.jsonl`. The second value says a listing inside it failed, so logs may hide there
+/// (RECHECK-BIG-1 M3).
+fn holds_logs(kind: &str, dir: &Path) -> (bool, bool) {
     let mut pending = vec![(dir.to_path_buf(), 0usize)];
     let mut seen = 0usize;
+    let mut failed = false;
     while let Some((folder, depth)) = pending.pop() {
-        let Some(names) = fsx::sorted_names(&folder) else {
-            continue;
+        let names = match fsx::list_dir(&folder) {
+            Ok(names) => names,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                failed = true;
+                continue;
+            }
         };
         for name in names {
             seen += 1;
             if seen > 400 {
-                return false;
+                return (false, failed);
             }
             let path = folder.join(&name);
             if fsx::is_link(&path) {
@@ -797,11 +838,11 @@ fn holds_logs(kind: &str, dir: &Path) -> bool {
                 _ => name.ends_with(".jsonl"),
             };
             if log {
-                return true;
+                return (true, failed);
             }
         }
     }
-    false
+    (false, failed)
 }
 
 /// What the experiment walk found: each kind's folders, and the kinds whose search a bound cut,
@@ -809,6 +850,8 @@ fn holds_logs(kind: &str, dir: &Path) -> bool {
 pub struct ExperimentRoots {
     pub found: HashMap<&'static str, Vec<PathBuf>>,
     pub limits: HashMap<&'static str, (usize, Option<usize>)>,
+    /// Kind-named folders whose look inside failed: named by their kind's reader (M3).
+    pub failed: HashMap<&'static str, Vec<PathBuf>>,
 }
 
 /// Experiment log folders outside `~/PM-Experiments` (DESIGN 16.5), for example
@@ -823,6 +866,7 @@ pub fn experiment_roots(home: &Path, budget: Duration) -> ExperimentRoots {
     let mut result = ExperimentRoots {
         found: HashMap::new(),
         limits: HashMap::new(),
+        failed: HashMap::new(),
     };
     let mut seen: HashMap<&'static str, usize> = HashMap::new();
     let mut entries = 0usize;
@@ -860,7 +904,11 @@ pub fn experiment_roots(home: &Path, budget: Duration) -> ExperimentRoots {
             if depth >= 1
                 && let Some(kind) = EXPERIMENT_KINDS.iter().find(|k| **k == name)
             {
-                if holds_logs(kind, &path) {
+                let (holds, failed) = holds_logs(kind, &path);
+                if failed {
+                    result.failed.entry(kind).or_default().push(path.clone());
+                }
+                if holds {
                     let count = seen.entry(kind).or_default();
                     *count += 1;
                     if *count <= EXPERIMENT_MAX_ROOTS {

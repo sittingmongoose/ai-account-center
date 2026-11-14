@@ -110,6 +110,9 @@ pub struct Collector {
     pub resume: HashMap<(String, String), (u64, Value)>,
     /// Compressed logs the decoder could not read this call: path and size, for naming.
     pub unreadable_logs: Vec<(PathBuf, u64)>,
+    /// Codex logs with no valid session header this call: path and size, for naming
+    /// ("partly read: no session id", RECHECK-BIG-1 M1). Never counted.
+    pub no_session_logs: Vec<(PathBuf, u64)>,
     /// Tests only: log lines left before the scan counts as past its deadline.
     pub lines_left: Option<u64>,
     /// Records (Cursor runs, Devin replies) whose numbers could not be read, per kind.
@@ -177,6 +180,7 @@ impl Collector {
             messages_cut: false,
             resume: HashMap::new(),
             unreadable_logs: Vec::new(),
+            no_session_logs: Vec::new(),
             lines_left: None,
             unreadable_records: HashMap::new(),
             kind_wal_unread: HashSet::new(),

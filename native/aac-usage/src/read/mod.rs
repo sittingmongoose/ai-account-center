@@ -86,18 +86,28 @@ pub enum Outcome {
 pub type Parse = fn(&str, &mut Collector, &str, &str, &mut LineBox);
 pub type Flush = fn(&mut Collector, &str, &str, &mut LineBox);
 
-/// Python's `_newest_first`: newest mtime first, ties by path; unstattable files dropped.
+/// Python's `_newest_first`: newest mtime first, ties by path. A file gone since the listing is
+/// dropped; one stat cannot read for another reason stays (last), so its read attempt names the
+/// failure instead of the file vanishing silently (RECHECK-BIG-1 M3).
 pub fn newest_first(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut stamped: Vec<(i128, String, PathBuf)> = paths
         .iter()
-        .filter_map(|p| {
-            std::fs::metadata(p)
-                .ok()
-                .map(|m| (util::mtime_ns(&m), path_text(p), p.clone()))
+        .filter_map(|p| match std::fs::metadata(p) {
+            Ok(m) => Some((util::mtime_ns(&m), path_text(p), p.clone())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => Some((i128::MIN, path_text(p), p.clone())),
         })
         .collect();
     stamped.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     stamped.into_iter().map(|(_, _, p)| p).collect()
+}
+
+/// True when `path` is simply gone (listed, then removed): no failure to name for it.
+pub fn gone(path: &Path) -> bool {
+    matches!(
+        std::fs::symlink_metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 /// Python's `_note_oversized`: the same 512-byte envelope rules as the server.
@@ -509,6 +519,20 @@ pub fn deps_print(kind: &str, copies: &[PathBuf], deadline: Instant) -> Option<S
 /// is a prefix the owner already holds (logs only grow), and a copy that diverged loses its own
 /// tail rather than being guessed at. Hard links and plain copies fall out the same way.
 pub fn owners(paths: &[PathBuf], key: &dyn Fn(&Path) -> String, length: &dyn Fn(&Path) -> Option<u64>) -> Vec<PathBuf> {
+    ranked_groups(paths, key, length)
+        .into_iter()
+        .filter_map(|group| group.into_iter().next())
+        .collect()
+}
+
+/// `owners` with every candidate kept, best first (RECHECK-BIG-1 M4): the owner is the longest
+/// copy that actually opens and decodes, so a reader tries these in order and stops at the first
+/// whole read. A copy stat cannot read ranks last, so its attempt still names the failure.
+pub fn ranked_groups(
+    paths: &[PathBuf],
+    key: &dyn Fn(&Path) -> String,
+    length: &dyn Fn(&Path) -> Option<u64>,
+) -> Vec<Vec<PathBuf>> {
     let mut groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     for path in paths {
@@ -518,27 +542,27 @@ pub fn owners(paths: &[PathBuf], key: &dyn Fn(&Path) -> String, length: &dyn Fn(
         }
         groups.entry(group).or_default().push(path.clone());
     }
-    let mut chosen = Vec::with_capacity(order.len());
-    for group in order {
-        let members = groups.remove(&group).unwrap_or_default();
-        if members.len() == 1 {
-            chosen.extend(members);
-            continue;
-        }
-        let best = members
-            .into_iter()
-            .filter_map(|path| {
-                let meta = std::fs::metadata(&path).ok()?;
-                Some((length(&path).unwrap_or(meta.len()), util::mtime_ns(&meta), path))
-            })
-            .max_by(|a, b| {
-                a.0.cmp(&b.0)
-                    .then(a.1.cmp(&b.1))
-                    .then_with(|| path_text(&b.2).cmp(&path_text(&a.2)))
-            });
-        chosen.extend(best.map(|(_, _, path)| path));
-    }
-    chosen
+    order
+        .into_iter()
+        .map(|group| rank_candidates(groups.remove(&group).unwrap_or_default(), length))
+        .collect()
+}
+
+/// Copies in owner order: longest first, then newest, then first by path.
+pub fn rank_candidates(members: Vec<PathBuf>, length: &dyn Fn(&Path) -> Option<u64>) -> Vec<PathBuf> {
+    let mut ranked: Vec<(u64, i128, PathBuf)> = members
+        .into_iter()
+        .map(|path| match std::fs::metadata(&path) {
+            Ok(meta) => (length(&path).unwrap_or(meta.len()), util::mtime_ns(&meta), path),
+            Err(_) => (0, i128::MIN, path),
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(b.1.cmp(&a.1))
+            .then_with(|| path_text(&a.2).cmp(&path_text(&b.2)))
+    });
+    ranked.into_iter().map(|(_, _, path)| path).collect()
 }
 
 /// What a log holds, by bytes: a compressed Codex log's decoded size when its frame states it.
@@ -664,21 +688,13 @@ pub fn scan_kind_files(
             refs.insert(path, copies);
         }
     }
-    if kind == "codex" {
-        // One owner per conversation across every folder, defaults and copies alike (FIX-ROUND-BIG
-        // 1): no record is read from a second copy, so none is counted twice or left to a guess.
-        paths = owners(&paths, &|p| copy_key("codex", p), &content_length)
-            .into_iter()
-            .filter(|p| {
-                std::fs::metadata(p)
-                    .map(|m| util::mtime_seconds(&m) * 1000.0 >= (collector.min_date_ms - 86_400_000) as f64)
-                    .unwrap_or(false)
-            })
-            .collect();
-        refs.clear();
-    }
     if kind == "claude" {
         return claude::scan_groups(collector, &paths, parse, flush);
+    }
+    if kind == "codex" {
+        // One owner per conversation across every folder, defaults and copies alike, identified by
+        // the log's own session header (FIX-ROUND-BIG 1, RECHECK-BIG-1 M1 and M4).
+        return scan_codex_groups(collector, &paths, parse, flush);
     }
     // The server's exact-copy rule: same size, head and tail. Unreadable files go to the read path.
     let mut seen: HashSet<Option<(u64, String, String)>> = HashSet::new();
@@ -758,6 +774,126 @@ pub fn scan_kind_files(
                 collector.read_failure(kind, filekey.clone());
                 // A failed decoder may have emitted a prefix. None of it is fresh.
                 collector.drop_file_rows(&HashSet::from([filekey]));
+            }
+        }
+    }
+    false
+}
+
+/// Codex reads (RECHECK-BIG-1 M1 and M4): conversations are grouped by the validated
+/// `session_meta` payload id of each log's own header, never by its file name. A log whose head
+/// holds no valid header is named ("partly read: no session id") and never counted, so its copies
+/// can never count separately. Of each conversation only one copy is read: the longest that
+/// actually opens and decodes, trying the next candidate when one fails. True when cut short.
+fn scan_codex_groups(collector: &mut Collector, paths: &[PathBuf], parse: Parse, flush: Option<Flush>) -> bool {
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for path in paths {
+        if collector.expired() {
+            collector.truncated = true;
+            return true;
+        }
+        match codex::session_id_of(path) {
+            codex::SessionPeek::Found(id) => {
+                if !groups.contains_key(&id) {
+                    order.push(id.clone());
+                }
+                groups.entry(id).or_default().push(path.clone());
+            }
+            codex::SessionPeek::NoHeader => {
+                if gone(path) {
+                    continue;
+                }
+                let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                collector.no_session_logs.push((path.clone(), size));
+                collector.read_failure("codex", util::filekey("codex", path));
+            }
+            codex::SessionPeek::Unreadable => {
+                if gone(path) {
+                    continue;
+                }
+                collector.read_failure("codex", util::filekey("codex", path));
+                if path_text(path).ends_with(".jsonl.zst") {
+                    note_unreadable_log(collector, path);
+                }
+            }
+        }
+    }
+    let cutoff = (collector.min_date_ms - 86_400_000) as f64;
+    let mut work: Vec<(i128, String, String, Vec<PathBuf>)> = Vec::new();
+    for id in order {
+        let recent: Vec<PathBuf> = groups
+            .remove(&id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| match std::fs::metadata(p) {
+                Ok(meta) => util::mtime_seconds(&meta) * 1000.0 >= cutoff,
+                Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+            })
+            .collect();
+        if recent.is_empty() {
+            continue;
+        }
+        let candidates = rank_candidates(recent, &content_length);
+        let newest = candidates
+            .iter()
+            .filter_map(|p| std::fs::metadata(p).ok().map(|m| util::mtime_ns(&m)))
+            .max()
+            .unwrap_or(i128::MIN);
+        let tie = candidates.first().map(|p| path_text(p)).unwrap_or_default();
+        work.push((newest, tie, codex::file_key_for(&id), candidates));
+    }
+    work.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    for (_, _, filekey, candidates) in work {
+        for path in &candidates {
+            if collector.expired() {
+                collector.truncated = true;
+                return true;
+            }
+            // A copy that cannot even be printed is rejected by name; the next copy is tried.
+            if util::fingerprint(path).is_none() {
+                if !gone(path) {
+                    collector.read_failure("codex", filekey.clone());
+                }
+                continue;
+            }
+            let Some(key) = collector.note_file_as("codex", path, filekey.clone(), None) else {
+                if collector.is_pending("codex", &filekey) {
+                    collector.confirm_file("codex", &filekey);
+                    break; // unchanged: this copy is the confirmed owner
+                }
+                // It printed above, so only the file cap refuses it here.
+                collector.truncated = true;
+                return true;
+            };
+            let (from, state) = collector.resume_point("codex", &key);
+            let mut line_box = LineBox {
+                through: from,
+                ..LineBox::default()
+            };
+            if from > 0 {
+                line_box.restore_codex(&state);
+            }
+            let outcome = read_into(collector, "codex", path, &key, parse, flush, &mut line_box);
+            let from = if line_box.restarted { 0 } else { from };
+            match outcome {
+                Outcome::Cut => {
+                    if !collector.row_cap {
+                        collector.cut_file("codex", &key, from, line_box.through, line_box.codex_state(), path);
+                    }
+                    return true;
+                }
+                Outcome::Ok => {
+                    collector.sent_through("codex", &key, path);
+                    collector.confirm_file("codex", &key);
+                    collector.finish_resumed("codex", &key, from);
+                    break;
+                }
+                Outcome::Unreadable => {
+                    // Named, its rows dropped, and the next copy is tried: still one owner.
+                    collector.read_failure("codex", filekey.clone());
+                    collector.drop_file_rows(&HashSet::from([key]));
+                }
             }
         }
     }

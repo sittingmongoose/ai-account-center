@@ -85,12 +85,18 @@ fn is_sandbox_tree(directory: &Path, entries: &[fs::DirEntry]) -> bool {
         .is_some_and(|t| t.is_object())
 }
 
-fn sessions_dir_has_marker(directory: &Path) -> bool {
+fn sessions_dir_has_marker(collector: &mut Collector, directory: &Path) -> bool {
     let mut pending = vec![(directory.to_path_buf(), 0usize)];
     let mut checked = 0;
     while let Some((current, depth)) = pending.pop() {
-        let Ok(list) = fs::read_dir(&current) else {
-            return false;
+        let list = match fs::read_dir(&current) {
+            Ok(list) => list,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                // There but not listable: named, never silently no marker (RECHECK-BIG-1 M3).
+                collector.unreadable_folder("omp", &current);
+                continue;
+            }
         };
         for entry in list.flatten().take(200) {
             checked += 1;
@@ -122,7 +128,29 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
         .min(Instant::now() + Duration::from_secs_f64(collector.budget * SCAN_BUDGET_SHARE));
     let mut pending: VecDeque<(PathBuf, usize)> = VecDeque::from([(base.to_path_buf(), 0)]);
     let (mut visited, mut examined) = (0usize, 0usize);
-    let read = |dir: &Path| -> Option<Vec<fs::DirEntry>> { fs::read_dir(dir).ok().map(|l| l.flatten().collect()) };
+    // A folder the marker search cannot list is named (M3); one simply gone is not.
+    fn read(collector: &mut Collector, dir: &Path) -> Option<Vec<fs::DirEntry>> {
+        let list = match fs::read_dir(dir) {
+            Ok(list) => list,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(_) => {
+                collector.unreadable_folder("omp", dir);
+                return None;
+            }
+        };
+        let mut entries = Vec::new();
+        for entry in list {
+            match entry {
+                Ok(entry) => entries.push(entry),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => {
+                    collector.unreadable_folder("omp", dir);
+                    return None;
+                }
+            }
+        }
+        Some(entries)
+    }
     let session_file = |entries: &[fs::DirEntry]| {
         entries.iter().any(|e| {
             e.file_type().map(|t| t.is_file()).unwrap_or(false) && is_session_filename(&e.file_name().to_string_lossy())
@@ -142,7 +170,7 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
             continue;
         }
         visited += 1;
-        let Some(entries) = read(&directory) else {
+        let Some(entries) = read(collector, &directory) else {
             continue;
         };
         examined += entries.len();
@@ -155,7 +183,7 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
         }
         if directory != base {
             if directory.file_name().is_some_and(|n| n == "sessions") {
-                if sessions_dir_has_marker(&directory) {
+                if sessions_dir_has_marker(collector, &directory) {
                     found.push(directory);
                 }
                 continue;
@@ -185,7 +213,7 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
                         continue;
                     }
                     visited += 1;
-                    let Some(children) = read(&entry.path()) else {
+                    let Some(children) = read(collector, &entry.path()) else {
                         continue;
                     };
                     examined += children.len() + 1;
@@ -193,7 +221,7 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
                         continue;
                     }
                     if name == "sessions" {
-                        if sessions_dir_has_marker(&entry.path()) {
+                        if sessions_dir_has_marker(collector, &entry.path()) {
                             found.push(entry.path());
                         }
                     } else if session_file(&children) {
@@ -242,13 +270,17 @@ fn roots(
     let agent = home.join(".omp").join("agent");
     add(agent.join("sessions"), "default", collector, &mut list);
     let profiles = home.join(".omp").join("profiles");
-    if let Some(names) = fsx::sorted_names(&profiles) {
-        for name in names.into_iter().take(SCAN_MAX_ROOTS) {
-            let candidate = profiles.join(name).join("agent").join("sessions");
-            if fsx::is_dir(&candidate) {
-                add(candidate, "default", collector, &mut list);
+    match fsx::list_dir(&profiles) {
+        Ok(names) => {
+            for name in names.into_iter().take(SCAN_MAX_ROOTS) {
+                let candidate = profiles.join(name).join("agent").join("sessions");
+                if fsx::is_dir(&candidate) {
+                    add(candidate, "default", collector, &mut list);
+                }
             }
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => collector.unreadable_folder("omp", &profiles),
     }
     if let Some(dir) = discover::env_dir(env, "PI_CODING_AGENT_DIR", home) {
         add(dir.join("sessions"), "env", collector, &mut list);

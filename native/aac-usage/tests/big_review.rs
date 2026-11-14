@@ -490,9 +490,11 @@ fn many_muse_sessions_never_use_up_another_kinds_search() {
     let home = tempfile::tempdir().unwrap();
     let h = home.path();
     for n in 0..100 {
+        // Distinct sessions hold distinct logs: byte-identical files are copies of one session
+        // and count once (RECHECK-BIG-1 M2), so each session here carries its own count.
         write(
             &h.join(format!("lab/a-run/muse/bucket-{n:03}/sess-{n:03}/session.jsonl")),
-            &muse_session(1),
+            &muse_session(n + 1),
         );
     }
     write(&h.join("lab/z-run/codex").join(rollout_name(ID)), &rollout(ID, &[100]));

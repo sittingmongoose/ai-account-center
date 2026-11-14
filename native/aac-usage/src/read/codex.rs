@@ -2,10 +2,12 @@
 //! cumulative `token_count` events differenced per file. The Python helper's `_parse_codex_line`.
 
 use super::LineBox;
-use crate::collector::Collector;
+use crate::collector::{Collector, MAX_LINE_BYTES};
 use crate::discover::{self, Env, T3Instance};
-use crate::util;
+use crate::fsx;
+use crate::util::{self, path_text};
 use serde_json::Value;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 /// The conversation id a rollout's file name ends with (`...-<uuid>.jsonl[.zst]`), lower case.
@@ -32,6 +34,97 @@ pub fn file_key(path: &Path) -> String {
         "codex",
         &format!("aac-conversation-v1:{}", super::copy_key("codex", path)),
     )
+}
+
+/// The same key from a validated session id itself (RECHECK-BIG-1 M1): the identity is the
+/// `session_meta` payload id, hashed here, never the file name.
+pub fn file_key_for(session: &str) -> String {
+    util::filekey_text("codex", &format!("aac-conversation-v1:{session}"))
+}
+
+/// What a bounded look at a log's head found: its session, no usable header, or no read at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionPeek {
+    /// The validated `session_meta` payload id (UUID-shaped ids lower-cased, as file names spell
+    /// them, so copies keep the key they had when names decided).
+    Found(String),
+    /// The head decoded but holds no valid session header.
+    NoHeader,
+    /// The file could not be opened or decoded far enough to tell.
+    Unreadable,
+}
+
+fn validated_id(value: Option<&Value>) -> Option<String> {
+    let id = util::clean_text(value, util::SESSION_MAX_LEN)?;
+    // A UUID-shaped id is one conversation in any case; file names spell it lower-case.
+    let bytes = id.as_bytes();
+    let uuid = bytes.len() == 36
+        && bytes.iter().enumerate().all(|(i, b)| match i {
+            8 | 13 | 18 | 23 => *b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        });
+    Some(if uuid { id.to_lowercase() } else { id })
+}
+
+fn header_id<R: Read>(reader: R) -> SessionPeek {
+    use std::io::BufRead;
+    let mut reader = BufReader::with_capacity(1 << 16, reader);
+    let mut spent: u64 = 0;
+    for _ in 0..16 {
+        if spent >= MAX_LINE_BYTES as u64 {
+            break;
+        }
+        let mut line = Vec::new();
+        let read = match reader
+            .by_ref()
+            .take(MAX_LINE_BYTES as u64 + 2 - spent.min(MAX_LINE_BYTES as u64))
+            .read_until(b'\n', &mut line)
+        {
+            Ok(read) => read as u64,
+            Err(_) => return SessionPeek::Unreadable,
+        };
+        if read == 0 {
+            break;
+        }
+        spent += read;
+        let Ok(text) = std::str::from_utf8(&line) else {
+            continue;
+        };
+        if !text.contains("\"session_meta\"") {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else {
+            continue;
+        };
+        if record.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+        return match record
+            .get("payload")
+            .filter(|p| p.is_object())
+            .and_then(|p| validated_id(p.get("id")))
+        {
+            Some(id) => SessionPeek::Found(id),
+            None => SessionPeek::NoHeader,
+        };
+    }
+    SessionPeek::NoHeader
+}
+
+/// A log's session from its own header, without reading the log: at most 16 lines or one line's
+/// worth of bytes, decoded the same way the read itself would be.
+pub fn session_id_of(path: &Path) -> SessionPeek {
+    let Ok(file) = fsx::open_regular(path) else {
+        return SessionPeek::Unreadable;
+    };
+    if path_text(path).ends_with(".jsonl.zst") {
+        let Ok(decoder) = zstd::stream::read::Decoder::new(file) else {
+            return SessionPeek::Unreadable;
+        };
+        header_id(decoder)
+    } else {
+        header_id(file)
+    }
 }
 
 fn number(value: Option<&Value>) -> f64 {
@@ -233,6 +326,10 @@ pub fn collect(
     // (FIX-ROUND-BIG 6).
     if let Some((read, total)) = plan.limit {
         collector.search_limit("codex", read, Some(total));
+    }
+    // An account base that could not be listed: named, and the kind is partial (RECHECK-BIG-1 M3).
+    for base in &plan.failed_bases {
+        collector.unreadable_folder("codex", base);
     }
     // Experiment log folders are read through the copy rule, like other homes' logs (DESIGN 16.5).
     plan.others
