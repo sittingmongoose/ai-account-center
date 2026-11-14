@@ -192,3 +192,89 @@ fn existing_settings_filenames_and_auth_environment_are_preserved() {
         false
     );
 }
+
+#[test]
+fn regression_m2_non_object_computers_are_damaged_without_panicking() {
+    for value in [
+        json!(42),
+        json!(true),
+        json!("scalar"),
+        json!([]),
+        json!(null),
+    ] {
+        for layer in ["cli", "seed", "yaml"] {
+            let root = tempfile::tempdir().unwrap();
+            let mut opts = options(root.path());
+            let computers = json!({"node-a":value});
+            match layer {
+                "cli" => opts.cli = json!({"computers":computers}),
+                "seed" => std::fs::write(
+                    &opts.computers_seed,
+                    serde_json::to_vec(&computers).unwrap(),
+                )
+                .unwrap(),
+                _ => {
+                    std::fs::create_dir(root.path().join(".ccs")).unwrap();
+                    std::fs::write(
+                        root.path().join(".ccs/config.yaml"),
+                        serde_yaml::to_string(&json!({"computers":computers})).unwrap(),
+                    )
+                    .unwrap();
+                }
+            }
+            let result = std::panic::catch_unwind(|| Config::load(&opts));
+            assert!(
+                matches!(result, Ok(Err(error)) if error.cause == Cause::Damaged),
+                "malformed {layer} computer entry must return Damaged"
+            );
+        }
+    }
+}
+
+#[test]
+fn regression_m3_indented_and_flow_retired_sections_stay_opaque() {
+    for style in ["indented-block", "indented-flow-values", "flow-root"] {
+        let root = tempfile::tempdir().unwrap();
+        let opts = options(root.path());
+        let mut original = String::new();
+        if style == "flow-root" {
+            original.push_str("{ dashboard: {port: 3000}, unicode: '\u{03bb}', ");
+            for section in RETIRED_SECTIONS {
+                original.push_str(&format!(
+                    "'{section}': &{section} {{self: *{section}, unicode: '\u{03bb}'}}, "
+                ));
+            }
+            original.push_str("active_literal: 'retired: not a root key' }\n");
+        } else {
+            original.push_str("  # Root indentation is valid YAML.\n  dashboard:\n    port: 3000\n  unicode: '\u{03bb}'\n");
+            for section in RETIRED_SECTIONS {
+                if style == "indented-block" {
+                    original.push_str(&format!("  '{section}': &{section}\n    self: *{section}\n    text: |\n      ---\n      ...\n"));
+                } else {
+                    original.push_str(&format!(
+                        "  '{section}': &{section} {{self: *{section}, text: 'literal # , :'}}\n"
+                    ));
+                }
+            }
+            original.push_str("  active_literal: 'retired: not a root key'\n");
+        }
+        std::fs::create_dir(root.path().join(".ccs")).unwrap();
+        let path = root.path().join(".ccs/config.yaml");
+        std::fs::write(&path, &original).unwrap();
+        let result = Config::load(&opts);
+        assert!(
+            result.is_ok(),
+            "{style} must load without expanding retired aliases"
+        );
+        let config = result.unwrap();
+        assert_eq!(config.values()["dashboard"]["port"], 3000);
+        assert_eq!(config.values()["unicode"], "\u{03bb}");
+        assert_eq!(config.values()["active_literal"], "retired: not a root key");
+        assert_eq!(config.original_yaml(), original);
+        assert_eq!(std::fs::read(path).unwrap(), original.as_bytes());
+        for section in RETIRED_SECTIONS {
+            assert!(config.values().get(*section).is_none());
+            assert!(config.retired_sections()[*section].contains(&format!("'{section}':")));
+        }
+    }
+}

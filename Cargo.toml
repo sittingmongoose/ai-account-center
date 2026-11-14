@@ -25,6 +25,7 @@ tempfile = "3"
 fs2 = "0.4"
 libc = "0.2"
 serde_yaml = "0.9"
+yaml-rust2 = { version = "0.13", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "io-std", "time", "sync", "test-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
@@ -34,4 +35,3 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
-

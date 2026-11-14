@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+mod yaml;
 
 /// Retired CCS sections are opaque text; they are never part of the effective model.
 pub const RETIRED_SECTIONS: &[&str] = &[
@@ -192,7 +193,7 @@ impl Config {
                 .map_err(|_| Failure::new(Cause::Damaged, "config YAML is not UTF-8"))?,
             None => String::new(),
         };
-        let (active_yaml, retired) = separate_retired(&original_yaml);
+        let (active_yaml, retired) = yaml::separate_retired(&original_yaml)?;
         let yaml: Value = if active_yaml.trim().is_empty() {
             json!({})
         } else {
@@ -323,36 +324,15 @@ fn set_path(values: &mut Value, path: &str, value: Value) -> Result<(), Failure>
     Ok(())
 }
 
-fn separate_retired(source: &str) -> (String, BTreeMap<String, String>) {
-    let mut active = String::new();
-    let mut retired = BTreeMap::<String, String>::new();
-    let mut section: Option<String> = None;
-    for line in source.split_inclusive('\n') {
-        if !line.starts_with(char::is_whitespace)
-            && !line.starts_with('#')
-            && !line.trim().is_empty()
-        {
-            section = line.split_once(':').and_then(|(key, _)| {
-                let key = key.trim().trim_matches(['\'', '"']);
-                RETIRED_SECTIONS.contains(&key).then(|| key.to_owned())
-            });
-        }
-        if let Some(key) = &section {
-            retired.entry(key.clone()).or_default().push_str(line);
-        } else {
-            active.push_str(line);
-        }
-    }
-    (active, retired)
-}
-
 fn read_computers(input: Value) -> Result<Vec<ComputerConfig>, Failure> {
     let rows = if let Some(rows) = input.as_array() {
         rows.clone()
     } else if let Some(map) = input.as_object() {
         map.iter()
             .map(|(id, fields)| {
-                let mut row = fields.clone();
+                let mut row = Value::Object(fields.as_object().cloned().ok_or_else(|| {
+                    Failure::new(Cause::Damaged, "computer map entries must be objects")
+                })?);
                 row["id"] = json!(id);
                 if row.get("transport").is_none() {
                     row["transport"] = if let Some(alias) =
@@ -365,9 +345,9 @@ fn read_computers(input: Value) -> Result<Vec<ComputerConfig>, Failure> {
                         json!({"kind": "local"})
                     };
                 }
-                row
+                Ok(row)
             })
-            .collect()
+            .collect::<Result<Vec<_>, Failure>>()?
     } else {
         return Err(Failure::new(
             Cause::Damaged,
