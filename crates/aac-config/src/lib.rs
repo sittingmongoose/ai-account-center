@@ -189,16 +189,14 @@ impl Config {
         }
         let original_yaml = match optional_read(&private_dir.join("config.yaml"), 4 * 1024 * 1024)?
         {
-            Some(bytes) => String::from_utf8(bytes)
-                .map_err(|_| Failure::new(Cause::Damaged, "config YAML is not UTF-8"))?,
+            Some(bytes) => String::from_utf8(bytes).map_err(|_| yaml::damaged())?,
             None => String::new(),
         };
         let (active_yaml, retired) = yaml::separate_retired(&original_yaml)?;
         let yaml: Value = if active_yaml.trim().is_empty() {
             json!({})
         } else {
-            serde_yaml::from_str(&active_yaml)
-                .map_err(|_| Failure::new(Cause::Damaged, "invalid active YAML configuration"))?
+            serde_yaml::from_str(&active_yaml).map_err(|_| yaml::damaged())?
         };
         let mut values = options.defaults.clone();
         require_object(&values)?;

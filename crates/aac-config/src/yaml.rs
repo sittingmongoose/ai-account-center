@@ -4,10 +4,13 @@ use crate::RETIRED_SECTIONS;
 use aac_core::{Cause, Failure};
 use std::collections::{BTreeMap, BTreeSet};
 use yaml_rust2::parser::{Event, Parser};
-use yaml_rust2::scanner::TScalarStyle;
+use yaml_rust2::scanner::{Marker, Scanner, TScalarStyle, Token, TokenType};
 
-fn damaged() -> Failure {
-    Failure::new(Cause::Damaged, "unsupported or invalid YAML root mapping")
+pub(super) fn damaged() -> Failure {
+    Failure::new(
+        Cause::Damaged,
+        "config.yaml: invalid or unsupported YAML document",
+    )
 }
 
 struct Entry {
@@ -21,10 +24,44 @@ struct Root {
     flow: bool,
 }
 
+// The scanner's Key marker includes an explicit '?' indicator, unlike the parser's Scalar
+// marker. Pair each scalar token with its entry indicator, or its own marker for a bare flow
+// key. The parser below decides which of those scalars are root keys. This one placement rule
+// covers plain/quoted and implicit/explicit keys without inspecting arbitrary line prefixes.
+fn scalar_sites(source: &str) -> Result<BTreeMap<usize, Marker>, Failure> {
+    let mut scanner = Scanner::new(source.chars());
+    let mut sites = BTreeMap::new();
+    let mut indicator = None;
+    for _ in 0..100_000 {
+        let Token(mark, token) = scanner.next().ok_or_else(damaged)?;
+        match token {
+            TokenType::StreamEnd => {
+                return if scanner.get_error().is_none() {
+                    Ok(sites)
+                } else {
+                    Err(damaged())
+                };
+            }
+            TokenType::Key => indicator = Some(mark),
+            TokenType::Scalar(..) => {
+                if sites
+                    .insert(mark.index(), indicator.take().unwrap_or(mark))
+                    .is_some()
+                {
+                    return Err(damaged());
+                }
+            }
+            _ => indicator = None,
+        }
+    }
+    Err(damaged())
+}
+
 // Parse events iteratively. Aliases remain single events, including recursive aliases; budgets
 // apply even to opaque sections. Refuse multiple documents, complex/duplicate/merged root keys
 // and root tags/anchors rather than reconstructing an ambiguous active document.
 fn root_entries(source: &str) -> Result<Root, Failure> {
+    let sites = scalar_sites(source)?;
     let mut parser = Parser::new_from_str(source);
     // The parser's character iterator advances its marker index once per Unicode scalar.
     // Convert those indices to UTF-8 byte boundaries before retaining any source spans.
@@ -75,17 +112,24 @@ fn root_entries(source: &str) -> Result<Root, Failure> {
                 {
                     return Err(damaged());
                 }
-                let column = if !flow {
-                    let prefix = source.get(..start).ok_or_else(damaged)?;
-                    let line = prefix.rsplit_once('\n').map_or(prefix, |(_, line)| line);
-                    if !line.bytes().all(|c| c == b' ') {
-                        return Err(damaged());
-                    }
-                    line.len()
-                } else {
-                    0
-                };
-                entries.push(Entry { key, start, column });
+                let site = sites.get(&mark.index()).ok_or_else(damaged)?;
+                let entry_start = *offsets.get(site.index()).ok_or_else(damaged)?;
+                if entry_start > start {
+                    return Err(damaged());
+                }
+                let column = site.col();
+                if !flow
+                    && entries
+                        .first()
+                        .is_some_and(|entry: &Entry| entry.column != column)
+                {
+                    return Err(damaged());
+                }
+                entries.push(Entry {
+                    key,
+                    start: entry_start,
+                    column,
+                });
                 expect_key = false;
             }
             Event::MappingStart(..) | Event::SequenceStart(..) if depth > 0 => {
@@ -126,12 +170,15 @@ fn root_entries(source: &str) -> Result<Root, Failure> {
             _ => return Err(damaged()),
         }
     }
-    Err(Failure::new(Cause::Damaged, "YAML event budget exceeded"))
+    Err(damaged())
 }
 
 pub(super) fn separate_retired(
-    source: &str,
+    original: &str,
 ) -> Result<(String, BTreeMap<String, String>), Failure> {
+    // Match the TS loader's single leading-BOM normalization. Scanner, parser and active
+    // deserialization all use this same view; Config retains the untouched original bytes.
+    let source = original.strip_prefix('\u{feff}').unwrap_or(original);
     if source.trim().is_empty() {
         return Ok((source.into(), BTreeMap::new()));
     }

@@ -1,0 +1,159 @@
+[
+  {
+    "name": "writer",
+    "source": "dashboard:\n  port: 3104\ncliproxy:\n  enabled: true\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "implicit-plain",
+    "source": "dashboard: {port: 3104}\ncliproxy: &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "implicit-single",
+    "source": "'dashboard': {port: 3104}\n'cliproxy': &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "implicit-double",
+    "source": "\"dashboard\": {port: 3104}\n\"cliproxy\": &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "quoted-escape",
+    "source": "\"dash\\u0062oard\": {port: 3104}\n\"cli\\u0070roxy\": &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "explicit-plain",
+    "source": "? dashboard\n: {port: 3104}\n? cliproxy\n: &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "explicit-single",
+    "source": "? 'dashboard'\n: {port: 3104}\n? 'cliproxy'\n: &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "explicit-double",
+    "source": "? \"dashboard\"\n: {port: 3104}\n? \"cliproxy\"\n: &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "explicit-separated",
+    "source": "?\n  dashboard\n: {port: 3104}\n?\n  \"cliproxy\"\n: &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "explicit-comment",
+    "source": "? # active scalar\n  dashboard\n: {port: 3104}\n? # opaque scalar\n  \"cliproxy\"\n: &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "explicit-indented",
+    "source": "  ? dashboard\n  : {port: 3104}\n  ? \"cliproxy\"\n  : &ret {self: *ret}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "flow-implicit",
+    "source": "{dashboard: {port: 3104}, cliproxy: &ret {self: *ret}}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "flow-explicit",
+    "source": "{? dashboard : {port: 3104}, ? \"cliproxy\" : &ret {self: *ret}}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "flow-no-retired-value",
+    "source": "{dashboard: {port: 3104}, cliproxy}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "inline-document-indented",
+    "source": "--- dashboard: {port: 3104}\n    cliproxy: &ret {self: *ret}\n",
+    "accept": false,
+    "refusal": "The pinned native scanners do not produce a root mapping for this TS-accepted layout; refuse instead of rewriting or guessing.",
+    "tsAccept": true
+  },
+  {
+    "name": "crlf",
+    "source": "? dashboard\r\n: {port: 3104}\r\n? \"cliproxy\"\r\n: &ret {self: *ret}\r\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "cr-only",
+    "source": "? dashboard\r: {port: 3104}\r? \"cliproxy\"\r: &ret {self: *ret}\r",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "unicode-before",
+    "source": "unicode: \"λ\"\n? dashboard\n: {port: 3104}\n? \"cliproxy\"\n: &ret {self: *ret, unicode: \"λ\"}\n",
+    "accept": true,
+    "tsAccept": true
+  },
+  {
+    "name": "complex-key",
+    "source": "? [dashboard]\n: {port: 3104}\ncliproxy: &ret {self: *ret}\n",
+    "accept": false,
+    "tsAccept": true
+  },
+  {
+    "name": "tagged-key",
+    "source": "!!str dashboard: {port: 3104}\ncliproxy: &ret {self: *ret}\n",
+    "accept": false,
+    "tsAccept": false
+  },
+  {
+    "name": "anchored-key",
+    "source": "&key dashboard: {port: 3104}\ncliproxy: &ret {self: *ret}\n",
+    "accept": false,
+    "tsAccept": false
+  },
+  {
+    "name": "duplicate-key",
+    "source": "dashboard: {port: 3104}\ncliproxy: &ret {self: *ret}\ncliproxy: {enabled: true}\n",
+    "accept": false,
+    "tsAccept": false
+  },
+  {
+    "name": "multiple-documents",
+    "source": "dashboard: {port: 3104}\n---\ncliproxy: &ret {self: *ret}\n",
+    "accept": false,
+    "tsAccept": false
+  },
+  {
+    "name": "merge-key",
+    "source": "base: &base {dashboard: {port: 3104}}\n<<: *base\ncliproxy: &ret {self: *ret}\n",
+    "accept": false,
+    "tsAccept": true
+  },
+  {
+    "name": "malformed",
+    "source": "dashboard: {port: 3104}\ncliproxy: [unclosed\n",
+    "accept": false,
+    "tsAccept": false
+  },
+  {
+    "name": "inline-document-unindented",
+    "source": "--- dashboard: {port: 3104}\ncliproxy: &ret {self: *ret}\n",
+    "accept": false,
+    "tsAccept": false
+  }
+]

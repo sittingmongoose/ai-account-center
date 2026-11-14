@@ -278,3 +278,108 @@ fn regression_m3_indented_and_flow_retired_sections_stay_opaque() {
         }
     }
 }
+
+fn yaml_fixture(source: &str) -> (tempfile::TempDir, LoadOptions) {
+    let root = tempfile::tempdir().unwrap();
+    let opts = options(root.path());
+    std::fs::create_dir(root.path().join(".ccs")).unwrap();
+    std::fs::write(root.path().join(".ccs/config.yaml"), source).unwrap();
+    (root, opts)
+}
+
+#[test]
+fn round2_bom_retired_entries_preserve_loading_and_original_bytes() {
+    for retired in ["{enabled: true}", "&ret {self: *ret}"] {
+        let source = format!("\u{feff}dashboard: {{port: 3104}}\ncliproxy: {retired}\n");
+        let (root, opts) = yaml_fixture(&source);
+        let result = Config::load(&opts);
+        assert!(
+            result.is_ok(),
+            "leading BOM must not change the active document"
+        );
+        let config = result.unwrap();
+        assert_eq!(config.values()["dashboard"]["port"], 3104);
+        assert!(config.retired_sections().contains_key("cliproxy"));
+        assert_eq!(config.original_yaml(), source);
+        assert_eq!(
+            std::fs::read(root.path().join(".ccs/config.yaml")).unwrap(),
+            source.as_bytes()
+        );
+    }
+}
+
+#[test]
+fn round2_explicit_scalar_keys_preserve_loading_and_opaque_entries() {
+    for (active, retired) in [
+        ("dashboard", "cliproxy"),
+        ("'dashboard'", "'cliproxy'"),
+        ("\"dashboard\"", "\"cliproxy\""),
+    ] {
+        let source = format!("? {active}\n: {{port: 3104}}\n? {retired}\n: &ret {{self: *ret}}\n");
+        let (root, opts) = yaml_fixture(&source);
+        let result = Config::load(&opts);
+        assert!(
+            result.is_ok(),
+            "explicit plain/quoted scalar keys must load"
+        );
+        let config = result.unwrap();
+        assert_eq!(config.values()["dashboard"]["port"], 3104);
+        assert!(config.values().get("cliproxy").is_none());
+        assert!(config.retired_sections()["cliproxy"].starts_with("? "));
+        assert_eq!(config.original_yaml(), source);
+        assert_eq!(
+            std::fs::read(root.path().join(".ccs/config.yaml")).unwrap(),
+            source.as_bytes()
+        );
+    }
+}
+
+#[test]
+fn round2_top_level_key_form_table_matches_the_supported_contract() {
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/yaml-key-forms.json")).unwrap();
+    let mut failures = Vec::new();
+    for case in cases {
+        for prefix in ["", "\u{feff}"] {
+            let source = format!("{prefix}{}", case["source"].as_str().unwrap());
+            let (root, opts) = yaml_fixture(&source);
+            match Config::load(&opts) {
+                Ok(config) => {
+                    if case["accept"] != true {
+                        failures.push(format!("unsupported key form loaded: {}", case["name"]));
+                        continue;
+                    }
+                    assert_eq!(
+                        config.values()["dashboard"]["port"],
+                        3104,
+                        "{}",
+                        case["name"]
+                    );
+                    assert!(config.values().get("cliproxy").is_none());
+                    assert!(config.retired_sections().contains_key("cliproxy"));
+                    assert_eq!(config.original_yaml(), source);
+                }
+                Err(failure) => {
+                    if case["accept"] != false {
+                        failures.push(format!(
+                            "supported key form refused: {} (BOM={}): {failure}",
+                            case["name"],
+                            !prefix.is_empty()
+                        ));
+                    }
+                    assert_eq!(failure.cause, Cause::Damaged, "{}", case["name"]);
+                    assert!(
+                        failure.detail.as_str().contains("config.yaml"),
+                        "failure must name the file: {}",
+                        case["name"]
+                    );
+                }
+            }
+            assert_eq!(
+                std::fs::read(root.path().join(".ccs/config.yaml")).unwrap(),
+                source.as_bytes()
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
