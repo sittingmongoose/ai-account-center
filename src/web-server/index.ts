@@ -7,6 +7,7 @@
  */
 
 import express from 'express';
+import { RustService, type RustServiceMode } from './rust-service';
 import http from 'http';
 import type https from 'https';
 import type { AddressInfo } from 'net';
@@ -77,6 +78,10 @@ import { startEventLoopMonitor } from '../utils/event-loop-monitor';
 
 export interface ServerOptions {
   port: number;
+  /** M3 service routing; default off. Auth and endpoint guards stay in TS. */
+  rustService?: RustServiceMode;
+  /** Optional existing binary; never built or installed at startup. */
+  rustServiceBinary?: string;
   host?: string;
   staticDir?: string;
   dev?: boolean;
@@ -88,6 +93,8 @@ export interface ServerInstance {
   server: http.Server;
   wss: WebSocketServer;
   cleanup: () => void;
+  /** Private test/diagnostic counters; never exposed by an HTTP route. */
+  rustService: RustService;
   /** The optional in-process HTTPS listener (`dashboard_tls.https_listener`); null when off. */
   httpsServer?: https.Server | null;
 }
@@ -209,6 +216,12 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
 
   // REST API routes (modularized); big JSON answers are encoded on the way out.
   app.use('/api', apiCompression());
+  const rustService = new RustService(options.rustService);
+  await rustService.start(options.rustServiceBinary);
+  app.use('/api', (_req, res, next) => {
+    res.locals.rustService = rustService;
+    next();
+  });
   const { apiRoutes } = await import('./routes/index');
   app.use('/api', apiRoutes);
   // Any /api request no router answered, in any method or letter case, is a JSON 404;
@@ -325,6 +338,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
+    rustService.stop();
     stopEventLoopMonitor();
     httpsServer?.close();
     detachDashboardEvents();
@@ -454,7 +468,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
         .catch(() => null)
         .then((started) => {
           httpsServer = started;
-          resolve({ server, wss, cleanup, httpsServer: started });
+          resolve({ server, wss, cleanup, httpsServer: started, rustService });
         });
     };
 

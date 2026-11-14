@@ -911,6 +911,20 @@
   },
   {
     "method": "GET",
+    "path": "/api/diag",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/index.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
     "path": "/api/health",
     "roles": [
       "signed-out",

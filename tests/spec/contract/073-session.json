@@ -1,13 +1,13 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/usage/at",
+    "path": "/api/store/status",
     "role": "session"
   },
   "response": {
     "body": {
-      "at": "<timestamp>",
-      "series": []
+      "fixture": true,
+      "state": "ready"
     },
     "headers": {
       "cache-control": "no-store",

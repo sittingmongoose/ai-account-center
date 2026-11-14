@@ -5,6 +5,8 @@
  * mounting each domain router at its appropriate path.
  */
 
+import { respondWithRust, skeletonDiagnostics } from '../rust-service';
+import { authKind } from '../middleware/request-auth';
 import {
   apiAuthMiddleware,
   isDashboardWebSocketOriginAllowed,
@@ -116,7 +118,19 @@ apiRoutes.use('/status/deliverable', createShareRouter());
 apiRoutes.use('/scoreboard', scoreboardRoutes);
 
 // Public process liveness compatibility; no configuration details or repair actions.
-apiRoutes.get('/health', (_req, res) => res.json({ status: 'ok' }));
+apiRoutes.get('/health', (req, res) =>
+  respondWithRust(req, res, '/api/health', () => ({ status: 'ok' }))
+);
+
+// Diagnostics never turn loopback or disabled auth into a signed-in principal.
+apiRoutes.get('/diag', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (authKind(req) !== 'session') {
+    res.status(401).json({ error: 'Authentication required' });
+    return;
+  }
+  return respondWithRust(req, res, '/api/diag', skeletonDiagnostics);
+});
 
 // Must stay last: a failed API request ends as a generic 500 in its own response.
 apiRoutes.use(apiErrorHandler);

@@ -1,11 +1,12 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/store/status",
+    "path": "/api/status",
     "role": "signed-out"
   },
   "response": {
     "body": {
+      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/status/answers",
+    "path": "/api/status/files/fixture/missing.txt",
     "role": "hub"
   },
   "response": {

@@ -1854,6 +1854,13 @@
     ]
   },
   {
+    "word": "jobs_not_migrated",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:cause"
+    ]
+  },
+  {
     "word": "key",
     "cause": null,
     "sources": [
@@ -4496,6 +4503,13 @@
     ]
   },
   {
+    "word": "store_owned_by_ts",
+    "cause": null,
+    "sources": [
+      "src/web-server/rust-service.ts:cause"
+    ]
+  },
+  {
     "word": "string",
     "cause": null,
     "sources": [
@@ -4922,6 +4936,7 @@
       "src/web-server/routes/account-visibility-routes.ts:state",
       "src/web-server/routes/reset-claim-routes.ts:status",
       "src/web-server/routes/store-routes.ts:state",
+      "src/web-server/rust-service.ts:status",
       "src/web-server/services/account-analytics-activity.ts:state",
       "src/web-server/services/account-analytics-activity.ts:status",
       "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",

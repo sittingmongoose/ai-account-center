@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/usage/burn",
+    "path": "/api/usage/at",
     "role": "signed-out"
   },
   "response": {

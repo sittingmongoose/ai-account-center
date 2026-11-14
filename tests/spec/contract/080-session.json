@@ -1,10 +1,23 @@
 {
   "request": {
-    "method": "UPGRADE",
-    "path": "/ws",
-    "role": "session"
+    "method": "POST",
+    "path": "/v0/management/reset-quota",
+    "role": "session",
+    "body": {}
   },
   "response": {
-    "status": 101
+    "body": {
+      "code": "rate_limited",
+      "error": "Too many wrong usage hub keys. Try again later.",
+      "retryAfterSeconds": 900
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "retry-after": "900",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 429
   }
 }

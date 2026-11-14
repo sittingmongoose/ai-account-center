@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
+    "method": "GET",
     "path": "/api/status/answers",
-    "role": "hub",
-    "body": {}
+    "role": "hub"
   },
   "response": {
     "body": {

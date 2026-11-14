@@ -1,4 +1,5 @@
 import type { Router } from 'express';
+import { respondWithRust } from '../rust-service';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
@@ -30,9 +31,9 @@ export function createAccountRefreshSettingsRouter(deps: SettingsRouterDeps = {}
     }
     next();
   });
-  router.get('/settings', (_req, res) => {
-    res.json((deps.read ?? readAccountRefreshSettings)());
-  });
+  router.get('/settings', (req, res) =>
+    respondWithRust(req, res, '/api/accounts/settings', deps.read ?? readAccountRefreshSettings)
+  );
   router.put('/settings', (req, res) => {
     if (
       typeof req.headers.origin !== 'string' ||

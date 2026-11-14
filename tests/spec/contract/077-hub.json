@@ -1,20 +1,20 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/v0/management/api-call",
+    "method": "ALL",
+    "path": "/v0/management/fixture-missing",
     "role": "hub",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "invalid_request",
-      "error": "auth_index must be a string from auth-files."
+      "code": "not_found",
+      "error": "AI Account Center offers only auth-files and api-call usage reads here."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 400
+    "status": 404
   }
 }

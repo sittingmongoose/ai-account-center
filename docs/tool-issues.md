@@ -72,3 +72,22 @@ R9 inherited Windows test-tool issues (not product bugs):
 R9 stopping bar, before review: a tool finding stops work only when demonstrated
 on real inputs to make a real check falsely pass or reveal a product bug.
 Other findings stay in this list for the six-hour tool batch; none are dropped.
+
+M3 service skeleton optional documentation check (2026-11-14):
+`node tests/docs/documentation-freshness.js` falsely treats the inline Markdown
+example on `docs/secret-policy.md:57` as a relative link to a file named `url`.
+The example is byte-identical on base `c5c2763db`; no real link or product failure
+was demonstrated. Queue the parser fix for the six-hour tool batch. Required
+M3 runtime/spec checks remain independent of this extra check.
+
+M3 cheap-review L1 (2026-11-14), nonblocking portability follow-up: the runtime
+route attribution used an unanchored stack regex that could consume a checkout
+folder named `src` or ending in `-src`. Fix round 1 anchors the frame to the
+actual checkout's source folder and extracts a checkout-relative path. The
+review also found clean-copy fixture HTML 404s on `/` and the wildcard hub POST.
+Diagnosis: Nas1's shared dependency tree has Express 4.22.1; package.json pins
+5.3.0, as used by the VM task checkout. Copying that already-existing pinned
+tree into the isolated Nas1 copy makes all 410 on/shadow goldens pass without
+any checker/golden change. The obsolete shared tree is unchanged and stays a
+tool/environment follow-up: source copies must use the pinned dependencies.
+No golden or checker is weakened or skipped.

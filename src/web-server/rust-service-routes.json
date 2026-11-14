@@ -1,0 +1,6 @@
+[
+  { "method": "GET", "path": "/api/health", "owner": "rust" },
+  { "method": "GET", "path": "/api/accounts/settings", "owner": "rust" },
+  { "method": "GET", "path": "/api/diag", "owner": "rust" },
+  { "method": "*", "path": "*", "owner": "ts-fallback" }
+]

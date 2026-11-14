@@ -1,46 +1,14 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/usage/history",
+    "path": "/api/usage/burn",
     "role": "session"
   },
   "response": {
     "body": {
-      "columns": [],
-      "from": "<timestamp>",
-      "resolution": "hour",
-      "series": [
-        {
-          "accountId": "codex:fixture-account",
-          "identity": "fixture-series",
-          "plan": null,
-          "points": [
-            [
-              1767225600000,
-              1,
-              2,
-              3,
-              60,
-              1,
-              0,
-              0,
-              0
-            ]
-          ],
-          "provider": "codex",
-          "window": {
-            "identity": "fixture-window",
-            "key": "five_hour",
-            "kind": null,
-            "label": "5 hour",
-            "poolId": null,
-            "poolLabel": null,
-            "unit": null
-          }
-        }
-      ],
-      "to": "<timestamp>",
-      "truncated": false
+      "at": "<timestamp>",
+      "rule": "Points used per hour across resets, from hourly rollups. A rate under 50% coverage is shown with its coverage only.",
+      "series": []
     },
     "headers": {
       "cache-control": "no-store",

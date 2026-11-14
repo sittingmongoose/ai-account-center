@@ -1,14 +1,12 @@
 {
   "request": {
-    "method": "POST",
+    "method": "GET",
     "path": "/api/status/answers",
-    "role": "bar",
-    "body": {}
+    "role": "bar"
   },
   "response": {
     "body": {
-      "code": "invalid_body",
-      "error": "The request body is not valid for this action."
+      "answers": []
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +14,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 400
+    "status": 200
   }
 }

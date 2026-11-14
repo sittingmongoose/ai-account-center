@@ -82,3 +82,65 @@ test file (including Rust files with inline tests and browser checks). Evidence
 labels may overlap, but each file has one primary kind. An internal test is marked
 `uncovered` until a behaviour-level mapping is demonstrated; classification is
 not a claim of behavioural coverage.
+
+## M3 service parity
+
+The M3 skeleton adds signed-in diagnostics (five new goldens). All original 405
+request/role documents retain their bytes; numeric filenames after the insertion
+shift because the runtime inventory remains sorted.
+
+After `bun run build:server`, copy an `aac-http` binary built on Nas1 into
+`dist/native/aac-http`. Never build Rust on the VM. Run the same full spec with
+`AAC_RUST_SERVICE=off` and `AAC_RUST_SERVICE=on`, plus `AAC_RUST_SERVICE=shadow bun
+tests/spec/capture.ts`. The on/shadow fixture allows only that exact binary, with
+no arguments, through the closed process seam and requires actual Rust reply
+counts. Existing role/session/origin checks stay real. The signed-out health
+request carries an internal public-only envelope; it confers no private access.
+
+`rust-proxy.ts` adds real fixture-socket fault injection: boot mismatch, invalid
+JSON, oversized replies, non-200 status, total deadline, header replacement and
+shadow divergence. Capture also verifies attachment, broken-socket fallback and
+unchanged read/write guards. Source fingerprints now include the three TS bridge
+modules and the shared ownership table. See [service details](../../docs/rust-service.md).
+
+### M3 fix round 1: conservative numeric parsing
+
+`settings-numeric-forms.json` is a 42-form shared regression table. The Rust
+socket test requires either an exact integer DTO matching its pinned TS result
+or an explicit 503 fallback. `settings-parity.ts` also executes the actual TS
+file reader and production Rust bridge in off/on/shadow modes. It verifies
+identical final answers, exact TS callback counts, and Rust reply/fallback
+counters, including all six concrete cheap-review examples. It failed against
+ce9d3eb61 on the lower-bound decimal (TS 60, Rust 30) before the fix.
+
+The complete table runs from `run.mjs` in on/shadow mode on a Rust host; off
+mode uses its `--ts-only` check. Run the actual table directly on Nas1 with
+`bun tests/spec/settings-parity.ts` after `cargo build --locked -p aac-http`.
+Rust accepts one typed integer DTO in 30..3600; all other file inputs delegate
+to the TS owner rather than guess a default. The main fixture writes its default
+setting through the real TS writer so ownership counters still prove Rust work.
+
+For clean-copy checks, use the pinned dependency tree (Express 5.3.0), not
+Nas1's obsolete shared Express 4 tree. The latter cannot implement the Express
+5 wildcard spellings and returns HTML 404s for the page/hub fixture paths.
+A source copy also needs its own Git index for `inventory.mjs`; a temporary
+`git init` and `git add -A` supplies that index without altering shared Git data.
+Route-source attribution is now explicitly relative to this checkout's `src/`,
+so checkout names containing `src` cannot become handler paths.
+
+### M3 fix round 2: raw object shape before DTO parsing
+
+The shared numeric/document table now has 65 forms. Added top-level integer
+arrays (including 30/60/90/3600), nested/multi-element arrays, scalar/null/boolean
+roots, wrong-key objects, nested values, extra keys and escaped duplicate keys
+all require raw 503 and exact TS callback/fallback accounting. Empty object and
+extra-key controls remain included. The extended real TS/Rust table fails at
+7ad39e524 on `[90]` (TS 60, Rust 90), before any fix is applied.
+
+Every parsed service object DTO now passes a map-only, exact-unique-key gate
+before its DTO deserializer is called. Original bytes are parsed again only
+after that gate succeeds, preserving number spelling and duplicate rejection.
+This covers settings, boot input, principal headers and raw route-table entries;
+the route list is intentionally an array. Helper tests prove bad object
+envelopes never invoke the DTO deserializer, and actual socket tests refuse
+sequence/unknown/duplicate principal envelopes with 401.

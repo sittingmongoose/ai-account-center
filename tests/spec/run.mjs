@@ -6,6 +6,13 @@ for (const [program, args] of [
   ['python3', ['tests/spec/parsers.py']],
   ['node', ['tests/spec/parser-ts.mjs']],
   ['node', ['tests/spec/inventory.mjs']],
+  [
+    'bun',
+    [
+      'tests/spec/settings-parity.ts',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
   ['bun', ['tests/spec/capture.ts']],
 ])
   execFileSync(program, args, {
