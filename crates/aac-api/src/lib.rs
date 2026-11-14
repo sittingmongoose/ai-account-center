@@ -44,15 +44,28 @@ pub enum PrincipalRole {
     Hub,
 }
 
+// Unit enums otherwise also accept serde's externally tagged object representation.
+// The principal wire contract from TS uses string words only.
+fn enum_word<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let word = String::deserialize(deserializer)?;
+    T::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(word))
+}
+
 /// Forwarded only alongside the service's boot secret over its private socket.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VerifiedPrincipal {
-    /// Credential category.
+    /// Credential category, received only as a string word.
+    #[serde(deserialize_with = "enum_word")]
     pub kind: PrincipalKind,
     /// Opaque identifier (session ids are SHA-256 hashed by TS).
     pub id: String,
-    /// Existing authority, without new permissions.
+    /// Existing authority, received only as a string word, without new permissions.
+    #[serde(deserialize_with = "enum_word")]
     pub role: PrincipalRole,
 }
 
@@ -117,4 +130,46 @@ pub struct Diagnostics {
     pub store: DiagnosticReading,
     /// Agent transports are not owned by the HTTP skeleton.
     pub computers: Vec<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn principal_enum_fields_are_string_only_and_keep_existing_policy() -> serde_json::Result<()> {
+        for (kind, role) in [
+            (json!({"session":null}), json!("admin")),
+            (json!("session"), json!({"admin":null})),
+            (json!({"session":null}), json!({"admin":null})),
+            (json!(["session"]), json!("admin")),
+            (json!("session"), json!(["admin"])),
+            (json!(null), json!("admin")),
+            (json!("session"), json!(true)),
+        ] {
+            assert!(
+                serde_json::from_value::<VerifiedPrincipal>(
+                    json!({"kind":kind,"id":"fixture-admin","role":role})
+                )
+                .is_err()
+            );
+        }
+        for (kind, role, id) in [
+            ("session", "admin", "fixture-admin"),
+            ("bar", "admin", "fixture-bar"),
+            ("device", "device", "fixture-device"),
+            ("hub", "hub", "fixture-hub"),
+            ("session", "public", "public-health"),
+        ] {
+            let value = json!({"kind":kind,"id":id,"role":role});
+            let p: VerifiedPrincipal = serde_json::from_value(value.clone())?;
+            assert!(p.valid());
+            assert_eq!(serde_json::to_value(p)?, value);
+        }
+        let p: VerifiedPrincipal =
+            serde_json::from_value(json!({"kind":"device","id":"fixture-device","role":"admin"}))?;
+        assert!(!p.valid());
+        Ok(())
+    }
 }

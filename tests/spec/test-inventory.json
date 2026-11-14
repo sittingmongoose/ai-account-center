@@ -97,6 +97,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-api/src/lib.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-config/tests/config.rs",
       "kind": "internal",
       "evidence": [],
@@ -117,6 +123,24 @@
     },
     {
       "file": "crates/aac-files/tests/files.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/json_object.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/unix.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/socket.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

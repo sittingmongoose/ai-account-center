@@ -59,7 +59,8 @@ output-only in this service and are not parsed from requests.
 
 Every socket request needs both the boot secret and a strict `x-aac-principal`
 JSON header (`kind`, `id`, `role`). Duplicate, missing or malformed headers and
-impossible role/kind combinations get 401, including on liveness. TS constructs
+impossible role/kind combinations get 401, including on liveness. Incoming kind
+and role fields accept string words only; serde enum-object spellings are refused. TS constructs
 these headers only inside the guarded handlers; it copies no caller credentials,
 origin, principal or secret header. Session ids are hashed before forwarding.
 The existing bar authenticates as a session; a nonce alone never creates a bar

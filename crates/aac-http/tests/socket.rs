@@ -129,6 +129,21 @@ fn unsigned_socket_requests_are_401_and_permissions_are_private() -> Result<()> 
             (Some("b".repeat(64)), Some("null".into())),
             (
                 Some("b".repeat(64)),
+                Some(r#"{"kind":{"session":null},"id":"fixture-admin","role":"admin"}"#.into()),
+            ),
+            (
+                Some("b".repeat(64)),
+                Some(r#"{"kind":"session","id":"fixture-admin","role":{"admin":null}}"#.into()),
+            ),
+            (
+                Some("b".repeat(64)),
+                Some(
+                    r#"{"kind":{"session":null},"id":"fixture-admin","role":{"admin":null}}"#
+                        .into(),
+                ),
+            ),
+            (
+                Some("b".repeat(64)),
                 Some(r#"{"kind":"session","id":"fixture-admin","role":"admin","extra":0}"#.into()),
             ),
             (
