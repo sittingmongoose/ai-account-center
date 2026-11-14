@@ -183,7 +183,7 @@ pub(crate) fn page_from_location(path: &str, search: &str) -> Page {
     if path == "/app" || path.starts_with("/app/") {
         return page_from_path(path);
     }
-    if let Some(page) = query_value(search, "view").and_then(Page::from_id) {
+    if let Some(page) = query_value(search, "view").as_deref().and_then(Page::from_id) {
         return page;
     }
     match path.trim_end_matches('/') {
@@ -206,23 +206,49 @@ fn provider_id(id: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// One query value, as written (page ids need no decoding).
-fn query_value<'a>(search: &'a str, key: &str) -> Option<&'a str> {
+/// One query value, decoded: the first pair whose decoded key is `key`, as `URLSearchParams.get` reads it (the classic
+/// `page-route.mjs` did), so `?view=%61nalytics` and `?%76iew=analytics` are `analytics` too.
+fn query_value(search: &str, key: &str) -> Option<String> {
     search.trim_start_matches('?').split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        (k == key).then_some(v)
+        (form_decode(k) == key).then(|| form_decode(v))
     })
 }
 
+/// `application/x-www-form-urlencoded` decoding, as `URLSearchParams` does it: `+` is a space, `%XX` is a byte, a `%`
+/// not followed by two hex digits stays as written, and the bytes are read as UTF-8 (lossily).
+fn form_decode(raw: &str) -> String {
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' => match (bytes.get(i + 1).and_then(|&b| hex(b)), bytes.get(i + 2).and_then(|&b| hex(b))) {
+                (Some(high), Some(low)) => {
+                    out.push(high << 4 | low);
+                    i += 2;
+                }
+                _ => out.push(b'%'),
+            },
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// The query the frame keeps when it writes its own address: the classic app's `view`, `classic` and `content` go (the
-/// tab is in the path now); everything else (`e2e`, `safe` and the rest) stays.
+/// tab is in the path now), however their keys are encoded; everything else (`e2e`, `safe` and the rest) stays as
+/// written.
 pub(crate) fn kept_search(search: &str) -> String {
     let kept: Vec<&str> = search
         .trim_start_matches('?')
         .split('&')
         .filter(|pair| {
-            let key = pair.split_once('=').map_or(*pair, |(k, _)| k);
-            !pair.is_empty() && !matches!(key, "view" | "classic" | "content")
+            let key = form_decode(pair.split_once('=').map_or(*pair, |(k, _)| k));
+            !pair.is_empty() && !matches!(key.as_str(), "view" | "classic" | "content")
         })
         .collect();
     if kept.is_empty() {
@@ -431,6 +457,13 @@ mod tests {
             ("/", "?e2e&view=accounts", Page::Accounts),
             ("/analytics", "?view=status", Page::Status),
             ("/", "?view=bogus", Page::Home),
+            // encoded keys and values read as URLSearchParams reads them (review L1)
+            ("/", "?view=%61nalytics", Page::Analytics),
+            ("/", "?%76iew=analytics", Page::Analytics),
+            ("/", "?view=%73tatus", Page::Status),
+            ("/", "?view=%2", Page::Home),
+            ("/", "?e2e&%76%69%65%77=%53coreboard", Page::Home),
+            ("/", "?e2e&%76%69%65%77=%73coreboard", Page::Scoreboard),
             ("/", "?classic=1", Page::Home),
             ("/", "?content=1", Page::Home),
             // the frame's own addresses are read as before; ?view= doesn't move them
@@ -453,6 +486,22 @@ mod tests {
             "?e2e&safe=1,2,3,4"
         );
         assert_eq!(kept_search("?embed=1"), "?embed=1");
+        // retired keys go however they are encoded; what stays is kept as written
+        assert_eq!(kept_search("?%76iew=analytics&safe=82%2C0"), "?safe=82%2C0");
+        assert_eq!(kept_search("?cl%61ssic=1&e2e"), "?e2e");
+        assert_eq!(kept_search("?viewer=1"), "?viewer=1");
+    }
+
+    #[test]
+    fn query_text_decodes_as_url_search_params_does() {
+        assert_eq!(form_decode("a+b%20c"), "a b c");
+        assert_eq!(form_decode("%61%62"), "ab");
+        assert_eq!(form_decode("100%"), "100%");
+        assert_eq!(form_decode("%zz%4"), "%zz%4");
+        assert_eq!(form_decode("%C3%A9"), "\u{e9}");
+        assert_eq!(query_value("?a=1&view=x&view=y", "view").as_deref(), Some("x"));
+        assert_eq!(query_value("?viewer=1", "view"), None);
+        assert_eq!(query_value("?view", "view").as_deref(), Some(""));
     }
 
     #[test]

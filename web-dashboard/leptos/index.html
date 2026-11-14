@@ -58,7 +58,7 @@
             const tab = (id) => /^(home|analytics|accounts|status|scoreboard)$/.test(id);
             const p = path.replace(/\/+$/, '');
             if (path === '/app' || path.startsWith('/app/')) return tab(p.split('/').pop()) ? p.split('/').pop() : 'status';
-            const view = /[?&]view=([a-z]+)(&|$)/.exec(search)?.[1];
+            const view = new URLSearchParams(search).get('view');
             if (tab(view)) return view;
             if (/^\/(analytics|accounts|status|scoreboard)$/.test(p)) return p.slice(1);
             return /^\/accounts\/[a-z0-9][a-z0-9-]{0,63}$/.test(p) ? 'accounts' : 'home';
