@@ -72,7 +72,13 @@ const FIXTURE = {
 // reported at.
 const WIDTHS = [1920, 1710, 1600, 1430, 1360, 1280, 1160, 1024, 900, 780];
 
+/** The fixture's accounts only: the registry is answered empty, so nothing from the server's own state is drawn. */
+const EMPTY_REGISTRY = { providers: [], accounts: [], jobs: [], trash: [] };
+const FIXTURE_IDS = FIXTURE.accounts.map((a) => a.id);
+
 async function openAccounts(t) {
+	await t.app.stub('/api/accounts/dashboard', FIXTURE);
+	await t.app.stub('/api/accounts/registry', EMPTY_REGISTRY);
 	await t.app.open({ page: 'accounts' });
 	await t.until('the Accounts page is drawn from the dashboard', () => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row]').length >= 3, null, { timeout: 45000, hard: true });
 }
@@ -106,7 +112,7 @@ async function closeDetails(t) {
 }
 
 async function everyRowSurvivesItsClick(t, width) {
-	const rows = await t.page.evaluate(() => [...document.querySelectorAll('.route:not([hidden]) .acc-item[data-row]')].map((el) => el.dataset.row));
+	const rows = await t.page.evaluate((ids) => [...document.querySelectorAll('.route:not([hidden]) .acc-item[data-row]')].map((el) => el.dataset.row).filter((id) => ids.includes(id)), FIXTURE_IDS);
 	if (!rows.length) throw new Error('no account rows rendered');
 	const height = t.page.viewportSize().height;
 	for (const id of rows) {
@@ -140,7 +146,6 @@ async function cooldownInsidePolicyBox(t, width) {
 
 export const tests = {
 	async 'provider clicks keep the page on screen'(t) {
-		await t.app.stub('/api/accounts/dashboard', FIXTURE);
 		for (const width of WIDTHS) {
 			await t.viewport(width, 1080);
 			await openAccounts(t);
@@ -155,7 +160,6 @@ export const tests = {
 
 	// The header switches re-render a provider's card in place; nothing may move off the page.
 	async 'provider header switches keep the page on screen'(t) {
-		await t.app.stub('/api/accounts/dashboard', FIXTURE);
 		await t.viewport(1920, 1080);
 		await openAccounts(t);
 		const height = t.page.viewportSize().height;
@@ -180,7 +184,6 @@ export const tests = {
 	// The phone tier stacks the rows and ends in the tab bar: the narrowest layout, where "went off the page" shows first.
 	async 'provider clicks keep the phone page on screen'(t) {
 		await t.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
-		await t.app.stub('/api/accounts/dashboard', FIXTURE);
 		await openAccounts(t);
 		await t.visible('.tabbar a[href="/app/accounts"]', 'the Accounts tab');
 		await t.step('390: every account row survives its own click', () => everyRowSurvivesItsClick(t, 390));

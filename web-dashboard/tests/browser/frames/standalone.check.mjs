@@ -194,8 +194,10 @@ for (const theme of ['light', 'dark']) {
       if (document.documentElement) set();
       else document.addEventListener('DOMContentLoaded', set, { once: true });
     });
+    // The start page is the frame's page: it reads its measured inset from safe=, as on the other poses; the offline
+    // cover is the service worker's own page, which paints from the strip's --safe-top above.
     for (const page of ['start-cover', 'offline-cover']) {
-      await t.goto('/__fixture/' + page);
+      await t.goto('/__fixture/' + page + (page === 'start-cover' ? `?safe=${p.safe}` : ''));
       await t.equal(
         `${page}: translucent install metadata`,
         await t.page.evaluate(

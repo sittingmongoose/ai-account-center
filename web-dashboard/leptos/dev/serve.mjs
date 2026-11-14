@@ -100,7 +100,7 @@ http.createServer((req, res) => {
   else if (p.startsWith('/app/marks/')) file(res, path.join(crate, 'src/ui/marks', path.basename(p)));
   else if (p.startsWith('/app/pkg/')) file(res, path.join(crate, 'pkg', path.basename(p)));
   else if (p === '/app/app.css') file(res, path.join(crate, 'style/app.css'));
-  else if (p === '/app/MartianMono.ttf') file(res, path.join(dashboard, 'ui/fonts/MartianMono.ttf'));
+  else if (p === '/app/MartianMono.ttf') file(res, path.join(crate, 'fonts/MartianMono.ttf'));
   else if (p.startsWith('/assets/')) file(res, path.join(dashboard, 'public/assets', path.basename(p)));
   else if (p.startsWith('/api/status/files/')) ranged(req, res, path.join(crate, 'fixtures/media', path.basename(p)));
   else if (p === '/api/scoreboard' && req.method === 'GET') json(res, 200, { ...fixtureJson('scoreboard-view.json'), byModel: fixtureJson('scoreboard-by-model.json') });
