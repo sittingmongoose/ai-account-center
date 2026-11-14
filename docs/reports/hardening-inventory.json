@@ -361,8 +361,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 156,
-    "filesAffected": 49,
+    "totalMarkers": 157,
+    "filesAffected": 50,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
