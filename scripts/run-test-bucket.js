@@ -26,6 +26,9 @@ const slowTests = [
   'tests/integration/web-server/codex-profiles-endpoint.test.ts',
   'tests/unit/docker/dockerfile-lifecycle-scripts.test.ts',
   'tests/unit/docker/docker-hygiene.test.ts',
+  // The helper-sync row reads the built codex runtime helper through
+  // localHelperChecksums, like app-update-helper-sync.test.ts.
+  'tests/unit/web-server/ssh-policy.test.ts',
   'tests/unit/web-server/muse-failure-contract-interop.test.ts',
   'tests/unit/web-server/usage-failover-transport.test.ts',
   'tests/unit/web-server/usage-failover-codex.test.ts',
