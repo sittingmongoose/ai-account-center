@@ -1,6 +1,7 @@
 use aac_config::{ComputerConfig, TransportConfig};
 use aac_core::{Cause, Failure, Retry};
 use std::ffi::OsString;
+use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
@@ -220,20 +221,14 @@ impl Computer {
             key,
         } = &config.transport
         {
-            if host.is_empty()
-                || host.len() > 253
-                || host.starts_with('-')
-                || !host
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b".-:[]".contains(&c))
-                || user.as_ref().is_some_and(|u| {
-                    u.is_empty()
-                        || u.starts_with('-')
-                        || !u
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
-                })
-                || *port == Some(0)
+            endpoint_host(host)?;
+            if user.as_ref().is_some_and(|u| {
+                u.is_empty()
+                    || u.starts_with('-')
+                    || !u
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+            }) || *port == Some(0)
             {
                 return Err(Failure::new(Cause::Refused, "invalid SSH endpoint"));
             }
@@ -291,7 +286,9 @@ impl Computer {
                 if let Some(user) = user {
                     cmd.args(["-l", user]);
                 }
-                cmd.arg("--").arg(host).arg(self.remote_command(argv)?);
+                let ssh_host = endpoint_host(host)?;
+                set_literal_hostname(&mut cmd, &ssh_host);
+                cmd.arg("--").arg(ssh_host).arg(self.remote_command(argv)?);
                 cmd
             }
         };
@@ -322,10 +319,12 @@ impl Computer {
         if let Some(port) = port {
             command.args(["-P", &port.to_string()]);
         }
+        let scp_host = endpoint_host(host)?;
+        set_literal_hostname(&mut command, &scp_host);
         let destination = format!(
             "{}{}:{destination}",
             user.as_ref().map(|u| format!("{u}@")).unwrap_or_default(),
-            host
+            scp_host
         );
         command.arg("--").arg(local).arg(destination);
         self.set_path(&mut command);
@@ -525,6 +524,44 @@ impl Computer {
         }
         guard.0 = None;
         result
+    }
+}
+
+// A single validator produces a bracketed literal for both tools. Hostname explicitly binds
+// both invocations to the unbracketed address consumed by OpenSSH's resolver.
+// Scoped literals, host:port strings, malformed brackets and other unsupported forms fail closed.
+fn endpoint_host(host: &str) -> Result<String, Failure> {
+    let refused = || Failure::new(Cause::Refused, "invalid or unsupported SSH host");
+    if host.is_empty() || host.len() > 253 || host.starts_with('-') {
+        return Err(refused());
+    }
+    let bracketed = host.starts_with('[');
+    let literal = if bracketed {
+        host.strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .ok_or_else(refused)?
+    } else {
+        host
+    };
+    if bracketed || literal.contains(':') {
+        let ip: Ipv6Addr = literal.parse().map_err(|_| refused())?;
+        return Ok(format!("[{ip}]"));
+    }
+    if !literal
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b".-".contains(&byte))
+    {
+        return Err(refused());
+    }
+    Ok(literal.to_owned())
+}
+
+fn set_literal_hostname(command: &mut Command, host: &str) {
+    if let Some(ip) = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        command.args(["-o", &format!("Hostname={ip}")]);
     }
 }
 

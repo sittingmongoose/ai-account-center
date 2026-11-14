@@ -124,7 +124,12 @@ pub struct ComputerConfig {
 }
 
 /// Inputs are injected so tests cannot accidentally discover a real private home.
-#[derive(Clone, Debug)]
+/// Secret-bearing input values deliberately cannot be formatted with Debug.
+/// ```compile_fail
+/// let options = aac_config::LoadOptions::new("/fixture".into(), "/fixture/seed.json".into());
+/// let _ = format!("{options:?}");
+/// ```
+#[derive(Clone)]
 pub struct LoadOptions {
     /// Explicit home; legacy CCS_HOME appends `.ccs` to this path.
     pub ccs_home: PathBuf,
@@ -166,27 +171,35 @@ impl Config {
     /// Load defaults < YAML < legacy setting files < environment < CLI. Reads are bounded;
     /// corrupt present files fail explicitly, and a missing optional file stays absent.
     pub fn load(options: &LoadOptions) -> Result<Self, Failure> {
-        let mut private_dir = options
-            .environment
-            .get("CCS_DIR")
+        let selected = options
+            .cli
+            .get("config_dir")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
             .map(PathBuf::from)
+            .or_else(|| {
+                options
+                    .environment
+                    .get("CCS_DIR")
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from)
+            })
             .unwrap_or_else(|| {
                 options
                     .environment
                     .get("CCS_HOME")
+                    .filter(|value| !value.is_empty())
                     .map(PathBuf::from)
                     .unwrap_or_else(|| options.ccs_home.clone())
                     .join(".ccs")
             });
-        if let Some(dir) = options.cli.get("config_dir").and_then(Value::as_str) {
-            private_dir = PathBuf::from(dir);
-        }
-        if !private_dir.is_absolute() {
-            return Err(Failure::new(
-                Cause::Refused,
-                "configuration root must be absolute",
-            ));
-        }
+        // Like TS path.resolve, consult cwd only for a selected relative path, once before IO.
+        let base = if selected.is_absolute() {
+            PathBuf::new()
+        } else {
+            std::env::current_dir()?
+        };
+        let private_dir = aac_files::resolve_root(&base, &selected)?;
         let original_yaml = match optional_read(&private_dir.join("config.yaml"), 4 * 1024 * 1024)?
         {
             Some(bytes) => String::from_utf8(bytes).map_err(|_| yaml::damaged())?,

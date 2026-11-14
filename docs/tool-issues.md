@@ -91,3 +91,9 @@ tree into the isolated Nas1 copy makes all 410 on/shadow goldens pass without
 any checker/golden change. The obsolete shared tree is unchanged and stays a
 tool/environment follow-up: source copies must use the pinned dependencies.
 No golden or checker is weakened or skipped.
+
+## Rewrite foundation: max review follow-up
+
+| Tool | Issue and evidence | Real false pass? | Status |
+| --- | --- | --- | --- |
+| Rust transport four-channel fixture | `crates/aac-transport/tests/transport.rs`, `clones_limit_a_computer_to_four_concurrent_channels`: uncoordinated 100 ms children reached only three-way overlap in two unchanged workspace runs. [Astra max review L2](/mnt/Cursor/share/ai-account-center/2026-11-14-parallel/MAX-REWRITE-ASTRA.md). | No; false failure only, no excess concurrency demonstrated. | Open for six-hour tool batch: arrange four child-ready signals, hold a barrier, assert fifth blocked, then release. Do not weaken the limit assertion to hide the race. |

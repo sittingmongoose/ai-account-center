@@ -20,6 +20,9 @@ impl Fixture {
         Self::for_os(OperatingSystem::Linux)
     }
     fn for_os(os: OperatingSystem) -> Self {
+        Self::for_endpoint(os, "fixture.invalid")
+    }
+    fn for_endpoint(os: OperatingSystem, host: &str) -> Self {
         let root = tempfile::tempdir().unwrap();
         for tool in ["ssh", "scp"] {
             let path = root.path().join(tool);
@@ -32,7 +35,7 @@ impl Fixture {
             label: "Fixture".into(),
             os,
             transport: TransportConfig::Ssh {
-                host: "fixture.invalid".into(),
+                host: host.into(),
                 user: Some("fixture".into()),
                 port: Some(2222),
                 key: root.path().join("key"),
@@ -79,6 +82,119 @@ impl Fixture {
             artifact,
             json!({"mode":"shipping", "hash":hash, "handshake":identity}),
         )
+    }
+}
+
+#[tokio::test]
+async fn max1_ipv6_shipping_uses_one_endpoint_for_ssh_and_scp() {
+    for host in ["2001:db8::1", "[2001:db8::1]"] {
+        let fixture = Fixture::for_endpoint(OperatingSystem::Linux, host);
+        let (artifact, scenario) = fixture.artifact();
+        fixture.scenario(scenario);
+        AgentClient::new(fixture.computer.clone(), artifact)
+            .ensure(&fixture.options())
+            .await
+            .unwrap();
+        let traces = fixture.traces();
+        for trace in traces.iter().filter(|trace| trace["tool"] == "ssh") {
+            let argv = trace["argv"].as_array().unwrap();
+            let target = argv[argv.len() - 2].as_str().unwrap();
+            assert_eq!(target, "[2001:db8::1]");
+            let parsed = std::process::Command::new("/usr/bin/ssh")
+                .args(["-G", "-F", "/dev/null"])
+                .args(
+                    argv[..argv.len() - 1]
+                        .iter()
+                        .map(|value| value.as_str().unwrap()),
+                )
+                .output()
+                .unwrap();
+            assert!(parsed.status.success());
+            assert!(
+                String::from_utf8(parsed.stdout)
+                    .unwrap()
+                    .lines()
+                    .any(|line| line == "hostname 2001:db8::1"),
+                "SSH parser selected a different IPv6 endpoint"
+            );
+        }
+        let upload = traces.iter().find(|trace| trace["tool"] == "scp").unwrap();
+        assert!(
+            upload["argv"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .starts_with("fixture@[2001:db8::1]:")
+        );
+    }
+}
+
+#[tokio::test]
+async fn max1_real_scp_parser_keeps_the_complete_ipv6_host() {
+    let fixture = Fixture::for_endpoint(OperatingSystem::Linux, "2001:db8::1");
+    let (artifact, scenario) = fixture.artifact();
+    fixture.scenario(scenario);
+    let recorder = r#"#!/usr/bin/python3
+import json,sys
+from pathlib import Path
+(Path(__file__).parent/'scp-selected.json').write_text(json.dumps(sys.argv[1:]))
+sys.exit(1)
+"#;
+    let wrapper = r#"#!/usr/bin/python3
+import subprocess,sys
+from pathlib import Path
+root=Path(__file__).parent
+sys.exit(subprocess.run(['/usr/bin/scp','-S',str(root/'scp-recorder'),*sys.argv[1:]]).returncode)
+"#;
+    for (name, body) in [("scp", wrapper), ("scp-recorder", recorder)] {
+        let path = fixture.root.path().join(name);
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let _ = AgentClient::new(fixture.computer.clone(), artifact)
+        .ensure(&fixture.options())
+        .await;
+    let args: Vec<String> = serde_json::from_slice(
+        &std::fs::read(fixture.root.path().join("scp-selected.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        args.iter().any(|arg| arg == "2001:db8::1"),
+        "SCP selected a different host: {args:?}"
+    );
+    assert!(!args.iter().any(|arg| arg == "2001"));
+}
+
+#[test]
+fn max1_unformattable_endpoint_literals_are_refused() {
+    let root = tempfile::tempdir().unwrap();
+    for host in [
+        "alias:2222",
+        "[fixture.invalid]",
+        "[2001:db8::1]:22",
+        "2001:db8::1]",
+        "[[2001:db8::1]]",
+        "fe80::1%eth0",
+    ] {
+        let config = ComputerConfig {
+            id: ComputerId::new("fixture").unwrap(),
+            label: "Fixture".into(),
+            os: OperatingSystem::Linux,
+            transport: TransportConfig::Ssh {
+                host: host.into(),
+                user: None,
+                port: None,
+                key: root.path().join("key"),
+            },
+            roles: Vec::new(),
+            metadata: Default::default(),
+        };
+        assert!(
+            matches!(Computer::new(config,SshPolicy::new(root.path().join("known_hosts"),root.path().join("run"))),Err(error) if error.cause==Cause::Refused)
+        );
     }
 }
 

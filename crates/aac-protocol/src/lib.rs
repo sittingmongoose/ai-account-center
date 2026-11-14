@@ -13,7 +13,12 @@ pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const MAX_DEADLINE_MS: u64 = 600_000;
 
 /// Exactly one request starts an agent process; later stdin lines carry controls.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Argument values deliberately cannot be formatted with Debug.
+/// ```compile_fail
+/// let request = aac_protocol::Request { protocol: 1, verb: "health".into(), id: "fixture".into(), deadline_ms: 1000, args: serde_json::json!({}) };
+/// let _ = format!("{request:?}");
+/// ```
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Request {
     /// Must equal `PROTOCOL_VERSION`.

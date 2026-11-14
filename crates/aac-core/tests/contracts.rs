@@ -127,6 +127,17 @@ fn wire_vocabulary_sources_are_pinned_to_the_generated_table() {
 }
 
 #[test]
+fn max1_progress_states_are_not_failure_causes() {
+    for word in ["ok", "scanning", "signing_in"] {
+        assert_eq!(wire_word(word).unwrap().cause, None, "{word}");
+    }
+    assert_eq!(
+        wire_word("auth_required").unwrap().cause,
+        Some(Cause::AuthRequired)
+    );
+}
+
+#[test]
 fn regression_m1_scrub_checks_the_text_it_returns() {
     let address = "fixture@\0example.invalid".to_owned();
     let prefix = format!("sk-\0{}", "A".repeat(24));

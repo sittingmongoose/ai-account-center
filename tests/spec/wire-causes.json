@@ -10,6 +10,7 @@
   "policy_blocked": "policy_blocked",
   "auth_required": "auth_required",
   "signin_needed": "signin_needed",
+  "signing_in": null,
   "not_idle": "not_idle",
   "held": "held",
   "installed_no_logs": "installed_no_logs",
