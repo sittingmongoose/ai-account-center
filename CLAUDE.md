@@ -43,7 +43,7 @@ or API routing product.
 | Area | Inputs |
 | --- | --- |
 | CLI/account/backend | `src/`, `lib/`, `config/` |
-| Dashboard | `web-dashboard/src/`, `web-dashboard/ui/`, `web-dashboard/public/` |
+| Dashboard | `web-dashboard/leptos/`, `web-dashboard/public/` |
 | Build/package verification | `scripts/build-ui.js`, `scripts/validate-ui.js`, `scripts/verify-bundle.js` |
 | Native clients | `macos-bar/`, `windows-bar/` |
 | Collectors and updates | `scripts/account-usage/`, `scripts/app-updates/` |
