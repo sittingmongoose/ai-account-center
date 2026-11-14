@@ -1,4 +1,4 @@
-//! Stdio entry point for the health-only agent; stdout is protocol data only.
+//! Stdio entry point for the host agent; stdout is protocol data only.
 use tokio::io::{AsyncWriteExt, BufReader};
 
 #[tokio::main]

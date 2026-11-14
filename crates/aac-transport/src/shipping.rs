@@ -1,9 +1,7 @@
 use crate::{CallOptions, Computer, ProcessOutput};
 use aac_config::{OperatingSystem, TransportConfig};
 use aac_core::{Cause, Failure};
-use aac_protocol::{
-    EXIT_AGENT_MISSING, Event, Handshake, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request,
-};
+use aac_protocol::{EXIT_AGENT_MISSING, Event, Handshake, PROTOCOL_VERSION, Request, frame_cap};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -176,7 +174,8 @@ impl AgentClient {
         self.ensure(options).await?;
         let mut input = serde_json::to_vec(request)
             .map_err(|_| Failure::new(Cause::Refused, "request encoding failed"))?;
-        if input.len() >= MAX_FRAME_BYTES {
+        let cap = frame_cap(&request.verb);
+        if input.len() >= cap {
             return Err(Failure::new(
                 Cause::OutputTooLarge,
                 "agent request cap exceeded",
@@ -196,7 +195,7 @@ impl AgentClient {
             .split(|c| *c == b'\n')
             .filter(|line| !line.is_empty())
         {
-            if terminal || line.len() > MAX_FRAME_BYTES {
+            if terminal || line.len() >= cap {
                 return Err(Failure::new(
                     Cause::AgentMismatch,
                     "invalid agent event ordering or size",

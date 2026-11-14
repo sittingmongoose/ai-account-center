@@ -158,6 +158,10 @@ async fn production_verbs_refuse_fixture_injection() {
     for (verb, args) in [
         ("signin-expiry", json!({"keychain":{}})),
         ("inventory", json!({"probe":"cores=1","platform":"linux"})),
+        (
+            "scan-usage",
+            json!({"kinds":["codex"],"minDateMs":0,"_scanFixture":{"home":"/unused","env":{}}}),
+        ),
     ] {
         let payload = json!({"protocol":1,"verb":verb,"id":"fixture","deadlineMs":1000,"args":args})
             .to_string() + "\n";
@@ -171,4 +175,36 @@ async fn production_verbs_refuse_fixture_injection() {
         let event: serde_json::Value = serde_json::from_slice(&output).unwrap();
         assert_eq!(event["failure"]["cause"], "refused");
     }
+}
+
+#[cfg(feature = "parity-fixtures")]
+#[tokio::test]
+async fn scan_uses_the_shared_library_without_changing_its_reply_bytes() {
+    let home = tempfile::tempdir().unwrap();
+    let args = json!({"kinds":["codex","claude","cursor","devin"],"minDateMs":0,"presence":true,"cwd":false});
+    let parsed = aac_usage::protocol::parse_request(&serde_json::to_vec(&args).unwrap()).unwrap();
+    let env = aac_usage::discover::env_from(std::iter::empty::<(String, String)>());
+    let expected =
+        serde_json::to_string(&aac_usage::protocol::scan(&parsed, home.path(), &env)).unwrap();
+    let mut fixture_args = args;
+    fixture_args["_scanFixture"] = json!({"home":home.path(),"env":{}});
+    let input = json!({"protocol":1,"verb":"scan-usage","id":"scan-fixture","deadlineMs":5000,"args":fixture_args}).to_string() + "\n";
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_aac-agent"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child.stdin.take().unwrap().write_all(input.as_bytes())?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(output.status.success());
+    let bytes = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        bytes,
+        format!(
+            "{{\"type\":\"result\",\"protocol\":1,\"id\":\"scan-fixture\",\"value\":{expected}}}\n"
+        )
+    );
 }

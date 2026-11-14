@@ -67,7 +67,7 @@ elif mode == "shipping":
         request = json.loads(sys.stdin.buffer.readline())
         if scenario.get("wrongEventId"):
             request["id"] = "wrong"
-        event = {"type": "result", "protocol": 1, "id": request["id"], "value": {"status": "ok"}}
+        event = {"type": "result", "protocol": 1, "id": request["id"], "value": scenario.get("value", {"status": "ok"})}
         print(json.dumps(event))
         if scenario.get("duplicateTerminal"):
             print(json.dumps(event))

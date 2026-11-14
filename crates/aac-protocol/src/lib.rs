@@ -9,6 +9,17 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const EXIT_AGENT_MISSING: i32 = 87;
 /// Largest request or NDJSON event accepted at a protocol boundary.
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+/// Discovery's existing 8 MiB payload cap plus bounded agent envelope overhead.
+pub const MAX_SCAN_FRAME_BYTES: usize = 8 * 1024 * 1024 + 1024;
+
+/// Keep discovery's larger frames isolated from the other verbs' existing cap.
+pub fn frame_cap(verb: &str) -> usize {
+    if verb == "scan-usage" {
+        MAX_SCAN_FRAME_BYTES
+    } else {
+        MAX_FRAME_BYTES
+    }
+}
 /// Largest allowed per-request relative deadline in milliseconds.
 pub const MAX_DEADLINE_MS: u64 = 600_000;
 

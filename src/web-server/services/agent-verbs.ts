@@ -1,4 +1,4 @@
-/** M2 read-only opt-in adapter. Never ships, installs, or refreshes an agent. */
+/** Read-only opt-in adapter. Never ships, installs, or refreshes an agent. */
 import fs from 'fs';
 import { ConfigError } from '../../errors/error-types';
 import path from 'path';
@@ -58,13 +58,13 @@ function target(platform: UsageHost['platform']): string {
 export function agentLauncher(artifact: AgentArtifact, platform: UsageHost['platform']): string {
   if (!/^[a-f0-9]{64}$/.test(artifact.sha256)) throw new ConfigError('Invalid agent hash');
   if (platform === 'windows') {
-    const script = `$p=Join-Path $env:LOCALAPPDATA 'ai-account-center\\bin\\aac-agent.exe'; if (!(Test-Path -LiteralPath $p -PathType Leaf)) { exit 87 }; if ((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() -ne '${artifact.sha256}') { exit 87 }; & $p; exit $LASTEXITCODE`;
+    const script = `$ErrorActionPreference='Stop'; try { $p=Join-Path $env:LOCALAPPDATA 'ai-account-center\\bin\\aac-agent.exe'; if (!(Test-Path -LiteralPath $p -PathType Leaf)) { exit 87 };  $h=(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash; if (!$h -or $h.ToLowerInvariant() -ne '${artifact.sha256}') { exit 87 }; & $p; exit $LASTEXITCODE } catch { exit 87 }`;
     return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
   }
   return `p="$HOME/.cache/ai-account-center/bin/aac-agent"; [ -f "$p" ] && [ -x "$p" ] || exit 87; h=$(sha256sum "$p" 2>/dev/null || shasum -a 256 "$p") || exit 87; [ "\${h%% *}" = '${artifact.sha256}' ] || exit 87; exec "$p"`;
 }
 
-function reply(stdout: string, id: string, verb: string): string | null {
+function reply(stdout: string, id: string): string | null {
   const lines = stdout.trim().split('\n');
   if (lines.length !== 1) throw new ConfigError('Invalid agent reply');
   const event: unknown = JSON.parse(lines[0]);
@@ -73,62 +73,52 @@ function reply(stdout: string, id: string, verb: string): string | null {
   if (row.protocol !== 1 || row.id !== id || row.type !== 'result')
     throw new ConfigError('Agent failed');
   if (JSON.stringify(row.value) === '{"fallback":"python"}') return null;
-  const value = row.value as { schemaVersion?: unknown; profiles?: unknown } | null;
-  if (
-    verb === 'signin-expiry'
-      ? value?.schemaVersion !== 1 || !Array.isArray(value.profiles)
-      : !validQuota(row.value)
-  )
-    throw new ConfigError('Invalid agent result');
-  return JSON.stringify(value);
+  if (!row.value || typeof row.value !== 'object') throw new ConfigError('Invalid agent result');
+  return JSON.stringify(row.value);
 }
 
-function validQuota(value: unknown): boolean {
-  if (!value || typeof value !== 'object') return false;
-  const row = value as Record<string, unknown>;
-  return (
-    typeof row.id === 'string' &&
-    typeof row.provider === 'string' &&
-    ['ok', 'unavailable', 'needs_sign_in', 'error'].includes(String(row.status)) &&
-    Array.isArray(row.windows) &&
-    typeof row.capabilities === 'object'
-  );
+export interface AgentCallOptions {
+  artifacts?: readonly AgentArtifact[];
+  run?: typeof runManagedCommand;
+  mode?: AgentVerbs;
+  deadlineMs: number;
+  timeoutMs?: number;
+  maxBytes: number;
 }
 
-export async function runQuotaAgent(
-  host: Pick<UsageHost, 'platform' | 'sshHost'>,
-  args: Record<string, unknown>,
+/** Presence and pinned digest only; execution additionally verifies the version handshake. */
+export function localAgentReady(
+  platform: UsageHost['platform'],
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
-  run = runManagedCommand,
   mode: AgentVerbs = agentVerbs()
-): Promise<string | null> {
-  return runVerbAgent(host, artifacts, run, mode, 'quota-read', args);
-}
-
-export async function collectQuotaWithFallback(
-  agent: () => Promise<string | null>,
-  python: () => Promise<string>
-): Promise<string> {
+): boolean {
+  if (mode !== 'on') return false;
+  const artifact = artifacts.find((a) => a.target === target(platform));
+  if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return false;
   try {
-    const result = await agent();
-    if (result !== null) return result;
+    const file = path.resolve(__dirname, '../../..', artifact.file);
+    const stat = fs.lstatSync(file);
+    return (
+      stat.isFile() &&
+      stat.size <= 128 * 1024 * 1024 &&
+      createHash('sha256').update(fs.readFileSync(file)).digest('hex') === artifact.sha256
+    );
   } catch {
-    /* Python remains authoritative. */
+    return false;
   }
-  logger.info('agent.verbs.fallback', 'fallback: python', { verb: 'quota-read' });
-  return python();
 }
 
 /** Every unavailable, unproven or failed agent delegates to the labelled Python helper. */
-async function runVerbAgent(
+export async function runAgentVerb(
   host: Pick<UsageHost, 'platform' | 'sshHost'>,
-  artifacts: readonly AgentArtifact[] = manifest.artifacts,
-  run = runManagedCommand,
-  mode: AgentVerbs,
-  verb: string,
-  verbArgs: Record<string, unknown>
+  verb: 'signin-expiry' | 'quota-read' | 'scan-usage',
+  verbArgs: Record<string, unknown>,
+  options: AgentCallOptions
 ): Promise<string | null> {
   try {
+    const mode = options.mode ?? agentVerbs();
+    const artifacts = options.artifacts ?? manifest.artifacts;
+    const run = options.run ?? runManagedCommand;
     if (mode === 'off') return null;
     const artifact = artifacts.find((a) => a.target === target(host.platform));
     if (!artifact || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return null;
@@ -138,7 +128,7 @@ async function runVerbAgent(
     if (host.sshHost) {
       args = sshArgv(host.sshHost, agentLauncher(artifact, host.platform), {
         interval: 5,
-        countMax: 1,
+        countMax: verb === 'scan-usage' ? 6 : 1,
       });
     } else {
       executable = path.resolve(__dirname, '../../..', artifact.file);
@@ -172,50 +162,101 @@ async function runVerbAgent(
         protocol: 1,
         verb,
         id,
-        deadlineMs: 15000,
+        deadlineMs: options.deadlineMs,
         args: verbArgs,
       }) + '\n';
+    if (Buffer.byteLength(input) > options.maxBytes) return null;
     const result = await run(executable, args, {
-      timeoutMs: 20000,
-      maxBytes: 1024 * 1024,
+      timeoutMs: options.timeoutMs ?? options.deadlineMs + 5000,
+      maxBytes: options.maxBytes,
       input,
       env: { ...process.env },
     });
     if (host.sshHost && result.code === 87) return null;
     if (result.failed || result.code !== 0 || result.timedOut || result.missing) return null;
-    const value = reply(result.stdout, id, verb);
-    if (value !== null && verb === 'quota-read') {
-      const row = JSON.parse(value);
-      if (
-        row.provider !== verbArgs.provider ||
-        row.platform !== verbArgs.platform ||
-        row.id !== (verbArgs.account ?? `plan-${verbArgs.provider}-${verbArgs.platform}`)
-      )
-        return null;
-    }
-    if (value !== null)
-      logger.info('agent.verbs.result', 'Agent verb collected', {
-        verb,
-      });
-    return value;
+    if (Buffer.byteLength(result.stdout) > options.maxBytes) return null;
+    return reply(result.stdout, id);
   } catch {
     return null;
   }
 }
 
-/** Verified sign-in collector, retaining the part-one adapter contract. */
+/** Sign-in retains its existing DTO and labelled Python fallback boundary. */
 export async function runSignInAgent(
   host: UsageHost,
   artifacts: readonly AgentArtifact[] = manifest.artifacts,
   run = runManagedCommand,
   mode: AgentVerbs = agentVerbs()
 ): Promise<string | null> {
-  return runVerbAgent(
+  const result = await runAgentVerb(
     host,
+    'signin-expiry',
+    host.sshHost ? {} : { ccsDir: getCcsDir() },
+    {
+      artifacts,
+      run,
+      mode,
+      deadlineMs: 15000,
+      maxBytes: 1024 * 1024,
+    }
+  );
+  if (result === null) return null;
+  const value = JSON.parse(result) as { schemaVersion?: unknown; profiles?: unknown };
+  if (value.schemaVersion !== 1 || !Array.isArray(value.profiles)) return null;
+  logger.info('agent.verbs.result', 'Agent sign-in expiry collected', { verb: 'signin-expiry' });
+  return result;
+}
+
+function validQuota(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.id === 'string' &&
+    typeof row.provider === 'string' &&
+    ['ok', 'unavailable', 'needs_sign_in', 'error'].includes(String(row.status)) &&
+    Array.isArray(row.windows) &&
+    typeof row.capabilities === 'object'
+  );
+}
+
+/** Quota retains its DTO, provider/platform/account binding and existing fallback boundary. */
+export async function runQuotaAgent(
+  host: Pick<UsageHost, 'platform' | 'sshHost'>,
+  args: Record<string, unknown>,
+  artifacts: readonly AgentArtifact[] = manifest.artifacts,
+  run = runManagedCommand,
+  mode: AgentVerbs = agentVerbs()
+): Promise<string | null> {
+  const value = await runAgentVerb(host, 'quota-read', args, {
     artifacts,
     run,
     mode,
-    'signin-expiry',
-    host.sshHost ? {} : { ccsDir: getCcsDir() }
-  );
+    deadlineMs: 15000,
+    maxBytes: 1024 * 1024,
+  });
+  if (value === null) return null;
+  const row = JSON.parse(value);
+  if (
+    !validQuota(row) ||
+    row.provider !== args.provider ||
+    row.platform !== args.platform ||
+    row.id !== (args.account ?? `plan-${args.provider}-${args.platform}`)
+  )
+    return null;
+  logger.info('agent.verbs.result', 'Agent verb collected', { verb: 'quota-read' });
+  return value;
+}
+
+export async function collectQuotaWithFallback(
+  agent: () => Promise<string | null>,
+  python: () => Promise<string>
+): Promise<string> {
+  try {
+    const result = await agent();
+    if (result !== null) return result;
+  } catch {
+    /* Python remains authoritative. */
+  }
+  logger.info('agent.verbs.fallback', 'fallback: python', { verb: 'quota-read' });
+  return python();
 }

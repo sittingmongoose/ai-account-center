@@ -2470,6 +2470,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/analytics-scan-agent.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/analytics-scan-failures.test.ts",
       "kind": "helper",
       "evidence": [

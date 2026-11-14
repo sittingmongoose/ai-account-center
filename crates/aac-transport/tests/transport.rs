@@ -315,6 +315,43 @@ async fn corrupt_upload_does_not_replace_an_existing_agent_or_retry() {
 }
 
 #[tokio::test]
+async fn scan_shipping_is_fake_only_uploads_once_and_keeps_discovery_frame_capacity() {
+    let fixture = Fixture::new();
+    let (artifact, mut scenario) = fixture.artifact();
+    let value = json!({"version":2,"truncated":false,"kinds":{},"rows":[],"srows":[],"fixture":"x".repeat(1_100_000)});
+    scenario["value"] = value.clone();
+    fixture.scenario(scenario);
+    let client = AgentClient::new(fixture.computer.clone(), artifact);
+    let mut request = Request {
+        protocol: 1,
+        verb: "scan-usage".into(),
+        id: "scan-fixture".into(),
+        deadline_ms: 1000,
+        args: json!({"kinds":["codex"],"minDateMs":0,"fingerprints":{},"fixture":"x".repeat(1_100_000)}),
+    };
+    let options = CallOptions::new(Duration::from_secs(5), 8 * 1024 * 1024);
+    for _ in 0..2 {
+        let events = client.call(&request, &options).await.unwrap();
+        assert!(
+            matches!(events.last(), Some(aac_protocol::Event::Result { value: actual, .. }) if actual == &value)
+        );
+    }
+    assert_eq!(
+        fixture
+            .traces()
+            .iter()
+            .filter(|row| row["tool"] == "scp")
+            .count(),
+        1
+    );
+    request.verb = "health".into();
+    assert_eq!(
+        client.call(&request, &options).await.unwrap_err().cause,
+        Cause::OutputTooLarge
+    );
+}
+
+#[tokio::test]
 async fn every_handshake_dimension_is_checked() {
     for field in ["name", "version", "target", "protocol"] {
         let fixture = Fixture::new();

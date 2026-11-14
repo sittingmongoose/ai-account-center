@@ -12,6 +12,7 @@ parity-fixtures = []
 [dependencies]
 aac-core.workspace = true
 aac-protocol.workspace = true
+aac-usage = { path = "../../native/aac-usage" }
 serde_json = { workspace = true, features = ["preserve_order"] }
 tokio.workspace = true
 libc.workspace = true
