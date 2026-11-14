@@ -314,6 +314,11 @@ textarea.note::placeholder { color: var(--ink-4); }
 .chrome-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .status-line { color: var(--ink-3); font-size: 12.5px; white-space: nowrap; margin-right: 6px; }
 .status-line b { color: var(--ink-2); font-weight: 580; font-variation-settings: 'wght' 580; }
+/* a long status line gives way (ellipsis) before anything else in the header: at 1280 px "Updated 12d 23h ago · live"
+   pushed Account 19 px past the edge */
+.chrome .brand, .chrome .nav, .chrome-right > :not(.status-line) { flex: none; }
+.chrome-right { min-width: 0; }
+.chrome .status-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chrome-sep { width: 1px; height: 22px; background: var(--rule); margin: 0 4px; }
 .upd-btn { height: 34px; padding: 0 13px 0 10px; border-radius: 9px; border: 1px solid var(--rule); background: var(--paper); display: inline-flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 580; font-variation-settings: 'wght' 580; font-size: 13px; white-space: nowrap; }
 .upd-btn .ic { width: 18px; height: 18px; color: var(--ink-2); }
@@ -1236,8 +1241,6 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 :root[data-chrome='desk'] .details { top: calc(var(--safe-top) + 63px); padding-top: 0; }
 /* With the strip on the left the rail is on the left: the Details sheet and panel reach the right edge (review L1). */
 :root[data-chrome='rail'][data-rail-side='left'] .details { right: var(--safe-right, 0px); }
-/* A switch confirmation the dashboard draws shows the dashboard over the tab while it is open. */
-.slint-host.raised { position: fixed; inset: 0; z-index: 45; height: auto; }
 
 /* ==========================================================================
    Below desktop: compact sizes and the mobile layout. Last, so they win over the section defaults.
@@ -1440,8 +1443,9 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
   .sb-title .lbl-short { display: inline; }
   .sb-title { gap: 6px 10px; }
 }
-/* Duo portrait: the band already names the page and sums it up (Status keeps its worst-thread line, below). */
-:root[data-chrome='band'] .page-head:not(.sb-head):not(.st-head) { display: none; }
+/* Duo portrait: the band already names the page and sums it up (Status keeps its worst-thread line, below). The
+   Analytics head holds the page's controls (range, dates, provider): it stays. */
+:root[data-chrome='band'] .page-head:not(.sb-head):not(.st-head):not(.ax-top) { display: none; }
 /* Beside the rail, which shows the page, the page's name goes, as on the phone: the summary starts at the top. */
 :root[data-chrome='rail'] .page-title { display: none; }
 /* Beside the rail the page's name and its one-line summary share a line, as wider screens do: no line for a word. */
@@ -1539,8 +1543,8 @@ button.ut-row:disabled { cursor: default; opacity: 1; }
 
 
 /* ==========================================================================
-   Shell: the page's own chrome is drawn only when it is opened standalone (html[data-chrome]); inside the Slint
-   shell's iframe data-chrome is "none" and the content takes the iframe's whole box.
+   Shell: the page's own chrome is drawn only when it is opened standalone (html[data-chrome]); embedded (?embed=1
+   or in an iframe) data-chrome is "none" and the content takes the embedder's whole box.
    ========================================================================== */
 html { background: var(--bg-band); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overscroll-behavior-y: none; }
 body { min-height: 100dvh; }
@@ -1584,7 +1588,7 @@ body { min-height: 100dvh; }
 :root[data-chrome='none'] .shell { grid-template-rows: minmax(0, 1fr); background: transparent; }
 :root[data-chrome='none'] .content { background: none; }
 :root[data-chrome='none'] html, :root[data-chrome='none'] body { background: transparent; }
-/* In the Slint shell's iframe the shell already names the page below desktop. */
+/* Embedded, the embedder names the page below desktop. */
 @container content (max-width: 1279.98px) { :root[data-chrome='none'] .page-title { display: none; } }
 .brand, .topbar .logo { color: var(--ink); }
 .logo { width: 24px; height: 24px; }
@@ -1756,8 +1760,6 @@ body { min-height: 100dvh; }
 .prov-item b { font-weight: 620; font-variation-settings: 'wght' 620; }
 .prov-item b.quiet { color: var(--ink-3); font-weight: 500; font-variation-settings: 'wght' 500; }
 .prov-note { margin-left: 11px; }
-/* the Duo band names the page, but the Analytics head holds the page's controls: it stays */
-:root[data-chrome='band'] .page-head.ax-top { display: flex; }
 
 /* cards */
 .ax-card { container: card / inline-size; display: flex; flex-direction: column; min-width: 0; margin-bottom: var(--ax-gap);
@@ -2355,11 +2357,6 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 [hidden] { display: none !important; }
 .upd-btn { cursor: pointer; }
 .brand { text-decoration: none; }
-/* Home, Analytics and Accounts: the dashboard scrolls inside its own frame, so the page is exactly one screen tall. */
-.shell.slint-route { height: 100dvh; min-height: 0; }
-.shell.slint-route .content { min-height: 0; overflow: hidden; }
-.slint-host { height: 100%; }
-.slint-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--bg); }
 
 .toasts { position: fixed; z-index: 60; top: calc(var(--safe-top) + 72px); right: calc(16px + var(--safe-right)); width: min(380px, calc(100vw - 32px)); display: grid; gap: 8px; pointer-events: none; }
 :root[data-chrome='phone'] .toasts, :root[data-chrome='band'] .toasts { top: calc(var(--safe-top) + 56px); left: calc(12px + var(--safe-left)); right: calc(12px + var(--safe-right)); width: auto; }
@@ -2406,6 +2403,9 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .field input:disabled { opacity: .55; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
 .check input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+/* Remember me: its meaning on its own line under it, so a narrow card (the folded Duo) never splits the two into columns */
+.signin-card .check .check-text { display: grid; gap: 1px; }
+.signin-card .check .check-sub { font-size: 11.5px; color: var(--ink-3); }
 .signin-message { font-size: 13px; line-height: 1.45; }
 .signin-note { font-size: 12px; line-height: 1.45; }
 .signin-card .btn.lg { width: 100%; }

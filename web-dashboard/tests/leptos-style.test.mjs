@@ -126,3 +126,10 @@ test('the iframe gets no rail or band space', () => {
 	const rail = css.indexOf("[data-chrome='rail'] .content");
 	assert.ok(rail > 0, 'the bottom inset applies only to the rail and band layouts');
 });
+
+test('the Duo band hides page heads it already names, never the Analytics head with its controls', () => {
+	// The exception must live in the hiding rule itself: a later `.page-head.ax-top` rule loses to its two :not()s.
+	const hide = css.match(/:root\[data-chrome='band'\] \.page-head([^{]*)\{ display: none; \}/g) || [];
+	assert.equal(hide.length, 1, 'one band rule hides page heads');
+	assert.match(hide[0], /:not\(\.ax-top\)/);
+});

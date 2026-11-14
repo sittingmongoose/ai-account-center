@@ -428,8 +428,9 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
                     </Show>
                     <Show when=move || !setup.get()>
                         <label class="check"><input name="remember-me" type="checkbox" checked
-                            on:change=move |e| remember.set(event_target_checked(&e))/>"Remember me on this device"
-                            <span class="q3">{move || if remember.get() { "· stays signed in" } else { "· signs out with the browser" }}</span></label>
+                            on:change=move |e| remember.set(event_target_checked(&e))/>
+                            <span class="check-text"><span>"Remember me on this device"</span>
+                            <span class="check-sub">{move || if remember.get() { "Stays signed in" } else { "Signs out with the browser" }}</span></span></label>
                     </Show>
                     {move || (busy.get() && view.with(|v| v.message.is_none())).then(|| view! {
                         <p class="signin-message q3" role="status">{checking_line(setup.get())}</p>
