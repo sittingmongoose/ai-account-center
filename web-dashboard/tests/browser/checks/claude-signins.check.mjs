@@ -56,6 +56,7 @@ const noSideways = async (t, name) => t.check(name, await t.page.evaluate(() => 
 export const tests = {
 	async 'sign-in renewal: header, notice, rows and Details'(t) {
 		await t.app.stub('/api/accounts/dashboard', FIXTURE);
+		await t.app.noResets();
 		await t.viewport(1920, 1080);
 		await t.app.open({ page: 'home' });
 		await t.page.waitForSelector('.route:not([hidden]) .page.home .hsec', { timeout: 30000 });

@@ -76,15 +76,10 @@ const WIDTHS = [1920, 1710, 1600, 1430, 1360, 1280, 1160, 1024, 900, 780];
 const EMPTY_REGISTRY = { providers: [], accounts: [], jobs: [], trash: [] };
 const FIXTURE_IDS = FIXTURE.accounts.map((a) => a.id);
 
-/** Details reads each account's reset inventory. Without the native reset backend (as on the VM) the server answers
- * 503; this answers as a backend with nothing to report, so Details draws the dashboard's own reset rows either way. */
-const NO_RESETS = { status: 'unavailable', reason: 'Fixture: no reset backend.', grants: [], history: [] };
-
 async function openAccounts(t) {
 	await t.app.stub('/api/accounts/dashboard', FIXTURE);
 	await t.app.stub('/api/accounts/registry', EMPTY_REGISTRY);
-	await t.page.route((u) => /^\/api\/accounts\/[^/]+\/reset-claims$/.test(new URL(u).pathname), (r) =>
-		r.request().method() === 'GET' ? r.fulfill({ json: NO_RESETS }) : r.continue());
+	await t.app.noResets();
 	await t.app.open({ page: 'accounts' });
 	await t.until('the Accounts page is drawn from the dashboard', () => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row]').length >= 3, null, { timeout: 45000, hard: true });
 }

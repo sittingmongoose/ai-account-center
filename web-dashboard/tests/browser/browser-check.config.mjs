@@ -97,7 +97,16 @@ export default (ctx) => {
 				return true;
 			},
 			// Synthetic API answers (shape them like src/web-server/services/*-types.ts; made-up names only)
-			async stub(t, apiPath, json) { await t.page.route((u) => new URL(u).pathname === apiPath, (r) => r.fulfill({ json })); }
+			async stub(t, apiPath, json) { await t.page.route((u) => new URL(u).pathname === apiPath, (r) => r.fulfill({ json })); },
+			// Details reads each account's reset inventory (GET /api/accounts/<id>/reset-claims). A server without the
+			// native reset backend (the VM) answers 503; this answers as a backend with nothing to report ('unavailable'),
+			// so Details draws the dashboard's own reset rows, as on that 503, without a console error. For checks of
+			// synthetic accounts whose subject isn't resets.
+			async noResets(t) {
+				const answer = { status: 'unavailable', reason: 'Fixture: no reset backend.', grants: [], history: [] };
+				await t.page.route((u) => /^\/api\/accounts\/[^/]+\/reset-claims$/.test(new URL(u).pathname), (r) =>
+					r.request().method() === 'GET' ? r.fulfill({ json: answer }) : r.continue());
+			}
 		}
 	};
 };

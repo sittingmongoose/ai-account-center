@@ -77,6 +77,7 @@ export default async function (t) {
   - `t.app.open({ page, signIn, query })` opens `/app/<page>?e2e` (and `query`), signed in unless `signIn: false`.
   - `t.app.signIn()`
   - `t.app.stub(path, json)`
+  - `t.app.noResets()` answers every account's reset inventory as `unavailable`, so Details on synthetic accounts reads no 503 where the server has no native reset backend (the VM). Not for checks about resets.
 - **Selectors:** controls carry `data-probe` names (`[data-probe="show:claude"]`); each tab is a `.route`, and the one on screen is `.route:not([hidden])`.
 - **Synthetic data only:** made-up names and emails, never real account data.
 - **DPR:** judge HiDPI on a real device; Playwright's DPR emulation is not the same as a phone's screen.
