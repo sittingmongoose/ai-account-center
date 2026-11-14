@@ -1027,7 +1027,7 @@ function cachedHostSources(
     );
     if (failedRoots.length) {
       if (kept.length || keptSessions.length)
-        results.push({ tool, data: toWorkerResult(kept, keptSessions, tool) });
+        results.push({ tool, data: toWorkerResult(kept, keptSessions, tool, host) });
       states.push({
         tool,
         host,
@@ -1849,7 +1849,7 @@ export async function loadAnalyticsRemoteSources(
           // fixed "not measured" row stands in); what the scanner read before still counts.
           if (!PYTHON_KINDS.has(tool) && response.reader?.name === 'python-fallback') {
             if (rows.length || srows.length) {
-              results.push({ tool, data: toWorkerResult(rows, srows, tool) });
+              results.push({ tool, data: toWorkerResult(rows, srows, tool, host) });
               states.push({
                 tool,
                 host,

@@ -1430,6 +1430,7 @@ export class AccountAnalyticsActivityService {
         windowFromMs: cutoff,
         now,
         localComplete: (tool) => discoveryComplete && succeeded.has(tool) && !unfinished.has(tool),
+        scannerOwned: new Set(answer?.local?.owned ?? []),
       });
       void this.ingestor().submit(reports);
     }
