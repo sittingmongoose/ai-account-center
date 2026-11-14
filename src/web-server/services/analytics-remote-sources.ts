@@ -437,6 +437,8 @@ interface KindRead {
   state: AnalyticsSourceState;
   unfinished?: AnalyticsUnfinishedLog[];
   unfinishedCount?: number;
+  /** Last nested-folder failure, retained through cached/failed reads until successful recovery. */
+  unreadableFolders?: number;
 }
 
 interface RemoteCache {
@@ -522,7 +524,14 @@ function loadCache(file: string, at: () => string = () => new Date().toISOString
     value.discovery = parseAnalyticsDiscovery(value.discovery);
     // A kind's unfinished list is a diagnostic: a malformed one is dropped.
     for (const read of Object.values(value.kinds ?? {})) {
-      if (!read || read.unfinished === undefined) continue;
+      if (!read) continue;
+      if (
+        !Number.isSafeInteger(read.unreadableFolders) ||
+        (read.unreadableFolders ?? 0) <= 0 ||
+        (read.unreadableFolders ?? 0) > 100_000
+      )
+        delete read.unreadableFolders;
+      if (read.unfinished === undefined) continue;
       const list = parseUnfinished(read.unfinished);
       if (list?.length) {
         read.unfinished = list;
@@ -982,6 +991,10 @@ function withCacheNote(
   );
 }
 
+function unreadableFoldersText(count: number): string {
+  return `${count.toLocaleString('en-US')} folder${count === 1 ? '' : 's'} inside its log folders could not be listed (permission denied, say), so ${count === 1 ? 'its' : 'their'} logs are not counted`;
+}
+
 /**
  * Previously read aggregates of one host, marked `cached`. A kind with nothing kept is `scan_failed`
  * while a failure stands (with its cause, and what the last read that worked found), never that
@@ -1005,12 +1018,18 @@ function cachedHostSources(
       (row) => row.k === tool && sessionInWindow(row, minDateMs)
     );
     const read = cached.kinds?.[tool];
+    const failedRoots = (cached.discovery?.kinds[tool]?.roots ?? []).filter(
+      (root) => root.state === 'unreadable' || root.state.startsWith('link_')
+    );
+    const unreadableFolders = read?.unreadableFolders ?? 0;
     // Cursor without a run store is told by presence, one cell only (DESIGN 16.2).
     if (
       tool === 'cursor' &&
       !kept.length &&
       !keptSessions.length &&
-      (!read || read.state === 'not_installed')
+      (!read || read.state === 'not_installed') &&
+      !failedRoots.length &&
+      !unreadableFolders
     )
       continue;
     const failed = standingFailure(cached, tool, failure);
@@ -1022,10 +1041,11 @@ function cachedHostSources(
     // The last known per-root quality rides along (RECHECK-BIG-1 M5): a log folder the last real
     // scan could not read stays named on cached cells, never plain "cached". The saved discovery
     // is replaced by the next scan of this kind, so a successful scan clears the cause.
-    const failedRoots = (cached.discovery?.kinds[tool]?.roots ?? []).filter(
-      (root) => root.state === 'unreadable' || root.state.startsWith('link_')
-    );
-    if (failedRoots.length) {
+    if (failedRoots.length || unreadableFolders) {
+      const causes = [
+        ...(failedRoots.length ? [rootFailureText(failedRoots)] : []),
+        ...(unreadableFolders ? [unreadableFoldersText(unreadableFolders)] : []),
+      ].join('; ');
       if (kept.length || keptSessions.length)
         results.push({ tool, data: toWorkerResult(kept, keptSessions, tool, host) });
       states.push({
@@ -1034,7 +1054,7 @@ function cachedHostSources(
         state: 'unreadable',
         lastScanAt: read?.lastScanAt ?? null,
         rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
-        detail: `${rootFailureText(failedRoots)}${failed ? `; ${scanFailureText(failed.cause)} (${failed.at})` : ''}; ${kept.length || keptSessions.length ? 'showing previously read usage' : 'nothing is counted from them'}`,
+        detail: `${causes}${failed ? `; ${scanFailureText(failed.cause)} (${failed.at})` : ''}; ${kept.length || keptSessions.length ? 'showing previously read usage' : 'nothing is counted from them'}`,
         cause: 'unreadable_folder',
         ...found,
       });
@@ -1706,8 +1726,20 @@ export async function loadAnalyticsRemoteSources(
         // The logs a kind has not read to its end, as its last answer named them (DESIGN 16.1).
         for (const tool of kinds) {
           const kind = response.kinds[tool];
-          if (!kind || discarded(tool)) continue;
-          const read = kindReads[tool];
+          if (!kind) continue;
+          let read = kindReads[tool];
+          const unreadableFolders =
+            kind.unreadableFolders ??
+            (discarded(tool) || kind.partial || cutKinds.has(tool)
+              ? cached.kinds?.[tool]?.unreadableFolders
+              : undefined);
+          if (unreadableFolders) {
+            read = { ...(read ?? { lastScanAt: null, state: 'cached' }), unreadableFolders };
+            kindReads[tool] = read;
+          } else if (read) {
+            delete read.unreadableFolders;
+          }
+          if (discarded(tool)) continue;
           if (kind.unfinished?.length)
             kindReads[tool] = {
               ...(read ?? { lastScanAt: null, state: 'cached' }),
@@ -1957,10 +1989,7 @@ export async function loadAnalyticsRemoteSources(
             if (failedRoots.length || unreadableFolders) {
               const parts: string[] = [];
               if (failedRoots.length) parts.push(rootFailureText(failedRoots));
-              if (unreadableFolders)
-                parts.push(
-                  `${unreadableFolders.toLocaleString('en-US')} folder${unreadableFolders === 1 ? '' : 's'} inside its log folders could not be listed (permission denied, say), so ${unreadableFolders === 1 ? 'its' : 'their'} logs are not counted`
-                );
+              if (unreadableFolders) parts.push(unreadableFoldersText(unreadableFolders));
               states.push({
                 tool,
                 host,

@@ -288,47 +288,78 @@ describe('recheck 1 leftovers (RECHECK-BIG-1, FIX-ROUND-BIG-2)', () => {
 
   // M5: a cached answer keeps the unreadable-folder cause of the last real scan, and a later
   // successful scan clears it. At 106f05a5c the cached cell read only "cached remote scan".
-  it('keeps the unreadable cause on cached cells until a successful scan', async () => {
-    const unreadable = answer({
-      kinds: { codex: { state: 'not_installed', partial: true, fingerprints: {} } },
-      rows: [],
-      discovery: discoveryWith([unreadableRoot]),
-    });
-    const live = await scans([answer({}), unreadable]);
-    expect(live.cell?.state).toBe('unreadable');
-    const cached = loadAnalyticsRemoteCachedSources(MIN_DATE, {
-      cacheDir: cache,
-      localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
-    });
-    const cell = cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex');
-    expect(cell?.state).toBe('unreadable');
-    expect(cell?.cause).toBe('unreadable_folder');
-    expect(cell?.detail).toContain('permission denied');
-    const tokens = cached.results
-      .filter((entry) => entry.tool === 'codex')
-      .flatMap((entry) => entry.data.hourly)
-      .reduce((sum, hour) => sum + hour.inputTokens, 0);
-    expect(tokens).toBe(10);
-    // A successful scan with the folder readable again clears the cause.
-    const healed = answer({
-      discovery: discoveryWith([
-        {
-          root: ROOT,
-          origin: 'default',
-          state: 'ok',
-          counts: { filesFound: 1, newestMtime: null },
+  it.each(['root', 'nested folder'])(
+    'keeps the unreadable %s cause on both cached loaders until recovery',
+    async (failure) => {
+      const unreadable = answer({
+        kinds: {
+          codex: {
+            state: 'ok',
+            partial: true,
+            ...(failure === 'nested folder' ? { unreadableFolders: 1 } : {}),
+            fingerprints: {},
+          },
         },
-      ]),
-    });
-    await scans([healed]);
-    const after = loadAnalyticsRemoteCachedSources(MIN_DATE, {
-      cacheDir: cache,
-      localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
-    });
-    const cleared = after.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex');
-    expect(cleared?.state).not.toBe('unreadable');
-    expect(cleared?.detail ?? '').not.toContain('permission denied');
-  });
+        rows: [],
+        discovery: discoveryWith([
+          failure === 'root'
+            ? unreadableRoot
+            : { ...unreadableRoot, state: 'installed_no_logs', cause: undefined },
+        ]),
+      });
+      const live = await scans([answer({}), unreadable]);
+      expect(live.cell?.state).toBe('unreadable');
+      const cached = loadAnalyticsRemoteCachedSources(MIN_DATE, {
+        cacheDir: cache,
+        localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
+      });
+      const cell = cached.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex');
+      expect(cell?.state).toBe('unreadable');
+      expect(cell?.cause).toBe('unreadable_folder');
+      expect(cell?.detail).toContain('permission denied');
+      if (failure === 'nested folder')
+        expect(cell?.detail).toContain('1 folder inside its log folders');
+      // The asynchronous loader at +1 s must read the persisted quality without scanning.
+      const cachedAgain = await loadAnalyticsRemoteSources(MIN_DATE, {
+        cacheDir: cache,
+        now: () => Date.parse('2026-10-02T00:20:01Z'),
+        force: false,
+        hosts: async () => ({ mac: 'mac-alias', windows: null, nas1: null, alexis: null }),
+        localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
+        runHelper: async () => {
+          throw new Error('cached request must not scan');
+        },
+      });
+      expect(
+        cachedAgain.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex')
+      ).toMatchObject({ state: 'unreadable', cause: 'unreadable_folder' });
+      const tokens = cached.results
+        .filter((entry) => entry.tool === 'codex')
+        .flatMap((entry) => entry.data.hourly)
+        .reduce((sum, hour) => sum + hour.inputTokens, 0);
+      expect(tokens).toBe(10);
+      // A successful scan with the folder readable again clears the cause.
+      const healed = answer({
+        discovery: discoveryWith([
+          {
+            root: ROOT,
+            origin: 'default',
+            state: 'ok',
+            counts: { filesFound: 1, newestMtime: null },
+          },
+        ]),
+      });
+      await scans([healed]);
+      const after = loadAnalyticsRemoteCachedSources(MIN_DATE, {
+        cacheDir: cache,
+        localScanner: () => ({ ok: false, cause: 'binary_not_built' }),
+      });
+      const cleared = after.states.find((entry) => entry.host === 'mac' && entry.tool === 'codex');
+      expect(cleared?.state).not.toBe('unreadable');
+      expect(cleared?.detail ?? '').not.toContain('permission denied');
+      expect(cleared?.detail ?? '').not.toContain('folder inside its log folders');
+    }
+  );
 
   // L2: presence says Cursor is installed with no local records, while the run-store reader read
   // it. One cell, the reader's. At 106f05a5c both cells appeared.
