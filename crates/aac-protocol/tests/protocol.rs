@@ -43,3 +43,13 @@ fn ndjson_events_are_tagged_and_failure_has_no_value() {
         Control::Cancel { cancel: true }
     ));
 }
+
+#[test]
+fn control_frames_refuse_mixed_or_unknown_fields() {
+    assert!(
+        serde_json::from_str::<Control>(r#"{"cancel":true,"input":"private fixture"}"#).is_err()
+    );
+    assert!(
+        serde_json::from_str::<Control>(r#"{"input":"private fixture","unknown":true}"#).is_err()
+    );
+}

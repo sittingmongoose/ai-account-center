@@ -51,6 +51,21 @@ fn writer_ownership_and_advisory_lock_are_enforced() {
 
 #[test]
 fn failed_partial_write_never_replaces_original_and_staging_is_removed() {
+    // Re-enter this existing test as an isolated child to kill it between staging and rename.
+    if let Some(root) = std::env::var_os("AAC_M1_CRASH_ROOT") {
+        let root = PathBuf::from(root);
+        let store = registry(32)
+            .claim(&root, Path::new("state.json"), "fixture-writer")
+            .unwrap();
+        let _ = store.write_with(|out| {
+            out.write_all(b"partial crash")?;
+            out.flush()?;
+            std::fs::write(root.join("stage-ready"), b"ready")?;
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            Ok(())
+        });
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let store = registry(32)
         .claim(root.path(), Path::new("state.json"), "fixture-writer")
@@ -71,6 +86,40 @@ fn failed_partial_write_never_replaces_original_and_staging_is_removed() {
     assert!(panic.is_err());
     assert_eq!(store.read().unwrap(), b"original");
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn killed_writer_keeps_the_committed_file_and_releases_its_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let store = registry(32)
+        .claim(root.path(), Path::new("state.json"), "fixture-writer")
+        .unwrap();
+    store.write(b"committed original").unwrap();
+    drop(store);
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "failed_partial_write_never_replaces_original_and_staging_is_removed",
+        ])
+        .env("AAC_M1_CRASH_ROOT", root.path())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !root.path().join("stage-ready").exists() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("crash fixture did not reach staging");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    child.kill().unwrap();
+    assert!(!child.wait().unwrap().success());
+    let store = registry(32)
+        .claim(root.path(), Path::new("state.json"), "fixture-writer")
+        .unwrap();
+    assert_eq!(store.read().unwrap(), b"committed original");
 }
 
 #[test]
@@ -122,6 +171,8 @@ fn registry_refuses_weak_modes_duplicates_and_path_escape() {
         "x/../../escape",
         "x\\escape",
         "C:escape",
+        "state.json.lock",
+        ".trash/entry",
     ] {
         let mut registry = Registry::default();
         assert!(

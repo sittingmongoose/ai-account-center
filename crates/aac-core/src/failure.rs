@@ -155,7 +155,7 @@ pub fn scrub(text: &str) -> Scrubbed {
 pub struct Failure {
     /// Stable failure class.
     pub cause: Cause,
-    /// Optional checked legacy wire word, preserved separately from the class.
+    /// Optional scrubbed feature-specific reason, preserved separately from the class.
     pub reason: Option<Scrubbed>,
     /// Safe bounded diagnostic text.
     pub detail: Scrubbed,
@@ -203,7 +203,7 @@ impl From<std::io::Error> for Failure {
 
 /// A reading cannot carry a value when unavailable; cached values retain their true time.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reading<T> {
     /// A successful observation at its source time.
     Live {

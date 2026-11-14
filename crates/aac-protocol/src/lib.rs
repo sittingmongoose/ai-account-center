@@ -61,7 +61,7 @@ impl Request {
 
 /// Interactive controls retain input only in memory and must never be logged.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum Control {
     /// Request cancellation; false does not cancel.
     Cancel {

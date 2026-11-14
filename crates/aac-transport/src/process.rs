@@ -41,6 +41,42 @@ impl SshPolicy {
         }
     }
 
+    fn prepare_control_directory(&self) -> Result<(), Failure> {
+        if !self.run_dir.exists() {
+            let builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            let builder = {
+                use std::os::unix::fs::DirBuilderExt;
+                let mut builder = builder;
+                builder.mode(0o700);
+                builder
+            };
+            match builder.create(&self.run_dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let metadata = std::fs::symlink_metadata(&self.run_dir)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(Failure::new(
+                Cause::Refused,
+                "SSH control directory must be private and real",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err(Failure::new(
+                    Cause::Refused,
+                    "SSH control directory permissions are too broad",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Exact target-design 5.1 options, in stable order. Scan keepalive is six, short is two.
     /// Identity and known-hosts paths remain individual argv items, including any spaces.
     pub fn argv(&self, key: &Path, scan: bool) -> Result<Vec<OsString>, Failure> {
@@ -225,6 +261,7 @@ impl Computer {
                 port,
                 key,
             } => {
+                self.policy.prepare_control_directory()?;
                 let mut cmd = Command::new(&self.policy.ssh);
                 cmd.args(self.policy.argv(key, options.scan)?);
                 if let Some(port) = port {
@@ -321,7 +358,11 @@ impl Computer {
             _ = tokio::time::sleep_until(options.deadline) => return Err(Failure::new(Cause::Timeout, "deadline expired waiting for channel")),
             slot = self.shared.slots.acquire() => slot.map_err(|_| Failure::new(Cause::Bug, "channel pool closed"))?,
         };
-        self.before_call()?;
+        let probing = self.before_call()?;
+        let _probe = ProbeLease {
+            shared: self.shared.clone(),
+            probing,
+        };
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -330,11 +371,11 @@ impl Computer {
         #[cfg(unix)]
         command.process_group(0);
         let result = self.capture(&mut command, stdin, options).await;
-        self.after_call(&result)?;
+        self.after_call(&result, probing)?;
         result
     }
 
-    fn before_call(&self) -> Result<(), Failure> {
+    fn before_call(&self) -> Result<bool, Failure> {
         let mut state = self
             .shared
             .breaker
@@ -349,17 +390,24 @@ impl Computer {
                 return Err(failure);
             }
             state.probing = true;
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
-    fn after_call(&self, result: &Result<ProcessOutput, Failure>) -> Result<(), Failure> {
+    fn after_call(
+        &self,
+        result: &Result<ProcessOutput, Failure>,
+        probing: bool,
+    ) -> Result<(), Failure> {
         let mut state = self
             .shared
             .breaker
             .lock()
             .map_err(|_| Failure::new(Cause::Bug, "breaker lock poisoned"))?;
-        state.probing = false;
+        if probing {
+            state.probing = false;
+        }
         match result {
             Err(failure)
                 if matches!(
@@ -391,6 +439,7 @@ impl Computer {
             Failure::new(Cause::SshUnreachable, "transport process could not start")
         })?;
         let pid = child.id();
+        let mut guard = KillOnDrop(pid);
         let mut input = child
             .stdin
             .take()
@@ -453,6 +502,7 @@ impl Computer {
             let _ = child.kill().await;
             let _ = child.wait().await;
         }
+        guard.0 = None;
         result
     }
 }
@@ -493,6 +543,27 @@ fn kill_tree(pid: Option<u32>) {
         let _ = std::process::Command::new("taskkill")
             .args(["/T", "/F", "/PID", &pid.to_string()])
             .output();
+    }
+}
+
+struct KillOnDrop(Option<u32>);
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        kill_tree(self.0);
+    }
+}
+
+struct ProbeLease {
+    shared: Arc<Shared>,
+    probing: bool,
+}
+impl Drop for ProbeLease {
+    fn drop(&mut self) {
+        if self.probing
+            && let Ok(mut state) = self.shared.breaker.lock()
+        {
+            state.probing = false;
+        }
     }
 }
 

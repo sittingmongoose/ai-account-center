@@ -70,6 +70,7 @@ fn relative(path: &Path) -> bool {
     !path.as_os_str().is_empty()
         && path.components().all(|c| matches!(c, Component::Normal(_)))
         && !path.to_string_lossy().contains(['\\', ':'])
+        && !path.components().any(|c| matches!(c, Component::Normal(name) if name == ".trash" || name.to_string_lossy().ends_with(".lock")))
 }
 
 impl Registry {
@@ -307,12 +308,14 @@ fn ensure_directory(path: &Path) -> Result<(), Failure> {
                 ));
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let mut builder = fs::DirBuilder::new();
+                let builder = fs::DirBuilder::new();
                 #[cfg(unix)]
-                {
+                let builder = {
                     use std::os::unix::fs::DirBuilderExt;
+                    let mut builder = builder;
                     builder.mode(0o700);
-                }
+                    builder
+                };
                 builder.create(directory)?;
             }
             Err(error) => return Err(error.into()),

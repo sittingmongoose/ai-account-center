@@ -29,6 +29,9 @@ fn unavailable_cannot_carry_a_value() {
     };
     let value = serde_json::to_value(&reading).unwrap();
     assert!(value.get("value").is_none());
+    let mut fabricated = value.clone();
+    fabricated["value"] = json!(0);
+    assert!(serde_json::from_value::<Reading<u64>>(fabricated).is_err());
     let measured: Reading<u64> = Reading::Live {
         value: 0,
         observed_at: UtcMs::new(5).unwrap(),
@@ -111,9 +114,14 @@ fn every_generated_wire_word_roundtrips_and_keeps_provenance() {
 
 #[test]
 fn wire_vocabulary_sources_are_pinned_to_the_generated_table() {
-    let hashes: std::collections::BTreeMap<String, String> = serde_json::from_str(include_str!("../../../tests/spec/wire-source-hashes.json")).unwrap();
+    let hashes: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(include_str!("../../../tests/spec/wire-source-hashes.json")).unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (source, hash) in hashes {
-        assert_eq!(sha256_hex(std::fs::read(root.join(&source)).unwrap()), hash, "wire vocabulary source changed: {source}; regenerate and review");
+        assert_eq!(
+            sha256_hex(std::fs::read(root.join(&source)).unwrap()),
+            hash,
+            "wire vocabulary source changed: {source}; regenerate and review"
+        );
     }
 }

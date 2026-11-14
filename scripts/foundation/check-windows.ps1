@@ -20,6 +20,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Set-Location $mirror
 $env:Path = "$env:USERPROFILE\.cargo\bin;" + $env:Path
 $env:CARGO_BUILD_JOBS = '2'
+$env:RUSTFLAGS = '-D warnings'
 $env:CARGO_TARGET_DIR = Join-Path $mirror 'target'
 $ErrorActionPreference = 'Continue'
 cargo +1.99.1 check --locked --target x86_64-pc-windows-msvc -p aac-core -p aac-protocol -p aac-files 2>&1 | ForEach-Object { "$_" }

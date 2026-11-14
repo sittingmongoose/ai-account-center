@@ -345,3 +345,65 @@ async fn agent_event_correlation_and_terminal_order_are_checked() {
         );
     }
 }
+
+#[tokio::test]
+async fn dropping_a_call_reaps_its_process_and_releases_the_channel() {
+    let fixture = Fixture::new();
+    fixture.scenario(json!({"mode":"sleep"}));
+    let computer = fixture.computer.clone();
+    let call = tokio::spawn(async move {
+        computer
+            .execute(
+                &["fixture-agent".into()],
+                &[],
+                &CallOptions::new(Duration::from_secs(5), 1024),
+            )
+            .await
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while fixture.traces().is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "fake process did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    call.abort();
+    let _ = call.await;
+    let pid = fixture.traces()[0]["pid"].as_u64().unwrap();
+    while Path::new(&format!("/proc/{pid}")).exists() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "aborted child was not reaped"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    fixture.scenario(json!({"mode":"ok"}));
+    assert!(
+        fixture
+            .computer
+            .execute(&["fixture-agent".into()], &[], &fixture.options())
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn control_socket_directory_is_private_and_symlinks_are_refused() {
+    let fixture = Fixture::new();
+    fixture
+        .computer
+        .execute(&["fixture-agent".into()], &[], &fixture.options())
+        .await
+        .unwrap();
+    let run = fixture.root.path().join("run");
+    assert_eq!(
+        std::fs::metadata(&run).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    std::fs::remove_dir(&run).unwrap();
+    std::os::unix::fs::symlink(fixture.root.path(), &run).unwrap();
+    assert!(
+        matches!(fixture.computer.execute(&["fixture-agent".into()], &[], &fixture.options()).await, Err(error) if error.cause == Cause::Refused)
+    );
+}
