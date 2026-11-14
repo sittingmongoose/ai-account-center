@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1268,
-    "filesAffected": 123,
-    "hotpathOccurrences": 576,
-    "hotpathFilesAffected": 64,
+    "totalOccurrences": 1270,
+    "filesAffected": 124,
+    "hotpathOccurrences": 578,
+    "hotpathFilesAffected": 65,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -771,7 +771,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
-          "loc": 1561
+          "loc": 1634
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",

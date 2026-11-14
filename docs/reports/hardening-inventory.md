@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1268 |
-| Sync fs files affected (all) | 123 |
-| Sync fs occurrences (runtime hotpaths) | 576 |
-| Sync fs files affected (runtime hotpaths) | 64 |
+| Sync fs occurrences (all) | 1270 |
+| Sync fs files affected (all) | 124 |
+| Sync fs occurrences (runtime hotpaths) | 578 |
+| Sync fs files affected (runtime hotpaths) | 65 |
 | Legacy shim markers | 180 |
 | Legacy shim files affected | 62 |
 
@@ -89,7 +89,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/services/account-analytics-activity.ts` | 2393 |
 | `src/web-server/services/analytics-remote-sources.ts` | 2145 |
 | `src/web-server/status/answers.ts` | 1744 |
-| `src/web-server/services/analytics-remote-transport.ts` | 1561 |
+| `src/web-server/services/analytics-remote-transport.ts` | 1634 |
 | `src/codex-auth/codex-activation-runtime.ts` | 1340 |
 | `src/antigravity/registry.ts` | 1104 |
 | `src/web-server/services/account-analytics-service.ts` | 1028 |
