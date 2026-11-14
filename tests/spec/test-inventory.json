@@ -1601,6 +1601,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/docker/docker-hygiene.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/docker/dockerfile-lifecycle-scripts.test.ts",
       "kind": "helper",
       "evidence": [
@@ -3057,6 +3063,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/ssh-policy.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "tests/unit/web-server/start-server-host.test.ts",
