@@ -234,7 +234,9 @@ config.dashboard_auth = {
 saveUnifiedConfig(config);
 const ui = path.join(home, 'ui');
 fs.mkdirSync(ui);
-fs.writeFileSync(path.join(ui, 'index.html'), '<canvas id="slint-dashboard"></canvas>');
+// The Leptos app frame is the dashboard page (static-ui.ts APP_ENTRY); every page route answers with it.
+fs.mkdirSync(path.join(ui, 'app'));
+fs.writeFileSync(path.join(ui, 'app', 'index.html'), '<div id="aac-app-fixture"></div>');
 const { startServer } = await import('../../src/web-server');
 const instance = await startServer({ port: 0, host: '127.0.0.1', staticDir: ui });
 const base = `http://127.0.0.1:${(instance.server.address() as any).port}`;

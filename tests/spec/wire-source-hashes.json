@@ -106,7 +106,7 @@
   "src/web-server/agent-usage/agent-usage-settings.ts": "44cb09a4a363fd43ab8c362477f7d109a03bfee7760033366712ab6dadf3157a",
   "src/web-server/agent-usage/agent-usage-snapshot.ts": "924b07923e4b50559c70b36b11f85498be1183e0ea6a3e47069646925dceff2a",
   "src/web-server/dashboard-auth-runtime.ts": "898694ab75ec968884721c8555d3e1170616c798b3af5a542502e489b13f03c2",
-  "src/web-server/index.ts": "2cfa43b3c4352cc89951b2ce9403b6e612dabe5bec1f3663f0206f2bf38410ca",
+  "src/web-server/index.ts": "35388d8ee1f6c75fb17eb88d73f942a49e9011691dc3d6860e5b2a79bff5c51b",
   "src/web-server/middleware/dashboard-session-store.ts": "1513dc25bfeafbdf85995bc39d2518f7e62281f9042f0bcb5fd0ebb6c0a3a8f1",
   "src/web-server/routes/account-lifecycle-routes.ts": "60f5216104d6ca7244a82b9128fbc1ba18f2c94b7afcabececcb7a16dcc0f9af",
   "src/web-server/routes/account-visibility-routes.ts": "9923604d988faee55330cff5e121001fe1872dabd10a7d2c2364df1faa74a03b",

@@ -5,7 +5,7 @@
     "role": "signed-out"
   },
   "response": {
-    "body": "<canvas id=\"slint-dashboard\"></canvas>",
+    "body": "<div id=\"aac-app-fixture\"></div>",
     "headers": {
       "cache-control": "no-cache",
       "content-security-policy": "frame-ancestors 'self'",

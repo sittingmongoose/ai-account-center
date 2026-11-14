@@ -1680,8 +1680,7 @@
       "file": "tests/unit/scripts/build-ui.test.ts",
       "kind": "helper",
       "evidence": [
-        "helper",
-        "table"
+        "helper"
       ]
     },
     {
@@ -3558,6 +3557,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "web-dashboard/leptos/src/session.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "web-dashboard/leptos/src/status.rs",
       "kind": "internal",
       "evidence": [],
@@ -3618,12 +3624,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "web-dashboard/tests/accounts-slint.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "web-dashboard/tests/accounts-view.test.mjs",
       "kind": "internal",
       "evidence": [],
@@ -3661,12 +3661,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "web-dashboard/tests/analytics-slint-r2.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "web-dashboard/tests/analytics-sources.test.mjs",
       "kind": "internal",
       "evidence": [],
@@ -3686,12 +3680,6 @@
     },
     {
       "file": "web-dashboard/tests/analytics.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "web-dashboard/tests/antigravity-bridge.test.mjs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3723,18 +3711,10 @@
       ]
     },
     {
-      "file": "web-dashboard/tests/bridge-session.test.mjs",
-      "kind": "safety",
-      "evidence": [
-        "safety"
-      ]
-    },
-    {
       "file": "web-dashboard/tests/browser/checks/accounts-clicks.check.mjs",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "web-dashboard/tests/browser/checks/accounts-frame.check.mjs",
@@ -3821,13 +3801,6 @@
       ]
     },
     {
-      "file": "web-dashboard/tests/browser/checks/status-embed.check.mjs",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
-      ]
-    },
-    {
       "file": "web-dashboard/tests/browser/checks/status-page.check.mjs",
       "kind": "HTTP",
       "evidence": [
@@ -3855,13 +3828,6 @@
       "evidence": [
         "HTTP",
         "table"
-      ]
-    },
-    {
-      "file": "web-dashboard/tests/browser/checks/status-tabs.check.mjs",
-      "kind": "HTTP",
-      "evidence": [
-        "HTTP"
       ]
     },
     {
@@ -3914,13 +3880,13 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "web-dashboard/tests/frame-dashboard.test.mjs",
+      "file": "web-dashboard/tests/frame-dashboard-golden.test.mjs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
     },
     {
-      "file": "web-dashboard/tests/frame-default.test.mjs",
+      "file": "web-dashboard/tests/frame-dashboard.test.mjs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3959,19 +3925,7 @@
       ]
     },
     {
-      "file": "web-dashboard/tests/home-controls.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "web-dashboard/tests/later-dismiss.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "web-dashboard/tests/layout-overflow-slint.test.mjs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3983,31 +3937,7 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "web-dashboard/tests/login-bridge.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "web-dashboard/tests/login-fields.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "web-dashboard/tests/marks-concept.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "web-dashboard/tests/marks-hidpi.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "web-dashboard/tests/marks-preload.test.mjs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -4025,19 +3955,7 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "web-dashboard/tests/page-route.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "web-dashboard/tests/pin-refusal.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "web-dashboard/tests/renderer.test.mjs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -4056,12 +3974,6 @@
     },
     {
       "file": "web-dashboard/tests/sheet-close.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "web-dashboard/tests/shell-frame.test.mjs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -4092,12 +4004,6 @@
       "behaviourTest": "uncovered"
     },
     {
-      "file": "web-dashboard/tests/tail-call-compat.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
       "file": "web-dashboard/tests/time-format.test.mjs",
       "kind": "internal",
       "evidence": [],
@@ -4105,12 +4011,6 @@
     },
     {
       "file": "web-dashboard/tests/typing-busy.test.mjs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
-    },
-    {
-      "file": "web-dashboard/tests/update-button-steady.test.mjs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"

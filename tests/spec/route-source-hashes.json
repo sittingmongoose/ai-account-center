@@ -1,5 +1,5 @@
 {
-  "src/web-server/index.ts": "2cfa43b3c4352cc89951b2ce9403b6e612dabe5bec1f3663f0206f2bf38410ca",
+  "src/web-server/index.ts": "35388d8ee1f6c75fb17eb88d73f942a49e9011691dc3d6860e5b2a79bff5c51b",
   "src/web-server/routes/account-analytics-routes.ts": "039b91c6d5676656b404179fde170d452de8a57187d578f43b1bfb60a802b992",
   "src/web-server/routes/account-dashboard-routes.ts": "4c0b09a79f428b0ad1b81247ee93dcd0ea49708bb12c329cd91a44ea3e925cdc",
   "src/web-server/routes/account-lifecycle-routes.ts": "60f5216104d6ca7244a82b9128fbc1ba18f2c94b7afcabececcb7a16dcc0f9af",
