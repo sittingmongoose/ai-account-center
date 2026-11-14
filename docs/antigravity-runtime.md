@@ -393,6 +393,10 @@ backups are never overwritten.
 
 ### Update all on managed switching runtimes
 
+Historical switching behavior below. Switching was retired on 2026-11-13;
+Update all now uses the ordinary native updater even with a leftover managed
+marker. See [the current updater behavior](../scripts/app-updates/README.md).
+
 The dashboard's Update all updates ordinary Antigravity CLI installations through
 the native updater. A new release does not need a switching review when no managed
 runtime is installed. Saved usage profiles alone cannot enable native activation.
