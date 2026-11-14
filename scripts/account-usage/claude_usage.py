@@ -45,6 +45,24 @@ WINDOWS = {
     "seven_day_cowork": ("Weekly Cowork usage", 10080),
 }
 UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+# Claude takes a reset claim only from a client surface it knows. Any other
+# User-Agent is answered `ineligible` with reason `surface` (live check
+# 2026-11-14). A claim names the newest Claude Code installed on this
+# credential host, in the form Claude Code and T3 Code send, and never a
+# version older than the one that check proved.
+CLAUDE_CLI_VERSION_FLOOR = (2, 1, 325)
+CLAUDE_CLI_VERSION_NAME = re.compile(r"(\d{1,4})\.(\d{1,4})\.(\d{1,6})")
+MAX_CLAUDE_VERSION_ENTRIES = 256
+# Why Claude refused an `ineligible` claim. Only these established reasons
+# prove the reset was not applied. Any other reason (`unknown`, a missing
+# one, or one added later) stays unconfirmed until AAC checks again, as do
+# the two "could not tell" answers.
+CLAIM_INELIGIBLE_OUTCOMES = {
+    "expired": "noCredit", "unknown_grant": "noCredit", "no_grant": "noCredit",
+    "already_used": "already-used", "not_limited": "nothingToReset", "cooldown": "cooldown",
+    **dict.fromkeys(("surface", "cli_version", "config_off", "tier", "seat", "mobile", "tenure",
+                     "other_experiment", "paused", "not_next_grant", "grant_id_required"), "unavailable"),
+}
 MAX_BYTES = 1024 * 1024
 MAX_CAPSULE_BYTES = 65536
 CHROMIUM_EPOCH = 11644473600000000
@@ -1498,6 +1516,38 @@ def reset_windows(usage):
     return windows
 
 
+def claude_version_dirs(profile_root):
+    """Where Claude Code keeps its versions here: the standalone install and the
+    copy Claude Desktop keeps inside this profile."""
+    return [Path.home() / ".local" / "share" / "claude" / "versions", Path(profile_root) / "claude-code"]
+
+
+def claude_claim_user_agent(version_dirs):
+    """Reads bounded entry names only; never runs an installed binary."""
+    best = CLAUDE_CLI_VERSION_FLOOR
+    for folder in version_dirs:
+        try:
+            with os.scandir(folder) as entries:
+                for count, entry in enumerate(entries):
+                    if count >= MAX_CLAUDE_VERSION_ENTRIES:
+                        break
+                    match = CLAUDE_CLI_VERSION_NAME.fullmatch(entry.name)
+                    if match:
+                        best = max(best, tuple(int(part) for part in match.groups()))
+        except (OSError, TypeError, ValueError):
+            continue
+    return "claude-cli/%d.%d.%d (external, cli)" % best
+
+
+def claim_outcome(answer):
+    """Map Claude's claim answer; anything unrecognized stays ambiguous, never success."""
+    result = answer.get("result") if isinstance(answer, dict) else None
+    if result == "ineligible":
+        return CLAIM_INELIGIBLE_OUTCOMES.get(answer.get("reason"), "ambiguous")
+    return {"reset": "reset", "not_limited": "nothingToReset", "already_used": "already-used",
+            "cooldown": "cooldown"}.get(result, "ambiguous")
+
+
 def reset_host(request):
     # Only reaching the actual opener can make a claim ambiguous. Collection,
     # identity, binding and request-construction failures prove no POST occurred.
@@ -1567,6 +1617,8 @@ def _reset_host(request, dispatch):
         if (not isinstance(token, str) or not token or len(token) > 32768
                 or any(ord(char) < 32 for char in token)):
             return {"outcome": "unavailable"}
+        user_agent = claude_claim_user_agent(claude_version_dirs(resolve_profile_path(
+            profile_id, request.get("profileDir"), None, request.get("isDefault") is True)))
         private["verifyRoot"]()
         private["verifyLogin"]()
         client = Client()
@@ -1574,17 +1626,15 @@ def _reset_host(request, dispatch):
             "https://api.anthropic.com/api/organizations/" + private["organization"] + "/reset_rate_limits",
             data=json.dumps(body, separators=(",", ":")).encode("ascii"), method="POST",
             headers={"Authorization": "Bearer " + token, "anthropic-beta": "oauth-2025-04-20",
-                     "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "CCS-ReadOnly-Usage/1.0"})
+                     "Content-Type": "application/json", "Accept": "application/json",
+                     "User-Agent": user_agent})
         try:
             dispatch["started"] = True
             with client.opener.open(req, timeout=8) as response:
                 raw = response.read(MAX_BYTES + 1)
                 if len(raw) > MAX_BYTES:
                     return {"outcome": "ambiguous"}
-                answer = json.loads(raw)
-                outcome = {"reset": "reset", "not_limited": "nothingToReset", "already_used": "already-used",
-                           "ineligible": "noCredit", "cooldown": "cooldown"}.get(answer.get("result"), "ambiguous")
-                return {"outcome": outcome}
+                return {"outcome": claim_outcome(json.loads(raw))}
         except urllib.error.HTTPError as error:
             if error.code == 429:
                 return {"outcome": "rate-limited", "retryAfterMs": (retry_after_seconds(error.headers.get("Retry-After")) or 60) * 1000}
