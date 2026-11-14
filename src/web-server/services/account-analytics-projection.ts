@@ -31,6 +31,8 @@ const TOOLS: readonly AccountAnalyticsActivityProvider[] = [
   'zcode',
   'jsonl',
   'antigravity',
+  'cursor',
+  'devin',
 ];
 
 /** The dashboard's provider labels; "other" is usage on a route no provider claims. */
@@ -92,6 +94,8 @@ const KNOWN_CLI_TARGETS: ReadonlySet<string> = new Set([
   'muse',
   'zcode',
   'antigravity',
+  'cursor',
+  'devin',
 ]);
 const MAX_SESSION_SAMPLE = 50;
 const MAX_NAMED_DAY_MODELS = 12;
@@ -114,6 +118,8 @@ export interface AccountAnalyticsProjectionOptions {
   refreshing?: boolean;
   /** Remote hosts the running collection is still waiting on; empty when settled. */
   refreshingRemote?: AccountAnalyticsActivity['refreshingRemote'];
+  /** The Cursor account through AAC's key (DESIGN 17.5); absent when never asked. */
+  cursorAccount?: AccountAnalyticsActivity['cursorAccount'];
 }
 
 function finite(value: unknown): number {
@@ -364,6 +370,7 @@ export function projectAccountAnalyticsActivity(
     status,
     refreshing: options.refreshing ?? false,
     refreshingRemote: options.refreshingRemote ?? [],
+    ...(options.cursorAccount ? { cursorAccount: options.cursorAccount } : {}),
     scope: 'multi-host-cli',
     timezone: tz,
     accountAttribution: 'unavailable',

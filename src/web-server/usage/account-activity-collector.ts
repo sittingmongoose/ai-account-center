@@ -137,7 +137,76 @@ export type AccountActivityScanResult = UsageWorkerResult & {
   scan?: NonNullable<UsageWorkerResult['scan']> & { detail?: string };
 };
 
-function compressedReplayDetail(stalled: number, terminal = 0): { detail?: string } {
+/** A compressed log not read to its end, named without its conversation id (DESIGN 16.1). */
+interface StalledLog {
+  name: string;
+  sizeBytes: number;
+  readThroughBytes: number;
+  /** The decoded size its zstd frame header states, when it does. */
+  decodedBytes?: number;
+  terminal: boolean;
+}
+
+/** A zstd frame's stated content size, from its header alone (RFC 8878 3.1.1.1), or undefined. */
+export function zstdContentSize(file: string): number | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, 'r');
+    const header = Buffer.alloc(18);
+    const read = fs.readSync(fd, header, 0, 18, 0);
+    if (read < 6 || header.readUInt32LE(0) !== 0xfd2fb528) return undefined;
+    const descriptor = header[4];
+    const sizeFlag = descriptor >> 6;
+    const single = (descriptor >> 5) & 1;
+    const dictFlag = descriptor & 3;
+    const fieldSize = [single ? 1 : 0, 2, 4, 8][sizeFlag];
+    if (fieldSize === 0) return undefined;
+    const at = 5 + (single ? 0 : 1) + [0, 1, 2, 4][dictFlag];
+    if (at + fieldSize > read) return undefined;
+    if (fieldSize === 1) return header[at];
+    if (fieldSize === 2) return header.readUInt16LE(at) + 256;
+    if (fieldSize === 4) return header.readUInt32LE(at);
+    const value = header.readBigUInt64LE(at);
+    return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+const CONVERSATION_ID = /[-_]?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+function stalledLogOf(
+  file: string,
+  stats: fs.Stats | undefined,
+  value: Checkpoint
+): { stalledLog?: StalledLog } {
+  const terminal = (value.compressedReplay?.terminalUntil ?? 0) > 0;
+  if (!file.endsWith('.zst') || value.complete || !(value.compressedReplayStalled || terminal))
+    return {};
+  return {
+    stalledLog: {
+      name: path.basename(file).replace(CONVERSATION_ID, '').slice(0, 120),
+      sizeBytes: stats?.size ?? value.size,
+      readThroughBytes: checkpointProgress(value),
+      ...(zstdContentSize(file) !== undefined ? { decodedBytes: zstdContentSize(file) } : {}),
+      terminal,
+    },
+  };
+}
+
+function sizeText(bytes: number): string {
+  return bytes >= 1024 ** 3
+    ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
+    : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+}
+
+function compressedReplayDetail(
+  stalled: number,
+  terminal = 0,
+  logs: StalledLog[] = []
+): { detail?: string } {
   const parts: string[] = [];
   if (terminal)
     parts.push(
@@ -147,6 +216,18 @@ function compressedReplayDetail(stalled: number, terminal = 0): { detail?: strin
     parts.push(
       `${stalled - terminal} compressed Codex log${stalled - terminal === 1 ? ' is' : 's are'} too large to finish within one analytics pass; replaying the decoded prefix exhausted the read budget. Retries rotate with bounded pass back-off.`
     );
+  if (parts.length && logs.length) {
+    const named = [...logs]
+      .sort((a, b) => b.sizeBytes - a.sizeBytes)
+      .slice(0, 5)
+      .map(
+        (log) =>
+          `${log.name} (${sizeText(log.sizeBytes)}, partly read: ${log.readThroughBytes.toLocaleString('en-US')}${log.decodedBytes ? ` of ${log.decodedBytes.toLocaleString('en-US')}` : ''} bytes${log.decodedBytes ? '' : ', full size not stated in the file'}${log.terminal ? ', paused' : ''})`
+      );
+    parts.push(
+      `Not finished: ${named.join(', ')}${logs.length > named.length ? ` and ${logs.length - named.length} more` : ''}.`
+    );
+  }
   return parts.length ? { detail: parts.join(' ') } : {};
 }
 
@@ -1049,6 +1130,8 @@ export function aggregateRows(
     /** OMP logged cost per model; those tokens are not priced again. */
     loggedCost: Map<string, number>;
     unlogged: Map<string, { input: number; output: number; write: number; read: number }>;
+    /** Some row's source reported no cost at all: the bucket's cost is partial, never priced. */
+    costUnknown: boolean;
     requestCount: number;
     firstActivity: string;
     lastActivity: string;
@@ -1062,6 +1145,7 @@ export function aggregateRows(
     models: new Map(),
     loggedCost: new Map(),
     unlogged: new Map(),
+    costUnknown: false,
     requestCount: 0,
     firstActivity: '',
     lastActivity: '',
@@ -1090,7 +1174,15 @@ export function aggregateRows(
       'cacheReadTokens',
     ] as const)
       model[field] += entry[field];
-    if (entry.costUsd !== undefined && entry.costUsd > 0) {
+    if (entry.costBasis === 'unknown') {
+      // The source gave no cost: the tokens count, the cost stays unknown, no list price is
+      // ever applied, and the bucket says its cost is partial.
+      bucket.costUnknown = true;
+    } else if (
+      entry.costUsd !== undefined &&
+      (entry.costUsd > 0 || entry.costBasis === 'reported')
+    ) {
+      // A source-reported cost is complete even at 0; only a positive logged cost adds here.
       bucket.loggedCost.set(modelKey, (bucket.loggedCost.get(modelKey) ?? 0) + entry.costUsd);
     } else {
       const pending = bucket.unlogged.get(modelKey) ?? { input: 0, output: 0, write: 0, read: 0 };
@@ -1141,6 +1233,7 @@ export function aggregateRows(
     const fallbackCost = modelBreakdowns.reduce((sum, item) => sum + (item.fallbackCost ?? 0), 0);
     modelBreakdowns.sort((left, right) => right.cost - left.cost);
     return {
+      ...(bucket.costUnknown && { costPartial: true }),
       source,
       inputTokens: modelBreakdowns.reduce((sum, item) => sum + item.inputTokens, 0),
       outputTokens: modelBreakdowns.reduce((sum, item) => sum + item.outputTokens, 0),
@@ -2683,6 +2776,7 @@ export async function collectCodexPartition(
         compressedReplayStalled: value.compressedReplayStalled,
         compressedReplayTerminal: (value.compressedReplay?.terminalUntil ?? 0) > 0,
         largeCodexRead: largeCodexReadSpec(file, cache, stats, value),
+        ...stalledLogOf(file, stats, value),
       });
     } catch {
       outcomes.push({
@@ -2728,6 +2822,7 @@ interface CodexFileTallies {
   compressedReplayStalled?: boolean;
   compressedReplayTerminal?: boolean;
   largeCodexRead?: LargeCodexReadSpec;
+  stalledLog?: StalledLog;
 }
 
 interface CodexCounters {
@@ -2739,6 +2834,7 @@ interface CodexCounters {
   stalledCompressedFiles: number;
   terminalCompressedFiles: number;
   largeCodexReads: LargeCodexReadSpec[];
+  stalledLogs: StalledLog[];
 }
 
 /**
@@ -2756,6 +2852,8 @@ function tallyCodexFile(
   if (tallies.unfinishedTail) counters.unfinishedFiles++;
   if (tallies.compressedReplayStalled) counters.stalledCompressedFiles++;
   if (tallies.compressedReplayTerminal) counters.terminalCompressedFiles++;
+  if (tallies.stalledLog && counters.stalledLogs.length < 64)
+    counters.stalledLogs.push(tallies.stalledLog);
   if (tallies.largeCodexRead && counters.largeCodexReads.length < 64)
     counters.largeCodexReads.push(tallies.largeCodexRead);
   counters.skippedLines += tallies.skippedLines;
@@ -2797,6 +2895,7 @@ async function readCodexFiles(
     stalledCompressedFiles: 0,
     terminalCompressedFiles: 0,
     largeCodexReads: [],
+    stalledLogs: [],
   };
   const rows: CompactEntry[] = [];
   const loaded = scanned.map(({ file, stats, unresolved }) => {
@@ -2870,6 +2969,7 @@ async function readCodexFiles(
           compressedReplayStalled: item.value.compressedReplayStalled,
           compressedReplayTerminal: (item.value.compressedReplay?.terminalUntil ?? 0) > 0,
           largeCodexRead: largeCodexReadSpec(item.file, item.cache, item.stats, item.value),
+          ...stalledLogOf(item.file, item.stats, item.value),
         });
       } catch {
         counters.failed++;
@@ -2956,6 +3056,7 @@ async function readCodexFiles(
     compressedReplayStalled: item.value.compressedReplayStalled,
     compressedReplayTerminal: (item.value.compressedReplay?.terminalUntil ?? 0) > 0,
     largeCodexRead: largeCodexReadSpec(item.file, item.cache, item.stats, item.value),
+    ...stalledLogOf(item.file, item.stats, item.value),
   });
   for (const item of loaded) {
     const error = errors.get(item.file);
@@ -3201,6 +3302,7 @@ async function collectExperimentActivity(
   let unfinishedFiles = 0;
   let stalledCompressedFiles = 0;
   let terminalCompressedFiles = 0;
+  const stalledLogs: StalledLog[] = [];
   const largeCodexReads: LargeCodexReadSpec[] = [];
   const referenceKeys = new Set<string>();
   const keyedByFile: Array<{ file: string; entries: KeyedEntry[] }> = [];
@@ -3254,6 +3356,8 @@ async function collectExperimentActivity(
       if (value.unfinishedTail) unfinishedFiles++;
       if (value.compressedReplayStalled) stalledCompressedFiles++;
       if (value.compressedReplay?.terminalUntil) terminalCompressedFiles++;
+      const stalled = stalledLogOf(item.file, item.stats, value).stalledLog;
+      if (stalled && stalledLogs.length < 64) stalledLogs.push(stalled);
       const largeRead = largeCodexReadSpec(item.file, cache, item.stats, value);
       if (largeRead && largeCodexReads.length < 64) largeCodexReads.push(largeRead);
       return { value, read };
@@ -3314,7 +3418,7 @@ async function collectExperimentActivity(
     failedFiles: failed,
     readBytes,
     unfinishedFiles,
-    ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles),
+    ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles, stalledLogs),
     ...(largeCodexReads.length ? { largeCodexReads } : {}),
   });
   const source =
@@ -3687,6 +3791,7 @@ export async function collectAccountActivity(
   let unfinishedFiles = 0;
   let stalledCompressedFiles = 0;
   let terminalCompressedFiles = 0;
+  let stalledLogs: StalledLog[] = [];
   let largeCodexReads: LargeCodexReadSpec[] = [];
   if (request.kind === 'codex') {
     // Codex alone fans out across partition readers above the unread threshold
@@ -3702,6 +3807,7 @@ export async function collectAccountActivity(
     unfinishedFiles = codex.unfinishedFiles;
     stalledCompressedFiles = codex.stalledCompressedFiles;
     terminalCompressedFiles = codex.terminalCompressedFiles;
+    stalledLogs = codex.stalledLogs;
     largeCodexReads = codex.largeCodexReads;
   } else {
     for (const { file, stats, unresolved, frozen, mode, prepared } of scanned) {
@@ -3888,7 +3994,7 @@ export async function collectAccountActivity(
       failedFiles: failed,
       readBytes,
       unfinishedFiles,
-      ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles),
+      ...compressedReplayDetail(stalledCompressedFiles, terminalCompressedFiles, stalledLogs),
       ...(largeCodexReads.length ? { largeCodexReads } : {}),
     },
   };

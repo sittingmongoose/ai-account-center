@@ -1,23 +1,43 @@
 import { ANALYTICS_TOOLS, type AnalyticsTool } from '../usage/analytics-tools';
 import { execFile } from 'child_process';
+import { createHash } from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import { readAnalyticsHelper } from './analytics-remote-helper';
 import { HOST_OS, REMOTE_HOSTS, SSH_ALIASES, isSafeUsageSshAlias } from './dashboard-hosts';
 import { sshArgv } from './ssh-policy';
+import {
+  UsageScanInstallError,
+  binaryMarker,
+  installUsageScan,
+  localUsageScan,
+  readUsageScanManifest,
+  scanCommand,
+  type UsageScanManifest,
+} from './usage-scan-binary';
 
 /**
  * The computers the packaged helper scans over ssh, in scan order: the Mac, Windows and Nas1. The
- * local Ubuntu computer is read by the local collectors, never through this transport.
+ * local Ubuntu computer is read by the local collectors, and by the same scanner run in place for
+ * the kinds it owns there (`runLocalUsageScan`, DESIGN 16.0 B), never over ssh.
  */
 export const REMOTE_ANALYTICS_HOSTS = REMOTE_HOSTS;
 export type AnalyticsRemoteHost = (typeof REMOTE_ANALYTICS_HOSTS)[number];
+/**
+ * A computer the usage scanner reads: the remote ones over ssh, and (DESIGN 16.0 B) the
+ * dashboard's own computer, `ubuntu`, run locally for the kinds the scanner owns there.
+ */
+export type AnalyticsScanHost = AnalyticsRemoteHost | 'ubuntu';
 /** The ssh alias to reach each remote host, or null when none is configured. */
 export type AnalyticsRemoteAliases = Record<AnalyticsRemoteHost, string | null>;
-export type AnalyticsRemoteKind = AnalyticsTool;
+export type AnalyticsRemoteKind = AnalyticsTool | 'cursor' | 'devin';
 
 /** Every kind the packaged helper reads. */
-const REMOTE_KIND_LIST = ANALYTICS_TOOLS;
+const REMOTE_KIND_LIST: readonly AnalyticsRemoteKind[] = [...ANALYTICS_TOOLS, 'cursor', 'devin'];
+/** The kinds the Python helper reads; the Rust scanner adds Cursor and Devin (DESIGN 16.2, 16.3). */
+export const PYTHON_KINDS: ReadonlySet<string> = new Set(ANALYTICS_TOOLS);
 const REMOTE_KINDS: ReadonlySet<string> = new Set(REMOTE_KIND_LIST);
 
 export {
@@ -136,6 +156,41 @@ export interface AnalyticsRemoteFingerprint {
   /** zcode only: the write-ahead log, where new rows wait for a checkpoint. */
   walSize?: number;
   walMtimeMs?: number;
+  /**
+   * A read the deadline cut (DESIGN 16.1): the decoded byte offset after its last complete line.
+   * The next call reads on from there while the file is unchanged.
+   */
+  readThrough?: number;
+  /** This answer's rows for the file continue an earlier read from this offset: add, not replace. */
+  readFrom?: number;
+  /** The reader's carry-over between lines: model, provider, running totals, a session digest. */
+  readState?: AnalyticsReadState;
+  /** The file name without its conversation id, to name a log not read to its end. */
+  readName?: string;
+  /** The decoded size when the file states it. */
+  decodedSize?: number;
+  /** Cursor or Devin: records this database's last read could not count, said again while it is
+   * unchanged (FIX-ROUND-BIG 5). */
+  unreadableRecords?: number;
+  /** The last read was immutable while the write-ahead log held rows. */
+  walUnread?: boolean;
+}
+
+/** Codex's carry-over for a resumed read; no identifier (the session travels as a digest). */
+export interface AnalyticsReadState {
+  model?: string | null;
+  provider?: string | null;
+  previous?: number[] | null;
+  sessionDigest?: string | null;
+}
+
+/** A log not read to its end, named for the page (no conversation id). */
+export interface AnalyticsUnfinishedLog {
+  name: string;
+  sizeBytes: number;
+  readThroughBytes: number | null;
+  decodedBytes: number | null;
+  reason: 'deadline' | 'unreadable' | 'no_session_id';
 }
 
 export interface AnalyticsRemoteRow {
@@ -150,6 +205,13 @@ export interface AnalyticsRemoteRow {
   cw: number;
   c: number;
   n: number;
+  /**
+   * This row's cost basis, set by the reader whose source reports cost itself (the Cursor
+   * account): `reported` — `c` is the source's own cost, complete even at 0, never priced
+   * again; `unknown` — the source gave none: the tokens count, no list price is applied, and
+   * the totals are marked partial. Absent: the logged-cost-else-list-price rule of `c`.
+   */
+  costBasis?: 'reported' | 'unknown';
 }
 
 /**
@@ -189,8 +251,335 @@ export interface AnalyticsRemoteKindResult {
   fingerprints: Record<string, AnalyticsRemoteFingerprint>;
   /** zcode: an immutable open cannot read rows still in the write-ahead log. */
   walUnread?: boolean;
+  /** Logs not read to their end (at most 20, largest first), and how many there are in all. */
+  unfinished?: AnalyticsUnfinishedLog[];
+  unfinishedCount?: number;
+  /** Cursor runs or Devin replies whose numbers could not be read; counted, never guessed. */
+  unreadableRecords?: number;
   /** Antigravity: a conversation database or folder could not be read (busy, damaged); the rest count. */
   unreadable?: boolean;
+  /** Folders inside a root that exist but could not be listed (FIX-ROUND-BIG 4). */
+  unreadableFolders?: number;
+  /** A discovery bound left roots unlooked-at: how many were kept, of how many seen (null: the
+   * search stopped before it could count them all). FIX-ROUND-BIG 6. */
+  searchLimit?: { read: number; found: number | null };
+}
+
+/** Where a root came from (the usage-report contract's `origin`). */
+export type AnalyticsRootOrigin =
+  | 'default'
+  | 'env'
+  | 'tool_config'
+  | 't3_instance'
+  | 'ccs_instance'
+  | 'signature'
+  | 'extra'
+  | 'experiment';
+const ROOT_ORIGINS: ReadonlySet<string> = new Set([
+  'default',
+  'env',
+  'tool_config',
+  't3_instance',
+  'ccs_instance',
+  'signature',
+  'extra',
+  'experiment',
+]);
+/** Why a computer has a tool apart from its logs. */
+const SIGNALS: ReadonlySet<string> = new Set(['home', 'binary', 't3_instance']);
+/** Tools Analytics has no usage reader for; the scanner reports only where they are present. */
+export const NO_READER_TOOLS = [
+  'cursor',
+  'gemini-cli',
+  'opencode',
+  'qwen',
+  'kimi',
+  'grok',
+  'kiro',
+  'pi',
+  'fx',
+] as const;
+export type AnalyticsNoReaderTool = (typeof NO_READER_TOOLS)[number];
+const NO_READER: ReadonlySet<string> = new Set(NO_READER_TOOLS);
+const NO_READER_CAUSES: ReadonlySet<string> = new Set(['no_local_usage_records', 'no_reader_yet']);
+
+export interface AnalyticsDiscoveryCounts {
+  roots: number;
+  filesFound: number;
+  filesRead: number;
+  filesFailed: number;
+  /** Epoch ms of the newest log found, null when none. */
+  newestMtime: number | null;
+}
+
+/** Why a root that is there could not be read (FIX-ROUND-BIG 4 and 9). */
+export type AnalyticsRootCause =
+  'permission_denied' | 'io_error' | 'target_missing' | 'did_not_answer';
+const ROOT_CAUSES: ReadonlySet<string> = new Set([
+  'permission_denied',
+  'io_error',
+  'target_missing',
+  'did_not_answer',
+]);
+
+export interface AnalyticsDiscoveryRoot {
+  /** First 16 hex of sha256("aac-root-v1:" + tool + ":" + origin + ":" + path with home as ~). */
+  root: string;
+  origin: AnalyticsRootOrigin;
+  /**
+   * `unreadable`: a folder (or database) that is there but could not be read; `link_unreadable`: a
+   * link whose target cannot be read; `link_unreachable`: a link whose target is gone or did not
+   * answer (DESIGN 16.4, FIX-ROUND-BIG 4). `cause` says which.
+   */
+  state: 'ok' | 'installed_no_logs' | 'unreadable' | 'link_unreadable' | 'link_unreachable';
+  cause?: AnalyticsRootCause;
+  counts: { filesFound: number; newestMtime: number | null };
+}
+
+/** One requested kind's discovery: install signals, its roots and counts. */
+export interface AnalyticsDiscoveryKind {
+  installed: boolean;
+  signals: string[];
+  roots: AnalyticsDiscoveryRoot[];
+  counts: AnalyticsDiscoveryCounts;
+}
+
+/** A tool without a reader that this computer has. */
+export interface AnalyticsPresenceTool {
+  installed: boolean;
+  signals: string[];
+  cause: 'no_local_usage_records' | 'no_reader_yet';
+  counts: { filesFound: number; newestMtime: number | null };
+  partial?: boolean;
+}
+
+export interface AnalyticsRemoteDiscovery {
+  kinds: Partial<Record<AnalyticsRemoteKind, AnalyticsDiscoveryKind>>;
+  /** Present only in the answer of the call that asked for presence. */
+  tools?: Partial<Record<AnalyticsNoReaderTool, AnalyticsPresenceTool>>;
+}
+
+/** Identity evidence of one session (DB audit 2): its full hash and the working folder its log states. */
+export interface AnalyticsSessionEvidence {
+  hash: string;
+  cwd: {
+    key: string;
+    path: string;
+    /** An inferred join only, never a measured attribution (history DESIGN 1.3). */
+    identitySource: 'inferred_cwd';
+    confidence: 'inferred';
+  } | null;
+  /** T3 Code's thread and provider instance, from T3's own provider-thread record. */
+  t3?: {
+    threadId: string;
+    providerInstanceId: string;
+    identitySource: 't3_native_ref';
+    confidence: 'explicit';
+  };
+}
+
+/** Which reader answered: the Rust scanner, or the Python helper standing in (with why). */
+export interface AnalyticsReader {
+  name: 'aac-usage-scan' | 'python-fallback';
+  version?: string;
+  protocol?: number;
+  target?: string;
+  cause?: string;
+}
+
+const count = (value: unknown, max = 10_000_000): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= max;
+const epoch = (value: unknown): value is number | null => value === null || count(value, 2 ** 52);
+const signalsOk = (value: unknown): value is string[] =>
+  Array.isArray(value) &&
+  value.length <= 3 &&
+  value.every((signal) => typeof signal === 'string' && SIGNALS.has(signal));
+
+function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  const counts = entry.counts as Record<string, unknown> | undefined;
+  if (
+    typeof entry.installed !== 'boolean' ||
+    !signalsOk(entry.signals) ||
+    !Array.isArray(entry.roots) ||
+    entry.roots.length > 64 ||
+    !counts ||
+    typeof counts !== 'object' ||
+    !count(counts.roots, 64) ||
+    !count(counts.filesFound) ||
+    !count(counts.filesRead) ||
+    !count(counts.filesFailed) ||
+    !epoch(counts.newestMtime)
+  )
+    return null;
+  const roots: AnalyticsDiscoveryRoot[] = [];
+  for (const root of entry.roots as unknown[]) {
+    if (!root || typeof root !== 'object') return null;
+    const item = root as Record<string, unknown>;
+    const rootCounts = item.counts as Record<string, unknown> | undefined;
+    if (
+      typeof item.root !== 'string' ||
+      !/^[0-9a-f]{16}$/.test(item.root) ||
+      typeof item.origin !== 'string' ||
+      !ROOT_ORIGINS.has(item.origin) ||
+      (item.state !== 'ok' &&
+        item.state !== 'installed_no_logs' &&
+        item.state !== 'unreadable' &&
+        item.state !== 'link_unreadable' &&
+        item.state !== 'link_unreachable') ||
+      (item.cause !== undefined &&
+        (typeof item.cause !== 'string' || !ROOT_CAUSES.has(item.cause))) ||
+      !rootCounts ||
+      !count(rootCounts.filesFound) ||
+      !epoch(rootCounts.newestMtime)
+    )
+      return null;
+    roots.push({
+      root: item.root,
+      origin: item.origin as AnalyticsRootOrigin,
+      state: item.state,
+      ...(item.cause !== undefined ? { cause: item.cause as AnalyticsRootCause } : {}),
+      counts: {
+        filesFound: rootCounts.filesFound as number,
+        newestMtime: rootCounts.newestMtime as number | null,
+      },
+    });
+  }
+  return {
+    installed: entry.installed,
+    signals: [...(entry.signals as string[])],
+    roots,
+    counts: {
+      roots: counts.roots as number,
+      filesFound: counts.filesFound as number,
+      filesRead: counts.filesRead as number,
+      filesFailed: counts.filesFailed as number,
+      newestMtime: counts.newestMtime as number | null,
+    },
+  };
+}
+
+function parsePresence(value: unknown): AnalyticsPresenceTool | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const entry = value as Record<string, unknown>;
+  const counts = entry.counts as Record<string, unknown> | undefined;
+  if (
+    typeof entry.installed !== 'boolean' ||
+    !signalsOk(entry.signals) ||
+    typeof entry.cause !== 'string' ||
+    !NO_READER_CAUSES.has(entry.cause) ||
+    !counts ||
+    !count(counts.filesFound) ||
+    !epoch(counts.newestMtime) ||
+    (entry.partial !== undefined && typeof entry.partial !== 'boolean')
+  )
+    return null;
+  return {
+    installed: entry.installed,
+    signals: [...(entry.signals as string[])],
+    cause: entry.cause as AnalyticsPresenceTool['cause'],
+    counts: {
+      filesFound: counts.filesFound as number,
+      newestMtime: counts.newestMtime as number | null,
+    },
+    ...(entry.partial === true ? { partial: true } : {}),
+  };
+}
+
+/**
+ * The scanner's discovery section, entry by entry: a malformed entry is dropped, never trusted,
+ * and never fails the usage rows it travels with. An older helper's answer has none.
+ */
+export function parseAnalyticsDiscovery(value: unknown): AnalyticsRemoteDiscovery | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as { kinds?: unknown; tools?: unknown };
+  const discovery: AnalyticsRemoteDiscovery = { kinds: {} };
+  if (raw.kinds && typeof raw.kinds === 'object' && !Array.isArray(raw.kinds))
+    for (const [kind, entry] of Object.entries(raw.kinds as Record<string, unknown>)) {
+      if (!REMOTE_KINDS.has(kind)) continue;
+      const parsed = parseDiscoveryKind(entry);
+      if (parsed) discovery.kinds[kind as AnalyticsRemoteKind] = parsed;
+    }
+  if (raw.tools && typeof raw.tools === 'object' && !Array.isArray(raw.tools)) {
+    discovery.tools = {};
+    for (const [tool, entry] of Object.entries(raw.tools as Record<string, unknown>)) {
+      if (!NO_READER.has(tool)) continue;
+      const parsed = parsePresence(entry);
+      if (parsed) discovery.tools[tool as AnalyticsNoReaderTool] = parsed;
+    }
+  }
+  return discovery;
+}
+
+/** Identity evidence keyed by session key; a malformed entry is dropped. At most 50,000. */
+export function parseAnalyticsSessions(
+  value: unknown
+): Record<string, AnalyticsSessionEvidence> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const result: Record<string, AnalyticsSessionEvidence> = {};
+  let kept = 0;
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (kept >= 50_000) break;
+    if (!SESSION_KEY_HEX.test(key) || !entry || typeof entry !== 'object') continue;
+    const { hash, cwd, t3 } = entry as { hash?: unknown; cwd?: unknown; t3?: unknown };
+    if (typeof hash !== 'string' || !SHA256_HEX.test(hash) || !hash.startsWith(key)) continue;
+    let evidence: AnalyticsSessionEvidence['cwd'] = null;
+    if (cwd !== null && cwd !== undefined) {
+      const item = cwd as Record<string, unknown>;
+      if (
+        typeof item.key !== 'string' ||
+        !SESSION_KEY_HEX.test(item.key) ||
+        !cleanText(item.path, 1024) ||
+        item.identitySource !== 'inferred_cwd' ||
+        item.confidence !== 'inferred'
+      )
+        continue;
+      evidence = {
+        key: item.key,
+        path: item.path,
+        identitySource: 'inferred_cwd',
+        confidence: 'inferred',
+      };
+    }
+    // T3's own record of the thread that drove the session: an explicit binding (Cursor).
+    let binding: AnalyticsSessionEvidence['t3'] = undefined;
+    if (t3 !== null && t3 !== undefined) {
+      const item = t3 as Record<string, unknown>;
+      const id = (value: unknown) =>
+        typeof value === 'string' && /^[A-Za-z0-9._:-]{1,200}$/.test(value);
+      if (
+        !id(item.threadId) ||
+        !id(item.providerInstanceId) ||
+        item.identitySource !== 't3_native_ref' ||
+        item.confidence !== 'explicit'
+      )
+        continue;
+      binding = {
+        threadId: item.threadId as string,
+        providerInstanceId: item.providerInstanceId as string,
+        identitySource: 't3_native_ref',
+        confidence: 'explicit',
+      };
+    }
+    result[key] = { hash, cwd: evidence, ...(binding ? { t3: binding } : {}) };
+    kept++;
+  }
+  return result;
+}
+
+function parseReader(value: unknown): AnalyticsReader | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const item = value as Record<string, unknown>;
+  if (item.name !== 'aac-usage-scan') return undefined;
+  if (!cleanText(item.version, 32) || !count(item.protocol, 1000) || !cleanText(item.target, 64))
+    return undefined;
+  return {
+    name: 'aac-usage-scan',
+    version: item.version,
+    protocol: item.protocol,
+    target: item.target,
+  };
 }
 
 export interface AnalyticsRemoteResponse {
@@ -203,6 +592,16 @@ export interface AnalyticsRemoteResponse {
   kinds: Record<AnalyticsRemoteKind, AnalyticsRemoteKindResult>;
   rows: AnalyticsRemoteRow[];
   srows: AnalyticsRemoteSessionRow[];
+  /** Where the logs were found (the Rust scanner's answers only). */
+  discovery?: AnalyticsRemoteDiscovery;
+  /** Identity evidence per session key (the Rust scanner's answers only). */
+  sessions?: Record<string, AnalyticsSessionEvidence>;
+  /** Which reader answered. */
+  reader?: AnalyticsReader;
+  /** Network or FUSE mounts on the computer that did not answer their probe (FIX-ROUND-BIG 9). */
+  unansweredMounts?: number;
+  /** The scan did not finish in its time: every kind is pending, nothing was confirmed. */
+  stalled?: boolean;
 }
 
 /**
@@ -235,6 +634,15 @@ export interface AnalyticsRemoteRequest {
    * they leave this host.
    */
   extraRoots?: Partial<Record<AnalyticsRemoteKind, string[]>>;
+  /**
+   * Rust scanner only: log folders an experiment harness kept (DESIGN 16.5), read through the
+   * copy rule with origin `experiment`. On the dashboard's own computer, the background walk's.
+   */
+  experimentRoots?: Partial<Record<AnalyticsRemoteKind, string[]>>;
+  /** Rust scanner only: also report which tools without a reader the computer has. */
+  presence?: boolean;
+  /** Rust scanner only: send each session's working folder (home as ~); the cwd capture setting. */
+  cwd?: boolean;
 }
 
 function quoteShell(value: string): string {
@@ -251,6 +659,23 @@ function isValidExtraRoot(value: unknown): value is string {
     !value.includes('\0') &&
     !value.includes('..') &&
     (path.posix.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value))
+  );
+}
+
+/** At most this many experiment folders per kind travel in one request. */
+export const MAX_EXPERIMENT_ROOTS = 256;
+
+function isValidExperimentRoots(
+  value: unknown
+): value is Partial<Record<AnalyticsRemoteKind, string[]>> {
+  if (value === undefined) return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.entries(value as Record<string, unknown>).every(
+    ([kind, roots]) =>
+      (kind === 'claude' || kind === 'codex' || kind === 'omp' || kind === 'muse') &&
+      Array.isArray(roots) &&
+      roots.length <= MAX_EXPERIMENT_ROOTS &&
+      (roots as unknown[]).every(isValidExtraRoot)
   );
 }
 
@@ -349,8 +774,77 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
       (typeof print.claudeGroup === 'string' && SHA256_HEX.test(print.claudeGroup))) &&
     (print.usageSkipped === undefined || typeof print.usageSkipped === 'boolean') &&
     (print.walSize === undefined || nonNegative(print.walSize)) &&
-    (print.walMtimeMs === undefined || nonNegative(print.walMtimeMs))
+    (print.walMtimeMs === undefined || nonNegative(print.walMtimeMs)) &&
+    (print.readThrough === undefined || nonNegative(print.readThrough)) &&
+    (print.readFrom === undefined || nonNegative(print.readFrom)) &&
+    (print.readState === undefined || validReadState(print.readState)) &&
+    (print.readName === undefined || validLogName(print.readName)) &&
+    (print.decodedSize === undefined || nonNegative(print.decodedSize)) &&
+    (print.unreadableRecords === undefined || nonNegative(print.unreadableRecords)) &&
+    (print.walUnread === undefined || typeof print.walUnread === 'boolean')
   );
+}
+
+/**
+ * A log's display name (FIX-ROUND-BIG 18): a Codex rollout as `rollout-<time>-<session key>`, any
+ * other log as `log-<12 hex>`, with its extension. Nothing else from a file name is accepted.
+ */
+const LOG_NAME =
+  /^(?:rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-[0-9a-f]{16}|log-[0-9a-f]{12})(?:\.jsonl\.zst|\.jsonl|\.json|\.db|\.sqlite)?$/;
+
+function validLogName(value: unknown): value is string {
+  return typeof value === 'string' && LOG_NAME.test(value);
+}
+
+function validReadState(value: unknown): value is AnalyticsReadState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const state = value as Record<string, unknown>;
+  const text = (item: unknown, limit: number) =>
+    item === undefined || item === null || cleanText(item, limit);
+  return (
+    Object.keys(state).every((key) =>
+      ['model', 'provider', 'previous', 'sessionDigest'].includes(key)
+    ) &&
+    text(state.model, 200) &&
+    text(state.provider, 64) &&
+    (state.previous === undefined ||
+      state.previous === null ||
+      (Array.isArray(state.previous) &&
+        state.previous.length === 4 &&
+        state.previous.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0))) &&
+    (state.sessionDigest === undefined ||
+      state.sessionDigest === null ||
+      (typeof state.sessionDigest === 'string' && /^[0-9a-f]{16}$/.test(state.sessionDigest)))
+  );
+}
+
+/** A list of logs not read to their end, or undefined when absent or malformed. */
+export function parseUnfinished(value: unknown): AnalyticsUnfinishedLog[] | undefined {
+  if (!Array.isArray(value) || value.length > 20) return undefined;
+  const list: AnalyticsUnfinishedLog[] = [];
+  for (const item of value) {
+    const entry = item as Record<string, unknown> | null;
+    if (
+      !entry ||
+      typeof entry !== 'object' ||
+      !validLogName(entry.name) ||
+      !nonNegative(entry.sizeBytes) ||
+      (entry.readThroughBytes !== null && !nonNegative(entry.readThroughBytes)) ||
+      (entry.decodedBytes !== null && !nonNegative(entry.decodedBytes)) ||
+      (entry.reason !== 'deadline' &&
+        entry.reason !== 'unreadable' &&
+        entry.reason !== 'no_session_id')
+    )
+      return undefined;
+    list.push({
+      name: entry.name,
+      sizeBytes: entry.sizeBytes as number,
+      readThroughBytes: (entry.readThroughBytes as number | null) ?? null,
+      decodedBytes: (entry.decodedBytes as number | null) ?? null,
+      reason: entry.reason,
+    });
+  }
+  return list;
 }
 
 /** Strict shape check: aggregates only, bounded, never trusted blindly. */
@@ -396,6 +890,11 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       fingerprints?: unknown;
       walUnread?: unknown;
       unreadable?: unknown;
+      unfinished?: unknown;
+      unfinishedCount?: unknown;
+      unreadableRecords?: unknown;
+      unreadableFolders?: unknown;
+      searchLimit?: unknown;
     };
     if (
       entry.state !== 'ok' &&
@@ -438,6 +937,44 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       throw new AnalyticsRemoteTransportError();
     if (entry.unreadable !== undefined && typeof entry.unreadable !== 'boolean')
       throw new AnalyticsRemoteTransportError();
+    if (
+      entry.unreadableRecords !== undefined &&
+      (!Number.isSafeInteger(entry.unreadableRecords) ||
+        (entry.unreadableRecords as number) < 1 ||
+        (entry.unreadableRecords as number) > 10_000_000 ||
+        entry.partial !== true)
+    )
+      throw new AnalyticsRemoteTransportError();
+    if (
+      entry.unreadableFolders !== undefined &&
+      (!Number.isSafeInteger(entry.unreadableFolders) ||
+        (entry.unreadableFolders as number) < 1 ||
+        (entry.unreadableFolders as number) > 100_000 ||
+        entry.partial !== true)
+    )
+      throw new AnalyticsRemoteTransportError();
+    const limit = entry.searchLimit as { read?: unknown; found?: unknown } | undefined;
+    if (
+      limit !== undefined &&
+      (!limit ||
+        typeof limit !== 'object' ||
+        !Number.isSafeInteger(limit.read) ||
+        (limit.read as number) < 0 ||
+        (limit.found !== null &&
+          (!Number.isSafeInteger(limit.found) ||
+            (limit.found as number) < (limit.read as number))) ||
+        entry.partial !== true)
+    )
+      throw new AnalyticsRemoteTransportError();
+    // Naming is a diagnostic: a malformed list is dropped, the usage kept.
+    const unfinished = parseUnfinished(entry.unfinished);
+    const unfinishedCount =
+      unfinished &&
+      Number.isSafeInteger(entry.unfinishedCount) &&
+      (entry.unfinishedCount as number) >= unfinished.length &&
+      (entry.unfinishedCount as number) <= 20_000
+        ? (entry.unfinishedCount as number)
+        : unfinished?.length;
     const prints = entry.fingerprints as Record<string, unknown> | undefined;
     if (!prints || typeof prints !== 'object' || Array.isArray(prints))
       throw new AnalyticsRemoteTransportError();
@@ -467,8 +1004,26 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
         : {}),
       ...(entry.walUnread === true ? { walUnread: true } : {}),
       ...(entry.unreadable === true ? { unreadable: true } : {}),
+      ...(unfinished?.length ? { unfinished, unfinishedCount } : {}),
+      ...(entry.unreadableRecords !== undefined
+        ? { unreadableRecords: entry.unreadableRecords as number }
+        : {}),
+      ...(entry.unreadableFolders !== undefined
+        ? { unreadableFolders: entry.unreadableFolders as number }
+        : {}),
+      ...(limit !== undefined
+        ? {
+            searchLimit: {
+              read: limit.read as number,
+              found: (limit.found as number | null) ?? null,
+            },
+          }
+        : {}),
     };
   }
+  const discovery = parseAnalyticsDiscovery(response.discovery);
+  const sessions = parseAnalyticsSessions(response.sessions);
+  const reader = parseReader(response.reader);
   return {
     version: response.version,
     truncated: response.truncated,
@@ -476,6 +1031,13 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
     kinds: parsed,
     rows: rows as AnalyticsRemoteRow[],
     srows: (Array.isArray(srows) ? srows : []) as AnalyticsRemoteSessionRow[],
+    ...(discovery ? { discovery } : {}),
+    ...(sessions ? { sessions } : {}),
+    ...(reader ? { reader } : {}),
+    ...(Number.isSafeInteger(response.unansweredMounts) && (response.unansweredMounts as number) > 0
+      ? { unansweredMounts: Math.min(response.unansweredMounts as number, 1000) }
+      : {}),
+    ...(response.stalled === true ? { stalled: true } : {}),
   };
 }
 
@@ -647,6 +1209,343 @@ export async function runAnalyticsRemoteHelper(
     child.stdin?.end(input);
   });
   return parseAnalyticsRemoteResponse(stdout);
+}
+
+/** How long a computer whose scanner failed is read by the Python helper before the scanner is retried. */
+export const SCANNER_RETRY_MS = 6 * 60 * 60_000;
+
+/** Per computer: why its scanner is not used, until when (memory only; a restart retries). */
+const scannerDown = new Map<string, { cause: string; until: number }>();
+/** One install per computer at a time; a second caller waits for the first. */
+const installing = new Map<string, Promise<void>>();
+
+export interface AnalyticsRemoteScanDeps {
+  timeoutMs?: number;
+  helperPath?: string;
+  /** The packaged scanners; null runs the Python helper everywhere. Default: dist/native/aac-usage. */
+  manifest?: UsageScanManifest | null;
+  install?: typeof installUsageScan;
+  now?: () => number;
+  /** The Python helper (tests stand it in). */
+  python?: typeof runAnalyticsRemoteHelper;
+}
+
+/** Forget scanner failures (tests). */
+export function resetScannerState(): void {
+  scannerDown.clear();
+  installing.clear();
+}
+
+class ScannerLaunchError extends Error {
+  constructor(readonly marker: ReturnType<typeof binaryMarker>) {
+    super('The usage-log scanner is not in place.');
+  }
+}
+
+/** One scanner run over ssh; ScannerLaunchError when the copy is missing or has no build here. */
+async function runScanner(
+  sshHost: string,
+  platform: AnalyticsRemoteHost,
+  request: AnalyticsRemoteRequest,
+  manifest: UsageScanManifest,
+  timeoutMs: number
+): Promise<AnalyticsRemoteResponse> {
+  const input = Buffer.from(
+    JSON.stringify({
+      kinds: [...new Set(request.kinds)],
+      minDateMs: Math.floor(request.minDateMs),
+      immutableSqlite: true,
+      fingerprints: request.fingerprints,
+      extraRoots: request.extraRoots ?? {},
+      ...(request.experimentRoots && isValidExperimentRoots(request.experimentRoots)
+        ? { experimentRoots: request.experimentRoots }
+        : {}),
+      deadlineMs: 20_000,
+      ...(request.presence === true ? { presence: true } : {}),
+      ...(request.cwd === false ? { cwd: false } : {}),
+    })
+  );
+  if (input.length > MAX_RESPONSE_BYTES)
+    throw new ValidationError('Analytics remote request is invalid.');
+  const stdout = await new Promise<string>((resolve, reject) => {
+    const child = execFile(
+      'ssh',
+      sshArgv(sshHost, scanCommand(platform, manifest), { interval: 5, countMax: 6 }),
+      { encoding: 'utf8', timeout: timeoutMs, maxBuffer: MAX_RESPONSE_BYTES, windowsHide: true },
+      (error, result, stderr) => {
+        if (error) {
+          const failure = error as NodeJS.ErrnoException & {
+            signal?: string | null;
+            code?: number | string;
+          };
+          const exitCode = typeof failure.code === 'number' ? failure.code : null;
+          const tail = typeof stderr === 'string' ? stderr.slice(-4096) : '';
+          const marker = binaryMarker(exitCode, tail);
+          if (marker) {
+            reject(new ScannerLaunchError(marker));
+            return;
+          }
+          const timedOut = error.killed === true && failure.signal === 'SIGTERM';
+          reject(
+            new AnalyticsRemoteTransportError(
+              timedOut,
+              failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+                ? 'bad_response'
+                : classifyAnalyticsScanFailure({
+                    exitCode,
+                    killed: error.killed,
+                    signal: failure.signal ?? null,
+                    stderr: tail,
+                  }),
+              exitCode
+            )
+          );
+          return;
+        }
+        resolve(typeof result === 'string' ? result : '');
+      }
+    );
+    child.stdin?.on('error', () => {
+      /* ssh's exit carries the outcome. */
+    });
+    child.stdin?.end(input);
+  });
+  const parsed = parseAnalyticsRemoteResponse(stdout);
+  if (parsed.reader?.name !== 'aac-usage-scan')
+    throw new AnalyticsRemoteTransportError(false, 'bad_response');
+  return parsed;
+}
+
+/**
+ * Scan one computer with the Rust scanner when this package carries one for its target, copying it
+ * there first when it is missing (DESIGN 12.2); else, or when the scanner fails, with the Python
+ * helper, whose answer is labelled `reader: python-fallback` with the cause. A failure of the
+ * computer itself (ssh, timeout) is never blamed on the scanner: it is thrown as it is.
+ */
+export async function runAnalyticsRemoteScan(
+  sshHost: string,
+  platform: AnalyticsRemoteHost,
+  request: AnalyticsRemoteRequest,
+  deps: AnalyticsRemoteScanDeps = {}
+): Promise<AnalyticsRemoteResponse> {
+  if (!isSafeUsageSshAlias(sshHost))
+    throw new ValidationError('Analytics remote SSH alias is not configured safely.');
+  const now = deps.now ?? Date.now;
+  const manifest = deps.manifest === undefined ? readUsageScanManifest() : deps.manifest;
+  const python = deps.python ?? runAnalyticsRemoteHelper;
+  const timeoutMs = deps.timeoutMs ?? SSH_TIMEOUT_MS;
+  let cause = manifest ? undefined : 'binary_not_built';
+  const down = scannerDown.get(platform);
+  if (down && down.until > now()) cause = down.cause;
+  if (manifest && !cause) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const answer = await runScanner(sshHost, platform, request, manifest, timeoutMs);
+        scannerDown.delete(platform);
+        return answer;
+      } catch (error) {
+        if (!(error instanceof ScannerLaunchError)) {
+          // ssh or the computer failed: the same failure would stop the Python helper too.
+          if (error instanceof AnalyticsRemoteTransportError && error.cause.startsWith('ssh_'))
+            throw error;
+          if (error instanceof AnalyticsRemoteTransportError && error.cause === 'timeout')
+            throw error;
+          cause = 'binary_failed';
+          break;
+        }
+        const marker = error.marker;
+        if (!marker || 'unavailable' in marker || attempt > 0) {
+          cause = marker && 'unavailable' in marker ? 'binary_unavailable:target' : 'binary_failed';
+          break;
+        }
+        const target = marker.missing;
+        if (!manifest.targets[target]) {
+          cause = 'binary_unavailable:target';
+          break;
+        }
+        try {
+          let pending = installing.get(platform);
+          if (!pending) {
+            pending = (deps.install ?? installUsageScan)(
+              sshHost,
+              platform,
+              target,
+              manifest
+            ).finally(() => installing.delete(platform));
+            installing.set(platform, pending);
+          }
+          await pending;
+        } catch (failure) {
+          cause = `binary_install:${failure instanceof UsageScanInstallError ? failure.step : 'copy'}`;
+          break;
+        }
+      }
+    }
+    if (cause) scannerDown.set(platform, { cause, until: now() + SCANNER_RETRY_MS });
+  }
+  // The Python helper refuses fields it does not know; it reads the defaults and T3 homes only.
+  // It cannot resume a part-read log: given that print it would take the file as read to its end,
+  // so such prints are left out and Python reads the file whole (DESIGN 16.1).
+  const { presence: _presence, cwd: _cwd, experimentRoots: _experiments, ...older } = request;
+  void _presence;
+  void _cwd;
+  void _experiments;
+  older.fingerprints = withoutPartialPrints(request.fingerprints);
+  // Cursor and Devin have no Python reader: those kinds are answered "not reached", so what was
+  // read before is kept and the cell names the fallback (DESIGN 16.2, 16.3).
+  const pythonKinds = request.kinds.filter((kind) => PYTHON_KINDS.has(kind));
+  const unreached = request.kinds.filter((kind) => !PYTHON_KINDS.has(kind));
+  const answer = pythonKinds.length
+    ? await python(
+        sshHost,
+        platform,
+        { ...older, kinds: pythonKinds },
+        {
+          ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
+          ...(deps.helperPath !== undefined ? { helperPath: deps.helperPath } : {}),
+        }
+      )
+    : { version: 2 as const, truncated: false, kinds: {}, rows: [], srows: [] };
+  const kinds = { ...answer.kinds } as AnalyticsRemoteResponse['kinds'];
+  for (const kind of unreached) kinds[kind] = { state: 'pending', fingerprints: {} };
+  return {
+    ...answer,
+    kinds,
+    reader: { name: 'python-fallback', cause: cause ?? 'binary_failed' },
+  };
+}
+
+/** The local scanner's budget: inside the 60 s collection, above one decode of the largest log. */
+export const LOCAL_SCAN_DEADLINE_MS = 40_000;
+
+const localDigests = new Map<string, string>();
+
+/** The SHA-256 of the local binary, re-read whenever its size or mtime changes. */
+function localDigest(file: string): string | null {
+  try {
+    const stat = fs.statSync(file);
+    const key = `${file}\0${stat.size}\0${stat.mtimeMs}`;
+    const known = localDigests.get(key);
+    if (known) return known;
+    const digest = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    localDigests.clear();
+    localDigests.set(key, digest);
+    return digest;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the packaged scanner can read this computer (DESIGN 16.0 B): built for its target, in
+ * place, and matching its pinned digest. Otherwise the cause, which labels the TypeScript fallback.
+ */
+export function localUsageScanReady(
+  scanner: ReturnType<typeof localUsageScan> = localUsageScan()
+): { ok: true } | { ok: false; cause: 'binary_not_built' | 'binary_missing' | 'binary_damaged' } {
+  if (!scanner.ok) return scanner;
+  return localDigest(scanner.file) === scanner.sha256
+    ? { ok: true }
+    : { ok: false, cause: 'binary_damaged' };
+}
+
+/**
+ * The scanner on the dashboard's own computer: the same request and answer as a remote scan, run
+ * in place at low priority, with no ssh and no Python fallback (the TypeScript collectors are the
+ * fallback there). DESIGN 16.0 B.
+ */
+export async function runLocalUsageScan(
+  request: AnalyticsRemoteRequest,
+  deps: { scanner?: ReturnType<typeof localUsageScan>; timeoutMs?: number } = {}
+): Promise<AnalyticsRemoteResponse> {
+  const scanner = deps.scanner ?? localUsageScan();
+  if (!scanner.ok || !localUsageScanReady(scanner).ok)
+    throw new AnalyticsRemoteTransportError(false, 'helper_failed');
+  const input = Buffer.from(
+    JSON.stringify({
+      kinds: [...new Set(request.kinds)],
+      minDateMs: Math.floor(request.minDateMs),
+      immutableSqlite: true,
+      fingerprints: request.fingerprints,
+      extraRoots: request.extraRoots ?? {},
+      ...(request.experimentRoots && isValidExperimentRoots(request.experimentRoots)
+        ? { experimentRoots: request.experimentRoots }
+        : {}),
+      deadlineMs: LOCAL_SCAN_DEADLINE_MS,
+      ...(request.presence === true ? { presence: true } : {}),
+      ...(request.cwd === false ? { cwd: false } : {}),
+    })
+  );
+  if (input.length > MAX_RESPONSE_BYTES)
+    throw new ValidationError('Analytics remote request is invalid.');
+  const stdout = await new Promise<string>((resolve, reject) => {
+    const child = execFile(
+      scanner.file,
+      [],
+      {
+        encoding: 'utf8',
+        timeout: deps.timeoutMs ?? LOCAL_SCAN_DEADLINE_MS + 20_000,
+        maxBuffer: MAX_RESPONSE_BYTES,
+        windowsHide: true,
+      },
+      (error, result) => {
+        if (error) {
+          const failure = error as NodeJS.ErrnoException & { signal?: string | null };
+          const timedOut = error.killed === true && failure.signal === 'SIGTERM';
+          reject(
+            new AnalyticsRemoteTransportError(
+              timedOut,
+              failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+                ? 'bad_response'
+                : timedOut
+                  ? 'timeout'
+                  : 'helper_failed',
+              typeof failure.code === 'number' ? failure.code : null
+            )
+          );
+          return;
+        }
+        resolve(typeof result === 'string' ? result : '');
+      }
+    );
+    try {
+      if (child.pid) os.setPriority(child.pid, 10);
+    } catch {
+      /* Priority is a courtesy; the scan runs either way. */
+    }
+    child.stdin?.on('error', () => {
+      /* The exit is handled above. */
+    });
+    child.stdin?.end(input);
+  });
+  const answer = parseAnalyticsRemoteResponse(stdout);
+  return answer.reader ? answer : { ...answer, reader: { name: 'aac-usage-scan' } };
+}
+
+/** Prints of logs read to their end only, without the resume fields the Python helper lacks. */
+export function withoutPartialPrints(
+  fingerprints: Record<string, Record<string, AnalyticsRemoteFingerprint>>
+): Record<string, Record<string, AnalyticsRemoteFingerprint>> {
+  const out: Record<string, Record<string, AnalyticsRemoteFingerprint>> = {};
+  for (const [kind, prints] of Object.entries(fingerprints)) {
+    out[kind] = {};
+    for (const [key, print] of Object.entries(prints)) {
+      if (print.readThrough !== undefined) continue;
+      const {
+        readFrom: _from,
+        readState: _state,
+        readName: _name,
+        decodedSize: _decoded,
+        ...plain
+      } = print;
+      void _from;
+      void _state;
+      void _name;
+      void _decoded;
+      out[kind][key] = plain;
+    }
+  }
+  return out;
 }
 
 /** All remote scans use only aliases in the packaged computer registry. */

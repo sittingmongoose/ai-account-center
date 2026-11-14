@@ -1,14 +1,27 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/devices/me/rotate",
-    "role": "bar",
-    "body": {}
+    "method": "GET",
+    "path": "/api/auth/check",
+    "role": "bar"
   },
   "response": {
     "body": {
-      "code": "device_required",
-      "error": "This route is for a paired tray's own token."
+      "accessMode": "login",
+      "authConfigured": true,
+      "authEnabled": true,
+      "authenticated": true,
+      "authRequired": true,
+      "connection": {
+        "peer": "127.0.0.1",
+        "trusted": false
+      },
+      "isLocalAccess": true,
+      "secureOrigin": null,
+      "secureTransport": true,
+      "setupCodeRequired": false,
+      "signedOutReason": null,
+      "trustedLocalNetwork": false,
+      "username": "fixture-admin"
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +29,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 403
+    "status": 200
   }
 }

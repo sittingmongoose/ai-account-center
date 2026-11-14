@@ -11,6 +11,7 @@ import {
   collectAccountActivity,
   collectCodexPartition,
   readLargeCodexCheckpoint,
+  zstdContentSize,
   type AccountActivityScanOptions,
 } from '../../../src/web-server/usage/account-activity-collector';
 import {
@@ -506,6 +507,11 @@ describe('Codex compressed rollouts', () => {
       expect(terminal.scan?.detail).toContain('1 compressed Codex log is too large to read here');
       expect(terminal.scan?.detail).toContain('earlier usage is kept');
       expect(terminal.scan?.detail).toContain('measurement remains partial');
+      // The log is named (DESIGN 16.1), never with its conversation id.
+      expect(terminal.scan?.detail).toMatch(
+        /Not finished: rollout-[^ ]*\.jsonl\.zst \(\d+ MB, partly read: [\d,]+( of [\d,]+)? bytes[^)]*, paused\)/
+      );
+      expect(terminal.scan?.detail).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-/i);
       expect(terminal.hourly).toEqual(earlier.hourly);
       expect(terminal.eventCount).toBe(earlier.eventCount);
       expect(checkpoint().decodedOffset).toBe(initial.decodedOffset);
@@ -601,6 +607,16 @@ describe('Codex compressed rollouts', () => {
       expect(result.eventCount).toBe(plain.eventCount);
     }
   );
+
+  it('reads the decoded size a zstd frame header states, without decoding', () => {
+    for (const length of [0, 200, 300, 70_000, 5_000_000]) {
+      const file = path.join(root, `size-${length}.zst`);
+      fs.writeFileSync(file, zstdCompressSync(Buffer.alloc(length, 120)));
+      expect(zstdContentSize(file)).toBe(length);
+    }
+    fs.writeFileSync(path.join(root, 'plain.zst'), 'not a frame');
+    expect(zstdContentSize(path.join(root, 'plain.zst'))).toBeUndefined();
+  });
 
   it('walks skippable frames and rejects truncated framing without accepting false boundaries', async () => {
     const metadata = Buffer.alloc(12);

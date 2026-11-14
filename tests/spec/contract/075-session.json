@@ -1,14 +1,13 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/usage/burn",
+    "path": "/api/store/status",
     "role": "session"
   },
   "response": {
     "body": {
-      "at": "<timestamp>",
-      "rule": "Points used per hour across resets, from hourly rollups. A rate under 50% coverage is shown with its coverage only.",
-      "series": []
+      "fixture": true,
+      "state": "ready"
     },
     "headers": {
       "cache-control": "no-store",

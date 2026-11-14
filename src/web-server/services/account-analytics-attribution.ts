@@ -32,12 +32,19 @@ export const USAGE_ROUTE_PROVIDERS: Readonly<Record<string, DashboardProvider>> 
 
 /**
  * The tools whose logs are one provider's usage by construction: Claude Code (Anthropic), Codex (OpenAI), the
- * Muse Code CLI (Muse Code) and Antigravity, whose Gemini and Claude models are all served by the Antigravity
- * subscription. OMP and zcode log a route per call instead.
+ * Muse Code CLI (Muse Code), Antigravity, whose Gemini and Claude models are all served by the Antigravity
+ * subscription, and Cursor's SDK runs, billed to the Cursor account. OMP and zcode log a route per call
+ * instead; Devin CLI's usage belongs to no dashboard provider and counts as "other".
  */
 const TOOL_PROVIDERS: Readonly<
   Partial<Record<AccountAnalyticsActivityProvider, DashboardProvider>>
-> = Object.freeze({ claude: 'claude', codex: 'codex', muse: 'muse', antigravity: 'antigravity' });
+> = Object.freeze({
+  claude: 'claude',
+  codex: 'codex',
+  muse: 'muse',
+  antigravity: 'antigravity',
+  cursor: 'cursor',
+});
 
 /** The provider order of the dashboard (Claude, Codex, then the additional providers), then "other". */
 export const USAGE_PROVIDER_ORDER: readonly AccountAnalyticsUsageProvider[] = [

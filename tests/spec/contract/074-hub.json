@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/usage/at",
+    "path": "/api/status",
     "role": "hub"
   },
   "response": {

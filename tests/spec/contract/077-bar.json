@@ -1,14 +1,14 @@
 {
   "request": {
-    "method": "ALL",
-    "path": "/v0/management/fixture-missing",
-    "role": "bar",
-    "body": {}
+    "method": "GET",
+    "path": "/api/usage/burn",
+    "role": "bar"
   },
   "response": {
     "body": {
-      "code": "missing_management_key",
-      "error": "A management key is required."
+      "at": "<timestamp>",
+      "rule": "Points used per hour across resets, from hourly rollups. A rate under 50% coverage is shown with its coverage only.",
+      "series": []
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 401
+    "status": 200
   }
 }

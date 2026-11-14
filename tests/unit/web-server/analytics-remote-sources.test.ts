@@ -18,6 +18,7 @@ import {
 import {
   analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
+  localScannerOwned,
   loadAnalyticsRemoteSources as readRemoteSources,
 } from '../../../src/web-server/services/analytics-remote-sources';
 import { analyticsSessionKey } from '../../../src/web-server/usage/analytics-session-key';
@@ -172,7 +173,7 @@ describe('analytics remote transport', () => {
     ).toThrow();
     expect(() =>
       parseAnalyticsRemoteResponse(
-        JSON.stringify(response({ kinds: { cursor: { state: 'ok', fingerprints: {} } } }))
+        JSON.stringify(response({ kinds: { 'gemini-cli': { state: 'ok', fingerprints: {} } } }))
       )
     ).toThrow();
     expect(() =>
@@ -246,7 +247,7 @@ describe('analytics remote transport', () => {
     expect(analyticsHelperCommand('windows')).toStartWith('powershell.exe ');
   });
 
-  it('scans the Mac, Windows and Nas1 for the same six tools', () => {
+  it('scans the Mac, Windows and Nas1 for the same eight tools (Cursor and Devin since round 2)', () => {
     expect([...REMOTE_ANALYTICS_HOSTS]).toEqual(REMOTE_HOSTS);
     for (const host of REMOTE_ANALYTICS_HOSTS)
       expect(analyticsRemoteTargets(host)).toEqual([
@@ -256,6 +257,8 @@ describe('analytics remote transport', () => {
         'muse',
         'zcode',
         'antigravity',
+        'cursor',
+        'devin',
       ]);
   });
 
@@ -552,10 +555,14 @@ describe('analytics remote sources', () => {
     }
   );
 
+  // Version 7 keys Codex by conversation and Muse by session (FIX-ROUND-BIG 1 and 2): their rows
+  // keyed by path are read again with Claude's; the other tools' history migrates as it is.
   it.each([3, 4, 5])(
-    'migrates v%i non-Claude history and dates while offline, then rebuilds Claude',
+    'migrates v%i history of path-keyed tools and dates while offline, then rebuilds the rest',
     async (version) => {
       const tools = ['codex', 'omp', 'muse', 'zcode', 'antigravity'] as const;
+      const kept = tools.filter((tool) => tool !== 'codex' && tool !== 'muse');
+      const rebuiltKinds = new Set<string>(['claude', 'codex', 'muse']);
       const rows = tools.map((k) => row({ k, i: 100 }));
       const srows = tools.map((k) => srow({ k, i: 100 }));
       const fingerprints = Object.fromEntries(
@@ -598,8 +605,8 @@ describe('analytics remote sources', () => {
         },
       });
       for (const answer of [loadAnalyticsRemoteCachedSources(MIN_DATE, deps), offline]) {
-        expect(answer.results.map((entry) => entry.tool).sort()).toEqual([...tools].sort());
-        for (const tool of tools) {
+        expect(answer.results.map((entry) => entry.tool).sort()).toEqual([...kept].sort());
+        for (const tool of kept) {
           const data = answer.results.find((entry) => entry.tool === tool)?.data;
           expect(data?.hourly[0].inputTokens).toBe(100);
           expect(data?.session[0].inputTokens).toBe(100);
@@ -619,7 +626,7 @@ describe('analytics remote sources', () => {
           const kind = request.kinds[0];
           requested.add(kind);
           expect(request.fingerprints[kind] ?? {}).toEqual(
-            kind === 'claude' ? {} : fingerprints[kind]
+            rebuiltKinds.has(kind) ? {} : fingerprints[kind]
           );
           return parseAnalyticsRemoteResponse(
             JSON.stringify(
@@ -638,7 +645,7 @@ describe('analytics remote sources', () => {
           );
         },
       });
-      expect(requested.size).toBe(6);
+      expect(requested.size).toBe(8);
       expect(
         rebuilt.results.find((entry) => entry.tool === 'claude')?.data.hourly[0].inputTokens
       ).toBe(150);
@@ -646,11 +653,60 @@ describe('analytics remote sources', () => {
         rebuilt.results.find((entry) => entry.tool === 'claude')?.data.session[0].inputTokens
       ).toBe(150);
       const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-      expect(saved.version).toBe(6);
-      expect(saved.rows.filter((row: { k: string }) => row.k !== 'claude')).toEqual(rows);
-      expect(saved.srows.filter((row: { k: string }) => row.k !== 'claude')).toEqual(srows);
+      expect(saved.version).toBe(7);
+      expect(saved.rows.filter((row: { k: string }) => !rebuiltKinds.has(row.k))).toEqual(
+        rows.filter((row) => !rebuiltKinds.has(row.k))
+      );
+      expect(saved.srows.filter((row: { k: string }) => !rebuiltKinds.has(row.k))).toEqual(
+        srows.filter((row) => !rebuiltKinds.has(row.k))
+      );
     }
   );
+
+  it('migrates v6 with Claude kept, Codex and Muse read again and their take-over undone', () => {
+    const tools = ['claude', 'codex', 'muse', 'omp'] as const;
+    for (const host of ['mac', 'ubuntu']) {
+      const file = path.join(cache, `analytics-remote-v1/${host}.json`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          version: 6,
+          ...(host === 'ubuntu' ? { owned: { codex: '2026-11-01T00:00:00.000Z' } } : {}),
+          fingerprints: Object.fromEntries(
+            tools.map((k) => [
+              k,
+              {
+                [FILE_1]: {
+                  size: 10,
+                  mtimeMs: 20,
+                  ...(k === 'claude' ? { claudeGroup: FILE_1 } : {}),
+                },
+              },
+            ])
+          ),
+          rows: tools.map((k) => row({ k, i: 100 })),
+          srows: tools.map((k) => srow({ k, i: 100 })),
+          kinds: Object.fromEntries(
+            tools.map((k) => [k, { state: 'ok', lastScanAt: '2026-10-02T16:00:00.000Z' }])
+          ),
+          lastScanAt: '2026-10-02T16:00:00.000Z',
+          settled: true,
+        })
+      );
+    }
+    expect(localScannerOwned(cache).has('codex')).toBe(false);
+    const { results } = loadAnalyticsRemoteCachedSources(MIN_DATE, {
+      cacheDir: cache,
+      hosts: async () => ({ mac: 'fixture', windows: null, nas1: null }),
+    });
+    expect(
+      results
+        .filter((entry) => entry.data.hourly.length)
+        .map((entry) => entry.tool)
+        .sort()
+    ).toEqual(['claude', 'omp']);
+  });
 
   it('replaces every Claude copy owner atomically on repeated partial reads and recovery', async () => {
     const other = 'b2'.repeat(32);
@@ -697,7 +753,7 @@ describe('analytics remote sources', () => {
     // Version 5 could contain accumulated Claude owners; its rows/prints must rebuild.
     const file = path.join(cache, 'analytics-remote-v1/mac.json');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-    expect(saved.version).toBe(6);
+    expect(saved.version).toBe(7);
     fs.writeFileSync(
       file,
       JSON.stringify({ ...saved, version: 5, rows: [...saved.rows, ...saved.rows] })
@@ -1143,6 +1199,8 @@ describe('analytics remote sources', () => {
         'antigravity',
         'claude',
         'codex',
+        'cursor',
+        'devin',
         'muse',
         'omp',
         'zcode',
@@ -1223,7 +1281,7 @@ describe('analytics remote sources', () => {
       },
     });
     expect([...new Set(calls)]).toEqual(REMOTE_HOSTS.map((host) => `${host}:${SSH_ALIASES[host]}`));
-    expect(states).toHaveLength(REMOTE_HOSTS.length * 6);
+    expect(states).toHaveLength(REMOTE_HOSTS.length * 8);
     expect(states.every((entry) => entry.detail !== 'remote host is not configured')).toBe(true);
   });
 
@@ -1265,7 +1323,7 @@ describe('analytics remote sources', () => {
         version: number;
         srows: unknown[];
       };
-      expect(saved.version).toBe(6);
+      expect(saved.version).toBe(7);
       expect(saved.srows).toHaveLength(1);
       fs.writeFileSync(file, JSON.stringify({ ...saved, version: 2, srows: [] }));
     }
@@ -1592,7 +1650,8 @@ describe('analytics remote sources', () => {
     const nas1 = states.find((entry) => entry.tool === 'omp' && entry.host === 'nas1');
     expect(nas1).toMatchObject({ state: 'cached', rowCount: 2 });
     expect(nas1?.detail).toContain('timed out');
-    expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(6);
+    // The six answered kinds and Devin; Cursor without a run store is left to presence.
+    expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(7);
   });
 
   it('says when logs were read but hold no usage in the last 31 days', async () => {
@@ -1653,7 +1712,7 @@ describe('analytics remote scans per kind', () => {
     nas1: 'nas1-alias',
     alexis: 'alexis-alias',
   });
-  const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity'];
+  const ALL = ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity', 'cursor', 'devin'];
   const FILE_2 = 'a2'.repeat(32);
   /** A clean answer for exactly the kinds asked, with an OMP row when OMP is asked. */
   const answer = (kinds: string[], extra: Record<string, unknown> = {}) =>
@@ -1795,7 +1854,7 @@ describe('analytics remote scans per kind', () => {
     seen.length = 0;
     prints.length = 0;
     await loadAnalyticsRemoteSources(MIN_DATE, { hosts, cacheDir: cache, runHelper });
-    expect(seen).toHaveLength(6);
+    expect(seen).toHaveLength(8);
     // Each call carries only its own kind's fingerprints.
     seen.forEach((kinds, index) => expect(prints[index]).toEqual(kinds));
   });

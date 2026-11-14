@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/accounts/signin-jobs/fixture-missing/cancel",
+    "method": "PUT",
+    "path": "/api/accounts/settings",
     "role": "hub",
     "body": {}
   },

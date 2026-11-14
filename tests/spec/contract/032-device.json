@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/antigravity/recover",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/antigravity/profiles/quotas",
+    "role": "device"
   },
   "response": {
     "body": {

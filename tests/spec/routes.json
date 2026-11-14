@@ -169,6 +169,34 @@
   },
   {
     "method": "GET",
+    "path": "/api/accounts/analytics/capture",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-analytics-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/accounts/analytics/capture",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-analytics-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
     "path": "/api/accounts/analytics",
     "roles": [
       "signed-out",

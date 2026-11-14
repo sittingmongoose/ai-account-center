@@ -60,6 +60,13 @@ const CONFIG_SUBCOMMAND_ROUTES: readonly NamedCommandRoute[] = [
       process.exitCode = await handleStoreCommand(args);
     },
   },
+  {
+    name: 'cursor-key',
+    handle: async (args) => {
+      const { handleCursorKeyCommand } = await import('./cursor-key-command');
+      process.exitCode = await handleCursorKeyCommand(args);
+    },
+  },
 ];
 
 interface ConfigCommandDependencies {

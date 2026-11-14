@@ -32,6 +32,14 @@ export interface RawUsageEntry {
    */
   costUsd?: number;
   /**
+   * This entry's cost basis, set only by readers whose source reports cost itself (the Cursor
+   * account's rows). `reported`: `costUsd` is the source's own cost, complete even at 0, and
+   * the tokens are never priced again. `unknown`: the source gave no cost; the tokens count,
+   * no list price is ever applied, and the bucket is marked `costPartial`. Absent: the rule
+   * above.
+   */
+  costBasis?: 'reported' | 'unknown';
+  /**
    * One API response, not one content block: Claude Code writes several
    * assistant lines per response (same message id and request id, usage
    * repeated, last line complete). The collector collapses consecutive

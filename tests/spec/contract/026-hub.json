@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/antigravity/auto-switch",
+    "path": "/api/accounts/trash",
     "role": "hub"
   },
   "response": {

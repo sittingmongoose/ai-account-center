@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/claude/history-snapshots/cleanup",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles/usage",
+    "role": "signed-out"
   },
   "response": {
     "body": {

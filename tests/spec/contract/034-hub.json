@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/app-updates/start",
+    "path": "/api/antigravity/recover",
     "role": "hub",
     "body": {}
   },

@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/accounts/preferences",
+    "path": "/api/accounts/analytics?fixture=invalid",
     "role": "hub"
   },
   "response": {

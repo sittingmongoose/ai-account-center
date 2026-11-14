@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { execFileSync } from 'child_process';
+import { rustParity } from './usage-scan-parity';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -155,7 +156,15 @@ function runHelper(
       ...env,
     },
   });
-  return JSON.parse(output) as HelperResponse;
+  const python = JSON.parse(output) as HelperResponse;
+  const { ANTIGRAVITY_DATA_DIR: _inherited, ...clean } = process.env;
+  void _inherited;
+  rustParity(
+    { kinds: ['antigravity'], minDateMs: 0, ...request },
+    python as unknown as Record<string, unknown>,
+    { ...clean, HOME: home, USERPROFILE: home, ANTIGRAVITY_DATA_DIR: undefined, ...env }
+  );
+  return python;
 }
 
 /** Totals per model of the antigravity rows: events, uncached input, output, cache read, cache write. */
@@ -622,7 +631,8 @@ describe.skipIf(!HAVE_PYTHON)('Antigravity usage in the analytics helper', () =>
     // Either the query is interrupted, or the parse loop stops at its next check.
     expect(['OperationalError', '_AgyDeadline']).toContain(aborted.trim());
     expect(fs.existsSync(`${file}-wal`)).toBe(false);
-  });
+    // Two readers in parity mode on NTFS take ~6 s (Argon L6).
+  }, 15_000);
 
   it('says not installed without any store, and the transport accepts the kind', () => {
     const response = runHelper();

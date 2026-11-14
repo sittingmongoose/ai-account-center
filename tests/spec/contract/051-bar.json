@@ -1,21 +1,20 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/auth/session",
+    "path": "/api/auth/session-lifetime",
     "role": "bar"
   },
   "response": {
     "body": {
-      "expiresAt": "<timestamp>",
-      "managedBy": "config",
-      "otherBrowsers": 16,
-      "pairedDevices": 1,
-      "passwordChangedAt": null,
-      "secureOrigin": null,
-      "secureTransport": true,
-      "sessionLifetimeDays": 7,
-      "sessionTimeoutHours": 168,
-      "username": "fixture-admin"
+      "days": 7,
+      "hours": 168,
+      "options": [
+        1,
+        7,
+        30,
+        90,
+        365
+      ]
     },
     "headers": {
       "cache-control": "no-store",

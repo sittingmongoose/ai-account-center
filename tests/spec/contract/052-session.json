@@ -1,13 +1,14 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/sessions/revoke-others",
+    "method": "PUT",
+    "path": "/api/auth/session-lifetime",
     "role": "session",
     "body": {}
   },
   "response": {
     "body": {
-      "signedOutBrowsers": 17
+      "code": "invalid_body",
+      "error": "The request body is not valid for this action."
     },
     "headers": {
       "cache-control": "no-store",
@@ -15,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

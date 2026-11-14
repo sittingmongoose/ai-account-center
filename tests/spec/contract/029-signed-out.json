@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/antigravity/profiles/fixture-missing/confirm",
+    "method": "PUT",
+    "path": "/api/antigravity/auto-switch",
     "role": "signed-out",
     "body": {}
   },

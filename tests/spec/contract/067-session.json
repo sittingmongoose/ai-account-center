@@ -1,20 +1,29 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/scoreboard",
+    "path": "/api/diag",
     "role": "session"
   },
   "response": {
     "body": {
-      "rows": [],
-      "version": 1
+      "computers": [],
+      "jobs": [],
+      "scheduler": {
+        "cause": "jobs_not_migrated",
+        "lastSuccessAt": null,
+        "status": "unavailable"
+      },
+      "store": {
+        "cause": "store_owned_by_ts",
+        "lastSuccessAt": null,
+        "status": "unavailable"
+      }
     },
     "headers": {
-      "cache-control": "private, no-cache",
+      "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
-      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
-      "vary": "Cookie"
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
     "status": 200
   }

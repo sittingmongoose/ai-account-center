@@ -216,8 +216,8 @@ const ownSeries = p => p === 'claude' || p === 'codex';
 /** A provider mark exists for every dashboard provider; "other" has none. */
 const markOf = p => p === 'other' ? '' : p;
 /** The tools whose logs the server reads. Their names say where a model's usage came from, never a division. */
-export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity'];
-export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', muse: 'Muse Code', zcode: 'zcode', jsonl: 'Generic JSONL', antigravity: 'Antigravity' };
+export const TOOLS = ['claude', 'codex', 'omp', 'muse', 'zcode', 'jsonl', 'antigravity', 'cursor', 'devin'];
+export const TOOL_LABEL = { claude: 'Claude Code', codex: 'Codex', omp: 'OMP', muse: 'Muse Code', zcode: 'zcode', jsonl: 'Generic JSONL', antigravity: 'Antigravity', cursor: 'Cursor', devin: 'Devin CLI' };
 const toolNames = tools => andList(TOOLS.filter(t => tools.has(t)).map(t => TOOL_LABEL[t]));
 /** Add v to o[k] (per-provider sums over providers that are only known from the data). */
 const bump = (o, k, v) => { o[k] = (o[k] || 0) + v; };
@@ -1319,10 +1319,16 @@ export function calendarView(A, R, now, monthGrid = true) {
 }
 
 // ---------------------------------------------------------------- included usage (activity.sources)
-const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor']];
-const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage', 'unreadable', 'scan_failed'];
+const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OMP'], ['muse', 'Muse Code'], ['zcode', 'zcode'], ['jsonl', 'Generic JSONL'], ['antigravity', 'Antigravity'], ['cursor', 'Cursor'], ['devin', 'Devin CLI'], ['gemini-cli', 'Gemini CLI'], ['opencode', 'OpenCode'], ['qwen', 'Qwen Code'], ['kimi', 'Kimi Code'], ['grok', 'Grok CLI'], ['kiro', 'Kiro CLI'], ['pi', 'Pi'], ['fx', 'fx']];
+/** Tools Analytics has no usage reader for: a row only where a computer reports them present. */
+const NO_READER_TOOLS = new Set(['cursor', 'gemini-cli', 'opencode', 'qwen', 'kimi', 'grok', 'kiro', 'pi', 'fx']);
+/** Where discovery found a tool's logs, in plain words (DESIGN 2's origins). */
+const ORIGIN_WORDS = { default: 'default folder', env: 'env var', tool_config: "the tool's config", t3_instance: 'T3 instance', ccs_instance: 'AAC profile', signature: 'other home', extra: 'saved extra', experiment: 'experiment folder' };
+const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage', 'unreadable', 'scan_failed', 'installed_no_logs', 'no_reader'];
 const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
-const noLocalLog = r => r.state === 'unavailable' && /no local usage log/i.test(text(r.detail));
+const noLocalLog = r => r.state === 'unavailable' && /no local usage log|not measured on this computer/i.test(text(r.detail));
+// Cursor on a computer the usage scanner did not read (round 2): its SDK runs are read where it runs.
+const notMeasured = r => r.state === 'unavailable' && /not measured on this computer/i.test(text(r.detail));
 const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
 /**
  * The "Included usage" disclosure: one sentence naming the tools and computers whose logs were read, a plain note
@@ -1335,6 +1341,49 @@ const capFirst = v => text(v).replace(/^./, c => c.toUpperCase());
  * that could not be read: "Can't read"). A failing source never reads as a zero.
  * tone: ok | cached | unavailable | scanning | quiet.
  */
+/**
+ * The Cursor account through AAC's own key (DESIGN 17.5): one sentence for its state. Only the account's usage outside the
+ * scanned computers is added to the numbers; the rest is T3's runs, already counted from their logs.
+ */
+export function cursorAccountLine(account, now = Date.now()) {
+  if (!account || typeof account !== 'object') return '';
+  const at = Date.parse(text(account.readAt));
+  const read = finite(at) ? `read ${relTxt(at, now)}` : 'never read';
+  switch (account.state) {
+    case 'read': {
+      // The account feed is the authoritative account total; the local runs are an overlapping
+      // breakdown of it. Nothing of the account is added to the page's totals, which already
+      // hold the local runs (the account's events cannot prove which residual is outside them).
+      const total = finite(account.accountTokens) ? account.accountTokens : 0;
+      const matched = finite(account.matchedTokens) ? account.matchedTokens : 0;
+      const unlogged = finite(account.unmeasured) ? account.unmeasured : 0;
+      const local = finite(account.localUnmatchedTokens) && account.localUnmatchedTokens > 0
+        ? `; ${tokC(account.localUnmatchedTokens)} local Cursor tokens are not in this account's events`
+        : '';
+      // Events whose token counts were not logged: the tokens shown are measured ones only, and
+      // missing measurements are never absence of usage, so "no usage" is never said for them.
+      const notLogged = unlogged > 0
+        ? `; ${nf0.format(unlogged)} event${unlogged === 1 ? '' : 's'} not logged (token counts missing)`
+        : '';
+      if (total <= 0)
+        return `Cursor account ${read}: ${unlogged > 0 ? 'no tokens logged' : 'no usage in range'}${notLogged}${local}.`;
+      return matched > 0
+        ? `Cursor account ${read}: ${tokC(total)} tokens on the account, about ${tokC(matched)} of them T3's runs already counted here; the rest is not added to these totals${notLogged}${local}.`
+        : `Cursor account ${read}: ${tokC(total)} tokens on the account, none of it matched to the local runs; it is not added to these totals${notLogged}${local}.`;
+    }
+    case 'no_key':
+      return 'Cursor account: no key, so Cursor used outside T3 (the app, cloud agents) is not counted.';
+    case 'key_rejected':
+      return `Cursor account: the key${text(account.last4) ? ` ending ${text(account.last4)}` : ''} was rejected, so Cursor used outside T3 is not counted.`;
+    case 'no_reader':
+      return 'Cursor account: its reader is not built for this computer.';
+    case 'unavailable':
+      return `Cursor account not read just now (${text(account.cause) || 'unavailable'}); ${finite(at) ? `showing its usage as read ${relTxt(at, now)}` : 'nothing of it is counted'}.`;
+    default:
+      return '';
+  }
+}
+
 export function includedView(payload, now = Date.now()) {
   const seen = new Set();
   const list = (Array.isArray(payload?.activity?.sources) ? payload.activity.sources : []).filter(r => SOURCE_TOOLS.some(([t]) => t === r?.tool)
@@ -1348,33 +1397,65 @@ export function includedView(payload, now = Date.now()) {
   // Cursor (and Antigravity, from a server older than its reader) keep no local log; their quota still shows on Home.
   const quietOnly = nolog.length > 0 && nolog.every(([t]) => t === 'antigravity' || t === 'cursor');
   const nologNames = nolog.map(([, l]) => l);
-  const nologLine = !nolog.length ? '' : quietOnly
+  const unmeasured = nolog.length > 0 && nolog.every(([t]) => list.filter(r => r.tool === t).every(notMeasured));
+  const nologLine = !nolog.length ? '' : unmeasured
+    ? `${andList(nologNames)} ${nolog.length === 1 ? 'is' : 'are'} not measured where the usage scanner did not run; ${nolog.length === 1 ? 'its' : 'their'} quota readings still show on Home.`
+    : quietOnly
     ? nolog.length === 1
       ? `${nologNames[0]} doesn't keep a local usage log; its quota readings still show on Home.`
       : `${andList(nologNames)} don't keep local usage logs; their quota readings still show on Home.`
     : `${andList(nologNames)} keep${nolog.length === 1 ? 's' : ''} no local usage log of ${nolog.length === 1 ? 'its' : 'their'} own; usage another tool routes through ${nolog.length === 1 ? 'it' : 'them'} still counts under ${nolog.length === 1 ? 'it' : 'them'}.`;
+  // Tools a computer has that Analytics cannot count: said in words, never left out.
+  const noRecords = tools.filter(([t]) => list.some(r => r.tool === t && r.state === 'no_reader' && r.cause === 'no_local_usage_records')).map(([, l]) => l);
+  const noReader = tools.filter(([t]) => list.some(r => r.tool === t && r.state === 'no_reader' && r.cause !== 'no_local_usage_records')).map(([, l]) => l);
+  const readerLine = [
+    noRecords.length ? `${andList(noRecords)} keep${noRecords.length === 1 ? 's' : ''} no local usage records; quota readings still show on Home.` : '',
+    noReader.length ? `${andList(noReader)} ${noReader.length === 1 ? 'is' : 'are'} installed, with no usage reader yet: ${noReader.length === 1 ? 'its' : 'their'} usage is not counted here.` : '',
+  ].filter(Boolean).join(' ');
   const line = [
     included.length ? `Includes ${andList(included)}${hosts.length ? ` on ${andList(hosts)}` : ''}.` : 'No usage log could be read yet.',
     nologLine,
+    readerLine,
+    cursorAccountLine(payload?.activity?.cursorAccount, now),
   ].filter(Boolean).join(' ');
   const when = r => Date.parse(text(r.lastScanAt));
+  // "1,234 files in 3 folders (default folder 900, other home 334)"; the older reader says so.
+  const found = r => {
+    const c = r.counts;
+    const origins = Array.isArray(r.origins) ? r.origins.filter(o => o && ORIGIN_WORDS[o.origin] && Number.isInteger(o.files)) : [];
+    const parts = [];
+    if (c && Number.isInteger(c.filesFound)) {
+      const where = origins.length ? ` (${origins.map(o => `${ORIGIN_WORDS[o.origin]} ${nf0.format(o.files)}`).join(', ')})` : '';
+      parts.push(`${nf0.format(c.filesFound)} files found${Number.isInteger(c.roots) && c.roots > 0 ? ` in ${c.roots} folder${c.roots === 1 ? '' : 's'}` : ''}${where}.`);
+      if (Number.isInteger(c.filesFailed) && c.filesFailed > 0) parts.push(`${nf0.format(c.filesFailed)} could not be read.`);
+    }
+    if (typeof r.reader === 'string' && r.reader.startsWith('python-fallback')) parts.push('Read with the older Python reader: default folders and T3 homes only.');
+    return parts.join(' ');
+  };
   const events = r => Number.isInteger(r.rowCount) && r.rowCount >= 0 ? `${nf0.format(r.rowCount)} usage events kept` : '';
-  const cell = (r, id) => {
+  const cell = (r, id, tool) => {
+    if (!r && NO_READER_TOOLS.has(tool)) return { id, text: 'Not found', tone: 'quiet', tip: 'No sign of this tool on this computer, or the computer was read by the older reader.' };
     if (!r) return { id, text: 'Not read', tone: 'quiet', tip: 'This computer is not read for this tool.' };
     const t = when(r), last = finite(t) ? `Last scan ${timeTxt(t)}.` : 'Never scanned.';
     const why = text(r.detail) ? `${capFirst(r.detail)}. ` : '';
     if (r.state === 'scanning') return { id, text: 'Scanning…', tone: 'scanning', tip: `${why}${last}` };
-    if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: 'ok', tip: [events(r), last].filter(Boolean).join(' · ') };
+    // A read with a note (a folder that did not answer, a write-ahead log, a cache cut) says it and is marked.
+    if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: why ? 'cached' : 'ok', tip: [why.trim(), events(r), found(r), last].filter(Boolean).join(' · ') };
     if (r.state === 'cached') return { id, text: finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Earlier records are shown until a scan finishes. ${last}` };
-    if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: `${why}${last}` };
+    if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
+    if (r.state === 'installed_no_logs') return { id, text: 'Installed, no logs yet', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
+    if (r.state === 'no_reader') return r.cause === 'no_local_usage_records'
+      ? { id, text: 'No local usage records', tone: 'quiet', tip: `${why}${found(r)}` }
+      : { id, text: 'No usage reader yet', tone: 'quiet', tip: `${why}${found(r)}` };
     if (r.state === 'scan_failed') return { id, text: 'Scan failed', tone: 'unavailable', tip: `${why}${last}` };
     if (r.state === 'unreadable') return { id, text: "Can't read", tone: 'unavailable', tip: `${why}${last}` };
+    if (notMeasured(r)) return { id, text: 'Not measured', tone: 'quiet', tip: `${capFirst(r.detail)}.` };
     if (noLocalLog(r)) return { id, text: 'No usage log', tone: 'quiet', tip: 'This tool keeps no local usage log to read.' };
     if (r.state === 'not_installed') return { id, text: 'Not installed', tone: 'quiet', tip: why || 'No usage logs for this tool were found on this computer.' };
     return { id, text: 'Unavailable', tone: 'unavailable', tip: `${why}${last}` };
   };
   const quiet = new Set(nolog.map(([t]) => t));
-  const rows = tools.filter(([t]) => !quiet.has(t)).map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h), h)) }));
+  const rows = tools.filter(([t]) => !quiet.has(t)).map(([t, label]) => ({ tool: label, cells: SOURCE_HOSTS.map(([h]) => cell(list.find(r => r.tool === t && r.host === h), h, t)) }));
   const scanning = list.filter(r => r.state === 'scanning').length;
   const cached = list.filter(r => r.state === 'cached').length, down = list.filter(r => r.state === 'unavailable' && !noLocalLog(r)).length;
   const failed = list.filter(r => r.state === 'scan_failed').length, unreadable = list.filter(r => r.state === 'unreadable').length;

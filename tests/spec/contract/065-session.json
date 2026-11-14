@@ -1,26 +1,14 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/diag",
+    "path": "/api/codex/profiles/quotas",
     "role": "session"
   },
   "response": {
     "body": {
-      "computers": [],
-      "jobs": [],
-      "scheduler": {
-        "cause": "jobs_not_migrated",
-        "lastSuccessAt": null,
-        "status": "unavailable"
-      },
-      "store": {
-        "cause": "store_owned_by_ts",
-        "lastSuccessAt": null,
-        "status": "unavailable"
-      }
+      "profiles": []
     },
     "headers": {
-      "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"

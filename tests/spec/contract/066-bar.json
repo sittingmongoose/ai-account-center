@@ -1,12 +1,19 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/health",
+    "path": "/api/codex/profiles",
     "role": "bar"
   },
   "response": {
     "body": {
-      "status": "ok"
+      "activated": null,
+      "active": {
+        "codexHome": "<fixture-home>/.codex",
+        "name": null,
+        "source": "explicit-codex-home"
+      },
+      "default": null,
+      "profiles": []
     },
     "headers": {
       "content-type": "application/json; charset=utf-8",

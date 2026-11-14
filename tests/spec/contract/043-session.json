@@ -1,12 +1,14 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/devices",
-    "role": "session"
+    "method": "POST",
+    "path": "/api/auth/devices/pair",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {
-      "devices": []
+      "code": "invalid_body",
+      "error": "The request body is not valid for this action."
     },
     "headers": {
       "cache-control": "no-store",
@@ -14,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

@@ -1,24 +1,14 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/devices",
-    "role": "bar"
+    "method": "POST",
+    "path": "/api/auth/devices/pair",
+    "role": "bar",
+    "body": {}
   },
   "response": {
     "body": {
-      "devices": [
-        {
-          "appVersion": "0.0.0",
-          "id": "<device-id>",
-          "idleExpiresAt": "<timestamp>",
-          "lastSeenAddress": "127.0.0.1",
-          "lastSeenAt": "<timestamp>",
-          "name": "Fixture device",
-          "pairedAt": "<timestamp>",
-          "platform": "mac",
-          "rotatedAt": null
-        }
-      ]
+      "code": "invalid_body",
+      "error": "The request body is not valid for this action."
     },
     "headers": {
       "cache-control": "no-store",
@@ -26,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

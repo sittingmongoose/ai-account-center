@@ -1,18 +1,18 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/codex/profiles/auto-switch",
-    "role": "session"
+    "method": "POST",
+    "path": "/api/claude/history-snapshots/cleanup",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {
-      "activationInProgress": false,
-      "enabled": false,
-      "message": "Automatic Codex account switching is disabled.",
-      "outcome": "disabled",
-      "pollIntervalSeconds": 60,
-      "thresholdPercent": 5,
-      "thresholdUsedPercent": 95
+      "deleted": 0,
+      "failed": 0,
+      "kept": 0,
+      "profiles": 0,
+      "skipped": 0,
+      "targets": 0
     },
     "headers": {
       "content-type": "application/json; charset=utf-8",

@@ -1,7 +1,7 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/auth/session",
+    "path": "/api/auth/session-lifetime",
     "role": "signed-out"
   },
   "response": {

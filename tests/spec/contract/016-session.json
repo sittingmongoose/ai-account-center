@@ -1,12 +1,16 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/accounts/settings",
+    "path": "/api/accounts/preferences",
     "role": "session"
   },
   "response": {
     "body": {
-      "refreshIntervalSeconds": 60
+      "snapshotCleanup": {
+        "auto": true
+      },
+      "timeZone": "America/New_York",
+      "usageLogSources": []
     },
     "headers": {
       "cache-control": "no-store",

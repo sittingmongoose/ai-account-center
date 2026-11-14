@@ -177,6 +177,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-cursor-account/tests/cursor_account.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "native/aac-status/src/computers.rs",
       "kind": "internal",
       "evidence": [],
@@ -409,6 +415,54 @@
     },
     {
       "file": "native/aac-store/tests/zstd_levels.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/src/read/antigravity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/src/util.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/agy_header.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/big_review.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/big_review_2.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/discovery.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/readers.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-usage/tests/resume.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -1715,6 +1769,12 @@
       ]
     },
     {
+      "file": "tests/unit/scripts/build-usage-scan.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/scripts/check-line-endings.test.ts",
       "kind": "helper",
       "evidence": [
@@ -2335,7 +2395,33 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/analytics-big-review.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-capture-cache-limit.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-cursor-devin.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/analytics-explicit-refresh.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/analytics-local-scanner.test.ts",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -2362,6 +2448,12 @@
         "helper",
         "table"
       ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-resume.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/analytics-scan-failures.test.ts",
@@ -2722,11 +2814,23 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/cursor-account.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/cursor-failure-contract-interop.test.ts",
       "kind": "helper",
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "tests/unit/web-server/cursor-key-pty.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "tests/unit/web-server/dashboard-auth-devices.test.ts",
@@ -3360,6 +3464,13 @@
       "kind": "HTTP",
       "evidence": [
         "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/usage-scan-transport.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
       ]
     },
     {

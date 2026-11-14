@@ -1,20 +1,14 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/session-lifetime",
-    "role": "session"
+    "method": "PUT",
+    "path": "/api/auth/network",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {
-      "days": 7,
-      "hours": 168,
-      "options": [
-        1,
-        7,
-        30,
-        90,
-        365
-      ]
+      "code": "invalid_body",
+      "error": "The request body is not valid for this action."
     },
     "headers": {
       "cache-control": "no-store",
@@ -22,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

@@ -19,14 +19,28 @@ import { collectorConcurrency, runBounded } from '../usage/collector-concurrency
 import type { PlanWorkerRequest, PlanWorkerResponse } from '../usage/analytics-plan-worker';
 import { startModelsDevRegistryRefresh } from '../models-dev/registry-cache';
 import {
+  LOCAL_SCANNER_KINDS,
   analyticsRemoteTargets,
   loadAnalyticsRemoteCachedSources,
   loadAnalyticsRemoteSources,
+  localScannerOwned,
   type AnalyticsRemoteSourceState,
-  type AnalyticsSourceTool,
+  type LocalScannerAnswer,
 } from './analytics-remote-sources';
-import { REMOTE_ANALYTICS_HOSTS, type AnalyticsRemoteHost } from './analytics-remote-transport';
+import {
+  REMOTE_ANALYTICS_HOSTS,
+  localUsageScanReady,
+  type AnalyticsRemoteHost,
+  type AnalyticsRemoteKind,
+} from './analytics-remote-transport';
 import { DASHBOARD_HOSTS, HOST_LABELS } from './dashboard-hosts';
+import {
+  cursorAccountOutside,
+  loadCursorAccountRead,
+  readCursorAccount,
+  type CursorAccountAnswer,
+  type CursorAccountRead,
+} from './cursor-account-reader';
 import {
   defaultAccountAnalyticsPricing,
   memoiseAccountAnalyticsPricing,
@@ -57,6 +71,7 @@ import type {
   AccountAnalyticsActivity,
   AccountAnalyticsActivityCoverage,
   AccountAnalyticsActivityProvider,
+  AccountAnalyticsCursorAccount,
   AccountAnalyticsActivityRequest,
   AccountAnalyticsQuery,
   AccountAnalyticsSource,
@@ -103,6 +118,14 @@ interface ActivityState {
   remotePending: AnalyticsRemoteHost[];
   /** When the published grid first showed a still-scanning cell; null once settled. Bounds the converge cadence. */
   scanningSince: number | null;
+  /**
+   * The Cursor account through AAC's key (DESIGN 17): what the page says about it. Its feed is
+   * the authoritative account total and the local runs are an overlapping breakdown of it, so
+   * no part of it is merged into the providers' usage: the account's events cannot be split
+   * reliably into the local runs' and the rest (review M1). Kept apart from `remote`, which is
+   * carried between collections.
+   */
+  cursorAccount: { status: AccountAnalyticsCursorAccount } | null;
   /** Rates memoised for the current snapshot; replaced whenever the snapshot is. */
   pricing: AccountAnalyticsPricingLookup;
   /** Recent cost of projecting this snapshot, reserved out of the response budget. */
@@ -113,8 +136,17 @@ type RemoteAnswer = {
   /** Re-elect mirrors against the inventory at publication, after local workers settle. */
   reconcileClaudeMirrors?: () => void;
   fetchedAt?: string;
-  results: Array<{ tool: AnalyticsSourceTool; data: UsageWorkerResult }>;
+  results: Array<{ tool: AnalyticsRemoteKind; data: UsageWorkerResult }>;
   states: AnalyticsRemoteSourceState[];
+  /** The scanner on this computer (DESIGN 16.0 B): the kinds it owns, or why it did not run. */
+  local?: LocalScannerAnswer;
+};
+
+/** How the local reader is labelled while the scanner cannot run here. */
+const LOCAL_FALLBACK_WORDS: Record<string, string> = {
+  binary_not_built: 'the usage scanner is not built for this computer',
+  binary_missing: "the usage scanner's file is missing from this install",
+  binary_damaged: "the usage scanner's file does not match its build",
 };
 
 interface LocalRequestIdentity {
@@ -179,12 +211,11 @@ function newerRemote(left: RemoteAnswer | null, right: RemoteAnswer | null): Rem
 }
 
 /**
- * Fixed entries for tools with no local usage log, on every host. Cursor usage
- * is server-side (the local chat store holds blobs and metadata only, with no
- * token-usage columns). The page uses these to say why it is missing. Every
- * other tool is scanned on every host, so its state is measured, never fixed;
- * Antigravity's usage metadata is read from its conversation databases by the
- * analytics helper (antigravity-native-usage-collector.ts).
+ * Fixed Cursor entries, for computers the usage scanner did not measure (DESIGN 16.2): the scanner
+ * reads Cursor's SDK run stores where it runs; chats in the Cursor app keep no local token counts,
+ * and cloud agents none at all. Every other tool is scanned on every host, so its state is
+ * measured, never fixed; Antigravity's usage metadata is read from its conversation databases by
+ * the analytics helper (antigravity-native-usage-collector.ts).
  */
 export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
   const entries: AccountAnalyticsSource[] = [];
@@ -196,7 +227,7 @@ export function fixedAnalyticsSourceEntries(): AccountAnalyticsSource[] {
       lastScanAt: null,
       rowCount: 0,
       detail:
-        'no local usage log: usage is server-side; the local state database has no token-usage columns',
+        "not measured on this computer: the usage scanner reads Cursor's SDK runs where it runs; chats in the Cursor app keep no local token counts",
     });
   }
   return entries;
@@ -212,6 +243,15 @@ const SOURCE_TOOL_ORDER = [
   'jsonl',
   'antigravity',
   'cursor',
+  'devin',
+  'gemini-cli',
+  'opencode',
+  'qwen',
+  'kimi',
+  'grok',
+  'kiro',
+  'pi',
+  'fx',
 ];
 const SOURCE_HOST_ORDER: readonly string[] = DASHBOARD_HOSTS;
 function sortSourceEntries(entries: AccountAnalyticsSource[]): AccountAnalyticsSource[] {
@@ -241,7 +281,12 @@ export function coldScanningSourceStates(): AccountAnalyticsSource[] {
         detail: 'the first scan is running',
       });
   }
-  entries.push(...fixedAnalyticsSourceEntries());
+  // Where Cursor is a scanned kind its own cell stands in for the fixed row.
+  entries.push(
+    ...fixedAnalyticsSourceEntries().filter(
+      (entry) => !entries.some((cell) => cell.tool === 'cursor' && cell.host === entry.host)
+    )
+  );
   return sortSourceEntries(entries);
 }
 
@@ -285,6 +330,13 @@ export interface AccountAnalyticsActivityDeps {
    * remote cache when `remote` is the default.
    */
   remoteCached?: (minDateMs: number) => RemoteAnswer | null;
+  /** The kinds the scanner owns on this computer (DESIGN 16.0 B); tests pass their own. */
+  localScannerOwned?: () => Iterable<string>;
+  /** The Cursor account reader (DESIGN 17); tests pass their own. */
+  cursorAccount?: {
+    read?: typeof readCursorAccount;
+    outside?: typeof cursorAccountOutside;
+  };
   now?: () => number;
   scope?: () => string;
   /**
@@ -427,7 +479,12 @@ function validSnapshot(value: unknown): value is PersistedActivitySnapshot {
     Record<string, unknown>
   >) {
     if (!source || typeof source !== 'object') return false;
-    if (!isActivityKind(source.provider as string)) return false;
+    if (
+      !isActivityKind(source.provider as string) &&
+      source.provider !== 'cursor' &&
+      source.provider !== 'devin'
+    )
+      return false;
     if (typeof source.fetchedAt !== 'string') return false;
     if (!Array.isArray(source.data)) return false;
     for (const result of source.data as Array<Record<string, unknown>>) {
@@ -695,6 +752,8 @@ function localSourcePresence(
     zcode: false,
     jsonl: false,
     antigravity: false,
+    cursor: false,
+    devin: false,
   };
   for (const entry of requests) presence[entry.provider] = true;
   return presence;
@@ -734,6 +793,75 @@ export class AccountAnalyticsActivityService {
       process.once('SIGTERM', this.onShutdown);
     }
     this.largeCodexReads.enqueue(data.scan.largeCodexReads);
+  }
+
+  /**
+   * The account's usage outside the scanned computers (DESIGN 17.4), from the reader's last read
+   * (at most every 10 minutes, at once on a manual refresh) and every scanned Cursor row. Skipped in
+   * tests that inject the remote and not the account.
+   */
+  private startCursorAccount(
+    state: ActivityState,
+    cutoff: number
+  ): Promise<CursorAccountRead | null> {
+    const deps = this.deps.cursorAccount;
+    if (!deps && this.deps.remote !== undefined) return Promise.resolve(null);
+    const scope = (this.deps.scope ?? getCcsDir)();
+    return (deps?.read ?? readCursorAccount)(cutoff, (this.deps.now ?? Date.now)(), {
+      force: state.manualRefreshPending,
+      cacheDir: path.join(scope, 'cache'),
+      ccsDir: scope,
+    }).catch(() => null);
+  }
+
+  /**
+   * The read started with the collection, waited for only until the collection's deadline; past it
+   * the last saved read stands (the running one saves for the next collection).
+   */
+  private async finishCursorAccount(
+    started: Promise<CursorAccountRead | null>,
+    answer: RemoteAnswer | null,
+    deadline: number
+  ): Promise<CursorAccountAnswer | null> {
+    const deps = this.deps.cursorAccount;
+    if (!deps && this.deps.remote !== undefined) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<'late'>((resolve) => {
+      timer = setTimeout(() => resolve('late'), Math.max(0, deadline - Date.now()));
+    });
+    const settled = await Promise.race([started, late]).finally(() => clearTimeout(timer));
+    const scope = (this.deps.scope ?? getCcsDir)();
+    const read =
+      settled === 'late' || settled === null
+        ? loadCursorAccountRead(path.join(scope, 'cache'))
+        : settled;
+    if (!read) return null;
+    const local: Array<{ h: string; m: string; i: number; o: number; cr: number; cw: number }> = [];
+    for (const entry of answer?.results ?? [])
+      if (entry.tool === 'cursor')
+        for (const hour of entry.data.hourly)
+          for (const model of hour.modelBreakdowns ?? [])
+            local.push({
+              h: hour.hour,
+              m: model.modelName,
+              i: model.inputTokens,
+              o: model.outputTokens,
+              cr: model.cacheReadTokens,
+              cw: model.cacheCreationTokens,
+            });
+    return (deps?.outside ?? cursorAccountOutside)(read, local);
+  }
+
+  /** The kinds the scanner owns here, while it can run; none in tests that inject the remote. */
+  private localScannerOwnedKinds(): Set<string> {
+    if (this.deps.localScannerOwned) return new Set(this.deps.localScannerOwned());
+    if (this.deps.remote !== undefined) return new Set();
+    try {
+      if (!localUsageScanReady().ok) return new Set();
+      return localScannerOwned(path.join((this.deps.scope ?? getCcsDir)(), 'cache'));
+    } catch {
+      return new Set();
+    }
   }
 
   private cachedRemote(cutoff: number, scope: string): RemoteAnswer | null {
@@ -780,6 +908,8 @@ export class AccountAnalyticsActivityService {
       onHostScan,
       force: state.manualRefreshPending,
     }).catch(() => null);
+    // The Cursor account is read alongside (at most every 10 minutes; DESIGN 17.5).
+    const accountRead = this.startCursorAccount(state, cutoff);
     let settledRemote: RemoteAnswer | null = null;
     void remotePromise.then((answer) => {
       settledRemote = answer;
@@ -788,9 +918,19 @@ export class AccountAnalyticsActivityService {
     let failed = false;
     // The roots a few stats find start reading at once; the OMP marker scan's roots join the queue
     // when that scan finishes, without holding the others back.
-    const plan: LocalRequestPlan = this.deps.requests
+    const planned: LocalRequestPlan = this.deps.requests
       ? { ...injectedRequestPlan(this.deps.requests), reused: false }
       : await localRequestPlan(state.requests, this.deps.planThread);
+    // A kind the local scanner owns is not read by the collectors at all (DESIGN 16.0 B).
+    const scannerOwned = this.localScannerOwnedKinds();
+    const notOwned = (entry: AccountAnalyticsActivityRequest) => !scannerOwned.has(entry.provider);
+    const plan: LocalRequestPlan = scannerOwned.size
+      ? {
+          ...planned,
+          ready: planned.ready.filter(notOwned),
+          later: planned.later.then((entries) => entries.filter(notOwned)),
+        }
+      : planned;
     let discoveryFailed = false;
     const later = plan.later.catch((): AccountAnalyticsActivityRequest[] => {
       failed = true;
@@ -1163,6 +1303,19 @@ export class AccountAnalyticsActivityService {
       state.remote = remoteAnswer;
     }
     if (generation !== state.generation) return;
+    // The Cursor account (DESIGN 17), deduped against every scanned computer's Cursor runs.
+    // Only its numbers are kept for the page: nothing of the account is added to the providers'
+    // usage, which already holds the local runs the account's events overlap.
+    try {
+      const account = await this.finishCursorAccount(accountRead, remoteAnswer, deadline);
+      if (account) {
+        const { rows: _rows, ...status } = account;
+        state.cursorAccount = { status };
+      }
+    } catch {
+      /* The account never fails a collection; the last answer stands. */
+    }
+    if (generation !== state.generation) return;
     // Phase 2: merge the remote answer (fresh, carried, or cached) and publish again.
     this.publish(state, {
       scope: (this.deps.scope ?? getCcsDir)(),
@@ -1260,6 +1413,12 @@ export class AccountAnalyticsActivityService {
     const merged = new Map<AccountAnalyticsActivityProvider, UsageWorkerResult[]>();
     for (const [provider, data] of collected) merged.set(provider, [...data]);
     let answer = remoteAnswer === undefined ? state.remote : remoteAnswer;
+    // A kind the local scanner owns comes from its answer alone; the collector's rows for it go,
+    // in the same step that adds the scanner's (DESIGN 16.0 B).
+    for (const kind of answer?.local?.owned ?? []) merged.delete(kind);
+    // The Cursor account (DESIGN 17.4) adds nothing here: its feed is the authoritative
+    // account total, the local runs already in `merged` are an overlapping breakdown of it, and
+    // the account's events cannot prove which residual is outside them (review M1).
     const retainingClaude = args.retainedClaudeRemote !== undefined;
     if (retainingClaude) {
       answer = {
@@ -1303,6 +1462,8 @@ export class AccountAnalyticsActivityService {
       'zcode',
       'jsonl',
       'antigravity',
+      'cursor',
+      'devin',
     ] as const) {
       const data = merged.get(provider);
       if (data) updated.push({ provider, data, fetchedAt });
@@ -1320,7 +1481,8 @@ export class AccountAnalyticsActivityService {
       presence,
       remotePending,
       pendingHosts,
-      localReadAt
+      localReadAt,
+      answer?.local
     );
     for (const source of state.sourceStates) {
       if (
@@ -1364,6 +1526,7 @@ export class AccountAnalyticsActivityService {
         windowFromMs: cutoff,
         now,
         localComplete: (tool) => discoveryComplete && succeeded.has(tool) && !unfinished.has(tool),
+        scannerOwned: new Set(answer?.local?.owned ?? []),
       });
       void this.ingestor().submit(reports);
     }
@@ -1638,9 +1801,11 @@ export class AccountAnalyticsActivityService {
     presence: Record<AccountAnalyticsActivityProvider, boolean> | null,
     remotePending = false,
     pendingHosts: readonly AnalyticsRemoteHost[] = [],
-    localReadAt = new Map<AccountAnalyticsActivityProvider, string>()
+    localReadAt = new Map<AccountAnalyticsActivityProvider, string>(),
+    local?: LocalScannerAnswer
   ): AccountAnalyticsSource[] {
     const entries: AccountAnalyticsSource[] = [];
+    const scannerOwned = new Set<string>(local?.owned ?? []);
     const previous = new Map(
       state.sourceStates.map((entry) => [`${entry.tool}\0${entry.host}`, entry])
     );
@@ -1653,6 +1818,8 @@ export class AccountAnalyticsActivityService {
       'jsonl',
       'antigravity',
     ] as const) {
+      // The scanner's own cell for this computer stands in for the collector's (DESIGN 16.0 B).
+      if (scannerOwned.has(tool)) continue;
       const key = `${tool}\0ubuntu`;
       const old = previous.get(key);
       const pending = unfinished.get(tool);
@@ -1735,6 +1902,22 @@ export class AccountAnalyticsActivityService {
         });
       }
     }
+    // While the local scanner catches up on a kind, or cannot run here, the collector's cell says so.
+    for (const entry of entries) {
+      if (
+        entry.host !== 'ubuntu' ||
+        !LOCAL_SCANNER_KINDS.includes(entry.tool as AnalyticsRemoteKind)
+      )
+        continue;
+      const note = local?.catchingUp[entry.tool as AnalyticsRemoteKind]
+        ? local.catchingUp[entry.tool as AnalyticsRemoteKind]
+        : local?.unavailable
+          ? `read by the built-in reader: ${LOCAL_FALLBACK_WORDS[local.unavailable] ?? local.unavailable}`
+          : local?.tooManyRoots?.includes(entry.tool as AnalyticsRemoteKind)
+            ? 'read by the built-in reader: this computer has more experiment folders than the usage scanner takes in one request'
+            : null;
+      if (note) entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+    }
     if (remote) {
       for (const entry of remote) entries.push({ ...entry });
     } else {
@@ -1803,7 +1986,17 @@ export class AccountAnalyticsActivityService {
         }
       }
     }
-    entries.push(...fixedAnalyticsSourceEntries());
+    // Cursor's fixed "not measured" row stands in only where the scanner has not measured the
+    // computer; where it has, the computer's own presence answer says whether Cursor is there.
+    const measured = new Set(entries.filter((entry) => entry.counts).map((entry) => entry.host));
+    entries.push(
+      ...fixedAnalyticsSourceEntries().filter(
+        (fixed) =>
+          // One cell per tool and computer: the dashboard's own computer too (Astra L3, Sol L4).
+          !entries.some((entry) => entry.tool === fixed.tool && entry.host === fixed.host) &&
+          (fixed.host === 'ubuntu' || !measured.has(fixed.host))
+      )
+    );
     return sortSourceEntries(entries);
   }
 
@@ -1866,6 +2059,7 @@ export class AccountAnalyticsActivityService {
         remote: null,
         remotePending: [],
         scanningSince: null,
+        cursorAccount: null,
         pricing: this.snapshotPricing(),
         projectionMs: 0,
       };
@@ -2120,6 +2314,7 @@ export class AccountAnalyticsActivityService {
           sources: answerSourceStates,
           refreshing: state.pending !== null,
           refreshingRemote: [...state.remotePending],
+          ...(state.cursorAccount ? { cursorAccount: state.cursorAccount.status } : {}),
         }
       );
       const coverage = accountAnalyticsActivityCoverage(snapshotSources, from, to);

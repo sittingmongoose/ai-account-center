@@ -2631,17 +2631,67 @@ describe('native local analytics activity', () => {
     // Every scanned tool on every host says scanning from the first byte, so the
     // loading page can show per-host progress; the fixed entries ride along.
     const scanning = cold.sources.filter((source) => source.state === 'scanning');
-    // Six tools on each of Ubuntu, Mac, Windows and Nas1.
-    expect(scanning).toHaveLength(DASHBOARD_HOSTS.length * 6);
+    // Six tools on Ubuntu; eight on each scanned computer (Cursor and Devin since round 2).
+    expect(scanning).toHaveLength(6 + REMOTE_HOSTS.length * 8);
     expect(scanning.every((source) => source.detail === 'the first scan is running')).toBe(true);
-    // Antigravity is scanned on every host now; Cursor stays a fixed no-local-log entry.
+    // Antigravity is scanned on every host; Cursor is one cell per host (scanned, or the fixed row).
     expect(
       cold.sources.filter((source) => source.tool === 'antigravity' && source.state === 'scanning')
     ).toHaveLength(DASHBOARD_HOSTS.length);
-    expect(cold.sources.filter((source) => source.tool === 'cursor')).toHaveLength(DASHBOARD_HOSTS.length);
+    expect(cold.sources.filter((source) => source.tool === 'cursor')).toHaveLength(
+      DASHBOARD_HOSTS.length
+    );
     gate.resolve([]);
     remote.resolve({ results: [], states: [] });
     await settled(service);
+  });
+
+  it('keeps the fixed Cursor row only for computers the scanner has not measured', async () => {
+    const measured = { roots: 1, filesFound: 3, filesRead: 3, filesFailed: 0, newestMtime: null };
+    const service = new AccountAnalyticsActivityService({
+      remote: async () => ({
+        results: [],
+        states: [
+          // Nas1 was read by the scanner: its own answer says whether Cursor is there.
+          {
+            tool: 'codex',
+            host: 'nas1',
+            state: 'ok',
+            lastScanAt: null,
+            rowCount: 1,
+            detail: null,
+            counts: measured,
+          },
+          {
+            tool: 'cursor',
+            host: 'windows',
+            state: 'no_reader',
+            lastScanAt: null,
+            rowCount: 0,
+            detail: 'x',
+            cause: 'no_local_usage_records',
+            counts: measured,
+          },
+          // The Mac was read by the older reader: no measurement, the fixed row stands in.
+          { tool: 'codex', host: 'mac', state: 'ok', lastScanAt: null, rowCount: 1, detail: null },
+        ],
+      }),
+      requests: () => [],
+      loadWorker: async () => data('gpt-5.4', 10, 0),
+      now: () => NOW,
+      responseBudgetMs: 2000,
+      scope: () => '/fixture-measured-cursor',
+    });
+    await service.get(QUERY, FROM, NOW);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const answer = await service.get(QUERY, FROM, NOW);
+    const cursor = answer.sources.filter((entry) => entry.tool === 'cursor');
+    expect(cursor.map((entry) => `${entry.host}:${entry.state}`).sort()).toEqual([
+      'alexis:unavailable',
+      'mac:unavailable',
+      'ubuntu:unavailable',
+      'windows:no_reader',
+    ]);
   });
 
   it('lists the fixed Cursor row on every computer, Nas1 included', () => {
@@ -2656,13 +2706,15 @@ describe('native local analytics activity', () => {
     expect(fixed.every((entry) => entry.state === 'unavailable' && entry.rowCount === 0)).toBe(
       true
     );
-    expect(fixed.every((entry) => entry.detail?.includes('usage is server-side'))).toBe(true);
+    expect(fixed.every((entry) => entry.detail?.includes('not measured on this computer'))).toBe(
+      true
+    );
   });
 
   it('orders the cold grid by tool, then Ubuntu, Mac, Windows and Nas1', () => {
     const cold = coldScanningSourceStates();
-    // Six scanned tools on four computers, plus the four fixed Cursor rows.
-    expect(cold).toHaveLength(DASHBOARD_HOSTS.length * 7);
+    // Six tools and the fixed Cursor row on Ubuntu; eight scanned tools on each other computer.
+    expect(cold).toHaveLength(7 + REMOTE_HOSTS.length * 8);
     const hostsOf = (tool: string) =>
       cold.filter((entry) => entry.tool === tool).map((entry) => entry.host);
     for (const tool of ['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity', 'cursor'])
@@ -2700,6 +2752,7 @@ describe('native local analytics activity', () => {
         'antigravity',
         'claude',
         'codex',
+        'devin',
         'muse',
         'omp',
         'zcode',

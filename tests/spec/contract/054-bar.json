@@ -1,14 +1,13 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/auth/setup",
+    "path": "/api/auth/sessions/revoke-others",
     "role": "bar",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "already_configured",
-      "error": "Dashboard sign-in is already set up."
+      "signedOutBrowsers": 1
     },
     "headers": {
       "cache-control": "no-store",
@@ -16,6 +15,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 409
+    "status": 200
   }
 }

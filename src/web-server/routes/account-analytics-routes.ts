@@ -13,6 +13,12 @@ import {
   type AccountAnalyticsRangePreset,
 } from '../services/account-analytics-range';
 import type { AccountAnalytics, AccountAnalyticsQuery } from '../services/account-analytics-types';
+import {
+  readAnalyticsCaptureSettings,
+  writeAnalyticsCaptureSettings,
+  type AnalyticsCaptureSettings,
+} from '../services/analytics-capture-settings';
+import { clearAnalyticsRemoteCwds } from '../services/analytics-remote-sources';
 
 const QUERY_KEYS = ['platform', 'range', 'provider', 'account', 'refresh', 'tz', 'from', 'to'];
 
@@ -20,6 +26,9 @@ export interface AccountAnalyticsRouterDeps {
   getAnalytics?: (query: AccountAnalyticsQuery) => Promise<AccountAnalytics>;
   /** Provider ids the server reports; `all` is always accepted as well. */
   providerIds?: () => readonly string[];
+  readCapture?: () => AnalyticsCaptureSettings;
+  writeCapture?: (value: AnalyticsCaptureSettings) => void;
+  clearCwds?: () => { folders: number; caches: number };
 }
 
 export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = {}): Router {
@@ -98,6 +107,66 @@ export function createAccountAnalyticsRouter(deps: AccountAnalyticsRouterDeps = 
         error: 'Account analytics could not be read safely.',
         code: 'analytics_unavailable',
       });
+    }
+  });
+  /*
+   * What Analytics captures beyond usage numbers: `cwd`, each session's working folder, kept in the
+   * local cache only. On by default; turning it off also clears the folders already saved.
+   */
+  router.use('/analytics/capture', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (authKind(req) !== 'session') {
+      res.status(401).json({ error: 'Authentication required', code: 'auth_required' });
+      return;
+    }
+    if (Object.keys(req.query).length !== 0) {
+      res.status(400).json({ error: 'Unexpected capture settings query.', code: 'invalid_query' });
+      return;
+    }
+    next();
+  });
+  router.get('/analytics/capture', (_req, res) => {
+    res.json((deps.readCapture ?? readAnalyticsCaptureSettings)());
+  });
+  router.put('/analytics/capture', (req, res) => {
+    if (
+      typeof req.headers.origin !== 'string' ||
+      !req.headers.origin ||
+      !isDashboardWebSocketOriginAllowed(req)
+    ) {
+      res.status(403).json({
+        error: 'Capture settings require the dashboard origin.',
+        code: 'origin_required',
+      });
+      return;
+    }
+    if (!req.is('application/json')) {
+      res.status(415).json({ error: 'Capture settings require application/json.' });
+      return;
+    }
+    const body = req.body as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      typeof body.cwd !== 'boolean'
+    ) {
+      res
+        .status(400)
+        .json({ error: 'Send {"cwd": true} or {"cwd": false}.', code: 'invalid_body' });
+      return;
+    }
+    try {
+      // The setting first, so a scan finishing now saves no folder; then the folders already saved.
+      (deps.writeCapture ?? writeAnalyticsCaptureSettings)({ cwd: body.cwd });
+      const cleared = body.cwd ? undefined : (deps.clearCwds ?? clearAnalyticsRemoteCwds)();
+      res.json({
+        ...(deps.readCapture ?? readAnalyticsCaptureSettings)(),
+        ...(cleared ? { cleared } : {}),
+      });
+    } catch {
+      res.status(500).json({ error: 'Capture settings could not be saved.', code: 'save_failed' });
     }
   });
   return router;

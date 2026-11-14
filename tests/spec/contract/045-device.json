@@ -1,9 +1,8 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/logout",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/auth/devices",
+    "role": "device"
   },
   "response": {
     "body": {

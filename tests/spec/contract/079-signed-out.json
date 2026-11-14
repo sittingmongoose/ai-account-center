@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/v0/management/auth-files",
-    "role": "signed-out"
+    "method": "ALL",
+    "path": "/v0/management/fixture-missing",
+    "role": "signed-out",
+    "body": {}
   },
   "response": {
     "body": {

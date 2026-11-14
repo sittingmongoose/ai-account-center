@@ -1,23 +1,13 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/network",
-    "role": "session"
+    "method": "POST",
+    "path": "/api/auth/login",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {
-      "canTurnOn": true,
-      "connection": {
-        "peer": "127.0.0.1",
-        "trusted": false
-      },
-      "trustedNetworks": [
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "fc00::/7"
-      ],
-      "trustLocalNetwork": false
+      "error": "Username and password required"
     },
     "headers": {
       "cache-control": "no-store",
@@ -25,6 +15,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

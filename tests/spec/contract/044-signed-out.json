@@ -1,19 +1,20 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/auth/login",
+    "path": "/api/auth/devices/revoke-all",
     "role": "signed-out",
     "body": {}
   },
   "response": {
     "body": {
-      "error": "Username and password required"
+      "code": "auth_required",
+      "error": "Authentication required"
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 400
+    "status": 401
   }
 }

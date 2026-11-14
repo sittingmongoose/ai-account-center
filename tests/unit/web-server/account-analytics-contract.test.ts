@@ -282,7 +282,8 @@ function analyticsService(
 ): AccountAnalyticsService {
   return new AccountAnalyticsService({
     getDashboard: async () => dashboard(accounts, options.extra),
-    createHistoryStore: () => memory(appendAccountAnalyticsSnapshot(options.history ?? null, accounts, options.now ?? NOW)),
+    createHistoryStore: () =>
+      memory(appendAccountAnalyticsSnapshot(options.history ?? null, accounts, options.now ?? NOW)),
     getActivity: options.activity ?? (async () => noActivity),
     now: () => options.now ?? NOW,
     scope: () => ccsHome,
@@ -700,6 +701,25 @@ describe('analytics contract: session sample', () => {
     source('codex', result([], sessions.slice(40))),
   ];
 
+  // Argon M4 (FIX-ROUND-BIG 19): Cursor and Devin sessions keep their target.
+  it('keeps Cursor and Devin as session targets', () => {
+    const rows = ['cursor', 'devin'].map((target, index) =>
+      sessionRow(
+        `raw-${target}-session`,
+        new Date(NOW - (index + 1) * 3_600_000).toISOString(),
+        [{ model: 'model-a', input: 10, output: 1 }],
+        target
+      )
+    );
+    const activity = project([
+      source(
+        'claude',
+        result([hourRow('2026-10-02T10:00:00Z', [{ model: 'model-a', input: 1 }])], rows)
+      ),
+    ]);
+    expect(activity.sessions?.sample.map((row) => row.target)).toEqual(['cursor', 'devin']);
+  });
+
   it('returns at most 50 rows, newest first, with the total of active sessions', () => {
     const activity = project(sources());
     expect(activity.sessions).not.toBeNull();
@@ -728,7 +748,13 @@ describe('analytics contract: session sample', () => {
       { model: '<synthetic>', input: 0, output: 0 },
     ]);
     const activity = project([
-      source('claude', result([hourRow('2026-10-02T10:00:00Z', [{ model: 'model-a', input: 1 }])], [mixed, onlySynthetic])),
+      source(
+        'claude',
+        result(
+          [hourRow('2026-10-02T10:00:00Z', [{ model: 'model-a', input: 1 }])],
+          [mixed, onlySynthetic]
+        )
+      ),
     ]);
     const sample = activity.sessions?.sample ?? [];
     expect(sample).toHaveLength(2);

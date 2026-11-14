@@ -11,8 +11,10 @@ import { DASHBOARD_HOSTS, helperPlatform } from '../../../src/web-server/service
 describe('Analytics vocabulary compatibility', () => {
   it('keeps every existing tool wire value and remote target in order', () => {
     expect(ANALYTICS_TOOLS).toEqual(['claude', 'codex', 'omp', 'muse', 'zcode', 'antigravity']);
+    // The usage scanner also reads Cursor and Devin on every computer (DESIGN 16.2, 16.3):
+    // they follow the registered tools, whose wire values keep their order.
     for (const host of DASHBOARD_HOSTS.filter((value) => value !== 'ubuntu'))
-      expect(analyticsRemoteTargets(host)).toEqual(ANALYTICS_TOOLS);
+      expect(analyticsRemoteTargets(host)).toEqual([...ANALYTICS_TOOLS, 'cursor', 'devin']);
     expect(EXPERIMENT_ANALYTICS_TOOLS).toEqual(['claude', 'codex', 'muse', 'zcode']);
   });
   it('keeps generic collection work separate from tools and refuses inherited names', () => {

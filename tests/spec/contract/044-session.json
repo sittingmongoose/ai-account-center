@@ -1,13 +1,14 @@
 {
   "request": {
     "method": "POST",
-    "path": "/api/auth/login",
+    "path": "/api/auth/devices/revoke-all",
     "role": "session",
     "body": {}
   },
   "response": {
     "body": {
-      "error": "Username and password required"
+      "revokedDevices": 1,
+      "signedOutBrowsers": 88
     },
     "headers": {
       "cache-control": "no-store",
@@ -15,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 400
+    "status": 200
   }
 }

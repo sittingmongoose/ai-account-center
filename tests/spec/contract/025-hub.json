@@ -1,8 +1,9 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/accounts/visibility",
-    "role": "hub"
+    "method": "POST",
+    "path": "/api/accounts/trash/fixture-missing/restore",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {

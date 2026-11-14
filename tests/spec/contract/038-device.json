@@ -1,14 +1,27 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/api/auth/devices/me/rotate",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/auth/check",
+    "role": "device"
   },
   "response": {
     "body": {
-      "rotateAfter": "<timestamp>",
-      "token": "<device-token>"
+      "accessMode": "login",
+      "authConfigured": true,
+      "authEnabled": true,
+      "authenticated": false,
+      "authRequired": true,
+      "connection": {
+        "peer": "127.0.0.1",
+        "trusted": false
+      },
+      "isLocalAccess": true,
+      "secureOrigin": null,
+      "secureTransport": true,
+      "setupCodeRequired": false,
+      "signedOutReason": null,
+      "trustedLocalNetwork": false,
+      "username": null
     },
     "headers": {
       "cache-control": "no-store",

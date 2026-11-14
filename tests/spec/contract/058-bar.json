@@ -1,18 +1,19 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/claude/desktop-profiles",
-    "role": "bar"
+    "method": "POST",
+    "path": "/api/claude/desktop-profiles/fixture-missing/open",
+    "role": "bar",
+    "body": {}
   },
   "response": {
     "body": {
-      "profiles": []
+      "error": "Select a configured Claude desktop account and platform."
     },
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

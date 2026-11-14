@@ -275,6 +275,38 @@
     ]
   },
   {
+    "word": "binary_damaged",
+    "cause": "damaged",
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:cause"
+    ]
+  },
+  {
+    "word": "binary_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:reader.cause",
+      "src/web-server/services/analytics-remote-transport.ts:cause"
+    ]
+  },
+  {
+    "word": "binary_missing",
+    "cause": "not_installed",
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:cause",
+      "src/web-server/services/analytics-remote-transport.ts:cause",
+      "src/web-server/services/usage-scan-binary.ts:cause"
+    ]
+  },
+  {
+    "word": "binary_not_built",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:cause",
+      "src/web-server/services/usage-scan-binary.ts:cause"
+    ]
+  },
+  {
     "word": "binding",
     "cause": null,
     "sources": [
@@ -335,6 +367,32 @@
     "sources": [
       "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
       "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "cache_format",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-cache-limit.ts:DISCARD_CAUSES",
+      "src/web-server/services/analytics-remote-cache-limit.ts:RemoteCacheDiscardCause"
+    ]
+  },
+  {
+    "word": "cache_oversize",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-cache-limit.ts:DISCARD_CAUSES",
+      "src/web-server/services/analytics-remote-cache-limit.ts:RemoteCacheDiscardCause",
+      "src/web-server/services/analytics-remote-cache-limit.ts:cause",
+      "src/web-server/services/analytics-remote-cache-limit.ts:item.cause"
+    ]
+  },
+  {
+    "word": "cache_unreadable",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-cache-limit.ts:DISCARD_CAUSES",
+      "src/web-server/services/analytics-remote-cache-limit.ts:RemoteCacheDiscardCause"
     ]
   },
   {
@@ -434,7 +492,8 @@
     "cause": null,
     "sources": [
       "scripts/app-updates/app_update_t3_rpc.py:causes",
-      "src/web-server/services/analytics-remote-sources.ts:cause"
+      "src/web-server/services/analytics-remote-sources.ts:cause",
+      "src/web-server/services/analytics-remote-transport.ts:cause"
     ]
   },
   {
@@ -832,10 +891,25 @@
     ]
   },
   {
+    "word": "deadline",
+    "cause": "timeout",
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:entry.reason",
+      "src/web-server/services/analytics-remote-transport.ts:reason"
+    ]
+  },
+  {
     "word": "decision_changed_before_activation",
     "cause": null,
     "sources": [
       "src/web-server/services/codex-auto-switch-service.ts:cause"
+    ]
+  },
+  {
+    "word": "dedupe_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/cursor-account-reader.ts:cause"
     ]
   },
   {
@@ -858,6 +932,15 @@
       "src/web-server/services/claude-account-records.ts:state",
       "src/web-server/services/claude-account-stores.ts:item.state",
       "src/web-server/services/claude-account-stores.ts:state"
+    ]
+  },
+  {
+    "word": "did_not_answer",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:causes",
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsRootCause",
+      "src/web-server/services/analytics-remote-transport.ts:ROOT_CAUSES"
     ]
   },
   {
@@ -1622,7 +1705,13 @@
       "src/store/activity-coverage.ts:s.state",
       "src/store/activity-coverage.ts:state",
       "src/store/activity-reports.ts:state",
-      "src/store/usage-report.ts:UsageReportState"
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:read?.state",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-transport.ts:item.state",
+      "src/web-server/services/analytics-remote-transport.ts:state"
     ]
   },
   {
@@ -1763,6 +1852,15 @@
     ]
   },
   {
+    "word": "io_error",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:causes",
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsRootCause",
+      "src/web-server/services/analytics-remote-transport.ts:ROOT_CAUSES"
+    ]
+  },
+  {
     "word": "ipc-already-exists",
     "cause": null,
     "sources": [
@@ -1868,6 +1966,15 @@
     ]
   },
   {
+    "word": "key_rejected",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-analytics-types.ts:state",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES"
+    ]
+  },
+  {
     "word": "keychain",
     "cause": null,
     "sources": [
@@ -1885,14 +1992,20 @@
     "word": "link_unreachable",
     "cause": "ssh_unreachable",
     "sources": [
-      "src/store/usage-report.ts:state"
+      "src/store/usage-report.ts:state",
+      "src/web-server/services/analytics-remote-sources.ts:causes",
+      "src/web-server/services/analytics-remote-sources.ts:root.state",
+      "src/web-server/services/analytics-remote-transport.ts:item.state",
+      "src/web-server/services/analytics-remote-transport.ts:state"
     ]
   },
   {
     "word": "link_unreadable",
     "cause": null,
     "sources": [
-      "src/store/usage-report.ts:state"
+      "src/store/usage-report.ts:state",
+      "src/web-server/services/analytics-remote-transport.ts:item.state",
+      "src/web-server/services/analytics-remote-transport.ts:state"
     ]
   },
   {
@@ -2331,6 +2444,16 @@
     ]
   },
   {
+    "word": "no_key",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-analytics-types.ts:state",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:state"
+    ]
+  },
+  {
     "word": "no_keychain_item",
     "cause": null,
     "sources": [
@@ -2341,7 +2464,10 @@
     "word": "no_local_usage_records",
     "cause": null,
     "sources": [
-      "src/store/activity-reports.ts:cause"
+      "src/store/activity-reports.ts:cause",
+      "src/web-server/services/analytics-remote-sources.ts:entry.cause",
+      "src/web-server/services/analytics-remote-transport.ts:NO_READER_CAUSES",
+      "src/web-server/services/analytics-remote-transport.ts:cause"
     ]
   },
   {
@@ -2372,7 +2498,24 @@
     "sources": [
       "src/store/activity-coverage.ts:s.state",
       "src/store/activity-reports.ts:state",
-      "src/store/usage-report.ts:UsageReportState"
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/account-analytics-types.ts:state",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:kept.state",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-sources.ts:state.state",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:state"
+    ]
+  },
+  {
+    "word": "no_reader_yet",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:NO_READER_CAUSES",
+      "src/web-server/services/analytics-remote-transport.ts:cause"
     ]
   },
   {
@@ -2406,6 +2549,15 @@
     "cause": null,
     "sources": [
       "scripts/app-updates/app_update_t3_rpc.py:ValueError"
+    ]
+  },
+  {
+    "word": "no_session_id",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:log.reason",
+      "src/web-server/services/analytics-remote-transport.ts:entry.reason",
+      "src/web-server/services/analytics-remote-transport.ts:reason"
     ]
   },
   {
@@ -2550,6 +2702,7 @@
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:kind.state",
       "src/web-server/services/analytics-remote-sources.ts:kindState",
+      "src/web-server/services/analytics-remote-sources.ts:read.state",
       "src/web-server/services/analytics-remote-sources.ts:read?.state",
       "src/web-server/services/analytics-remote-sources.ts:state",
       "src/web-server/services/analytics-remote-sources.ts:state.state",
@@ -2748,6 +2901,7 @@
       "src/web-server/services/analytics-remote-sources.ts:state",
       "src/web-server/services/analytics-remote-sources.ts:state.state",
       "src/web-server/services/analytics-remote-transport.ts:entry.state",
+      "src/web-server/services/analytics-remote-transport.ts:item.state",
       "src/web-server/services/analytics-remote-transport.ts:kind.state",
       "src/web-server/services/analytics-remote-transport.ts:state",
       "src/web-server/services/claude-account-stores.ts:read.state",
@@ -2982,6 +3136,14 @@
       "src/web-server/services/account-lifecycle-actions.ts:state",
       "src/web-server/services/account-lifecycle-extras.ts:state",
       "src/web-server/usage-hub/usage-hub-projection.ts:account.lifecycle?.state"
+    ]
+  },
+  {
+    "word": "permission_denied",
+    "cause": "permission_denied",
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsRootCause",
+      "src/web-server/services/analytics-remote-transport.ts:ROOT_CAUSES"
     ]
   },
   {
@@ -3258,10 +3420,27 @@
     ]
   },
   {
+    "word": "read",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-analytics-types.ts:state",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:state"
+    ]
+  },
+  {
     "word": "read_failed",
     "cause": "provider_error",
     "sources": [
       "src/web-server/services/analytics-remote-sources.ts:cause"
+    ]
+  },
+  {
+    "word": "reader_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/cursor-account-reader.ts:cause"
     ]
   },
   {
@@ -4518,9 +4697,16 @@
       "src/cliproxy/quota/quota-fetcher-codex.ts:typeof error.code",
       "src/web-server/services/additional-account-service.ts:museTransientFailure",
       "src/web-server/services/additional-account-service.ts:typeof result.failureCode",
+      "src/web-server/services/analytics-remote-cache-limit.ts:typeof item.cause",
       "src/web-server/services/analytics-remote-sources.ts:typeof failure.at",
       "src/web-server/services/analytics-remote-sources.ts:typeof failure.cause",
       "src/web-server/services/analytics-remote-transport.ts:cause",
+      "src/web-server/services/analytics-remote-transport.ts:typeof entry.cause",
+      "src/web-server/services/analytics-remote-transport.ts:typeof item.cause",
+      "src/web-server/services/analytics-remote-transport.ts:typeof state.sessionDigest",
+      "src/web-server/services/cursor-account-reader.ts:cause",
+      "src/web-server/services/cursor-account-reader.ts:typeof answer.cause",
+      "src/web-server/services/cursor-account-reader.ts:typeof value.cause",
       "src/web-server/services/dashboard-device-records.ts:revokedReason",
       "src/web-server/services/dashboard-device-records.ts:typeof record.revokedReason",
       "src/web-server/services/signin-health-service.ts:typeof reason",
@@ -4671,6 +4857,14 @@
     ]
   },
   {
+    "word": "target_missing",
+    "cause": "not_installed",
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsRootCause",
+      "src/web-server/services/analytics-remote-transport.ts:ROOT_CAUSES"
+    ]
+  },
+  {
     "word": "target-running",
     "cause": null,
     "sources": [
@@ -4753,6 +4947,7 @@
       "src/store/activity-reports.ts:cause",
       "src/web-server/services/analytics-remote-transport.ts:ANALYTICS_SCAN_FAILURE_CAUSES",
       "src/web-server/services/analytics-remote-transport.ts:AnalyticsScanFailureCause",
+      "src/web-server/services/analytics-remote-transport.ts:error.cause",
       "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
       "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
     ]
@@ -4875,7 +5070,8 @@
     "cause": null,
     "sources": [
       "src/store/activity-reports.ts:state",
-      "src/web-server/services/account-analytics-activity.ts:states"
+      "src/web-server/services/account-analytics-activity.ts:states",
+      "src/web-server/services/analytics-remote-sources.ts:states"
     ]
   },
   {
@@ -4943,6 +5139,7 @@
       "src/web-server/services/account-analytics-projection.ts:status",
       "src/web-server/services/account-analytics-service.ts:status",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/account-analytics-types.ts:state",
       "src/web-server/services/account-analytics-types.ts:status",
       "src/web-server/services/account-dashboard-projection.ts:status",
       "src/web-server/services/account-dashboard-service.ts:state",
@@ -4957,6 +5154,9 @@
       "src/web-server/services/analytics-remote-sources.ts:state.state",
       "src/web-server/services/claude-desktop-usage-service.ts:status",
       "src/web-server/services/codex-profile-quota-service.ts:status",
+      "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
+      "src/web-server/services/cursor-account-reader.ts:STATES",
+      "src/web-server/services/cursor-account-reader.ts:state",
       "src/web-server/services/opencode-console-wallet-service.ts:result.status",
       "src/web-server/services/opencode-console-wallet-service.ts:status",
       "src/web-server/services/signin-health-service.ts:row.state",
@@ -5125,7 +5325,14 @@
       "src/web-server/scoreboard/scoreboard-sources.ts:state",
       "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
       "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:entry.state",
+      "src/web-server/services/analytics-remote-sources.ts:log.reason",
+      "src/web-server/services/analytics-remote-sources.ts:root.state",
       "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-transport.ts:entry.reason",
+      "src/web-server/services/analytics-remote-transport.ts:item.state",
+      "src/web-server/services/analytics-remote-transport.ts:reason",
+      "src/web-server/services/analytics-remote-transport.ts:state",
       "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
       "src/web-server/status/status-view-panels.ts:source.state",
       "src/web-server/status/status-view-panels.ts:state",
@@ -5133,6 +5340,13 @@
       "src/web-server/status/status-view-types.ts:SourceState",
       "src/web-server/status/status-view-types.ts:reportState",
       "src/web-server/status/status-view.ts:state"
+    ]
+  },
+  {
+    "word": "unreadable_folder",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:cause"
     ]
   },
   {

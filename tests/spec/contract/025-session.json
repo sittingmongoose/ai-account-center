@@ -1,15 +1,14 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/accounts/visibility",
-    "role": "session"
+    "method": "POST",
+    "path": "/api/accounts/trash/fixture-missing/restore",
+    "role": "session",
+    "body": {}
   },
   "response": {
     "body": {
-      "hiddenAccountIds": [],
-      "hiddenProviders": [],
-      "trayHiddenAccountIds": [],
-      "trayHiddenProviders": []
+      "code": "invalid_account",
+      "error": "That account id is not valid."
     },
     "headers": {
       "cache-control": "no-store",
@@ -17,6 +16,6 @@
       "etag": "<etag>",
       "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
     },
-    "status": 200
+    "status": 400
   }
 }

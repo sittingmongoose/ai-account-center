@@ -1,18 +1,20 @@
 {
   "request": {
     "method": "GET",
-    "path": "/api/status/answers",
+    "path": "/api/scoreboard",
     "role": "session"
   },
   "response": {
     "body": {
-      "answers": []
+      "rows": [],
+      "version": 1
     },
     "headers": {
-      "cache-control": "no-store",
+      "cache-control": "private, no-cache",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
-      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
+      "vary": "Cookie"
     },
     "status": 200
   }

@@ -98,7 +98,7 @@ export interface AccountAnalyticsModelRates {
 }
 
 /** A tool whose CLI usage logs the server reads (a collection source, not a provider). */
-export type AccountAnalyticsActivityProvider = ActivityKind;
+export type AccountAnalyticsActivityProvider = ActivityKind | 'cursor' | 'devin';
 
 /** One worker request the analytics activity service runs for a tool. */
 export type AccountAnalyticsActivityRequest = {
@@ -125,10 +125,18 @@ export type AccountAnalyticsSourceState =
   /** Its logs were found and could not be read; nothing read earlier is kept (`cause`). */
   | 'unreadable'
   /** The computer's scan failed and nothing read earlier is kept (`cause`). */
-  | 'scan_failed';
+  | 'scan_failed'
+  /** The tool is installed (its home, program or a T3 instance) but no log of it exists yet. */
+  | 'installed_no_logs'
+  /** The tool is here and Analytics has no usage reader for it (`cause`). */
+  | 'no_reader';
+
+/** Tools without a usage reader that a computer can report as present. */
+export type AccountAnalyticsNoReaderTool =
+  'cursor' | 'gemini-cli' | 'opencode' | 'qwen' | 'kimi' | 'grok' | 'kiro' | 'pi' | 'fx';
 
 export interface AccountAnalyticsSource {
-  tool: AccountAnalyticsActivityProvider | 'cursor';
+  tool: AccountAnalyticsActivityProvider | AccountAnalyticsNoReaderTool;
   host: DashboardHost;
   state: AccountAnalyticsSourceState;
   /** Last successful scan, null when never scanned. */
@@ -139,10 +147,23 @@ export interface AccountAnalyticsSource {
   detail: string | null;
   /**
    * One fixed word, when the source is not read now: a scan failure cause (`ssh_unreachable`,
-   * `ssh_auth`, `ssh_host_key`, `runtime_missing`, `runtime_missing:store_alias`, `helper_failed`, `timeout`,
-   * `bad_response`, `helper_damaged`) or `read_failed`.
+   * `ssh_auth`, `ssh_host_key`, `runtime_missing`, `runtime_missing:store_alias`, `helper_failed`,
+   * `timeout`, `bad_response`, `helper_damaged`) or `read_failed`; for a tool without a reader,
+   * `no_local_usage_records` or `no_reader_yet`.
    */
   cause?: string | null;
+  /** What discovery found: roots, files found, read and failed, and the newest log's time. */
+  counts?: {
+    roots: number;
+    filesFound: number;
+    filesRead: number;
+    filesFailed: number;
+    newestMtime: string | null;
+  };
+  /** Files found per root origin (default, env, tool_config, t3_instance, ccs_instance, signature, extra). */
+  origins?: Array<{ origin: string; files: number }>;
+  /** `python-fallback:<cause>` when the Rust scanner did not read this computer. */
+  reader?: string | null;
 }
 
 export interface AccountAnalyticsSessionRow extends AccountAnalyticsActivityTotals {
@@ -192,6 +213,12 @@ export interface AccountAnalyticsActivity {
   refreshing?: boolean;
   /** Remote hosts the running collection is still waiting on; absent or empty when settled. */
   refreshingRemote?: AnalyticsRemoteHost[];
+  /**
+   * The Cursor account through AAC's own API key (DESIGN 17.5): its state, when it was read, and
+   * how much of its usage the local runs account for. Only the part outside the scanned computers
+   * is added to the totals (`outsideTokens`).
+   */
+  cursorAccount?: AccountAnalyticsCursorAccount | null;
   scope: 'multi-host-cli';
   /** The zone used for `byDay`, `byDayModel` and anomaly dates. `byHour[].hour` stays a UTC instant. */
   timezone: string;
@@ -307,6 +334,37 @@ export interface AccountAnalyticsHistoryCoverage {
    * first and last flagged hour. `outputIncludesReasoningTwice`: the retired Codex cache's output.
    */
   quality: Array<{ tool: string; flags: string[]; from: string; to: string }>;
+}
+
+export interface AccountAnalyticsCursorAccount {
+  state: 'no_key' | 'key_rejected' | 'read' | 'unavailable' | 'no_reader';
+  /** When the account was last asked (any state). */
+  checkedAt: string | null;
+  /** When its usage was last read in full; the numbers are from then. */
+  readAt: string | null;
+  /** A fixed word when `unavailable`: timeout, network, server_error, bad_response, ... */
+  cause?: string;
+  /** The key's last four characters, never more. */
+  last4?: string;
+  /** The account feed's own total: authoritative for the account, never added to the page's totals. */
+  accountTokens: number;
+  /**
+   * Estimate of how much of the account the scanned computers' runs cover. The account's events
+   * carry no run id, so this is a model-and-time overlap, reported as an estimate and never
+   * summed with the account total.
+   */
+  matchedTokens: number;
+  /** The estimate's remainder (`accountTokens` - `matchedTokens`); shown as an estimate, never counted. */
+  outsideTokens: number;
+  /** Local Cursor tokens the account's events do not show (another account on a computer, say). */
+  localUnmatchedTokens: number;
+  /** Present when some of the account's events carried no Cursor cost: any cost figure is partial. */
+  costPartial?: boolean;
+  /**
+   * In-range events whose token counts were not logged: the token numbers are measured events
+   * only, never a claim that nothing happened.
+   */
+  unmeasured: number;
 }
 
 /** Internal facts the activity reader passes to the analytics service; never serialised. */

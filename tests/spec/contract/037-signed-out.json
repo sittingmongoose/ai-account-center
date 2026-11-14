@@ -1,13 +1,11 @@
 {
   "request": {
-    "method": "DELETE",
-    "path": "/api/auth/devices/fixture-missing",
-    "role": "signed-out",
-    "body": {}
+    "method": "GET",
+    "path": "/api/app-updates/status",
+    "role": "signed-out"
   },
   "response": {
     "body": {
-      "code": "auth_required",
       "error": "Authentication required"
     },
     "headers": {

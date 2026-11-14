@@ -1,21 +1,20 @@
 {
   "request": {
-    "method": "PUT",
-    "path": "/api/auth/network",
+    "method": "POST",
+    "path": "/api/auth/logout",
     "role": "bar",
     "body": {}
   },
   "response": {
     "body": {
-      "code": "invalid_body",
-      "error": "The request body is not valid for this action."
+      "success": true
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>",
-      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+      "set-cookie": "connect.sid=; Path=/; Expires=<http-date>"
     },
-    "status": 400
+    "status": 200
   }
 }

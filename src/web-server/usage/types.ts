@@ -84,6 +84,11 @@ export interface HourlyUsage {
   /** Sum of the breakdowns' `fallbackCost`, when the reader reports it. */
   fallbackCost?: number;
   /**
+   * Present when a row behind this bucket reported no cost (the Cursor account's uncosted
+   * events): the cost shown is partial and no list price fills the gap.
+   */
+  costPartial?: boolean;
+  /**
    * Raw request count for this hour bucket.
    * Optional for backward compatibility with previously persisted snapshots.
    */
@@ -129,6 +134,11 @@ export interface SessionUsage {
   modelBreakdowns: ModelBreakdown[];
   /** Sum of the breakdowns' `fallbackCost`, when the reader reports it. */
   fallbackCost?: number;
+  /**
+   * Present when a row behind this session reported no cost: the cost shown is partial and no
+   * list price fills the gap.
+   */
+  costPartial?: boolean;
   source: string;
   /** Target CLI used for this session (default: 'claude') */
   target?: string;

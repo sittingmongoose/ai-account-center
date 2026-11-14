@@ -1,19 +1,19 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/api/auth/network",
-    "role": "signed-out"
+    "method": "POST",
+    "path": "/api/auth/login",
+    "role": "signed-out",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "auth_required",
-      "error": "Authentication required"
+      "error": "Username and password required"
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 401
+    "status": 400
   }
 }
