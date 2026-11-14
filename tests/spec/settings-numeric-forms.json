@@ -1,0 +1,254 @@
+[
+  {
+    "name": "writer-integer",
+    "file": "{\"refreshIntervalSeconds\":90}",
+    "ts": 90,
+    "owner": "rust"
+  },
+  {
+    "name": "review-rounded-lower-bound",
+    "file": "{\"refreshIntervalSeconds\":30.000000000000002}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "review-rounded-91",
+    "file": "{\"refreshIntervalSeconds\":90.99999999999999}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "review-rounded-121",
+    "file": "{\"refreshIntervalSeconds\":120.99999999999999}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "minimum",
+    "file": "{\"refreshIntervalSeconds\":30}",
+    "ts": 30,
+    "owner": "rust"
+  },
+  {
+    "name": "default-writer",
+    "file": "{\"refreshIntervalSeconds\":60}",
+    "ts": 60,
+    "owner": "rust"
+  },
+  {
+    "name": "maximum",
+    "file": "{\"refreshIntervalSeconds\":3600}",
+    "ts": 3600,
+    "owner": "rust"
+  },
+  {
+    "name": "fraction",
+    "file": "{\"refreshIntervalSeconds\":30.5}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "integral-decimal",
+    "file": "{\"refreshIntervalSeconds\":91.0}",
+    "ts": 91,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "decimal-rounds-to-integer-in-js",
+    "file": "{\"refreshIntervalSeconds\":30.0000000000000001}",
+    "ts": 30,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "decimal-below-minimum",
+    "file": "{\"refreshIntervalSeconds\":29.999999999999996}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "decimal-above-maximum",
+    "file": "{\"refreshIntervalSeconds\":3600.0000000000005}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "exponent",
+    "file": "{\"refreshIntervalSeconds\":9e1}",
+    "ts": 90,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "exponent-upper",
+    "file": "{\"refreshIntervalSeconds\":9E1}",
+    "ts": 90,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "exponent-plus",
+    "file": "{\"refreshIntervalSeconds\":3e+1}",
+    "ts": 30,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "exponent-zero",
+    "file": "{\"refreshIntervalSeconds\":30e0}",
+    "ts": 30,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "exponent-fraction",
+    "file": "{\"refreshIntervalSeconds\":3.05e1}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "overflow-exponent",
+    "file": "{\"refreshIntervalSeconds\":1e400}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "underflow-exponent",
+    "file": "{\"refreshIntervalSeconds\":1e-4000}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "huge-integer",
+    "file": "{\"refreshIntervalSeconds\":9007199254740993}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "u32-max",
+    "file": "{\"refreshIntervalSeconds\":4294967295}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "below-minimum",
+    "file": "{\"refreshIntervalSeconds\":29}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "above-maximum",
+    "file": "{\"refreshIntervalSeconds\":3601}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "zero",
+    "file": "{\"refreshIntervalSeconds\":0}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "negative-zero",
+    "file": "{\"refreshIntervalSeconds\":-0}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "negative-zero-exponent",
+    "file": "{\"refreshIntervalSeconds\":-0e0}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "negative",
+    "file": "{\"refreshIntervalSeconds\":-90}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "numeric-string",
+    "file": "{\"refreshIntervalSeconds\":\"90\"}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "fraction-string",
+    "file": "{\"refreshIntervalSeconds\":\"30.000000000000002\"}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "null",
+    "file": "{\"refreshIntervalSeconds\":null}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "boolean",
+    "file": "{\"refreshIntervalSeconds\":true}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "leading-zero",
+    "file": "{\"refreshIntervalSeconds\":090}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "review-overwritten-overflow",
+    "file": "{\"refreshIntervalSeconds\":1e400,\"refreshIntervalSeconds\":90}",
+    "ts": 90,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "review-overwritten-surrogate",
+    "file": "{\"refreshIntervalSeconds\":\"\\ud800\",\"refreshIntervalSeconds\":90}",
+    "ts": 90,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "overwritten-huge-integer",
+    "file": "{\"refreshIntervalSeconds\":9007199254740993,\"refreshIntervalSeconds\":120}",
+    "ts": 120,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "duplicate-valid-integers",
+    "file": "{\"refreshIntervalSeconds\":90,\"refreshIntervalSeconds\":120}",
+    "ts": 120,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "escaped-key",
+    "file": "{\"refreshInterval\\u0053econds\":90}",
+    "ts": 90,
+    "owner": "rust"
+  },
+  {
+    "name": "whitespace",
+    "file": " \n { \"refreshIntervalSeconds\" : 90 } \t\n",
+    "ts": 90,
+    "owner": "rust"
+  },
+  {
+    "name": "unknown-field",
+    "file": "{\"refreshIntervalSeconds\":90,\"extra\":true}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "empty-object",
+    "file": "{}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "array",
+    "file": "[]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "truncated",
+    "file": "{",
+    "ts": 60,
+    "owner": "ts-fallback"
+  }
+]

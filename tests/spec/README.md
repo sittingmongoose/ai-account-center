@@ -102,3 +102,28 @@ JSON, oversized replies, non-200 status, total deadline, header replacement and
 shadow divergence. Capture also verifies attachment, broken-socket fallback and
 unchanged read/write guards. Source fingerprints now include the three TS bridge
 modules and the shared ownership table. See [service details](../../docs/rust-service.md).
+
+### M3 fix round 1: conservative numeric parsing
+
+`settings-numeric-forms.json` is a 42-form shared regression table. The Rust
+socket test requires either an exact integer DTO matching its pinned TS result
+or an explicit 503 fallback. `settings-parity.ts` also executes the actual TS
+file reader and production Rust bridge in off/on/shadow modes. It verifies
+identical final answers, exact TS callback counts, and Rust reply/fallback
+counters, including all six concrete cheap-review examples. It failed against
+ce9d3eb61 on the lower-bound decimal (TS 60, Rust 30) before the fix.
+
+The complete table runs from `run.mjs` in on/shadow mode on a Rust host; off
+mode uses its `--ts-only` check. Run the actual table directly on Nas1 with
+`bun tests/spec/settings-parity.ts` after `cargo build --locked -p aac-http`.
+Rust accepts one typed integer DTO in 30..3600; all other file inputs delegate
+to the TS owner rather than guess a default. The main fixture writes its default
+setting through the real TS writer so ownership counters still prove Rust work.
+
+For clean-copy checks, use the pinned dependency tree (Express 5.3.0), not
+Nas1's obsolete shared Express 4 tree. The latter cannot implement the Express
+5 wildcard spellings and returns HTML 404s for the page/hub fixture paths.
+A source copy also needs its own Git index for `inventory.mjs`; a temporary
+`git init` and `git add -A` supplies that index without altering shared Git data.
+Route-source attribution is now explicitly relative to this checkout's `src/`,
+so checkout names containing `src` cannot become handler paths.

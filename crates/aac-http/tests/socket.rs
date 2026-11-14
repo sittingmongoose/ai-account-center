@@ -168,47 +168,46 @@ fn unsigned_socket_requests_are_401_and_permissions_are_private() -> Result<()> 
 }
 
 #[test]
-fn read_setting_matches_js_numbers_and_never_writes() -> Result<()> {
+fn settings_table_matches_proven_ts_values_or_falls_back_without_writes() -> Result<()> {
     let s = Service::start()?;
     let file = s.root.path().join("account-refresh-settings.json");
-    for (bytes, expected) in [
-        ("{\"refreshIntervalSeconds\":30}", 30),
-        ("{\"refreshIntervalSeconds\":3600}", 3600),
-        ("{\"refreshIntervalSeconds\":9e1}", 90),
-        ("{\"refreshIntervalSeconds\":91.0}", 91),
-        ("{\"refreshIntervalSeconds\":29}", 60),
-        ("{\"refreshIntervalSeconds\":3601}", 60),
-        ("{\"refreshIntervalSeconds\":30.5}", 60),
-        ("{\"refreshIntervalSeconds\":\"90\"}", 60),
-        ("{\"refreshIntervalSeconds\":90,\"extra\":true}", 60),
-        ("[]", 60),
-        ("{", 60),
-    ] {
+    let rows: Vec<Value> = serde_json::from_str(include_str!(
+        "../../../tests/spec/settings-numeric-forms.json"
+    ))?;
+    let expect_fallback = || -> Result<()> {
+        let reply = s.request(
+            "/api/accounts/settings",
+            Some(&"b".repeat(64)),
+            Some(&principal("session", "admin")),
+            "GET",
+        )?;
+        assert!(reply.starts_with("HTTP/1.1 503"), "{reply}");
+        Ok(())
+    };
+    for row in rows {
+        let bytes = row["file"].as_str().ok_or("missing file bytes")?;
         fs::write(&file, bytes)?;
-        assert_eq!(
-            s.body("/api/accounts/settings")?,
-            json!({"refreshIntervalSeconds":expected})
-        );
+        if row["owner"] == "rust" {
+            assert_eq!(
+                s.body("/api/accounts/settings")?,
+                json!({"refreshIntervalSeconds":row["ts"]}),
+                "{}",
+                row["name"]
+            );
+        } else {
+            expect_fallback()?;
+        }
         assert_eq!(fs::read_to_string(&file)?, bytes);
     }
     fs::write(&file, " ".repeat(4097))?;
-    assert_eq!(
-        s.body("/api/accounts/settings")?,
-        json!({"refreshIntervalSeconds":60})
-    );
+    expect_fallback()?;
     fs::remove_file(&file)?;
     let target = s.root.path().join("do-not-read.json");
     fs::write(&target, "{\"refreshIntervalSeconds\":99}")?;
     std::os::unix::fs::symlink(&target, &file)?;
-    assert_eq!(
-        s.body("/api/accounts/settings")?,
-        json!({"refreshIntervalSeconds":60})
-    );
+    expect_fallback()?;
     fs::remove_file(&file)?;
-    assert_eq!(
-        s.body("/api/accounts/settings")?,
-        json!({"refreshIntervalSeconds":60})
-    );
+    expect_fallback()?;
     let diag = s.body("/api/diag")?;
     assert_eq!(diag["store"]["status"], "unavailable");
     assert_eq!(diag["scheduler"]["lastSuccessAt"], Value::Null);

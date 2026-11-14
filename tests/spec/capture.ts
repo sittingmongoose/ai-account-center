@@ -222,11 +222,13 @@ spyOn(routerModule, 'createApiRouter').mockImplementation(() => {
     (router as any)[method] = (...args: any[]) => {
       const frame = new Error().stack
         ?.split('\n')
-        .find((line) => line.includes('/src/') && !line.includes('api-router.ts'));
+        .find((line) => line.includes(`${root}/src/`) && !line.includes('api-router.ts'));
       entries.push({
         method,
         args,
-        handlerFile: frame?.match(/(src\/[^():]+\.ts)/)?.[1] ?? 'unknown',
+        handlerFile:
+          frame?.slice(frame.indexOf(root) + root.length + 1).match(/^(src\/[^():]+\.ts)/)?.[1] ??
+          'unknown',
       });
       return original.apply(router, args);
     };
@@ -254,6 +256,10 @@ config.dashboard_auth = {
   session_timeout_hours: 24,
 };
 saveUnifiedConfig(config);
+// Use the owner's writer shape so the Rust subset is exercised, not its TS fallback.
+(
+  await import('../../src/web-server/services/account-refresh-settings')
+).writeAccountRefreshSettings({ refreshIntervalSeconds: 60 }, ccs);
 const ui = path.join(home, 'ui');
 fs.mkdirSync(ui);
 // The Leptos app frame is the dashboard page (static-ui.ts APP_ENTRY); every page route answers with it.

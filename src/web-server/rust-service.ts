@@ -146,7 +146,11 @@ export class RustService {
       void rustAnswer
         .then((result) => {
           this.stats.shadowed++;
-          if (result.status !== 200 || canonical(body) !== canonical(result.body)) {
+          if (result.status !== 200) {
+            this.fallback();
+            return;
+          }
+          if (canonical(body) !== canonical(result.body)) {
             this.stats.differences++;
             logger.warn('rust.service.shadow_difference', 'Rust shadow response differs', {
               route,

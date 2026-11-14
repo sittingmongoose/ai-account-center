@@ -153,32 +153,27 @@ async fn route(State(state): State<AppState>, req: Request) -> Response {
             }
             let root = state.0.ccs_dir.clone();
             match tokio::task::spawn_blocking(move || read_settings(&root)).await {
-                Ok(value) => Json(value).into_response(),
-                Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                Ok(Some(value)) => Json(value).into_response(),
+                Ok(None) | Err(_) => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"error":"TypeScript settings fallback required"})),
+                )
+                    .into_response(),
             }
         }
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
-fn read_settings(root: &std::path::Path) -> AccountRefreshSettings {
-    let bytes = aac_files::read_bounded(&root.join("account-refresh-settings.json"), 4096);
-    // JS JSON.parse accepts 60.0 and 6e1, so parse a JSON number before integer validation.
-    let number = bytes
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .and_then(|v| {
-            let o = v.as_object()?;
-            (o.len() == 1).then_some(())?;
-            o.get("refreshIntervalSeconds")?.as_f64()
-        });
-    let refresh = number
-        .filter(|n| n.is_finite() && n.fract() == 0.0 && (30.0..=3600.0).contains(n))
-        .map(|n| n as u32)
-        .unwrap_or(60);
-    AccountRefreshSettings {
-        refresh_interval_seconds: refresh,
-    }
+fn read_settings(root: &std::path::Path) -> Option<AccountRefreshSettings> {
+    let bytes = aac_files::read_bounded(&root.join("account-refresh-settings.json"), 4096).ok()?;
+    // This typed DTO accepts one JSON integer token, with no float conversion or duplicate
+    // fields. In this small range every accepted integer is exactly representable in JS.
+    // Everything outside that proven subset delegates parsing/defaults to the TS owner.
+    let value: AccountRefreshSettings = serde_json::from_slice(&bytes).ok()?;
+    (30..=3600)
+        .contains(&value.refresh_interval_seconds)
+        .then_some(value)
 }
 
 struct SocketGuard {
