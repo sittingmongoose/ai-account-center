@@ -100,3 +100,21 @@ fn empty_rollout_is_fully_read_and_is_revisited_if_it_grows() {
     );
     assert_eq!(grown["kinds"]["codex"]["unfinished"][0]["reason"], "no_session_id");
 }
+
+// REVIEW-cheap M3: a folder under a mount that did not answer is a read failure, decided from the
+// avoided list alone. (The removed extra stat was shown with strace; this pins the outcome.)
+#[test]
+fn folder_under_an_unanswered_mount_is_a_read_failure_without_a_folder_claim() {
+    use aac_usage::{collector::Collector, fsx};
+    let home = tempfile::tempdir().unwrap();
+    let mount = home.path().join("unanswered-mount");
+    let child = mount.join("child");
+    fs::create_dir_all(&child).unwrap();
+    fsx::avoid(&mount);
+    let mut collector = Collector::new(0, 10.0, Default::default());
+    let meta = fsx::discovery_metadata(&mut collector, "codex", &child);
+    fsx::reset_avoided();
+    assert!(meta.is_none());
+    assert!(collector.unreadable_folders.is_empty());
+    assert_eq!(collector.read_failures["codex"].len(), 1);
+}

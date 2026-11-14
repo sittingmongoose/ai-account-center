@@ -167,11 +167,9 @@ pub fn discovery_metadata(collector: &mut Collector, kind: &str, path: &Path) ->
         Err(_) => {
             // A failed stat does not establish a folder. In particular, a busy regular file,
             // SQLite sidecar or broken file link must never inflate unreadableFolders.
-            if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()) {
-                collector.unreadable_folder(kind, path);
-            } else {
-                collector.read_failure(kind, util::filekey(kind, path));
-            }
+            // unreadable_folder checks for an avoided mount before its own stat, so a mount
+            // that did not answer is never stat'ed again here (REVIEW-cheap M3).
+            collector.unreadable_folder(kind, path);
             None
         }
     }
