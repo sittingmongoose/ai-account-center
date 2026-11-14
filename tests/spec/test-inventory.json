@@ -123,6 +123,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-config/tests/root_paths.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-core/tests/contracts.rs",
       "kind": "internal",
       "evidence": [],
@@ -140,6 +146,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-files/tests/root_identity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
     },
     {
       "file": "crates/aac-http/src/json_object.rs",
@@ -174,9 +187,10 @@
     },
     {
       "file": "crates/aac-transport/tests/transport.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "macos-bar/Sources/CCSBarApp/PanelSelfTest.swift",
