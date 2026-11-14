@@ -1890,11 +1890,14 @@ class ResetWebInventoryTests(unittest.TestCase):
         self.request = {"profile": "fixture", "expectedEmail": EMAIL, "host": "windows:fixture",
                         "action": "read", "expectedSavedBinding": usage.reset_login_binding(*self.saved),
                         "expectedSavedOrganization": ORG}
+        self.real_version_dirs = usage.claude_version_dirs
         self.patches = ExitStack()
         self.addCleanup(self.patches.close)
         for patcher in (
             mock.patch.object(usage.sys, "platform", "win32"),
             mock.patch.object(usage, "resolve_profile_path", return_value=Path("fixture-root")),
+            # The claim's client version comes from local install folders; none here keeps the proven floor.
+            mock.patch.object(usage, "claude_version_dirs", return_value=[]),
             mock.patch.object(usage, "decrypt_cache", side_effect=lambda _: self.current),
             mock.patch.object(usage, "Client", return_value=self.oauth),
             mock.patch.object(usage, "live_session_cookies", return_value=[{"name": "sessionKey", "value": "fixture-cookie"}]),
@@ -2084,13 +2087,46 @@ class ResetWebInventoryTests(unittest.TestCase):
         opener.open.assert_called_once()
         self.assertNotIn(TOKEN, json.dumps(result))
 
+    def test_claim_names_the_newest_installed_claude_code_never_below_the_proven_floor(self):
+        with tempfile.TemporaryDirectory() as standalone, tempfile.TemporaryDirectory() as desktop:
+            for name in ("2.1.322", "2.1.400", "2.1.99", "notes", "3.0.0-beta", "2.1.400.1"):
+                os.mkdir(os.path.join(standalone, name))
+            Path(desktop, "2.2.0").write_text("")
+            self.assertEqual(usage.claude_claim_user_agent([standalone, desktop]), "claude-cli/2.2.0 (external, cli)")
+            self.assertEqual(usage.claude_claim_user_agent([standalone]), "claude-cli/2.1.400 (external, cli)")
+            old = os.path.join(desktop, "old")
+            os.mkdir(old)
+            os.mkdir(os.path.join(old, "2.1.304"))
+            self.assertEqual(usage.claude_claim_user_agent([old, os.path.join(desktop, "missing"), None]),
+                             "claude-cli/2.1.325 (external, cli)")
+            self.assertEqual(self.real_version_dirs(Path("C:/fixture/Claude-me"))[1], Path("C:/fixture/Claude-me") / "claude-code")
+            self.oauth.responses = [profile()]
+            self.web.get.side_effect = [self.web_account, self.payload]
+            request = self.claim_request()
+            response = mock.MagicMock()
+            response.__enter__.return_value = response
+            response.read.return_value = b'{"result":"reset"}'
+            self.oauth.opener = mock.Mock()
+            self.oauth.opener.open.return_value = response
+            with mock.patch.object(usage, "claude_version_dirs", return_value=[standalone]) as dirs:
+                self.assertEqual(usage.reset_host(request), {"outcome": "reset"})
+            dirs.assert_called_once_with(Path("fixture-root"))
+            sent = self.oauth.opener.open.call_args.args[0]
+            self.assertEqual(sent.get_header("User-agent"), "claude-cli/2.1.400 (external, cli)")
+
     def test_ineligible_answers_say_why_instead_of_calling_every_refusal_a_missing_reset(self):
         cases = [({"result": "ineligible", "reason": "surface"}, "unavailable"),
                  ({"result": "ineligible", "reason": "cli_version"}, "unavailable"),
                  ({"result": "ineligible", "reason": "paused"}, "unavailable"),
                  ({"result": "ineligible", "reason": "not_next_grant"}, "unavailable"),
-                 ({"result": "ineligible"}, "unavailable"),
-                 ({"result": "ineligible", "reason": "something_new"}, "unavailable"),
+                 ({"result": "ineligible", "reason": "tier"}, "unavailable"),
+                 ({"result": "ineligible", "reason": "grant_id_required"}, "unavailable"),
+                 # A refusal is "nothing spent" only for an established reason.
+                 ({"result": "ineligible"}, "ambiguous"),
+                 ({"result": "ineligible", "reason": None}, "ambiguous"),
+                 ({"result": "ineligible", "reason": "unknown"}, "ambiguous"),
+                 ({"result": "ineligible", "reason": "unavailable"}, "ambiguous"),
+                 ({"result": "ineligible", "reason": "something_new"}, "ambiguous"),
                  ({"result": "ineligible", "reason": "unknown_grant"}, "noCredit"),
                  ({"result": "ineligible", "reason": "expired"}, "noCredit"),
                  ({"result": "ineligible", "reason": "no_grant"}, "noCredit"),

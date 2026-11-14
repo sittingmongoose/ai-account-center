@@ -1,5 +1,5 @@
 {
-  "scripts/account-usage/claude_usage.py": "2f74cdc92ea5cc0ed559f89e07b83c1438f0dc2ef5690f88886df94c1c5e7d18",
+  "scripts/account-usage/claude_usage.py": "9701b1ccdbbd3668304836a5f24ef1a5a5761db0e4058b710dc40bf50931ff30",
   "scripts/account-usage/cursor_usage.py": "7fc27661a8f9a44a67683c7d485366d903e41d732d1a2014aed7fef405cee154",
   "scripts/account-usage/desktop_helpers.py": "86d73d556af2c28855d48258bbd9687c8c55d3070d629c282664aab1a10880d3",
   "scripts/account-usage/desktop_usage.py": "5bdd37fd7efa00717e76d90d78dd57d76e623f405773218976dc95c9fd4eb238",
