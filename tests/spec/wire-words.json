@@ -1,0 +1,5499 @@
+[
+  {
+    "word": "aborted",
+    "cause": "cancelled",
+    "sources": [
+      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
+      "src/commands/antigravity-command.ts:result.status",
+      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES"
+    ]
+  },
+  {
+    "word": "absent",
+    "cause": "not_installed",
+    "sources": [
+      "src/web-server/middleware/dashboard-session-store.ts:read.state",
+      "src/web-server/services/account-registry-mode.ts:state",
+      "src/web-server/services/account-registry-v2.ts:state",
+      "src/web-server/services/account-visibility.ts:read.state",
+      "src/web-server/services/additional-account-service.ts:state",
+      "src/web-server/services/claude-account-stores.ts:read.state",
+      "src/web-server/services/codex-login-file.ts:live.state",
+      "src/web-server/services/codex-login-file.ts:state",
+      "src/web-server/services/dashboard-auth-files.ts:state",
+      "src/web-server/services/dashboard-auth-state.ts:read.state",
+      "src/web-server/services/dashboard-device-store.ts:read.state",
+      "src/web-server/services/private-json-store.ts:state",
+      "src/web-server/usage-hub/usage-hub-key-store.ts:read.state"
+    ]
+  },
+  {
+    "word": "account_active",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-profile-removal.ts:CodexProfileRemovalReason",
+      "src/web-server/services/codex-account-lifecycle.ts:error.reason"
+    ]
+  },
+  {
+    "word": "account_default",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-profile-removal.ts:CodexProfileRemovalReason",
+      "src/web-server/services/codex-account-lifecycle.ts:error.reason"
+    ]
+  },
+  {
+    "word": "account_mismatch",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/cursor_usage.py:failure_code",
+      "scripts/account-usage/failover_additional.py:failure_code",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_console.py:error.code",
+      "scripts/account-usage/muse_native.py:failureCode",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "action_required",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:status",
+      "scripts/app-updates/app_updates.py:payload.get('status')",
+      "scripts/app-updates/app_updates.py:status",
+      "src/antigravity/managed-update-command.ts:status",
+      "src/web-server/services/app-update-contract.ts:STATUSES",
+      "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
+      "src/web-server/services/app-update-contract.ts:row.status",
+      "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
+      "src/web-server/services/app-update-diagnostics.ts:status"
+    ]
+  },
+  {
+    "word": "activation_busy",
+    "cause": "busy",
+    "sources": [
+      "src/codex-auth/codex-profile-renewal.ts:outcome.reason",
+      "src/codex-auth/codex-renewal-status-store.ts:outcome.reason",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/codex-auto-switch-service.ts:cause"
+    ]
+  },
+  {
+    "word": "activation_error",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:cause"
+    ]
+  },
+  {
+    "word": "activation_running",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/activate-codex-profile.ts:reason",
+      "src/web-server/routes/codex-routes.ts:error.details?.reason",
+      "src/web-server/routes/codex-routes.ts:failures"
+    ]
+  },
+  {
+    "word": "activation-running",
+    "cause": null,
+    "sources": [
+      "src/antigravity/switch-service.ts:reason",
+      "src/antigravity/types.ts:reason",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+    ]
+  },
+  {
+    "word": "active",
+    "cause": null,
+    "sources": [
+      "src/antigravity/auto-switch/monitor.ts:result.status",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/terminal-activate.ts:result.status",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
+      "src/web-server/routes/antigravity-activate-route.ts:result.status",
+      "src/web-server/routes/antigravity-activate-route.ts:status",
+      "src/web-server/usage-hub/usage-hub-contract.ts:status",
+      "src/web-server/usage-hub/usage-hub-projection.ts:status"
+    ]
+  },
+  {
+    "word": "active-identity-changed",
+    "cause": null,
+    "sources": [
+      "src/antigravity/switch-service.ts:reason",
+      "src/antigravity/types.ts:reason",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+    ]
+  },
+  {
+    "word": "adapter_version_unreadable",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_zcode.py:reason"
+    ]
+  },
+  {
+    "word": "adopted",
+    "cause": null,
+    "sources": [
+      "src/antigravity/release-status.ts:status.adoption"
+    ]
+  },
+  {
+    "word": "agent_state",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_attestor.py:agentState"
+    ]
+  },
+  {
+    "word": "already-active",
+    "cause": null,
+    "sources": [
+      "src/antigravity/auto-switch/monitor.ts:result.status",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/terminal-activate.ts:result.status",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
+      "src/web-server/routes/antigravity-activate-route.ts:result.status",
+      "src/web-server/routes/antigravity-activate-route.ts:status"
+    ]
+  },
+  {
+    "word": "antigravity",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-lifecycle-antigravity.ts:reason",
+      "src/web-server/services/account-lifecycle-listing.ts:reason"
+    ]
+  },
+  {
+    "word": "antigravity_acp_signin_hold",
+    "cause": "signin_needed",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES"
+    ]
+  },
+  {
+    "word": "antigravity-acp",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES"
+    ]
+  },
+  {
+    "word": "antigravity-private-store-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/native_credential_worker.py:ValueError",
+      "scripts/antigravity/runtime/native_credential_worker.py:ValueError",
+      "src/antigravity/native-credential-transport.ts:failure"
+    ]
+  },
+  {
+    "word": "app-server",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-activation-runtime.ts:status"
+    ]
+  },
+  {
+    "word": "attempted",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_zcode.py:(before, state)",
+      "scripts/app-updates/app_update_zcode.py:(state, behind)"
+    ]
+  },
+  {
+    "word": "auth_file_missing",
+    "cause": "auth_required",
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
+    ]
+  },
+  {
+    "word": "auth_read_failed",
+    "cause": "auth_required",
+    "sources": [
+      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
+    ]
+  },
+  {
+    "word": "auth_required",
+    "cause": "auth_required",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_cursor.py:cause",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "auth_write_failed",
+    "cause": "auth_required",
+    "sources": [
+      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
+    ]
+  },
+  {
+    "word": "available",
+    "cause": null,
+    "sources": [
+      "src/cliproxy/quota/codex-extra-usage.ts:credit?.status",
+      "src/web-server/services/codex-profile-quota-service.ts:status"
+    ]
+  },
+  {
+    "word": "awaiting_code",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/signin-job-types.ts:SignInJobState",
+      "src/web-server/services/signin-jobs.ts:record.job.state"
+    ]
+  },
+  {
+    "word": "bad_response",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:ANALYTICS_SCAN_FAILURE_CAUSES",
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsScanFailureCause",
+      "src/web-server/services/analytics-remote-transport.ts:cause"
+    ]
+  },
+  {
+    "word": "before",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/native_credential_worker.py:rollbackState",
+      "scripts/antigravity/runtime/native_credential_worker.py:rollbackState"
+    ]
+  },
+  {
+    "word": "binding",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:saved_state['runningContexts']",
+      "scripts/antigravity/runtime/resident_broker.py:saved_state['runningNativeKeys']",
+      "scripts/antigravity/runtime/resident_broker.py:set(state.get('runningContexts', {}))",
+      "scripts/antigravity/runtime/resident_broker.py:state['restartContexts']"
+    ]
+  },
+  {
+    "word": "blocked",
+    "cause": "refused",
+    "sources": [
+      "src/web-server/status/report-schema.ts:ITEM_STATES",
+      "src/web-server/status/report-schema.ts:THREAD_STATES",
+      "src/web-server/status/status-view-strip.ts:item.state",
+      "src/web-server/status/status-view.ts:row.doc.state"
+    ]
+  },
+  {
+    "word": "blocked_uncertain",
+    "cause": "refused",
+    "sources": [
+      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
+      "src/web-server/services/claude-open-operations.ts:state"
+    ]
+  },
+  {
+    "word": "busy",
+    "cause": "busy",
+    "sources": [
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_native.py:MuseError",
+      "scripts/app-updates/app_update_common.py:UpdateFailure",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_t3.py:error.code",
+      "scripts/app-updates/app_updates.py:UpdateFailure",
+      "src/antigravity/account-lifecycle.ts:error.code",
+      "src/antigravity/auto-switch/monitor.ts:result.status",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/switch-service.ts:error.code",
+      "src/antigravity/terminal-activate.ts:error.code",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode",
+      "src/codex-auth/activate-codex-profile.ts:error.code",
+      "src/codex-auth/codex-activation-runtime.ts:error.code",
+      "src/commands/antigravity-command.ts:error.code",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
+      "src/web-server/routes/antigravity-recover-route.ts:error.code",
+      "src/web-server/services/codex-auto-switch-service.ts:error.code",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "busy-or-unproven-idle",
+    "cause": "busy",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "cached",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/desktop_usage.py:result['status']",
+      "scripts/account-usage/desktop_usage.py:status",
+      "scripts/account-usage/failover_additional.py:status",
+      "scripts/account-usage/failover_usage.py:status",
+      "scripts/account-usage/failover_usage.py:value.get('status')",
+      "scripts/account-usage/failover_usage.py:window.get('status')",
+      "scripts/account-usage/muse_console.py:status",
+      "scripts/account-usage/muse_console.py:value.get('status')",
+      "scripts/account-usage/muse_native.py:sample['status']",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/runtime-composition.ts:snapshot.status",
+      "src/antigravity/runtime-composition.ts:status",
+      "src/antigravity/usage-contract.ts:status",
+      "src/antigravity/usage-normalization.ts:status",
+      "src/antigravity/usage-service.ts:result.status",
+      "src/antigravity/usage-service.ts:sample.status",
+      "src/antigravity/usage-service.ts:status",
+      "src/store/activity-answer.ts:status",
+      "src/store/activity-coverage.ts:s.state",
+      "src/store/activity-coverage.ts:state",
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-observations.ts:account.status",
+      "src/store/usage-observations.ts:safe.status",
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/agent-usage/agent-usage-history.ts:row.status",
+      "src/web-server/agent-usage/agent-usage-history.ts:window.status",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:account.status",
+      "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
+      "src/web-server/agent-usage/agent-usage-projection.ts:window.status",
+      "src/web-server/agent-usage/agent-usage-snapshot.ts:account.status",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:status",
+      "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
+      "src/web-server/services/account-analytics-history.ts:account.status",
+      "src/web-server/services/account-analytics-history.ts:safe?.status",
+      "src/web-server/services/account-analytics-history.ts:status",
+      "src/web-server/services/account-analytics-history.ts:value.status",
+      "src/web-server/services/account-analytics-projection.ts:status",
+      "src/web-server/services/account-analytics-providers.ts:account.status",
+      "src/web-server/services/account-analytics-service.ts:account.status",
+      "src/web-server/services/account-analytics-service.ts:previous?.status",
+      "src/web-server/services/account-analytics-service.ts:status",
+      "src/web-server/services/account-analytics-service.ts:window?.status",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/account-analytics-types.ts:status",
+      "src/web-server/services/account-dashboard-projection.ts:row.status",
+      "src/web-server/services/account-dashboard-projection.ts:status",
+      "src/web-server/services/account-dashboard-projection.ts:usage?.status",
+      "src/web-server/services/account-dashboard-projection.ts:window.status",
+      "src/web-server/services/account-dashboard-service.ts:current.status",
+      "src/web-server/services/account-dashboard-service.ts:status",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
+      "src/web-server/services/account-dashboard-types.ts:status",
+      "src/web-server/services/account-lifecycle-actions.ts:reading.status",
+      "src/web-server/services/additional-account-service.ts:cache.result.status",
+      "src/web-server/services/additional-account-service.ts:result.status",
+      "src/web-server/services/additional-account-service.ts:status",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/claude-desktop-live-cache.ts:status",
+      "src/web-server/services/claude-desktop-live-cache.ts:window.status",
+      "src/web-server/services/claude-desktop-live-service.ts:item.status",
+      "src/web-server/services/claude-desktop-live-service.ts:status",
+      "src/web-server/services/claude-desktop-usage-service.ts:status",
+      "src/web-server/services/opencode-console-wallet-service.ts:result.status",
+      "src/web-server/services/opencode-console-wallet-service.ts:status",
+      "src/web-server/services/opencode-console-wallet-service.ts:this.result.status",
+      "src/web-server/services/usage-failover-claude-extras.ts:reading.status",
+      "src/web-server/services/usage-failover-claude-extras.ts:status",
+      "src/web-server/services/usage-failover-claude-extras.ts:window.status",
+      "src/web-server/services/usage-failover-contract.ts:reading.status",
+      "src/web-server/services/usage-failover-contract.ts:status",
+      "src/web-server/services/usage-failover-contract.ts:value.status",
+      "src/web-server/services/usage-failover-service.ts:account.status",
+      "src/web-server/services/usage-failover-service.ts:reading.status",
+      "src/web-server/services/usage-failover-service.ts:status"
+    ]
+  },
+  {
+    "word": "cancelled",
+    "cause": "cancelled",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:UpdateFailure",
+      "scripts/app-updates/app_update_antigravity.py:state['phase']",
+      "src/web-server/services/signin-job-types.ts:SignInJobState",
+      "src/web-server/services/signin-jobs.ts:state"
+    ]
+  },
+  {
+    "word": "cause",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:causes",
+      "src/web-server/services/analytics-remote-sources.ts:cause"
+    ]
+  },
+  {
+    "word": "census-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "changed",
+    "cause": null,
+    "sources": [
+      "src/antigravity/release-status.ts:status.nativeCli",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason"
+    ]
+  },
+  {
+    "word": "check_timeout",
+    "cause": "timeout",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES"
+    ]
+  },
+  {
+    "word": "check-again-required",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "checking",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
+      "src/web-server/services/claude-open-operations.ts:state"
+    ]
+  },
+  {
+    "word": "choose_team",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "claim-token-outstanding",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "claude",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/failover_usage.py:statuses",
+      "scripts/analytics-remote/analytics_usage_remote.py:states[kind]",
+      "src/web-server/services/account-analytics-activity.ts:states",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-sources.ts:state.tool"
+    ]
+  },
+  {
+    "word": "claude_not_found",
+    "cause": "not_installed",
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:RuntimeError"
+    ]
+  },
+  {
+    "word": "cleanup-current-pin-conflict",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-file-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-file-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-hook-mismatch",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-hook-span-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-json-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-original-hook-present",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-parent-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-postcommit-conflict",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-proposal-unrelated-change",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-read-failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-unrelated-change",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-write-committed-sync-failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "cleanup-write-failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError"
+    ]
+  },
+  {
+    "word": "closed",
+    "cause": null,
+    "sources": [
+      "src/store/store-service.ts:reason"
+    ]
+  },
+  {
+    "word": "codex",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:states[kind]",
+      "src/web-server/services/account-lifecycle-actions.ts:state"
+    ]
+  },
+  {
+    "word": "codex_busy",
+    "cause": "busy",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES"
+    ]
+  },
+  {
+    "word": "committed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_hook_cleanup.py:CleanupError",
+      "scripts/antigravity/runtime/resident_broker.py:state['phase']"
+    ]
+  },
+  {
+    "word": "completed",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3.py:job.get('state')",
+      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
+      "src/commands/antigravity-command.ts:result.status",
+      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES",
+      "src/web-server/services/app-update-contract.ts:state"
+    ]
+  },
+  {
+    "word": "confirmation_stale",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode",
+      "src/web-server/services/codex-auto-switch-service.ts:error.code"
+    ]
+  },
+  {
+    "word": "confirmation-invalid",
+    "cause": "damaged",
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "confirmation-required",
+    "cause": null,
+    "sources": [
+      "src/antigravity/auto-switch/monitor.ts:result.status",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/terminal-activate.ts:result.status",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES"
+    ]
+  },
+  {
+    "word": "connection_refused",
+    "cause": "refused",
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
+    "word": "contexts",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:saved_state['runningContexts']",
+      "scripts/antigravity/runtime/resident_broker.py:saved_state['runningNativeKeys']",
+      "scripts/antigravity/runtime/resident_broker.py:set(state.get('runningContexts', {}))",
+      "scripts/antigravity/runtime/resident_broker.py:state['restartContexts']"
+    ]
+  },
+  {
+    "word": "cooldown",
+    "cause": "rate_limited",
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "copying",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
+      "src/web-server/services/claude-open-operations.ts:state"
+    ]
+  },
+  {
+    "word": "create_only_transaction_refused",
+    "cause": "refused",
+    "sources": [
+      "src/web-server/services/claude-history-sync-service.ts:result.reason"
+    ]
+  },
+  {
+    "word": "create_only_transaction_unconfirmed",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-desktop-open-service.ts:historySync?.reason",
+      "src/web-server/services/claude-history-sync-service.ts:reason"
+    ]
+  },
+  {
+    "word": "created_metadata",
+    "cause": null,
+    "sources": [
+      "scripts/claude-history/history_index_remote_v2.py:receipt['status']"
+    ]
+  },
+  {
+    "word": "credential-host-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS",
+      "src/web-server/routes/reset-claim-routes.ts:reason",
+      "src/web-server/routes/reset-claim-routes.ts:recovery.reason"
+    ]
+  },
+  {
+    "word": "critical",
+    "cause": null,
+    "sources": [
+      "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:state",
+      "src/web-server/agent-usage/agent-usage-snapshot.ts:row.state",
+      "src/web-server/services/signin-health-service.ts:row.state",
+      "src/web-server/services/signin-health-service.ts:state",
+      "src/web-server/services/signin-health-service.ts:states"
+    ]
+  },
+  {
+    "word": "current",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:result['status']",
+      "scripts/antigravity/rebuild_bundle.py:status",
+      "scripts/app-updates/app_update_antigravity.py:t3_row.get('status')",
+      "scripts/app-updates/app_update_common.py:status",
+      "scripts/app-updates/app_updates.py:payload.get('status')",
+      "src/antigravity/managed-updater.ts:status",
+      "src/antigravity/production-runtime.ts:result.status",
+      "src/antigravity/runtime-refresh.ts:status",
+      "src/antigravity/terminal-refresh.ts:result.status",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:STATUS_WORDS",
+      "src/web-server/services/app-update-contract.ts:STATUSES",
+      "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
+      "src/web-server/services/app-update-contract.ts:row.status"
+    ]
+  },
+  {
+    "word": "cursor_signin_needed",
+    "cause": "signin_needed",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_cursor.py:UpdateFailure",
+      "scripts/app-updates/app_update_cursor.py:error.code",
+      "scripts/app-updates/app_update_cursor.py:failure.code"
+    ]
+  },
+  {
+    "word": "cursor_update_staged",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_cursor.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "cursor-cli",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES"
+    ]
+  },
+  {
+    "word": "daemon",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-activation-runtime.ts:status"
+    ]
+  },
+  {
+    "word": "dashboard",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-device-records.ts:DeviceRevokeReason",
+      "src/web-server/services/dashboard-device-records.ts:revokedReason"
+    ]
+  },
+  {
+    "word": "day",
+    "cause": null,
+    "sources": [
+      "src/store/activity-answer.ts:[range, sourcesState]"
+    ]
+  },
+  {
+    "word": "deactivated_workspace",
+    "cause": null,
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+    ]
+  },
+  {
+    "word": "dead",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_zcode.py:state",
+      "src/codex-auth/codex-profile-renewal.ts:reason",
+      "src/codex-auth/codex-renewal-types.ts:CODEX_RENEWAL_DEAD_REASONS",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason"
+    ]
+  },
+  {
+    "word": "decision_changed_before_activation",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:cause"
+    ]
+  },
+  {
+    "word": "deferred",
+    "cause": null,
+    "sources": [
+      "src/antigravity/auto-switch/monitor.ts:result.status",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES"
+    ]
+  },
+  {
+    "word": "deleting",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-lifecycle-removal.ts:entry.state",
+      "src/web-server/services/claude-account-lifecycle.ts:entry.state",
+      "src/web-server/services/claude-account-lifecycle.ts:state",
+      "src/web-server/services/claude-account-records.ts:state",
+      "src/web-server/services/claude-account-stores.ts:item.state",
+      "src/web-server/services/claude-account-stores.ts:state"
+    ]
+  },
+  {
+    "word": "direct_failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_cursor.py:reason"
+    ]
+  },
+  {
+    "word": "directories",
+    "cause": null,
+    "sources": [
+      "scripts/claude-history/history_index_remote_v2.py:state"
+    ]
+  },
+  {
+    "word": "directory",
+    "cause": null,
+    "sources": [
+      "scripts/claude-history/history_index_remote_v2.py:waiting_state"
+    ]
+  },
+  {
+    "word": "dirs",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:state"
+    ]
+  },
+  {
+    "word": "disabled",
+    "cause": "refused",
+    "sources": [
+      "src/codex-auth/codex-profile-renewal.ts:reason",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/status-native/native-loader.ts:StatusUnavailableReason",
+      "src/status-native/native-loader.ts:reason",
+      "src/store/native-loader.ts:StoreUnavailableReason",
+      "src/store/native-loader.ts:reason",
+      "src/web-server/index.ts:opened.reason"
+    ]
+  },
+  {
+    "word": "done",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3.py:host.get('state')",
+      "scripts/app-updates/app_update_t3.py:hosts['ubuntu'].get('state')",
+      "src/store/store-service.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/app-update-contract.ts:state",
+      "src/web-server/services/app-update-service.ts:host.state",
+      "src/web-server/services/app-update-service.ts:state",
+      "src/web-server/status/answers.ts:a.state",
+      "src/web-server/status/answers.ts:b.state",
+      "src/web-server/status/answers.ts:doorbell.state",
+      "src/web-server/status/answers.ts:entry.doorbell.state",
+      "src/web-server/status/answers.ts:entry.share.state",
+      "src/web-server/status/answers.ts:entry[step].state",
+      "src/web-server/status/answers.ts:line.state",
+      "src/web-server/status/answers.ts:send.summary.state",
+      "src/web-server/status/answers.ts:share.state",
+      "src/web-server/status/answers.ts:state",
+      "src/web-server/status/answers.ts:summary.state",
+      "src/web-server/status/report-schema.ts:ITEM_STATES",
+      "src/web-server/status/report-schema.ts:THREAD_STATES"
+    ]
+  },
+  {
+    "word": "download_blocked",
+    "cause": "refused",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:UpdateFailure",
+      "scripts/app-updates/app_update_desktop.py:error.code",
+      "scripts/app-updates/app_update_t3.py:error.code",
+      "scripts/app-updates/app_updates.py:error.code"
+    ]
+  },
+  {
+    "word": "dropped",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/report-schema.ts:ITEM_STATES"
+    ]
+  },
+  {
+    "word": "due",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
+      "src/codex-auth/codex-renewal-types.ts:reason",
+      "src/web-server/services/codex-renewal-notes.ts:entry.state"
+    ]
+  },
+  {
+    "word": "duplicate_identity",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
+    ]
+  },
+  {
+    "word": "email",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/muse_console.py:state",
+      "scripts/claude-signin/claude_signin.py:reason",
+      "src/web-server/services/codex-login-file.ts:state"
+    ]
+  },
+  {
+    "word": "empty",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-tls-config.ts:TrustedProxyProblemReason",
+      "src/web-server/services/dashboard-tls-config.ts:reason",
+      "src/web-server/status/quota-report.ts:reason",
+      "src/web-server/status/schema-helpers.ts:reason"
+    ]
+  },
+  {
+    "word": "env",
+    "cause": null,
+    "sources": [
+      "src/web-server/dashboard-auth-runtime.ts:state.managedBy",
+      "src/web-server/routes/auth-session-routes.ts:state.managedBy"
+    ]
+  },
+  {
+    "word": "error",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/account-usage/claude_usage.py:result['status']",
+      "scripts/account-usage/desktop_helpers.py:UsageError",
+      "scripts/account-usage/desktop_usage.py:(result['status'], result['message'])",
+      "scripts/account-usage/failover_special.py:helpers.UsageError",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_console.py:state['lastError']",
+      "scripts/account-usage/muse_native.py:failureCode",
+      "scripts/account-usage/plan_common.py:CollectionError",
+      "scripts/account-usage/plan_usage.py:CollectionError",
+      "scripts/account-usage/plan_usage.py:status",
+      "scripts/antigravity/quota_adapter.py:base['status']",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/runtime-composition.ts:snapshot.status",
+      "src/antigravity/runtime-composition.ts:status",
+      "src/antigravity/usage-contract.ts:status",
+      "src/antigravity/usage-normalization.ts:status",
+      "src/antigravity/usage-service.ts:result.status",
+      "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
+      "src/web-server/scoreboard/catalog.ts:state",
+      "src/web-server/scoreboard/catalog.ts:this.state",
+      "src/web-server/scoreboard/runs-reader.ts:state",
+      "src/web-server/scoreboard/runs-reader.ts:this.state",
+      "src/web-server/scoreboard/runs-store.ts:state",
+      "src/web-server/scoreboard/scoreboard-sources.ts:catalog.state",
+      "src/web-server/scoreboard/scoreboard-sources.ts:runs.state",
+      "src/web-server/scoreboard/scoreboard-sources.ts:state",
+      "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
+      "src/web-server/services/account-dashboard-projection.ts:row?.quotaStatus",
+      "src/web-server/services/account-dashboard-projection.ts:status",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
+      "src/web-server/services/account-dashboard-types.ts:quotaStatus",
+      "src/web-server/services/additional-account-service.ts:account.status",
+      "src/web-server/services/additional-account-service.ts:cache.result.status",
+      "src/web-server/services/additional-account-service.ts:result.status",
+      "src/web-server/services/additional-account-service.ts:status",
+      "src/web-server/services/analytics-remote-sources.ts:kind?.state",
+      "src/web-server/services/analytics-remote-sources.ts:kindState",
+      "src/web-server/services/analytics-remote-sources.ts:response.kinds[tool]?.state",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-transport.ts:entry.state",
+      "src/web-server/services/analytics-remote-transport.ts:state",
+      "src/web-server/services/codex-profile-quota-service.ts:row?.quotaStatus",
+      "src/web-server/services/opencode-console-wallet-service.ts:result.status",
+      "src/web-server/services/usage-failover-antigravity.ts:status",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
+      "src/web-server/services/usage-failover-contract.ts:status",
+      "src/web-server/status/agent-reports-reader.ts:state",
+      "src/web-server/status/quota-report.ts:state",
+      "src/web-server/status/quota-report.ts:this.state",
+      "src/web-server/status/status-docs.ts:state",
+      "src/web-server/status/status-view-panels.ts:state",
+      "src/web-server/status/status-view-quota.ts:quota.state",
+      "src/web-server/status/status-view-quota.ts:state",
+      "src/web-server/status/status-view-strip.ts:i.reports.state",
+      "src/web-server/status/status-view-types.ts:SourceState",
+      "src/web-server/status/status-view.ts:reports.state",
+      "src/web-server/status/status-view.ts:state",
+      "src/web-server/usage-hub/usage-hub-contract.ts:status",
+      "src/web-server/usage-hub/usage-hub-projection.ts:status",
+      "src/web-server/usage/account-activity-collector.ts:fresh.state",
+      "src/web-server/usage/antigravity-native-usage-collector.ts:state",
+      "src/web-server/usage/native-quota-collector.ts:quotaStatus",
+      "src/web-server/usage/zcode-native-usage-collector.ts:kind.state",
+      "src/web-server/usage/zcode-native-usage-collector.ts:state"
+    ]
+  },
+  {
+    "word": "exact-conversation-required",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "exact-grant-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "execution_policy",
+    "cause": "refused",
+    "sources": [
+      "scripts/app-updates/app_update_cursor.py:reason"
+    ]
+  },
+  {
+    "word": "exited",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_macos.py:state[1].strip()",
+      "scripts/app-updates/app_update_zcode.py:state"
+    ]
+  },
+  {
+    "word": "expired",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-device-records.ts:DeviceRevokeReason",
+      "src/web-server/services/dashboard-device-store.ts:record.revokedReason",
+      "src/web-server/services/dashboard-device-store.ts:revokedReason",
+      "src/web-server/services/signin-job-types.ts:SignInJobState",
+      "src/web-server/services/signin-jobs.ts:state"
+    ]
+  },
+  {
+    "word": "expired-checkpoint",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "extension_update_required",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-dashboard-types.ts:DashboardSignInUnavailableReason"
+    ]
+  },
+  {
+    "word": "failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:state['phase']",
+      "scripts/app-updates/app_update_antigravity.py:status",
+      "scripts/app-updates/app_update_common.py:(cause, derived)",
+      "scripts/app-updates/app_update_t3.py:job.get('state')",
+      "scripts/app-updates/app_update_t3.py:state[0]",
+      "scripts/app-updates/app_update_t3.py:status",
+      "scripts/app-updates/app_update_zcode.py:state",
+      "scripts/app-updates/app_update_zcode.py:status",
+      "scripts/app-updates/app_updates.py:payload.get('status')",
+      "scripts/app-updates/app_updates.py:row['status']",
+      "src/antigravity/managed-update-command.ts:status",
+      "src/antigravity/managed-update-command.ts:value.status",
+      "src/antigravity/managed-updater.ts:status",
+      "src/antigravity/runtime-health.ts:fields.get('ActiveState')",
+      "src/antigravity/runtime-refresh.ts:status",
+      "src/codex-auth/codex-login-family.ts:state",
+      "src/codex-auth/codex-profile-removal.ts:CodexProfileRemovalReason",
+      "src/codex-auth/codex-profile-renewal.ts:attempt.state",
+      "src/codex-auth/codex-renewal-planner.ts:snapshot.processScan.state",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
+      "src/store/store-service.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/app-update-contract.ts:STATUSES",
+      "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
+      "src/web-server/services/app-update-contract.ts:row.status",
+      "src/web-server/services/app-update-contract.ts:state",
+      "src/web-server/services/app-update-contract.ts:status",
+      "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
+      "src/web-server/services/app-update-diagnostics.ts:status",
+      "src/web-server/services/app-update-service.ts:job.state",
+      "src/web-server/services/app-update-service.ts:result.status",
+      "src/web-server/services/app-update-service.ts:state",
+      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
+      "src/web-server/services/claude-open-operations.ts:state",
+      "src/web-server/services/codex-auto-switch-service.ts:renewals.get(profile.name)?.state",
+      "src/web-server/services/codex-profile-quota-service.ts:renewal?.state",
+      "src/web-server/services/codex-renewal-notes.ts:entry.state",
+      "src/web-server/services/signin-job-types.ts:SignInJobState",
+      "src/web-server/services/signin-job-types.ts:state",
+      "src/web-server/services/signin-jobs.ts:state",
+      "src/web-server/services/signin-process.ts:SignInSpawnFailure",
+      "src/web-server/status/answers.ts:(['done', 'failed', 'skipped'] as const).find((s) => s === record.state)",
+      "src/web-server/status/answers.ts:doorbell.state",
+      "src/web-server/status/answers.ts:entry.doorbell.state",
+      "src/web-server/status/answers.ts:entry.share.state",
+      "src/web-server/status/answers.ts:share.state",
+      "src/web-server/status/answers.ts:state"
+    ]
+  },
+  {
+    "word": "failed-rolled-back",
+    "cause": "provider_error",
+    "sources": [
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
+      "src/web-server/routes/antigravity-activate-route.ts:result.status",
+      "src/web-server/routes/antigravity-activate-route.ts:status"
+    ]
+  },
+  {
+    "word": "failures",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:pst['failures']"
+    ]
+  },
+  {
+    "word": "family_unverifiable",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
+    ]
+  },
+  {
+    "word": "files",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:state",
+      "scripts/claude-history/history_index_remote_v2.py:state"
+    ]
+  },
+  {
+    "word": "finished",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_updates.py:state.strip()"
+    ]
+  },
+  {
+    "word": "fixing",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/report-schema.ts:ITEM_STATES"
+    ]
+  },
+  {
+    "word": "foreground",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:state"
+    ]
+  },
+  {
+    "word": "foreground-already-attached",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "foreground-attach-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "foreground-context-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "foreground-input-budget",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError",
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "foreground-input-incomplete",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "foreground-input-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "foreground-not-attached",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "foreground-not-ready",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "foreground-terminal-required",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "foreign-owner",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/linux_process_guard.py:GuardError"
+    ]
+  },
+  {
+    "word": "foreign-replacement",
+    "cause": null,
+    "sources": [
+      "src/antigravity/switch-service.ts:reason",
+      "src/antigravity/types.ts:reason",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+    ]
+  },
+  {
+    "word": "fresh",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/quota_adapter.py:status",
+      "src/antigravity/auto-switch/policy.ts:quota.status",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/runtime-composition.ts:snapshot.status",
+      "src/antigravity/runtime-composition.ts:status",
+      "src/antigravity/usage-contract.ts:status",
+      "src/antigravity/usage-service.ts:sample.status",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/codex-auth/codex-renewal-types.ts:reason",
+      "src/web-server/status/status-view-types.ts:reportState"
+    ]
+  },
+  {
+    "word": "frozen-terminal-observer-binding-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_header_graphics.py:RuntimeError"
+    ]
+  },
+  {
+    "word": "fulfilled",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-analytics-activity.ts:status",
+      "src/web-server/services/account-analytics-service.ts:result.status",
+      "src/web-server/services/signin-health-service.ts:result.status",
+      "src/web-server/usage-hub/usage-hub-accounts.ts:result.status"
+    ]
+  },
+  {
+    "word": "function",
+    "cause": null,
+    "sources": [
+      "src/status-native/native-loader.ts:typeof loaded?.NativeStatus"
+    ]
+  },
+  {
+    "word": "gate-closed",
+    "cause": null,
+    "sources": [
+      "src/antigravity/runtime-refresh.ts:status",
+      "src/antigravity/terminal-refresh.ts:result.status"
+    ]
+  },
+  {
+    "word": "gone",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/status-view-types.ts:askerState"
+    ]
+  },
+  {
+    "word": "grant-changed",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "grant-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "healthy",
+    "cause": null,
+    "sources": [
+      "src/web-server/agent-usage/agent-usage-markdown.ts:SIGNIN_STATE_WORDS"
+    ]
+  },
+  {
+    "word": "held",
+    "cause": "held",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:status",
+      "src/web-server/services/app-update-contract.ts:STATUSES",
+      "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
+      "src/web-server/services/app-update-contract.ts:row.status"
+    ]
+  },
+  {
+    "word": "helper_damaged",
+    "cause": "damaged",
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:HOST_FAILURE_CAUSES",
+      "src/web-server/services/analytics-remote-sources.ts:cause",
+      "src/web-server/services/analytics-remote-sources.ts:lastFailure"
+    ]
+  },
+  {
+    "word": "helper_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:cause",
+      "src/web-server/services/analytics-remote-sources.ts:failure.byKind.get(tool)",
+      "src/web-server/services/analytics-remote-sources.ts:failure.cause",
+      "src/web-server/services/analytics-remote-sources.ts:lastFailure",
+      "src/web-server/services/analytics-remote-transport.ts:ANALYTICS_SCAN_FAILURE_CAUSES",
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsScanFailureCause"
+    ]
+  },
+  {
+    "word": "helper_invalid",
+    "cause": "damaged",
+    "sources": [
+      "src/web-server/services/app-update-service.ts:error.code"
+    ]
+  },
+  {
+    "word": "history_marker_store_full",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-history-sync-service.ts:error.reason",
+      "src/web-server/services/claude-history-sync-service.ts:reason"
+    ]
+  },
+  {
+    "word": "host_timeout",
+    "cause": "timeout",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES"
+    ]
+  },
+  {
+    "word": "host_unreachable",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "src/web-server/services/account-lifecycle-actions.ts:error.code",
+      "src/web-server/services/account-lifecycle-actions.ts:status",
+      "src/web-server/services/account-lifecycle-extras.ts:error.code",
+      "src/web-server/services/account-lifecycle-extras.ts:status"
+    ]
+  },
+  {
+    "word": "hour",
+    "cause": null,
+    "sources": [
+      "src/store/activity-answer.ts:[range, sourcesState]"
+    ]
+  },
+  {
+    "word": "http_401",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_cursor.py:reason"
+    ]
+  },
+  {
+    "word": "identity_mismatch",
+    "cause": "identity_mismatch",
+    "sources": [
+      "scripts/account-usage/failover_core.py:Failure",
+      "scripts/account-usage/failover_special.py:failure",
+      "scripts/account-usage/failover_special.py:failureCode",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "src/codex-auth/codex-renewal-tokens.ts:reason",
+      "src/codex-auth/codex-renewal-types.ts:CODEX_RENEWAL_DEAD_REASONS",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/signin-job-types.ts:SignInJobErrorCode",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "identity_unavailable",
+    "cause": "identity_unavailable",
+    "sources": [
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "identity_unbound",
+    "cause": null,
+    "sources": [
+      "src/antigravity/usage-normalization.ts:statusReason",
+      "src/antigravity/usage-normalization.ts:value.statusReason",
+      "src/antigravity/usage-service.ts:result.statusReason",
+      "src/web-server/services/account-dashboard-state.ts:account.statusReason",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatusReason",
+      "src/web-server/services/opencode-console-wallet-service.ts:result?.statusReason",
+      "src/web-server/services/usage-failover-antigravity.ts:account.statusReason",
+      "src/web-server/services/usage-failover-antigravity.ts:result.statusReason",
+      "src/web-server/services/usage-failover-service.ts:template.statusReason"
+    ]
+  },
+  {
+    "word": "identity_unconfirmed",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/claude_usage.py:error.status",
+      "scripts/account-usage/claude_usage.py:result['status']"
+    ]
+  },
+  {
+    "word": "identity-changed",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "identity-unconfirmed",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/claude_usage.py:reason",
+      "scripts/account-usage/claude_usage.py:result.get('resetReason')",
+      "scripts/account-usage/claude_usage.py:result['resetReason']",
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "identity-verification-failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/antigravity/switch-service.ts:reason",
+      "src/antigravity/types.ts:reason",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+    ]
+  },
+  {
+    "word": "idle",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_attestor.py:STATES",
+      "scripts/antigravity/runtime/native_status_attestor.py:value['agent_state']",
+      "scripts/antigravity/runtime/native_status_omitted_counters.py:frame['agent_state']",
+      "scripts/antigravity/runtime/native_status_service.py:value['agent_state']",
+      "src/web-server/status/report-schema.ts:THREAD_STATES"
+    ]
+  },
+  {
+    "word": "in_use",
+    "cause": "in_use",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure",
+      "scripts/app-updates/app_updates.py:payload.get('status') == 'action_required'",
+      "src/antigravity/managed-update-command.ts:status",
+      "src/antigravity/managed-update-command.ts:value.status",
+      "src/antigravity/managed-updater.ts:status",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
+      "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
+    ]
+  },
+  {
+    "word": "inactive",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3.py:state[0]"
+    ]
+  },
+  {
+    "word": "inactive_subscription",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/failover_additional.py:failure_code",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "incompatible",
+    "cause": null,
+    "sources": [
+      "src/status-native/native-loader.ts:StatusUnavailableReason",
+      "src/status-native/native-loader.ts:reason",
+      "src/store/native-loader.ts:StoreUnavailableReason",
+      "src/store/native-loader.ts:reason",
+      "src/web-server/status/status-collectors.ts:reason"
+    ]
+  },
+  {
+    "word": "incomplete-stop",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "initializing",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_attestor.py:STATES"
+    ]
+  },
+  {
+    "word": "input",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:state"
+    ]
+  },
+  {
+    "word": "installed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/native_credential_worker.py:rollbackState",
+      "scripts/antigravity/runtime/native_credential_worker.py:rollbackState"
+    ]
+  },
+  {
+    "word": "installed_no_logs",
+    "cause": "installed_no_logs",
+    "sources": [
+      "src/store/activity-coverage.ts:s.state",
+      "src/store/activity-coverage.ts:state",
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-report.ts:UsageReportState"
+    ]
+  },
+  {
+    "word": "installer",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "installer_failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "invalid",
+    "cause": "damaged",
+    "sources": [
+      "src/commands/usage-hub-command.ts:state.state",
+      "src/web-server/services/account-lifecycle-accounts.ts:state",
+      "src/web-server/services/account-registry-mode.ts:read.state",
+      "src/web-server/services/account-registry-mode.ts:state",
+      "src/web-server/services/account-registry-v2.ts:state",
+      "src/web-server/services/account-visibility.ts:read.state",
+      "src/web-server/services/dashboard-auth-files.ts:state",
+      "src/web-server/services/private-json-store.ts:state",
+      "src/web-server/status/status-service.ts:storeErrorCode(error)",
+      "src/web-server/usage-hub/usage-hub-key-store.ts:UsageHubKeyState",
+      "src/web-server/usage-hub/usage-hub-key-store.ts:read.state",
+      "src/web-server/usage-hub/usage-hub-key-store.ts:state",
+      "src/web-server/usage-hub/usage-hub-router.ts:keyState.state"
+    ]
+  },
+  {
+    "word": "invalid_codex_home",
+    "cause": "damaged",
+    "sources": [
+      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
+    ]
+  },
+  {
+    "word": "invalid_credentials",
+    "cause": "damaged",
+    "sources": [
+      "src/web-server/routes/auth-device-routes.ts:reason",
+      "src/web-server/routes/auth-routes.ts:reason"
+    ]
+  },
+  {
+    "word": "invalid_profile",
+    "cause": "damaged",
+    "sources": [
+      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
+    ]
+  },
+  {
+    "word": "invalid_provider",
+    "cause": "damaged",
+    "sources": [
+      "src/web-server/services/account-analytics-range.ts:AccountAnalyticsQueryErrorCode"
+    ]
+  },
+  {
+    "word": "invalid_query",
+    "cause": "damaged",
+    "sources": [
+      "src/web-server/services/account-analytics-range.ts:AccountAnalyticsQueryErrorCode"
+    ]
+  },
+  {
+    "word": "invalid_range",
+    "cause": "damaged",
+    "sources": [
+      "src/web-server/services/account-analytics-range.ts:AccountAnalyticsQueryErrorCode"
+    ]
+  },
+  {
+    "word": "invalid_request",
+    "cause": "damaged",
+    "sources": [
+      "scripts/account-usage/failover_additional.py:_failure",
+      "scripts/account-usage/muse_console.py:MuseError"
+    ]
+  },
+  {
+    "word": "invalid_response",
+    "cause": "damaged",
+    "sources": [
+      "scripts/account-usage/cursor_usage.py:failure_code",
+      "scripts/account-usage/desktop_usage.py:result['failureCode']",
+      "scripts/account-usage/failover_additional.py:_failure",
+      "scripts/account-usage/failover_core.py:Failure",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/failover_usage.py:_failure",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "src/codex-auth/codex-profile-renewal.ts:identity.reason",
+      "src/codex-auth/codex-renewal-tokens.ts:reason",
+      "src/codex-auth/codex-renewal-types.ts:CODEX_RENEWAL_RETRY_REASONS",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "invalid_tz",
+    "cause": "damaged",
+    "sources": [
+      "src/web-server/services/account-analytics-range.ts:AccountAnalyticsQueryErrorCode"
+    ]
+  },
+  {
+    "word": "invalid-conversation",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "invalid-profile",
+    "cause": "damaged",
+    "sources": [
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
+      "src/web-server/routes/antigravity-activate-route.ts:result.status",
+      "src/web-server/routes/antigravity-activate-route.ts:status"
+    ]
+  },
+  {
+    "word": "invalid-request",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/linux_process_guard.py:GuardError"
+    ]
+  },
+  {
+    "word": "ipc-already-exists",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "ipc-directory-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "ipc-endpoint-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "ipc-frame-too-large",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "ipc-invalid-json",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "ipc-invalid-request",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "ipc-method-unsupported",
+    "cause": "refused",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "ipc-output-budget",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "ipc-peer-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "ipc-request-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "isolation_unproven",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-dashboard-types.ts:DashboardSignInUnavailableReason"
+    ]
+  },
+  {
+    "word": "issuer_exit_nonzero",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
+    "word": "issuer_timeout",
+    "cause": "timeout",
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
+    "word": "key",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/muse_native.py:state"
+    ]
+  },
+  {
+    "word": "keychain",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:row['state']"
+    ]
+  },
+  {
+    "word": "landed",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/report-schema.ts:ITEM_STATES"
+    ]
+  },
+  {
+    "word": "link_unreachable",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "src/store/usage-report.ts:state"
+    ]
+  },
+  {
+    "word": "link_unreadable",
+    "cause": null,
+    "sources": [
+      "src/store/usage-report.ts:state"
+    ]
+  },
+  {
+    "word": "listening",
+    "cause": null,
+    "sources": [
+      "src/antigravity/runtime-socket-probe.ts:RuntimeSocketState"
+    ]
+  },
+  {
+    "word": "live",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/account-dashboard-projection.ts:renewal.reason"
+    ]
+  },
+  {
+    "word": "live_login_changed_under_lock",
+    "cause": "signin_needed",
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:cause"
+    ]
+  },
+  {
+    "word": "live_login_mismatch",
+    "cause": "signin_needed",
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:cause"
+    ]
+  },
+  {
+    "word": "live_unverifiable",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
+    ]
+  },
+  {
+    "word": "load_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/status-native/native-loader.ts:StatusUnavailableReason",
+      "src/status-native/native-loader.ts:reason",
+      "src/store/native-loader.ts:StoreUnavailableReason",
+      "src/store/native-loader.ts:reason"
+    ]
+  },
+  {
+    "word": "loading",
+    "cause": null,
+    "sources": [
+      "src/store/activity-answer.ts:status",
+      "src/web-server/services/account-analytics-activity.ts:answerSourceStates",
+      "src/web-server/services/account-analytics-activity.ts:status",
+      "src/web-server/services/account-analytics-projection.ts:status",
+      "src/web-server/services/account-analytics-service.ts:answer.activity.status",
+      "src/web-server/services/account-analytics-types.ts:status"
+    ]
+  },
+  {
+    "word": "local_storage_error",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/account-usage/desktop_usage.py:error.code",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_native.py:MuseError",
+      "scripts/account-usage/muse_native.py:failureCode",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "lock_held",
+    "cause": "held",
+    "sources": [
+      "src/commands/store-command.ts:storeErrorCode(error)"
+    ]
+  },
+  {
+    "word": "logged_out",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:row.get('state')",
+      "scripts/claude-signin/claude_signin.py:row['state']",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:state",
+      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
+      "src/web-server/services/signin-health-service.ts:row.state",
+      "src/web-server/services/signin-health-service.ts:state",
+      "src/web-server/services/signin-health-service.ts:states"
+    ]
+  },
+  {
+    "word": "loopback",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-tls-config.ts:TrustedProxyProblemReason"
+    ]
+  },
+  {
+    "word": "looping",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/status-view-strip.ts:state",
+      "src/web-server/status/status-view-types.ts:state"
+    ]
+  },
+  {
+    "word": "lost_session_reply",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_t3_rpc.py:cause",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "mac",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-history-sync-service.ts:pendingMarkerState"
+    ]
+  },
+  {
+    "word": "mac_gui_cleanup_failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_macos.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "mac_gui_unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_macos.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "mac_keychain_locked",
+    "cause": "busy",
+    "sources": [
+      "scripts/app-updates/app_update_macos.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "managed-runtime-request-failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "missing",
+    "cause": "not_installed",
+    "sources": [
+      "src/antigravity/account-lifecycle.ts:error.code",
+      "src/antigravity/release-status.ts:status.nativeCli",
+      "src/codex-auth/codex-renewal-planner.ts:profile.state",
+      "src/codex-auth/codex-renewal-planner.ts:state",
+      "src/codex-auth/commands/show-detail-view.ts:authState",
+      "src/status-native/native-loader.ts:StatusUnavailableReason",
+      "src/status-native/native-loader.ts:reason",
+      "src/store/native-loader.ts:StoreUnavailableReason",
+      "src/store/native-loader.ts:reason",
+      "src/web-server/index.ts:opened.reason",
+      "src/web-server/routes/store-routes.ts:aacStoreState().reason",
+      "src/web-server/routes/store-routes.ts:reason",
+      "src/web-server/scoreboard/catalog.ts:state",
+      "src/web-server/scoreboard/runs-reader.ts:state",
+      "src/web-server/scoreboard/runs-store.ts:state",
+      "src/web-server/scoreboard/scoreboard-sources.ts:catalog.state",
+      "src/web-server/scoreboard/scoreboard-sources.ts:runs.state",
+      "src/web-server/scoreboard/scoreboard-sources.ts:state",
+      "src/web-server/services/codex-auto-switch-service.ts:reason",
+      "src/web-server/services/signin-jobs.ts:failure",
+      "src/web-server/services/signin-process.ts:SignInSpawnFailure",
+      "src/web-server/status/agent-reports-reader.ts:state",
+      "src/web-server/status/quota-report.ts:state",
+      "src/web-server/status/quota-report.ts:this.state",
+      "src/web-server/status/status-docs.ts:state",
+      "src/web-server/status/status-view-panels.ts:state",
+      "src/web-server/status/status-view-quota.ts:state",
+      "src/web-server/status/status-view-strip.ts:i.reports.state",
+      "src/web-server/status/status-view-types.ts:SourceState",
+      "src/web-server/status/status-view.ts:reports.state",
+      "src/web-server/status/status-view.ts:state"
+    ]
+  },
+  {
+    "word": "missing_access_token",
+    "cause": "not_installed",
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
+    ]
+  },
+  {
+    "word": "missing_account_id",
+    "cause": "not_installed",
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
+    ]
+  },
+  {
+    "word": "missing-python-module",
+    "cause": "not_installed",
+    "sources": [
+      "scripts/antigravity/runtime_health.py:reason",
+      "scripts/antigravity/runtime_health.py:result.get('reason')",
+      "src/antigravity/runtime-health.ts:PARSER_REASONS",
+      "src/antigravity/runtime-health.ts:problem.reason",
+      "src/antigravity/usage-contract.ts:reason"
+    ]
+  },
+  {
+    "word": "model_catalog_unrefreshed",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_updates.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "muse",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:states[kind]",
+      "src/web-server/services/account-lifecycle-actions.ts:state",
+      "src/web-server/services/additional-account-service.ts:museTransientFailure"
+    ]
+  },
+  {
+    "word": "native",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:reason"
+    ]
+  },
+  {
+    "word": "native-account-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "native-output-budget-exceeded",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_header.py:ValueError"
+    ]
+  },
+  {
+    "word": "native-plan-unbound",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "native-profile-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/native_status_userinfo.py:ValueError",
+      "scripts/antigravity/runtime/native_status_userinfo.py:ValueError"
+    ]
+  },
+  {
+    "word": "native-publisher-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_publisher.py:ValueError"
+    ]
+  },
+  {
+    "word": "native-publisher-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/native_status_publisher.py:ValueError"
+    ]
+  },
+  {
+    "word": "needs",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:reason"
+    ]
+  },
+  {
+    "word": "needs_sign_in",
+    "cause": "signin_needed",
+    "sources": [
+      "scripts/account-usage/claude_usage.py:error.status",
+      "scripts/account-usage/claude_usage.py:result.get('status')",
+      "scripts/account-usage/cursor_usage.py:CollectionError",
+      "scripts/account-usage/desktop_helpers.py:UsageError",
+      "scripts/account-usage/desktop_usage.py:UsageError",
+      "scripts/account-usage/desktop_usage.py:error.status",
+      "scripts/account-usage/desktop_usage.py:failureCode",
+      "scripts/account-usage/desktop_usage.py:status",
+      "scripts/account-usage/failover_additional.py:_failure",
+      "scripts/account-usage/failover_additional.py:error.status",
+      "scripts/account-usage/failover_additional.py:muse.MuseError",
+      "scripts/account-usage/failover_core.py:Failure",
+      "scripts/account-usage/failover_core.py:error.status",
+      "scripts/account-usage/failover_special.py:error.status",
+      "scripts/account-usage/failover_special.py:failure",
+      "scripts/account-usage/failover_special.py:failureCode",
+      "scripts/account-usage/failover_special.py:helpers.UsageError",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_console.py:error.status",
+      "scripts/account-usage/muse_native.py:error.status",
+      "scripts/account-usage/muse_native.py:failureCode",
+      "scripts/account-usage/plan_common.py:CollectionError",
+      "scripts/account-usage/plan_usage.py:CollectionError",
+      "scripts/antigravity/auth_platforms.py:getattr(error, 'status', None)",
+      "scripts/antigravity/quota_adapter.py:base['status']",
+      "scripts/antigravity/quota_adapter.py:status",
+      "scripts/antigravity/runtime/auth_platforms.py:getattr(error, 'status', None)",
+      "src/antigravity/runtime-composition.ts:status",
+      "src/antigravity/usage-contract.ts:status",
+      "src/antigravity/usage-normalization.ts:status",
+      "src/antigravity/usage-service.ts:result.status",
+      "src/antigravity/usage-service.ts:sample.status",
+      "src/antigravity/usage-service.ts:status",
+      "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
+      "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
+      "src/web-server/services/account-analytics-providers.ts:account.status",
+      "src/web-server/services/account-dashboard-projection.ts:status",
+      "src/web-server/services/account-dashboard-state.ts:account.status",
+      "src/web-server/services/account-dashboard-state.ts:status",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
+      "src/web-server/services/account-lifecycle-actions.ts:reading.status",
+      "src/web-server/services/account-lifecycle-extras.ts:status",
+      "src/web-server/services/additional-account-service.ts:cache.result.status",
+      "src/web-server/services/additional-account-service.ts:result.status",
+      "src/web-server/services/additional-account-service.ts:status",
+      "src/web-server/services/claude-desktop-live-service.ts:result.status",
+      "src/web-server/services/codex-renewal-notes.ts:status",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
+      "src/web-server/services/usage-failover-contract.ts:status",
+      "src/web-server/services/usage-failover-service.ts:account.status",
+      "src/web-server/services/usage-failover-service.ts:response.failureCode",
+      "src/web-server/services/usage-failover-service.ts:result.status",
+      "src/web-server/services/usage-failover-service.ts:status",
+      "src/web-server/services/usage-failover-service.ts:template.status",
+      "src/web-server/usage-hub/usage-hub-projection.ts:account.status",
+      "src/web-server/usage-hub/usage-hub-projection.ts:status_message"
+    ]
+  },
+  {
+    "word": "needs-sign-in",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-dashboard-projection.ts:status",
+      "src/web-server/services/account-dashboard-projection.ts:usage?.status",
+      "src/web-server/services/claude-desktop-usage-service.ts:status"
+    ]
+  },
+  {
+    "word": "network_error",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_console.py:error.code",
+      "scripts/account-usage/muse_console.py:state",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
+      "src/web-server/services/additional-account-service.ts:MUSE_TRANSIENT_FAILURES",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "network_timeout",
+    "cause": "timeout",
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
+    ]
+  },
+  {
+    "word": "no_active_profile",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:cause"
+    ]
+  },
+  {
+    "word": "no_browser_cookie",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/desktop_usage.py:error.code",
+      "scripts/account-usage/failover_additional.py:_failure",
+      "scripts/account-usage/failover_special.py:failure",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_console.py:error.code",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "no_direct_entry",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_cursor.py:reason"
+    ]
+  },
+  {
+    "word": "no_enabled_instance",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:reason"
+    ]
+  },
+  {
+    "word": "no_end_date",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:row['state']",
+      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES"
+    ]
+  },
+  {
+    "word": "no_healthy_other",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:cause"
+    ]
+  },
+  {
+    "word": "no_installable_instance",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:reason"
+    ]
+  },
+  {
+    "word": "no_keychain_item",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:row['state']"
+    ]
+  },
+  {
+    "word": "no_local_usage_records",
+    "cause": null,
+    "sources": [
+      "src/store/activity-reports.ts:cause"
+    ]
+  },
+  {
+    "word": "no_login",
+    "cause": "signin_needed",
+    "sources": [
+      "src/codex-auth/codex-profile-renewal.ts:reason",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason"
+    ]
+  },
+  {
+    "word": "no_node",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:reason"
+    ]
+  },
+  {
+    "word": "no_operation",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:reason"
+    ]
+  },
+  {
+    "word": "no_reader",
+    "cause": null,
+    "sources": [
+      "src/store/activity-coverage.ts:s.state",
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-report.ts:UsageReportState"
+    ]
+  },
+  {
+    "word": "no_refresh_token",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:row.get('state')",
+      "scripts/claude-signin/claude_signin.py:row['state']",
+      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
+      "src/web-server/services/signin-health-service.ts:row.state",
+      "src/web-server/services/signin-health-service.ts:state"
+    ]
+  },
+  {
+    "word": "no_result",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:reason"
+    ]
+  },
+  {
+    "word": "no_server_endpoint",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:ValueError",
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
+    "word": "no_server_version",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:ValueError"
+    ]
+  },
+  {
+    "word": "no_t3_install",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
+    "word": "no_usage",
+    "cause": null,
+    "sources": [
+      "src/store/activity-coverage.ts:s.state",
+      "src/store/activity-coverage.ts:state",
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:read?.state",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-sources.ts:state.state"
+    ]
+  },
+  {
+    "word": "no_waiting_records_or_saved_pending_fields",
+    "cause": null,
+    "sources": [
+      "scripts/claude-history/history_index_remote_v2.py:pendingInputState"
+    ]
+  },
+  {
+    "word": "no_windows",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:reason"
+    ]
+  },
+  {
+    "word": "no-installation",
+    "cause": null,
+    "sources": [
+      "src/antigravity/runtime-refresh.ts:status",
+      "src/antigravity/terminal-refresh.ts:result.status"
+    ]
+  },
+  {
+    "word": "no-model",
+    "cause": null,
+    "sources": [
+      "src/web-server/scoreboard/scoreboard-view-types.ts:UnscoredReason",
+      "src/web-server/scoreboard/scoreboard-view.ts:reason"
+    ]
+  },
+  {
+    "word": "no-recovery-pending",
+    "cause": null,
+    "sources": [
+      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
+      "src/commands/antigravity-command.ts:result.status",
+      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES",
+      "src/web-server/routes/antigravity-routes.ts:status"
+    ]
+  },
+  {
+    "word": "no-task-type",
+    "cause": null,
+    "sources": [
+      "src/web-server/scoreboard/scoreboard-view-types.ts:UnscoredReason",
+      "src/web-server/scoreboard/scoreboard-view.ts:reason"
+    ]
+  },
+  {
+    "word": "none",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:cause",
+      "src/antigravity/release-status.ts:status.adoption",
+      "src/codex-auth/codex-login-family.ts:state",
+      "src/codex-auth/codex-renewal-dry-run.ts:state",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
+      "src/web-server/status/status-view-types.ts:reportState"
+    ]
+  },
+  {
+    "word": "not_a_list",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-tls-config.ts:TrustedProxyProblemReason",
+      "src/web-server/services/dashboard-tls-config.ts:reason"
+    ]
+  },
+  {
+    "word": "not_an_address",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-tls-config.ts:TrustedProxyProblemReason"
+    ]
+  },
+  {
+    "word": "not_connected",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/codex-profile-quota-service.ts:status"
+    ]
+  },
+  {
+    "word": "not_found",
+    "cause": "not_installed",
+    "sources": [
+      "src/codex-auth/codex-profile-removal.ts:CodexProfileRemovalReason",
+      "src/web-server/services/codex-account-lifecycle.ts:error.reason",
+      "src/web-server/status/status-files.ts:reason"
+    ]
+  },
+  {
+    "word": "not_implemented",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-dashboard-types.ts:DashboardSignInUnavailableReason",
+      "src/web-server/services/account-lifecycle-antigravity.ts:reason",
+      "src/web-server/services/account-lifecycle-listing.ts:reason",
+      "src/web-server/services/dashboard-provider-registry.ts:unavailableReason"
+    ]
+  },
+  {
+    "word": "not_installed",
+    "cause": "not_installed",
+    "sources": [
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/analytics-remote/analytics_usage_remote.py:state",
+      "scripts/app-updates/app_update_common.py:status",
+      "src/store/activity-coverage.ts:s.state",
+      "src/store/activity-coverage.ts:state",
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:state.state",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:kind.state",
+      "src/web-server/services/analytics-remote-sources.ts:kindState",
+      "src/web-server/services/analytics-remote-sources.ts:read?.state",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-sources.ts:state.state",
+      "src/web-server/services/analytics-remote-transport.ts:entry.state",
+      "src/web-server/services/analytics-remote-transport.ts:state",
+      "src/web-server/services/app-update-contract.ts:STATUSES",
+      "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
+      "src/web-server/usage/account-activity-collector.ts:fresh.state",
+      "src/web-server/usage/antigravity-native-usage-collector.ts:state",
+      "src/web-server/usage/zcode-native-usage-collector.ts:kind.state",
+      "src/web-server/usage/zcode-native-usage-collector.ts:state"
+    ]
+  },
+  {
+    "word": "not_logged_in",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_cursor.py:reason"
+    ]
+  },
+  {
+    "word": "not_media",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/status-files.ts:reason"
+    ]
+  },
+  {
+    "word": "not_network",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:reason"
+    ]
+  },
+  {
+    "word": "not_private",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-tls-config.ts:TrustedProxyProblemReason"
+    ]
+  },
+  {
+    "word": "not_signed_in",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:p.get('state')",
+      "scripts/claude-signin/claude_signin.py:row['state']",
+      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES"
+    ]
+  },
+  {
+    "word": "not_started",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:reason"
+    ]
+  },
+  {
+    "word": "not_writable",
+    "cause": "not_writable",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "not-stopped",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "now",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/report-v2.ts:row.state"
+    ]
+  },
+  {
+    "word": "null",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-confirmations.ts:JSON.stringify(state)"
+    ]
+  },
+  {
+    "word": "number",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-status-store.ts:typeof record.consecutiveFailures",
+      "src/web-server/index.ts:status",
+      "src/web-server/services/analytics-remote-transport.ts:typeof failure.code"
+    ]
+  },
+  {
+    "word": "off",
+    "cause": null,
+    "sources": [
+      "src/commands/usage-hub-command.ts:state.state",
+      "src/status-native/native-loader.ts:(env.AAC_STATUS_NATIVE ?? '').trim().toLowerCase()",
+      "src/web-server/status/answers.ts:process.env.AAC_STATUS_DOORBELL",
+      "src/web-server/usage-hub/usage-hub-key-store.ts:UsageHubKeyState",
+      "src/web-server/usage-hub/usage-hub-key-store.ts:state",
+      "src/web-server/usage-hub/usage-hub-router.ts:keyState.state"
+    ]
+  },
+  {
+    "word": "ok",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/claude_usage.py:result.get('status')",
+      "scripts/account-usage/claude_usage.py:status",
+      "scripts/account-usage/desktop_usage.py:result['status']",
+      "scripts/account-usage/desktop_usage.py:status",
+      "scripts/account-usage/failover_additional.py:status",
+      "scripts/account-usage/failover_core.py:status",
+      "scripts/account-usage/failover_special.py:status",
+      "scripts/account-usage/failover_usage.py:value.get('status')",
+      "scripts/account-usage/muse_console.py:status",
+      "scripts/account-usage/muse_console.py:value.get('status')",
+      "scripts/account-usage/plan_usage.py:item.get('status')",
+      "scripts/account-usage/plan_usage.py:status",
+      "scripts/claude-signin/claude_signin.py:row['state']",
+      "src/antigravity/runtime-composition.ts:snapshot.status",
+      "src/antigravity/usage-contract.ts:status",
+      "src/antigravity/usage-normalization.ts:status",
+      "src/antigravity/usage-service.ts:result.status",
+      "src/antigravity/usage-service.ts:sample.status",
+      "src/codex-auth/codex-login-family.ts:state",
+      "src/codex-auth/codex-renewal-dry-run.ts:state",
+      "src/codex-auth/codex-renewal-planner.ts:snapshot.live?.state",
+      "src/codex-auth/codex-renewal-planner.ts:state",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
+      "src/store/activity-answer.ts:status",
+      "src/store/activity-coverage.ts:s.state",
+      "src/store/activity-coverage.ts:state",
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-observations.ts:account.status",
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/agent-usage/agent-usage-history.ts:row.status",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:account.status",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:state",
+      "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
+      "src/web-server/agent-usage/agent-usage-settings.ts:read.state",
+      "src/web-server/agent-usage/agent-usage-snapshot.ts:account.status",
+      "src/web-server/agent-usage/agent-usage-snapshot.ts:row.state",
+      "src/web-server/middleware/dashboard-session-store.ts:read.state",
+      "src/web-server/routes/account-visibility-routes.ts:current.state",
+      "src/web-server/routes/bar-routes.ts:status",
+      "src/web-server/routes/index.ts:status",
+      "src/web-server/scoreboard/catalog.ts:state",
+      "src/web-server/scoreboard/catalog.ts:this.state",
+      "src/web-server/scoreboard/runs-reader.ts:state",
+      "src/web-server/scoreboard/runs-reader.ts:this.state",
+      "src/web-server/scoreboard/runs-store.ts:state",
+      "src/web-server/scoreboard/runs-store.ts:this.last?.state",
+      "src/web-server/scoreboard/scoreboard-service.ts:source.state",
+      "src/web-server/scoreboard/scoreboard-service.ts:state",
+      "src/web-server/scoreboard/scoreboard-sources.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:status",
+      "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
+      "src/web-server/services/account-analytics-history.ts:account.status",
+      "src/web-server/services/account-analytics-projection.ts:status",
+      "src/web-server/services/account-analytics-providers.ts:account.status",
+      "src/web-server/services/account-analytics-service.ts:account.status",
+      "src/web-server/services/account-analytics-service.ts:previous?.status",
+      "src/web-server/services/account-analytics-service.ts:status",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/account-analytics-types.ts:status",
+      "src/web-server/services/account-dashboard-projection.ts:account.status",
+      "src/web-server/services/account-dashboard-projection.ts:row.status",
+      "src/web-server/services/account-dashboard-projection.ts:row?.quotaStatus",
+      "src/web-server/services/account-dashboard-projection.ts:status",
+      "src/web-server/services/account-dashboard-service.ts:current.status",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
+      "src/web-server/services/account-dashboard-types.ts:quotaStatus",
+      "src/web-server/services/account-lifecycle-actions.ts:reading.status",
+      "src/web-server/services/account-lifecycle-extras.ts:status",
+      "src/web-server/services/account-registry-mode.ts:read.state",
+      "src/web-server/services/account-registry-mode.ts:state",
+      "src/web-server/services/account-registry-v2.ts:read.state",
+      "src/web-server/services/account-registry-v2.ts:state",
+      "src/web-server/services/account-visibility.ts:current.state",
+      "src/web-server/services/account-visibility.ts:read.state",
+      "src/web-server/services/account-visibility.ts:state",
+      "src/web-server/services/additional-account-service.ts:account.status",
+      "src/web-server/services/additional-account-service.ts:cache.result.status",
+      "src/web-server/services/additional-account-service.ts:result.status",
+      "src/web-server/services/additional-account-service.ts:status",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-sources.ts:state.state",
+      "src/web-server/services/analytics-remote-transport.ts:entry.state",
+      "src/web-server/services/analytics-remote-transport.ts:kind.state",
+      "src/web-server/services/analytics-remote-transport.ts:state",
+      "src/web-server/services/claude-account-stores.ts:read.state",
+      "src/web-server/services/claude-desktop-live-service.ts:result.status",
+      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
+      "src/web-server/services/codex-auto-switch-service.ts:row.quotaStatus",
+      "src/web-server/services/codex-profile-quota-service.ts:row?.quotaStatus",
+      "src/web-server/services/dashboard-auth-files.ts:state",
+      "src/web-server/services/dashboard-auth-state.ts:read.state",
+      "src/web-server/services/dashboard-device-store.ts:read.state",
+      "src/web-server/services/opencode-console-wallet-service.ts:result.status",
+      "src/web-server/services/opencode-console-wallet-service.ts:result?.status",
+      "src/web-server/services/opencode-console-wallet-service.ts:status",
+      "src/web-server/services/opencode-console-wallet-service.ts:this.result.status",
+      "src/web-server/services/opencode-console-wallet-service.ts:value.status",
+      "src/web-server/services/private-json-store.ts:state",
+      "src/web-server/services/signin-health-service.ts:row.state",
+      "src/web-server/services/signin-health-service.ts:state",
+      "src/web-server/services/signin-health-service.ts:states",
+      "src/web-server/services/usage-failover-contract.ts:reading.status",
+      "src/web-server/services/usage-failover-contract.ts:status",
+      "src/web-server/services/usage-failover-contract.ts:value.status",
+      "src/web-server/services/usage-failover-service.ts:reading.status",
+      "src/web-server/services/usage-failover-service.ts:status",
+      "src/web-server/services/usage-failover-service.ts:template.status",
+      "src/web-server/status/agent-reports-reader.ts:state",
+      "src/web-server/status/agent-reports-reader.ts:this.state",
+      "src/web-server/status/quota-report.ts:state",
+      "src/web-server/status/quota-report.ts:this.state",
+      "src/web-server/status/spend-by-stream.ts:panel.state",
+      "src/web-server/status/status-docs.ts:state",
+      "src/web-server/status/status-docs.ts:this.state",
+      "src/web-server/status/status-view-panels.ts:account.status",
+      "src/web-server/status/status-view-panels.ts:row.state",
+      "src/web-server/status/status-view-panels.ts:source.state",
+      "src/web-server/status/status-view-panels.ts:state",
+      "src/web-server/status/status-view-quota.ts:state",
+      "src/web-server/status/status-view-strip.ts:s.state",
+      "src/web-server/status/status-view-types.ts:SourceState",
+      "src/web-server/status/status-view-types.ts:state",
+      "src/web-server/status/status-view.ts:quotaSrc.state",
+      "src/web-server/status/status-view.ts:s.state",
+      "src/web-server/status/status-view.ts:state",
+      "src/web-server/usage/antigravity-native-usage-collector.ts:state",
+      "src/web-server/usage/native-quota-collector.ts:quotaStatus",
+      "src/web-server/usage/zcode-native-usage-collector.ts:kind.state",
+      "src/web-server/usage/zcode-native-usage-collector.ts:state"
+    ]
+  },
+  {
+    "word": "omp",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:states[kind]"
+    ]
+  },
+  {
+    "word": "on",
+    "cause": null,
+    "sources": [
+      "src/web-server/usage-hub/usage-hub-key-store.ts:UsageHubKeyState",
+      "src/web-server/usage-hub/usage-hub-key-store.ts:current.state",
+      "src/web-server/usage-hub/usage-hub-key-store.ts:state"
+    ]
+  },
+  {
+    "word": "open",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/answers.ts:parsed.doc.state",
+      "src/web-server/status/card-schema.ts:CARD_STATES",
+      "src/web-server/status/card-schema.ts:doc.state",
+      "src/web-server/status/card-schema.ts:reason",
+      "src/web-server/status/card-schema.ts:state",
+      "src/web-server/status/pinned-threads.ts:row.doc.state",
+      "src/web-server/status/status-view.ts:card.doc.state",
+      "src/web-server/status/status-view.ts:row.doc.state"
+    ]
+  },
+  {
+    "word": "opened",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
+      "src/web-server/services/claude-open-operations.ts:state"
+    ]
+  },
+  {
+    "word": "opening",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
+      "src/web-server/services/claude-open-operations.ts:state"
+    ]
+  },
+  {
+    "word": "operation_changed",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:reason"
+    ]
+  },
+  {
+    "word": "os_crypt",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/claude_usage.py:crypto_state"
+    ]
+  },
+  {
+    "word": "output",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:state"
+    ]
+  },
+  {
+    "word": "owned-cleanup-incomplete",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "package_in_use",
+    "cause": "busy",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES"
+    ]
+  },
+  {
+    "word": "package_mismatch",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_desktop.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "parser",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:info.get('reason')",
+      "scripts/antigravity/rebuild_bundle.py:reason"
+    ]
+  },
+  {
+    "word": "parser-import-failed",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime_health.py:reason",
+      "scripts/antigravity/runtime_health.py:result.get('reason')",
+      "src/antigravity/runtime-health.ts:PARSER_REASONS",
+      "src/antigravity/runtime-health.ts:problem.reason",
+      "src/antigravity/usage-contract.ts:reason"
+    ]
+  },
+  {
+    "word": "parser-mismatch",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime_health.py:reason",
+      "scripts/antigravity/runtime_health.py:result.get('reason')",
+      "src/antigravity/runtime-health.ts:PARSER_REASONS",
+      "src/antigravity/runtime-health.ts:problem.reason",
+      "src/antigravity/usage-contract.ts:reason"
+    ]
+  },
+  {
+    "word": "partial",
+    "cause": null,
+    "sources": [
+      "src/store/activity-coverage.ts:s.state",
+      "src/store/activity-coverage.ts:state",
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/services/claude-history-sync-service.ts:result.status",
+      "src/web-server/services/claude-open-operations.ts:status"
+    ]
+  },
+  {
+    "word": "pass_limit",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-analytics-activity.ts:cause"
+    ]
+  },
+  {
+    "word": "paused",
+    "cause": "held",
+    "sources": [
+      "src/web-server/status/report-schema.ts:THREAD_STATES"
+    ]
+  },
+  {
+    "word": "payment_required",
+    "cause": null,
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+    ]
+  },
+  {
+    "word": "pending",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:state",
+      "src/antigravity/registry.ts:state",
+      "src/store/activity-coverage.ts:b.state",
+      "src/store/activity-coverage.ts:s.backfill?.state",
+      "src/store/activity-coverage.ts:state",
+      "src/store/store-service.ts:state",
+      "src/web-server/services/analytics-remote-sources.ts:kindState",
+      "src/web-server/services/analytics-remote-sources.ts:response.kinds[tool]?.state",
+      "src/web-server/services/analytics-remote-transport.ts:entry.state",
+      "src/web-server/services/analytics-remote-transport.ts:state",
+      "src/web-server/services/signin-output.ts:SignInOutputState",
+      "src/web-server/services/signin-output.ts:this.state",
+      "src/web-server/status/answers.ts:entry.doorbell.state",
+      "src/web-server/status/answers.ts:entry.share.state",
+      "src/web-server/status/answers.ts:state",
+      "src/web-server/status/answers.ts:summary.state"
+    ]
+  },
+  {
+    "word": "pending_sign_in",
+    "cause": "signin_needed",
+    "sources": [
+      "src/web-server/services/account-dashboard-state.ts:account.lifecycle?.state",
+      "src/web-server/services/account-dashboard-state.ts:state",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountLifecycleState",
+      "src/web-server/services/account-lifecycle-actions.ts:state",
+      "src/web-server/services/account-lifecycle-extras.ts:state",
+      "src/web-server/usage-hub/usage-hub-projection.ts:account.lifecycle?.state"
+    ]
+  },
+  {
+    "word": "phase",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "pid",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:state"
+    ]
+  },
+  {
+    "word": "pidfd-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/linux_process_guard.py:GuardError"
+    ]
+  },
+  {
+    "word": "pinned",
+    "cause": null,
+    "sources": [
+      "src/antigravity/release-status.ts:status.nativeCli"
+    ]
+  },
+  {
+    "word": "plan",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/muse_console.py:state",
+      "scripts/account-usage/muse_native.py:state['observedPlan']",
+      "scripts/account-usage/muse_native.py:state['observedPlanAt']"
+    ]
+  },
+  {
+    "word": "plan_mismatch",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_console.py:error.code",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "policy_blocked",
+    "cause": "policy_blocked",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_cursor.py:UpdateFailure",
+      "scripts/app-updates/app_update_cursor.py:cause",
+      "scripts/app-updates/app_update_cursor.py:error.code",
+      "scripts/app-updates/app_update_cursor.py:failure.code",
+      "scripts/app-updates/app_update_cursor.py:reason",
+      "scripts/app-updates/app_updates.py:install.probe_reason",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "prefix_not_writable",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES"
+    ]
+  },
+  {
+    "word": "preflight_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/antigravity/signin-sandbox.ts:reason",
+      "src/web-server/services/account-dashboard-types.ts:DashboardSignInUnavailableReason"
+    ]
+  },
+  {
+    "word": "present",
+    "cause": null,
+    "sources": [
+      "scripts/claude-history/history_index_remote_v2.py:waiting_state"
+    ]
+  },
+  {
+    "word": "previous_server",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:ValueError"
+    ]
+  },
+  {
+    "word": "probe-failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime_health.py:reason"
+    ]
+  },
+  {
+    "word": "process_scan_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
+    ]
+  },
+  {
+    "word": "process-exited",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "profile",
+    "cause": null,
+    "sources": [
+      "scripts/claude-history/history_index_remote_v2.py:state"
+    ]
+  },
+  {
+    "word": "protected-check",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-history-sync-service.ts:targetProtectedStateUnchanged"
+    ]
+  },
+  {
+    "word": "provider_denied",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
+    ]
+  },
+  {
+    "word": "provider_error",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/account-usage/desktop_usage.py:failureCode",
+      "scripts/account-usage/failover_additional.py:_failure",
+      "scripts/account-usage/failover_additional.py:muse.MuseError",
+      "scripts/account-usage/failover_special.py:failure",
+      "scripts/account-usage/failover_special.py:failureCode",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_console.py:error.code",
+      "scripts/account-usage/muse_native.py:failureCode",
+      "scripts/account-usage/plan_common.py:failure_code",
+      "src/web-server/services/additional-account-service.ts:MUSE_TRANSIENT_FAILURES",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "provider_unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+    ]
+  },
+  {
+    "word": "provider-read-only",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "quit_first",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_desktop.py:UpdateFailure",
+      "scripts/app-updates/app_update_desktop.py:error.code",
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "quota",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/muse_console.py:state"
+    ]
+  },
+  {
+    "word": "quota_api_forbidden",
+    "cause": null,
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+    ]
+  },
+  {
+    "word": "quota_endpoint_not_found",
+    "cause": "not_installed",
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+    ]
+  },
+  {
+    "word": "quota-changed",
+    "cause": null,
+    "sources": [
+      "src/antigravity/switch-service.ts:reason",
+      "src/antigravity/types.ts:reason",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+    ]
+  },
+  {
+    "word": "rang",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/answers.ts:state"
+    ]
+  },
+  {
+    "word": "rate_limited",
+    "cause": "rate_limited",
+    "sources": [
+      "scripts/account-usage/claude_usage.py:cooldown['failureCode']",
+      "scripts/account-usage/claude_usage.py:error.status",
+      "scripts/account-usage/claude_usage.py:result.get('failureCode')",
+      "scripts/account-usage/claude_usage.py:result['status']",
+      "scripts/account-usage/cursor_usage.py:error.failure_code",
+      "scripts/account-usage/cursor_usage.py:failureCode",
+      "scripts/account-usage/desktop_helpers.py:failure_code",
+      "scripts/account-usage/failover_additional.py:error.failure_code",
+      "scripts/account-usage/failover_additional.py:failureCode",
+      "scripts/account-usage/failover_core.py:Failure",
+      "scripts/account-usage/failover_core.py:cooldown['failureCode']",
+      "scripts/account-usage/failover_core.py:error.status",
+      "scripts/account-usage/failover_core.py:hold.get('failureCode')",
+      "scripts/account-usage/failover_special.py:failed['failureCode']",
+      "scripts/account-usage/failover_special.py:failure.get('code')",
+      "scripts/account-usage/failover_special.py:failureCode",
+      "scripts/account-usage/failover_special.py:result.get('failureCode')",
+      "scripts/account-usage/failover_special.py:result['failureCode']",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/failover_usage.py:_failure",
+      "scripts/account-usage/failover_usage.py:result.get('failureCode')",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "scripts/account-usage/muse_console.py:error.code",
+      "scripts/account-usage/muse_console.py:getattr(error, 'failure_code', None)",
+      "scripts/account-usage/muse_console.py:result['failureCode']",
+      "scripts/account-usage/muse_console.py:state['lastError']",
+      "scripts/account-usage/muse_console.py:state['nextRequestAt']",
+      "scripts/account-usage/muse_console.py:state['restoreAllowed']",
+      "scripts/account-usage/muse_native.py:state['failureCode']",
+      "scripts/account-usage/plan_common.py:failure_code",
+      "scripts/antigravity/quota_adapter.py:base['status']",
+      "scripts/antigravity/quota_adapter.py:status",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/runtime-composition.ts:snapshot.status",
+      "src/antigravity/runtime-composition.ts:status",
+      "src/antigravity/usage-contract.ts:status",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode",
+      "src/web-server/routes/account-lifecycle-routes.ts:error.code",
+      "src/web-server/services/additional-account-service.ts:MUSE_TRANSIENT_FAILURES",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
+      "src/web-server/services/usage-failover-service.ts:response.failureCode"
+    ]
+  },
+  {
+    "word": "rate-limited",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/claude_usage.py:reason",
+      "scripts/account-usage/plan_usage.py:item.get('status')",
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "read_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/analytics-remote-sources.ts:cause"
+    ]
+  },
+  {
+    "word": "readiness_unknown",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:UpdateFailure",
+      "scripts/app-updates/app_updates.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "ready",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-dashboard-state.ts:state",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountLifecycleState",
+      "src/web-server/services/account-lifecycle-accounts.ts:state",
+      "src/web-server/services/account-lifecycle-extras.ts:state",
+      "src/web-server/services/signin-jobs.ts:state",
+      "src/web-server/services/signin-output.ts:SignInOutputState",
+      "src/web-server/services/signin-output.ts:this.state",
+      "src/web-server/status/report-schema.ts:ITEM_STATES"
+    ]
+  },
+  {
+    "word": "reason",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime_health.py:reason",
+      "src/antigravity/runtime-health.ts:reason",
+      "src/web-server/status/card-schema.ts:reason"
+    ]
+  },
+  {
+    "word": "reauth_required",
+    "cause": "auth_required",
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode",
+      "src/web-server/services/codex-profile-quota-service.ts:status"
+    ]
+  },
+  {
+    "word": "rebuilt",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:status"
+    ]
+  },
+  {
+    "word": "recovered",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:status"
+    ]
+  },
+  {
+    "word": "recovery-busy",
+    "cause": "busy",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "recovery-context-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "recovery-replay",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "recovery-required",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:state['phase']",
+      "src/antigravity/account-lifecycle.ts:error.code",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/registry.ts:state",
+      "src/antigravity/registry.ts:state.transaction.state",
+      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
+      "src/antigravity/switch-service.ts:error.code",
+      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
+      "src/web-server/routes/antigravity-activate-route.ts:result.status",
+      "src/web-server/routes/antigravity-activate-route.ts:status",
+      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES",
+      "src/web-server/routes/antigravity-recover-route.ts:result.status"
+    ]
+  },
+  {
+    "word": "recovery-running",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:saved_state['phase']",
+      "scripts/antigravity/runtime/resident_broker.py:state['phase']"
+    ]
+  },
+  {
+    "word": "recovery-stop-incomplete",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "recovery-stop-unproved",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "recovery-stopped",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:saved_state['phase']",
+      "scripts/antigravity/runtime/resident_broker.py:state['phase']"
+    ]
+  },
+  {
+    "word": "recovery-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "refill-windows-unconfirmed",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "refreshed",
+    "cause": null,
+    "sources": [
+      "src/antigravity/production-runtime.ts:result.status",
+      "src/antigravity/runtime-refresh.ts:status",
+      "src/antigravity/terminal-refresh.ts:result.status"
+    ]
+  },
+  {
+    "word": "refused",
+    "cause": "refused",
+    "sources": [
+      "scripts/claude-history/history_index_remote_v2.py:receipt['status']",
+      "scripts/claude-history/history_index_remote_v2.py:status",
+      "src/web-server/scoreboard/runs-store.ts:reason",
+      "src/web-server/scoreboard/runs-store.ts:row.reason",
+      "src/web-server/services/claude-history-sync-service.ts:result.status",
+      "src/web-server/services/claude-history-sync-service.ts:status",
+      "src/web-server/services/claude-open-operations.ts:status"
+    ]
+  },
+  {
+    "word": "registry",
+    "cause": null,
+    "sources": [
+      "scripts/claude-history/history_index_remote_v2.py:state"
+    ]
+  },
+  {
+    "word": "registry_unreadable",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_zcode.py:reason"
+    ]
+  },
+  {
+    "word": "rejected",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-analytics-activity.ts:result.status",
+      "src/web-server/services/account-analytics-activity.ts:status",
+      "src/web-server/services/signin-health-service.ts:reason",
+      "src/web-server/services/signin-health-service.ts:result.status",
+      "src/web-server/services/signin-jobs.ts:state",
+      "src/web-server/services/signin-output.ts:SignInOutputState",
+      "src/web-server/services/signin-output.ts:this.state"
+    ]
+  },
+  {
+    "word": "renewed",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-profile-renewal.ts:reason",
+      "src/codex-auth/codex-renewal-status-store.ts:failures",
+      "src/codex-auth/codex-renewal-status-store.ts:outcome.reason",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/codex-auth/codex-renewal-types.ts:reason"
+    ]
+  },
+  {
+    "word": "renewing",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
+      "src/codex-auth/codex-renewal-types.ts:reason",
+      "src/web-server/services/codex-profile-renewal-service.ts:reason",
+      "src/web-server/services/codex-profile-renewal-service.ts:state",
+      "src/web-server/services/codex-renewal-notes.ts:entry.state"
+    ]
+  },
+  {
+    "word": "replaced",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-device-records.ts:DeviceRevokeReason"
+    ]
+  },
+  {
+    "word": "reply_too_large",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:reason"
+    ]
+  },
+  {
+    "word": "requested",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:reason"
+    ]
+  },
+  {
+    "word": "reset_passed",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:assessed.reason",
+      "src/web-server/services/codex-auto-switch-service.ts:reason"
+    ]
+  },
+  {
+    "word": "reset-inventory-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:reason",
+      "src/web-server/routes/reset-claim-routes.ts:recovery.reason ?? safeReason(error)"
+    ]
+  },
+  {
+    "word": "resident-broker-disconnected",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "scripts/antigravity/runtime/foreground_launcher.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "restart_context",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:UpdateFailure",
+      "scripts/app-updates/app_update_desktop.py:UpdateFailure",
+      "scripts/app-updates/app_update_desktop.py:error.code",
+      "scripts/app-updates/app_update_processes.py:UpdateFailure",
+      "scripts/app-updates/app_update_terminal.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:error.code"
+    ]
+  },
+  {
+    "word": "restart_failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_desktop.py:UpdateFailure",
+      "scripts/app-updates/app_update_processes.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3.py:error.code",
+      "scripts/app-updates/app_update_t3.py:status",
+      "scripts/app-updates/app_update_terminal.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:status",
+      "scripts/app-updates/app_updates.py:payload.get('status')",
+      "scripts/app-updates/app_updates.py:row['status']",
+      "scripts/app-updates/app_updates.py:status",
+      "scripts/app-updates/app_updates.py:value['status']",
+      "src/antigravity/managed-updater.ts:status",
+      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode",
+      "src/web-server/services/app-update-contract.ts:STATUSES",
+      "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
+      "src/web-server/services/app-update-contract.ts:row.status",
+      "src/web-server/services/app-update-service.ts:result.status"
+    ]
+  },
+  {
+    "word": "restart-context-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "restored-previous",
+    "cause": null,
+    "sources": [
+      "src/antigravity/switch-service.ts:AntigravityRecoveryStatus",
+      "src/commands/antigravity-command.ts:result.status",
+      "src/web-server/routes/antigravity-recover-route.ts:RECOVERY_STATUSES"
+    ]
+  },
+  {
+    "word": "resumed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/foreground_launcher.py:message.get('switchState')",
+      "scripts/antigravity/runtime/resident_broker.py:switchState"
+    ]
+  },
+  {
+    "word": "retrying",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-profile-renewal.ts:attempt.state",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
+      "src/web-server/services/codex-renewal-notes.ts:entry.state"
+    ]
+  },
+  {
+    "word": "reverted",
+    "cause": null,
+    "sources": [
+      "scripts/claude-signin/claude_signin.py:reason"
+    ]
+  },
+  {
+    "word": "review",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/report-schema.ts:ITEM_STATES"
+    ]
+  },
+  {
+    "word": "reviewed",
+    "cause": null,
+    "sources": [
+      "src/antigravity/managed-updater.ts:NativeReviewState"
+    ]
+  },
+  {
+    "word": "revoke-all",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-device-records.ts:DeviceRevokeReason"
+    ]
+  },
+  {
+    "word": "revoked",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/auth-routes.ts:signedOutReason"
+    ]
+  },
+  {
+    "word": "running",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-activation-runtime.ts:status.status",
+      "src/store/activity-coverage.ts:b.state",
+      "src/store/store-service.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/app-update-contract.ts:state",
+      "src/web-server/services/app-update-service.ts:host.state",
+      "src/web-server/services/app-update-service.ts:host?.state",
+      "src/web-server/services/app-update-service.ts:job.hosts?.[platform].state",
+      "src/web-server/services/app-update-service.ts:job.state",
+      "src/web-server/services/app-update-service.ts:raw.state",
+      "src/web-server/services/app-update-service.ts:state",
+      "src/web-server/services/app-update-service.ts:this.job?.state",
+      "src/web-server/services/claude-account-lifecycle.ts:state"
+    ]
+  },
+  {
+    "word": "running_processes",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/activate-codex-profile.ts:reason"
+    ]
+  },
+  {
+    "word": "running-processes",
+    "cause": null,
+    "sources": [
+      "src/antigravity/switch-service.ts:reason",
+      "src/antigravity/types.ts:reason",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+    ]
+  },
+  {
+    "word": "runtime_missing",
+    "cause": "not_installed",
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:ANALYTICS_SCAN_FAILURE_CAUSES",
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsScanFailureCause"
+    ]
+  },
+  {
+    "word": "runtime_paused",
+    "cause": "held",
+    "sources": [
+      "src/antigravity/managed-update-command.ts:ManagedFailureCode"
+    ]
+  },
+  {
+    "word": "runtime_paused_blocked",
+    "cause": "refused",
+    "sources": [
+      "src/antigravity/managed-update-command.ts:ManagedFailureCode"
+    ]
+  },
+  {
+    "word": "runtime_record_invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:probe_reason",
+      "scripts/app-updates/app_update_antigravity.py:reason"
+    ]
+  },
+  {
+    "word": "runtime_unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "src/antigravity/managed-update-command.ts:ManagedFailureCode"
+    ]
+  },
+  {
+    "word": "runtime-adoption-already-present",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-adoption-checkpoint-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-adoption-checkpoint-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError",
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-adoption-checkpoint-size",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-adoption-file-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-adoption-file-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-adoption-parent-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-adoption-post-write-conflict",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-adoption-restore-conflict",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-adoption-write-conflict",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-backup-divergent",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-bundle-already-present",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-bundle-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-bundle-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-bundle-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-descriptor-stale",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-endpoint-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime_control.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-endpoint-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime_control.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-installation-already-present",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-installation-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime_installation.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-installation-foreign",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-installation-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError",
+      "scripts/antigravity/runtime_installation.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-installation-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime_installation.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-method-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime_control.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-native-binary-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError",
+      "scripts/antigravity/runtime_installation.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-native-binary-unsafe",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError",
+      "scripts/antigravity/runtime_installation.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-native-gate-pending",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError",
+      "scripts/antigravity/install_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-native-unreviewed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-native-writer-present",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-not-adopted",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-original-command-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-package-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-package-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError",
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-parser-check-failed",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-parser-package-mismatch",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime/resident_main.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "runtime-parser-unusable",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-preparation-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-preparation-recovery-refused",
+    "cause": "refused",
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-preparation-recovery-required",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-private-directory-required",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-proof-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/native_status_service.py:ContinuityError",
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError",
+      "scripts/antigravity/runtime/ubuntu_runtime_factory.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "runtime-readiness-provider-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError",
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-rebuild-diverged",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-rebuild-journal-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-rebuild-journal-size",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-rebuild-nothing-to-recover",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-rebuild-recovery-required",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-registry-unreadable",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-request-size",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime_control.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-response-incomplete",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime_control.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-response-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/runtime_control.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-response-size",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime_control.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-service-already-present",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-service-readiness-failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError",
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-service-restore-conflict",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-shell-profile-conflict",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/install_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-startup-not-ready",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "runtime-transaction-active",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-ubuntu-only",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError",
+      "scripts/antigravity/install_runtime.py:InstallationError",
+      "scripts/antigravity/rebuild_bundle.py:InstallationError"
+    ]
+  },
+  {
+    "word": "runtime-unit-path-invalid",
+    "cause": "damaged",
+    "sources": [
+      "scripts/antigravity/adopt_runtime.py:InstallationError"
+    ]
+  },
+  {
+    "word": "sample",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/muse_native.py:state"
+    ]
+  },
+  {
+    "word": "saved",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/account-visibility-routes.ts:result.state",
+      "src/web-server/services/account-visibility.ts:state"
+    ]
+  },
+  {
+    "word": "scan_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:state"
+    ]
+  },
+  {
+    "word": "scan-limit",
+    "cause": null,
+    "sources": [
+      "src/web-server/scoreboard/scoreboard-view-types.ts:UnscoredReason"
+    ]
+  },
+  {
+    "word": "scanning",
+    "cause": null,
+    "sources": [
+      "src/store/activity-coverage.ts:s.state",
+      "src/store/activity-coverage.ts:state",
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/services/account-analytics-activity.ts:entry.state",
+      "src/web-server/services/account-analytics-activity.ts:old.state",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:state"
+    ]
+  },
+  {
+    "word": "secure_transport_required",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "src/web-server/services/account-dashboard-types.ts:DashboardSignInUnavailableReason",
+      "src/web-server/services/account-lifecycle-actions.ts:state.unavailableReason",
+      "src/web-server/services/account-lifecycle-antigravity.ts:reason",
+      "src/web-server/services/dashboard-provider-registry.ts:unavailableReason"
+    ]
+  },
+  {
+    "word": "seen",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:state",
+      "scripts/antigravity/runtime/resident_broker.py:state"
+    ]
+  },
+  {
+    "word": "selectors",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/failover_usage.py:_failure"
+    ]
+  },
+  {
+    "word": "self",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-device-records.ts:DeviceRevokeReason"
+    ]
+  },
+  {
+    "word": "separate_row",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3.py:status"
+    ]
+  },
+  {
+    "word": "server_restarted",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
+    ]
+  },
+  {
+    "word": "service-failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/antigravity/runtime-health.ts:REASONS",
+      "src/antigravity/runtime-health.ts:problem.reason",
+      "src/antigravity/runtime-health.ts:reason",
+      "src/antigravity/usage-contract.ts:reason"
+    ]
+  },
+  {
+    "word": "session-observation-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "settings_changed_before_activation",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/codex-auto-switch-service.ts:cause"
+    ]
+  },
+  {
+    "word": "shadowed",
+    "cause": "policy_blocked",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "shared_family",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
+    ]
+  },
+  {
+    "word": "show",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_zcode.py:state"
+    ]
+  },
+  {
+    "word": "sign_in_needed_selectors",
+    "cause": "signin_needed",
+    "sources": [
+      "scripts/account-usage/failover_usage.py:statuses"
+    ]
+  },
+  {
+    "word": "signature_failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_desktop.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "signed-in",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-desktop-signin-state.ts:ClaudeSignInState"
+    ]
+  },
+  {
+    "word": "signed-out",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/claude_usage.py:reason",
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS",
+      "src/web-server/services/account-dashboard-service.ts:macState",
+      "src/web-server/services/account-dashboard-service.ts:state",
+      "src/web-server/services/claude-account-lifecycle.ts:state",
+      "src/web-server/services/claude-desktop-signin-state.ts:ClaudeSignInState"
+    ]
+  },
+  {
+    "word": "signin_needed",
+    "cause": "signin_needed",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "signing_in",
+    "cause": "signin_needed",
+    "sources": [
+      "src/web-server/services/account-dashboard-state.ts:AccountJobStates",
+      "src/web-server/services/account-dashboard-state.ts:state",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountLifecycleState",
+      "src/web-server/services/signin-jobs.ts:state",
+      "src/web-server/services/signin-jobs.ts:states"
+    ]
+  },
+  {
+    "word": "skipped",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:status",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalState",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/app-update-contract.ts:STATUSES",
+      "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
+      "src/web-server/services/app-update-contract.ts:status",
+      "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
+      "src/web-server/services/app-update-diagnostics.ts:status",
+      "src/web-server/services/app-update-service.ts:result.status",
+      "src/web-server/services/app-update-service.ts:row.status",
+      "src/web-server/services/claude-history-sync-service.ts:status",
+      "src/web-server/services/codex-renewal-notes.ts:entry.state",
+      "src/web-server/status/answers.ts:doorbell.state",
+      "src/web-server/status/answers.ts:entry.doorbell.state",
+      "src/web-server/status/answers.ts:share.state",
+      "src/web-server/status/answers.ts:state",
+      "src/web-server/status/answers.ts:summary.state"
+    ]
+  },
+  {
+    "word": "source_changed",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/failover_additional.py:_failure",
+      "scripts/account-usage/failover_core.py:Failure",
+      "scripts/account-usage/failover_core.py:error.code",
+      "scripts/account-usage/failover_core.py:failureCode",
+      "scripts/account-usage/failover_special.py:failureCode",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/failover_usage.py:_failure",
+      "scripts/account-usage/failover_usage.py:result.get('failureCode')",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
+      "src/web-server/services/usage-failover-service.ts:response.failureCode",
+      "src/web-server/services/usage-failover-transport.ts:value.failureCode"
+    ]
+  },
+  {
+    "word": "ssh_auth",
+    "cause": "auth_required",
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:ANALYTICS_SCAN_FAILURE_CAUSES",
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsScanFailureCause"
+    ]
+  },
+  {
+    "word": "ssh_host_key",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:ANALYTICS_SCAN_FAILURE_CAUSES",
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsScanFailureCause"
+    ]
+  },
+  {
+    "word": "ssh_unreachable",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "src/web-server/services/analytics-remote-transport.ts:ANALYTICS_SCAN_FAILURE_CAUSES",
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsScanFailureCause"
+    ]
+  },
+  {
+    "word": "stale",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/rebuild_bundle.py:result['status']",
+      "scripts/antigravity/rebuild_bundle.py:status",
+      "src/web-server/scoreboard/scoreboard-service.ts:state",
+      "src/web-server/scoreboard/scoreboard-sources.ts:state",
+      "src/web-server/services/codex-auto-switch-service.ts:assessed.reason",
+      "src/web-server/services/codex-auto-switch-service.ts:reason",
+      "src/web-server/status/status-view-panels.ts:source.state",
+      "src/web-server/status/status-view-panels.ts:state",
+      "src/web-server/status/status-view-quota.ts:state",
+      "src/web-server/status/status-view-types.ts:SourceState",
+      "src/web-server/status/status-view-types.ts:reportState",
+      "src/web-server/status/status-view-types.ts:state",
+      "src/web-server/status/status-view.ts:state"
+    ]
+  },
+  {
+    "word": "stale-checkpoint",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "stale-confirmation",
+    "cause": null,
+    "sources": [
+      "src/antigravity/auto-switch/monitor.ts:result.status",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
+      "src/web-server/routes/antigravity-activate-route.ts:status"
+    ]
+  },
+  {
+    "word": "stale-inventory",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "stale-process",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/linux_process_guard.py:GuardError",
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "starting",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/signin-job-types.ts:SignInJobState",
+      "src/web-server/services/signin-jobs.ts:record.job.state",
+      "src/web-server/services/signin-jobs.ts:state"
+    ]
+  },
+  {
+    "word": "state",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/signin_expiry.py:state",
+      "scripts/claude-signin/claude_signin.py:state",
+      "src/web-server/scoreboard/catalog.ts:state",
+      "src/web-server/scoreboard/runs-reader.ts:state",
+      "src/web-server/scoreboard/runs-store.ts:state",
+      "src/web-server/services/app-update-service.ts:state",
+      "src/web-server/services/signin-health-service.ts:state",
+      "src/web-server/status/agent-reports-reader.ts:state",
+      "src/web-server/status/card-schema.ts:state",
+      "src/web-server/status/quota-report.ts:state",
+      "src/web-server/status/report-schema.ts:state",
+      "src/web-server/status/status-docs.ts:state",
+      "src/web-server/status/status-view-types.ts:askerState",
+      "src/web-server/status/status-view-types.ts:state"
+    ]
+  },
+  {
+    "word": "status",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/failover_usage.py:status",
+      "scripts/antigravity/quota_adapter.py:status",
+      "scripts/app-updates/app_update_common.py:(status, code)",
+      "src/antigravity/managed-update-command.ts:status",
+      "src/web-server/services/usage-failover-contract.ts:status"
+    ]
+  },
+  {
+    "word": "stopped",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:saved_state['phase']",
+      "scripts/antigravity/runtime/resident_broker.py:state['phase']",
+      "src/antigravity/runtime-socket-probe.ts:RuntimeSocketState",
+      "src/web-server/services/claude-account-lifecycle.ts:state"
+    ]
+  },
+  {
+    "word": "stopping",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/foreground_launcher.py:message.get('switchState')",
+      "scripts/antigravity/runtime/resident_broker.py:switchState"
+    ]
+  },
+  {
+    "word": "string",
+    "cause": null,
+    "sources": [
+      "src/antigravity/ubuntu-runtime-bridge.ts:typeof value.restartState",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:typeof error.code",
+      "src/web-server/services/additional-account-service.ts:museTransientFailure",
+      "src/web-server/services/additional-account-service.ts:typeof result.failureCode",
+      "src/web-server/services/analytics-remote-sources.ts:typeof failure.at",
+      "src/web-server/services/analytics-remote-sources.ts:typeof failure.cause",
+      "src/web-server/services/analytics-remote-transport.ts:cause",
+      "src/web-server/services/dashboard-device-records.ts:revokedReason",
+      "src/web-server/services/dashboard-device-records.ts:typeof record.revokedReason",
+      "src/web-server/services/signin-health-service.ts:typeof reason",
+      "src/web-server/services/signin-health-service.ts:typeof row.state",
+      "src/web-server/services/usage-failover-cache.ts:typeof record.primaryFailure",
+      "src/web-server/services/usage-failover-service.ts:typeof value.primaryFailure",
+      "src/web-server/status/status-docs.ts:reason",
+      "src/web-server/status/status-docs.ts:typeof record.reason",
+      "src/web-server/usage/account-activity-collector.ts:typeof value.state.sessionId"
+    ]
+  },
+  {
+    "word": "succeeded",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:state['phase']",
+      "src/web-server/services/account-lifecycle-runtime.ts:job.state",
+      "src/web-server/services/signin-job-types.ts:SignInJobState"
+    ]
+  },
+  {
+    "word": "superseded",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/card-schema.ts:CARD_STATES",
+      "src/web-server/status/card-schema.ts:state"
+    ]
+  },
+  {
+    "word": "synchronized",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-open-operations.ts:status"
+    ]
+  },
+  {
+    "word": "t3_absent",
+    "cause": "not_installed",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:status",
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:cause",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "t3_auth_failed",
+    "cause": "auth_required",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:status",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "t3_cli_not_started",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:error.code"
+    ]
+  },
+  {
+    "word": "t3_install_state_unknown",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "t3_install_timeout",
+    "cause": "timeout",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:error.code"
+    ]
+  },
+  {
+    "word": "t3_issuer_protection_failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:error.code"
+    ]
+  },
+  {
+    "word": "t3_not_ready",
+    "cause": "busy",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:status",
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:cause",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "t3_restart_pending",
+    "cause": "busy",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "t3_session_issue_unknown",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "t3_session_reply_lost",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "t3_session_revoke_failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "t3_unreachable",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:status",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_t3_rpc.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3_rpc.py:error.code"
+    ]
+  },
+  {
+    "word": "t3-acp-adapters",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES"
+    ]
+  },
+  {
+    "word": "target-running",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:saved_state['phase']",
+      "scripts/antigravity/runtime/resident_broker.py:state['phase']"
+    ]
+  },
+  {
+    "word": "team_mismatch",
+    "cause": "team_mismatch",
+    "sources": [
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/muse_console.py:MuseError",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES"
+    ]
+  },
+  {
+    "word": "terminal-control-unsupported",
+    "cause": "refused",
+    "sources": [
+      "scripts/antigravity/runtime/native_header.py:ValueError"
+    ]
+  },
+  {
+    "word": "terminal-read-unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "terminal-reply-budget-exceeded",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_header.py:ValueError"
+    ]
+  },
+  {
+    "word": "terminal-size-unsupported",
+    "cause": "refused",
+    "sources": [
+      "scripts/antigravity/runtime/native_header.py:ValueError",
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "thinking",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_attestor.py:STATES"
+    ]
+  },
+  {
+    "word": "this_computer",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-tls-config.ts:TrustedProxyProblemReason"
+    ]
+  },
+  {
+    "word": "timeout",
+    "cause": "timeout",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:UpdateFailure",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_common.py:error.code",
+      "scripts/app-updates/app_update_cursor.py:UpdateFailure",
+      "scripts/app-updates/app_update_cursor.py:error.code",
+      "scripts/app-updates/app_update_cursor.py:failure.code",
+      "scripts/app-updates/app_update_desktop.py:UpdateFailure",
+      "scripts/app-updates/app_update_desktop.py:error.code",
+      "scripts/app-updates/app_update_macos.py:UpdateFailure",
+      "scripts/app-updates/app_update_macos.py:domain_error.code",
+      "scripts/app-updates/app_update_macos.py:error.code",
+      "scripts/app-updates/app_update_t3.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:error.code",
+      "scripts/app-updates/app_updates.py:error.code",
+      "src/store/activity-reports.ts:cause",
+      "src/web-server/services/analytics-remote-transport.ts:ANALYTICS_SCAN_FAILURE_CAUSES",
+      "src/web-server/services/analytics-remote-transport.ts:AnalyticsScanFailureCause",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
+      "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
+    ]
+  },
+  {
+    "word": "todo",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/report-schema.ts:ITEM_STATES"
+    ]
+  },
+  {
+    "word": "token_expired",
+    "cause": null,
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
+    ]
+  },
+  {
+    "word": "too_large",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/status-files.ts:reason"
+    ]
+  },
+  {
+    "word": "too_many",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-tls-config.ts:TrustedProxyProblemReason",
+      "src/web-server/services/dashboard-tls-config.ts:reason"
+    ]
+  },
+  {
+    "word": "too_many_devices",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/auth-device-routes.ts:error.code"
+    ]
+  },
+  {
+    "word": "too_short",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/auth-route-helpers.ts:reason"
+    ]
+  },
+  {
+    "word": "tool_missing",
+    "cause": "not_installed",
+    "sources": [
+      "src/antigravity/signin-sandbox.ts:reason",
+      "src/codex-auth/commands/login-command.ts:error.code",
+      "src/web-server/services/account-dashboard-types.ts:DashboardSignInUnavailableReason",
+      "src/web-server/services/account-lifecycle-antigravity.ts:preflight.reason",
+      "src/web-server/services/account-lifecycle-antigravity.ts:reason",
+      "src/web-server/services/account-lifecycle-listing.ts:reason",
+      "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
+    ]
+  },
+  {
+    "word": "tool_use",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_attestor.py:STATES"
+    ]
+  },
+  {
+    "word": "transaction-ambiguous",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "transaction-commit-unproved",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "transaction-context-changed",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "transaction-failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/antigravity/switch-service.ts:reason",
+      "src/antigravity/types.ts:reason",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+    ]
+  },
+  {
+    "word": "transient",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CODEX_RENEWAL_RETRY_REASONS",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason"
+    ]
+  },
+  {
+    "word": "trashed",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-lifecycle-removal.ts:entry.state",
+      "src/web-server/services/claude-account-lifecycle.ts:entry.state",
+      "src/web-server/services/claude-account-lifecycle.ts:state",
+      "src/web-server/services/claude-account-records.ts:state",
+      "src/web-server/services/claude-account-stores.ts:item.state",
+      "src/web-server/services/claude-account-stores.ts:state"
+    ]
+  },
+  {
+    "word": "ubuntu",
+    "cause": null,
+    "sources": [
+      "src/store/activity-reports.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:states"
+    ]
+  },
+  {
+    "word": "uid",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:state"
+    ]
+  },
+  {
+    "word": "unauthenticated",
+    "cause": "auth_required",
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:provider['auth'].get('status')"
+    ]
+  },
+  {
+    "word": "unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/account-usage/claude_usage.py:result['status']",
+      "scripts/account-usage/claude_usage.py:status",
+      "scripts/account-usage/cursor_usage.py:CollectionError",
+      "scripts/account-usage/desktop_helpers.py:status",
+      "scripts/account-usage/desktop_usage.py:(result['status'], result['message'])",
+      "scripts/account-usage/desktop_usage.py:UsageError",
+      "scripts/account-usage/desktop_usage.py:status",
+      "scripts/account-usage/failover_additional.py:_failure",
+      "scripts/account-usage/failover_additional.py:plans.CollectionError",
+      "scripts/account-usage/failover_core.py:Failure",
+      "scripts/account-usage/failover_core.py:failureCode",
+      "scripts/account-usage/failover_special.py:failureCode",
+      "scripts/account-usage/failover_special.py:helpers.UsageError",
+      "scripts/account-usage/failover_usage.py:FAILURES",
+      "scripts/account-usage/failover_usage.py:_failure",
+      "scripts/account-usage/failover_usage.py:failureCode",
+      "scripts/account-usage/plan_common.py:status",
+      "scripts/account-usage/plan_usage.py:CollectionError",
+      "scripts/account-usage/signin_expiry.py:row['state']",
+      "scripts/account-usage/signin_expiry.py:state",
+      "scripts/antigravity/quota_adapter.py:base['status']",
+      "scripts/antigravity/quota_adapter.py:status",
+      "scripts/claude-history/history_index_remote_v2.py:reason",
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/runtime-composition.ts:status",
+      "src/antigravity/usage-contract.ts:status",
+      "src/antigravity/usage-normalization.ts:status",
+      "src/antigravity/usage-service.ts:sample.status",
+      "src/antigravity/usage-service.ts:status",
+      "src/codex-auth/codex-login-family.ts:state",
+      "src/store/activity-answer.ts:status",
+      "src/store/activity-coverage.ts:state",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:state",
+      "src/web-server/agent-usage/agent-usage-projection.ts:STATUSES",
+      "src/web-server/agent-usage/agent-usage-projection.ts:status",
+      "src/web-server/agent-usage/agent-usage-snapshot.ts:state",
+      "src/web-server/routes/account-visibility-routes.ts:state",
+      "src/web-server/routes/reset-claim-routes.ts:status",
+      "src/web-server/routes/store-routes.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:state",
+      "src/web-server/services/account-analytics-activity.ts:status",
+      "src/web-server/services/account-analytics-history.ts:VALID_STATUSES",
+      "src/web-server/services/account-analytics-projection.ts:status",
+      "src/web-server/services/account-analytics-service.ts:status",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/account-analytics-types.ts:status",
+      "src/web-server/services/account-dashboard-projection.ts:status",
+      "src/web-server/services/account-dashboard-service.ts:state",
+      "src/web-server/services/account-dashboard-service.ts:status",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountStatus",
+      "src/web-server/services/account-visibility.ts:state",
+      "src/web-server/services/additional-account-service.ts:cache.result.status",
+      "src/web-server/services/additional-account-service.ts:result.status",
+      "src/web-server/services/additional-account-service.ts:status",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/analytics-remote-sources.ts:state.state",
+      "src/web-server/services/claude-desktop-usage-service.ts:status",
+      "src/web-server/services/codex-profile-quota-service.ts:status",
+      "src/web-server/services/opencode-console-wallet-service.ts:result.status",
+      "src/web-server/services/opencode-console-wallet-service.ts:status",
+      "src/web-server/services/signin-health-service.ts:row.state",
+      "src/web-server/services/signin-health-service.ts:state",
+      "src/web-server/services/signin-health-service.ts:states",
+      "src/web-server/services/usage-failover-antigravity.ts:status",
+      "src/web-server/services/usage-failover-codex.ts:status",
+      "src/web-server/services/usage-failover-contract.ts:USAGE_FAILURE_CODES",
+      "src/web-server/services/usage-failover-contract.ts:status",
+      "src/web-server/services/usage-failover-service.ts:status",
+      "src/web-server/status/spend-by-stream.ts:panel.state",
+      "src/web-server/status/spend-by-stream.ts:state",
+      "src/web-server/status/status-view-types.ts:state"
+    ]
+  },
+  {
+    "word": "unconfigured",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/status-view-quota.ts:state",
+      "src/web-server/status/status-view-strip.ts:s.state",
+      "src/web-server/status/status-view-types.ts:SourceState",
+      "src/web-server/status/status-view.ts:s.state"
+    ]
+  },
+  {
+    "word": "unexpected_output",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
+    ]
+  },
+  {
+    "word": "unknown",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_t3_rpc.py:cause",
+      "scripts/app-updates/app_updates.py:status",
+      "src/antigravity/managed-updater.ts:NativeReviewState",
+      "src/antigravity/runtime-socket-probe.ts:RuntimeSocketState",
+      "src/web-server/index.ts:error.code",
+      "src/web-server/services/app-update-contract.ts:STATUSES",
+      "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
+      "src/web-server/services/app-update-contract.ts:status",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES",
+      "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
+      "src/web-server/services/app-update-diagnostics.ts:status",
+      "src/web-server/services/app-update-service.ts:result.status",
+      "src/web-server/services/app-update-service.ts:row.status",
+      "src/web-server/services/claude-account-lifecycle.ts:state",
+      "src/web-server/status/status-view-types.ts:askerState"
+    ]
+  },
+  {
+    "word": "unknown_account",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/services/account-lifecycle-removal.ts:error.code"
+    ]
+  },
+  {
+    "word": "unknown_device",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/routes/auth-device-routes.ts:error.code"
+    ]
+  },
+  {
+    "word": "unknown_error",
+    "cause": "provider_error",
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode"
+    ]
+  },
+  {
+    "word": "unknown_upstream_error",
+    "cause": "provider_error",
+    "sources": [
+      "src/cliproxy/quota/quota-fetcher-codex.ts:errorCode",
+      "src/cliproxy/quota/quota-fetcher-codex.ts:parsed.errorCode"
+    ]
+  },
+  {
+    "word": "unknown-conversation",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "unknown-grant-kind",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "unknown-model",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/scoreboard/scoreboard-view-types.ts:UnscoredReason",
+      "src/web-server/scoreboard/scoreboard-view.ts:reason"
+    ]
+  },
+  {
+    "word": "unknown-task-type",
+    "cause": "provider_error",
+    "sources": [
+      "src/web-server/scoreboard/scoreboard-view-types.ts:UnscoredReason",
+      "src/web-server/scoreboard/scoreboard-view.ts:reason"
+    ]
+  },
+  {
+    "word": "unlisted",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:self.reason"
+    ]
+  },
+  {
+    "word": "unmanaged_location",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_cursor.py:probe_reason"
+    ]
+  },
+  {
+    "word": "unmanaged-writer",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "unowned-checkpoint",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "unreachable",
+    "cause": "ssh_unreachable",
+    "sources": [
+      "src/web-server/status/status-view-panels.ts:row.state",
+      "src/web-server/status/status-view-panels.ts:state",
+      "src/web-server/status/status-view-types.ts:state",
+      "src/web-server/status/status-view.ts:row.state"
+    ]
+  },
+  {
+    "word": "unreadable",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:state",
+      "scripts/claude-signin/claude_signin.py:p.get('state')",
+      "scripts/claude-signin/claude_signin.py:row['state']",
+      "src/codex-auth/codex-login-family.ts:other.state",
+      "src/codex-auth/codex-login-family.ts:state",
+      "src/codex-auth/codex-renewal-dry-run.ts:state",
+      "src/codex-auth/codex-renewal-planner.ts:snapshot.live?.state",
+      "src/store/activity-reports.ts:state",
+      "src/store/usage-report.ts:UsageReportState",
+      "src/web-server/scoreboard/scoreboard-sources.ts:state",
+      "src/web-server/services/account-analytics-types.ts:AccountAnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:AnalyticsSourceState",
+      "src/web-server/services/analytics-remote-sources.ts:state",
+      "src/web-server/services/claude-signin-renewal.ts:RENEWAL_STATES",
+      "src/web-server/status/status-view-panels.ts:source.state",
+      "src/web-server/status/status-view-panels.ts:state",
+      "src/web-server/status/status-view-quota.ts:state",
+      "src/web-server/status/status-view-types.ts:SourceState",
+      "src/web-server/status/status-view-types.ts:reportState",
+      "src/web-server/status/status-view.ts:state"
+    ]
+  },
+  {
+    "word": "unreviewed",
+    "cause": null,
+    "sources": [
+      "src/antigravity/managed-updater.ts:NativeReviewState",
+      "src/antigravity/runtime-refresh.ts:status",
+      "src/antigravity/terminal-refresh.ts:result.status"
+    ]
+  },
+  {
+    "word": "unreviewed-process",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/linux_process_guard.py:GuardError",
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "unreviewed-processes",
+    "cause": null,
+    "sources": [
+      "src/antigravity/switch-service.ts:reason",
+      "src/antigravity/types.ts:reason",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_REASONS"
+    ]
+  },
+  {
+    "word": "unsafe",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-planner.ts:profile.state",
+      "src/codex-auth/codex-renewal-planner.ts:state"
+    ]
+  },
+  {
+    "word": "unsafe_file",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
+    ]
+  },
+  {
+    "word": "unsafe-replay",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "unsigned",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/answer-signing.ts:reason"
+    ]
+  },
+  {
+    "word": "unspecified",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/dashboard-tls-config.ts:TrustedProxyProblemReason"
+    ]
+  },
+  {
+    "word": "unsupported",
+    "cause": "refused",
+    "sources": [
+      "scripts/account-usage/signin_expiry.py:state",
+      "scripts/app-updates/app_update_desktop.py:UpdateFailure",
+      "scripts/app-updates/app_update_macos.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure",
+      "scripts/app-updates/app_updates.py:UpdateFailure",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:state",
+      "src/web-server/services/account-dashboard-types.ts:quotaStatus",
+      "src/web-server/services/signin-health-service.ts:row.state",
+      "src/web-server/services/signin-health-service.ts:states",
+      "src/web-server/usage/native-quota-collector.ts:quotaStatus",
+      "src/web-server/usage/native-quota-collector.ts:state.cachedRow.quotaStatus"
+    ]
+  },
+  {
+    "word": "unsupported_process",
+    "cause": "refused",
+    "sources": [
+      "src/codex-auth/activate-codex-profile.ts:reason"
+    ]
+  },
+  {
+    "word": "unsupported-grant-id",
+    "cause": "refused",
+    "sources": [
+      "src/web-server/routes/reset-claim-routes.ts:SAFE_REASONS"
+    ]
+  },
+  {
+    "word": "unsupported-runtime-probe",
+    "cause": "refused",
+    "sources": [
+      "src/antigravity/auto-switch/types.ts:status",
+      "src/antigravity/production-runtime.ts:status",
+      "src/antigravity/terminal-activate.ts:TERMINAL_FAILURES",
+      "src/antigravity/types.ts:ActivationStatus",
+      "src/web-server/routes/antigravity-activate-route.ts:ACTIVATION_STATUSES",
+      "src/web-server/routes/antigravity-routes.ts:status"
+    ]
+  },
+  {
+    "word": "unsupported-session-schema",
+    "cause": "refused",
+    "sources": [
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "unsupported-terminal-movement",
+    "cause": "refused",
+    "sources": [
+      "scripts/antigravity/runtime/native_header.py:ValueError"
+    ]
+  },
+  {
+    "word": "unsupported-terminal-sequence",
+    "cause": "refused",
+    "sources": [
+      "scripts/antigravity/runtime/native_header.py:ValueError"
+    ]
+  },
+  {
+    "word": "unverifiable",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/codex-renewal-notes.ts:STUCK_RENEWAL_REASONS"
+    ]
+  },
+  {
+    "word": "unverified",
+    "cause": null,
+    "sources": [
+      "src/codex-auth/codex-profile-removal.ts:CodexProfileRemovalReason",
+      "src/web-server/services/codex-login-file.ts:live.state",
+      "src/web-server/services/codex-login-file.ts:state"
+    ]
+  },
+  {
+    "word": "unverified-workspace",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "update_failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:UpdateFailure",
+      "scripts/app-updates/app_update_cursor.py:error.code",
+      "scripts/app-updates/app_update_desktop.py:UpdateFailure",
+      "scripts/app-updates/app_update_macos.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure",
+      "src/antigravity/managed-update-command.ts:ManagedFailureCode"
+    ]
+  },
+  {
+    "word": "updated",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_antigravity.py:t3_row.get('status')",
+      "scripts/app-updates/app_update_common.py:status",
+      "scripts/app-updates/app_updates.py:payload.get('status')",
+      "scripts/app-updates/app_updates.py:row.get('status')",
+      "src/antigravity/managed-updater.ts:status",
+      "src/web-server/services/app-update-contract.ts:STATUSES",
+      "src/web-server/services/app-update-contract.ts:UpdateResultStatus",
+      "src/web-server/services/app-update-contract.ts:row.status",
+      "src/web-server/services/app-update-diagnostics.ts:CAUSE_CODE_RULES",
+      "src/web-server/services/app-update-diagnostics.ts:status"
+    ]
+  },
+  {
+    "word": "userdata",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:state"
+    ]
+  },
+  {
+    "word": "utf-8",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_t3_rpc.py:state"
+    ]
+  },
+  {
+    "word": "utf8",
+    "cause": null,
+    "sources": [
+      "src/antigravity/registry.ts:state"
+    ]
+  },
+  {
+    "word": "verification_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/codex-auth/activate-codex-profile.ts:CodexActivationErrorCode"
+    ]
+  },
+  {
+    "word": "verifying",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/account-dashboard-state.ts:AccountJobStates",
+      "src/web-server/services/account-dashboard-state.ts:state",
+      "src/web-server/services/account-dashboard-types.ts:DashboardAccountLifecycleState",
+      "src/web-server/services/signin-job-types.ts:SignInJobState",
+      "src/web-server/services/signin-jobs.ts:record.job.state",
+      "src/web-server/services/signin-jobs.ts:state",
+      "src/web-server/services/signin-jobs.ts:states"
+    ]
+  },
+  {
+    "word": "version",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/muse_native.py:state",
+      "src/codex-auth/codex-activation-runtime.ts:status"
+    ]
+  },
+  {
+    "word": "version_probe_failed",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_cursor.py:probe_reason"
+    ]
+  },
+  {
+    "word": "version_unknown",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:UpdateFailure",
+      "scripts/app-updates/app_update_cursor.py:UpdateFailure",
+      "scripts/app-updates/app_update_desktop.py:UpdateFailure",
+      "scripts/app-updates/app_update_t3.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure",
+      "scripts/app-updates/app_updates.py:UpdateFailure"
+    ]
+  },
+  {
+    "word": "version_unparsed",
+    "cause": "damaged",
+    "sources": [
+      "scripts/app-updates/app_update_cursor.py:probe_reason"
+    ]
+  },
+  {
+    "word": "version_went_down",
+    "cause": null,
+    "sources": [
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "scripts/app-updates/app_update_cursor.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure",
+      "scripts/app-updates/app_update_zcode.py:status"
+    ]
+  },
+  {
+    "word": "waiting",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/app-update-contract.ts:state",
+      "src/web-server/services/app-update-service.ts:state",
+      "src/web-server/services/signin-job-types.ts:SignInJobState",
+      "src/web-server/status/report-schema.ts:THREAD_STATES",
+      "src/web-server/status/status-view-strip.ts:state",
+      "src/web-server/status/status-view-types.ts:state",
+      "src/web-server/status/status-view.ts:row.doc.state"
+    ]
+  },
+  {
+    "word": "waiting_or_saved_pending_state_unknown",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/claude-history/history_index_remote_v2.py:pendingInputState"
+    ]
+  },
+  {
+    "word": "warn",
+    "cause": null,
+    "sources": [
+      "src/web-server/agent-usage/agent-usage-markdown.ts:row.state",
+      "src/web-server/agent-usage/agent-usage-markdown.ts:state",
+      "src/web-server/agent-usage/agent-usage-snapshot.ts:row.state",
+      "src/web-server/services/signin-health-service.ts:row.state",
+      "src/web-server/services/signin-health-service.ts:state",
+      "src/web-server/services/signin-health-service.ts:states"
+    ]
+  },
+  {
+    "word": "windows",
+    "cause": null,
+    "sources": [
+      "src/web-server/services/claude-history-sync-service.ts:pendingMarkerState"
+    ]
+  },
+  {
+    "word": "withdrawn",
+    "cause": null,
+    "sources": [
+      "src/web-server/status/card-schema.ts:CARD_STATES"
+    ]
+  },
+  {
+    "word": "working",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/native_status_attestor.py:STATES",
+      "src/web-server/status/report-schema.ts:ITEM_STATES",
+      "src/web-server/status/report-schema.ts:THREAD_STATES",
+      "src/web-server/status/status-view.ts:t.state"
+    ]
+  },
+  {
+    "word": "workspace_mismatch",
+    "cause": null,
+    "sources": [
+      "scripts/account-usage/failover_special.py:failure"
+    ]
+  },
+  {
+    "word": "workspace-mismatch",
+    "cause": null,
+    "sources": [
+      "scripts/antigravity/runtime/resident_broker.py:ContinuityError",
+      "scripts/antigravity/runtime/runtime_continuity.py:ContinuityError"
+    ]
+  },
+  {
+    "word": "write_failed",
+    "cause": "provider_error",
+    "sources": [
+      "src/codex-auth/codex-renewal-types.ts:CODEX_RENEWAL_RETRY_REASONS",
+      "src/codex-auth/codex-renewal-types.ts:CodexRenewalReason",
+      "src/web-server/services/account-lifecycle-actions.ts:error.code",
+      "src/web-server/services/account-lifecycle-actions.ts:status",
+      "src/web-server/services/account-lifecycle-extras.ts:error.code",
+      "src/web-server/services/account-lifecycle-extras.ts:status",
+      "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
+    ]
+  },
+  {
+    "word": "wrong_prefix",
+    "cause": "policy_blocked",
+    "sources": [
+      "scripts/app-updates/app_update_common.py:CAUSES",
+      "scripts/app-updates/app_update_common.py:_CODE_CAUSES",
+      "src/web-server/services/app-update-diagnostics.ts:APP_UPDATE_CAUSES"
+    ]
+  },
+  {
+    "word": "zcode",
+    "cause": null,
+    "sources": [
+      "scripts/analytics-remote/analytics_usage_remote.py:states[kind]"
+    ]
+  },
+  {
+    "word": "zcode_release_unavailable",
+    "cause": "provider_error",
+    "sources": [
+      "scripts/app-updates/app_update_zcode.py:UpdateFailure"
+    ]
+  }
+]

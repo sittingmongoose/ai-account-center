@@ -68,3 +68,6 @@ native/aac-store/prebuilt/
 # Status readers crate: build output and machine-specific prebuilt modules
 native/aac-status/target/
 native/aac-status/prebuilt/
+
+# Rust rewrite foundation workspace
+/target/
