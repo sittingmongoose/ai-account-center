@@ -65,6 +65,7 @@ test('a signed-in browser goes straight to the frame', async () => {
   assert.equal(last().signedIn, true);
   assert.equal(last().username, 'labadmin');
   assert.equal(last().host, 'aac.lan:3000');
+  assert.equal(last().fresh, undefined, 'a session the browser already had is not a fresh sign-in');
 });
 
 test('the right password signs in with the same call as the dashboard, and remembers the sign-in', async () => {
@@ -80,6 +81,7 @@ test('the right password signs in with the same call as the dashboard, and remem
   assert.equal(last().state, 'default');
   await s.signIn({ username: 'labadmin', password: 'Lab-Correct-Horse-Battery-9', remember: true });
   assert.equal(last().signedIn, true);
+  assert.equal(last().fresh, true, 'a sign-in through the form is fresh: the frame may reopen the last tab');
   const login = server.calls.find((c) => c.path === '/api/auth/login');
   assert.deepEqual(login.body, { username: 'labadmin', password: 'Lab-Correct-Horse-Battery-9', rememberMe: true });
   assert.ok(Object.keys(storage.dump()).length > 0, 'the sign-in time is kept, as the dashboard keeps it');

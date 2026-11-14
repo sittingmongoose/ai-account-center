@@ -6,7 +6,7 @@
 // The view it publishes (`onChange(view)`):
 //   { signedIn, state, host, username, transportNote, sessionHours, setupForm, codeRequired, busy, nonce,
 //     message, messageSub, notice, field, bannerTitle, bannerBody, bannerStrong, retrySeconds, limitSeconds,
-//     offlineTitle, offlineStrong, offlineBody, offlineMeta, strength }
+//     offlineTitle, offlineStrong, offlineBody, offlineMeta, strength, fresh }
 // `state` is one of loading, default, connecting, wrong, limited, setup, expired, offline, success.
 import {
   strength as passwordStrength,
@@ -205,7 +205,9 @@ export function createFrameSession({
     rememberSignIn(storage, now());
     busy = false;
     publish(false, 'success');
-    publish(true, 'default');
+    // `fresh`: signed in through the form just now (not a session the browser already had), so the frame may reopen
+    // the tab this device showed last (bridge.js signedIn, DESIGN-MOBILE.md 4.5.4).
+    publish(true, 'default', { fresh: true });
   }
 
   async function signIn({ username: user = '', password = '', remember = true } = {}) {

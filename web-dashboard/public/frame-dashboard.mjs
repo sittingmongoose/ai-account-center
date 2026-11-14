@@ -684,8 +684,6 @@ export function createFrameDashboard({
       const page = id === 'accounts' ? 'accounts' : id === 'home' ? 'home' : 'other';
       if (page === currentPage) return;
       currentPage = page;
-      // the last page id, so a fresh sign-in in the classic app can reopen it (bridge.js navigate)
-      if (page !== 'other') { try { storage?.setItem('aac-last-page', page); } catch {} }
       if (page === 'accounts' && authenticated) { renderAccounts(); if (authCheck?.accessMode !== 'open') { void accounts.loadAll(); void updateStatus(); } }
     },
     /** One of the page's action kinds (frame-seam.mjs PAGE_ACTIONS); false, and nothing run, for any other. */

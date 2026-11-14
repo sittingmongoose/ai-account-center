@@ -95,6 +95,10 @@ impl FrameCtx {
         self.route.set(page);
         crate::set_active(page);
         window().scroll_to_with_x_and_y(0.0, 0.0);
+        // the tab this device showed last, for the next fresh sign-in (`reopen_last_page`)
+        if let Some(s) = window().local_storage().ok().flatten() {
+            let _ = s.set_item(LAST_PAGE_KEY, page.id());
+        }
     }
 
     /// A page tells the chrome what to say for its tab; the id lets it take that back when it is unmounted.
@@ -190,6 +194,42 @@ impl FrameCtx {
             ms.max(2000),
         );
     }
+}
+
+/// The tab this device showed last (a page id, never data): the classic app's key, so a device keeps its place.
+const LAST_PAGE_KEY: &str = "aac-last-page";
+
+/// Where a fresh sign-in goes (DESIGN-MOBILE.md 4.5.4, bridge.js `signedIn`): signed in through the form while the
+/// frame shows Home, the tab this device showed last opens instead; a stored id that names no tab, or Home, changes
+/// nothing. An address that names another tab is kept.
+pub(crate) fn reopen_target(fresh: bool, on: Page, stored: Option<&str>) -> Option<Page> {
+    if !fresh || on != Page::Home {
+        return None;
+    }
+    Page::from_id(stored?).filter(|p| *p != Page::Home)
+}
+
+/// Follows the session: once per fresh sign-in, the last tab opens (`reopen_target`).
+fn reopen_last_page(ctx: FrameCtx, view: RwSignal<SessionView>) {
+    Effect::new(move |done: Option<bool>| {
+        let (signed_in, fresh) = view.with(|v| (v.signed_in, v.fresh));
+        // one reopen per sign-in: armed again once signed out
+        if !signed_in {
+            return false;
+        }
+        if done == Some(true) {
+            return true;
+        }
+        let stored = window()
+            .local_storage()
+            .ok()
+            .flatten()
+            .and_then(|s| s.get_item(LAST_PAGE_KEY).ok().flatten());
+        if let Some(page) = reopen_target(fresh, ctx.route.get_untracked(), stored.as_deref()) {
+            ctx.go(page);
+        }
+        true
+    });
 }
 
 /// The browser's Back and Forward move between tabs.
@@ -426,6 +466,7 @@ pub fn Frame(initial: Page) -> impl IntoView {
     for page in [Page::Home, Page::Accounts] {
         ctx.register(page, dash_info);
     }
+    reopen_last_page(ctx, view_signal);
     follow_history(ctx);
     warm_offline_copies();
     watch_build(ctx);
@@ -614,6 +655,25 @@ mod tests {
             refresh: Callback::new(|_| {}),
             lead: None,
         }
+    }
+
+    #[test]
+    fn a_fresh_sign_in_on_home_reopens_the_last_tab() {
+        assert_eq!(
+            reopen_target(true, Page::Home, Some("analytics")),
+            Some(Page::Analytics)
+        );
+        assert_eq!(
+            reopen_target(true, Page::Home, Some("scoreboard")),
+            Some(Page::Scoreboard)
+        );
+        // nothing stored, Home itself, or something that is not a tab: Home stays
+        assert_eq!(reopen_target(true, Page::Home, None), None);
+        assert_eq!(reopen_target(true, Page::Home, Some("home")), None);
+        assert_eq!(reopen_target(true, Page::Home, Some("settings")), None);
+        // a session the browser already had, or an address that named another tab, is kept
+        assert_eq!(reopen_target(false, Page::Home, Some("analytics")), None);
+        assert_eq!(reopen_target(true, Page::Status, Some("analytics")), None);
     }
 
     #[test]
