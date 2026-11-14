@@ -17,6 +17,8 @@ import {
   writeClaudeDesktopLiveSnapshot,
   type ClaudeDesktopLiveUsage,
 } from './claude-desktop-live-cache';
+import { isSafeUsageSshAlias } from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 
 export type { ClaudeDesktopLiveUsage };
 
@@ -573,22 +575,7 @@ async function runWindowsHelper(
     const run = new Promise<string>((resolve, reject) => {
       child = execFile(
         'ssh',
-        [
-          '-T',
-          '-o',
-          'BatchMode=yes',
-          '-o',
-          'ConnectTimeout=5',
-          '-o',
-          'ConnectionAttempts=1',
-          '-o',
-          'ServerAliveInterval=5',
-          '-o',
-          'ServerAliveCountMax=1',
-          '--',
-          sshHost,
-          command,
-        ],
+        sshArgv(sshHost, command, { interval: 5, countMax: 1 }),
         {
           encoding: 'utf8',
           timeout: PROCESS_TIMEOUT_MS,
@@ -664,7 +651,7 @@ export async function getLiveClaudeDesktopUsage(
     const profiles = await boundedFile(listClaudeDesktopProfiles());
     const profile = profiles.find((candidate) => candidate.id === profileId);
     const sshHost = profile?.windows?.sshHost;
-    if (!profile || !sshHost || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sshHost)) {
+    if (!profile || !sshHost || !isSafeUsageSshAlias(sshHost)) {
       return null;
     }
     const manifestHash = createHash('sha256').update(JSON.stringify(profile)).digest('hex');

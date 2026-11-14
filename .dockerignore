@@ -5,20 +5,19 @@
 
 # Dependencies
 node_modules
-ui/node_modules
 
 # Build outputs (rebuilt in container)
 dist
-ui/dist
-ui/.vite
+*.tsbuildinfo
+native/*/target
+native/*/prebuilt
 web-dashboard/target
 web-dashboard/pkg
 web-dashboard/leptos/target
 web-dashboard/leptos/pkg
 
-# Test and coverage
+# Test and coverage (includes the fixture test homes)
 coverage
-ui/coverage
 tests
 **/__tests__
 
@@ -49,3 +48,4 @@ Thumbs.db
 # Misc
 *.tgz
 *.tar.gz
+*.bundle

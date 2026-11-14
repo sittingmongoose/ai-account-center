@@ -38,6 +38,16 @@ COPY . .
 
 RUN bun run build:all
 
+# The image ships both native modules. The prebuilt directories are
+# machine-specific and never committed, so build them for this platform here,
+# then fail loudly if either module is missing: a dashboard without stored
+# history is not a shippable image.
+RUN bun run store:build && bun run status:build
+RUN test -f native/aac-store/prebuilt/*.node \
+  && test -f native/aac-status/prebuilt/*.node \
+  && test -f dist/native/aac-store.*.node \
+  && test -f dist/native/aac-status.*.node
+
 # Verify the executable and actual Slint browser artifacts before packaging.
 # The wasm lives in dist/ui/pkg/<buildId>/; verify-bundle.js checks it against the manifest.
 RUN test -s dist/ccs.js \
@@ -86,7 +96,7 @@ ENV CCS_HOME=/home/node NODE_ENV=production
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD node -e "const http=require('http');const req=http.get('http://127.0.0.1:3000/',res=>{res.resume();process.exit(res.statusCode===200?0:1);});req.on('error',()=>process.exit(1));req.setTimeout(4500,()=>{req.destroy();process.exit(1);});"
+  CMD node -e "const http=require('http');const req=http.get('http://127.0.0.1:3000/api/health',res=>{res.resume();process.exit(res.statusCode===200?0:1);});req.on('error',()=>process.exit(1));req.setTimeout(4500,()=>{req.destroy();process.exit(1);});"
 
 ENTRYPOINT ["/usr/local/bin/ai-account-center-entrypoint"]
 USER node

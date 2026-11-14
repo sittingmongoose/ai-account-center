@@ -4,8 +4,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { resolveAnalyticsRemoteHosts } from './analytics-remote-transport';
-import { isSafeUsageSshAlias } from './additional-usage-transport';
-import { helperPlatform, REMOTE_HOSTS, localComputer } from './dashboard-hosts';
+import {
+  helperPlatform,
+  REMOTE_HOSTS,
+  localComputer,
+  isSafeUsageSshAlias,
+} from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 import {
   DeadlineExceededError,
   PROCESS_SETTLE_GRACE_MS,
@@ -264,22 +269,7 @@ export function privateUsageInvocation(
   return {
     executable: host.sshHost ? 'ssh' : localUsagePython(request),
     args: host.sshHost
-      ? [
-          '-T',
-          '-o',
-          'BatchMode=yes',
-          '-o',
-          'ConnectTimeout=5',
-          '-o',
-          'ConnectionAttempts=1',
-          '-o',
-          'ServerAliveInterval=5',
-          '-o',
-          'ServerAliveCountMax=3',
-          '--',
-          host.sshHost,
-          usageHelperCommand(host.platform),
-        ]
+      ? sshArgv(host.sshHost, usageHelperCommand(host.platform), { interval: 5, countMax: 3 })
       : ['-c', BOOTSTRAP],
     payload: { helperSource, request: privateRequest },
   };

@@ -3,8 +3,8 @@ import { execFile } from 'child_process';
 import * as path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import { readAnalyticsHelper } from './analytics-remote-helper';
-import { isSafeUsageSshAlias } from './additional-usage-transport';
-import { HOST_OS, REMOTE_HOSTS, SSH_ALIASES } from './dashboard-hosts';
+import { HOST_OS, REMOTE_HOSTS, SSH_ALIASES, isSafeUsageSshAlias } from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 
 /**
  * The computers the packaged helper scans over ssh, in scan order: the Mac, Windows and Nas1. The
@@ -606,22 +606,7 @@ export async function runAnalyticsRemoteHelper(
   const stdout = await new Promise<string>((resolve, reject) => {
     const child = execFile(
       'ssh',
-      [
-        '-T',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'ConnectTimeout=5',
-        '-o',
-        'ConnectionAttempts=1',
-        '-o',
-        'ServerAliveInterval=5',
-        '-o',
-        'ServerAliveCountMax=6',
-        '--',
-        sshHost,
-        command,
-      ],
+      sshArgv(sshHost, command, { interval: 5, countMax: 6 }),
       {
         encoding: 'utf8',
         timeout: deps.timeoutMs ?? SSH_TIMEOUT_MS,

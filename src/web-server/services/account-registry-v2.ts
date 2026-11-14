@@ -7,11 +7,11 @@ import {
   isAdditionalAccountId,
   isAdditionalProvider,
   isCollectorCredential,
-  isSafeUsageSshAlias,
   type AdditionalProvider,
   type AdditionalUsageSource,
   type CollectorCredential,
 } from './additional-usage-transport';
+import { isSafeUsageSshAlias } from './dashboard-hosts';
 import {
   readPrivateJsonFile,
   withPrivateFileLock,

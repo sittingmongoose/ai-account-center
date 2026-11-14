@@ -1,14 +1,15 @@
 # AI Account Center in Docker
 
 The canonical image builds this checkout's TypeScript backend and pinned
-Slint 1.18.1 dashboard. It starts the dashboard only, with no upstream npm
+Slint 1.18.1 dashboard, and compiles both native modules (history store and
+status readers) for the image's platform; the build fails loudly if either
+module is missing. It starts the dashboard only, with no upstream npm
 installation, AI runtime installation or CLIProxy process.
 
-These instructions use the reviewed `feat/activate-in-place` product source
-branch explicitly:
+These instructions use the `main` branch:
 
 ```bash
-git clone --branch feat/activate-in-place https://github.com/sittingmongoose/ai-account-center.git
+git clone --branch main https://github.com/sittingmongoose/ai-account-center.git
 cd ai-account-center
 ```
 
@@ -82,7 +83,7 @@ docker compose -f docker/compose.yaml stop
 docker compose -f docker/compose.yaml up -d --build
 ```
 
-Health checks request the actual dashboard entry at `/` on port 3000. They do
+Health checks request the public `/api/health` endpoint on port 3000. They do
 not probe port 8317 or retired health APIs. Use the dashboard's authenticated
 account views to assess provider availability; an HTTP healthcheck does not
 prove live provider collection.

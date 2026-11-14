@@ -5,10 +5,10 @@ import { ConfigError } from '../../errors/error-types';
 import {
   ADDITIONAL_PROVIDERS,
   isAdditionalProvider,
-  isSafeUsageSshAlias,
   type AdditionalProvider,
   type AdditionalUsageSource,
 } from './additional-usage-transport';
+import { isSafeUsageSshAlias } from './dashboard-hosts';
 
 /**
  * The version 1 source manifest, `account-usage-sources.json`: at most one
