@@ -371,6 +371,39 @@ test('the frame loads a page module once, not early while offline, and asks agai
   assert.deepEqual(c.asked, []);
 });
 
+test('the frame asks for the module of the tab its address opens at once, classic addresses included', async () => {
+  const html = await readFile(new URL('../leptos/index.html', import.meta.url), 'utf8');
+  const source = html.match(/const startPage = \(\(path, search\) => \{[\s\S]*?\n {10}\}\)/)?.[0];
+  assert.ok(source, 'index.html names the start tab');
+  // eslint-disable-next-line no-new-func
+  const startPage = new Function(`${source.replace('const startPage = ', 'return ')};`)();
+  // lib.rs the_classic_addresses_open_the_same_tabs, case for case
+  for (const [path, search, tab] of [
+    ['/', '', 'home'],
+    ['/login', '', 'home'],
+    ['/analytics', '', 'analytics'],
+    ['/analytics/', '', 'analytics'],
+    ['/accounts', '', 'accounts'],
+    ['/accounts/claude', '', 'accounts'],
+    ['/accounts/opencode-go', '', 'accounts'],
+    ['/accounts/Claude', '', 'home'],
+    ['/accounts/-x', '', 'home'],
+    ['/status', '', 'status'],
+    ['/scoreboard', '', 'scoreboard'],
+    ['/nowhere', '', 'home'],
+    ['/', '?view=analytics', 'analytics'],
+    ['/', '?e2e&view=accounts', 'accounts'],
+    ['/analytics', '?view=status', 'status'],
+    ['/', '?view=bogus', 'home'],
+    ['/', '?classic=1', 'home'],
+    ['/', '?content=1', 'home'],
+    ['/app/scoreboard', '?view=home', 'scoreboard'],
+    ['/app/home', '', 'home'],
+    ['/app/', '', 'status'],
+  ])
+    assert.equal(startPage(path, search), tab, `${path}${search}`);
+});
+
 test('each install numbers its controller and stops the one before, so a page drives only its own', async () => {
   const listeners = new Map();
   const win = {

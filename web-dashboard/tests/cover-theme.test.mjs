@@ -59,3 +59,10 @@ test('the frame page opts into the measured standalone status-strip viewport', (
   );
   assert.doesNotMatch(html, /name="apple-mobile-web-app-status-bar-style" content="default"/);
 });
+
+test('the frame page, the start page now, names the Home Screen icon as the classic page did', () => {
+  const html = frame();
+  assert.match(html, /<link rel="apple-touch-icon" sizes="180x180" href="\/icons\/apple-touch-icon-180-v2.png" \/>/);
+  assert.match(html, /<link rel="apple-touch-icon" href="\/icons\/apple-touch-icon-180-v2.png" \/>/);
+  assert.ok(readFileSync(new URL('icons/apple-touch-icon-180-v2.png', publicDir)).length > 0);
+});
