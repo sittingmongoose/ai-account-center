@@ -102,7 +102,6 @@ export async function recheck(
     body: {
       account: {
         ...row,
-        switchable: false,
         lifecycle: { state: 'ready', jobId: null },
       },
     },
@@ -147,7 +146,6 @@ async function recheckClaude(
         label: account.profile.label,
         email: result.email,
         status: result.promoted ? 'ok' : 'needs_sign_in',
-        switchable: false,
         lifecycle: {
           state: result.promoted ? 'ready' : 'pending_sign_in',
           jobId: null,

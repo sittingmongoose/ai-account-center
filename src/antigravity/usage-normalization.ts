@@ -207,9 +207,6 @@ export function publicDashboardAccount(
       claudeProfileId: null,
       claudePlatforms: [],
       antigravityProfileId: id,
-      ...(typeof value.capabilities.antigravityCanActivate === 'boolean'
-        ? { antigravityCanActivate: value.capabilities.antigravityCanActivate }
-        : {}),
       antigravityHostIds: value.capabilities.antigravityHostIds?.includes('ubuntu')
         ? ['ubuntu']
         : [],

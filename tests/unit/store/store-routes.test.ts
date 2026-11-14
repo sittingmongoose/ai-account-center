@@ -39,7 +39,9 @@ describe('device scope for the history store (approved L6 change)', () => {
   });
   it('keeps the tray routes', () => {
     expect(isDeviceScopeRoute('GET', '/accounts/dashboard')).toBe(true);
-    expect(isDeviceScopeRoute('POST', '/codex/profiles/a/activate')).toBe(true);
+    expect(isDeviceScopeRoute('GET', '/antigravity/profiles')).toBe(true);
+    // Account switching was removed; its tray routes left the scope with it.
+    expect(isDeviceScopeRoute('POST', '/codex/profiles/a/activate')).toBe(false);
   });
 });
 

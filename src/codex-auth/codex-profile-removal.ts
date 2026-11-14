@@ -306,7 +306,7 @@ function assertInactiveSavedProfile(nativeAuthPath: string, profileAuthPath: str
   }
   if (isLiveLogin(live, target)) {
     throw new CodexProfileRemovalError(
-      'Cannot remove a profile for the current Codex account. Activate another account first.',
+      'Cannot remove a profile for the current Codex account. Sign ~/.codex in to another account first.',
       ExitCode.PROFILE_ERROR,
       'account_active'
     );

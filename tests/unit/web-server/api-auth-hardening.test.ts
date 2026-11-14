@@ -17,13 +17,11 @@ import type { AddressInfo } from 'net';
 
 import { startServer } from '../../../src/web-server';
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
-import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 import * as accountDashboard from '../../../src/web-server/services/account-dashboard-service';
 import * as claudeOpen from '../../../src/web-server/services/claude-desktop-open-service';
 import * as claudeProfiles from '../../../src/web-server/services/claude-desktop-profile-service';
 import * as claudeUsage from '../../../src/web-server/services/claude-desktop-usage-service';
-import * as codexActivation from '../../../src/codex-auth/activate-codex-profile';
 import * as codexDashboard from '../../../src/codex-auth/codex-auth-dashboard-service';
 import * as codexQuotas from '../../../src/web-server/services/codex-profile-quota-service';
 
@@ -74,17 +72,8 @@ const ROUTES: ApiRoute[] = [
   },
   { family: 'codex', method: 'GET', path: '/api/codex/profiles', status: 200 },
   { family: 'codex', method: 'GET', path: '/api/codex/profiles/quotas', status: 200 },
-  { family: 'codex', method: 'GET', path: '/api/codex/profiles/auto-switch', status: 200 },
-  {
-    family: 'codex',
-    method: 'POST',
-    path: '/api/codex/profiles/work/activate',
-    body: {},
-    status: 200,
-  },
   { family: 'antigravity', method: 'GET', path: '/api/antigravity/profiles', status: 200 },
   { family: 'antigravity', method: 'GET', path: '/api/antigravity/profiles/quotas', status: 200 },
-  { family: 'antigravity', method: 'GET', path: '/api/antigravity/auto-switch', status: 200 },
   { family: 'bar', method: 'GET', path: '/api/bar/auth', status: 200 },
 ];
 
@@ -158,7 +147,6 @@ beforeEach(async () => {
   process.on('uncaughtException', recordProcessFailure);
 
   // Background work started by startServer is unrelated to these checks.
-  spyOn(CodexAutoSwitchService.prototype, 'start').mockImplementation(() => {});
   spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {});
   // Data behind every route is stubbed, so a guard failure shows as a stub call.
   serviceStubs = [
@@ -171,13 +159,6 @@ beforeEach(async () => {
       stub: true,
     } as never),
     spyOn(codexQuotas, 'getCodexProfileQuotas').mockResolvedValue({ stub: true } as never),
-    spyOn(codexActivation, 'activateCodexProfile').mockResolvedValue({
-      name: 'work',
-      email: 'work@example.test',
-      plan: 'plus',
-      codexHome: path.join(tempHome, '.codex'),
-      previousEmail: null,
-    } as never),
   ];
 
   const realFetch = globalThis.fetch;

@@ -1,5 +1,5 @@
 /**
- * The read-only switching readiness report over temporary folders: every
+ * The read-only Antigravity runtime report over temporary folders: every
  * gate is read from fixtures; nothing is installed, started or written.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
@@ -13,10 +13,9 @@ import {
   type ReleaseStatusDeps,
 } from '../../../src/antigravity/release-status';
 import { AntigravityProfileRegistry } from '../../../src/antigravity/registry';
-import { AntigravityAutoSwitchFileStore } from '../../../src/antigravity/auto-switch/store';
 import type { AntigravityRuntimeServiceProblem } from '../../../src/antigravity/usage-contract';
 
-// Automatic switching state exists on the Linux dashboard host only (the product refuses it elsewhere).
+// The runtime state exists on the Linux dashboard host only (the product refuses it elsewhere).
 const itOnLinux = process.platform === 'linux' ? it : it.skip;
 
 const PIN = 'a759ce7c7a235d9b6c281a25ead97cbbf2e92314a3ffd224e2f9144f3fae7a86';
@@ -142,17 +141,16 @@ function installRuntime(): string {
   return state;
 }
 
-describe('Antigravity switching readiness', () => {
+describe('Antigravity runtime readiness', () => {
   itOnLinux('walks the gates in order and names the next step each time', async () => {
     expect(read()).toMatchObject({ nativeCli: 'missing', profiles: [] });
     expect(read().nextStep).toContain('Install the Antigravity CLI');
     installAgy();
     await save('gmail');
-    expect(read().nextStep).toContain('Save a second profile');
     await save('party');
     expect(read({ pinMatches: () => false })).toMatchObject({ nativeCli: 'changed' });
     expect(read({ pinMatches: () => false }).nextStep).toContain(
-      'not the reviewed build; switching is paused until the runtime is reviewed'
+      'not the reviewed build; managed updates are paused until the runtime is reviewed'
     );
     const closed = read();
     expect(closed).toMatchObject({
@@ -166,7 +164,6 @@ describe('Antigravity switching readiness', () => {
         { id: 'gmail', email: 'gmail@example.com', runtimeVerifiedActive: false },
         { id: 'party', email: 'party@example.com', runtimeVerifiedActive: false },
       ],
-      automaticSwitching: { enabled: false, thresholdUsedPercent: 95, requestedPoolId: null },
     });
     expect(closed.nextStep).toContain('Open both release gates');
     writeRelease(true);
@@ -179,9 +176,6 @@ describe('Antigravity switching readiness', () => {
     expect(read({ dashboardGate: true }).nextStep).toContain('did not finish');
     fs.writeFileSync(path.join(state, 'runtime-adoption.json'), '{"phase":"adopted"}');
     expect(read({ dashboardGate: true }).nextStep).toContain('Start ai-account-center');
-    const store = new AntigravityAutoSwitchFileStore(state);
-    store.write({ ...store.read(), settings: { ...store.read().settings, enabled: true } });
-    expect(read({ dashboardGate: true }).automaticSwitching?.enabled).toBe(true);
   });
 
   it('names a runtime service that cannot load its parser and never advises starting it', async () => {
@@ -265,7 +259,7 @@ describe('Antigravity switching readiness', () => {
       expect(probes).toBe(0);
       expect(running.serviceSocket).toBe(true);
       expect(running.serviceProblem).toBeNull();
-      expect(running.nextStep).toContain('Manual switching can be tested');
+      expect(running.nextStep).toBe('The Antigravity runtime is ready.');
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -301,7 +295,7 @@ describe('Antigravity switching readiness', () => {
     await save('gmail');
     await save('party');
     const lines = formatAntigravityReleaseStatus(read());
-    expect(lines[0]).toBe('Antigravity switching on Ubuntu');
+    expect(lines[0]).toBe('Antigravity runtime on Ubuntu');
     expect(lines.join('\n')).toContain(
       'Saved profiles:      gmail (gmail@example.com), party (party@example.com)'
     );

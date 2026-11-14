@@ -1,10 +1,7 @@
 import { AntigravityError } from './errors';
 import path from 'path';
 import { getCcsDir } from '../utils/config-manager';
-import {
-  disabledAntigravityAutoSwitchStatus,
-  type AntigravityRuntime,
-} from './runtime-composition';
+import type { AntigravityRuntime } from './runtime-composition';
 
 export type AntigravityRuntimeFactory = (privateCcsDirectory: string) => AntigravityRuntime | null;
 const runtimes = new Map<string, AntigravityRuntime | null>();
@@ -12,8 +9,6 @@ const runtimes = new Map<string, AntigravityRuntime | null>();
 export const ANTIGRAVITY_RUNTIME_RETRY_MS = 15_000;
 const emptyChecks = new Map<string, number>();
 let factory: AntigravityRuntimeFactory | null = null;
-/** The scope whose runtime runs its monitor (the server's own scope). */
-let startedScope: string | null = null;
 
 /** Explicit application composition; importing the API never initializes native adapters. */
 export function configureAntigravityRuntimeFactory(next: AntigravityRuntimeFactory): void {
@@ -25,8 +20,7 @@ export function configureAntigravityRuntimeFactory(next: AntigravityRuntimeFacto
 /**
  * A scope without saved profiles has no runtime. It is asked again after
  * ANTIGRAVITY_RUNTIME_RETRY_MS, so a first profile added by
- * `ai-account-center antigravity signin` appears without a server restart; a
- * runtime created later for the started scope starts its monitor then.
+ * `ai-account-center antigravity signin` appears without a server restart.
  */
 export function getAntigravityRuntime(
   scope = getCcsDir(),
@@ -41,36 +35,16 @@ export function getAntigravityRuntime(
   emptyChecks.set(key, now);
   const created = factory(key);
   runtimes.set(key, created);
-  if (created && startedScope === key) created.start();
   return created;
 }
 
-/** The server's start: its scope's runtime monitor runs now, or once a runtime exists. */
+/** The server's start: its scope's runtime is built now (it has no background work of its own). */
 export function startAntigravityRuntime(scope = getCcsDir()): AntigravityRuntime | null {
-  startedScope = path.resolve(scope);
-  const runtime = getAntigravityRuntime(scope);
-  runtime?.start();
-  return runtime;
+  return getAntigravityRuntime(scope);
 }
 
-/** The server's cleanup: stop the started scope's monitor, created now or later. */
-export function stopAntigravityRuntime(): void {
-  const key = startedScope;
-  startedScope = null;
-  if (key) runtimes.get(key)?.stop();
-}
-
-export function getAntigravityAutoSwitchStatus() {
-  try {
-    return getAntigravityRuntime()?.getAutoSwitchStatus() ?? disabledAntigravityAutoSwitchStatus();
-  } catch {
-    return {
-      ...disabledAntigravityAutoSwitchStatus(),
-      outcome: 'error' as const,
-      message: 'Antigravity automatic switching could not complete its check.',
-    };
-  }
-}
+/** The server's cleanup. The runtime holds no timers, so there is nothing to stop. */
+export function stopAntigravityRuntime(): void {}
 
 export function hasAntigravityProfiles(scope = getCcsDir()): boolean {
   try {

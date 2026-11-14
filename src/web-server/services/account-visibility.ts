@@ -14,8 +14,7 @@ import {
  * `hiddenAccountIds` hide providers and accounts on the dashboard;
  * `trayHiddenProviders` and `trayHiddenAccountIds` hide them in the trays.
  * The dashboard lists and the tray lists are independent: changing one never
- * changes the other. Hidden accounts keep being collected and stay
- * auto-switch candidates.
+ * changes the other. Hidden accounts keep being collected.
  */
 export const ACCOUNT_VISIBILITY_FILE = 'account-visibility.json';
 /** Room for both 128-id lists at their longest, plus both provider lists. */

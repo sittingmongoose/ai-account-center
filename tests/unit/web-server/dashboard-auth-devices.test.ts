@@ -1,7 +1,6 @@
 /**
  * CONTRACT-auth-devices section 12, tests 6-9, 14 and 15: pairing, the bearer
- * scope, device management, rotation and the 90-day idle expiry, plus the
- * Antigravity confirmation bound to the caller. Every test runs in a temporary
+ * scope, device management, rotation and the 90-day idle expiry. Every test runs in a temporary
  * CCS_HOME with bcrypt at cost 4 and an injected clock where time matters; the
  * services behind the tray routes are stubbed.
  */
@@ -10,15 +9,10 @@ import express from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { ANTIGRAVITY_AUTO_SWITCH_MESSAGES } from '../../../src/antigravity/auto-switch/monitor';
-import type { ActivationResult } from '../../../src/antigravity/types';
-import * as codexActivation from '../../../src/codex-auth/activate-codex-profile';
-import { isDashboardWebSocketOriginAllowed } from '../../../src/web-server/middleware/auth-middleware';
 import { createAntigravityRouter } from '../../../src/web-server/routes/antigravity-routes';
 import * as accountDashboard from '../../../src/web-server/services/account-dashboard-service';
 import * as claudeOpen from '../../../src/web-server/services/claude-desktop-open-service';
 import * as claudeProfiles from '../../../src/web-server/services/claude-desktop-profile-service';
-import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import {
   setAuthClockForTests,
   settleAuthWrites,
@@ -37,99 +31,25 @@ import {
   type Harness,
 } from './dashboard-auth-harness';
 
-const AG_TOKEN = 'FixtureConfirmation_1234567890';
-const SAMPLE_TIME = '2026-10-01T17:00:00.000Z';
 let harness: Harness | null = null;
-let activationResult: ActivationResult;
 let stubs: Array<{ mockRestore: () => void }> = [];
 
 function antigravityRouter(app: express.Express): void {
   app.use(
     '/api/antigravity',
-    createAntigravityRouter(
-      {
-        getInventory: async () => ({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] }),
-        getAccounts: async () => [],
-        activate: async () => activationResult,
-        getAutoSwitchStatus: () => ({
-          enabled: false,
-          thresholdUsedPercent: 95,
-          pollIntervalSeconds: 60,
-          maxQuotaAgeSeconds: 300,
-          cooldownSeconds: 300,
-          selectedHostIds: ['ubuntu'],
-          requestedPoolId: null,
-          outcome: 'disabled',
-          message: ANTIGRAVITY_AUTO_SWITCH_MESSAGES.disabled,
-          activationInProgress: false,
-          lastCheckedAt: SAMPLE_TIME,
-          lastSwitchedAt: null,
-          lastProfileId: null,
-          lastHostId: null,
-        }),
-        updateAutoSwitchSettings: () =>
-          ({
-            enabled: true,
-            thresholdUsedPercent: 95,
-            pollIntervalSeconds: 60,
-            maxQuotaAgeSeconds: 300,
-            cooldownSeconds: 300,
-            selectedHostIds: ['ubuntu'],
-            requestedPoolId: null,
-            outcome: 'disabled',
-            activationInProgress: false,
-            lastCheckedAt: SAMPLE_TIME,
-            lastSwitchedAt: null,
-            lastProfileId: null,
-            lastHostId: null,
-          }) as never,
-      },
-      isDashboardWebSocketOriginAllowed
-    )
+    createAntigravityRouter({
+      getInventory: async () => ({ schemaVersion: 1, hostId: 'ubuntu', profiles: [] }),
+      getAccounts: async () => [],
+    })
   );
 }
 
-function busy(): ActivationResult {
-  return {
-    status: 'confirmation-required',
-    profileId: 'party',
-    hostId: 'ubuntu',
-    email: 'party@example.com',
-    reason: 'running-processes',
-    confirmation: {
-      token: AG_TOKEN,
-      expiresAt: '2099-10-01T13:00:00-04:00',
-      profileId: 'party',
-      hostId: 'ubuntu',
-      email: 'party@example.com',
-      warning: 'fixture',
-      processes: [{ pid: 12, role: 'cli', label: 'Antigravity CLI' }],
-    },
-  } as ActivationResult;
-}
-
 beforeEach(() => {
-  activationResult = {
-    status: 'active',
-    profileId: 'party',
-    hostId: 'ubuntu',
-    email: 'party@example.com',
-  } as ActivationResult;
   stubs = [
     spyOn(accountDashboard, 'getAccountDashboard').mockResolvedValue({ stub: true } as never),
     spyOn(claudeProfiles, 'listClaudeDesktopProfileMetadata').mockResolvedValue([] as never),
     spyOn(claudeOpen, 'claudeOpenUsesManagedHistory').mockResolvedValue(false as never),
     spyOn(claudeOpen, 'openClaudeDesktopProfile').mockResolvedValue(undefined as never),
-    spyOn(codexActivation, 'activateCodexProfile').mockResolvedValue({
-      name: 'work',
-      email: 'work@example.test',
-      plan: 'plus',
-      codexHome: '/fixture/.codex',
-      previousEmail: null,
-    } as never),
-    spyOn(CodexAutoSwitchService.prototype, 'updateSettings').mockReturnValue({
-      stub: true,
-    } as never),
   ];
 });
 
@@ -264,19 +184,9 @@ describe('Bearer device tokens', () => {
     const { client } = await pairedTray(harness);
     const calls: Array<[string, string, unknown?]> = [
       ['GET', '/api/accounts/dashboard?platform=mac&refresh=false'],
-      ['POST', '/api/codex/profiles/work/activate', {}],
-      ['PUT', '/api/codex/profiles/auto-switch', { enabled: false }],
       ['POST', '/api/claude/desktop-profiles/work/open', { platform: 'mac' }],
       ['GET', '/api/claude/desktop-profiles'],
       ['GET', '/api/antigravity/profiles'],
-      ['GET', '/api/antigravity/auto-switch'],
-      ['PUT', '/api/antigravity/auto-switch', { enabled: true }],
-      ['POST', '/api/antigravity/profiles/party/activate', { hostId: 'ubuntu' }],
-      [
-        'POST',
-        '/api/antigravity/profiles/party/confirm',
-        { hostId: 'ubuntu', confirmationToken: AG_TOKEN },
-      ],
       ['GET', '/api/bar/auth'],
       ['GET', '/api/auth/devices/me'],
       ['POST', '/api/auth/devices/me/rotate'],
@@ -529,45 +439,5 @@ describe('rotation and idle expiry', () => {
     const pair = await pairTray(harness);
     expect(pair.status).toBe(503);
     expect(fs.statSync(path.join(harness.ccsDir, 'auth', 'devices.json')).mode & 0o777).toBe(0o644);
-  });
-});
-
-describe('Antigravity confirmations stay with their caller', () => {
-  it('refuses a token issued to device A for device B and for a browser', async () => {
-    harness = await startAuthHarness({ before: antigravityRouter });
-    const deviceA = await pairedTray(harness);
-    const deviceB = await pairedTray(harness, { deviceName: 'other' });
-    const browser = await signedIn(harness);
-    activationResult = busy();
-    const offer = await deviceA.client.send('POST', '/api/antigravity/profiles/party/activate', {
-      hostId: 'ubuntu',
-    });
-    expect(offer.status).toBe(409);
-    expect((offer.body.confirmation as { token: string }).token).toBe(AG_TOKEN);
-    activationResult = {
-      status: 'active',
-      profileId: 'party',
-      hostId: 'ubuntu',
-      email: 'party@example.com',
-    } as ActivationResult;
-    const confirm = { hostId: 'ubuntu', confirmationToken: AG_TOKEN };
-    const fromB = await deviceB.client.send(
-      'POST',
-      '/api/antigravity/profiles/party/confirm',
-      confirm
-    );
-    expect([fromB.status, fromB.body.status]).toEqual([409, 'stale-confirmation']);
-    const fromBrowser = await browser.send(
-      'POST',
-      '/api/antigravity/profiles/party/confirm',
-      confirm
-    );
-    expect([fromBrowser.status, fromBrowser.body.status]).toEqual([409, 'stale-confirmation']);
-    const fromA = await deviceA.client.send(
-      'POST',
-      '/api/antigravity/profiles/party/confirm',
-      confirm
-    );
-    expect([fromA.status, fromA.body.status]).toEqual([200, 'active']);
   });
 });

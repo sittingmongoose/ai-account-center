@@ -14,7 +14,7 @@ import { loadNativeStatus } from '../../status-native/native-loader';
 import { getCcsDir } from '../../utils/config-manager';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
-import { callerKey } from './caller-bound-confirmations';
+import { callerKey } from './caller-key';
 import { createApiRouter } from './api-router';
 import { createResetSourceAdapter } from '../services/reset-source-adapter';
 import type { ResetSource, ResetWrite } from '../services/reset-source-contract';

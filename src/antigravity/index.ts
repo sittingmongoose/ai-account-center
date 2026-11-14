@@ -1,4 +1,4 @@
 export * from './types';
 export * from './registry';
-export * from './confirmation';
+export * from './process-plan';
 export * from './switch-service';

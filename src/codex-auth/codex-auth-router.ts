@@ -15,11 +15,8 @@ import {
   handleShowCodex,
   handleRemoveCodex,
   handleImportDefaultCodex,
-  handleActivateCodex,
 } from './commands/index';
 import type { CodexCommandContext } from './commands/types';
-import type { CodexActivationOptions } from './activate-codex-profile';
-import { CodexActivationError } from './activate-codex-profile';
 
 const packageJson = require('../../package.json') as { version: string };
 
@@ -29,10 +26,7 @@ const packageJson = require('../../package.json') as { version: string };
  * @param argv - Arguments after `auth`, e.g. ['create', 'work'] or ['--help']
  * @returns Exit code (0 success, 1 user error, 2+ system error)
  */
-export async function runCodexAuth(
-  argv: string[],
-  activationOptions: CodexActivationOptions = {}
-): Promise<number> {
+export async function runCodexAuth(argv: string[]): Promise<number> {
   const [subcommand, ...rest] = argv;
 
   // Help / no-arg
@@ -47,7 +41,7 @@ export async function runCodexAuth(
     return 0;
   }
 
-  if (subcommand === 'use' || subcommand === 'switch') {
+  if (subcommand === 'use' || subcommand === 'switch' || subcommand === 'activate') {
     printRetiredCodexAuthCommand(subcommand);
     return 1;
   }
@@ -60,9 +54,6 @@ export async function runCodexAuth(
 
   try {
     switch (subcommand) {
-      case 'activate':
-        await handleActivateCodex(ctx, rest, activationOptions);
-        return 0;
       case 'create':
         await handleCreateCodex(ctx, rest);
         return 0;
@@ -90,9 +81,7 @@ export async function runCodexAuth(
     // These should be rare — handlers use exitWithError() which calls process.exit
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(
-      err instanceof CodexActivationError
-        ? `[X] ${msg}\n`
-        : `[X] Unexpected error in ai-account-center codex-auth ${subcommand}: ${msg}\n`
+      `[X] Unexpected error in ai-account-center codex-auth ${subcommand}: ${msg}\n`
     );
     return 1;
   }

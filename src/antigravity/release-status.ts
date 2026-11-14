@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import { AntigravityAutoSwitchFileStore } from './auto-switch/store';
 import {
   ANTIGRAVITY_NATIVE_RELEASED,
   readInstalledAntigravityRuntime,
@@ -18,12 +17,12 @@ import { nativeBinaryProblem } from './signin-sandbox';
 import type { AntigravityRuntimeServiceProblem } from './usage-contract';
 
 /**
- * A read-only report of what stands between this computer and Antigravity
- * account switching (docs/antigravity-runtime.md, "Releasing account
- * switching"): the native CLI pin, both release gates, the runtime
- * installation and adoption, the resident service socket, the saved profiles
- * and the automatic switching setting. It reads metadata only (no credential,
- * no network) and changes nothing. When the socket is missing it also runs the
+ * A read-only report of the Antigravity runtime on this computer
+ * (docs/antigravity-runtime.md): the native CLI pin, both release gates, the
+ * runtime installation and adoption, the resident service socket that managed
+ * updates use, and the saved profiles. Account switching was removed
+ * (2026-11-14). It reads metadata only (no credential, no network) and changes
+ * nothing. When the socket is missing it also runs the
  * read-only runtime health check (runtime-health.ts), so a service that cannot
  * start is named instead of reported as merely "not running".
  */
@@ -39,11 +38,6 @@ export interface AntigravityReleaseStatus {
   /** Why the service is not running, when the read-only check found a cause. */
   serviceProblem: AntigravityRuntimeServiceProblem | null;
   profiles: Array<{ id: string; email: string; runtimeVerifiedActive: boolean }>;
-  automaticSwitching: {
-    enabled: boolean;
-    thresholdUsedPercent: number;
-    requestedPoolId: string | null;
-  } | null;
   nextStep: string;
 }
 
@@ -77,10 +71,10 @@ function readAdoption(ccsDir: string): AntigravityReleaseStatus['adoption'] {
 
 function nextStep(status: Omit<AntigravityReleaseStatus, 'nextStep'>): string {
   if (status.nativeCli === 'missing') return 'Install the Antigravity CLI at ~/.local/bin/agy.';
-  if (status.profiles.length < 2)
-    return 'Save a second profile: ai-account-center antigravity signin <profile>.';
+  if (status.profiles.length < 1)
+    return 'Save a profile: ai-account-center antigravity signin <profile>.';
   if (status.nativeCli === 'changed')
-    return 'The Antigravity CLI is not the reviewed build; switching is paused until the runtime is reviewed for it.';
+    return 'The Antigravity CLI is not the reviewed build; managed updates are paused until the runtime is reviewed for it.';
   if (!status.runtimeGateOpen || !status.dashboardGateOpen)
     return 'Open both release gates and deploy that build (releasing steps 1 and 2).';
   if (!status.runtimeInstalled)
@@ -100,11 +94,7 @@ function nextStep(status: Omit<AntigravityReleaseStatus, 'nextStep'>): string {
     return `${describeRuntimeServiceProblem(status.serviceProblem)}. Read journalctl --user -u ai-account-center-antigravity.service and fix the cause before starting it again.`;
   if (!status.serviceSocket)
     return 'Start ai-account-center-antigravity.service, then restart ccs-dashboard (steps 4 and 5).';
-  if (!status.automaticSwitching?.enabled)
-    return 'Manual switching can be tested (step 7). Automatic switching is off (step 8).';
-  if (!status.automaticSwitching.requestedPoolId)
-    return 'Automatic switching is on but has no quota pool; choose one both accounts report (step 8).';
-  return 'Manual and automatic switching are open.';
+  return 'The Antigravity runtime is ready.';
 }
 
 export function readAntigravityReleaseStatus(deps: ReleaseStatusDeps): AntigravityReleaseStatus {
@@ -159,19 +149,6 @@ export function readAntigravityReleaseStatus(deps: ReleaseStatusDeps): Antigravi
   } catch {
     profiles = [];
   }
-  let automaticSwitching: AntigravityReleaseStatus['automaticSwitching'] = null;
-  try {
-    const { settings } = new AntigravityAutoSwitchFileStore(
-      path.join(ccsDir, 'antigravity-switching')
-    ).read();
-    automaticSwitching = {
-      enabled: settings.enabled,
-      thresholdUsedPercent: settings.thresholdUsedPercent,
-      requestedPoolId: settings.requestedPoolId,
-    };
-  } catch {
-    automaticSwitching = null;
-  }
   const status = {
     nativeCli,
     reviewedNativeVersions: release.reviewed.map((entry) => entry.version),
@@ -182,7 +159,6 @@ export function readAntigravityReleaseStatus(deps: ReleaseStatusDeps): Antigravi
     serviceSocket,
     serviceProblem,
     profiles,
-    automaticSwitching,
   };
   return { ...status, nextStep: nextStep(status) };
 }
@@ -191,7 +167,7 @@ export function formatAntigravityReleaseStatus(status: AntigravityReleaseStatus)
   const yes = (value: boolean) => (value ? 'yes' : 'no');
   const gate = (open: boolean) => (open ? 'open' : 'closed');
   return [
-    'Antigravity switching on Ubuntu',
+    'Antigravity runtime on Ubuntu',
     `  Native CLI:          ${
       status.nativeCli === 'pinned'
         ? `installed, reviewed ${status.reviewedNativeVersions.join(' / ')} build`
@@ -219,11 +195,6 @@ export function formatAntigravityReleaseStatus(status: AntigravityReleaseStatus)
             )
             .join(', ')
         : 'none'
-    }`,
-    `  Automatic switching: ${
-      status.automaticSwitching
-        ? `${status.automaticSwitching.enabled ? 'on' : 'off'}, at ${status.automaticSwitching.thresholdUsedPercent}% used, pool ${status.automaticSwitching.requestedPoolId ?? 'not chosen'}`
-        : 'settings unreadable'
     }`,
     `  Next step:           ${status.nextStep}`,
   ];

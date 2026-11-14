@@ -91,9 +91,9 @@ describe('retained root command routing', () => {
   );
 
   it('delegates native Codex account arguments and preserves the returned status', async () => {
-    await expect(tryHandleRootCommand(['codex-auth', 'activate', 'work'])).resolves.toBe(true);
+    await expect(tryHandleRootCommand(['codex-auth', 'login', 'work'])).resolves.toBe(true);
 
-    expect(calls).toEqual([{ command: 'codex-auth', args: ['activate', 'work'] }]);
+    expect(calls).toEqual([{ command: 'codex-auth', args: ['login', 'work'] }]);
     expect(process.exitCode).toBe(37);
   });
 
@@ -214,6 +214,7 @@ describe('configuration-backed runtime service gate', () => {
     ['codex-auth', '--help'],
     ['codex-auth', 'use', 'saved'],
     ['codex-auth', 'switch', 'saved'],
+    ['codex-auth', 'activate', 'saved'],
     ['bar', '--help=true'],
     ['bar', 'version'],
     ['bar', 'launch'],
@@ -240,7 +241,7 @@ describe('configuration-backed runtime service gate', () => {
     ['dashboard', '--no-open'],
     ['config', '--port', '4100'],
     ['config', 'auth', 'setup'],
-    ['codex-auth', 'activate', 'saved'],
+    ['codex-auth', 'login', 'saved'],
     ['antigravity', 'signin', 'party'],
     ['antigravity', 'status'],
     ['bar', 'install'],

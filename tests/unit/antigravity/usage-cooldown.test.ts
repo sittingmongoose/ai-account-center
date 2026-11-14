@@ -13,7 +13,6 @@ import {
   type SavedQuotaRequest,
   type SavedQuotaSnapshot,
 } from '../../../src/antigravity/runtime-composition';
-import { defaultAntigravityAutoSwitchState } from '../../../src/antigravity/auto-switch/settings';
 import type { AntigravitySwitchDriver } from '../../../src/antigravity/types';
 import { readIdentityUsageCooldown } from '../../../src/web-server/services/usage-failover-cooldown';
 import { UsageFailoverService } from '../../../src/web-server/services/usage-failover-service';
@@ -27,7 +26,7 @@ const STAMP = '2026-10-01T17:00:00.000Z';
 const scopes: string[] = [];
 const runtimes: AntigravityRuntime[] = [];
 afterEach(() => {
-  for (const runtime of runtimes.splice(0)) runtime.stop();
+  runtimes.splice(0);
   for (const scope of scopes.splice(0)) fs.rmSync(scope, { recursive: true, force: true });
 });
 
@@ -72,8 +71,6 @@ function fixture() {
   );
   const registry = new AntigravityProfileRegistry(scope, { readOnly: true });
   let now = Date.parse(STAMP);
-  let state = defaultAntigravityAutoSwitchState();
-  let callback: (() => void) | null = null;
   const quotaCalls: string[] = [];
   const forbidden = async (): Promise<never> => {
     throw new Error('Native mutation forbidden');
@@ -139,30 +136,9 @@ function fixture() {
       ccsDirectory: scope,
       driver,
       now: () => now,
-      store: {
-        read: () => structuredClone(state),
-        write: (next) => {
-          state = structuredClone(next);
-        },
-      },
       collectQuota: async (request) => {
         quotaCalls.push(request.profileId);
         return collect(request);
-      },
-      observeHost: async () => ({
-        hostId: 'ubuntu',
-        available: true,
-        complete: true,
-        busy: false,
-        manualActivationInProgress: false,
-        sampledAt: new Date(now).toISOString(),
-      }),
-      setTimer: (next) => {
-        callback = next;
-        return next;
-      },
-      clearTimer: () => {
-        callback = null;
       },
     });
     runtimes.push(runtime);
@@ -218,10 +194,6 @@ function fixture() {
         JSON.stringify({ version: 1, revision: 2, active: null, transaction: null, profiles }),
         { mode: 0o600 }
       );
-    },
-    tick: async () => {
-      callback?.();
-      await new Promise<void>((resolve) => setImmediate(resolve));
     },
   };
 }
@@ -341,7 +313,7 @@ describe('native and alternate Antigravity identity cooldown', () => {
     expect(h.quotaCalls).toEqual(['alice', 'bob', 'bob']);
   });
 
-  it('alternate 429 gates native usage and the monitor until the shared deadline', async () => {
+  it('alternate 429 gates native usage until the shared deadline', async () => {
     const h = fixture();
     const native = h.construct();
     const alternate = new UsageFailoverService({
@@ -363,14 +335,9 @@ describe('native and alternate Antigravity identity cooldown', () => {
     await alternate.collect(h.target, row);
     await native.getAccounts({ refresh: true });
     expect(h.quotaCalls).toEqual(['bob']);
-    native.updateAutoSwitchSettings({ enabled: true, requestedPoolId: 'model-pool' });
-    native.start();
-    await h.tick();
-    expect(h.quotaCalls).toEqual(['bob', 'bob']);
-    native.stop();
     h.advance(121_000);
     native.invalidateUsage?.();
     await native.getAccounts({ refresh: true });
-    expect(h.quotaCalls).toEqual(['bob', 'bob', 'alice', 'bob']);
+    expect(h.quotaCalls).toEqual(['bob', 'alice', 'bob']);
   });
 });

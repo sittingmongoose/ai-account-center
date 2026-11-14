@@ -87,9 +87,7 @@ export async function handleRemoveCodex(
     process.stderr.write(`    After removal, codex sessions in this shell will fail until you\n`);
     const others = allProfiles.filter((n) => n !== profileName);
     if (others.length > 0) {
-      process.stderr.write(
-        `    Activate another saved login and unset legacy CCS_CODEX_PROFILE before retrying.\n`
-      );
+      process.stderr.write(`    Unset legacy CCS_CODEX_PROFILE before retrying.\n`);
     } else {
       process.stderr.write(`    run: unset CCS_CODEX_PROFILE\n`);
     }

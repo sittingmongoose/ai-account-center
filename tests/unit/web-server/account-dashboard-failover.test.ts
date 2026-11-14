@@ -131,26 +131,6 @@ function deps(overrides: AccountDashboardDeps = {}): AccountDashboardDeps {
     getAdditionalAccounts: async () => [],
     getConfiguredAdditional: () => ({ registry: 'v1', accounts: [] }),
     hasAntigravityProfiles: () => false,
-    getAntigravityAutoSwitchStatus: () => ({
-      enabled: false,
-      thresholdUsedPercent: 95,
-      pollIntervalSeconds: 60,
-      maxQuotaAgeSeconds: 120,
-      cooldownSeconds: 60,
-      selectedHostIds: [],
-      requestedPoolId: null,
-      outcome: 'disabled',
-      message: 'Disabled',
-      activationInProgress: false,
-    }),
-    getAutoSwitchStatus: () => ({
-      enabled: false,
-      thresholdPercent: 5,
-      pollIntervalSeconds: 60,
-      outcome: 'disabled',
-      message: 'Disabled',
-      activationInProgress: false,
-    }),
     accountJobStates: () => new Map(),
     providerFacts: () => ({ lifecycleRoutes: false, secureTransport: false }),
     invalidateClaudeCache: () => {},
@@ -242,7 +222,7 @@ describe('account dashboard shared usage failover integration', () => {
       const initialPeeks = peeks;
       summary = fixture.select('workspace', false);
       const current = (await service.peek('mac')).accounts[0];
-      expect(current).toMatchObject({ status: 'needs_sign_in', windows: [], switchable: false });
+      expect(current).toMatchObject({ status: 'needs_sign_in', windows: [] });
       expect(peeks).toBe(initialPeeks);
     } finally {
       fixture.cleanup();

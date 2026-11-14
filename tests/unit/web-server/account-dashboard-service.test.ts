@@ -188,14 +188,6 @@ function deps(overrides: AccountDashboardDeps = {}): AccountDashboardDeps {
     }),
     getAdditionalAccounts: async () => [additional()],
     getLiveClaudeUsage: async () => null,
-    getAutoSwitchStatus: () => ({
-      enabled: true,
-      thresholdPercent: 5,
-      pollIntervalSeconds: 60,
-      outcome: 'healthy',
-      message: 'Healthy',
-      activationInProgress: false,
-    }),
     invalidateClaudeCache: () => {},
     scope: () => 'fixture-scope',
     refreshIntervalSeconds: () => 60,
@@ -229,7 +221,6 @@ describe('Antigravity coding plan dashboard JSON', () => {
         claudePlatforms: [],
         antigravityProfileId: 'fixture',
         antigravityHostIds: ['ubuntu'],
-        antigravityCanActivate: false,
       },
       windows: [
         {
@@ -368,7 +359,7 @@ describe('consolidated account dashboard', () => {
     expect(
       result.accounts.filter((account) => account.isActive).map((account) => account.id)
     ).toEqual(['codex:gmail']);
-    expect(result.codexAutoSwitch.enabled).toBe(true);
+    expect(result.codexAutoSwitch.enabled).toBe(false);
     const codex = result.accounts[0];
     expect(codex.windows[0]).toEqual({
       key: 'five_hour',
@@ -562,9 +553,8 @@ describe('consolidated account dashboard', () => {
     expect(calls).toBe(3);
   });
 
-  it('refreshes active account and switch settings while cached quota samples are retained', async () => {
+  it('refreshes the active account while cached quota samples are retained', async () => {
     let active = 'gmail';
-    let enabled = true;
     let rowCalls = 0;
     const service = new AccountDashboardService(
       deps({
@@ -573,25 +563,15 @@ describe('consolidated account dashboard', () => {
           rowCalls += 1;
           return names.map((name) => row(name));
         },
-        getAutoSwitchStatus: () => ({
-          enabled,
-          thresholdPercent: 5,
-          pollIntervalSeconds: 60,
-          outcome: enabled ? 'healthy' : 'disabled',
-          message: 'safe',
-          activationInProgress: false,
-        }),
       })
     );
     await service.get();
     active = 'party';
-    enabled = false;
     const updated = await service.get();
     expect(rowCalls).toBe(1);
     expect(
       updated.accounts.filter((account) => account.isActive).map((account) => account.id)
     ).toEqual(['codex:party']);
-    expect(updated.codexAutoSwitch.enabled).toBe(false);
   });
 
   it('responds within its budget and retains late remote results for the next poll', async () => {

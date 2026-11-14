@@ -52,15 +52,9 @@ const PUBLIC_ROUTES: ReadonlyArray<readonly [Method, string]> = [
  */
 const DEVICE_SCOPE: ReadonlyArray<readonly [Method, RegExp]> = [
   ['GET', /^\/accounts\/dashboard\/?$/],
-  ['POST', /^\/codex\/profiles\/[^/]+\/activate\/?$/],
-  ['PUT', /^\/codex\/profiles\/auto-switch\/?$/],
   ['POST', /^\/claude\/desktop-profiles\/[^/]+\/open\/?$/],
   ['GET', /^\/claude\/desktop-profiles\/?$/],
   ['GET', /^\/antigravity\/profiles\/?$/],
-  ['GET', /^\/antigravity\/auto-switch\/?$/],
-  ['PUT', /^\/antigravity\/auto-switch\/?$/],
-  ['POST', /^\/antigravity\/profiles\/[^/]+\/activate\/?$/],
-  ['POST', /^\/antigravity\/profiles\/[^/]+\/confirm\/?$/],
   ['GET', /^\/bar\/auth\/?$/],
   ['GET', /^\/auth\/devices\/me\/?$/],
   ['POST', /^\/auth\/devices\/me\/rotate\/?$/],

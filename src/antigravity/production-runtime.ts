@@ -200,8 +200,6 @@ export function createInstalledAntigravityRuntimeFactory(
     /** Explicit private composition seams; never dashboard settings or native setup. */
     collectQuota?: AntigravityRuntimeDependencies['collectQuota'];
     now?: AntigravityRuntimeDependencies['now'];
-    setTimer?: AntigravityRuntimeDependencies['setTimer'];
-    clearTimer?: AntigravityRuntimeDependencies['clearTimer'];
   } = {}
 ): AntigravityRuntimeFactory {
   const home = path.resolve(options.home ?? os.homedir());
@@ -210,7 +208,7 @@ export function createInstalledAntigravityRuntimeFactory(
     const directory = path.resolve(ccsDir);
     const components = createInstalledAntigravityComponents(directory, home);
     if (components) {
-      const { quotaWorker, driver, bridge } = components;
+      const { quotaWorker, driver } = components;
       const pausedProbe = {
         home,
         ccsDir: directory,
@@ -220,7 +218,6 @@ export function createInstalledAntigravityRuntimeFactory(
       return createPersistentAntigravityRuntime(directory, {
         driver,
         collectQuota: quotaWorker.collectQuota,
-        observeHost: () => bridge.readHostCensus(),
         readNativeUpdatePaused: () => readNativeUpdatePaused(pausedProbe),
         readRuntimeServiceProblem,
       });
@@ -252,34 +249,12 @@ export function createInstalledAntigravityRuntimeFactory(
       ccsDir: directory,
       pinMatches: verifyOwnedAntigravityNativePin,
     };
-    const runtime = createPersistentAntigravityRuntime(directory, {
+    return createPersistentAntigravityRuntime(directory, {
       driver,
       collectQuota: options.collectQuota ?? createAntigravityQuotaWorker().collectQuota,
       readNativeUpdatePaused: () => readNativeUpdatePaused(pausedProbe),
-      observeHost: async () => ({
-        hostId: 'ubuntu',
-        available: false,
-        complete: false,
-        busy: true,
-        manualActivationInProgress: true,
-        sampledAt: new Date(now()).toISOString(),
-      }),
       now,
-      setTimer: options.setTimer,
-      clearTimer: options.clearTimer,
     });
-    return {
-      ...runtime,
-      activate: async (request) => {
-        if (request.mode !== 'manual' || request.hostId !== 'ubuntu')
-          throw new AntigravityError('Invalid manual activation request.');
-        return {
-          status: 'unsupported-runtime-probe',
-          profileId: request.profileId,
-          hostId: 'ubuntu',
-        };
-      },
-    };
   };
 }
 

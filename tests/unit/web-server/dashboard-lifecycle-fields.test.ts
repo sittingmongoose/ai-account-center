@@ -69,14 +69,6 @@ function deps(
       return { registry: 'v2', accounts: [zai('zai:usage'), zai('zai:acct:9f2c41d0')] };
     },
     getOptionalWalletAccounts: async () => [],
-    getAutoSwitchStatus: () => ({
-      enabled: false,
-      thresholdPercent: 5,
-      pollIntervalSeconds: 60,
-      outcome: 'disabled',
-      message: '',
-      activationInProgress: false,
-    }),
     invalidateClaudeCache: () => {},
     scope: () => '/tmp/aac-lifecycle-fields-fixture-scope',
     now: () => Date.parse(NOW),
@@ -234,7 +226,6 @@ describe('lifecycle fields on rows', () => {
       email: null,
       status: 'needs_sign_in',
       platform: 'windows',
-      switchable: false,
       hidden: false,
       windows: [],
       lifecycle: { state: 'pending_sign_in', jobId: null },

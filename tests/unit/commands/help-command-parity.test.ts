@@ -194,21 +194,15 @@ describe('retained help surface', () => {
     expect(none.out.join('\n')).toContain('No Antigravity profiles');
   });
 
-  test('antigravity activate usage names the profile without starting a switch', async () => {
+  test('antigravity activate is retired and starts nothing', async () => {
     const lines: string[] = [];
     await handleHelpRoute(['antigravity'], (line) => lines.push(line));
-    expect(lines.join('\n')).toContain('ai-account-center antigravity activate <profile>');
+    expect(lines.join('\n')).not.toContain('ai-account-center antigravity activate <profile>');
     const errors: string[] = [];
     expect(
-      await antigravityCommand.handleAntigravityCommand(['activate'], (l) => errors.push(l))
+      await antigravityCommand.handleAntigravityCommand(['activate', 'party'], (l) => errors.push(l))
     ).toBe(1);
-    expect(
-      await antigravityCommand.handleAntigravityCommand(['activate', '--yes'], (l) =>
-        errors.push(l)
-      )
-    ).toBe(1);
-    expect(errors).toHaveLength(2);
-    expect(errors.join('\n')).toContain('antigravity activate <profile>');
+    expect(errors.join('\n')).toContain('antigravity activate is retired');
   });
 
   test('antigravity runtime routes help and refresh usage without touching the descriptor', async () => {

@@ -3,9 +3,9 @@ import {
   codexResetTimestamp,
   normalizeCodexExtraUsage,
   normalizeCodexResetCreditDetails,
-} from '../../../src/cliproxy/quota/codex-extra-usage';
+} from '../../../src/web-server/usage/codex-quota/codex-extra-usage';
 import { getCodexAdditionalUsageWindows } from '../../../src/web-server/usage/codex-network-extra-windows';
-import type { CodexQuotaResult } from '../../../src/cliproxy/quota/quota-types';
+import type { CodexQuotaResult } from '../../../src/web-server/usage/codex-quota/quota-types';
 
 describe('Codex extra usage and packs', () => {
   test('retains exact raw credit units, zero and unknown values', () => {

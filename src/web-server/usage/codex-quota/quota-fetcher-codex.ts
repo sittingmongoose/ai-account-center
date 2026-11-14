@@ -5,11 +5,6 @@
  * Used for displaying rate limit windows and reset times.
  */
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { getAuthDir } from '../config/path-resolver';
-import { getAccount, getProviderAccounts, getPausedDir } from '../accounts/account-manager';
-import { sanitizeEmail, isTokenExpired } from '../auth/auth-utils';
 import type { CodexQuotaResult, CodexQuotaWindow, CodexCoreUsageSummary } from './quota-types';
 import {
   codexResetTimestamp,
@@ -17,11 +12,10 @@ import {
   normalizeCodexResetCreditDetails,
 } from './codex-extra-usage';
 import { sanitizeCodexFeatureLabel } from './quota-label-sanitizer';
-import { extractCanonicalEmailFromAccountId } from '../accounts/email-account-identity';
-import { createLogger } from '../../services/logging';
-import { DeadlineExceededError, withDeadline } from '../../utils/settle-deadline';
+import { createLogger } from '../../../services/logging';
+import { DeadlineExceededError, withDeadline } from '../../../utils/settle-deadline';
 
-const logger = createLogger('cliproxy:quota:codex');
+const logger = createLogger('usage:quota:codex');
 
 /** ChatGPT backend API base URL */
 const CODEX_API_BASE = 'https://chatgpt.com/backend-api';
@@ -37,14 +31,6 @@ const CODEX_ERROR_DETAIL_MAX_LENGTH = 240;
  * Update when Codex CLI releases new versions to maintain compatibility.
  */
 const USER_AGENT = 'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal';
-
-/** Auth data extracted from Codex auth file */
-interface CodexAuthData {
-  accessToken: string;
-  accountId: string; // ChatGPT-Account-Id header
-  isExpired: boolean;
-  expiresAt: string | null;
-}
 
 /** Raw API response structure */
 interface CodexUsageResponse {
@@ -228,94 +214,6 @@ export function buildCodexCoreUsageSummary(windows: CodexQuotaWindow[]): CodexCo
     fiveHour: mapWindow(fiveHourWindow),
     weekly: mapWindow(weeklyWindow),
   };
-}
-
-/**
- * Read auth data from Codex auth file
- */
-function readCodexAuthFile(filePath: string): CodexAuthData | null {
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    const data = JSON.parse(content);
-    if (!data.access_token) {
-      return null;
-    }
-
-    return {
-      accessToken: data.access_token,
-      accountId: data.account_id || data.accountId || '',
-      isExpired: isTokenExpired(data.expired),
-      expiresAt: data.expired || null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function readCodexAuthData(accountId: string): CodexAuthData | null {
-  const authDirs = [getAuthDir(), getPausedDir()];
-  const registryAccount = getAccount('codex', accountId);
-  const canonicalEmail = extractCanonicalEmailFromAccountId(accountId);
-  const hasExplicitVariant = canonicalEmail !== null && canonicalEmail !== accountId;
-  if (registryAccount?.tokenFile) {
-    for (const authDir of authDirs) {
-      const filePath = path.join(authDir, registryAccount.tokenFile);
-      if (!fs.existsSync(filePath)) {
-        continue;
-      }
-
-      const authData = readCodexAuthFile(filePath);
-      if (authData) {
-        return authData;
-      }
-    }
-  }
-
-  const legacyEmail = canonicalEmail ?? accountId;
-  const sanitizedId = sanitizeEmail(legacyEmail);
-  const expectedFile = `codex-${sanitizedId}.json`;
-
-  for (const authDir of authDirs) {
-    if (!fs.existsSync(authDir)) continue;
-
-    const filePath = path.join(authDir, expectedFile);
-    if (fs.existsSync(filePath)) {
-      const authData = readCodexAuthFile(filePath);
-      if (authData) {
-        return authData;
-      }
-    }
-
-    // Fallback is only safe for legacy email-only IDs. Variant-backed IDs must resolve
-    // through the registry-backed token file so duplicate-email accounts stay deterministic.
-    if (hasExplicitVariant) {
-      continue;
-    }
-
-    // Fallback: scan directory for matching email in file content.
-    const files = fs.readdirSync(authDir);
-    for (const file of files) {
-      if (file.startsWith('codex-') && file.endsWith('.json')) {
-        const candidatePath = path.join(authDir, file);
-        try {
-          const content = fs.readFileSync(candidatePath, 'utf-8');
-          const data = JSON.parse(content);
-          if (data.email === legacyEmail && data.access_token) {
-            return {
-              accessToken: data.access_token,
-              accountId: data.account_id || data.accountId || '',
-              isExpired: isTokenExpired(data.expired),
-              expiresAt: data.expired || null,
-            };
-          }
-        } catch {
-          continue;
-        }
-      }
-    }
-  }
-
-  return null;
 }
 
 /**
@@ -588,7 +486,7 @@ function buildCodexHttpFailureResult(
       httpStatus: 401,
       errorCode: parsed.errorCode || 'reauth_required',
       errorDetail: parsed.errorDetail,
-      actionHint: 'Run ccs cliproxy auth codex to re-authenticate this account.',
+      actionHint: 'Sign in to this Codex account again.',
       needsReauth: true,
       retryable: false,
     });
@@ -672,71 +570,7 @@ function buildCodexHttpFailureResult(
   });
 }
 
-/**
- * Fetch quota for a single Codex account
- *
- * @param accountId - Account identifier (email)
- * @param verbose - Show detailed diagnostics
- * @returns Quota result with windows and percentages
- */
-export async function fetchCodexQuota(
-  accountId: string,
-  verbose = false
-): Promise<CodexQuotaResult> {
-  if (verbose)
-    logger.info('quota.fetch.start', 'Fetching Codex quota for account', { provider: 'codex' });
-
-  const authData = readCodexAuthData(accountId);
-  if (!authData) {
-    const error = 'Auth file not found for Codex account';
-    if (verbose)
-      logger.warn('quota.fetch.auth_missing', error, {
-        provider: 'codex',
-        errorCode: 'auth_file_missing',
-      });
-    return buildCodexFailureResult(accountId, {
-      error,
-      errorCode: 'auth_file_missing',
-      actionHint: 'Remove the stale account or authenticate again with ccs cliproxy auth codex.',
-      retryable: false,
-    });
-  }
-
-  if (authData.isExpired) {
-    const error = 'Token expired - re-authenticate with ccs cliproxy auth codex';
-    if (verbose)
-      logger.warn('quota.fetch.token_expired', error, {
-        provider: 'codex',
-        errorCode: 'token_expired',
-      });
-    return buildCodexFailureResult(accountId, {
-      error,
-      errorCode: 'token_expired',
-      actionHint: 'Run ccs cliproxy auth codex to refresh the token for this account.',
-      needsReauth: true,
-      retryable: false,
-    });
-  }
-
-  if (!authData.accountId) {
-    const error = 'Missing ChatGPT-Account-Id in auth file';
-    if (verbose)
-      logger.warn('quota.fetch.missing_account_id', error, {
-        provider: 'codex',
-        errorCode: 'missing_account_id',
-      });
-    return buildCodexFailureResult(accountId, {
-      error,
-      errorCode: 'missing_account_id',
-      actionHint: 'Remove and re-add this Codex account to refresh workspace metadata.',
-      retryable: false,
-    });
-  }
-
-  return runCodexUsageFetch(authData.accessToken, authData.accountId, accountId, verbose);
-}
-
-/** Fetch quota using native credentials without looking up CLIProxy auth files. */
+/** Fetch quota with a saved native Codex login's access token. */
 export async function fetchCodexQuotaWithToken(
   accessToken: string,
   chatgptAccountId: string,
@@ -805,7 +639,7 @@ async function readCodexResetCreditDetails(
   }
 }
 
-/** Shared request and normalization for CLIProxy and directly supplied native credentials. */
+/** Shared request and normalization for a saved native Codex login. */
 async function runCodexUsageFetch(
   accessToken: string,
   chatgptAccountId: string,
@@ -961,30 +795,5 @@ async function runCodexUsageFetch(
   };
 }
 
-/**
- * Fetch quota for all Codex accounts
- *
- * @param verbose - Show detailed diagnostics
- * @returns Array of account quotas
- */
-export async function fetchAllCodexQuotas(
-  verbose = false
-): Promise<{ account: string; quota: CodexQuotaResult }[]> {
-  const accounts = getProviderAccounts('codex');
-
-  if (accounts.length === 0) {
-    return [];
-  }
-
-  const results = await Promise.all(
-    accounts.map(async (account) => ({
-      account: account.id,
-      quota: await fetchCodexQuota(account.id, verbose),
-    }))
-  );
-
-  return results;
-}
-
 // Export for testing
-export { readCodexAuthData, buildCodexQuotaWindows, getUnknownCodexWindowLabels };
+export { buildCodexQuotaWindows, getUnknownCodexWindowLabels };

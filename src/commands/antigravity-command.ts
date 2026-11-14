@@ -10,14 +10,12 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('  ai-account-center antigravity signin <profile>');
   writeLine('  ai-account-center antigravity status');
   writeLine('  ai-account-center antigravity recover');
-  writeLine('  ai-account-center antigravity activate <profile>');
   writeLine('  ai-account-center antigravity runtime refresh');
   writeLine('');
   writeLine('Commands');
   writeLine('  signin <profile>   Add a new saved profile, or sign in again to a saved one');
-  writeLine('  status             Show what account switching still needs (read-only)');
+  writeLine('  status             Show what the Antigravity runtime still needs (read-only)');
   writeLine('  recover            Finish or undo a stuck account switch (proof-driven)');
-  writeLine('  activate <profile> Switch the Ubuntu login (same guarded path as the dashboard)');
   writeLine('  runtime refresh    Re-pin the installed runtime to the reviewed CLI build');
   writeLine('');
   writeLine('Notes');
@@ -26,15 +24,13 @@ export function printAntigravityHelp(writeLine: Writer = console.log): void {
   writeLine('  link in a browser, sign in to the Google account for this profile and paste');
   writeLine('  the code back. The live Antigravity login, history and settings are not');
   writeLine('  touched. Sign in again keeps the same Google account and is refused for the');
-  writeLine('  live login. Switch accounts and remove profiles in the dashboard.');
-  writeLine('  Recover re-proves the live Ubuntu login with the same identity check the');
-  writeLine('  switcher uses, then completes the stuck switch, undoes it, or restores the');
-  writeLine('  previous saved login when the live one matches neither. Saved profiles are');
-  writeLine('  never changed. Anything unproven leaves the switch stuck.');
-  writeLine('  Activate runs the same guarded switch the dashboard runs (idle proof,');
-  writeLine('  identity proof, transaction, rollback) and only as the user that owns');
-  writeLine("  this computer's Antigravity state. Running programs are listed for");
-  writeLine('  review first; the switch needs your answer in an interactive terminal.');
+  writeLine('  live login. Remove profiles in the dashboard. AI Account Center no longer');
+  writeLine("  switches the live login (activate is retired); it reads each profile's usage.");
+  writeLine('  Recover finishes a switch that an older version or a managed update left');
+  writeLine('  stuck: it re-proves the live Ubuntu login, then completes the stuck switch,');
+  writeLine('  undoes it, or restores the previous saved login when the live one matches');
+  writeLine('  neither. Saved profiles are never changed. Anything unproven leaves the');
+  writeLine('  switch stuck.');
   writeLine('  Refresh re-verifies the installed CLI against the reviewed set and');
   writeLine('  re-pins the install descriptor atomically, keeping the previous pin');
   writeLine('  as a backup. An unreviewed CLI stays paused until it is reviewed.');
@@ -136,25 +132,9 @@ export async function handleAntigravityCommand(
     return 1;
   }
   if (args[0] === 'activate') {
-    if (args.length !== 2 || args[1].startsWith('-')) {
-      writeLine('[X] Usage: ai-account-center antigravity activate <profile>');
-      return 1;
-    }
-    // Loaded late so help and usage errors never construct a runtime.
-    const [{ createInstalledAntigravityRuntimeFactory }, { AntigravityAccountLifecycle }] =
-      await Promise.all([
-        import('../antigravity/production-runtime'),
-        import('../antigravity/account-lifecycle'),
-      ]);
-    const { runAntigravityTerminalActivate } = await import('../antigravity/terminal-activate');
-    const ccsDir = getCcsDir();
-    const realHome = os.homedir();
-    return runAntigravityTerminalActivate(args[1], {
-      runtime: createInstalledAntigravityRuntimeFactory({ home: realHome })(ccsDir),
-      lifecycle: new AntigravityAccountLifecycle({ ccsDir: () => ccsDir, home: () => realHome }),
-      ccsDir,
-      uid: process.getuid?.() ?? null,
-    });
+    writeLine('[X] antigravity activate is retired in AI Account Center.');
+    writeLine('    Account switching was removed; AI Account Center only reads usage and limits.');
+    return 1;
   }
   if (args[0] === 'runtime') {
     if (args.length === 1 || (args.length === 2 && ['help', '--help', '-h'].includes(args[1]))) {

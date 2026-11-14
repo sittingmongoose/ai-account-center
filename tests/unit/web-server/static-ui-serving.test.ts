@@ -15,7 +15,6 @@ import zlib from 'zlib';
 
 import { requestErrorKind, startServer } from '../../../src/web-server';
 import { getRecentLogEntries } from '../../../src/services/logging';
-import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 import { negotiateEncoding, resolvePageRoute } from '../../../src/web-server/static-ui';
 
@@ -114,7 +113,6 @@ beforeEach(async () => {
   process.env.CODEX_HOME = path.join(tempRoot, 'home', '.codex');
   process.env.CLAUDE_CONFIG_DIR = path.join(tempRoot, 'home', '.claude');
   delete process.env.CCS_DASHBOARD_AUTH_ENABLED;
-  spyOn(CodexAutoSwitchService.prototype, 'start').mockImplementation(() => {});
   spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {});
   manifest = buildFixtureUi(tempRoot);
   staticDir = path.join(tempRoot, 'dist', 'ui');

@@ -3,13 +3,8 @@ import { cloneAntigravityPlan } from './plan';
 import path from 'path';
 import { isNativeVersion } from './native-version';
 import { AntigravityProfileRegistry, identityKey } from './registry';
-import { AntigravitySwitchService } from './switch-service';
-import type {
-  ActivateRequest,
-  AntigravitySwitchDriver,
-  NativeCredential,
-  VerifiedIdentity,
-} from './types';
+import { AntigravitySwitchService, type AntigravityRecoveryResult } from './switch-service';
+import type { AntigravitySwitchDriver, NativeCredential, VerifiedIdentity } from './types';
 import { AntigravityUsageService } from './usage-service';
 import type {
   AntigravityApiDependencies,
@@ -23,20 +18,6 @@ import {
   holdIdentityUsageCooldown,
   readIdentityUsageCooldown,
 } from '../web-server/services/usage-failover-cooldown';
-import { DEFAULT_ANTIGRAVITY_AUTO_SWITCH_SETTINGS } from './auto-switch/settings';
-import {
-  AntigravityAutoSwitchService,
-  ANTIGRAVITY_AUTO_SWITCH_MESSAGES,
-} from './auto-switch/monitor';
-import { AntigravityAutoSwitchFileStore } from './auto-switch/store';
-import type {
-  AntigravityAutoHostCensus,
-  AntigravityAutoObservation,
-  AntigravityAutoQuotaPool,
-  AntigravityAutoQuotaSnapshot,
-  AntigravityAutoSwitchStatus,
-  AntigravityAutoSwitchStore,
-} from './auto-switch/types';
 
 /** Private worker request; bytes, subjects, identity keys and revisions never leave adapters. */
 export interface SavedQuotaRequest {
@@ -52,7 +33,6 @@ export interface SavedQuotaSnapshot extends AntigravityUsageSample {
   source: 'native-consumer';
   identityVerified: boolean;
   identityValidation: 'verified' | 'mismatch' | 'needs_sign_in' | 'unavailable';
-  pools: AntigravityAutoQuotaPool[];
 }
 
 export interface AntigravityRuntimeDependencies {
@@ -60,13 +40,8 @@ export interface AntigravityRuntimeDependencies {
   /** Shared private usage scope, supplied by persistent production construction. */
   ccsDirectory?: string;
   driver: AntigravitySwitchDriver;
-  store: AntigravityAutoSwitchStore;
   collectQuota(request: SavedQuotaRequest): Promise<SavedQuotaSnapshot>;
-  /** Must report current native process ownership/completeness and external transaction locks. */
-  observeHost(): Promise<AntigravityAutoHostCensus>;
   now?: () => number;
-  setTimer?: (callback: () => void, milliseconds: number) => unknown;
-  clearTimer?: (timer: unknown) => void;
   /**
    * Reports the paused state when the installed CLI moved past the reviewed
    * pin. Absent in fixtures; production passes the read-only native probe.
@@ -83,9 +58,8 @@ export interface AntigravityRuntime extends AntigravityApiDependencies {
   hasProfiles(): boolean;
   cachedAccounts(): AntigravityDashboardAccount[];
   readSelectedProfileId(): Promise<string | null>;
-  getAutoSwitchStatus(): AntigravityAutoSwitchStatus;
-  start(): void;
-  stop(): void;
+  /** Finish or undo a switch an older version or a managed update left unfinished (CLI `recover`). */
+  recover(): Promise<AntigravityRecoveryResult>;
 }
 
 function copyAccount(account: AntigravityDashboardAccount): AntigravityDashboardAccount {
@@ -122,7 +96,6 @@ function unavailableQuota(request: SavedQuotaRequest): SavedQuotaSnapshot {
     source: 'native-consumer',
     identityVerified: false,
     identityValidation: 'unavailable',
-    pools: [],
   };
 }
 
@@ -135,7 +108,6 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
     driver: deps.driver,
     now: deps.now,
   });
-  let manualActivations = 0;
   const mapProfiles = (
     profiles: ReturnType<AntigravityProfileRegistry['listProfiles']>
   ): AntigravityUsageProfile[] => {
@@ -285,111 +257,6 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
   };
 
   const usage = new AntigravityUsageService({ readProfiles, collectQuota: collect, now: deps.now });
-  const capability = async (): Promise<boolean> => {
-    try {
-      return (await deps.driver.canProveRuntimeIdentity()) === true;
-    } catch {
-      return false;
-    }
-  };
-  const observe = async (
-    quiescedHost?: AntigravityAutoHostCensus
-  ): Promise<AntigravityAutoObservation> => {
-    const profiles = await readProfiles();
-    const [snapshots, host, supported] = await Promise.all([
-      Promise.all(
-        profiles
-          .filter((profile) => profile.identityVerified && profile.available)
-          .map((profile) => collect(profile.id))
-      ),
-      quiescedHost ? Promise.resolve(quiescedHost) : deps.observeHost(),
-      quiescedHost ? Promise.resolve(quiescedHost.available === true) : capability(),
-    ]);
-    const census: AntigravityAutoHostCensus = {
-      hostId: 'ubuntu',
-      available: supported && host.hostId === 'ubuntu' && host.available === true,
-      complete:
-        host.complete === true &&
-        typeof host.busy === 'boolean' &&
-        typeof host.manualActivationInProgress === 'boolean',
-      busy: host.busy !== false,
-      manualActivationInProgress:
-        manualActivations > 0 || host.manualActivationInProgress !== false,
-      sampledAt: host.sampledAt,
-    };
-    return {
-      profiles: profiles.map((profile) => ({
-        id: profile.id,
-        hostId: 'ubuntu',
-        identityKey: profile.identityKey,
-        credentialRevision: profile.credentialRevision,
-        authValid: profile.identityVerified && profile.available,
-        nativeConsumerCompatible: profile.identityVerified && profile.available,
-        isActive: profile.selected,
-      })),
-      quotas: snapshots.map((snapshot): AntigravityAutoQuotaSnapshot => ({
-        profileId: snapshot.profileId,
-        hostId: 'ubuntu',
-        identityKey: snapshot.identityKey,
-        credentialRevision: snapshot.credentialRevision,
-        source: 'native-consumer',
-        status:
-          snapshot.status === 'fresh'
-            ? 'fresh'
-            : snapshot.status === 'cached' || snapshot.status === 'rate_limited'
-              ? snapshot.status
-              : snapshot.status === 'error'
-                ? 'error'
-                : 'unavailable',
-        sampledAt: snapshot.sampledAt ?? '',
-        pools:
-          snapshot.identityVerified === true &&
-          snapshot.identityValidation === 'verified' &&
-          Array.isArray(snapshot.pools)
-            ? snapshot.pools
-            : [],
-      })),
-      hosts: [census],
-    };
-  };
-  const monitor = new AntigravityAutoSwitchService({
-    store: deps.store,
-    observe,
-    now: deps.now,
-    setTimer: deps.setTimer,
-    clearTimer: deps.clearTimer,
-    activate: (request) =>
-      switcher.activate({
-        ...request,
-        revalidateAutomatic: (context) =>
-          request.revalidateAutomatic({
-            hostId: context.hostId,
-            currentIdentityKey: context.currentIdentityKey,
-            targetIdentityKey: context.targetIdentityKey,
-            phase: context.phase,
-            quiescedHost: context.quiescedHost,
-          }),
-      }),
-  });
-
-  const activate = async (request: ActivateRequest) => {
-    if (request.mode !== 'manual' || request.hostId !== 'ubuntu')
-      throw new AntigravityError('Invalid manual activation request.');
-    manualActivations += 1;
-    try {
-      return await switcher.activate(request);
-    } finally {
-      manualActivations -= 1;
-    }
-  };
-  const recover = async () => {
-    manualActivations += 1;
-    try {
-      return await switcher.recover();
-    } finally {
-      manualActivations -= 1;
-    }
-  };
   return {
     hasProfiles: () => deps.registry.listProfiles().length > 0,
     getInventory: async () => {
@@ -400,7 +267,6 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
       );
       return {
         ...inventory,
-        activationSupported: await capability(),
         ...(serviceProblem ? { runtimeServiceProblem: serviceProblem } : {}),
         ...(paused
           ? {
@@ -413,40 +279,20 @@ export function createAntigravityRuntime(deps: AntigravityRuntimeDependencies): 
           : {}),
       };
     },
-    getAccounts: async (options) => {
-      const accounts = await usage.getAccounts(options);
-      const supported = await capability();
-      const result = accounts.map((account) => ({
-        ...account,
-        capabilities: {
-          ...account.capabilities,
-          antigravityCanActivate:
-            supported && account.capabilities.antigravityHostIds.includes('ubuntu'),
-        },
-      }));
-      return result.map(copyAccount);
-    },
+    getAccounts: async (options) => (await usage.getAccounts(options)).map(copyAccount),
     cachedAccounts: () =>
-      usage.cachedAccounts(mapProfiles(deps.registry.listProfiles())).map((account) => ({
-        ...copyAccount(account),
-        capabilities: { ...account.capabilities, antigravityCanActivate: false },
-      })),
+      usage.cachedAccounts(mapProfiles(deps.registry.listProfiles())).map(copyAccount),
     readSelectedProfileId: async () =>
       (await readProfiles()).find((profile) => profile.selected)?.id ?? null,
-    activate,
-    recover,
-    getAutoSwitchStatus: () => monitor.getStatus(),
-    updateAutoSwitchSettings: (patch) => monitor.updateSettings(patch),
+    recover: () => switcher.recover(),
     invalidateUsage: () => usage.invalidate(),
-    start: () => monitor.start(),
-    stop: () => monitor.stop(),
   };
 }
 
 /** Persistent construction is opt-in and happens only after a verified driver is supplied. */
 export function createPersistentAntigravityRuntime(
   ccsDirectory: string,
-  deps: Omit<AntigravityRuntimeDependencies, 'registry' | 'store'>
+  deps: Omit<AntigravityRuntimeDependencies, 'registry'>
 ): AntigravityRuntime {
   if (
     process.platform !== 'linux' ||
@@ -458,16 +304,5 @@ export function createPersistentAntigravityRuntime(
     ...deps,
     ccsDirectory,
     registry: new AntigravityProfileRegistry(ccsDirectory),
-    store: new AntigravityAutoSwitchFileStore(path.join(ccsDirectory, 'antigravity-switching')),
   });
-}
-
-export function disabledAntigravityAutoSwitchStatus(): AntigravityAutoSwitchStatus {
-  return {
-    ...DEFAULT_ANTIGRAVITY_AUTO_SWITCH_SETTINGS,
-    selectedHostIds: ['ubuntu'],
-    outcome: 'disabled',
-    message: ANTIGRAVITY_AUTO_SWITCH_MESSAGES.disabled,
-    activationInProgress: false,
-  };
 }

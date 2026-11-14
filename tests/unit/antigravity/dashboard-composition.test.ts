@@ -9,7 +9,6 @@ import type {
   DashboardProvider,
 } from '../../../src/web-server/services/account-dashboard-types';
 import type { AntigravityDashboardAccount } from '../../../src/antigravity/usage-contract';
-import { disabledAntigravityAutoSwitchStatus } from '../../../src/antigravity/runtime-composition';
 
 const NOW = '2026-10-01T17:00:00.000Z';
 const PROVIDERS: DashboardProvider[] = [
@@ -75,7 +74,6 @@ function antigravity(id: string): AntigravityDashboardAccount {
       claudePlatforms: [],
       antigravityProfileId: id,
       antigravityHostIds: ['ubuntu'],
-      antigravityCanActivate: false,
     },
   };
 }
@@ -138,15 +136,6 @@ function deps(extra: AccountDashboardDeps = {}): AccountDashboardDeps {
         ],
       },
     ],
-    getAutoSwitchStatus: () => ({
-      enabled: true,
-      thresholdPercent: 5,
-      pollIntervalSeconds: 60,
-      outcome: 'healthy',
-      message: 'Fixture healthy',
-      activationInProgress: false,
-    }),
-    getAntigravityAutoSwitchStatus: disabledAntigravityAutoSwitchStatus,
     invalidateClaudeCache: () => {},
     scope: () => '/tmp/aac-explicit-injected-scope',
     now: () => Date.parse(NOW),
@@ -176,8 +165,8 @@ describe('bounded Antigravity dashboard integration', () => {
       result.accounts.filter((row) => row.provider === 'antigravity').map((row) => row.id)
     ).toEqual(['antigravity:usage']);
     expect(antigravityReads).toBe(0);
-    expect(result.antigravityAutoSwitch?.enabled).toBe(false);
-    expect(result.codexAutoSwitch.thresholdPercent).toBe(5);
+    // Switching was removed; the trays installed before that still need this field, always off.
+    expect(result.codexAutoSwitch).toMatchObject({ enabled: false, outcome: 'disabled' });
   });
 
   it('keeps two Antigravity profiles without duplicating Gmail or dropping another provider/wallet', async () => {
@@ -270,55 +259,6 @@ describe('bounded Antigravity dashboard integration', () => {
     expect(collections).toBe(1);
     expect(cacheReads).toBeGreaterThanOrEqual(2);
     expect(second.accounts).toHaveLength(16);
-  });
-
-  it('retains a proven activation capability only while the saved quota binding remains valid', async () => {
-    let valid = true;
-    const service = new AccountDashboardService(
-      deps({
-        hasAntigravityProfiles: () => true,
-        getAntigravityAccounts: async () => [
-          {
-            ...antigravity('gmail'),
-            capabilities: {
-              ...antigravity('gmail').capabilities,
-              antigravityCanActivate: true,
-            },
-          },
-          antigravity('party'),
-        ],
-        getCachedAntigravityAccounts: () => [
-          {
-            ...antigravity('gmail'),
-            ...(valid
-              ? {}
-              : {
-                  status: 'unavailable' as const,
-                  windows: [],
-                  sampledAt: null,
-                }),
-          },
-          antigravity('party'),
-        ],
-        readSelectedAntigravityProfileId: async () => 'gmail',
-      })
-    );
-    const first = await service.get('mac');
-    expect(
-      first.accounts.find((row) => row.id === 'antigravity:profile:gmail')?.capabilities
-        .antigravityCanActivate
-    ).toBe(true);
-    const cached = await service.get('mac');
-    expect(
-      cached.accounts.find((row) => row.id === 'antigravity:profile:gmail')?.capabilities
-        .antigravityCanActivate
-    ).toBe(true);
-    valid = false;
-    const changed = await service.get('mac');
-    expect(
-      changed.accounts.find((row) => row.id === 'antigravity:profile:gmail')?.capabilities
-        .antigravityCanActivate
-    ).toBe(false);
   });
 
   it('does not let a slow Antigravity source hold up all other account groups', async () => {

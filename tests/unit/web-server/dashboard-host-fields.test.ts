@@ -7,7 +7,6 @@
  */
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
-import { disabledAntigravityAutoSwitchStatus } from '../../../src/antigravity/runtime-composition';
 import { keyStoreFor } from '../../../src/web-server/services/account-key-store';
 import { parseAccountRegistry } from '../../../src/web-server/services/account-registry-v2';
 import type { AccountRegistryRead } from '../../../src/web-server/services/account-registry-v2';
@@ -69,15 +68,6 @@ function dashboardService(additional: AdditionalAccountDeps): AccountDashboardSe
     getClaudeUsage: async (platform) => ({ platform, fetchedAt: NOW, profiles: [] }),
     getAdditionalSnapshot: (refresh) => accounts.snapshot({ refresh }),
     getOptionalWalletAccounts: async () => [],
-    getAutoSwitchStatus: () => ({
-      enabled: false,
-      thresholdPercent: 5,
-      pollIntervalSeconds: 60,
-      outcome: 'disabled',
-      message: 'Disabled',
-      activationInProgress: false,
-    }),
-    getAntigravityAutoSwitchStatus: disabledAntigravityAutoSwitchStatus,
     invalidateClaudeCache: () => {},
     // Every lifecycle flow on, so a provider that offered Nas1 would show it.
     providerFacts: () => ({ lifecycleRoutes: true, secureTransport: true }),
@@ -222,13 +212,13 @@ describe('nothing here gives Nas1 a key store, a sign-in or an activation', () =
       expect(row).toMatchObject({
         platform: 'ubuntu',
         source: 'Account on Nas1',
-        switchable: false,
         isActive: false,
         lifecycle: { state: 'ready', jobId: null },
         capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
       });
       expect(row.capabilities).not.toHaveProperty('antigravityProfileId');
       expect(row.capabilities).not.toHaveProperty('antigravityHostIds');
+      expect(row).not.toHaveProperty('switchable');
     }
     // No provider offers a sign-in or Open on Nas1, even with every flow available.
     expect(dashboard.providers?.length).toBeGreaterThan(0);

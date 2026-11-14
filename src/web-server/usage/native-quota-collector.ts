@@ -2,7 +2,7 @@
  * Saved native Codex profile quota collector: the server-side fetch surface for
  * the subscription quota of the user's saved Codex logins.
  *
- * The dashboard, the trays and the Codex auto-switch read this through the
+ * The dashboard and the trays read this through the
  * account services and never call ChatGPT themselves. The upstream endpoint is
  * undocumented and hostile to polling (persistent 429s, no Retry-After), so the
  * controls below exist to protect the user's accounts:
@@ -25,10 +25,9 @@
  * token for the same account does not erase its shared provider hold.
  */
 
-import { fetchCodexQuotaWithToken } from '../../cliproxy/quota/quota-fetcher-codex';
-import { getProviderAccounts } from '../../cliproxy/accounts/query';
+import { fetchCodexQuotaWithToken } from './codex-quota/quota-fetcher-codex';
 import { getCodexLocalQuota, type CodexLocalQuota } from './codex-local-quota-collector';
-import type { CodexQuotaResult } from '../../cliproxy/quota/quota-types';
+import type { CodexQuotaResult } from './codex-quota/quota-types';
 import type { BarSummaryRow, QuotaWindowDetail } from '../services/account-dashboard-types';
 import { getCodexAdditionalUsageWindows } from './codex-network-extra-windows';
 
@@ -54,7 +53,7 @@ const logger = createLogger('web-server:usage:codex');
 // ============================================================================
 
 /** On-demand cache TTL. Floor is 5 min; we use 10 min because the dashboard,
- *  the trays and the auto-switch ask far more often than a hook fires. */
+ *  the trays ask far more often than a hook fires. */
 const NATIVE_QUOTA_TTL_MS = 600_000; // 10 minutes
 // After a 401/expired result, cache the reauth row and cool the profile down so
 // an expired account is shown dimmed and re-checked at most this often instead
@@ -85,7 +84,7 @@ const CB_COOLDOWN_MS = 900_000; // 15 minutes
  * Hard limit for one profile's in-flight read. Two bounded network attempts
  * plus optional reset metadata fit well inside it. Past it the shared pending
  * read is released as a transient failure, so a lost completion cannot freeze
- * the profile, its failover recovery and Codex auto-switch.
+ * the profile and its failover recovery.
  */
 const COLLECTION_DEADLINE_MS = 45_000;
 
@@ -448,22 +447,13 @@ function getDefaultCodexProfileFromDisk(): string | null {
     const { CodexProfileRegistry } = require('../../codex-auth/codex-profile-registry') as {
       CodexProfileRegistry: new () => {
         getDefault: () => string | null;
-        getProfile: (name: string) => { email?: string; account_id?: string };
         listProfiles: () => string[];
       };
     };
     const registry = new CodexProfileRegistry();
-    const pausedIdentities = getPausedCodexAccountIdentities();
     const def = registry.getDefault();
-    if (def && !codexProfileMatchesPausedAccount(def, registry.getProfile(def), pausedIdentities)) {
-      return def;
-    }
-    const fallback = registry
-      .listProfiles()
-      .find(
-        (name) =>
-          !codexProfileMatchesPausedAccount(name, registry.getProfile(name), pausedIdentities)
-      );
+    if (def) return def;
+    const fallback = registry.listProfiles()[0];
     if (fallback) return fallback;
     // Fall back to the bare ~/.codex account (DEFAULT_PROFILE) when no registry
     // default is set — it is the default `ccsx` invocation.
@@ -472,33 +462,6 @@ function getDefaultCodexProfileFromDisk(): string | null {
   } catch {
     return null;
   }
-}
-
-function getPausedCodexAccountIdentities(): Set<string> | null {
-  try {
-    const accounts = getProviderAccounts('codex');
-    if (accounts.length === 0) return null;
-    const identities = new Set<string>();
-    for (const account of accounts) {
-      if (!account.paused) continue;
-      identities.add(account.id);
-      if (account.email) identities.add(account.email);
-    }
-    return identities;
-  } catch {
-    return null;
-  }
-}
-
-function codexProfileMatchesPausedAccount(
-  profileName: string,
-  profile: { email?: string; account_id?: string },
-  pausedIdentities: Set<string> | null
-): boolean {
-  if (!pausedIdentities || pausedIdentities.size === 0) return false;
-  return [profileName, profile.email, profile.account_id].some(
-    (identity): identity is string => typeof identity === 'string' && pausedIdentities.has(identity)
-  );
 }
 
 // ============================================================================

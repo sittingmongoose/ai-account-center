@@ -228,7 +228,7 @@ function accountSeries(
   from: number,
   to: number,
   bucketMinutes: number,
-  registry: { switchable: boolean; hidden: boolean }
+  registry: { hidden: boolean }
 ): AccountAnalyticsAccount {
   const identity = accountAnalyticsIdentity(account);
   const records = (history?.records ?? []).filter(
@@ -248,7 +248,6 @@ function accountSeries(
     if (!preferredWindows.has(key)) preferredWindows.set(key, window);
   return {
     ...account,
-    switchable: registry.switchable,
     hidden: registry.hidden,
     firstSampleAt: records[0]?.sampledAt ?? null,
     lastSampleAt: records[records.length - 1]?.sampledAt ?? null,
@@ -810,7 +809,6 @@ export class AccountAnalyticsService {
     );
     const series = accounts.map((account) =>
       accountSeries(account, history, from, to, range.bucketMinutes, {
-        switchable: registry.switchable(account),
         hidden: registry.hidden(account),
       })
     );
@@ -831,7 +829,7 @@ export class AccountAnalyticsService {
     });
     const activeAccountIds: AccountAnalytics['summary']['activeAccountIds'] = {};
     for (const entry of registry.table)
-      if (entry.switchable && (entry.id === 'codex' || entry.id === 'antigravity'))
+      if (entry.id === 'codex' || entry.id === 'antigravity')
         activeAccountIds[entry.id] =
           dashboard.accounts.find((account) => account.provider === entry.id && account.isActive)
             ?.id ?? null;

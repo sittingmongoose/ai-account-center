@@ -69,12 +69,7 @@ import { generateYamlHeader, generateYamlWithComments } from './loader/yaml-seri
 
 export { mergeWithDefaults } from './loader/defaults-merger';
 import { mergeWithDefaults } from './loader/defaults-merger';
-import { validateCompositeVariants } from './loader/normalizers';
-export {
-  normalizeSessionAffinityTtl,
-  hasPositiveDuration,
-  validateCompositeVariants,
-} from './loader/normalizers';
+export { normalizeSessionAffinityTtl, hasPositiveDuration } from './loader/normalizers';
 
 // ---------------------------------------------------------------------------
 // Phase 5 re-exports: config-getters
@@ -165,9 +160,7 @@ export function loadOrCreateUnifiedConfig(): UnifiedConfig {
   // it for read paths without implicitly creating config.yaml.
   const existing = loadUnifiedConfig();
   if (existing) {
-    const merged = mergeWithDefaults(existing);
-    validateCompositeVariants(merged);
-    return merged;
+    return mergeWithDefaults(existing);
   }
   return createEmptyUnifiedConfig();
 }
@@ -189,7 +182,7 @@ export function saveUnifiedConfig(config: UnifiedConfig): void {
  */
 export function mutateUnifiedConfig(mutator: (config: UnifiedConfig) => void): UnifiedConfig {
   return withConfigWriteLock(() => {
-    const current = loadUnifiedConfigWithLockHeld(mergeWithDefaults, validateCompositeVariants);
+    const current = loadUnifiedConfigWithLockHeld(mergeWithDefaults);
     mutator(current);
     writeUnifiedConfigWithLockHeld(current, generateYamlHeader, generateYamlWithComments);
     return current;

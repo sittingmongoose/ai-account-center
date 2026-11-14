@@ -103,14 +103,6 @@ function deps(extra: AccountDashboardDeps = {}): AccountDashboardDeps {
     getCachedLiveClaudeUsage: async () => null,
     getAdditionalSnapshot: async () => V2,
     getOptionalWalletAccounts: async () => [],
-    getAutoSwitchStatus: () => ({
-      enabled: true,
-      thresholdPercent: 5,
-      pollIntervalSeconds: 60,
-      outcome: 'healthy',
-      message: 'Fixture healthy',
-      activationInProgress: false,
-    }),
     invalidateClaudeCache: () => {},
     scope: () => '/tmp/aac-registry-fields-fixture-scope',
     now: () => Date.parse(NOW),
@@ -151,7 +143,6 @@ describe('providers[] in the dashboard DTO', () => {
     expect(providers.find((entry) => entry.id === 'antigravity')).toMatchObject({
       label: 'Antigravity',
       longLabel: 'Google Antigravity CLI',
-      switchable: true,
     });
     expect(providers.find((entry) => entry.id === 'qwen')?.signIn.label).toBe(
       'Console session by browser extension'
@@ -177,10 +168,7 @@ describe('providers[] in the dashboard DTO', () => {
       expect([entry.visible, entry.trayVisible]).toEqual([true, true]);
     }
     expect(providers.find((entry) => entry.id === 'zai')?.accountCount).toBe(2);
-    expect(providers.filter((entry) => entry.switchable).map((entry) => entry.id)).toEqual([
-      'codex',
-      'antigravity',
-    ]);
+    for (const entry of providers) expect(entry).not.toHaveProperty('switchable');
   });
 
   it('keeps a provider with no accounts (Kimi Code going away) and drops only its rows', async () => {
@@ -223,9 +211,9 @@ describe('providers[] in the dashboard DTO', () => {
         replaceKey: false,
         remove: false,
         recheck: false,
-        activate: entry.switchable,
-        autoSwitch: entry.switchable,
       });
+      expect(entry.capabilities).not.toHaveProperty('activate');
+      expect(entry.capabilities).not.toHaveProperty('autoSwitch');
       // Only routes that exist today are advertised: Claude's Open.
       expect(entry.capabilities.openApp).toEqual(entry.id === 'claude' ? ['mac', 'windows'] : []);
     }
@@ -346,14 +334,14 @@ describe('visibility in the dashboard DTO', () => {
     expect(
       hiddenDashboard.accounts.filter((account) => account.hidden).map((account) => account.id)
     ).toEqual(['codex:gmail', 'zai:usage', 'zai:acct:9f2c41d0']);
-    // Display only: the same rows, still collected, still active and switchable.
+    // Display only: the same rows, still collected and still active.
     expect(hiddenDashboard.accounts.map((account) => account.id)).toEqual(
       visible.accounts.map((account) => account.id)
     );
     const strip = (account: DashboardAccount) => ({ ...account, hidden: undefined });
     expect(hiddenDashboard.accounts.map(strip)).toEqual(visible.accounts.map(strip));
     const gmail = hiddenDashboard.accounts.find((account) => account.id === 'codex:gmail');
-    expect(gmail).toMatchObject({ hidden: true, isActive: true, switchable: true });
+    expect(gmail).toMatchObject({ hidden: true, isActive: true });
     expect(
       hiddenDashboard.accounts.find((account) => account.id === 'zai:acct:9f2c41d0')?.windows
     ).toHaveLength(1);

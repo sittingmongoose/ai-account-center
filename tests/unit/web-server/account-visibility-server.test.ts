@@ -14,7 +14,6 @@ import path from 'path';
 import { WebSocket } from 'ws';
 import { startServer } from '../../../src/web-server';
 import { loginRateLimiter } from '../../../src/web-server/middleware/auth-middleware';
-import { CodexAutoSwitchService } from '../../../src/web-server/services/codex-auto-switch-service';
 import * as accountAnalytics from '../../../src/web-server/services/account-analytics-service';
 
 const ENVIRONMENT = [
@@ -57,7 +56,6 @@ beforeEach(async () => {
   process.env.CCS_DASHBOARD_PASSWORD_HASH = passwordHash;
   process.env.CCS_SESSION_SECRET = 'isolated-visibility-server-session-secret';
   for (const key of ['127.0.0.1', '::ffff:127.0.0.1', '::1']) loginRateLimiter.resetKey(key);
-  spyOn(CodexAutoSwitchService.prototype, 'start').mockImplementation(() => {});
   spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {});
   instance = await startServer({ port: 0, host: '127.0.0.1', staticDir });
   base = `http://127.0.0.1:${(instance.server.address() as AddressInfo).port}`;

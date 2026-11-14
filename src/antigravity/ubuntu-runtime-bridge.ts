@@ -11,7 +11,6 @@ import type {
   VerifiedIdentity,
   QuiescedHostProof,
 } from './types';
-import type { AntigravityAutoHostCensus } from './auto-switch/types';
 
 const MAX_FRAME_BYTES = 256 * 1024;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -23,7 +22,6 @@ type Method =
   | 'restart'
   | 'prove'
   | 'stop-owned-restarts'
-  | 'census'
   | 'approve-idle-plan'
   | 'approve-quiesced-stop'
   | 'complete-transaction';
@@ -41,8 +39,6 @@ export class AntigravityRuntimeStartupNotReadyError extends AntigravityError {
 }
 
 export interface UbuntuRuntimeBridge {
-  /** Private monitor census; cached checkpoints never supply fresh idle state. */
-  readHostCensus(): Promise<AntigravityAutoHostCensus>;
   canProveRuntimeIdentity(): Promise<boolean>;
   inspectProcesses(): Promise<ProcessPlan>;
   stopProcesses(plan: ProcessPlan): Promise<StopReceipt>;
@@ -188,46 +184,6 @@ export function createUbuntuRuntimeBridge(options: {
     async completeActivation(expected) {
       const value = await request('complete-transaction', { expected });
       if (!record(value) || !exactKeys(value, ['ok']) || value.ok !== true) fail();
-    },
-    async readHostCensus() {
-      const unavailable: AntigravityAutoHostCensus = {
-        hostId: 'ubuntu',
-        available: false,
-        complete: false,
-        busy: true,
-        manualActivationInProgress: false,
-        sampledAt: '',
-      };
-      try {
-        const value = await request('census');
-        if (
-          !record(value) ||
-          !exactKeys(value, [
-            'available',
-            'complete',
-            'busy',
-            'manualActivationInProgress',
-            'sampledAt',
-          ]) ||
-          typeof value.available !== 'boolean' ||
-          typeof value.complete !== 'boolean' ||
-          typeof value.busy !== 'boolean' ||
-          typeof value.manualActivationInProgress !== 'boolean' ||
-          typeof value.sampledAt !== 'string' ||
-          !Number.isFinite(Date.parse(value.sampledAt))
-        )
-          return unavailable;
-        return {
-          hostId: 'ubuntu',
-          available: value.available,
-          complete: value.complete,
-          busy: value.busy,
-          manualActivationInProgress: value.manualActivationInProgress,
-          sampledAt: value.sampledAt,
-        };
-      } catch {
-        return unavailable;
-      }
     },
     async canProveRuntimeIdentity() {
       try {

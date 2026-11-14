@@ -5,7 +5,7 @@
  * A plain detached spawn keeps the child in the unit's cgroup, so a dashboard
  * restart or deploy would SIGKILL the launched app AND everything it started
  * (editors, terminals, user work). Verified 2026-10-05: the Codex app-server
- * and ChatGPT/Codex Desktop launched by auto-switch activation, plus ~60
+ * and ChatGPT/Codex Desktop launched by the (since removed) auto-switch activation, plus ~60
  * descendant processes, all lived inside ccs-dashboard.service's cgroup.
  *
  * On Linux every launch therefore goes through a transient user service

@@ -19,7 +19,6 @@ import { DASHBOARD_PROVIDER_IDS } from './dashboard-provider-table';
 interface ProviderDefinition {
   label: string;
   longLabel: string;
-  switchable: boolean;
   multiAccount: boolean;
   signIn: { kind: DashboardSignInKind; label: string; platforms: DashboardPlatform[] };
   extras: DashboardProviderEntry['extras'];
@@ -33,7 +32,6 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
   claude: {
     label: 'Claude',
     longLabel: 'Claude',
-    switchable: false,
     multiAccount: true,
     signIn: { kind: 'desktop-profile', label: 'Desktop profile', platforms: ['mac', 'windows'] },
     extras: null,
@@ -43,7 +41,6 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
   codex: {
     label: 'Codex',
     longLabel: 'Codex',
-    switchable: true,
     multiAccount: true,
     signIn: { kind: 'device-code', label: 'Device-code sign-in', platforms: ['ubuntu'] },
     extras: null,
@@ -53,7 +50,6 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
   antigravity: {
     label: 'Antigravity',
     longLabel: 'Google Antigravity CLI',
-    switchable: true,
     multiAccount: true,
     signIn: { kind: 'supervised-cli', label: 'Supervised CLI login', platforms: ['ubuntu'] },
     extras: null,
@@ -63,7 +59,6 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
   cursor: {
     label: 'Cursor',
     longLabel: 'Cursor',
-    switchable: false,
     multiAccount: false,
     signIn: { kind: 'app-session', label: 'Desktop app session', platforms: ['mac', 'windows'] },
     extras: null,
@@ -75,7 +70,6 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
   muse: {
     label: 'Muse Code',
     longLabel: 'Muse Code',
-    switchable: false,
     multiAccount: false,
     signIn: { kind: 'device-code', label: 'Device-code sign-in', platforms: ['mac'] },
     extras: {
@@ -89,7 +83,6 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
   'kimi-code': {
     label: 'Kimi Code',
     longLabel: 'Kimi Code',
-    switchable: false,
     multiAccount: true,
     signIn: { kind: 'api-key', label: 'API key', platforms: ['ubuntu'] },
     extras: null,
@@ -99,7 +92,6 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
   qwen: {
     label: 'Qwen Token Plan',
     longLabel: 'Qwen Token Plan',
-    switchable: false,
     multiAccount: false,
     signIn: {
       kind: 'browser-session',
@@ -113,7 +105,6 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
   zai: {
     label: 'Z.ai Coding Plan',
     longLabel: 'Z.ai Coding Plan',
-    switchable: false,
     multiAccount: true,
     signIn: { kind: 'api-key', label: 'API key', platforms: ['ubuntu'] },
     extras: null,
@@ -123,7 +114,6 @@ const PROVIDERS: Readonly<Record<DashboardProvider, ProviderDefinition>> = Objec
   'opencode-go': {
     label: 'OpenCode Go',
     longLabel: 'OpenCode Go',
-    switchable: false,
     multiAccount: true,
     signIn: { kind: 'api-key', label: 'API key', platforms: ['ubuntu'] },
     extras: {
@@ -213,7 +203,6 @@ export function buildDashboardProviders(
       visible: !hidden.has(id),
       trayVisible: !trayHidden.has(id),
       accountCount,
-      switchable: definition.switchable,
       signIn: {
         kind,
         label: definition.signIn.label,
@@ -233,8 +222,6 @@ export function buildDashboardProviders(
           facts.lifecycleRoutes && kind !== 'api-key' && (GUIDE_KINDS.has(kind) || available),
         replaceKey: kind === 'api-key' && available,
         remove: facts.lifecycleRoutes && facts.remove?.[id] !== false,
-        activate: definition.switchable,
-        autoSwitch: definition.switchable,
         openApp: [
           ...definition.openApp,
           ...(facts.lifecycleRoutes ? definition.lifecycleOpenApp : []),

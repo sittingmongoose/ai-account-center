@@ -103,8 +103,6 @@ describeOnLinux('installed Antigravity saved-profile usage without native descri
   let restore: Array<() => void>;
   let nativeCalls: string[];
   let quotaCalls: string[];
-  let callbacks: Map<number, () => void>;
-  let nextTimer: number;
 
   beforeEach(() => {
     fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-agy-usage-only-'));
@@ -113,8 +111,6 @@ describeOnLinux('installed Antigravity saved-profile usage without native descri
     registry = new AntigravityProfileRegistry(ccs);
     nativeCalls = [];
     quotaCalls = [];
-    callbacks = new Map();
-    nextTimer = 0;
     restore = [];
     const forbidden = (name: string) => () => {
       nativeCalls.push(name);
@@ -138,7 +134,6 @@ describeOnLinux('installed Antigravity saved-profile usage without native descri
   });
 
   afterEach(() => {
-    runtime?.stop();
     for (const reset of restore) reset();
     fs.rmSync(fixture, { recursive: true, force: true });
   });
@@ -177,14 +172,6 @@ describeOnLinux('installed Antigravity saved-profile usage without native descri
       home: fixture,
       collectQuota: collect,
       now: () => NOW_MS,
-      setTimer: (callback) => {
-        const id = ++nextTimer;
-        callbacks.set(id, callback);
-        return id;
-      },
-      clearTimer: (id) => {
-        callbacks.delete(id as number);
-      },
     });
   }
 
@@ -204,7 +191,6 @@ describeOnLinux('installed Antigravity saved-profile usage without native descri
     expect(runtime).not.toBeNull();
     expect(runtime!.hasProfiles()).toBe(true);
     const inventory = await runtime!.getInventory();
-    expect(inventory.activationSupported).toBe(false);
     expect(
       inventory.profiles.map((profile) => [
         profile.id,
@@ -241,10 +227,7 @@ describeOnLinux('installed Antigravity saved-profile usage without native descri
       )
     ).toBe(true);
     expect(
-      accounts.every(
-        (account) =>
-          account.capabilities.antigravityCanActivate === false && account.isActive === false
-      )
+      accounts.every((account) => account.isActive === false)
     ).toBe(true);
     expect(quotaCalls).toEqual(['gmail', 'party']);
     const output = JSON.stringify({ inventory, accounts });
@@ -259,43 +242,6 @@ describeOnLinux('installed Antigravity saved-profile usage without native descri
     accounts[0].windows[0].modelIds!.push('mutated-public-copy');
     expect(runtime!.cachedAccounts()[0].windows[0].modelIds).toEqual(['fixture-gemini-model']);
     expect(snapshot(ccs)).toEqual(before);
-    noNativeInstallation();
-  });
-
-  test('manual and enabled automatic switching cannot touch native auth or processes', async () => {
-    await saveProfiles();
-    await registry.withLock(async () => {
-      registry.beginTransaction('party', 'gmail', NOW_MS);
-      registry.completeTransaction('gmail', NOW);
-    });
-    const beforeProfiles = snapshot(path.join(ccs, 'antigravity-profiles'));
-    const beforeCredentials = snapshot(path.join(ccs, 'antigravity-instances'));
-    runtime = factory()(ccs);
-    expect(
-      (await runtime!.activate({ profileId: 'party', hostId: 'ubuntu', mode: 'manual' })).status
-    ).toBe('unsupported-runtime-probe');
-    await expect(
-      runtime!.activate({ profileId: 'party', hostId: 'ubuntu', mode: 'automatic' })
-    ).rejects.toThrow('Invalid manual activation request.');
-    expect(await runtime!.readSelectedProfileId()).toBeNull();
-    runtime!.updateAutoSwitchSettings({
-      enabled: true,
-      requestedPoolId: POOL_ID,
-      thresholdUsedPercent: 95,
-    });
-    runtime!.start();
-    const callback = callbacks.values().next().value;
-    expect(typeof callback).toBe('function');
-    callbacks.clear();
-    callback!();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const status = runtime!.getAutoSwitchStatus();
-    expect(status.enabled).toBe(true);
-    expect(status.outcome).toBe('setup_required');
-    expect(status.activationInProgress).toBe(false);
-    expect(status.lastSwitchedAt).toBeUndefined();
-    expect(snapshot(path.join(ccs, 'antigravity-profiles'))).toEqual(beforeProfiles);
-    expect(snapshot(path.join(ccs, 'antigravity-instances'))).toEqual(beforeCredentials);
     noNativeInstallation();
   });
 

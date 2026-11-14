@@ -776,7 +776,6 @@ describe('explicit Ubuntu Antigravity production-driver composition', () => {
     const publishedAccount = publicDashboardAccount(account);
     const serialized = JSON.stringify([publishedProfile, publishedAccount]);
     expect(publishedProfile).toMatchObject({ id: 'party', selected: true, hostId: 'ubuntu' });
-    expect(publishedAccount.capabilities.antigravityCanActivate).toBe(true);
     expect(serialized).not.toContain(PRIVATE);
     for (const key of ['credential', 'subject', 'nativePath', 'rollbackState', 'restartState']) {
       expect(publishedProfile).not.toHaveProperty(key);

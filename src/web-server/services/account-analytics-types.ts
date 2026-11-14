@@ -50,8 +50,6 @@ export interface AccountAnalyticsWindow extends DashboardAccountWindow {
 }
 
 export interface AccountAnalyticsAccount extends Omit<DashboardAccount, 'windows'> {
-  /** The provider is switchable and this account can be a switch target. */
-  switchable: boolean;
   /** Hidden from Home and the trays; Analytics still lists it. */
   hidden: boolean;
   firstSampleAt: string | null;
@@ -426,7 +424,7 @@ export interface AccountAnalytics {
     availableAccounts: number;
     /** @deprecated Equals `activeAccountIds.codex`; kept for one release. */
     activeCodexAccountId: string | null;
-    /** The active account of each switchable provider, or null when none is active. */
+    /** The live account of Codex and Antigravity on Ubuntu, or null when none is live. */
     activeAccountIds: Partial<Record<'codex' | 'antigravity', string | null>>;
     sampleCount: number;
   };

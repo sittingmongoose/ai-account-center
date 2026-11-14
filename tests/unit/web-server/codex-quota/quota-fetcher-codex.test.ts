@@ -5,69 +5,32 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import type { CodexQuotaResult } from '../quota-types';
+import type { CodexQuotaResult } from '../../../../src/web-server/usage/codex-quota/quota-types';
 
-let tmpDir: string;
-let originalCcsHome: string | undefined;
 let originalFetch: typeof fetch;
 let moduleVersion = 0;
-let buildCodexQuotaWindows: typeof import('../quota-fetcher-codex').buildCodexQuotaWindows;
-let buildCodexCoreUsageSummary: typeof import('../quota-fetcher-codex').buildCodexCoreUsageSummary;
-let fetchCodexQuota: typeof import('../quota-fetcher-codex').fetchCodexQuota;
-let fetchCodexQuotaWithToken: typeof import('../quota-fetcher-codex').fetchCodexQuotaWithToken;
-let getUnknownCodexWindowLabels: typeof import('../quota-fetcher-codex').getUnknownCodexWindowLabels;
-let registerAccount: typeof import('../../accounts/account-manager').registerAccount;
-
-function createCodexAccount(
-  accountId: string,
-  tokenPayload: Record<string, unknown>,
-  tokenFile = `codex-${accountId.replace(/[@.]/g, '_')}.json`
-): void {
-  const authDir = path.join(tmpDir, '.ccs', 'cliproxy', 'auth');
-  fs.mkdirSync(authDir, { recursive: true });
-  fs.writeFileSync(path.join(authDir, tokenFile), JSON.stringify(tokenPayload));
-}
+let buildCodexQuotaWindows: typeof import('../../../../src/web-server/usage/codex-quota/quota-fetcher-codex').buildCodexQuotaWindows;
+let buildCodexCoreUsageSummary: typeof import('../../../../src/web-server/usage/codex-quota/quota-fetcher-codex').buildCodexCoreUsageSummary;
+let fetchCodexQuotaWithToken: typeof import('../../../../src/web-server/usage/codex-quota/quota-fetcher-codex').fetchCodexQuotaWithToken;
+let getUnknownCodexWindowLabels: typeof import('../../../../src/web-server/usage/codex-quota/quota-fetcher-codex').getUnknownCodexWindowLabels;
 
 beforeEach(async () => {
   moduleVersion += 1;
   mock.restore();
-
-  const configGenerator = await import(
-    `../../config/path-resolver?codex-config-generator=${moduleVersion}`
-  );
-  const accountManager = await import(
-    `../../accounts/account-manager?codex-account-manager=${moduleVersion}`
-  );
-  mock.module('../../config/path-resolver', () => configGenerator);
-  mock.module('../../accounts/account-manager', () => accountManager);
-  ({ registerAccount } = accountManager);
-
   ({
     buildCodexQuotaWindows,
     buildCodexCoreUsageSummary,
-    fetchCodexQuota,
     fetchCodexQuotaWithToken,
     getUnknownCodexWindowLabels,
-  } = await import(`../quota-fetcher-codex?codex-fetcher=${moduleVersion}`));
-
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-codex-quota-test-'));
-  originalCcsHome = process.env.CCS_HOME;
-  process.env.CCS_HOME = tmpDir;
+  } = await import(
+    `../../../../src/web-server/usage/codex-quota/quota-fetcher-codex?codex-fetcher=${moduleVersion}`
+  ));
   originalFetch = global.fetch;
 });
 
 afterEach(() => {
   mock.restore();
   global.fetch = originalFetch;
-  if (originalCcsHome !== undefined) {
-    process.env.CCS_HOME = originalCcsHome;
-  } else {
-    delete process.env.CCS_HOME;
-  }
-  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe('Codex Quota Fetcher', () => {
@@ -822,12 +785,7 @@ describe('Codex Quota Fetcher', () => {
       expect(result.resetCredits?.credits).toBeUndefined();
     }, 500);
 
-    it('uses supplied native headers without looking up CLIProxy auth', async () => {
-      const configGenerator = await import('../../config/path-resolver');
-      const accountManager = await import('../../accounts/account-manager');
-      const getAuthDirSpy = spyOn(configGenerator, 'getAuthDir');
-      const getPausedDirSpy = spyOn(accountManager, 'getPausedDir');
-      const getAccountSpy = spyOn(accountManager, 'getAccount');
+    it('sends the supplied native headers', async () => {
       const fetchSpy = mock((input: RequestInfo | URL, init?: RequestInit) =>
         Promise.resolve(
           new Response(
@@ -847,9 +805,6 @@ describe('Codex Quota Fetcher', () => {
       const result = await fetchCodexQuotaWithToken(' native-token ', ' native-workspace ');
       const headers = new Headers(fetchSpy.mock.calls[0]?.[1]?.headers);
 
-      expect(getAuthDirSpy).not.toHaveBeenCalled();
-      expect(getPausedDirSpy).not.toHaveBeenCalled();
-      expect(getAccountSpy).not.toHaveBeenCalled();
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(fetchSpy.mock.calls[0]?.[0]).toBe('https://chatgpt.com/backend-api/wham/usage');
       expect(headers.get('Authorization')).toBe('Bearer native-token');
@@ -886,7 +841,7 @@ describe('Codex Quota Fetcher', () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it('shares structured upstream failure mapping with the CLIProxy wrapper', async () => {
+    it('maps a 401 to reauth-required for the native login', async () => {
       global.fetch = mock(() => Promise.resolve(new Response('', { status: 401 }))) as typeof fetch;
 
       const result = await fetchCodexQuotaWithToken('expired-native-token', 'native-workspace');
@@ -900,29 +855,8 @@ describe('Codex Quota Fetcher', () => {
     });
   });
 
-  describe('fetchCodexQuota failure mapping', () => {
-    function createValidCodexAccount(
-      email: string,
-      accountId = `workspace-${email}`,
-      tokenFile?: string,
-      accessToken = 'test-token'
-    ): void {
-      createCodexAccount(
-        email,
-        {
-          access_token: accessToken,
-          account_id: accountId,
-          expired: '2099-01-01T00:00:00.000Z',
-          email,
-          type: 'codex',
-        },
-        tokenFile
-      );
-    }
-
+  describe('fetchCodexQuotaWithToken failure mapping', () => {
     it('maps deactivated workspace 402 responses to structured metadata', async () => {
-      createValidCodexAccount('workspace@example.com', 'workspace-123');
-
       global.fetch = mock(() =>
         Promise.resolve(
           new Response(JSON.stringify({ detail: { code: 'deactivated_workspace' } }), {
@@ -932,7 +866,7 @@ describe('Codex Quota Fetcher', () => {
         )
       ) as typeof fetch;
 
-      const result = await fetchCodexQuota('workspace@example.com');
+      const result = await fetchCodexQuotaWithToken('test-token', 'workspace-123');
 
       expect(result.success).toBe(false);
       expect(result.httpStatus).toBe(402);
@@ -943,111 +877,18 @@ describe('Codex Quota Fetcher', () => {
     });
 
     it('maps 401 responses to reauth-required metadata', async () => {
-      createValidCodexAccount('reauth@example.com', 'workspace-reauth');
-
       global.fetch = mock(() => Promise.resolve(new Response('', { status: 401 }))) as typeof fetch;
 
-      const result = await fetchCodexQuota('reauth@example.com');
+      const result = await fetchCodexQuotaWithToken('test-token', 'workspace-reauth');
 
       expect(result.success).toBe(false);
       expect(result.httpStatus).toBe(401);
       expect(result.errorCode).toBe('reauth_required');
       expect(result.needsReauth).toBe(true);
-      expect(result.actionHint).toContain('ccs cliproxy auth codex');
-    });
-
-    it('uses the registry token file for duplicate-email Codex accounts', async () => {
-      createValidCodexAccount(
-        'shared.user@example.com',
-        'workspace-team',
-        'codex-04a0f049-shared.user@example.com-team.json',
-        'team-token'
-      );
-      createValidCodexAccount(
-        'shared.user@example.com',
-        'workspace-free',
-        'codex-shared.user@example.com-free.json',
-        'free-token'
-      );
-
-      registerAccount(
-        'codex',
-        'codex-04a0f049-shared.user@example.com-team.json',
-        'shared.user@example.com'
-      );
-      const freeAccount = registerAccount(
-        'codex',
-        'codex-shared.user@example.com-free.json',
-        'shared.user@example.com'
-      );
-
-      const fetchSpy = mock((input: RequestInfo | URL, init?: RequestInit) =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              plan_type: 'free',
-              rate_limit: {
-                primary_window: { used_percent: 10, reset_after_seconds: 3600 },
-              },
-            }),
-            {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            }
-          )
-        )
-      ) as typeof fetch;
-      global.fetch = fetchSpy;
-
-      const result = await fetchCodexQuota(freeAccount.id);
-      const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
-      const headers = new Headers(requestInit?.headers);
-
-      expect(result.success).toBe(true);
-      expect(headers.get('Authorization')).toBe('Bearer free-token');
-      expect(headers.get('ChatGPT-Account-Id')).toBe('workspace-free');
-    });
-
-    it('does not guess a duplicate-email Codex auth file when the registry entry is missing', async () => {
-      createValidCodexAccount(
-        'shared.user@example.com',
-        'workspace-team',
-        'codex-legacy-slot-a.json'
-      );
-      createValidCodexAccount(
-        'shared.user@example.com',
-        'workspace-free',
-        'codex-legacy-slot-b.json'
-      );
-
-      const fetchSpy = mock(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              plan_type: 'free',
-              rate_limit: {
-                primary_window: { used_percent: 10, reset_after_seconds: 3600 },
-              },
-            }),
-            {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' },
-            }
-          )
-        )
-      ) as typeof fetch;
-      global.fetch = fetchSpy;
-
-      const result = await fetchCodexQuota('shared.user@example.com#04a0f049-team');
-
-      expect(result.success).toBe(false);
-      expect(result.errorCode).toBe('auth_file_missing');
-      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(result.actionHint).toBe('Sign in to this Codex account again.');
     });
 
     it('maps 403 responses to forbidden metadata', async () => {
-      createValidCodexAccount('forbidden@example.com', 'workspace-forbidden');
-
       global.fetch = mock(() =>
         Promise.resolve(
           new Response(JSON.stringify({ detail: { code: 'quota_api_forbidden' } }), {
@@ -1057,7 +898,7 @@ describe('Codex Quota Fetcher', () => {
         )
       ) as typeof fetch;
 
-      const result = await fetchCodexQuota('forbidden@example.com');
+      const result = await fetchCodexQuotaWithToken('test-token', 'workspace-forbidden');
 
       expect(result.success).toBe(false);
       expect(result.httpStatus).toBe(403);
@@ -1067,8 +908,6 @@ describe('Codex Quota Fetcher', () => {
     });
 
     it('maps 429 responses to retryable rate-limit metadata', async () => {
-      createValidCodexAccount('rate-limit@example.com', 'workspace-rate-limit');
-
       global.fetch = mock(() =>
         Promise.resolve(
           new Response(JSON.stringify({ detail: { code: 'rate_limited' } }), {
@@ -1078,7 +917,7 @@ describe('Codex Quota Fetcher', () => {
         )
       ) as typeof fetch;
 
-      const result = await fetchCodexQuota('rate-limit@example.com');
+      const result = await fetchCodexQuotaWithToken('test-token', 'workspace-rate-limit');
 
       expect(result.success).toBe(false);
       expect(result.httpStatus).toBe(429);
@@ -1088,8 +927,6 @@ describe('Codex Quota Fetcher', () => {
     });
 
     it('maps 5xx responses to retryable provider-unavailable metadata', async () => {
-      createValidCodexAccount('outage@example.com', 'workspace-outage');
-
       global.fetch = mock(() =>
         Promise.resolve(
           new Response(JSON.stringify({ detail: { code: 'upstream_failure' } }), {
@@ -1099,7 +936,7 @@ describe('Codex Quota Fetcher', () => {
         )
       ) as typeof fetch;
 
-      const result = await fetchCodexQuota('outage@example.com');
+      const result = await fetchCodexQuotaWithToken('test-token', 'workspace-outage');
 
       expect(result.success).toBe(false);
       expect(result.httpStatus).toBe(503);
@@ -1109,8 +946,6 @@ describe('Codex Quota Fetcher', () => {
     });
 
     it('maps unknown upstream statuses to a non-retryable structured error', async () => {
-      createValidCodexAccount('teapot@example.com', 'workspace-teapot');
-
       global.fetch = mock(() =>
         Promise.resolve(
           new Response('{"message":"Strange upstream response"}', {
@@ -1120,7 +955,7 @@ describe('Codex Quota Fetcher', () => {
         )
       ) as typeof fetch;
 
-      const result = await fetchCodexQuota('teapot@example.com');
+      const result = await fetchCodexQuotaWithToken('test-token', 'workspace-teapot');
 
       expect(result.success).toBe(false);
       expect(result.httpStatus).toBe(418);
@@ -1130,7 +965,6 @@ describe('Codex Quota Fetcher', () => {
     });
 
     it('sanitizes and truncates raw upstream error detail before returning it', async () => {
-      createValidCodexAccount('sanitized@example.com', 'workspace-sanitized');
       const leakedToken = 'secret-token-value-123';
       const oversizedMessage = 'x'.repeat(400);
 
@@ -1150,7 +984,7 @@ describe('Codex Quota Fetcher', () => {
         )
       ) as typeof fetch;
 
-      const result = await fetchCodexQuota('sanitized@example.com');
+      const result = await fetchCodexQuotaWithToken('test-token', 'workspace-sanitized');
 
       expect(result.success).toBe(false);
       expect(result.errorDetail).toBeDefined();
@@ -1160,8 +994,6 @@ describe('Codex Quota Fetcher', () => {
     });
 
     it('omits raw HTML upstream bodies from the returned error detail', async () => {
-      createValidCodexAccount('html@example.com', 'workspace-html');
-
       global.fetch = mock(() =>
         Promise.resolve(
           new Response('<html><body>bad gateway</body></html>', {
@@ -1171,7 +1003,7 @@ describe('Codex Quota Fetcher', () => {
         )
       ) as typeof fetch;
 
-      const result = await fetchCodexQuota('html@example.com');
+      const result = await fetchCodexQuotaWithToken('test-token', 'workspace-html');
 
       expect(result.success).toBe(false);
       expect(result.errorDetail).toBe('[HTML error response omitted]');
