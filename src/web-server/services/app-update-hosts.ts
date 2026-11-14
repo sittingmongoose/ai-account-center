@@ -28,8 +28,8 @@ const MAX_STREAM = 1024 * 1024;
 
 /**
  * The Antigravity CLI versions that passed a switching review, comma-joined
- * for the helper's --agy-reviewed (it holds any newer build). Empty when the
- * packaged release file is unusable: the helper then holds the update.
+ * for older helpers' --agy-reviewed. Current helpers accept and ignore this
+ * legacy argument after switching retirement. Empty when the release is unusable.
  * Versions are strictly validated (digits, dots, one -tag), so they are inert
  * on every command line below.
  */

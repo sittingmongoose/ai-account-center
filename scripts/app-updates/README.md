@@ -68,7 +68,7 @@ modify or export account credentials/configuration.
 
 | App | Detected installation and supported update |
 | --- | --- |
-| Antigravity CLI | Active native `agy update`; on a managed switching installation a paused unreviewed runtime updates without checking running copies (see below) |
+| Antigravity CLI | Native `agy update`; retired switching markers never select the managed coordinator (see below) |
 | Cursor CLI | Official managed `cursor-agent update`; Linux/Nas1 directly, Mac in the login GUI session, Windows the way Cursor's own `.cmd` runs it (`powershell -ExecutionPolicy Bypass -File cursor-agent.ps1`, a process-only policy) in the existing interactive task. Windows reads the version from the folder the launcher picks, without running it. A refused sign-in is `cursor_signin_needed`. No running agent is stopped. |
 | Antigravity ACP (T3) | After T3's own row: asks the local T3 server, once it answers, to install the release T3 offers on an enabled Antigravity instance, using a temporary scoped session, then refreshes every enabled instance's models. Only T3 writes `active.json`. Linux and Mac hold the move from the 1.3/1.4 runtime pair to the native 1.5+ CLI (sign-in). Separate from `agy`. |
 | Muse Code | Active user launcher, fixed Meta installer with `MUSE_UPGRADE_MODE=1` and no PATH modification; bash on Ubuntu/Nas1/Mac, PowerShell on Windows |
@@ -491,109 +491,26 @@ scheduled the restart of Nas1's own `t3code.service`, that
 has no AI Account Center package, command or service and no `~/.ccs` content
 beyond `app-updates/`.
 
-**Antigravity CLI on managed switching installations.** Account switching works only
-with native builds listed in `scripts/antigravity/runtime/release.json`
-(`reviewedNatives`), and `agy update` always installs the newest build. Update all
-never holds a new build for that review: Antigravity updates on every computer.
-On a managed runtime an unreviewed build only pauses switching until it is
-reviewed, the same as the CLI's own background update. An ordinary CLI
-installation uses its native updater without any review. Saved usage profiles
-alone cannot activate accounts.
+**Antigravity CLI after switching retirement (2026-11-13).** Update all runs the
+ordinary native `agy update` on every computer, including a VM with a leftover
+`antigravity-switching/runtime-installation.json`. It does not read that marker,
+probe switching sockets, fetch a switching-review manifest, or invoke
+`managed-update-command.js`. The old `--agy-reviewed` option and Windows task
+field remain accepted for compatibility; they do not gate updates or change
+result messages. Older saved jobs and helpers can still contain switching-era
+`held`, `updated_unreviewed` and `runtime_unavailable` rows.
 
-Until 2026-10-21 a managed runtime held every unreviewed newest build
-(`held_for_review`), so each Antigravity release (1.3.0, 1.3.2, 1.3.5, 1.4.4)
-stayed uninstalled on the Ubuntu VM until someone reviewed it by hand. The
-dashboard still reads `held` rows from older helpers and saved jobs.
+On Ubuntu, discovery excludes the old managed PATH launcher and selects the
+native `~/.local/bin/agy`. After a native hash change, that launcher's existing
+hash fallback also runs the native CLI directly. Its startup still needs the
+managed marker, so removing the marker requires retiring the launcher's PATH
+entries first; do not delete the marker alone.
 
-When `antigravity-switching/runtime-installation.json` is present in any relevant
-AAC configuration directory, the helper treats the installation as managed. It checks the default `~/.ccs`, `CCS_DIR`, `CCS_HOME/.ccs`, and the parent of
-the explicit update state directory (`--state-dir`/`AAC_UPDATE_STATE_DIR`, which
-carries the dashboard's resolved `--config-dir` scope). These checks are additive;
-an override cannot hide a default-scope runtime. Malformed descriptors, symlinks
-(including dangling ancestors), Windows junctions, unreadable paths and unexpected
-file types also count as managed; only certainly absent runtime paths allow the
-ordinary updater.
-Before a managed update runs, the helper reads the official release manifest for
-this computer (the fixed `.../manifests/<os>_<arch>.json` the CLI's own updater and installer use, 16 KB at
-most) and compares its version with the reviewed versions the dashboard passes as
-`--agy-reviewed` (on Windows they travel in the task request file; a manual Ubuntu
-run reads the packaged release file):
-
-- newest build already installed: `current`, and `agy update` is not run;
-- newest build reviewed: the managed update runs and may stop idle managed
-  sessions and reopen them on the new build;
-- newest build not reviewed, or the review list or manifest unreadable: the
-  managed update runs idle-only (`managed-update-command.js --idle-only`). With
-  a running coordinator, no managed session may be running; the update reports
-  `updated_unreviewed` ("Updated, but this Antigravity version has no switching
-  review yet; Antigravity switching is paused until it is reviewed."). A running
-  managed session is never stopped: the runtime could not restart a managed
-  session on an unreviewed build, so the row is `action_required` / `in_use` and
-  nothing changes until Antigravity is closed;
-- an update that lands outside the list in any other way (a release published
-  between the check and `agy update`) also reports `updated_unreviewed` when no
-  managed session was running. With managed sessions running, that race (the
-  manifest named a reviewed build, `agy update` installed a newer unreviewed one)
-  still ends as before: the sessions cannot restart on it, so the row is
-  `restart_failed` and the runtime keeps its recovery record.
-
-Once an unreviewed build is installed (by Update all or by the CLI's own
-background update), the resident runtime refuses to start: the native no longer
-matches its pin, so `ai-account-center-antigravity.service` exits with
-`Managed Antigravity runtime is unavailable (native-publisher-changed).`
-A stopped runtime holds no managed session, so the bridge does not need it to
-update. When nothing listens on the runtime socket
-(`~/.ccs/antigravity-runtime/control.sock` absent, or a leftover socket file
-that refuses connections) and the installed native was read in full and matches
-no reviewed build, `managed-update-command.js` takes the paused path instead of
-the coordinator. The socket is probed first, and the native is hashed once
-against the whole reviewed set. A native that cannot be read, or an unusable
-review list, is not proof of an unreviewed build: it keeps the coordinator.
-
-Owner decision (2026-11-07): "No check, like Antigravity's own updater".
-
-Under the account lock, a pending managed recovery record stops the paused
-update. Otherwise AAC backs up the native to
-`antigravity-switching/native-backups/<sha256>`, then rechecks that the selected
-native identity and digest still match the backup and the build is still
-unreviewed. After hashing, it probes the runtime socket again and synchronously
-checks pending recovery before granting permission. This slow recheck runs last,
-with nothing awaited between it and `agy update`.
-
-The paused path does not look for running Antigravity processes and stops
-nothing. Antigravity's own background updater already replaces the binary
-while copies are running. Copies already open keep the old version until they
-restart. A successful changed version reports `updated` (or
-`updated_unreviewed` if the new build also has no review), with that restart
-note; an unchanged version reports `current`.
-
-A pending recovery, failed backup, unreadable version, or a runtime or build
-that changes before the final recheck reports `failed` / `runtime_paused_blocked`
-before the updater runs. A failed `agy update` reports `failed` /
-`runtime_paused` and records the attempt.
-
-Known issue, not fixed here: the runtime's process guard can refuse an owned
-identity worker that exits just as it is checked, which loses that worker's
-result. The race predates the paused path and is on `main` too; its fix is on
-its own branch, `fix/antigravity-worker-exit-race`.
-
-A listening (or unclear) runtime socket keeps the coordinator, as do a reviewed
-build and an unreadable native whose runtime is down. The coordinator's
-idle-only rule for managed sessions is unchanged: a running managed session
-reports `action_required` / `in_use` when the newest build is unreviewed.
-A coordinator that cannot reach its runtime reports `failed` /
-`runtime_unavailable` and installs nothing. Until 2026-11-06 the paused case
-failed this way too, preventing later updates once an unreviewed build landed.
-
-`agy` keeps working on an unreviewed build: the managed launcher runs the native
-CLI directly when its hash does not match the reviewed pin. Switching resumes
-after that build's review, runtime refresh and bundle rebuild
-(`docs/antigravity-runtime.md`). Managed execution uses the existing
-default-scope Ubuntu account lock and resident PTY coordinator. A custom-scope
-managed marker or one on another platform reports unsupported instead of
-falling through to the ordinary updater; the installed bridge cannot safely
-manage those scopes. The CLI also updates itself in the background during
-ordinary runs; switching then pauses until a review in the same way.
+The ordinary CLI process and terminal checks apply. An executed updater that
+fails reports `failed` with `updateAttempted: true`; an unchanged successful
+version reports `current`; a changed version reports `updated`. A failed
+terminal restart remains `restart_failed` with its pending-restart marker.
+Background sessions keep their old build until they restart.
 
 Inventory disables background CLI updates (`MUSE_NO_AUTO_UPDATE=1`,
 `AGY_CLI_DISABLE_AUTO_UPDATE=true`, `DISABLE_AUTOUPDATER=1`). This matters because
@@ -1270,10 +1187,8 @@ three. It follows the Ubuntu rows of this guide except where noted here.
   run its `t3-acp-update` unit, and the worker starts it again after a T3 restart,
   as the Ubuntu rows above describe, where those are installed. Run without
   `--dashboard-job`, it needs no dashboard job or lock.
-- **Antigravity.** Nas1 has no AI Account Center managed Antigravity runtime
-  (that update branch needs `~/.ccs/antigravity-switching/runtime-installation.json`,
-  which is never created there), so the CLI updates through the generic
-  `agy update` without a switching-review hold.
+- **Antigravity.** As on every computer, the CLI uses the ordinary native
+  `agy update`; switching markers and reviewed builds no longer affect it.
 - **Only fixed commands.** For updates the dashboard runs three fixed commands
   on Nas1: the hash query, the extract and this helper. None reads or writes
   `auth.json`, `.credentials.json` or a saved profile, and restarts reuse each

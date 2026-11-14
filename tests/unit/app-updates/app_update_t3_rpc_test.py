@@ -247,7 +247,6 @@ class AuthTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(updates, "execution_lock", contextlib.nullcontext))
             stack.enter_context(mock.patch.object(updates, "detect", return_value=installs))
             stack.enter_context(mock.patch.object(updates, "check_readiness", return_value=None))
-            stack.enter_context(mock.patch.object(updates, "antigravity_plan", return_value=(None, False)))
             stack.enter_context(mock.patch.object(updates, "claude_current", return_value=None))
             stack.enter_context(mock.patch.object(acp, "detect_antigravity_acp", return_value=installs["antigravity-acp"]))
             stack.enter_context(mock.patch.object(rpc, "auth_command", side_effect=AssertionError("stopped T3 must not issue")))

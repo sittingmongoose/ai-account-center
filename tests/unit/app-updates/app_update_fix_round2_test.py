@@ -446,7 +446,6 @@ class Deadlines(Home):
             for headers in (False, True):
                 server.trickle_headers = headers
                 for call, module, field in ((t3.latest_release, t3, 'RELEASES'),
-                                            (lambda: updates.latest_agy_version('ubuntu'), updates, 'AGY_MANIFEST_BASE'),
                                             (lambda: updates.claude_pointer('latest'), updates, 'CLAUDE_RELEASES')):
                     with self.subTest(headers=headers, field=field), mock.patch.object(module, field, base), \
                             mock.patch.object(zcode, 'read_bounded', side_effect=short_read):

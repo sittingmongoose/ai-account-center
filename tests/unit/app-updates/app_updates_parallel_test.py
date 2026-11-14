@@ -32,7 +32,6 @@ class ParallelUpdateTests(unittest.TestCase):
         self.stack.enter_context(mock.patch.object(pathlib.Path, "home", return_value=self.root))
         self.stack.enter_context(mock.patch.object(updater, "execution_lock", contextlib.nullcontext))
         self.stack.enter_context(mock.patch.object(updater, "check_readiness", return_value=None))
-        self.stack.enter_context(mock.patch.object(updater, "antigravity_plan", return_value=(None, False)))
         self.stack.enter_context(mock.patch.object(updater, "claude_current", return_value=None))
         self.stack.enter_context(mock.patch.object(updater, "ubuntu_unit_busy", return_value=False))
         self.installs = {key: common.Install(key, "windows", self.root / key, "1.0.0") for key in common.APP_LABELS}
