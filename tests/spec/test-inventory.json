@@ -128,6 +128,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-transport/tests/path_identity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
       "file": "crates/aac-transport/tests/transport.rs",
       "kind": "internal",
       "evidence": [],
