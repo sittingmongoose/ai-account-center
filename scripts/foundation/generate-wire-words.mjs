@@ -6,6 +6,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -107,7 +108,15 @@ const table = [...words].sort(([a], [b]) => a.localeCompare(b, 'en')).map(([word
 }));
 const path = resolve(root, 'tests/spec/wire-words.json');
 const output = JSON.stringify(table, null, 2) + '\n';
+const fingerprints = Object.fromEntries([...new Set(table.flatMap(row => row.sources.map(s => s.split(':')[0])))].sort()
+  .map(path => [path, createHash('sha256').update(readFileSync(resolve(root, path))).digest('hex')]));
+const fingerprintPath = resolve(root, 'tests/spec/wire-source-hashes.json');
+const fingerprintOutput = JSON.stringify(fingerprints, null, 2) + '\n';
 if (process.argv.includes('--check')) {
   if (readFileSync(path, 'utf8') !== output) throw new Error('wire vocabulary drift; regenerate and review');
-} else writeFileSync(path, output);
+  if (readFileSync(fingerprintPath, 'utf8') !== fingerprintOutput) throw new Error('wire vocabulary source drift; regenerate and review');
+} else {
+  writeFileSync(path, output);
+  writeFileSync(fingerprintPath, fingerprintOutput);
+}
 console.log(`${table.length} wire words from ${new Set(table.flatMap(row => row.sources.map(s => s.split(':')[0]))).size} sources`);
