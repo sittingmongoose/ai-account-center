@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/codex/profiles/auto-switch",
+    "role": "signed-out"
+  },
+  "response": {
+    "body": {
+      "error": "Authentication required"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 401
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/app-updates/start",
+    "role": "signed-out",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "error": "Authentication required"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 401
+  }
+}

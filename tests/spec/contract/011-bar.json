@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/accounts/add",
+    "role": "bar",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "invalid_body",
+      "error": "The request could not be completed."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 400
+  }
+}

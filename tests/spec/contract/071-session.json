@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/status",
+    "role": "session"
+  },
+  "response": {
+    "body": {
+      "cards": [],
+      "version": 1
+    },
+    "headers": {
+      "cache-control": "private, no-cache",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
+      "vary": "Cookie"
+    },
+    "status": 200
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles",
+    "role": "device"
+  },
+  "response": {
+    "body": {
+      "profiles": []
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 200
+  }
+}

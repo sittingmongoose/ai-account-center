@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "PATCH",
+    "path": "/api/accounts/fixture-missing",
+    "role": "session",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "error": "API endpoint was not found."
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 404
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/auth/devices/me",
+    "role": "device"
+  },
+  "response": {
+    "body": {
+      "id": "<device-id>",
+      "idleExpiresAt": "<timestamp>",
+      "name": "Fixture device",
+      "pairedAt": "<timestamp>",
+      "platform": "mac",
+      "rotateAfter": "<timestamp>"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 200
+  }
+}

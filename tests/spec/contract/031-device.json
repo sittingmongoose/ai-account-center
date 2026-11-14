@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/antigravity/profiles",
+    "role": "device"
+  },
+  "response": {
+    "body": {
+      "activationSupported": false,
+      "hostId": "ubuntu",
+      "profiles": [],
+      "schemaVersion": 1
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 200
+  }
+}

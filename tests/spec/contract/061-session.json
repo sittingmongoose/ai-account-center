@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/codex/profiles/auto-switch",
+    "role": "session"
+  },
+  "response": {
+    "body": {
+      "activationInProgress": false,
+      "enabled": false,
+      "message": "Automatic Codex account switching is disabled.",
+      "outcome": "disabled",
+      "pollIntervalSeconds": 60,
+      "thresholdPercent": 5,
+      "thresholdUsedPercent": 95
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 200
+  }
+}

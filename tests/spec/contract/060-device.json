@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/codex/profiles/fixture-missing/activate",
+    "role": "device",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "invalid_profile",
+      "error": "The selected profile has no valid saved login."
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 400
+  }
+}

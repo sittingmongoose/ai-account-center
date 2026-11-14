@@ -1,0 +1,10 @@
+{
+  "request": {
+    "method": "UPGRADE",
+    "path": "/ws",
+    "role": "device"
+  },
+  "response": {
+    "status": 403
+  }
+}

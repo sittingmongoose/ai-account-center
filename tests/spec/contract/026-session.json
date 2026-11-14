@@ -1,0 +1,34 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/antigravity/auto-switch",
+    "role": "session"
+  },
+  "response": {
+    "body": {
+      "activationInProgress": false,
+      "cooldownSeconds": 300,
+      "enabled": false,
+      "lastCheckedAt": null,
+      "lastHostId": null,
+      "lastProfileId": null,
+      "lastSwitchedAt": null,
+      "maxQuotaAgeSeconds": 300,
+      "message": "Antigravity automatic switching is off.",
+      "outcome": "disabled",
+      "pollIntervalSeconds": 60,
+      "requestedPoolId": null,
+      "selectedHostIds": [
+        "ubuntu"
+      ],
+      "thresholdUsedPercent": 95
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 200
+  }
+}

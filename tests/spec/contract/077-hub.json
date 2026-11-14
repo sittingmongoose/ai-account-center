@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/management/api-call",
+    "role": "hub",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "invalid_request",
+      "error": "auth_index must be a string from auth-files."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 400
+  }
+}

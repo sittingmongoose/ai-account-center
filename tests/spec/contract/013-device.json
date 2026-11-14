@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/accounts/dashboard?fixture=invalid",
+    "role": "device"
+  },
+  "response": {
+    "body": {
+      "error": "Select a valid desktop platform and refresh value."
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 400
+  }
+}

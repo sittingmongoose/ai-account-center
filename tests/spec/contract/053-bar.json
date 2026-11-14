@@ -1,0 +1,31 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/auth/setup",
+    "role": "bar"
+  },
+  "response": {
+    "body": {
+      "configured": true,
+      "connection": {
+        "peer": "127.0.0.1",
+        "trusted": false
+      },
+      "enabled": true,
+      "managedBy": "config",
+      "secureOrigin": null,
+      "secureTransport": true,
+      "sessionLifetimeDays": 7,
+      "sessionTimeoutHours": 168,
+      "setupCodeRequired": false,
+      "trustedLocalNetwork": false
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 200
+  }
+}

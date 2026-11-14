@@ -1,0 +1,13 @@
+{
+  "account": { "id": "fixture-account", "provider": "codex", "label": "Fixture account" },
+  "storeStatus": { "state": "ready", "fixture": true },
+  "seriesPoints": {
+    "resolution": "hour", "columns": [], "truncated": false,
+    "series": [{ "identity": "fixture-series", "accountId": "codex:fixture-account", "provider": "codex", "plan": null,
+      "window": { "identity": "fixture-window", "key": "five_hour", "label": "5 hour", "kind": null, "unit": null, "poolId": null, "poolLabel": null },
+      "points": [[1767225600000, 1, 2, 3, 60, 1, 0, 0, 0]] }]
+  },
+  "usageAt": { "at": "2026-01-01T00:00:00.000Z", "series": [] },
+  "statusView": { "version": 1, "cards": [] },
+  "scoreboardView": { "version": 1, "rows": [] }
+}

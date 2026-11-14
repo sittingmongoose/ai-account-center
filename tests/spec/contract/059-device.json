@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/claude/history-snapshots/cleanup",
+    "role": "device",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "device_scope",
+      "error": "This action needs a signed-in dashboard session."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 403
+  }
+}

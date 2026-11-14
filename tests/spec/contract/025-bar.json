@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/accounts/visibility",
+    "role": "bar"
+  },
+  "response": {
+    "body": {
+      "hiddenAccountIds": [],
+      "hiddenProviders": [],
+      "trayHiddenAccountIds": [],
+      "trayHiddenProviders": []
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 200
+  }
+}

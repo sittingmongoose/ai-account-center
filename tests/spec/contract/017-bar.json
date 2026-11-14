@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "PUT",
+    "path": "/api/accounts/settings",
+    "role": "bar",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "error": "Choose a whole number of seconds from 30 to 3600."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 400
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "DELETE",
+    "path": "/api/auth/devices/fixture-missing",
+    "role": "bar",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "unknown_device",
+      "error": "That device is not paired."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 404
+  }
+}

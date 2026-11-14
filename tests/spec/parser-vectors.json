@@ -1,0 +1,2402 @@
+{
+  "schemaVersion": 1,
+  "nowUnixSeconds": 1767225600.25,
+  "cases": [
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": null,
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": true,
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": 0,
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "",
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "garbage",
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "-1",
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "0",
+      "python": 0
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "1",
+      "python": 1
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": " 31 ",
+      "python": 31
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "86401",
+      "python": 86400
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "9999999999999",
+      "python": 86400
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "Thu, 01 Jan 2026 00:00:01 GMT",
+      "python": 1
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "Wed, 31 Dec 2025 23:59:59 GMT",
+      "python": 0
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": null,
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": true,
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": 0,
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": -1,
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": 1767225600,
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": 1767225600000,
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "1767225600",
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "",
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "bad",
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00Z",
+      "python": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T01:00:00+01:00",
+      "python": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00.123Z",
+      "python": "2026-01-01T00:00:00.123Z"
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00",
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2101-01-01T00:00:00Z",
+      "python": "2101-01-01T00:00:00.000Z"
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2201-01-01T00:00:00Z",
+      "python": null
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": null,
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": true,
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": false,
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": 0,
+      "python": 0,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": 0,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": -1,
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": 1.25,
+      "python": 1.25,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": 1.25,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "1.25",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": " 2 ",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "NaN",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "Infinity",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "1e309",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": [],
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "claude_usage",
+      "providers": [
+        "claude"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": {},
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": null,
+      "python": 600
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": true,
+      "python": 600
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": 0,
+      "python": 600
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "",
+      "python": 600
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "garbage",
+      "python": 600
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "-1",
+      "python": 600
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "0",
+      "python": 300
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "1",
+      "python": 300
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": " 31 ",
+      "python": 300
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "86401",
+      "python": 86400
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "9999999999999",
+      "python": 600
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "Thu, 01 Jan 2026 00:00:01 GMT",
+      "python": 300
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "Wed, 31 Dec 2025 23:59:59 GMT",
+      "python": 300
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "python": 600
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": null,
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": true,
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": 0,
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": -1,
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": 1767225600,
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": 1767225600000,
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "1767225600",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "bad",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00Z",
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T01:00:00+01:00",
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00.123Z",
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2101-01-01T00:00:00Z",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2201-01-01T00:00:00Z",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": null,
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": true,
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": false,
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": 0,
+      "python": 0
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": -1,
+      "python": -1
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": 1.25,
+      "python": 1.25
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "1.25",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": " 2 ",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "NaN",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "Infinity",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "1e309",
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": [],
+      "python": null
+    },
+    {
+      "module": "desktop_helpers",
+      "providers": [
+        "antigravity",
+        "muse-native"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": {},
+      "python": null
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": null,
+      "python": 600
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": true,
+      "python": 600
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": 0,
+      "python": 600
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "",
+      "python": 600
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "garbage",
+      "python": 600
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "-1",
+      "python": 600
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "0",
+      "python": 30
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "1",
+      "python": 30
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": " 31 ",
+      "python": 31
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "86401",
+      "python": 86400
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "9999999999999",
+      "python": 600
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "Thu, 01 Jan 2026 00:00:01 GMT",
+      "python": 30
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "Wed, 31 Dec 2025 23:59:59 GMT",
+      "python": 30
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "retry_after_seconds",
+      "kind": "retry",
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "python": 600
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": null,
+      "python": null
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": true,
+      "python": null
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": 0,
+      "python": null
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": -1,
+      "python": null
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": 1767225600,
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": 1767225600000,
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "1767225600",
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "",
+      "python": null
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "bad",
+      "python": null
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00Z",
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T01:00:00+01:00",
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00.123Z",
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00",
+      "python": null
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2101-01-01T00:00:00Z",
+      "python": "2101-01-01T00:00:00Z"
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "reset_at",
+      "kind": "reset",
+      "input": "2201-01-01T00:00:00Z",
+      "python": null
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": null,
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": true,
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": false,
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": 0,
+      "python": 0,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": 0,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": -1,
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": 1.25,
+      "python": 1.25,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": 1.25,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "1.25",
+      "python": 1.25,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": true
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": " 2 ",
+      "python": 2,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": true
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "NaN",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "Infinity",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": "1e309",
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": [],
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "plan_common",
+      "providers": [
+        "kimi",
+        "zai",
+        "minimax",
+        "qwen"
+      ],
+      "function": "number",
+      "kind": "number",
+      "input": {},
+      "python": null,
+      "typescriptSource": "src/web-server/services/claude-desktop-live-service.ts#nonnegative",
+      "typescript": null,
+      "disagreement": false
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": null,
+      "python": 600
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": true,
+      "python": 600
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": 0,
+      "python": 600
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "",
+      "python": 600
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "garbage",
+      "python": 600
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "-1",
+      "python": 600
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "0",
+      "python": 300
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "1",
+      "python": 300
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": " 31 ",
+      "python": 300
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "86401",
+      "python": 86400
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "9999999999999",
+      "python": 600
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "Thu, 01 Jan 2026 00:00:01 GMT",
+      "python": 300
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "Wed, 31 Dec 2025 23:59:59 GMT",
+      "python": 300
+    },
+    {
+      "module": "muse_console",
+      "providers": [
+        "muse"
+      ],
+      "function": "retry_seconds",
+      "kind": "retry",
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "python": 600
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": null,
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": true,
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": 0,
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "garbage",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "-1",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "0",
+      "python": 0
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "1",
+      "python": 1
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": " 31 ",
+      "python": 31
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "86401",
+      "python": 86400
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "9999999999999",
+      "python": 86400
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "Thu, 01 Jan 2026 00:00:01 GMT",
+      "python": 1
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "Wed, 31 Dec 2025 23:59:59 GMT",
+      "python": 0
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": null,
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": true,
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": false,
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": 0,
+      "python": 0
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": -1,
+      "python": -1
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": 1.25,
+      "python": 1.25
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "1.25",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": " 2 ",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "NaN",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "Infinity",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "1e309",
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": [],
+      "python": null
+    },
+    {
+      "module": "failover_core",
+      "providers": [
+        "claude-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": {},
+      "python": null
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": null,
+      "python": 60
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": true,
+      "python": 60
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": 0,
+      "python": 60
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "",
+      "python": 60
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "garbage",
+      "python": 60
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "-1",
+      "python": 60
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "0",
+      "python": 1
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "1",
+      "python": 1
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": " 31 ",
+      "python": 31
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "86401",
+      "python": 86400
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "9999999999999",
+      "python": 60
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "Thu, 01 Jan 2026 00:00:01 GMT",
+      "python": 1
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "Wed, 31 Dec 2025 23:59:59 GMT",
+      "python": 1
+    },
+    {
+      "module": "failover_special",
+      "providers": [
+        "antigravity-failover"
+      ],
+      "function": "_retry_after",
+      "kind": "retry",
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "python": 60
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": null,
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": true,
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": false,
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": 0,
+      "python": 0
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": -1,
+      "python": -1
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": 1.25,
+      "python": 1.25
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "1.25",
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": " 2 ",
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "",
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "NaN",
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "Infinity",
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": "1e309",
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": [],
+      "python": null
+    },
+    {
+      "module": "failover_usage",
+      "providers": [
+        "codex-failover"
+      ],
+      "function": "_number",
+      "kind": "number",
+      "input": {},
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": null,
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": true,
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": 0,
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": -1,
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": 1767225600,
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": 1767225600000,
+      "python": "2026-01-01T00:00:00Z"
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": "1767225600",
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": "",
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": "bad",
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00Z",
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": "2026-01-01T01:00:00+01:00",
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00.123Z",
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": "2026-01-01T00:00:00",
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": "2101-01-01T00:00:00Z",
+      "python": null
+    },
+    {
+      "module": "cursor_usage",
+      "providers": [
+        "cursor"
+      ],
+      "function": "_milliseconds_reset",
+      "kind": "reset",
+      "input": "2201-01-01T00:00:00Z",
+      "python": null
+    }
+  ]
+}
