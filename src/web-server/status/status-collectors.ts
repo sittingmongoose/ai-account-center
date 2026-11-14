@@ -4,6 +4,7 @@ import {
   HOST_OS,
   namedComputer,
   localComputer,
+  isSafeUsageSshAlias,
   type HostOs,
 } from '../services/dashboard-hosts';
 /**
@@ -26,7 +27,7 @@ import path from 'path';
 import { NetworkError, ValidationError } from '../../errors/error-types';
 import { runManagedCommand } from '../../utils/managed-process';
 import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
-import { isSafeUsageSshAlias } from '../services/additional-usage-transport';
+import { sshArgv } from '../services/ssh-policy';
 import { PERSISTENT_SHARE_ERROR, TransientMisses } from './agent-reports-reader';
 import { findSecret, MACHINES, type MachineId } from './report-schema';
 import { readRegularFile } from './share-read';
@@ -886,22 +887,7 @@ export async function readRemoteMachine(
   if (!alias) throw new ValidationError('No ssh host is configured for this machine.');
   const result = await run(
     'ssh',
-    [
-      '-T',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'ConnectTimeout=5',
-      '-o',
-      'ConnectionAttempts=1',
-      '-o',
-      'ServerAliveInterval=5',
-      '-o',
-      'ServerAliveCountMax=2',
-      '--',
-      alias,
-      machineProbeCommand(REMOTE_MACHINES[machine]),
-    ],
+    sshArgv(alias, machineProbeCommand(REMOTE_MACHINES[machine]), { interval: 5, countMax: 2 }),
     { timeoutMs: 20_000, maxBytes: 64 * 1024 }
   );
   if (result.code !== 0) throw new NetworkError(commandFailure('ssh', result));
@@ -963,22 +949,7 @@ export async function readRemotePins(
   if (!alias) throw new ValidationError('No ssh host is configured for this machine.');
   const result = await run(
     'ssh',
-    [
-      '-T',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'ConnectTimeout=5',
-      '-o',
-      'ConnectionAttempts=1',
-      '-o',
-      'ServerAliveInterval=5',
-      '-o',
-      'ServerAliveCountMax=2',
-      '--',
-      alias,
-      remotePinsCommand(REMOTE_MACHINES[machine]),
-    ],
+    sshArgv(alias, remotePinsCommand(REMOTE_MACHINES[machine]), { interval: 5, countMax: 2 }),
     { timeoutMs: 30_000, maxBytes: 1024 * 1024, coalesce: true }
   );
   if (result.code !== 0) throw new NetworkError(commandFailure('ssh', result));

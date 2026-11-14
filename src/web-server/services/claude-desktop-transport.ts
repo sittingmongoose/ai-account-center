@@ -8,6 +8,8 @@ import {
   CLAUDE_PROFILE_ID_PATTERN,
   type ClaudeDesktopLauncher,
 } from './claude-desktop-profile-service';
+import { isSafeUsageSshAlias } from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 
 const SSH_TIMEOUT_MS = 8000;
 const MAX_HISTORY_BYTES = 1024 * 1024;
@@ -27,7 +29,7 @@ function quoteShell(value: string): string {
 }
 
 function checkHost(host: string | undefined): string {
-  if (!host || host.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(host)) {
+  if (!isSafeUsageSshAlias(host)) {
     throw new ValidationError('Claude desktop SSH alias is not configured safely.');
   }
   return host;
@@ -59,22 +61,7 @@ async function runDesktopSsh(
   const run = new Promise<string | Buffer>((resolve, reject) => {
     child = execFile(
       'ssh',
-      [
-        '-T',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'ConnectTimeout=5',
-        '-o',
-        'ConnectionAttempts=1',
-        '-o',
-        'ServerAliveInterval=5',
-        '-o',
-        'ServerAliveCountMax=1',
-        '--',
-        checkHost(host),
-        command,
-      ],
+      sshArgv(checkHost(host), command, { interval: 5, countMax: 1 }),
       {
         encoding: privatePipe ? 'buffer' : 'utf8',
         timeout,

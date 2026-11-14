@@ -3,6 +3,8 @@ import path from 'path';
 import { NetworkError } from '../../errors/error-types';
 import { withProcessDeadline } from '../../utils/settle-deadline';
 import type { DashboardPlatform } from './account-dashboard-types';
+import { isSafeUsageSshAlias } from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 
 export const ADDITIONAL_PROVIDERS = [
   'antigravity',
@@ -167,11 +169,8 @@ export function isAdditionalProvider(value: unknown): value is AdditionalProvide
   return typeof value === 'string' && (ADDITIONAL_PROVIDERS as readonly string[]).includes(value);
 }
 
-export function isSafeUsageSshAlias(value: unknown): value is string {
-  return (
-    typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)
-  );
-}
+/** The alias grammar lives in dashboard-hosts.ts; existing suites import it from here. */
+export { isSafeUsageSshAlias };
 
 function helperName(provider: AdditionalProvider): string {
   return ['antigravity', 'muse', 'cursor'].includes(provider)
@@ -241,22 +240,7 @@ export async function runAdditionalUsageSource(source: AdditionalUsageSource): P
       ? 'python.exe'
       : '/usr/bin/python3';
   const args = source.sshHost
-    ? [
-        '-T',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'ConnectTimeout=5',
-        '-o',
-        'ConnectionAttempts=1',
-        '-o',
-        'ServerAliveInterval=5',
-        '-o',
-        'ServerAliveCountMax=1',
-        '--',
-        source.sshHost,
-        remoteCommand(source),
-      ]
+    ? sshArgv(source.sshHost, remoteCommand(source), { interval: 5, countMax: 1 })
     : [
         path.resolve(__dirname, '../../../scripts/account-usage', helperName(source.provider)),
         '--provider',

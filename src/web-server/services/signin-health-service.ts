@@ -8,6 +8,7 @@ import {
   signinHelperBundle,
   usageHelperCommand,
 } from './usage-failover-transport';
+import { sshArgv } from './ssh-policy';
 import {
   readClaudeSignInRenewal,
   type ClaudeSignInRenewal,
@@ -397,22 +398,10 @@ async function collectRemote(host: UsageHostEntry): Promise<string> {
   const bundle = await signinHelperBundle();
   return runCollector(
     'ssh',
-    [
-      '-T',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'ConnectTimeout=5',
-      '-o',
-      'ConnectionAttempts=1',
-      '-o',
-      'ServerAliveInterval=5',
-      '-o',
-      'ServerAliveCountMax=1',
-      '--',
-      host.sshHost as string,
-      usageHelperCommand(host.platform),
-    ],
+    sshArgv(host.sshHost as string, usageHelperCommand(host.platform), {
+      interval: 5,
+      countMax: 1,
+    }),
     30_000,
     JSON.stringify({ request: {}, helperSource: bundle })
   );

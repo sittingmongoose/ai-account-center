@@ -1,4 +1,5 @@
-import { isSafeUsageSshAlias } from './additional-usage-transport';
+import { isSafeUsageSshAlias } from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 import type { RegistryAccount } from './account-registry-v2';
 import { runClaudeHostOverSsh } from './claude-host-transport';
 import {
@@ -67,20 +68,6 @@ export interface MuseLifecycleDeps {
   enabled: boolean;
   ssh?: MuseSshRunner;
 }
-
-const SSH_ARGV = [
-  '-T',
-  '-o',
-  'BatchMode=yes',
-  '-o',
-  'ConnectTimeout=5',
-  '-o',
-  'ConnectionAttempts=1',
-  '-o',
-  'ServerAliveInterval=5',
-  '-o',
-  'ServerAliveCountMax=1',
-] as const;
 
 const PASSED_ENV = [
   'PATH',
@@ -171,7 +158,7 @@ export class MuseAccountLifecycle {
         }
         return {
           file: 'ssh',
-          args: [...SSH_ARGV, '--', sshHost, remoteLogin],
+          args: sshArgv(sshHost, remoteLogin, { interval: 5, countMax: 1 }),
           env,
           pty: false,
         };

@@ -4,7 +4,8 @@ import path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { ConfigError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
-import { isSafeUsageSshAlias } from './additional-usage-transport';
+import { isSafeUsageSshAlias } from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 import type { DashboardAccount, DashboardAccountWindow } from './account-dashboard-types';
 import { getUsageFailoverService, type UsageFailoverService } from './usage-failover-service';
 import {
@@ -299,22 +300,11 @@ async function runSource(sshHost: string): Promise<string> {
   const run = new Promise<string>((resolve, reject) => {
     child = execFile(
       'ssh',
-      [
-        '-T',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'ConnectTimeout=5',
-        '-o',
-        'ConnectionAttempts=1',
-        '-o',
-        'ServerAliveInterval=5',
-        '-o',
-        'ServerAliveCountMax=1',
-        '--',
+      sshArgv(
         sshHost,
         'exec "$HOME/.ccs/opencode-usage-bridge/native-host/launch-host.sh" --collect',
-      ],
+        { interval: 5, countMax: 1 }
+      ),
       { encoding: 'utf8', timeout: SOURCE_TIMEOUT_MS, maxBuffer: MAX_BYTES, windowsHide: true },
       (error, stdout) => {
         if (error) reject(new Error('Optional console wallet unavailable.'));

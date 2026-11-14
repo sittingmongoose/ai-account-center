@@ -5,7 +5,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { ConfigError, NetworkError } from '../../errors/error-types';
 import type { DashboardPlatform } from './account-dashboard-types';
-import { isSafeUsageSshAlias } from './additional-usage-transport';
+import { isSafeUsageSshAlias } from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 
 /**
  * The AAC-owned API-key store (CONTRACT-registry-lifecycle section 3.2).
@@ -237,20 +238,6 @@ export type KeyHelperRunner = (
   input: string | null
 ) => Promise<string>;
 
-const SSH_OPTIONS = [
-  '-T',
-  '-o',
-  'BatchMode=yes',
-  '-o',
-  'ConnectTimeout=5',
-  '-o',
-  'ConnectionAttempts=1',
-  '-o',
-  'ServerAliveInterval=5',
-  '-o',
-  'ServerAliveCountMax=1',
-];
-
 export const runKeyHelperOverSsh: KeyHelperRunner = (sshHost, remoteCommand, input) =>
   new Promise((resolve, reject) => {
     if (!isSafeUsageSshAlias(sshHost)) {
@@ -259,7 +246,7 @@ export const runKeyHelperOverSsh: KeyHelperRunner = (sshHost, remoteCommand, inp
     }
     const child = execFile(
       'ssh',
-      [...SSH_OPTIONS, '--', sshHost, remoteCommand],
+      sshArgv(sshHost, remoteCommand, { interval: 5, countMax: 1 }),
       {
         encoding: 'utf8',
         timeout: HELPER_TIMEOUT_MS,

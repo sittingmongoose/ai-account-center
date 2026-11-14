@@ -8,6 +8,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
 import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/native-version';
 import { HOST_OS, SSH_ALIASES, helperPlatform } from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 
 /**
  * How the dashboard reaches each computer's fixed update helper: the local
@@ -83,22 +84,7 @@ export function appUpdateInvocation(
   }
   return {
     binary: 'ssh',
-    args: [
-      '-T',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'ConnectTimeout=5',
-      '-o',
-      'ConnectionAttempts=1',
-      '-o',
-      'ServerAliveInterval=10',
-      '-o',
-      'ServerAliveCountMax=2',
-      '--',
-      host,
-      command,
-    ],
+    args: sshArgv(host, command, { interval: 10, countMax: 2 }),
   };
 }
 
@@ -314,15 +300,6 @@ export function helperArchiveArgs(root = PACKAGE_ROOT): string[] {
 }
 const HELPER_QUERY_TIMEOUT_MS = 30_000;
 const HELPER_PUSH_TIMEOUT_MS = 90_000;
-const SSH_SYNC_OPTIONS = [
-  '-T',
-  '-o',
-  'BatchMode=yes',
-  '-o',
-  'ConnectTimeout=5',
-  '-o',
-  'ConnectionAttempts=1',
-];
 /**
  * Stage a complete immutable generation, then atomically replace only its launcher.
  * Python 3.13's private Windows directories belong to the elevated token's owner
@@ -412,7 +389,7 @@ function sshText(host: string, command: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       'ssh',
-      [...SSH_SYNC_OPTIONS, '--', host, command],
+      sshArgv(host, command),
       {
         encoding: 'utf8',
         timeout: HELPER_QUERY_TIMEOUT_MS,
@@ -438,7 +415,7 @@ function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): Promis
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
     });
-    const remote = spawn('ssh', [...SSH_SYNC_OPTIONS, '--', host, extract], {
+    const remote = spawn('ssh', sshArgv(host, extract), {
       stdio: ['pipe', 'ignore', 'ignore'],
       windowsHide: true,
     });

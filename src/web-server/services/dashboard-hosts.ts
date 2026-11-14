@@ -68,6 +68,17 @@ export const MACHINE_LABELS = Object.freeze(
 ) as Readonly<Record<MachineId, string>>;
 /** Compatibility export; consumers use the registry's maps. */
 export const NAS1_SSH_ALIAS = SSH_ALIASES.nas1;
+/**
+ * The one SSH alias grammar for every transport: a safe ssh_config alias
+ * (alphanumeric start, then letters, digits, dot, underscore or dash; at
+ * most 128 characters). The host table owns the rule; transports keep their
+ * own error types when a value fails it.
+ */
+export function isSafeUsageSshAlias(value: unknown): value is string {
+  return (
+    typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)
+  );
+}
 export function helperPlatform(host: DashboardHost): HelperPlatform {
   const kind = HOST_OS[host];
   return kind === 'linux' ? 'ubuntu' : kind;

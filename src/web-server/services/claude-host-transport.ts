@@ -7,6 +7,8 @@ import {
   type ClaudeHost,
   type ClaudeHostLauncher,
 } from './claude-account-stores';
+import { isSafeUsageSshAlias } from './dashboard-hosts';
+import { sshArgv } from './ssh-policy';
 
 /**
  * Host steps for Claude Add and Remove (CONTRACT-registry-lifecycle 6.2, 6.7,
@@ -71,28 +73,13 @@ export class ClaudeHostError extends NetworkError {
 
 export const runClaudeHostOverSsh: ClaudeHostRunner = (sshHost, command, input) =>
   new Promise((resolve, reject) => {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sshHost)) {
+    if (!isSafeUsageSshAlias(sshHost)) {
       reject(new ValidationError('Claude host alias is not configured safely.'));
       return;
     }
     const child = execFile(
       'ssh',
-      [
-        '-T',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'ConnectTimeout=5',
-        '-o',
-        'ConnectionAttempts=1',
-        '-o',
-        'ServerAliveInterval=5',
-        '-o',
-        'ServerAliveCountMax=1',
-        '--',
-        sshHost,
-        command,
-      ],
+      sshArgv(sshHost, command, { interval: 5, countMax: 1 }),
       { encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024, windowsHide: true },
       (error, stdout) => (error ? reject(new ClaudeHostError()) : resolve(stdout))
     );
