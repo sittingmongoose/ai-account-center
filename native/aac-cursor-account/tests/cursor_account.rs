@@ -148,8 +148,9 @@ fn reads_every_page_and_drops_the_copies_a_boundary_repeats() {
     });
     let client = api::Client::new(Some(&base));
     let access = client.exchange(KEY).unwrap();
-    let (events, pages) = api::events(&client, &access, WINDOW.0, WINDOW.1).unwrap();
+    let (events, pages, unmeasured) = api::events(&client, &access, WINDOW.0, WINDOW.1).unwrap();
     assert_eq!(pages, 2);
+    assert_eq!(unmeasured, 0);
     assert_eq!(events.len(), 1003);
     assert_eq!(
         events.iter().map(|e| e.tokens[0]).sum::<u64>(),
@@ -183,7 +184,11 @@ fn reads_every_page_and_drops_the_copies_a_boundary_repeats() {
 }
 
 #[test]
-fn skips_events_without_token_usage_or_outside_the_window() {
+fn an_event_without_measured_counts_is_unmeasured_never_measured_zeros() {
+    // The review's M3 input, beside the neighbours it must not be confused with: a measured
+    // event, one with no tokenUsage at all (outside), one outside the window, and two whose
+    // tokenUsage is empty or incomplete ({}, and inputTokens only). The last two must read as
+    // not logged (counted separately), never as an hour of zeros.
     let (base, _) = fake(|path, _| {
         if let Some(answer) = exchange_ok(path) {
             return answer;
@@ -194,18 +199,25 @@ fn skips_events_without_token_usage_or_outside_the_window() {
             event(0, "kimi-k3", None),
             json!({"timestamp": "1794000000500", "model": "kimi-k3"}),
             late,
+            json!({"timestamp": "1794000000500", "model": "grok-4.7", "tokenUsage": {}}),
+            json!({"timestamp": "1794000000500", "model": "grok-4.7",
+                   "tokenUsage": {"inputTokens": 50}}),
         ];
         (
             200,
             vec![],
-            json!({"totalUsageEventsCount": 3, "usageEventsDisplay": events}).to_string(),
+            json!({"totalUsageEventsCount": 5, "usageEventsDisplay": events}).to_string(),
         )
     });
     let client = api::Client::new(Some(&base));
     let access = client.exchange(KEY).unwrap();
-    let (events, _) = api::events(&client, &access, WINDOW.0, WINDOW.1).unwrap();
+    let (events, _, unmeasured) = api::events(&client, &access, WINDOW.0, WINDOW.1).unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(api::hourly(&events)[0]["uncosted"], 1);
+    assert_eq!(unmeasured, 2);
+    let rows = api::hourly(&events);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["m"], "kimi-k3");
+    assert_eq!(rows[0]["uncosted"], 1);
 }
 
 #[test]
@@ -218,6 +230,7 @@ fn every_failure_is_a_fixed_cause_and_a_redirect_is_never_followed() {
         (200, "inconsistent", api::Failure::BadResponse),
         (200, "short", api::Failure::BadResponse),
         (200, "error-body", api::Failure::BadResponse),
+        (200, "bad-count", api::Failure::BadResponse),
     ];
     for (status, at, expected) in cases {
         let (base, seen) = fake(move |path, body| {
@@ -246,6 +259,15 @@ fn every_failure_is_a_fixed_cause_and_a_redirect_is_never_followed() {
                     vec![],
                     json!({"totalUsageEventsCount": 5, "usageEventsDisplay": [event(0, "m", None)]}).to_string(),
                 ),
+                "bad-count" => {
+                    let mut broken = event(0, "m", None);
+                    broken["tokenUsage"]["inputTokens"] = json!(10.5);
+                    (
+                        200,
+                        vec![],
+                        json!({"totalUsageEventsCount": 1, "usageEventsDisplay": [broken]}).to_string(),
+                    )
+                }
                 _ => (200, vec![], json!({"error": "x"}).to_string()),
             }
         });
@@ -294,7 +316,8 @@ fn quota_reads_the_plan_percentages() {
     let quota = api::quota(&client, &access).unwrap();
     assert_eq!(quota["billingCycleStartMs"], 1_793_000_000_000i64);
     assert_eq!(quota["planUsage"]["totalPercentUsed"], 42.5);
-    assert_eq!(quota["planUsage"]["autoPercentUsed"], 100.0);
+    // The reported percentage, unclamped: a plan over its quota reads above 100 (review L1).
+    assert_eq!(quota["planUsage"]["autoPercentUsed"], 120.0);
 }
 
 #[test]
@@ -344,7 +367,7 @@ fn the_key_is_one_private_credential_never_shown() {
 }
 
 #[test]
-fn dedupe_counts_each_token_once() {
+fn dedupe_reports_the_overlap_estimate_and_the_account_rows_as_read() {
     let row = |h: &str, m: &str, i: u64, n: u64, cents: f64| json!({"h": h, "m": m, "i": i, "o": 0, "cr": 0, "cw": 0, "n": n, "cents": cents});
     let local = |h: &str, m: &str, i: u64| json!({"h": h, "m": m, "i": i, "o": 0, "cr": 0, "cw": 0});
     let answer = dedupe::dedupe(&json!({
@@ -360,28 +383,61 @@ fn dedupe_counts_each_token_once() {
             local("2026-11-12 15:00", "kimi-k3", 25),                 // no account event: unmatched
         ],
     }));
+    // The rows are the account's own rows, unscaled: rows sum to accountTokens, never to the
+    // local runs plus a residual.
     let rows = answer["rows"].as_array().unwrap();
-    let left: Vec<(String, u64)> = rows
+    let shown: Vec<(String, u64, f64)> = rows
         .iter()
         .map(|r| {
             (
                 format!("{} {}", r["h"].as_str().unwrap(), r["m"].as_str().unwrap()),
                 r["i"].as_u64().unwrap(),
+                r["cents"].as_f64().unwrap(),
             )
         })
         .collect();
     assert_eq!(
-        left,
+        shown,
         vec![
-            ("2026-11-11 22:00 claude-5-sonnet".to_string(), 50),
-            ("2026-11-12 09:00 kimi-k3".to_string(), 40)
+            ("2026-11-11 22:00 claude-5-sonnet".to_string(), 50, 5.0),
+            ("2026-11-11 20:00 grok-4.7-high".to_string(), 300, 30.0),
+            ("2026-11-11 21:00 grok-4.7-high".to_string(), 700, 70.0),
+            ("2026-11-12 09:00 kimi-k3".to_string(), 100, 4.0),
         ]
     );
-    // Cursor's cost follows the part left: 40 of 100 tokens -> 40% of 4 cents.
-    assert!((rows[1]["cents"].as_f64().unwrap() - 1.6).abs() < 1e-9);
+    // The overlap estimate: 1,000 of the run's hour cover 300 + 700, and 60 of the 100 cover 60.
     assert_eq!(
         answer["summary"],
         json!({"accountTokens": 1150, "matchedTokens": 1060, "outsideTokens": 90, "localUnmatchedTokens": 25})
+    );
+}
+
+#[test]
+fn a_multi_hour_run_never_inflates_the_account_total() {
+    // The review's witness: one T3 run over three hours, aggregated at its finish. The account
+    // total is its 300 tokens; the old code also published the 100 residual the finish-hour
+    // window cannot reach, counting 400 tokens for 300 tokens of work.
+    let row = |h: &str| json!({"h": h, "m": "grok-4.7", "i": 100u64, "o": 0, "cr": 0, "cw": 0, "n": 1, "cents": 0.0});
+    let answer = dedupe::dedupe(&json!({
+        "account": [row("2026-11-11 10:00"), row("2026-11-11 11:00"), row("2026-11-11 12:00")],
+        "local": [
+            {"h": "2026-11-11 12:00", "m": "grok-4.7", "i": 300, "o": 0, "cr": 0, "cw": 0},
+        ],
+    }));
+    // The account total is authoritative: 300, and the rows carry exactly those tokens.
+    assert_eq!(answer["summary"]["accountTokens"], 300);
+    let rows: u64 = answer["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["i"].as_u64().unwrap())
+        .sum();
+    assert_eq!(rows, 300);
+    // The overlap estimate itself is reported as such: the finish-hour window covers the 11:00
+    // and 12:00 hours, never the 10:00 one.
+    assert_eq!(
+        answer["summary"],
+        json!({"accountTokens": 300, "matchedTokens": 200, "outsideTokens": 100, "localUnmatchedTokens": 100})
     );
 }
 
@@ -444,6 +500,7 @@ fn the_binary_prints_no_key_token_or_account_id() {
     );
     assert_eq!(read["state"], "read");
     assert_eq!(read["events"], 1);
+    assert_eq!(read["unmeasured"], 0);
     let text = format!("{put}{read}");
     for secret in [KEY, SUB, token().as_str(), "conv-0"] {
         assert!(!text.contains(secret), "{secret} was printed");

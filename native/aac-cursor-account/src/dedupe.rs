@@ -1,11 +1,14 @@
-//! The account's usage outside the scanned computers (DESIGN 17.4). Cursor's events are every
-//! request on every device, T3's runs included; the local runs reader places T3's runs on a
-//! computer. Never add the two: local hours cover the account's tokens, the rest is outside.
+//! The account's usage against the local runs (DESIGN 17.4). Cursor's events are every request
+//! on every device, T3's runs included; the local runs reader places T3's runs on a computer.
+//! The account feed is the authoritative account total, and the local runs are an overlapping
+//! breakdown of it, never added to it. No event carries a run id, so the overlap can only be
+//! estimated, by model and time; the estimate is reported as an estimate (`matchedTokens`,
+//! `outsideTokens`) and must never be summed with the account total or added to any other total.
 //!
-//! An event carries no run id, so the match is by model and time, per token kind. A local run
-//! counts in the hour it finished, its requests are billed through its run: a local hour covers
-//! the account's same hour first, then the hour before, then the hour after (clock skew), never
-//! further, greedily, never below zero. Models compare without a `cursor-` prefix and effort,
+//! The match itself is by model and time, per token kind. A local run counts in the hour it
+//! finished, while its requests are billed through its run: a local hour covers the account's
+//! same hour first, then the hour before, then the hour after (clock skew), never further,
+//! greedily, never below zero. Models compare without a `cursor-` prefix and effort,
 //! `-thinking` or `-fast` suffix; rows keep their own spelling.
 
 use crate::util;
@@ -16,7 +19,9 @@ const HOUR_MS: i64 = 3_600_000;
 
 #[derive(Clone, Debug, Default)]
 struct Cell {
+    /// The tokens left after the local runs were matched against this cell (the estimate's basis).
     tokens: [u64; 4],
+    /// The account's own tokens, as read: never changed by the match.
     original: [u64; 4],
     events: u64,
     cents: f64,
@@ -51,8 +56,10 @@ fn rows(value: Option<&Value>) -> Vec<(i64, String, [u64; 4], u64, f64, u64)> {
         .collect()
 }
 
-/// `{account: rows, local: rows}` in, `{rows, summary}` out: the account's rows minus what the
-/// local runs account for, and the four totals that say how much was matched.
+/// `{account: rows, local: rows}` in, `{rows, summary}` out: the account's own rows (the
+/// authoritative total; `rows` sum to `accountTokens`), and the four totals of the overlap
+/// estimate. `matchedTokens` and `outsideTokens` are estimates of how much of the account the
+/// local runs cover; they are never meant to be added to anything.
 pub fn dedupe(request: &Value) -> Value {
     // (match model, hour) -> raw model -> cell
     let mut account: BTreeMap<(String, i64), BTreeMap<String, Cell>> = BTreeMap::new();
@@ -103,22 +110,16 @@ pub fn dedupe(request: &Value) -> Value {
                 total[i] += cell.original[i];
                 outside[i] += cell.tokens[i];
             }
-            let left: u64 = cell.tokens.iter().sum();
-            if left == 0 {
-                continue;
-            }
-            let whole: u64 = cell.original.iter().sum();
-            let share = if whole == 0 { 1.0 } else { left as f64 / whole as f64 };
             out.push(json!({
                 "h": util::hour_label(hour),
                 "m": model,
-                "i": cell.tokens[0],
-                "o": cell.tokens[1],
-                "cr": cell.tokens[2],
-                "cw": cell.tokens[3],
-                "n": ((cell.events as f64 * share).round() as u64).max(1),
-                "cents": cell.cents * share,
-                "uncosted": ((cell.uncosted as f64 * share).round() as u64),
+                "i": cell.original[0],
+                "o": cell.original[1],
+                "cr": cell.original[2],
+                "cw": cell.original[3],
+                "n": cell.events,
+                "cents": cell.cents,
+                "uncosted": cell.uncosted,
             }));
         }
     }

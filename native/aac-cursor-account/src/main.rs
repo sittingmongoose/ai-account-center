@@ -128,15 +128,19 @@ fn main() {
             let client = client();
             let read = client.exchange(&stored.secret).and_then(|token| {
                 let account = api::account_hash(&token);
-                api::events(&client, &token, since, until).map(|(events, pages)| (account, events, pages))
+                api::events(&client, &token, since, until)
+                    .map(|(events, pages, unmeasured)| (account, events, pages, unmeasured))
             });
             match read {
-                Ok((account, events, pages)) => print(json!({
+                Ok((account, events, pages, unmeasured)) => print(json!({
                     "state": "read",
                     "readAt": started,
                     "account": account,
                     "key": {"fingerprint": stored.fingerprint, "last4": stored.last4},
                     "events": events.len(),
+                    // Events whose tokenUsage had no usable counts: not logged, never measured
+                    // zeros, and so never a row.
+                    "unmeasured": unmeasured,
                     "pages": pages,
                     "rows": api::hourly(&events),
                 })),

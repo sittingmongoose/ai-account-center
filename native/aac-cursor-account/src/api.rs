@@ -150,25 +150,34 @@ fn number(value: Option<&Value>) -> Result<Option<f64>, Failure> {
     }
 }
 
-fn whole(value: Option<f64>) -> u64 {
-    value.map_or(0, |v| v.trunc() as u64)
+/// One measured token count: a finite, non-negative integer (a count is never fractional; a
+/// missing field is `None`, which the caller treats as not measured, never as zero).
+fn count_of(usage: &serde_json::Map<String, Value>, key: &str) -> Result<Option<u64>, Failure> {
+    match usage.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) => match n.as_f64() {
+            Some(v) if v.is_finite() && v >= 0.0 && v == v.trunc() => Ok(Some(v as u64)),
+            _ => Err(Failure::BadResponse),
+        },
+        _ => Err(Failure::BadResponse),
+    }
 }
 
-/// One raw event: None when it holds no token usage or falls outside the window.
-fn event(raw: &Value, since_ms: i64, until_ms: i64) -> Result<Option<Event>, Failure> {
+/// One raw event's verdict. `Unmeasured`: the event carries a `tokenUsage` without every
+/// measured count (the wire format documents no guarantee they are present, and an empty or
+/// incomplete object must never become measured zeros); it is counted separately and reads as
+/// not logged. `Outside`: no `tokenUsage` at all, or outside the window.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Parsed {
+    Outside,
+    Unmeasured,
+    Measured(Event),
+}
+
+fn event(raw: &Value, since_ms: i64, until_ms: i64) -> Result<Parsed, Failure> {
     let Some(item) = raw.as_object() else {
         return Err(Failure::BadResponse);
     };
-    let usage = match item.get("tokenUsage") {
-        None | Some(Value::Null) => return Ok(None),
-        Some(Value::Object(map)) => map,
-        _ => return Err(Failure::BadResponse),
-    };
-    let input = number(usage.get("inputTokens"))?;
-    let output = number(usage.get("outputTokens"))?;
-    let read = number(usage.get("cacheReadTokens"))?;
-    let write = number(usage.get("cacheWriteTokens"))?;
-    let cents = number(usage.get("totalCents"))?;
     let at = match item.get("timestamp") {
         Some(Value::String(text)) if !text.trim().is_empty() => text.trim().parse::<f64>().ok(),
         Some(Value::Number(n)) => n.as_f64(),
@@ -184,20 +193,35 @@ fn event(raw: &Value, since_ms: i64, until_ms: i64) -> Result<Option<Event>, Fai
         .ok_or(Failure::BadResponse)?;
     let at_ms = at as i64;
     if at_ms < since_ms || at_ms > until_ms {
-        return Ok(None);
+        return Ok(Parsed::Outside);
     }
     let session = item
         .get("conversationId")
         .and_then(Value::as_str)
         .filter(|c| !c.is_empty())
         .map(|c| util::sha256_hex(format!("aac-session-v1:cursor:{c}").as_bytes())[..16].to_string());
-    Ok(Some(Event {
-        at_ms,
-        model: model.to_string(),
-        session,
-        tokens: [whole(input), whole(output), whole(read), whole(write)],
-        cents,
-    }))
+    let usage = match item.get("tokenUsage") {
+        None | Some(Value::Null) => return Ok(Parsed::Outside),
+        Some(Value::Object(map)) => map,
+        _ => return Err(Failure::BadResponse),
+    };
+    let cents = number(usage.get("totalCents"))?;
+    let verdict = match (
+        count_of(usage, "inputTokens")?,
+        count_of(usage, "outputTokens")?,
+        count_of(usage, "cacheReadTokens")?,
+        count_of(usage, "cacheWriteTokens")?,
+    ) {
+        (Some(input), Some(output), Some(read), Some(write)) => Parsed::Measured(Event {
+            at_ms,
+            model: model.to_string(),
+            session,
+            tokens: [input, output, read, write],
+            cents,
+        }),
+        _ => Parsed::Unmeasured,
+    };
+    Ok(verdict)
 }
 
 /// The longest suffix of `previous` equal to a prefix of `current` (T3's `boundaryOverlap`).
@@ -224,14 +248,21 @@ fn boundary_overlap(previous: &[String], current: &[String]) -> usize {
         .min(previous.len())
 }
 
-/// Every billed event in [since, until], pages read in order. An event the account gained while
-/// paging can repeat at a page boundary: the final count proves how many copies to drop (T3's
-/// rule). A count that does not reconcile is a bad answer, never a partial total.
-pub fn events(client: &Client, token: &str, since_ms: i64, until_ms: i64) -> Result<(Vec<Event>, usize), Failure> {
+/// Every billed event in [since, until], pages read in order, as `(measured events, pages read,
+/// unmeasured events)`. An event the account gained while paging can repeat at a page boundary:
+/// the final count proves how many copies to drop (T3's rule). A count that does not reconcile
+/// is a bad answer, never a partial total. An unmeasured event (no usable `tokenUsage`) counts
+/// separately and never becomes a row.
+pub fn events(
+    client: &Client,
+    token: &str,
+    since_ms: i64,
+    until_ms: i64,
+) -> Result<(Vec<Event>, usize, usize), Failure> {
     if since_ms < 0 || until_ms < since_ms {
         return Err(Failure::BadResponse);
     }
-    let mut raw_pages: Vec<(Vec<Option<Event>>, usize)> = Vec::new();
+    let mut raw_pages: Vec<(Vec<Parsed>, usize)> = Vec::new();
     let mut previous: Vec<String> = Vec::new();
     let mut total: Option<usize> = None;
     for page in 1..=MAX_PAGES + 1 {
@@ -293,16 +324,22 @@ pub fn events(client: &Client, token: &str, since_ms: i64, until_ms: i64) -> Res
         None => 0,
     };
     let pages = raw_pages.len();
-    let mut kept = Vec::new();
+    let (mut kept, mut unmeasured) = (Vec::new(), 0usize);
     for (page, overlap) in raw_pages {
         let drop = removals.min(overlap);
         removals -= drop;
-        kept.extend(page.into_iter().skip(drop).flatten());
+        for verdict in page.into_iter().skip(drop) {
+            match verdict {
+                Parsed::Measured(event) => kept.push(event),
+                Parsed::Unmeasured => unmeasured += 1,
+                Parsed::Outside => {}
+            }
+        }
     }
     if removals != 0 {
         return Err(Failure::BadResponse);
     }
-    Ok((kept, pages))
+    Ok((kept, pages, unmeasured))
 }
 
 /// One hour and model of the account's usage.
@@ -366,8 +403,10 @@ pub fn quota(client: &Client, token: &str) -> Result<Value, Failure> {
     let mut plan = Map::new();
     if let Some(Value::Object(usage)) = map.get("planUsage") {
         for key in ["totalPercentUsed", "autoPercentUsed", "apiPercentUsed"] {
+            // The reported percentage, unclamped: a plan over its quota reads above 100, and a
+            // comparison must see that. Any cap belongs to the presentation.
             if let Some(value) = number(usage.get(key))? {
-                plan.insert(key.into(), json!(value.min(100.0)));
+                plan.insert(key.into(), json!(value));
             }
         }
     }
