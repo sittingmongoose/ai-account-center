@@ -50,6 +50,7 @@ import {
   invalidateSignInHealthCache,
 } from '../../../src/web-server/services/signin-health-service';
 import {
+  configuredUsageHosts,
   privateUsageInvocation,
   usageHelperCommand,
 } from '../../../src/web-server/services/usage-failover-transport';
@@ -397,7 +398,12 @@ describe('signin-health-service', () => {
     const calls = captureExec(() => '{"schemaVersion":1,"profiles":[]}');
     await getSignInHealth(async () => null);
     const remote = sshCalls(calls);
-    const hosts = Object.entries(SSH_ALIASES) as Array<[keyof typeof SSH_ALIASES, string]>;
+    // Every remote host this machine collects from: the machine running the test is local, not SSH (on Nas1 that
+    // drops nas1), so the expected set comes from the same host table, never a fixed count.
+    const hosts = (await configuredUsageHosts()).flatMap((entry) =>
+      entry.sshHost ? [[entry.host, entry.sshHost] as [keyof typeof SSH_ALIASES, string]] : []
+    );
+    expect(hosts.length).toBeGreaterThan(0);
     expect(remote).toHaveLength(hosts.length);
     for (const [host, alias] of hosts) {
       const call = remote.find((candidate) => candidate.args.includes(alias));
