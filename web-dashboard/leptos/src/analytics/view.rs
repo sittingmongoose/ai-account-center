@@ -29,7 +29,7 @@ pub struct AnalyticsView {
     pub agenda: Agenda,
 }
 
-/// The page state bridge.js keeps (`analyticsPage`): the controls show it, the actions change it.
+/// The page state the Analytics controller keeps (frame-analytics.mjs, once bridge.js `analyticsPage`): the controls show it, the actions change it.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PageState {
@@ -192,7 +192,7 @@ pub struct PickItem {
     pub off: bool,
 }
 
-/// The usage trend, laid out by bridge.js in the pixels of the box the page reported (`analytics-layout trend`):
+/// The usage trend, laid out by the Analytics controller (analytics-usage.mjs) in the pixels of the box the page reported (`analytics-layout trend`):
 /// `pw` x `ph` is the plot inside the fixed pads (`TREND_PAD`).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -902,7 +902,7 @@ pub struct QRow {
     pub na: String,
 }
 
-/// An open row's focus chart, laid out by bridge.js in the pixels of the reported focus box (`w` x `h`). Shapes and
+/// An open row's focus chart, laid out by the Analytics controller in the pixels of the reported focus box (`w` x `h`). Shapes and
 /// labels name theme colours by key; labels were placed so they never overlap.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]

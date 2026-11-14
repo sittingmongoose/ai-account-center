@@ -146,7 +146,7 @@ pub fn DailyCard() -> impl IntoView {
             observe_size(&el, move |w, h| size.set((w.round(), h.round())));
         }
     });
-    // The bars' labels are thinned for the reported width (bridge.js `dailyView`): report this box.
+    // The bars' labels are thinned for the reported width (analytics-usage.mjs `dailyView`): report this box.
     let reported = StoredValue::new((0.0f64, 0.0f64));
     Effect::new(move |_| {
         let (w, h) = size.get();

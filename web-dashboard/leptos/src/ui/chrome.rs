@@ -318,7 +318,7 @@ pub fn FrameShell(ctx: FrameCtx, children: Children) -> impl IntoView {
     }
 }
 
-/// A page's own wrapper. Inside today's Slint shell (`embedded`) it is the content box; in the app frame the page
+/// A page's own wrapper. Embedded (`?embed=1`) it is the content box; in the app frame the page
 /// tells the frame what its chrome should say and draws its content only.
 #[component]
 pub fn PageShell(

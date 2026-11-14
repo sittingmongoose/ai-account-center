@@ -113,7 +113,7 @@ impl Page {
         }
     }
 
-    /// The page's id in the Slint dashboard (bridge.js `navigate`).
+    /// The page's id: the last part of its address, `?view=`'s value and the remembered tab.
     pub fn id(self) -> &'static str {
         match self {
             Page::Home => "home",
@@ -355,7 +355,7 @@ pub fn start() {
     let embed = embedded(&search);
     ui::device::start(embed);
     if embed {
-        // Today's Slint shell shows this page in its iframe: the content only.
+        // Embedded (`?embed=1`): the content only.
         ACTIVE.store(page as u8, Ordering::Relaxed);
         listen_to_shell();
         mount_to_body(move || {

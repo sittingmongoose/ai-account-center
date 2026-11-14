@@ -18,7 +18,7 @@ pub struct ActivationView {
     pub target_profile: String,
     #[serde(deserialize_with = "nullable")]
     pub warning: String,
-    /// Already worded by bridge.js ("Review valid until ...").
+    /// Already worded by the dashboard controller ("Review valid until ...").
     #[serde(deserialize_with = "nullable")]
     pub expires_at: String,
     #[serde(deserialize_with = "nullable")]
@@ -48,7 +48,7 @@ pub fn parse(json: &str) -> Option<ActivationView> {
 }
 
 impl ActivationView {
-    /// Only the two products the dashboard asks about; anything else reads as Codex, as the Slint dialog does.
+    /// Only the two products the dashboard asks about; anything else reads as Codex, as the Slint dialog did.
     pub fn product_name(&self) -> &'static str {
         if self.product == "Antigravity" {
             "Antigravity"

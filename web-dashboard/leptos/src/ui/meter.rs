@@ -115,7 +115,7 @@ pub fn media_matches(query: &str) -> bool {
 }
 
 /// Motion is on unless the system asks for less, or a headless capture runs without `?motion` (the screenshot
-/// guard the Slint dashboard has).
+/// guard the Slint dashboard had).
 pub fn motion_on() -> bool {
     MOTION.with(|m| {
         if let Some(on) = m.get() {
