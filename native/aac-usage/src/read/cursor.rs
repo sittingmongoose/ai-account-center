@@ -19,16 +19,16 @@ pub const MAX_STORES_PER_PROJECT: usize = 256;
 pub const MAX_STORES: usize = 2048;
 
 /// Sub-folders of `base` by name, at most `limit`; links count only when they stay inside `base`.
-/// The third value says the listing itself failed (a folder that is simply not there does not):
+/// The third value names failed listings or metadata filters (NotFound is simply absent):
 /// an enumeration error is named, never an empty success (RECHECK-BIG-1 M3).
-fn folders(base: &Path, limit: usize) -> (Vec<PathBuf>, bool, bool) {
+fn folders(base: &Path, limit: usize) -> (Vec<PathBuf>, bool, Vec<PathBuf>) {
     let entries = match std::fs::read_dir(base) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), false, false),
-        Err(_) => return (Vec::new(), false, true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), false, Vec::new()),
+        Err(_) => return (Vec::new(), false, vec![base.to_path_buf()]),
     };
     let mut names: Vec<String> = Vec::new();
-    let mut failed = false;
+    let mut failures = Vec::new();
     for entry in entries {
         match entry {
             Ok(entry) => {
@@ -38,7 +38,7 @@ fn folders(base: &Path, limit: usize) -> (Vec<PathBuf>, bool, bool) {
                 names.push(entry.file_name().to_string_lossy().into_owned());
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(_) => failed = true,
+            Err(_) => failures.push(base.to_path_buf()),
         }
     }
     let cut = names.len() > limit;
@@ -47,34 +47,41 @@ fn folders(base: &Path, limit: usize) -> (Vec<PathBuf>, bool, bool) {
     let found = names
         .into_iter()
         .map(|name| base.join(name))
-        .filter(|path| {
-            crate::fsx::is_dir(path) && (!crate::fsx::is_link(path) || crate::fsx::link_inside(path, base).is_some())
+        .filter(|path| match crate::fsx::metadata(path) {
+            Ok(meta) => meta.is_dir() && (!crate::fsx::is_link(path) || crate::fsx::link_inside(path, base).is_some()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => {
+                failures.push(path.clone());
+                false
+            }
         })
         .collect();
-    (found, cut, failed)
+    (found, cut, failures)
 }
 
 /// Every run store under a home's `.cursor/projects`, bounded: the stores, whether a bound cut
 /// the list, and the folders that could not be listed (RECHECK-BIG-1 M3).
 pub fn stores(home: &Path) -> (Vec<PathBuf>, bool, Vec<PathBuf>) {
     let projects_dir = home.join(".cursor").join("projects");
-    let (projects, mut cut, failed) = folders(&projects_dir, MAX_PROJECTS);
-    let mut failures: Vec<PathBuf> = if failed { vec![projects_dir] } else { Vec::new() };
+    let (projects, mut cut, mut failures) = folders(&projects_dir, MAX_PROJECTS);
     let mut found = Vec::new();
     for project in projects {
         let store_base = project.join("sdk-agent-store");
         let (agents, cut_here, failed) = folders(&store_base, MAX_STORES_PER_PROJECT);
         cut |= cut_here;
-        if failed {
-            failures.push(store_base);
-        }
+        failures.extend(failed);
         for store in agents {
             let db = store.join("index.db");
-            if crate::fsx::is_file(&db) {
-                found.push(db);
-                if found.len() >= MAX_STORES {
-                    return (found, true, failures);
+            match crate::fsx::metadata(&db) {
+                Ok(meta) if meta.is_file() => {
+                    found.push(db);
+                    if found.len() >= MAX_STORES {
+                        return (found, true, failures);
+                    }
                 }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => failures.push(store),
             }
         }
     }
@@ -244,10 +251,10 @@ fn scan_store(
 /// read-only query of the provider-thread projection, `driver = 'cursor'`, selecting only the thread
 /// id, the provider instance id and `payload_json.nativeThreadRef.nativeId`. No other column or
 /// table is read.
-pub fn t3_threads(home: &Path, collector: &Collector) -> HashMap<String, (String, String)> {
+pub fn t3_threads(home: &Path, collector: &mut Collector) -> HashMap<String, (String, String)> {
     let db = home.join(".t3").join("userdata").join("statev2.sqlite");
     let mut found = HashMap::new();
-    if !crate::fsx::is_file(&db) {
+    if !crate::fsx::discovery_metadata(collector, "cursor", &db).is_some_and(|meta| meta.is_file()) {
         return found;
     }
     let Some((connection, _)) = sqlite::open(&db, collector.deadline()) else {

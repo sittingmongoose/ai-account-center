@@ -323,7 +323,9 @@ fn identity(path: &Path) -> Option<DbIdentity> {
 }
 
 fn wal_exists(path: &Path) -> bool {
-    Path::new(&format!("{}-wal", path_text(path))).exists()
+    // An inaccessible WAL is not proof of a cleanly closed database: use the live read path.
+    !matches!(fsx::metadata(Path::new(&format!("{}-wal", path_text(path)))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// A WAL-mode database (header bytes 18-19 are 2) closed cleanly (no -wal): an immutable open reads
@@ -658,11 +660,12 @@ pub fn roots(home: &Path, env: &Env, collector: &mut Collector) -> (Vec<PathBuf>
         let Some(real) = real_dir(&root, home) else {
             continue;
         };
-        if !fsx::is_dir(&real) {
+        if !fsx::discovery_metadata(collector, "antigravity", &real).is_some_and(|meta| meta.is_dir()) {
             continue;
         }
         present = true;
-        let nested = real_dir(&real.join("conversations"), home).filter(|n| fsx::is_dir(n));
+        let nested = real_dir(&real.join("conversations"), home)
+            .filter(|n| fsx::discovery_metadata(collector, "antigravity", n).is_some_and(|meta| meta.is_dir()));
         let chosen = nested.unwrap_or(real);
         if !dirs.contains(&chosen) {
             dirs.push(chosen);
@@ -681,8 +684,9 @@ struct WalkState {
 fn walk(collector: &mut Collector, directory: &Path, start: &Path, depth: usize, state: &mut WalkState) -> bool {
     // Python: a folder gone since the listing is skipped; any other stat or list failure counts.
     let Some(id) = fsx::identity(directory) else {
-        if fs::symlink_metadata(directory).is_ok() {
+        if !matches!(fsx::metadata(directory), Err(error) if error.kind() == std::io::ErrorKind::NotFound) {
             state.unreadable += 1;
+            collector.unreadable_folder("antigravity", directory);
         }
         return true;
     };
@@ -712,7 +716,14 @@ fn walk(collector: &mut Collector, directory: &Path, start: &Path, depth: usize,
         let Some(real) = real else {
             continue;
         };
-        if fsx::is_dir(&real) {
+        let Some(meta) = fsx::discovery_metadata(collector, "antigravity", &real) else {
+            // A stat failure already made the kind partial; keep this walk's verdict honest too.
+            if !matches!(fsx::metadata(&real), Err(error) if error.kind() == std::io::ErrorKind::NotFound) {
+                state.unreadable += 1;
+            }
+            continue;
+        };
+        if meta.is_dir() {
             if name == "secrets" {
                 continue;
             }
@@ -723,7 +734,7 @@ fn walk(collector: &mut Collector, directory: &Path, start: &Path, depth: usize,
             if !walk(collector, &real, start, depth + 1, state) {
                 return false;
             }
-        } else if name.ends_with(".db") && fsx::is_file(&real) {
+        } else if name.ends_with(".db") && meta.is_file() {
             let canonical = realpath(&real);
             if !state.seen.insert(canonical) {
                 continue;
@@ -836,11 +847,14 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
             collector.truncated = true;
             return "ok";
         }
-        let Ok(meta) = fs::metadata(path) else {
-            if fs::symlink_metadata(path).is_ok() {
+        let meta = match fsx::metadata(path) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
                 state.unreadable += 1;
+                collector.unreadable_folder("antigravity", path);
+                continue;
             }
-            continue;
         };
         if meta.len() > AGY_MAX_DB_BYTES {
             state.unreadable += 1;
@@ -864,7 +878,7 @@ pub fn collect(collector: &mut Collector, home: &Path, env: &Env) -> &'static st
                     collector.truncated = true;
                     return "ok";
                 }
-                if path.exists() {
+                if !matches!(fsx::metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound) {
                     state.unreadable += 1;
                 }
             }

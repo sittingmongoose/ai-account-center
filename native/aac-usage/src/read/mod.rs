@@ -596,7 +596,7 @@ pub fn other_files(
 ) -> Vec<(PathBuf, Vec<PathBuf>)> {
     let exclude: Vec<PathBuf> = dirs
         .iter()
-        .filter(|d| fsx::is_dir(d))
+        .filter(|d| fsx::discovery_metadata(collector, kind, d).is_some_and(|meta| meta.is_dir()))
         .map(|d| util::realpath(d))
         .collect();
     let mut identities: HashSet<(u64, u64)> = default_paths.iter().filter_map(|p| fsx::identity(p)).collect();
@@ -662,7 +662,9 @@ pub fn scan_kind_files(
 ) -> bool {
     let mut paths: Vec<PathBuf> = Vec::new();
     for directory in dirs {
-        if !fsx::is_dir(directory) || fsx::is_link(directory) {
+        if !fsx::discovery_metadata(collector, kind, directory).is_some_and(|meta| meta.is_dir())
+            || fsx::is_link(directory)
+        {
             continue;
         }
         let start = paths.len();

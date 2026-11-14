@@ -60,10 +60,21 @@ fn session_id(path: &Path) -> Option<String> {
     Some(util::prefix_chars(&parent, util::SESSION_MAX_LEN))
 }
 
-fn is_sandbox_tree(directory: &Path, entries: &[fs::DirEntry]) -> bool {
+fn entry_type(collector: &mut Collector, entry: &fs::DirEntry) -> Option<fs::FileType> {
+    match entry.file_type() {
+        Ok(kind) => Some(kind),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => {
+            collector.unreadable_folder("omp", &entry.path());
+            None
+        }
+    }
+}
+
+fn is_sandbox_tree(collector: &mut Collector, directory: &Path, entries: &[fs::DirEntry]) -> bool {
     let names: HashSet<String> = entries
         .iter()
-        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter(|e| entry_type(collector, e).is_some_and(|t| t.is_file()))
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
     if names.contains(SANDBOX_MARKER) || names.contains("SANDBOX.md") {
@@ -98,18 +109,29 @@ fn sessions_dir_has_marker(collector: &mut Collector, directory: &Path) -> bool 
                 continue;
             }
         };
-        for entry in list.flatten().take(200) {
+        for entry in list.take(200) {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => {
+                    collector.unreadable_folder("omp", &current);
+                    continue;
+                }
+            };
             checked += 1;
             if checked > 400 {
                 return false;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             let path = entry.path();
-            if fsx::is_file(&path) {
+            let Some(meta) = fsx::discovery_metadata(collector, "omp", &path) else {
+                continue;
+            };
+            if meta.is_file() {
                 if is_session_filename(&name) {
                     return true;
                 }
-            } else if depth < 1 && fsx::is_dir(&path) && !fsx::is_link(&path) {
+            } else if depth < 1 && meta.is_dir() && !fsx::is_link(&path) {
                 pending.push((path, depth + 1));
             }
         }
@@ -120,7 +142,7 @@ fn sessions_dir_has_marker(collector: &mut Collector, directory: &Path) -> bool 
 /// Python's `_scan_session_roots`: breadth-first marker scan for custom OMP session roots under base.
 fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    if !fsx::is_dir(base) {
+    if !fsx::discovery_metadata(collector, "omp", base).is_some_and(|meta| meta.is_dir()) {
         return found;
     }
     let deadline = collector
@@ -151,9 +173,10 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
         }
         Some(entries)
     }
-    let session_file = |entries: &[fs::DirEntry]| {
+    let session_file = |collector: &mut Collector, entries: &[fs::DirEntry]| {
         entries.iter().any(|e| {
-            e.file_type().map(|t| t.is_file()).unwrap_or(false) && is_session_filename(&e.file_name().to_string_lossy())
+            entry_type(collector, e).is_some_and(|t| t.is_file())
+                && is_session_filename(&e.file_name().to_string_lossy())
         })
     };
     while let Some((directory, depth)) = pending.pop_front() {
@@ -178,7 +201,7 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
             collector.discovery_truncated = true;
             break;
         }
-        if is_sandbox_tree(&directory, &entries) {
+        if is_sandbox_tree(collector, &directory, &entries) {
             continue;
         }
         if directory != base {
@@ -188,14 +211,14 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
                 }
                 continue;
             }
-            if session_file(&entries) {
+            if session_file(collector, &entries) {
                 found.push(directory);
                 continue;
             }
         }
         if depth >= SCAN_MAX_DEPTH {
             if entries.iter().any(|e| {
-                e.file_type().map(|t| t.is_dir()).unwrap_or(false) && !skipped(&e.file_name().to_string_lossy())
+                entry_type(collector, e).is_some_and(|t| t.is_dir()) && !skipped(&e.file_name().to_string_lossy())
             }) {
                 collector.discovery_truncated = true;
             }
@@ -209,7 +232,7 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
                         break;
                     }
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) || !name.contains("sessions") {
+                    if !entry_type(collector, entry).is_some_and(|t| t.is_dir()) || !name.contains("sessions") {
                         continue;
                     }
                     visited += 1;
@@ -217,14 +240,14 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
                         continue;
                     };
                     examined += children.len() + 1;
-                    if is_sandbox_tree(&entry.path(), &children) {
+                    if is_sandbox_tree(collector, &entry.path(), &children) {
                         continue;
                     }
                     if name == "sessions" {
                         if sessions_dir_has_marker(collector, &entry.path()) {
                             found.push(entry.path());
                         }
-                    } else if session_file(&children) {
+                    } else if session_file(collector, &children) {
                         found.push(entry.path());
                     }
                 }
@@ -234,7 +257,7 @@ fn scan_session_roots(base: &Path, collector: &mut Collector) -> Vec<PathBuf> {
         let mut dirs: Vec<(String, PathBuf)> = entries
             .iter()
             .filter(|e| {
-                !skipped(&e.file_name().to_string_lossy()) && e.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                !skipped(&e.file_name().to_string_lossy()) && entry_type(collector, e).is_some_and(|t| t.is_dir())
             })
             .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
             .collect();
@@ -274,7 +297,7 @@ fn roots(
         Ok(names) => {
             for name in names.into_iter().take(SCAN_MAX_ROOTS) {
                 let candidate = profiles.join(name).join("agent").join("sessions");
-                if fsx::is_dir(&candidate) {
+                if fsx::discovery_metadata(collector, "omp", &candidate).is_some_and(|meta| meta.is_dir()) {
                     add(candidate, "default", collector, &mut list);
                 }
             }

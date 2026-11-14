@@ -150,6 +150,27 @@ pub fn is_file(path: &Path) -> bool {
     !avoided(path) && fs::metadata(path).map(|m| m.is_file()).unwrap_or(false)
 }
 
+/// Discovery must distinguish absence from a failed stat, including an avoided mount.
+pub fn metadata(path: &Path) -> io::Result<fs::Metadata> {
+    if avoided(path) {
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "did not answer"));
+    }
+    fs::metadata(path)
+}
+
+/// A failed discovery filter makes the kind partial and names the unvisited path. Only NotFound
+/// is absence; retaining unvisited usage and fingerprints is then the server's existing rule.
+pub fn discovery_metadata(collector: &mut Collector, kind: &str, path: &Path) -> Option<fs::Metadata> {
+    match metadata(path) {
+        Ok(meta) => Some(meta),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(_) => {
+            collector.unreadable_folder(kind, path);
+            None
+        }
+    }
+}
+
 /// A cloud-only placeholder (Windows: recall on open or on data access, or offline): reading it
 /// would download it, so a walk never opens one (FIX-ROUND-BIG 15).
 pub fn placeholder(meta: &fs::Metadata) -> bool {
@@ -276,16 +297,22 @@ pub fn walk_files(
                 continue;
             }
             let path = directory.join(&name);
-            // The link test comes first: it never follows the link (FIX-ROUND-BIG 9).
+            // Never follow a directory link just to classify it (FIX-ROUND-BIG 9).
             let link = is_link(&path);
-            if !link && is_dir(&path) {
+            if link && !accept(&name) {
+                continue;
+            }
+            let Some(meta) = discovery_metadata(collector, kind, &path) else {
+                continue;
+            };
+            if !link && meta.is_dir() {
                 if skip_dir.is_some_and(|skip| skip(&name)) {
                     continue;
                 }
                 if depth < 64 {
                     pending.push((path, depth + 1));
                 }
-            } else if accept(&name) && regular(&path) {
+            } else if accept(&name) && meta.is_file() && !placeholder(&meta) {
                 found.push(path);
             }
         }
@@ -311,16 +338,20 @@ pub fn child_dirs_checked(base: &Path) -> (Vec<PathBuf>, bool) {
         Err(error) => return (Vec::new(), error.kind() != io::ErrorKind::NotFound),
     };
     let mut found = Vec::new();
+    let mut failed = false;
     for name in names {
         if found.len() >= T3_MAX_HOMES {
             break;
         }
         let path = base.join(&name);
-        if is_dir(&path) {
-            found.push(path);
+        match metadata(&path) {
+            Ok(meta) if meta.is_dir() => found.push(path),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => failed = true,
         }
     }
-    (found, false)
+    (found, failed)
 }
 
 /// Python's `_same_or_inside` (case-insensitive on Windows, like `os.path.normcase`).
@@ -462,7 +493,8 @@ pub fn walk_t3_files(
 ) -> Vec<(PathBuf, (u64, u64))> {
     let mut found = Vec::new();
     let start = realpath(root);
-    if !is_dir(&start) || same_or_inside(&start, exclude) {
+    if same_or_inside(&start, exclude) || !discovery_metadata(collector, kind, &start).is_some_and(|meta| meta.is_dir())
+    {
         return found;
     }
     let mut pending: Vec<(PathBuf, usize)> = vec![(start.clone(), 0)];
@@ -479,7 +511,12 @@ pub fn walk_t3_files(
                     continue;
                 }
             }
-            None => continue,
+            None => {
+                if !matches!(metadata(&directory), Err(error) if error.kind() == io::ErrorKind::NotFound) {
+                    collector.unreadable_folder(kind, &directory);
+                }
+                continue;
+            }
         }
         let Some(names) = listing(collector, kind, &directory) else {
             continue;
@@ -505,15 +542,22 @@ pub fn walk_t3_files(
             if same_or_inside(&real, exclude) {
                 continue;
             }
-            if is_dir(&real) {
+            let Some(meta) = discovery_metadata(collector, kind, &real) else {
+                continue;
+            };
+            if meta.is_dir() {
                 if depth < 64 {
                     pending.push((real, depth + 1));
                 }
-            } else if accept(&name)
-                && regular(&real)
-                && let Some(id) = identity(&real)
-            {
-                found.push((real, id));
+            } else if accept(&name) && meta.is_file() && !placeholder(&meta) {
+                match identity(&real) {
+                    Some(id) => found.push((real, id)),
+                    None => {
+                        if !matches!(metadata(&real), Err(error) if error.kind() == io::ErrorKind::NotFound) {
+                            collector.unreadable_folder(kind, &real);
+                        }
+                    }
+                }
             }
         }
     }

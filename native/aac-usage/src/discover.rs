@@ -5,7 +5,7 @@
 //! origin; its path never leaves this computer (`root_id` is a digest with home written as `~`).
 
 use crate::collector::Collector;
-use crate::fsx::{self, home_path, is_dir, is_link, link_inside, skipped, sorted_names};
+use crate::fsx::{self, home_path, is_dir, is_link, link_inside, skipped};
 use crate::util::{self, path_text, realpath};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -104,19 +104,28 @@ pub fn env_dir(env: &Env, name: &str, home: &Path) -> Option<PathBuf> {
     }
 }
 
-fn has_state_db(path: &Path) -> bool {
-    sorted_names(path).is_some_and(|names| names.iter().any(|n| n.starts_with("state_") && n.ends_with(".sqlite")))
-}
-
 /// Direct children of home with a Codex home's signature (`sessions` or `archived_sessions`, with
 /// `config.toml`, `auth.json` or a `state_*.sqlite`) or a Claude config dir's (`projects`, with one of
 /// CLAUDE_DIR_MARKERS), whatever their name. A link counts only when its target stays inside home.
 /// Cloud-synced and personal folders are not looked in (FIX-ROUND-BIG 15). The third value is
 /// `(looked at, children)` when home has more children than the search takes (FIX-ROUND-BIG 6).
 pub fn signature_homes(home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<(usize, usize)>) {
+    signature_homes_checked(home, &mut Vec::new())
+}
+
+fn signature_homes_checked(
+    home: &Path,
+    failures: &mut Vec<PathBuf>,
+) -> (Vec<PathBuf>, Vec<PathBuf>, Option<(usize, usize)>) {
     let (mut codex, mut claude) = (Vec::new(), Vec::new());
-    let Some(names) = sorted_names(home) else {
-        return (codex, claude, None);
+    let names = match fsx::list_dir(home) {
+        Ok(names) => names,
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                failures.push(home.to_path_buf());
+            }
+            return (codex, claude, None);
+        }
     };
     let total = names.len();
     let limit = (total > SIGNATURE_MAX_CHILDREN).then_some((SIGNATURE_MAX_CHILDREN, total));
@@ -128,16 +137,41 @@ pub fn signature_homes(home: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<(usiz
         if is_link(&path) && link_inside(&path, home).is_none() {
             continue;
         }
-        if !is_dir(&path) {
-            continue;
+        match fsx::metadata(&path) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                failures.push(path);
+                continue;
+            }
         }
-        let has = |entry: &str| fsx::exists(&path.join(entry));
-        if (has("sessions") || has("archived_sessions"))
-            && (CODEX_HOME_MARKERS.iter().any(|m| has(m)) || has_state_db(&path))
+        let mut has = |entry: &str| match fsx::metadata(&path.join(entry)) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(_) => {
+                failures.push(path.join(entry));
+                false
+            }
+        };
+        let codex_logs = has("sessions") || has("archived_sessions");
+        let codex_marker = codex_logs && CODEX_HOME_MARKERS.iter().any(|m| has(m));
+        let claude_home = has("projects") && CLAUDE_DIR_MARKERS.iter().any(|m| has(m));
+        if codex_logs
+            && (codex_marker
+                || match fsx::list_dir(&path) {
+                    Ok(names) => names.iter().any(|n| n.starts_with("state_") && n.ends_with(".sqlite")),
+                    Err(error) => {
+                        if error.kind() != std::io::ErrorKind::NotFound {
+                            failures.push(path.clone());
+                        }
+                        false
+                    }
+                })
         {
             codex.push(path.clone());
         }
-        if has("projects") && CLAUDE_DIR_MARKERS.iter().any(|m| has(m)) {
+        if claude_home {
             claude.push(path);
         }
     }
@@ -238,7 +272,7 @@ pub fn claude_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3In
             .into_iter()
             .map(|p| (p, "ccs_instance")),
     );
-    let (_, signed, limit) = signature_homes(home);
+    let (_, signed, limit) = signature_homes_checked(home, &mut failed_bases);
     others.extend(log_dirs("claude", &signed).into_iter().map(|p| (p, "signature")));
     RootPlan {
         defaults,
@@ -276,7 +310,7 @@ pub fn codex_roots(home: &Path, env: &Env, extra: &[PathBuf], instances: &[T3Ins
             .into_iter()
             .map(|p| (p, "ccs_instance")),
     );
-    let (signed, _, limit) = signature_homes(home);
+    let (signed, _, limit) = signature_homes_checked(home, &mut failed_bases);
     others.extend(log_dirs("codex", &signed).into_iter().map(|p| (p, "signature")));
     RootPlan {
         defaults,
@@ -825,7 +859,15 @@ fn holds_logs(kind: &str, dir: &Path) -> (bool, bool) {
             if fsx::is_link(&path) {
                 continue;
             }
-            if fsx::is_dir(&path) {
+            let meta = match fsx::metadata(&path) {
+                Ok(meta) => meta,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => {
+                    failed = true;
+                    continue;
+                }
+            };
+            if meta.is_dir() {
                 if depth < 3 && !fsx::skipped(&name) {
                     pending.push((path, depth + 1));
                 }
@@ -837,7 +879,7 @@ fn holds_logs(kind: &str, dir: &Path) -> (bool, bool) {
                 "muse" => name == "session.jsonl",
                 _ => name.ends_with(".jsonl"),
             };
-            if log {
+            if log && meta.is_file() {
                 return (true, failed);
             }
         }
@@ -880,8 +922,15 @@ pub fn experiment_roots(home: &Path, budget: Duration) -> ExperimentRoots {
         if depth > 0 && fsx::exists(&folder.join(".git")) {
             continue;
         }
-        let Some(names) = fsx::sorted_names(&folder) else {
-            continue;
+        let names = match fsx::list_dir(&folder) {
+            Ok(names) => names,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                for kind in EXPERIMENT_KINDS {
+                    result.failed.entry(kind).or_default().push(folder.clone());
+                }
+                continue;
+            }
         };
         for name in names {
             entries += 1;
@@ -898,8 +947,19 @@ pub fn experiment_roots(home: &Path, budget: Duration) -> ExperimentRoots {
                 continue;
             }
             let path = folder.join(&name);
-            if fsx::is_link(&path) || !fsx::is_dir(&path) {
+            if fsx::is_link(&path) {
                 continue;
+            }
+            match fsx::metadata(&path) {
+                Ok(meta) if meta.is_dir() => {}
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => {
+                    for kind in EXPERIMENT_KINDS {
+                        result.failed.entry(kind).or_default().push(path.clone());
+                    }
+                    continue;
+                }
             }
             if depth >= 1
                 && let Some(kind) = EXPERIMENT_KINDS.iter().find(|k| **k == name)

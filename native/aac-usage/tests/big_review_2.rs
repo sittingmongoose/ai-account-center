@@ -293,6 +293,108 @@ fn an_unreadable_nested_cursor_folder_is_named_and_partial() {
     assert!(!roots.is_empty(), "{answer}");
 }
 
+/// R2-M3: stat of index.db cannot traverse a denied store/ child. This is not absence.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_cursor_store_child_is_named_and_partial_until_recovery() {
+    if running_as_root() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let h = home.path();
+    let db = cursor_db(h, "project", "store");
+    let first = scan(h, &["cursor"], None);
+    assert_eq!(sums(&first, "cursor")[0], 300);
+    let store = db.parent().unwrap();
+    deny(store);
+    let denied = scan(h, &["cursor"], Some(&first));
+    allow(store, 0o755);
+    assert_ne!(denied["kinds"]["cursor"]["state"], "not_installed", "{denied}");
+    assert_eq!(denied["kinds"]["cursor"]["partial"], true, "{denied}");
+    assert_eq!(denied["kinds"]["cursor"]["unreadableFolders"], 1, "{denied}");
+    // The server retains unvisited fingerprints whenever the kind is partial.
+    let healed = scan(h, &["cursor"], Some(&first));
+    assert_ne!(healed["kinds"]["cursor"]["partial"], true, "{healed}");
+    assert_eq!(
+        healed["kinds"]["cursor"]["fingerprints"],
+        first["kinds"]["cursor"]["fingerprints"]
+    );
+    // A genuinely removed store is absence, so its cached usage may be dropped.
+    fs::remove_file(db).unwrap();
+    let gone = scan(h, &["cursor"], Some(&first));
+    assert_eq!(gone["kinds"]["cursor"]["state"], "not_installed", "{gone}");
+    assert_ne!(gone["kinds"]["cursor"]["partial"], true, "{gone}");
+}
+
+/// R2-M3: a directory metadata filter must name errors too (ELOOP), but skip NotFound.
+#[cfg(unix)]
+#[test]
+fn cursor_directory_metadata_errors_are_partial_but_missing_targets_are_absent() {
+    use std::os::unix::fs::symlink;
+    let home = tempfile::tempdir().unwrap();
+    let projects = home.path().join(".cursor/projects");
+    fs::create_dir_all(&projects).unwrap();
+    let link = projects.join("loop");
+    symlink("loop", &link).unwrap();
+    let answer = scan(home.path(), &["cursor"], None);
+    assert_eq!(answer["kinds"]["cursor"]["partial"], true, "{answer}");
+    assert_eq!(answer["kinds"]["cursor"]["unreadableFolders"], 1, "{answer}");
+    fs::remove_file(&link).unwrap();
+    symlink("gone", &link).unwrap();
+    let absent = scan(home.path(), &["cursor"], None);
+    assert_ne!(absent["kinds"]["cursor"]["partial"], true, "{absent}");
+}
+
+/// The shared log walkers use the same stat-error rule for every line-log reader.
+#[cfg(unix)]
+#[test]
+fn log_reader_metadata_failures_are_partial_and_missing_targets_are_absent() {
+    use std::os::unix::fs::symlink;
+    for (kind, relative, filename) in [
+        ("claude", ".claude/projects/project", "broken.jsonl"),
+        ("codex", ".codex/sessions", "rollout-broken.jsonl"),
+        ("muse", ".local/share/muse/sessions/session", "session.jsonl"),
+        ("antigravity", ".config/antigravity", "conversations"),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let folder = home.path().join(relative);
+        fs::create_dir_all(&folder).unwrap();
+        let link = folder.join(filename);
+        symlink(filename, &link).unwrap();
+        let failed = scan(home.path(), &[kind], None);
+        assert_eq!(failed["kinds"][kind]["partial"], true, "{kind}: {failed}");
+        assert!(
+            failed["kinds"][kind]["unreadableFolders"].as_u64().unwrap_or(0) > 0,
+            "{kind}: {failed}"
+        );
+        fs::remove_file(&link).unwrap();
+        symlink("gone", &link).unwrap();
+        let gone = scan(home.path(), &[kind], None);
+        assert_ne!(gone["kinds"][kind]["partial"], true, "{kind}: {gone}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_omp_profile_with_unreadable_parent_is_partial_until_recovery() {
+    if running_as_root() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let parent = home.path().join(".omp/profiles/locked");
+    fs::create_dir_all(parent.join("agent/sessions")).unwrap();
+    deny(&parent);
+    let failed = scan(home.path(), &["omp"], None);
+    allow(&parent, 0o755);
+    assert_eq!(failed["kinds"]["omp"]["partial"], true, "{failed}");
+    assert!(
+        failed["kinds"]["omp"]["unreadableFolders"].as_u64().unwrap_or(0) > 0,
+        "{failed}"
+    );
+    let healed = scan(home.path(), &["omp"], None);
+    assert_ne!(healed["kinds"]["omp"]["partial"], true, "{healed}");
+}
+
 /// M3: one project's store folder unreadable; another project's store still reads.
 #[cfg(unix)]
 #[test]
