@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "PUT",
+    "path": "/api/auth/network",
+    "role": "signed-out",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "auth_required",
+      "error": "Authentication required"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 401
+  }
+}

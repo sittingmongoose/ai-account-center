@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/app-updates/start",
+    "role": "session",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "job": {
+        "hosts": {},
+        "id": "fixture-update",
+        "results": [],
+        "state": "running"
+      }
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 202
+  }
+}

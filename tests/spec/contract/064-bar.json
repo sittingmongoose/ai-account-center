@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/codex/profiles",
+    "role": "bar"
+  },
+  "response": {
+    "body": {
+      "activated": null,
+      "active": {
+        "codexHome": "<fixture-home>/.codex",
+        "name": null,
+        "source": "explicit-codex-home"
+      },
+      "default": null,
+      "profiles": []
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 200
+  }
+}

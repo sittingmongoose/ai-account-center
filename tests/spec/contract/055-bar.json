@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/bar/auth",
+    "role": "bar"
+  },
+  "response": {
+    "body": {
+      "status": "ok"
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict",
+      "x-ccs-bar-token": "<bar-proof>"
+    },
+    "status": 200
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/accounts/fixture-missing/remove",
+    "role": "session",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "invalid_account",
+      "error": "That account id is not valid."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 400
+  }
+}

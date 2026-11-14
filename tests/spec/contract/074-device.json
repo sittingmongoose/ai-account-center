@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/usage/burn",
+    "role": "device"
+  },
+  "response": {
+    "body": {
+      "at": "<timestamp>",
+      "rule": "Points used per hour across resets, from hourly rollups. A rate under 50% coverage is shown with its coverage only.",
+      "series": []
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 200
+  }
+}

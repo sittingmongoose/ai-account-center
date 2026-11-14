@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/auth/setup",
+    "role": "session",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "already_configured",
+      "error": "Dashboard sign-in is already set up."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 409
+  }
+}

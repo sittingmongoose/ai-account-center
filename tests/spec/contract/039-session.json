@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "DELETE",
+    "path": "/api/auth/devices/me",
+    "role": "session",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "device_required",
+      "error": "This route is for a paired tray's own token."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 403
+  }
+}

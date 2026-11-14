@@ -1,0 +1,58 @@
+[
+  {
+    "tool": "codex",
+    "sessionId": "fixture-session",
+    "typescript": "769c69fc91846736",
+    "python": "769c69fc91846736",
+    "disagreement": false
+  },
+  {
+    "tool": "claude",
+    "sessionId": "",
+    "typescript": "5b209f91ec343f74",
+    "python": null,
+    "disagreement": true
+  },
+  {
+    "tool": "muse",
+    "sessionId": "0123456789abcdef",
+    "typescript": "5a005823c6a65d9b",
+    "python": "5a005823c6a65d9b",
+    "disagreement": false
+  },
+  {
+    "tool": "codex",
+    "sessionId": "0123456789ABCDEF",
+    "typescript": "262a24d9acaa6264",
+    "python": "262a24d9acaa6264",
+    "disagreement": false
+  },
+  {
+    "tool": "omp",
+    "sessionId": "λ-session",
+    "typescript": "ea186e64fc084784",
+    "python": "ea186e64fc084784",
+    "disagreement": false
+  },
+  {
+    "tool": "zcode",
+    "sessionId": "line\nseparator",
+    "typescript": "3c0b1754d891e705",
+    "python": "3c0b1754d891e705",
+    "disagreement": false
+  },
+  {
+    "tool": "claude-code",
+    "sessionId": "path/with:punctuation",
+    "typescript": "c4e8e8d6782112a7",
+    "python": "c4e8e8d6782112a7",
+    "disagreement": false
+  },
+  {
+    "tool": "codex",
+    "sessionId": "😀",
+    "typescript": "044765c732d5b798",
+    "python": "044765c732d5b798",
+    "disagreement": false
+  }
+]

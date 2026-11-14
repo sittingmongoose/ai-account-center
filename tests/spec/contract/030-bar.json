@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/antigravity/profiles/quotas",
+    "role": "bar"
+  },
+  "response": {
+    "body": {
+      "accounts": [],
+      "hostId": "ubuntu",
+      "schemaVersion": 1
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 200
+  }
+}

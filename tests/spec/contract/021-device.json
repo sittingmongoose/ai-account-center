@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/accounts/signin-jobs/fixture-missing",
+    "role": "device"
+  },
+  "response": {
+    "body": {
+      "code": "device_scope",
+      "error": "This action needs a signed-in dashboard session."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 403
+  }
+}

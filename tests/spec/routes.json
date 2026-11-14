@@ -1,0 +1,1136 @@
+[
+  {
+    "method": "GET",
+    "path": "/{*splat}",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/index.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/:accountId/reset-claims/check",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/reset-claim-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/:accountId/reset-claims/prepare",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/reset-claim-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/:accountId/reset-claims",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/reset-claim-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/:accountId/reset-claims",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/reset-claim-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/accounts/:id/key",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/:id/open",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/:id/recheck",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/:id/remove",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/:id/signin-again",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/accounts/:id",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/add",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/analytics",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-analytics-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/dashboard",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-dashboard-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/preferences",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-preferences-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/registry",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/settings",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-refresh-settings-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/accounts/settings",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-refresh-settings-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/signin-command",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/signin-jobs/:jobId/cancel",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/signin-jobs/:jobId/code",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/signin-jobs/:jobId",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/trash/:trashId/purge",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/accounts/trash/:trashId/restore",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/trash",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-lifecycle-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/accounts/visibility",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/account-visibility-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/antigravity/auto-switch",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/antigravity-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/antigravity/auto-switch",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/antigravity-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/antigravity/profiles/:profileId/activate",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/antigravity-activate-route.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/antigravity/profiles/:profileId/confirm",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/antigravity-activate-route.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/antigravity/profiles/quotas",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/antigravity-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/antigravity/profiles",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/antigravity-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "POST",
+    "path": "/api/antigravity/recover",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/antigravity-recover-route.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/app-updates/cancel",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/app-update-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/app-updates/start",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/app-update-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/app-updates/status",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/app-update-routes.ts",
+    "writes": false,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/check",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-routes.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/auth/devices/:id",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-device-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/devices/me/rotate",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-device-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/auth/devices/me",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-device-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/devices/me",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-device-routes.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/devices/pair",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-device-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/devices/revoke-all",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-device-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/devices",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-device-routes.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/login",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/logout",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/network",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-network-routes.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/auth/network",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-network-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/password",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-session-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/session-lifetime",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-lifetime-routes.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/auth/session-lifetime",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-lifetime-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/session",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-session-routes.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/sessions/revoke-others",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-session-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "GET",
+    "path": "/api/auth/setup",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-routes.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/auth/setup",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/auth-session-routes.ts",
+    "writes": true,
+    "milestone": "M6"
+  },
+  {
+    "method": "GET",
+    "path": "/api/bar/auth",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/bar-routes.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/api/claude/desktop-profiles/:id/open",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/claude-desktop-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles/usage",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/claude-desktop-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/claude-desktop-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "POST",
+    "path": "/api/claude/history-snapshots/cleanup",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/claude-desktop-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "POST",
+    "path": "/api/codex/profiles/:name/activate",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/codex-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/codex/profiles/auto-switch",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/codex-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "PUT",
+    "path": "/api/codex/profiles/auto-switch",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/codex-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/codex/profiles/quotas",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/codex-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/codex/profiles",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/codex-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/health",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/index.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/scoreboard",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/scoreboard-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/status/@regex:^\\/files\\/([^/]+)\\/(.+)$",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/status-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/status/answers",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/status-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "POST",
+    "path": "/api/status/answers",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/status-routes.ts",
+    "writes": true,
+    "milestone": "M5"
+  },
+  {
+    "method": "GET",
+    "path": "/api/status/deliverable",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/share-route.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/status",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/status-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/store/status",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/store-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/usage/at",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/store-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/usage/burn",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/store-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "GET",
+    "path": "/api/usage/history",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/store-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
+    "method": "ALL",
+    "path": "/v0/management/{*splat}",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/usage-hub/usage-hub-router.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/v0/management/api-call",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/usage-hub/usage-hub-router.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "GET",
+    "path": "/v0/management/auth-files",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/usage-hub/usage-hub-router.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "POST",
+    "path": "/v0/management/reset-quota",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/usage-hub/usage-hub-router.ts",
+    "writes": false,
+    "milestone": "M6"
+  },
+  {
+    "method": "UPGRADE",
+    "path": "/ws",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/index.ts",
+    "writes": false,
+    "milestone": "M6"
+  }
+]

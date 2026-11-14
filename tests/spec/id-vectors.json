@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "sources": {
+    "sessions": [
+      "src/web-server/usage/analytics-session-key.ts",
+      "src/web-server/usage/activity-cells.ts"
+    ],
+    "accounts": [
+      "src/web-server/services/account-analytics-history.ts"
+    ],
+    "events": [
+      "native/aac-store/src/log.rs"
+    ]
+  },
+  "sessions": [
+    {
+      "tool": "codex",
+      "sessionId": "fixture-session",
+      "sessionKey": "769c69fc91846736",
+      "sessionHash": "769c69fc91846736c2faa8c2a899673a64c449d796d82e6894eea46e8531929d",
+      "publishedSessionKey": "769c69fc91846736"
+    },
+    {
+      "tool": "claude",
+      "sessionId": "",
+      "sessionKey": "5b209f91ec343f74",
+      "sessionHash": "5b209f91ec343f741450e6d356e0db9a15d9a369a18db8790996f7b30140c20a",
+      "publishedSessionKey": "5b209f91ec343f74"
+    },
+    {
+      "tool": "muse",
+      "sessionId": "0123456789abcdef",
+      "sessionKey": "5a005823c6a65d9b",
+      "sessionHash": "5a005823c6a65d9b84753da047c4c7e445b66f023adb605e8a2a72c4297aec9f",
+      "publishedSessionKey": "0123456789abcdef"
+    },
+    {
+      "tool": "codex",
+      "sessionId": "0123456789ABCDEF",
+      "sessionKey": "262a24d9acaa6264",
+      "sessionHash": "262a24d9acaa6264b9df6f6e1d43627471c395ac675bf6353a0c01e90aad6699",
+      "publishedSessionKey": "262a24d9acaa6264"
+    },
+    {
+      "tool": "omp",
+      "sessionId": "λ-session",
+      "sessionKey": "ea186e64fc084784",
+      "sessionHash": "ea186e64fc08478418eb98059bf214c59cb81f5c926a6598f6d6939ce52a5d29",
+      "publishedSessionKey": "ea186e64fc084784"
+    },
+    {
+      "tool": "zcode",
+      "sessionId": "line\nseparator",
+      "sessionKey": "3c0b1754d891e705",
+      "sessionHash": "3c0b1754d891e705eab24f0e78fe1b3c6e8cefaca722e2a978bb6bd842dd4715",
+      "publishedSessionKey": "3c0b1754d891e705"
+    },
+    {
+      "tool": "claude-code",
+      "sessionId": "path/with:punctuation",
+      "sessionKey": "c4e8e8d6782112a7",
+      "sessionHash": "c4e8e8d6782112a72b2f7c889fe069778908c7e30b0a92956a4206b8e9a0e547",
+      "publishedSessionKey": "c4e8e8d6782112a7"
+    },
+    {
+      "tool": "codex",
+      "sessionId": "😀",
+      "sessionKey": "044765c732d5b798",
+      "sessionHash": "044765c732d5b798e02e4d12a1fc0b22368bcc21d1066b6d3094707b64585f0e",
+      "publishedSessionKey": "044765c732d5b798"
+    }
+  ],
+  "accounts": [
+    {
+      "provider": "codex",
+      "id": "fixture-account",
+      "accountKey": "99322406f1974b4a131d1c775536ae289cd11f2efe84e424a735aad8e0e5eaa2"
+    },
+    {
+      "provider": "claude",
+      "id": "fixture-account",
+      "email": null,
+      "accountKey": "bbdc1cd7b64035801d5d11ee6753d734339feadd768443d4510cb3c906e616cd"
+    },
+    {
+      "provider": "muse",
+      "id": "fixture-account",
+      "email": "ALIAS",
+      "accountKey": "9b85a52c1d94052ec5054da3d85c277f6bf61cf8973dce586cfe357d7b6adc46"
+    },
+    {
+      "provider": "muse",
+      "id": "fixture-account",
+      "email": "alias",
+      "accountKey": "9b85a52c1d94052ec5054da3d85c277f6bf61cf8973dce586cfe357d7b6adc46"
+    },
+    {
+      "provider": "codex",
+      "id": "λ-identity",
+      "email": "",
+      "accountKey": "e6b95fd78ad2bec43ec03f0f8484f887a12fdf3e48703f435e44af2713bbe9f9"
+    },
+    {
+      "provider": "codex",
+      "id": "quote\"slash\\",
+      "email": "ΟΣ",
+      "accountKey": "aabaf2925372f40ba4d7fed0085b550242771ff8f13a303e223b497ed42e8e47"
+    }
+  ],
+  "events": [
+    {
+      "storeShortId": "fixture",
+      "sequence": "0",
+      "eventId": "fixture-0000000000000000"
+    },
+    {
+      "storeShortId": "fixture",
+      "sequence": "1",
+      "eventId": "fixture-0000000000000001"
+    },
+    {
+      "storeShortId": "fixture",
+      "sequence": "9007199254740993",
+      "eventId": "fixture-0020000000000001"
+    },
+    {
+      "storeShortId": "fixture",
+      "sequence": "18446744073709551615",
+      "eventId": "fixture-ffffffffffffffff"
+    }
+  ]
+}

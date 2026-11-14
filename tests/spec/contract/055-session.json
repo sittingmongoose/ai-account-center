@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/bar/auth",
+    "role": "session"
+  },
+  "response": {
+    "body": {
+      "status": "ok"
+    },
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 200
+  }
+}

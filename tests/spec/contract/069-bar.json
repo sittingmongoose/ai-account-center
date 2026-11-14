@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/status/answers",
+    "role": "bar",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "invalid_body",
+      "error": "The request body is not valid for this action."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 400
+  }
+}

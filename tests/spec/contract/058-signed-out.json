@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/claude/desktop-profiles",
+    "role": "signed-out"
+  },
+  "response": {
+    "body": {
+      "error": "Authentication required"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 401
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/accounts/preferences",
+    "role": "bar"
+  },
+  "response": {
+    "body": {
+      "snapshotCleanup": {
+        "auto": true
+      },
+      "timeZone": "America/New_York",
+      "usageLogSources": []
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 200
+  }
+}

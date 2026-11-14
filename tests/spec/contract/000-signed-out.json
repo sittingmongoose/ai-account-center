@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/",
+    "role": "signed-out"
+  },
+  "response": {
+    "body": "<canvas id=\"slint-dashboard\"></canvas>",
+    "headers": {
+      "cache-control": "no-cache",
+      "content-security-policy": "frame-ancestors 'self'",
+      "content-type": "text/html; charset=utf-8",
+      "etag": "<etag>",
+      "referrer-policy": "same-origin",
+      "x-content-type-options": "nosniff"
+    },
+    "status": 200
+  }
+}

@@ -1,0 +1,4068 @@
+{
+  "schemaVersion": 1,
+  "policy": "Priority: safety, HTTP, helper, table, internal. Static classification only; internal mappings deliberately say uncovered until proven by a behaviour test.",
+  "tests": [
+    {
+      "file": "browser-bridge/opencode-muse/tests/bridge-core.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "browser-bridge/opencode-muse/tests/muse-core.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "browser-bridge/opencode-muse/tests/muse-popup.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "browser-bridge/opencode-muse/tests/muse-worker.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "browser-bridge/opencode-muse/tests/test_host.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "browser-bridge/opencode-muse/tests/test_muse.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "browser-bridge/opencode-muse/tests/test_muse_cache.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "browser-bridge/opencode-muse/tests/test_muse_plan_changes.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "browser-bridge/opencode-muse/tests/wallet-popup.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "browser-bridge/qwen/native-host/SelfTests.cs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "browser-bridge/qwen/tests/bridge-core.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "browser-bridge/qwen/tests/installer-layout.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "browser-bridge/qwen/tests/popup.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "browser-bridge/qwen/tests/service-worker.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "macos-bar/Sources/CCSBarApp/PanelSelfTest.swift",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "macos-bar/Sources/CCSBarApp/PanelToggleTest.swift",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/src/computers.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/src/scoreboard.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/ops.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/pinned.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/pins.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/remote_pins.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/reset.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/reset_alias.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/reset_any_usage.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "native/aac-status/tests/reset_claude_source.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "native/aac-status/tests/reset_concurrent.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/reset_evidence.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/reset_history_identity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "native/aac-status/tests/reset_review_controls.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/reset_review_grants.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/reset_source.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "native/aac-status/tests/reset_source_overlap.rs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "native/aac-status/tests/scoreboard.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/spend.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/tests/status_doc.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/src/activity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/src/contract.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/src/frame.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/src/msgpack.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/src/pack.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/src/run_identity.rs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "native/aac-store/src/run_schema.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/src/secret.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "native/aac-store/tests/activity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/tests/log_recovery.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/tests/replay_memory.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/tests/store_capture.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "native/aac-store/tests/store_packed.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/tests/store_review.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/tests/store_runs.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/tests/store_storage_health.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-store/tests/store_usage.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "native/aac-store/tests/zstd_levels.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/__tests__/model-catalog-compat.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/__tests__/model-catalog.test.js",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/__tests__/pool-routing-phase3.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/__tests__/provider-capabilities.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/accounts/__tests__/account-manager-discover.test.js",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/accounts/__tests__/account-registry-integrity.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/accounts/__tests__/account-registry-optional-nickname.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/ai-providers/__tests__/model-id-normalizer.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/auth/__tests__/auth-token-manager.test.js",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "src/cliproxy/auth/__tests__/auth-types-management-path.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "src/cliproxy/auth/__tests__/auth-utils.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "src/cliproxy/auth/__tests__/skip-local-auth.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "src/cliproxy/config/__tests__/backend-selection.test.js",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/config/__tests__/composite-validator.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/config/__tests__/env-builder-migration.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/config/__tests__/port-validation.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/proxy/__tests__/proxy-config-resolver.test.js",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/quota/__tests__/quota-fetcher-codex.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "src/cliproxy/services/__tests__/stats-fetcher.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/services/__tests__/stats-transformer.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/cliproxy/types/__tests__/types-backward-compat.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/commands/__tests__/config-command-supervisord.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/commands/bar/__tests__/cli-read-only.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/commands/bar/__tests__/packaged-install.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/config/__tests__/config-loader-facade.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/config/__tests__/retired-sections.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "src/config/schemas/__tests__/cliproxy-retry.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/config/schemas/__tests__/cliproxy-user-routing.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/config/schemas/__tests__/schemas-reexport.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/errors/__tests__/error-types.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "src/errors/__tests__/typed-error-migration-exit-codes.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/integration/codex-auth/import-default.integration.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/integration/codex-auth/two-terminal-isolation.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/integration/computer-registry.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/integration/dashboard-auth-lifecycle.e2e.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/integration/logging-request-context.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/integration/web-server/claude-desktop-profiles-endpoint.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/integration/web-server/codex-profiles-endpoint.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/integration/web-server/m0-spec.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/integration/web-server/usage-hub-endpoint.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/integration/web-server/usage-worker.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/npm/cli.test.js",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/npm/cross-platform.test.js",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/npm/postinstall.test.js",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/shared/unit/helpers.test.js",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/account-usage/claude_dynamic_e2e_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/claude_usage_test.py",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/cursor_usage_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/desktop_usage_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/failover_additional_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/failover_core_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/failover_special_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/failover_usage_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/key_store_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/muse_failover_budget_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/muse_native_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/opencode_go_failure_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/plan_usage_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/account-usage/signin_expiry_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/agent-reports/schemas.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/agent-usage/aac_usage_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/account-lifecycle.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/analytics-integration.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/auto-switch/monitor.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/auto-switch/policy.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/auto-switch/store.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/composition.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/dashboard-composition.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/managed-native-update.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/managed-paused-update.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/native-credential-cache.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/native-version.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/plan.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production-composition.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production-native-pin.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production-phase.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/production-readiness.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production-usage-only.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/production_adoption_boundary_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_adoption_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_broker_phase_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_guard_exit_race_test.py",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_installation_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_native_worker_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_oauth_metadata_test.py",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_omitted_counter_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_quota_pool_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_rebuild_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_resident_socket_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_runtime_health_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_stale_socket_test.py",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_status_census_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_status_resident_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_status_service_test.py",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/production_status_transport_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/quota_adapter_plan_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/quota_adapter_sign_in_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/registry-lock.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/registry-retention.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/release-status.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/runtime-bundle-parity.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/runtime-health.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/runtime-refresh.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/runtime-service.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/signin-driver.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/signin-sandbox.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/terminal-activate.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/terminal-refresh.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/terminal-signin-pickup.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/terminal-signin.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/transaction.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/antigravity/usage-cooldown.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/usage-service.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/antigravity/worker-transport.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app-update-codex.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_cursor_acp_macos_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_fix_round1_test.py",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_fix_round2_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_robustness_test.py",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_session_test.py",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_t3_rpc_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_t3_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_update_zcode_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_updates_parallel_test.py",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_updates_review_r2_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/app_updates_test.py",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/app-updates/codex-update-runtime-bundle.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/claude-history/atomic-writer.test.cjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/claude-history/held-without-core.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/claude-history/history-policy.test.cjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/claude-history/microbatch-progress.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/claude-history/microbatch-sync.test.cjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/claude-history/node-bridge.test.cjs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/claude-history/pending-marker.test.cjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/claude-history/pending-open.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/claude-history/private-open-policy.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/claude-history/private-transport.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/claude-history/test_history_remote.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/claude-signin/claude_signin_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/cliproxy/concurrent-state-locks.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/cliproxy/session-bridge-bg-keepalive.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/activate-codex-profile-identity.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/activate-codex-profile.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-account-identity.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-activation-confirmation.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-activation-identity.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-activation-runtime.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-auth-dashboard-service.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-auth-router.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-config-symlink.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-confirmed-process-fixture.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-profile-paths.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-profile-registry.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-profile-renewal.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-profile-resources.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-renewal-planner.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/codex-token-refresh.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/commands/create-command.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/commands/import-default-command.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/commands/login-command.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/commands/remove-command.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/commands/show-command.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/codex-auth/decode-id-token.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/commands/arg-extractor.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/commands/bar-command.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/commands/command-catalog.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/commands/config-auth-command.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/commands/config-command-options.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/commands/config-command.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/commands/config-dashboard-host.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/commands/dashboard-proxy-command.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/commands/help-command-parity.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/commands/root-command-router.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/commands/usage-hub-command.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/commands/usage-snapshot-command.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/config-dir-override.test.js",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/config/dashboard-auth-persistence.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/cursor/cursor-shortcut-routing.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/docker/dockerfile-lifecycle-scripts.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/eslint-rules/no-throw-new-error.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/flag-parsing-simple.test.js",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/jsonl-parser.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/management/instance-directory.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/mcp-manager.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/model-pricing-table-parity.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/model-pricing.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/models-dev-registry-cache.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/scripts/build-status-native.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/scripts/build-ui.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/check-line-endings.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/deploy-lineage.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/github/ai-review-workflow.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/scripts/github/ci-workflow.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/github/push-ci-workflow.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/github/release-workflow.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/scripts/github/runner-portability.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/scripts/github/self-hosted-runner-policy.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/scripts/hardening-inventory.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/maintainability-metrics.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/personal-detail-guard.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/pre-commit.test.js",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/run-test-bucket.test.js",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/ui-build-lock.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/scripts/verify-codex-update-runtime.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/services/logging/cli-entry-log-redaction.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/services/logging/hotpath-redaction-regression.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/services/logging/log-context.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/services/logging/log-paths.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/services/logging/log-reader.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/services/logging/log-redaction-extended.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/services/logging/log-redaction.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/services/logging/log-storage.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/services/logging/logger-stages.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/services/logging/request-id-forwarding.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/shared/extended-context-utils.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/shared/test-environment-cleanup.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/status-native/native-loader.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/status-native/pinned.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/status-native/remote-pins.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/status-native/secret-gate.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/status-native/seq-parity.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/status/pinned-threads.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/status/status-docs.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/store/activity-reports.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/store/native-loader.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/store/store-activity.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/store/store-capture-secret.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/store/store-command.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/store/store-kill.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/store/store-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/store/store-usage-account-id.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/store/store-usage.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/targets/ccsd-alias-integration.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/targets/codex-detector.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/unified-config.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/app-launcher.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/utils/bounded-cache.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/claude-config-path.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/error-codes.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/event-loop-monitor.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/expand-path.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/fetch-proxy-setup.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/utils/managed-process.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/utils/process-broker-orphan.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/utils/profile-compat.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/prompt.test.js",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/proxy-env.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/settle-deadline.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/shell-executor.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/utils/ui.test.js",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-activity-collector-sources.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-activity-collector.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-activity-incremental.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-analytics-activity.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-analytics-attribution.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-analytics-contract.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-analytics-history.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-analytics-log-sources.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-analytics-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-analytics-saved-views.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-analytics-service.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-analytics-sources.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-confirmations.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-dashboard-codex-renewal.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-dashboard-failover.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-dashboard-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-dashboard-service.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-key-store.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-key-sweep.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-lifecycle-logs.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-lifecycle-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-preferences.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-refresh-settings.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-registry-mode.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/account-registry-v2.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-visibility-server.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-visibility.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/account-window-reset.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/additional-account-failover.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/additional-account-registry-v2.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/additional-account-service.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/additional-account-transport.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/agent-usage-golden.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/agent-usage-snapshot.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/analytics-explicit-refresh.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/analytics-remote-helper.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-remote-nas1.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-remote-sources.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-scan-failures.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/analytics-tools.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/antigravity-signin-flow.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/antigravity-usage-helper.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/api-auth-hardening.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/api-compression.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/api-product-surface.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/api-router.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/api-routes-bar-local-access-guard.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/api-routes-remote-write-guard.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-cancel.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-contract.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/app-update-cursor-acp.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/app-update-diagnostics.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/app-update-helper-sync.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-nas1.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-parallel.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-registration.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-review-r2.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-round2.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-service.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/app-update-t3-contract.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/auth-check-remote-access.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/auth-middleware.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/caller-bound-confirmations.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/cgroup-foreign-check.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/claude-account-lifecycle.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/claude-desktop-live-cache.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/claude-desktop-live-service.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/claude-desktop-signin-state.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/claude-desktop-transport.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/claude-desktop-usage-service.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/claude-host-transport.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/claude-open-progress.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/claude-signin-renewal.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/codex-account-lifecycle.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/codex-activation-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/codex-auto-switch-routes.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/codex-auto-switch-service.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/codex-extra-usage.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/codex-local-quota-collector.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/codex-native-usage-collector.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/codex-profile-quota-service.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/codex-profile-renewal-service.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/codex-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/codex-zst.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/collector-concurrency.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/compatible-cli-config-paths.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/computer-registry-rollback.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/computer-registry.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/cursor-failure-contract-interop.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-auth-devices.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-auth-hardening.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-auth-lifetime.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-auth-limits.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-auth-logs.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-auth-password.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-auth-runtime.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-credential-stamp.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-dto-fields.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-events.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-host-fields.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-hosts.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-lan-proxy.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-lifecycle-fields.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-network-config.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-network-trust.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-registry-fields.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-session-store.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/dashboard-tls-config.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/experiment-activity-collector.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/hung-disk-deadlines.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/import-cycles.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/muse-account-lifecycle.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/muse-failure-contract-interop.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/native-quota-collector.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/native-quota-failover-cooldown.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/opencode-console-wallet-service.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/private-json-store.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/rate-limit-keys.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/request-context-middleware.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/reset-any-usage-native.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/reset-capture-native.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/reset-claims.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/reset-refusal-native.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/reset-source-adapter.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/reset-source-failure-native.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/revalidated-view.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/by-model.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/model-identity.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/run-bounds.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/scoreboard-alias-union.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/scoreboard-aliases.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/scoreboard-catalog-publish.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/scoreboard-measures.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/scoreboard-reader.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/scoreboard-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/scoreboard-store.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/scoreboard/scoreboard-view.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/secure-transport.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/settings-review-r2.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/shutdown.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/signin-health-hosts.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/signin-health-service.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/signin-jobs.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/signin-output.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/signin-process.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/sqlite-cli-path-resolution.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/start-server-host.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/static-ui-dot-root.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/static-ui-pwa.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/static-ui-serving.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/status/agent-reports-reader.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/answers.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/readers-check.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/report-schema.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/report-secret-parity.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/status/share-route.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/status/spend-by-stream.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/status-capture.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/status-collectors.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/status/status-end-to-end.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/status-feedback.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/status-fixture.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/status-quota.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/status-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/status/status-server-review.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/status/status-source-honesty.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/status/status-view-strip.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/status-view.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/wave3-checks.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/wave3-findings.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/wave3-tasks.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/status/wave3-v2.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/tier-lock-routes.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/trusted-networks.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/usage-failover-antigravity.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/usage-failover-cache.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/usage-failover-claude-extras.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/usage-failover-codex.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/usage-failover-deadline.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/usage-failover-service.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/usage-failover-transport.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/usage-hub-key-store.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/usage-hub-projection.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/usage-hub-router.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/usage/experiment-usage-roots.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/usage/muse-native-usage-collector.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/usage/omp-native-usage-collector.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/usage/omp-session-root-discovery.test.ts",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/usage/t3-usage-roots.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/usage/zcode-native-usage-collector.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/accounts/flow.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/accounts/layout.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/accounts/settings.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/accounts/update.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/activation.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/analytics/feed.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/analytics/head.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/analytics/mod.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/analytics/models.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/analytics/quota.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/analytics/trend.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/api.rs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/leptos/src/cards.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/dash.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/details.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/drafts.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/fmt.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/frame.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/home.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/lib.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/live.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/owned.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/question_index.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/reset_action_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/reset_order_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/reset_projection_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/reset_receipt_tests.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/reset_state.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/resets.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/roster.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/scoreboard.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/scoreboard_arrange.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/status.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/summary.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/ui/charts.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/ui/chrome.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/ui/device.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/ui/focus_order.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/ui/icons.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/leptos/src/ui/meter.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/account-actions.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/accounts-controller.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/accounts-slint.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/accounts-view.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/activation-confirmation.test.mjs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/analytics-history.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/analytics-quota-r2.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/analytics-quota.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/analytics-review-r2.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/analytics-slint-r2.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/analytics-sources.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/analytics-usage.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/analytics-visible.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/analytics.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/antigravity-bridge.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/antigravity-confirmation.test.mjs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/antigravity-data.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/antigravity-plan.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/auth-view.test.mjs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/bridge-session.test.mjs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/accounts-clicks.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/accounts-frame.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/analytics-page.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/claude-signins.check.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/frame-commands.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/frame.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/home-page.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/overlay-close.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/page-load.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/pages-together.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/reset-claims.check.mjs",
+      "kind": "safety",
+      "evidence": [
+        "safety",
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/scoreboard-page.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/smoke.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/status-embed.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/status-page.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/status-real-pins.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/status-reporting.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/status-sheet-transition.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/browser/checks/status-tabs.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/claude-open.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/claude-signins.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/cover-theme.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/cursor-plans.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/data.test.mjs",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/device.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/duo-images.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/frame-analytics.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/frame-dashboard.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/frame-default.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/frame-kit.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/frame-seam.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/frame-session-later-session.test.mjs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/frame-session.test.mjs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/guards.test.mjs",
+      "kind": "safety",
+      "evidence": [
+        "safety"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/home-controls.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/later-dismiss.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/layout-overflow-slint.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/leptos-style.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/login-bridge.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/login-fields.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/marks-concept.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/marks-hidpi.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/marks-preload.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/model-rates.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/overlay-rail.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/page-route.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/pin-refusal.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/renderer.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/reset-live.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/reset-rows.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/sheet-close.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/shell-frame.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/standalone-status.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/sw-fallback.test.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/sw-route.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/sw-shell-stamp.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/tail-call-compat.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/time-format.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/typing-busy.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/update-button-steady.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/view-model.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/visible-usage.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    }
+  ]
+}

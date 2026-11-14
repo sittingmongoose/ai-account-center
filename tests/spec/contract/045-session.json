@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/auth/logout",
+    "role": "session",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "success": true
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=; Path=/; Expires=<http-date>"
+    },
+    "status": 200
+  }
+}

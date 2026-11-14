@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/antigravity/profiles/fixture-missing/activate",
+    "role": "device",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "error": "Select an Antigravity profile on Ubuntu and provide a valid confirmation when required."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 400
+  }
+}

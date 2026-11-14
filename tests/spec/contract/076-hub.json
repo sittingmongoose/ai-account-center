@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "ALL",
+    "path": "/v0/management/fixture-missing",
+    "role": "hub",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "code": "not_found",
+      "error": "AI Account Center offers only auth-files and api-call usage reads here."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 404
+  }
+}

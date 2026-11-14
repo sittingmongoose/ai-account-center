@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "DELETE",
+    "path": "/api/auth/devices/me",
+    "role": "device",
+    "body": {}
+  },
+  "response": {
+    "body": "",
+    "headers": {
+      "cache-control": "no-store"
+    },
+    "status": 204
+  }
+}

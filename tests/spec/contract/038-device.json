@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/api/auth/devices/me/rotate",
+    "role": "device",
+    "body": {}
+  },
+  "response": {
+    "body": {
+      "rotateAfter": "<timestamp>",
+      "token": "<device-token>"
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 200
+  }
+}

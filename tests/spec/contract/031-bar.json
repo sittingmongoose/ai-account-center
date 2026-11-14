@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/antigravity/profiles",
+    "role": "bar"
+  },
+  "response": {
+    "body": {
+      "activationSupported": false,
+      "hostId": "ubuntu",
+      "profiles": [],
+      "schemaVersion": 1
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>",
+      "set-cookie": "connect.sid=<session-cookie>; Path=/; Expires=<http-date>; HttpOnly; SameSite=Strict"
+    },
+    "status": 200
+  }
+}

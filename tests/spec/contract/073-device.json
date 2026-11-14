@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/usage/at",
+    "role": "device"
+  },
+  "response": {
+    "body": {
+      "at": "<timestamp>",
+      "series": []
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 200
+  }
+}

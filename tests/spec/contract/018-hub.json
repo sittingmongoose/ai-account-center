@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/api/accounts/signin-command",
+    "role": "hub"
+  },
+  "response": {
+    "body": {
+      "code": "invalid_token",
+      "error": "The device token is not valid."
+    },
+    "headers": {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "etag": "<etag>"
+    },
+    "status": 401
+  }
+}
