@@ -183,7 +183,10 @@ pub(crate) fn page_from_location(path: &str, search: &str) -> Page {
     if path == "/app" || path.starts_with("/app/") {
         return page_from_path(path);
     }
-    if let Some(page) = query_value(search, "view").as_deref().and_then(Page::from_id) {
+    if let Some(page) = query_value(search, "view")
+        .as_deref()
+        .and_then(Page::from_id)
+    {
         return page;
     }
     match path.trim_end_matches('/') {
@@ -225,7 +228,10 @@ fn form_decode(raw: &str) -> String {
     while i < bytes.len() {
         match bytes[i] {
             b'+' => out.push(b' '),
-            b'%' => match (bytes.get(i + 1).and_then(|&b| hex(b)), bytes.get(i + 2).and_then(|&b| hex(b))) {
+            b'%' => match (
+                bytes.get(i + 1).and_then(|&b| hex(b)),
+                bytes.get(i + 2).and_then(|&b| hex(b)),
+            ) {
                 (Some(high), Some(low)) => {
                     out.push(high << 4 | low);
                     i += 2;
@@ -499,7 +505,10 @@ mod tests {
         assert_eq!(form_decode("100%"), "100%");
         assert_eq!(form_decode("%zz%4"), "%zz%4");
         assert_eq!(form_decode("%C3%A9"), "\u{e9}");
-        assert_eq!(query_value("?a=1&view=x&view=y", "view").as_deref(), Some("x"));
+        assert_eq!(
+            query_value("?a=1&view=x&view=y", "view").as_deref(),
+            Some("x")
+        );
         assert_eq!(query_value("?viewer=1", "view"), None);
         assert_eq!(query_value("?view", "view").as_deref(), Some(""));
     }

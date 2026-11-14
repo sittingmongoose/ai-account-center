@@ -691,12 +691,21 @@ mod tests {
     #[test]
     fn a_signed_in_frame_remembers_the_tab_it_lands_on() {
         // a tab opened directly is remembered, as a clicked one is (review L2)
-        assert_eq!(landing_page(false, Page::Accounts, Some("home")), Page::Accounts);
+        assert_eq!(
+            landing_page(false, Page::Accounts, Some("home")),
+            Page::Accounts
+        );
         assert_eq!(landing_page(false, Page::Status, None), Page::Status);
         // a fresh sign-in on Home lands on the remembered tab, which stays remembered
-        assert_eq!(landing_page(true, Page::Home, Some("accounts")), Page::Accounts);
+        assert_eq!(
+            landing_page(true, Page::Home, Some("accounts")),
+            Page::Accounts
+        );
         // a session the browser already had shows the address's tab, Home included
-        assert_eq!(landing_page(false, Page::Home, Some("accounts")), Page::Home);
+        assert_eq!(
+            landing_page(false, Page::Home, Some("accounts")),
+            Page::Home
+        );
         assert_eq!(landing_page(true, Page::Home, None), Page::Home);
     }
 
