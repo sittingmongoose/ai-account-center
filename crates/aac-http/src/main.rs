@@ -11,7 +11,7 @@ async fn main() {
     )
     .await
     {
-        Ok(Ok(n)) if n > 0 && n <= 8192 => serde_json::from_str::<aac_http::Boot>(&line).ok(),
+        Ok(Ok(n)) if n > 0 && n <= 8192 => aac_http::Boot::from_json(line.as_bytes()).ok(),
         _ => None,
     };
     let Some(boot) = boot else {

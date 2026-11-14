@@ -15,7 +15,7 @@ aac-api.workspace = true
 aac-diag.workspace = true
 aac-files.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 tokio = { workspace = true, features = ["net", "signal"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 subtle = "2.6"

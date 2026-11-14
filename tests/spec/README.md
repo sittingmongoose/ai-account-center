@@ -127,3 +127,20 @@ A source copy also needs its own Git index for `inventory.mjs`; a temporary
 `git init` and `git add -A` supplies that index without altering shared Git data.
 Route-source attribution is now explicitly relative to this checkout's `src/`,
 so checkout names containing `src` cannot become handler paths.
+
+### M3 fix round 2: raw object shape before DTO parsing
+
+The shared numeric/document table now has 65 forms. Added top-level integer
+arrays (including 30/60/90/3600), nested/multi-element arrays, scalar/null/boolean
+roots, wrong-key objects, nested values, extra keys and escaped duplicate keys
+all require raw 503 and exact TS callback/fallback accounting. Empty object and
+extra-key controls remain included. The extended real TS/Rust table fails at
+7ad39e524 on `[90]` (TS 60, Rust 90), before any fix is applied.
+
+Every parsed service object DTO now passes a map-only, exact-unique-key gate
+before its DTO deserializer is called. Original bytes are parsed again only
+after that gate succeeds, preserving number spelling and duplicate rejection.
+This covers settings, boot input, principal headers and raw route-table entries;
+the route list is intentionally an array. Helper tests prove bad object
+envelopes never invoke the DTO deserializer, and actual socket tests refuse
+sequence/unknown/duplicate principal envelopes with 401.

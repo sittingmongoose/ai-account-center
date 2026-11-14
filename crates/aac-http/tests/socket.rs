@@ -122,6 +122,22 @@ fn unsigned_socket_requests_are_401_and_permissions_are_private() -> Result<()> 
             (Some("b".repeat(64)), None),
             (None, Some(principal("session", "admin"))),
             (Some("b".repeat(64)), Some("{}".into())),
+            (
+                Some("b".repeat(64)),
+                Some(r#"["session","fixture-admin","admin"]"#.into()),
+            ),
+            (Some("b".repeat(64)), Some("null".into())),
+            (
+                Some("b".repeat(64)),
+                Some(r#"{"kind":"session","id":"fixture-admin","role":"admin","extra":0}"#.into()),
+            ),
+            (
+                Some("b".repeat(64)),
+                Some(
+                    r#"{"kind":"session","id":"fixture-admin","role":"admin","role":"admin"}"#
+                        .into(),
+                ),
+            ),
             (Some("b".repeat(64)), Some(principal("hub", "admin"))),
         ] {
             let r = s.request(path, secret.as_deref(), p.as_deref(), "GET")?;

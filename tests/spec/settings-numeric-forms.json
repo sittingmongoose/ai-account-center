@@ -6,6 +6,144 @@
     "owner": "rust"
   },
   {
+    "name": "top-array-90",
+    "file": "[90]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-minimum",
+    "file": "[30]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-31",
+    "file": "[31]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-59",
+    "file": "[59]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-default",
+    "file": "[60]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-91",
+    "file": "[91]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-maximum",
+    "file": "[3600]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-nested-array",
+    "file": "[[90]]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-extra-element",
+    "file": "[90,120]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-object",
+    "file": "[{\"refreshIntervalSeconds\":90}]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-string",
+    "file": "[\"90\"]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-null",
+    "file": "[null]",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-array-whitespace",
+    "file": " \n [90] \t",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-number",
+    "file": "90",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-string",
+    "file": "\"90\"",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-null",
+    "file": "null",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-true",
+    "file": "true",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-false",
+    "file": "false",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "top-object-wrong-key",
+    "file": "{\"seconds\":90}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "field-array",
+    "file": "{\"refreshIntervalSeconds\":[90]}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "field-object",
+    "file": "{\"refreshIntervalSeconds\":{\"value\":90}}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "extra-key-array-value",
+    "file": "{\"refreshIntervalSeconds\":90,\"extra\":[]}",
+    "ts": 60,
+    "owner": "ts-fallback"
+  },
+  {
+    "name": "duplicate-escaped-key",
+    "file": "{\"refreshIntervalSeconds\":30,\"refreshInterval\\u0053econds\":90}",
+    "ts": 90,
+    "owner": "ts-fallback"
+  },
+  {
     "name": "review-rounded-lower-bound",
     "file": "{\"refreshIntervalSeconds\":30.000000000000002}",
     "ts": 60,

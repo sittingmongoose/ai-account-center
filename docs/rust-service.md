@@ -19,7 +19,11 @@ HEAD uses the same read handler. Writes remain with TS.
 
 `/api/health` remains public liveness only: `{"status":"ok"}`. Settings keeps its
 existing signed-in-session and query checks, and reads the bounded, existing
-`account-refresh-settings.json`. Rust answers only a single DTO whose JSON value
+`account-refresh-settings.json`. Before any DTO parse, a shared raw JSON gate
+requires an object with exactly the expected unique keys. Arrays (including
+single-element arrays), scalars, null, missing/extra keys and duplicates take
+the logged TS fallback. Original bytes are retained for the strict DTO parse;
+no Value conversion can erase duplicates or numeric spelling. Rust answers only a single DTO whose JSON value
 is an integer token in 30..3600; these values are exactly representable in JS.
 Decimal/exponent forms, strings, duplicate fields, out-of-range or unreadable
 files, and any other unsupported input return a private 503 so the bridge logs
@@ -46,6 +50,12 @@ metadata using a fresh random directory/secret, without signalling a PID from di
 An attachment does not terminate the owner on cleanup. The spawning front door
 owns the boot; its stdin closing ends that service. Normal shutdown also sends
 SIGTERM, with a one-second SIGKILL backstop.
+
+The same raw object gate covers the boot input, principal header and each
+embedded route-table entry. The route list itself intentionally remains an
+array; entries are retained as RawValue bytes and then checked as exact objects.
+Each parsed DTO also denies unknown fields. Health and diagnostic DTOs are
+output-only in this service and are not parsed from requests.
 
 Every socket request needs both the boot secret and a strict `x-aac-principal`
 JSON header (`kind`, `id`, `role`). Duplicate, missing or malformed headers and
@@ -88,11 +98,12 @@ AAC_RUST_SERVICE=on node tests/spec/run.mjs
 AAC_RUST_SERVICE=shadow bun tests/spec/capture.ts
 ```
 
-`settings-numeric-forms.json` and `settings-parity.ts` compare 42 numeric/document
+`settings-numeric-forms.json` and `settings-parity.ts` compare 65 numeric/document
 forms against the real TS reader and the actual Rust socket, then run them through
 the production off/on/shadow bridge with exact TS-call and reply/fallback counters.
 The table covers fractional rounding, exponents, huge numbers, negative zero,
-strings, duplicate/out-of-domain values, and the canonical writer integers.
+strings, duplicate/out-of-domain values, top-level JSON shapes, nested arrays,
+extra keys, and the canonical writer integers.
 Unsupported shadow responses also log a fallback rather than compare a guessed
 value. `bun tests/spec/settings-parity.ts --ts-only` checks the real TS side
 without running Rust; the full spec runner selects that on the VM in off mode.

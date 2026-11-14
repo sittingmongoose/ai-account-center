@@ -43,6 +43,7 @@ pub struct Boot {
 struct AppState(Arc<Boot>);
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Route {
     method: String,
     path: String,
@@ -65,6 +66,11 @@ fn private_dir(path: &std::path::Path) -> io::Result<()> {
 }
 
 impl Boot {
+    /// Parse only the exact object envelope supplied by TS; arrays are never positional fields.
+    pub fn from_json(bytes: &[u8]) -> serde_json::Result<Self> {
+        crate::json_object::from_slice(bytes, &["ccsDir", "socketPath", "secret", "bootId"])
+    }
+
     fn validate(&self) -> io::Result<()> {
         if !self.ccs_dir.is_absolute()
             || fs::canonicalize(&self.ccs_dir)? != self.ccs_dir
@@ -113,7 +119,8 @@ async fn boundary(State(state): State<AppState>, mut req: Request, next: Next) -
         if encoded.len() > 512 {
             return None;
         }
-        let p: VerifiedPrincipal = serde_json::from_str(encoded).ok()?;
+        let p: VerifiedPrincipal =
+            crate::json_object::from_slice(encoded.as_bytes(), &["kind", "id", "role"]).ok()?;
         p.valid().then_some(p)
     })();
     let Some(principal) = principal else {
@@ -167,10 +174,11 @@ async fn route(State(state): State<AppState>, req: Request) -> Response {
 
 fn read_settings(root: &std::path::Path) -> Option<AccountRefreshSettings> {
     let bytes = aac_files::read_bounded(&root.join("account-refresh-settings.json"), 4096).ok()?;
-    // This typed DTO accepts one JSON integer token, with no float conversion or duplicate
-    // fields. In this small range every accepted integer is exactly representable in JS.
-    // Everything outside that proven subset delegates parsing/defaults to the TS owner.
-    let value: AccountRefreshSettings = serde_json::from_slice(&bytes).ok()?;
+    // Require the raw object and exact unique keys before the strict integer DTO parse.
+    // Original bytes are retained: no Value normalization or positional struct decoding.
+    // These small integers are exact in JS; every other input delegates to the TS owner.
+    let value: AccountRefreshSettings =
+        crate::json_object::from_slice(&bytes, &["refreshIntervalSeconds"]).ok()?;
     (30..=3600)
         .contains(&value.refresh_interval_seconds)
         .then_some(value)
@@ -203,10 +211,14 @@ pub async fn serve(
     fs::set_permissions(&boot.socket_path, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
-    let routes: Vec<Route> = serde_json::from_str(ROUTES).map_err(|_| failure())?;
+    let routes: Vec<Box<serde_json::value::RawValue>> =
+        serde_json::from_str(ROUTES).map_err(|_| failure())?;
     let state = AppState(Arc::new(boot));
     let mut router = Router::new();
-    for entry in routes {
+    for raw in routes {
+        let entry: Route =
+            crate::json_object::from_slice(raw.get().as_bytes(), &["method", "path", "owner"])
+                .map_err(|_| failure())?;
         if entry.owner == "rust" {
             if entry.method != "GET"
                 || !matches!(
@@ -229,4 +241,50 @@ pub async fn serve(
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
         .await
+}
+
+#[cfg(test)]
+mod dto_tests {
+    use super::*;
+    #[test]
+    fn boot_principal_and_route_dtos_cannot_use_sequence_as_struct() {
+        let boot = br#"{"ccsDir":"/tmp/fixture","socketPath":"/tmp/fixture/socket","secret":"fixture","bootId":"fixture"}"#;
+        assert!(Boot::from_json(boot).is_ok());
+        for raw in [
+            r#"["/tmp/fixture","/tmp/fixture/socket","fixture","fixture"]"#,
+            "null",
+            r#"{"ccsDir":"fixture","socketPath":"fixture","secret":"fixture","bootId":"fixture","extra":0}"#,
+            r#"{"ccsDir":"fixture","socketPath":"fixture","secret":"fixture","bootId":"fixture","bootId":"other"}"#,
+        ] {
+            assert!(Boot::from_json(raw.as_bytes()).is_err());
+        }
+        for raw in [
+            r#"["session","fixture-admin","admin"]"#,
+            "null",
+            r#"{"kind":"session","id":"fixture-admin","role":"admin","extra":0}"#,
+            r#"{"kind":"session","id":"fixture-admin","role":"admin","role":"admin"}"#,
+        ] {
+            assert!(
+                crate::json_object::from_slice::<VerifiedPrincipal>(
+                    raw.as_bytes(),
+                    &["kind", "id", "role"]
+                )
+                .is_err()
+            );
+        }
+        for raw in [
+            r#"["GET","/api/health","rust"]"#,
+            "null",
+            r#"{"method":"GET","path":"/api/health","owner":"rust","extra":0}"#,
+            r#"{"method":"GET","path":"/api/health","owner":"rust","owner":"rust"}"#,
+        ] {
+            assert!(
+                crate::json_object::from_slice::<Route>(
+                    raw.as_bytes(),
+                    &["method", "path", "owner"]
+                )
+                .is_err()
+            );
+        }
+    }
 }
