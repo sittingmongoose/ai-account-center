@@ -4,10 +4,13 @@
 
 use aac_usage::discover::Env;
 use aac_usage::protocol::{self, Request};
+#[cfg(unix)]
 use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 const AT: &str = "2026-11-11T21:33:15.765Z";
 const MIN_DATE: u64 = 1_780_000_000_000;
@@ -232,6 +235,7 @@ fn a_muse_byte_copy_under_a_renamed_folder_counts_once() {
 
 // ----- M3: enumeration errors are named, never an empty success -----------------------------------
 
+#[cfg(unix)]
 fn cursor_db(home: &Path, project: &str, store: &str) -> PathBuf {
     let db = home
         .join(".cursor/projects")
