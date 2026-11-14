@@ -317,6 +317,8 @@ textarea.note::placeholder { color: var(--ink-4); }
 .chrome-sep { width: 1px; height: 22px; background: var(--rule); margin: 0 4px; }
 .upd-btn { height: 34px; padding: 0 13px 0 10px; border-radius: 9px; border: 1px solid var(--rule); background: var(--paper); display: inline-flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 580; font-variation-settings: 'wght' 580; font-size: 13px; white-space: nowrap; }
 .upd-btn .ic { width: 18px; height: 18px; color: var(--ink-2); }
+/* a running update: the spinner takes the arrow's place */
+.upd-btn .spin, .icon-btn.upd-run .spin { width: 18px; height: 18px; color: var(--accent); }
 
 /* ---------- phone top bar and bottom tab bar (DESIGN-MOBILE.md 3.1) ---------- */
 .topbar { background: var(--paper); border-bottom: 1px solid var(--rule); padding: var(--safe-top) calc(12px + var(--safe-right)) 0 calc(12px + var(--safe-left)); }

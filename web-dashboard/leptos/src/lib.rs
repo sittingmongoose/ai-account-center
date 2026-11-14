@@ -193,6 +193,43 @@ pub(crate) fn set_theme(mode: &str) {
             }
         }
     }
+    sync_theme_color(mode);
+}
+
+/// index.html's theme-color for each scheme (the page background).
+const THEME_COLOR_LIGHT: &str = "#ECF0F3";
+const THEME_COLOR_DARK: &str = "#0C1217";
+
+/// The colour a theme-color meta takes: an explicit Light or Dark wins over the meta's own scheme (`media`), Auto keeps
+/// the scheme's own colour (as the classic app's `syncThemeColor` did).
+pub(crate) fn theme_color(mode: &str, meta_media: &str) -> &'static str {
+    let dark = match mode {
+        "dark" => true,
+        "light" => false,
+        _ => meta_media.contains("dark"),
+    };
+    if dark {
+        THEME_COLOR_DARK
+    } else {
+        THEME_COLOR_LIGHT
+    }
+}
+
+/// The browser's bar follows the chosen theme: each theme-color meta keeps its media query and takes the colour above.
+fn sync_theme_color(mode: &str) {
+    let Ok(metas) = document().query_selector_all("meta[name=\"theme-color\"]") else {
+        return;
+    };
+    for i in 0..metas.length() {
+        let Some(meta) = metas
+            .item(i)
+            .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
+        else {
+            continue;
+        };
+        let media = meta.get_attribute("media").unwrap_or_default();
+        let _ = meta.set_attribute("content", theme_color(mode, &media));
+    }
 }
 
 /// Same-origin messages from the shell only; anything else is ignored.
@@ -301,6 +338,18 @@ mod tests {
         assert!(page_from_path("/app/analytics") == Page::Analytics);
         assert!(page_from_path("/app/accounts") == Page::Accounts);
         assert!(page_from_path("/app/") == Page::Status);
+    }
+
+    #[test]
+    fn the_bar_colour_follows_an_explicit_theme_and_auto_keeps_each_scheme() {
+        let light = "(prefers-color-scheme: light)";
+        let dark = "(prefers-color-scheme: dark)";
+        assert_eq!(theme_color("auto", light), THEME_COLOR_LIGHT);
+        assert_eq!(theme_color("auto", dark), THEME_COLOR_DARK);
+        for media in [light, dark, ""] {
+            assert_eq!(theme_color("dark", media), THEME_COLOR_DARK);
+            assert_eq!(theme_color("light", media), THEME_COLOR_LIGHT);
+        }
     }
 
     #[test]
