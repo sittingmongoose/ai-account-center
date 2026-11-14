@@ -141,12 +141,15 @@ pub fn scrub(text: &str) -> Scrubbed {
     if text.len() > 4096 {
         return Scrubbed("[detail exceeded limit]".into());
     }
-    let parsed =
-        serde_json::from_str(text).unwrap_or_else(|_| serde_json::Value::String(text.into()));
-    if secret_policy::find_secret_in(text, &parsed).is_some() {
+    let normalized: String = text.chars().filter(|c| !c.is_control()).collect();
+    if [text, normalized.as_str()].iter().any(|candidate| {
+        let parsed = serde_json::from_str(candidate)
+            .unwrap_or_else(|_| serde_json::Value::String((*candidate).into()));
+        secret_policy::find_secret_in(candidate, &parsed).is_some()
+    }) {
         return Scrubbed("[redacted]".into());
     }
-    Scrubbed(text.chars().filter(|c| !c.is_control()).collect())
+    Scrubbed(normalized)
 }
 
 /// A scrubbed failure with explicit retry intent and an optional known observation time.

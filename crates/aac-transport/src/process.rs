@@ -78,7 +78,8 @@ impl SshPolicy {
     }
 
     /// Exact target-design 5.1 options, in stable order. Scan keepalive is six, short is two.
-    /// Identity and known-hosts paths remain individual argv items, including any spaces.
+    /// The separate identity argv accepts spaces. OpenSSH -o paths accept only literal ASCII
+    /// letters/digits and `/._-:`; unsupported quoting, whitespace and expansion are refused.
     pub fn argv(&self, key: &Path, scan: bool) -> Result<Vec<OsString>, Failure> {
         if !key.is_absolute()
             || !self.known_hosts.is_absolute()
@@ -92,6 +93,8 @@ impl SshPolicy {
                 "SSH paths must be explicit absolute paths",
             ));
         }
+        let hosts_path = option_path(&self.known_hosts)?;
+        let control_path = option_path(&self.run_dir)?;
         let mut argv: Vec<OsString> = vec!["-T".into()];
         for value in [
             "BatchMode=yes",
@@ -108,7 +111,7 @@ impl SshPolicy {
             argv.extend(["-o".into(), value.into()]);
         }
         let mut hosts = OsString::from("UserKnownHostsFile=");
-        hosts.push(&self.known_hosts);
+        hosts.push(hosts_path);
         argv.extend([
             "-o".into(),
             hosts,
@@ -120,7 +123,7 @@ impl SshPolicy {
             "ControlMaster=auto".into(),
         ]);
         let mut control = OsString::from("ControlPath=");
-        control.push(self.run_dir.join("cm-%C"));
+        control.push(format!("{}/cm-%C", control_path.trim_end_matches('/')));
         argv.extend([
             "-o".into(),
             control,
@@ -129,6 +132,24 @@ impl SshPolicy {
         ]);
         Ok(argv)
     }
+}
+
+fn option_path(path: &Path) -> Result<String, Failure> {
+    let text = path
+        .to_str()
+        .ok_or_else(|| Failure::new(Cause::Refused, "SSH option path is not UTF-8"))?;
+    #[cfg(windows)]
+    let text = text.replace('\\', "/");
+    if !text
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || b"/._-:".contains(&c))
+    {
+        return Err(Failure::new(
+            Cause::Refused,
+            "unsupported OpenSSH option path",
+        ));
+    }
+    Ok(text.to_owned())
 }
 
 /// Per-call controls; the absolute deadline also covers waiting for a channel slot.

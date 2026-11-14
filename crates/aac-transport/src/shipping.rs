@@ -18,7 +18,8 @@ pub struct AgentArtifact {
 
 impl AgentArtifact {
     /// Verify a regular non-symlink artifact up to 64 MiB. A mismatched or malformed manifest
-    /// is refused before any connection or remote write occurs.
+    /// is refused before any connection or remote write occurs. Resolve the path once to an
+    /// absolute spelling before verification; Local execution and SCP use that exact path.
     pub fn load(path: PathBuf, hash: String, expected: Handshake) -> Result<Self, Failure> {
         if hash.len() != 64
             || !hash
@@ -40,7 +41,7 @@ impl AgentArtifact {
             return Err(Failure::new(Cause::AgentMismatch, "invalid agent manifest"));
         }
         let artifact = Self {
-            path,
+            path: std::path::absolute(path)?,
             hash,
             expected,
         };

@@ -434,3 +434,48 @@ async fn control_socket_directory_is_private_and_symlinks_are_refused() {
         matches!(fixture.computer.execute(&["fixture-agent".into()], &[], &fixture.options()).await, Err(error) if error.cause == Cause::Refused)
     );
 }
+
+#[test]
+fn regression_m4_option_paths_survive_openssh_parsing_or_are_refused() {
+    let policy = SshPolicy::new("/fixture/known_hosts".into(), "/fixture/run".into());
+    let output = std::process::Command::new("/usr/bin/ssh")
+        .args(["-G", "-F", "/dev/null"])
+        .args(
+            policy
+                .argv(Path::new("/fixture/key with space"), false)
+                .unwrap(),
+        )
+        .arg("fixture.invalid")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "OpenSSH rejected valid pinned argv"
+    );
+    let config = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        config
+            .lines()
+            .any(|line| line == "userknownhostsfile /fixture/known_hosts")
+    );
+    assert!(config.lines().any(|line| line == "stricthostkeychecking true" || line == "stricthostkeychecking yes"));
+    for path in [
+        "/fixture/with space",
+        "/fixture/with\"quote",
+        "/fixture/with'quote",
+        "/fixture/with\\escape",
+        "/fixture/%h",
+        "/fixture/${ENV}",
+        "/fixture/~other",
+    ] {
+        for policy in [
+            SshPolicy::new(path.into(), "/fixture/run".into()),
+            SshPolicy::new("/fixture/known_hosts".into(), path.into()),
+        ] {
+            assert!(
+                matches!(policy.argv(Path::new("/fixture/key"), false), Err(error) if error.cause == Cause::Refused),
+                "unsupported OpenSSH option path must be refused"
+            );
+        }
+    }
+}
