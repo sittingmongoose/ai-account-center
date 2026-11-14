@@ -2322,6 +2322,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/agent-verbs.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/analytics-explicit-refresh.test.ts",
       "kind": "internal",
       "evidence": [],

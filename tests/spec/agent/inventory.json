@@ -1,0 +1,185 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:226",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "cores=6\nload=7.48\nmemTotalKb=20210000\nmemAvailKb=13245000\ncpu=100 0 50 800 50 0 0 0\ndiskTotalKb=812506724\ndiskFreeKb=528836920\nmount=/\n"
+      },
+      "expected": {
+        "cores": 6,
+        "load1": 7.48,
+        "busyPct": null,
+        "memAvailableBytes": 13562880000,
+        "memTotalBytes": 20695040000,
+        "disk": {
+          "mount": "/",
+          "freeBytes": 541529006080,
+          "totalBytes": 832006885376
+        },
+        "cpuTimes": {
+          "busy": 150,
+          "total": 1000
+        }
+      }
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:234",
+      "verb": "inventory",
+      "args": {
+        "platform": "mac",
+        "probe": "cores=8\nload=2.84\nmemTotalB=17179869184\npageSize=16384\npagesAvail=100000\npagesAvail=50000\ncpuPct=32\ndiskTotalKb=482766932\ndiskFreeKb=18378524\nmount=/System/Volumes/Data\n"
+      },
+      "expected": {
+        "cores": 8,
+        "load1": 2.84,
+        "busyPct": 4,
+        "memAvailableBytes": 2457600000,
+        "memTotalBytes": 17179869184,
+        "disk": {
+          "mount": "/System/Volumes/Data",
+          "freeBytes": 18819608576,
+          "totalBytes": 494353338368
+        },
+        "cpuTimes": null
+      }
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:241",
+      "verb": "inventory",
+      "args": {
+        "platform": "windows",
+        "probe": "cores=32\r\ncpuPct=40\r\nmemTotalKb=33463884\r\nmemAvailKb=10291080\r\ndiskTotalB=1999342923776\r\ndiskFreeB=218592583680\r\nmount=C:\r\n"
+      },
+      "expected": {
+        "cores": 32,
+        "load1": null,
+        "busyPct": 40,
+        "memAvailableBytes": 10538065920,
+        "memTotalBytes": 34267017216,
+        "disk": {
+          "mount": "C:",
+          "freeBytes": 218592583680,
+          "totalBytes": 1999342923776
+        },
+        "cpuTimes": null
+      }
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:252",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "garbage"
+      },
+      "expected": null
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:254",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "cores=6\nmemTotalKb=20210000\nmemAvailKb=13245000\n"
+      },
+      "expected": {
+        "cores": 6,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": 13562880000,
+        "memTotalBytes": 20695040000,
+        "disk": null,
+        "diskError": "The machine did not report its system disk.",
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      }
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:263",
+      "verb": "inventory",
+      "args": {
+        "platform": "windows",
+        "probe": "cores=32\r\ndiskTotalB=100\r\ndiskFreeB=50\r\nmount=C:\r\n"
+      },
+      "expected": {
+        "cores": 32,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": null,
+        "memTotalBytes": null,
+        "disk": {
+          "mount": "C:",
+          "freeBytes": 50,
+          "totalBytes": 100
+        },
+        "memoryError": "The machine did not report its memory.",
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      }
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:469",
+      "verb": "inventory",
+      "args": {
+        "platform": "windows",
+        "probe": "cores=0\r\ncpuLoad=10\r\nmemTotalKb=2\r\nmemAvailKb=\r\ndiskTotalB=10\r\ndiskFreeB=\r\nmount=C:\r\n"
+      },
+      "expected": {
+        "cores": null,
+        "load1": null,
+        "busyPct": 10,
+        "memAvailableBytes": null,
+        "memTotalBytes": 2048,
+        "disk": null,
+        "diskError": "The machine did not report its system disk.",
+        "memoryError": "The machine did not report its memory.",
+        "cpuTimes": null
+      }
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:478",
+      "verb": "inventory",
+      "args": {
+        "platform": "mac",
+        "probe": "cores=\nmemTotalB=17179869184\npageSize=16384\npagesAvail=1000\ncpuPct=320\ndiskTotalKb=10\ndiskFreeKb=5\n"
+      },
+      "expected": {
+        "cores": null,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": 16384000,
+        "memTotalBytes": 17179869184,
+        "disk": {
+          "mount": "/",
+          "freeBytes": 5120,
+          "totalBytes": 10240
+        },
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      }
+    },
+    {
+      "source": "tests/unit/web-server/status/status-collectors.test.ts:484",
+      "verb": "inventory",
+      "args": {
+        "platform": "linux",
+        "probe": "cores=6\nmemTotalKb=2\nmemAvailKb=1\ndiskTotalKb=10\ndiskFreeKb=5\n"
+      },
+      "expected": {
+        "cores": 6,
+        "load1": null,
+        "busyPct": null,
+        "memAvailableBytes": 1024,
+        "memTotalBytes": 2048,
+        "disk": {
+          "mount": "/",
+          "freeBytes": 5120,
+          "totalBytes": 10240
+        },
+        "cpuError": "The machine did not report its CPU.",
+        "cpuTimes": null
+      }
+    }
+  ]
+}

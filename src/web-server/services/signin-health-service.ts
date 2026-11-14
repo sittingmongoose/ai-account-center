@@ -4,11 +4,13 @@ import { getCcsDir } from '../../utils/config-manager';
 import type { SnapshotSignInProfile } from '../agent-usage/agent-usage-markdown';
 import {
   configuredUsageHosts,
+  localUsageHost,
   localUsagePython,
   signinHelperBundle,
   usageHelperCommand,
 } from './usage-failover-transport';
 import { sshArgv } from './ssh-policy';
+import { runSignInAgent, pythonSignInFallback } from './agent-verbs';
 import {
   readClaudeSignInRenewal,
   type ClaudeSignInRenewal,
@@ -381,6 +383,9 @@ function unavailableHost(machine: string, error: string): SignInProfile[] {
 }
 
 async function collectLocal(): Promise<string> {
+  const agent = await runSignInAgent(localUsageHost());
+  if (agent !== null) return agent;
+  pythonSignInFallback();
   // The packaged helper, resolved from this module like the sibling usage
   // transports, run by this host's own installed python when it has one,
   // scoped to the dashboard's configured CCS directory (CCS_HOME and
@@ -393,6 +398,9 @@ async function collectLocal(): Promise<string> {
 type UsageHostEntry = Awaited<ReturnType<typeof configuredUsageHosts>>[number];
 
 async function collectRemote(host: UsageHostEntry): Promise<string> {
+  const agent = await runSignInAgent(host);
+  if (agent !== null) return agent;
+  pythonSignInFallback();
   // The collector runs from an in-memory stdin bundle: helper source never
   // lands on the remote disk, and a clean host reports instead of failing.
   const bundle = await signinHelperBundle();

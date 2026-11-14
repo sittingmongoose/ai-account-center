@@ -6,11 +6,21 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+parity-fixtures = []
+
 [dependencies]
 aac-core.workspace = true
 aac-protocol.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 tokio.workspace = true
+libc.workspace = true
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+unicode-normalization = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
 
 [dev-dependencies]
 aac-config.workspace = true

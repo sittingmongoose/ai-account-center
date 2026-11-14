@@ -1,5 +1,6 @@
-//! Health-only host agent. Reads one bounded request followed by optional controls; no usage
-//! scan, provider refresh, credential access or external host action is implemented here.
+//! Read-only host agent with bounded, deadline-controlled NDJSON requests.
+mod inventory;
+mod signin;
 use aac_core::{Cause, Failure, UtcMs};
 use aac_protocol::{Control, Event, Handshake, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
@@ -156,6 +157,12 @@ fn safe_id(id: &str) -> String {
 
 async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     tokio::task::yield_now().await;
+    if request.verb == "signin-expiry" {
+        return signin::run(&request.args);
+    }
+    if request.verb == "inventory" {
+        return inventory::run(&request.args).await;
+    }
     if request.verb != "health" {
         return Err(Failure::new(Cause::Refused, "unsupported agent verb"));
     }

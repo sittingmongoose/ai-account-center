@@ -125,3 +125,50 @@ async fn idle_stdin_has_a_bounded_initial_read_deadline() {
         matches!(serde_json::from_slice::<Event>(&output).unwrap(), Event::Failure { failure, .. } if failure.cause == Cause::Timeout)
     );
 }
+
+#[tokio::test]
+async fn signin_fixture_is_read_only_and_reports_existing_expiry() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join(".claude");
+    std::fs::create_dir(&dir).unwrap();
+    let credentials = br#"{"claudeAiOauth":{"accessToken":"fixture-access","refreshToken":"fixture-refresh","expiresAt":1800007200123,"refreshTokenExpiresAt":1800108000123}}"#;
+    std::fs::write(dir.join(".credentials.json"), credentials).unwrap();
+    let payload = json!({"protocol":1,"verb":"signin-expiry","id":"expiry","deadlineMs":1000,"args":{"home":home.path(),"nowMs":1800000000123_i64}}).to_string()+"\n";
+    let mut output = Vec::new();
+    let code = aac_agent::run(tokio::io::BufReader::new(payload.as_bytes()), &mut output)
+        .await
+        .unwrap();
+    assert_eq!(code, 0);
+    let event: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(event["value"]["profiles"][0]["state"], "ok");
+    assert_eq!(
+        std::fs::read(dir.join(".credentials.json")).unwrap(),
+        credentials
+    );
+    assert!(
+        !String::from_utf8(output)
+            .unwrap()
+            .contains("fixture-access")
+    );
+}
+
+#[cfg(not(feature = "parity-fixtures"))]
+#[tokio::test]
+async fn production_verbs_refuse_fixture_injection() {
+    for (verb, args) in [
+        ("signin-expiry", json!({"keychain":{}})),
+        ("inventory", json!({"probe":"cores=1","platform":"linux"})),
+    ] {
+        let payload = json!({"protocol":1,"verb":verb,"id":"fixture","deadlineMs":1000,"args":args})
+            .to_string() + "\n";
+        let mut output = Vec::new();
+        assert_eq!(
+            aac_agent::run(tokio::io::BufReader::new(payload.as_bytes()), &mut output)
+                .await
+                .unwrap(),
+            1
+        );
+        let event: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(event["failure"]["cause"], "refused");
+    }
+}

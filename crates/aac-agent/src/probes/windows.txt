@@ -1,0 +1,13 @@
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$os = Get-CimInstance Win32_OperatingSystem
+$cpu = @(Get-CimInstance Win32_Processor)
+$drive = $env:SystemDrive
+$disk = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='" + $drive + "'")
+foreach ($p in $cpu) { "coreCount=" + $p.NumberOfLogicalProcessors }
+foreach ($p in $cpu) { "cpuLoad=" + $p.LoadPercentage }
+"memTotalKb=" + $os.TotalVisibleMemorySize
+"memAvailKb=" + $os.FreePhysicalMemory
+"diskTotalB=" + $disk.Size
+"diskFreeB=" + $disk.FreeSpace
+"mount=" + $drive
