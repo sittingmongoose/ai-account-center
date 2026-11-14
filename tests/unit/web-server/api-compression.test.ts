@@ -272,11 +272,12 @@ beforeEach(async () => {
 
   staticDir = path.join(tempRoot, 'ui');
   fs.mkdirSync(staticDir, { recursive: true });
+  fs.mkdirSync(path.join(staticDir, 'app'));
   fs.writeFileSync(
-    path.join(staticDir, 'index.html'),
-    '<!doctype html><canvas id="slint-dashboard"></canvas>'
+    path.join(staticDir, 'app', 'index.html'),
+    '<!doctype html><main id="aac-frame-fixture"></main>'
   );
-  fs.writeFileSync(path.join(staticDir, 'bridge.js'), 'export default 1;\n'.repeat(200));
+  fs.writeFileSync(path.join(staticDir, 'view-model.mjs'), 'export default 1;\n'.repeat(200));
 
   spyOn(CodexAutoSwitchService.prototype, 'start').mockImplementation(() => {});
   spyOn(accountAnalytics, 'startAccountAnalyticsSampling').mockImplementation(() => {});
@@ -392,7 +393,7 @@ describe('startServer: compression, session skip and the upgrade', () => {
     expect(page.headers['set-cookie']).toBeDefined();
 
     for (const method of ['GET', 'HEAD']) {
-      const asset = await rawRequest(port, method, '/bridge.js', { Cookie: cookie });
+      const asset = await rawRequest(port, method, '/view-model.mjs', { Cookie: cookie });
       expect(asset.status).toBe(200);
       expect(asset.headers['set-cookie']).toBeUndefined();
     }
@@ -400,7 +401,7 @@ describe('startServer: compression, session skip and the upgrade', () => {
 
   it('logs page and API requests but not static asset hits', async () => {
     clearRecentLogEntries();
-    const asset = await rawRequest(port, 'GET', '/bridge.js');
+    const asset = await rawRequest(port, 'GET', '/view-model.mjs');
     expect(asset.status).toBe(200);
     expect(asset.headers['x-ccs-request-id']).toBeUndefined();
     const api = await rawRequest(port, 'GET', '/api/health');
@@ -411,19 +412,19 @@ describe('startServer: compression, session skip and the upgrade', () => {
     const logged = getRecentLogEntries()
       .filter((entry) => entry.event === 'request.completed')
       .map((entry) => entry.context?.path)
-      .filter((path) => path === '/bridge.js' || path === '/api/health');
+      .filter((path) => path === '/view-model.mjs' || path === '/api/health');
     expect(logged).toEqual(['/api/health']);
   });
 
   it('revalidates a static asset with 304 and never sends x-powered-by', async () => {
-    const first = await rawRequest(port, 'GET', '/bridge.js');
+    const first = await rawRequest(port, 'GET', '/view-model.mjs');
     expect(first.status).toBe(200);
-    const revalidated = await rawRequest(port, 'GET', '/bridge.js', {
+    const revalidated = await rawRequest(port, 'GET', '/view-model.mjs', {
       'If-None-Match': String(first.headers.etag),
     });
     expect(revalidated.status).toBe(304);
     expect(revalidated.body.length).toBe(0);
-    for (const route of ['/api/health', '/bridge.js', '/']) {
+    for (const route of ['/api/health', '/view-model.mjs', '/']) {
       const response = await rawRequest(port, 'GET', route);
       expect(response.headers['x-powered-by']).toBeUndefined();
     }

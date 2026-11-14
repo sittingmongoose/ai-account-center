@@ -1,8 +1,8 @@
 //! The app frame (PLAN step 4): one chrome around all five tabs, every one drawn here, and every one reading its own
 //! data: Status `/api/status`, the Scoreboard its own, Analytics `/api/accounts/analytics` (analytics/feed.rs), and
-//! Home and Accounts & Settings the dashboard (dash.rs, `public/frame-dashboard.mjs`: bridge.js's server calls, timers
-//! and guards, run in this window). The frame never loads the Slint dashboard or its bridge (G5); the classic app
-//! (`/?classic=1`) is unchanged.
+//! Home and Accounts & Settings the dashboard (dash.rs, `public/frame-dashboard.mjs`: the server calls, timers and
+//! guards bridge.js kept, run in this window since G5). The classic Slint app and bridge.js were retired in Leptos
+//! finish (step 9): every page address opens this frame.
 //!
 //! Details (details.rs) and the switch confirmation (activation.rs) are the frame's own overlays over every tab.
 //!
@@ -55,7 +55,8 @@ fn push_history(path: &str, replace: bool) {
     let Ok(history) = window().history() else {
         return;
     };
-    let search = window().location().search().unwrap_or_default();
+    // the classic app's ?view=, ?classic=1 and ?content=1 go: the tab is in the path now
+    let search = crate::kept_search(&window().location().search().unwrap_or_default());
     let url = format!("{path}{search}");
     let _ = if replace {
         history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url))
@@ -154,14 +155,6 @@ impl FrameCtx {
         self.theme.set(mode.to_string());
     }
 
-    /// The way back: this device opens the classic app again until the frame is turned on.
-    pub fn classic(&self) {
-        if let Some(s) = window().local_storage().ok().flatten() {
-            let _ = s.set_item("aac-frame", "classic");
-        }
-        let _ = window().location().set_href("/");
-    }
-
     /// Sign out. With the dashboard controller started, its own Sign out runs (bridge.js signOut): it waits while an
     /// account switch is waiting on screen, words a failure, and ends the frame's session when it has signed out.
     /// Otherwise (not loaded yet, so no switch can be waiting) the frame's session signs out itself.
@@ -235,7 +228,11 @@ fn reopen_last_page(ctx: FrameCtx, view: RwSignal<SessionView>) {
 /// The browser's Back and Forward move between tabs.
 fn follow_history(ctx: FrameCtx) {
     let handler = Closure::<dyn Fn()>::new(move || {
-        let page = crate::page_from_path(&window().location().pathname().unwrap_or_default());
+        let location = window().location();
+        let page = crate::page_from_location(
+            &location.pathname().unwrap_or_default(),
+            &location.search().unwrap_or_default(),
+        );
         if page != ctx.route.get_untracked() {
             ctx.show(page);
         }

@@ -10,23 +10,16 @@ const {
   buildUi,
   localRustBuildRefusal,
   readBuildCommit,
-  assertSlintPin,
-  assertLockedSlint,
   assertLockedLeptos,
+  assertLockedWasmBindgen,
   leptosFingerprint,
   fingerprintInputs,
   normalizedFingerprintPaths,
-  BRIDGE_IMPORT_ERROR,
   SW_BUILD_ID_ERROR,
 } = require('../../../scripts/build-ui.js');
 const { verifyBundle } = require('../../../scripts/verify-bundle.js');
 const { validateUi } = require('../../../scripts/validate-ui.js');
 const roots: string[] = [];
-// A valid wasm header followed by a compressible body, large enough to precompress.
-const WASM = Buffer.concat([
-  Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]),
-  Buffer.from('slint-dashboard-fixture-'.repeat(256)),
-]);
 const sha256 = (data: Buffer) => crypto.createHash('sha256').update(data).digest('hex');
 const mode = (file: string) => fs.statSync(file).mode & 0o777;
 
@@ -40,39 +33,51 @@ function filesBelow(directory: string, relative = ''): string[] {
     .sort();
 }
 
+/** One custom wasm section: id 0, a two-byte size, the name and its body. */
+function section(name: string, body: Buffer): Buffer {
+  const payload = Buffer.concat([Buffer.from([name.length]), Buffer.from(name), body]);
+  return Buffer.concat([
+    Buffer.from([0, (payload.length & 0x7f) | 0x80, payload.length >> 7]),
+    payload,
+  ]);
+}
+/** The module the build ships: a wasm header and one section to keep, compressible enough to precompress. */
+const STRIPPED = Buffer.concat([
+  Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]),
+  section('target_features', Buffer.from('leptos-fixture-'.repeat(120))),
+]);
+/** What the fake wasm-pack leaves: the same module with a large debug "name" section, which the build strips. */
+const BUILT = Buffer.concat([STRIPPED, section('name', Buffer.alloc(900, 7))]);
+const LEPTOS_LOCK =
+  'version = 4\n\n[[package]]\nname = "leptos"\nversion = "0.9.0-rc1"\n[[package]]\nname = "wasm-bindgen"\nversion = "0.2.130"\n[[package]]\nname = "wasm-bindgen-futures"\nversion = "0.4.80"\n[[package]]\nname = "js-sys"\nversion = "0.3.107"\n[[package]]\nname = "web-sys"\nversion = "0.3.107"\n';
+
+/** A checkout with the dashboard's public files and a Leptos crate whose pkg/ the fake wasm-pack has "built". */
 function fixture(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-slint-build-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-leptos-build-'));
   roots.push(root);
   const crate = path.join(root, 'web-dashboard');
-  fs.mkdirSync(path.join(crate, 'public'), { recursive: true });
-  fs.mkdirSync(path.join(crate, 'pkg'), { recursive: true });
-  fs.mkdirSync(path.join(crate, 'tests'), { recursive: true });
+  const leptos = path.join(crate, 'leptos');
+  for (const dir of [
+    'public/icons',
+    'tests',
+    'leptos/src',
+    'leptos/style',
+    'leptos/build',
+    'leptos/fonts',
+    'leptos/pkg',
+  ])
+    fs.mkdirSync(path.join(crate, dir), { recursive: true });
   for (const name of ['data.test.mjs', 'analytics.test.mjs', 'activation-confirmation.test.mjs']) {
     fs.writeFileSync(path.join(crate, 'tests', name), '// Build-gate fixture');
   }
-  fs.writeFileSync(
-    path.join(crate, 'Cargo.toml'),
-    '[dependencies]\nslint = { version = "=1.18.1" }\n[build-dependencies]\nslint-build = "=1.18.1"\n'
-  );
-  fs.writeFileSync(
-    path.join(crate, 'Cargo.lock'),
-    '[[package]]\nname = "slint"\nversion = "1.18.1"\n[[package]]\nname = "slint-build"\nversion = "1.18.1"\n[[package]]\nname = "wasm-bindgen"\nversion = "0.2.130"\n[[package]]\nname = "wasm-bindgen-futures"\nversion = "0.4.80"\n[[package]]\nname = "js-sys"\nversion = "0.3.107"\n[[package]]\nname = "web-sys"\nversion = "0.3.107"\n'
-  );
-  fs.writeFileSync(
-    path.join(crate, 'public', 'index.html'),
-    '<canvas></canvas><script type="module" src="/bridge.js"></script>'
-  );
-  fs.writeFileSync(
-    path.join(crate, 'public', 'bridge.js'),
-    "import './pkg/ccs_account_dashboard.js';"
-  );
-  // The installable shell: the worker carries the build placeholder, the
-  // manifest names one fixture icon, and the icon file exists.
+  // The installable shell: the worker carries the build placeholder, the manifest names one fixture icon, and the icon
+  // file exists.
   fs.writeFileSync(
     path.join(crate, 'public', 'sw.js'),
     "importScripts('./sw-route.js');\nvar BUILD_ID = '__AAC_BUILD_ID__';\n"
   );
   fs.writeFileSync(path.join(crate, 'public', 'sw-route.js'), '// routing fixture\n');
+  fs.writeFileSync(path.join(crate, 'public', 'view-model.mjs'), 'export const rows = [];\n');
   fs.writeFileSync(
     path.join(crate, 'public', 'manifest.webmanifest'),
     JSON.stringify({
@@ -83,7 +88,6 @@ function fixture(): string {
       icons: [{ src: '/icons/fixture-192.png', sizes: '192x192', type: 'image/png' }],
     })
   );
-  fs.mkdirSync(path.join(crate, 'public', 'icons'), { recursive: true });
   fs.writeFileSync(
     path.join(crate, 'public', 'icons', 'fixture-192.png'),
     Buffer.from(
@@ -91,12 +95,27 @@ function fixture(): string {
       'base64'
     )
   );
+  fs.writeFileSync(path.join(leptos, 'Cargo.toml'), '[package]\nname = "aac-web"\n');
+  fs.writeFileSync(path.join(leptos, 'Cargo.lock'), LEPTOS_LOCK);
+  fs.writeFileSync(path.join(leptos, 'src', 'lib.rs'), '// fixture\n');
+  fs.writeFileSync(path.join(leptos, 'style', 'app.css'), 'body{margin:0}\n'.repeat(80));
   fs.writeFileSync(
-    path.join(crate, 'pkg', 'ccs_account_dashboard.js'),
+    path.join(leptos, 'index.html'),
+    `<!doctype html><link rel="stylesheet" href="{{CSS}}"><link rel="modulepreload" href="{{PKG}}/aac_web.js"><script type="module">import init from '{{PKG}}/aac_web.js'; init({ module_or_path: '{{PKG}}/aac_web_bg.wasm' });</script>${'<!-- page -->'.repeat(80)}`
+  );
+  fs.copyFileSync(
+    path.join(__dirname, '../../../web-dashboard/leptos/build/strip-names.cjs'),
+    path.join(leptos, 'build', 'strip-names.cjs')
+  );
+  fs.writeFileSync(path.join(leptos, 'fonts', 'MartianMono.ttf'), 'font');
+  fs.writeFileSync(path.join(leptos, 'fonts', 'OFL-MartianMono.txt'), 'license');
+  fs.writeFileSync(path.join(leptos, 'pkg', 'aac_web_bg.wasm'), BUILT);
+  fs.writeFileSync(
+    path.join(leptos, 'pkg', 'aac_web.js'),
     `export default async function init() {}\n${'// wasm-bindgen glue fixture\n'.repeat(80)}`
   );
-  fs.writeFileSync(path.join(crate, 'pkg', 'ccs_account_dashboard_bg.wasm'), WASM);
-  fs.writeFileSync(path.join(crate, 'pkg', '.gitignore'), '*');
+  fs.writeFileSync(path.join(leptos, 'pkg', '.gitignore'), '*');
+  fs.writeFileSync(path.join(leptos, 'pkg', 'package.json'), '{}');
   return root;
 }
 
@@ -106,13 +125,6 @@ function runner(calls: Array<[string, string[]]>, rust = 'rustc 1.99.1 (fixture)
     if (command.includes('rustc')) return rust;
     if (command.includes('rustup')) return 'wasm32-unknown-unknown\nx86_64-unknown-linux-gnu\n';
     if (command.includes('wasm-pack') && args[0] === '--version') return 'wasm-pack 0.15.1\n';
-    if (args[0]?.endsWith('tail-call-compat.mjs'))
-      return JSON.stringify({
-        policy: 'webkit-ipint-boundaries-v1',
-        imported: 1,
-        indirect: 1,
-        internal: 10,
-      });
     return '';
   };
 }
@@ -122,7 +134,7 @@ const savedCache = process.env.XDG_CACHE_HOME;
 const savedTarget = process.env.CARGO_TARGET_DIR;
 let cacheHome = '';
 beforeAll(() => {
-  cacheHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-slint-cache-'));
+  cacheHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-leptos-cache-'));
   process.env.XDG_CACHE_HOME = cacheHome;
   delete process.env.CARGO_TARGET_DIR;
 });
@@ -140,60 +152,20 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-/** A Leptos pages crate beside the Slint one; the fake wasm-pack "builds" it by writing a module with a name section. */
-function addLeptosCrate(root: string): Buffer {
-  const crate = path.join(root, 'web-dashboard');
-  const leptos = path.join(crate, 'leptos');
-  for (const dir of ['src', 'style', 'build', 'pkg'])
-    fs.mkdirSync(path.join(leptos, dir), { recursive: true });
-  fs.writeFileSync(path.join(leptos, 'Cargo.toml'), '[package]\nname = "aac-web"\n');
-  fs.writeFileSync(
-    path.join(leptos, 'Cargo.lock'),
-    'version = 4\n\n[[package]]\nname = "leptos"\nversion = "0.9.0-rc1"\n[[package]]\nname = "wasm-bindgen"\nversion = "0.2.130"\n[[package]]\nname = "wasm-bindgen-futures"\nversion = "0.4.80"\n[[package]]\nname = "js-sys"\nversion = "0.3.107"\n[[package]]\nname = "web-sys"\nversion = "0.3.107"\n'
-  );
-  fs.writeFileSync(path.join(leptos, 'src', 'lib.rs'), '// fixture\n');
-  fs.writeFileSync(path.join(leptos, 'style', 'app.css'), 'body{margin:0}\n'.repeat(80));
-  fs.writeFileSync(
-    path.join(leptos, 'index.html'),
-    `<!doctype html><link rel="stylesheet" href="{{CSS}}"><script type="module">import init from '{{PKG}}/aac_web.js'; init({ module_or_path: '{{PKG}}/aac_web_bg.wasm' });</script>${'<!-- page -->'.repeat(80)}`
-  );
-  fs.copyFileSync(
-    path.join(__dirname, '../../../web-dashboard/leptos/build/strip-names.cjs'),
-    path.join(leptos, 'build', 'strip-names.cjs')
-  );
-  fs.mkdirSync(path.join(crate, 'ui', 'fonts'), { recursive: true });
-  fs.writeFileSync(path.join(crate, 'ui', 'fonts', 'MartianMono.ttf'), 'font');
-  fs.writeFileSync(path.join(crate, 'ui', 'fonts', 'OFL-MartianMono.txt'), 'license');
-  // A module: header, one code-ish custom section to keep, and a big "name" section to strip.
-  const section = (name: string, body: Buffer) => {
-    const payload = Buffer.concat([Buffer.from([name.length]), Buffer.from(name), body]);
-    return Buffer.concat([
-      Buffer.from([0, (payload.length & 0x7f) | 0x80, payload.length >> 7]),
-      payload,
-    ]);
-  };
-  const kept = section('target_features', Buffer.from('leptos-fixture-'.repeat(20)));
-  const stripped = Buffer.concat([Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]), kept]);
-  const module = Buffer.concat([stripped, section('name', Buffer.alloc(900, 7))]);
-  fs.writeFileSync(path.join(leptos, 'pkg', 'aac_web_bg.wasm'), module);
-  fs.writeFileSync(
-    path.join(leptos, 'pkg', 'aac_web.js'),
-    `export default async function init() {}\n${'// glue\n'.repeat(80)}`
-  );
-  fs.writeFileSync(path.join(leptos, 'pkg', '.gitignore'), '*');
-  return stripped;
+/** A dist/ui with one file, as a previous build leaves it: a failed build must keep it. */
+function existingOutput(root: string): string {
+  const oldUi = path.join(root, 'dist', 'ui');
+  fs.mkdirSync(path.join(oldUi, 'app'), { recursive: true });
+  fs.writeFileSync(path.join(oldUi, 'app', 'index.html'), 'existing');
+  return path.join(oldUi, 'app', 'index.html');
 }
 
-describe('Leptos pages in the UI build', () => {
-  it('builds, strips and content-addresses the Leptos pages beside the Slint runtime', () => {
+describe('the Leptos dashboard build', () => {
+  it('builds, strips and content-addresses the app into the packaged dashboard', () => {
     const root = fixture();
-    const stripped = addLeptosCrate(root);
     const calls: Array<[string, string[]]> = [];
     const manifest = build({ repoRoot: root, run: runner(calls) });
-    const leptosCall = calls.find(
-      ([, args]) => args[0] === 'build' && args[1].endsWith(path.join('web-dashboard', 'leptos'))
-    );
-    expect(leptosCall?.[1]).toEqual([
+    expect(calls.find(([, args]) => args[0] === 'build')?.[1]).toEqual([
       'build',
       path.join(root, 'web-dashboard', 'leptos'),
       '--release',
@@ -206,20 +178,23 @@ describe('Leptos pages in the UI build', () => {
       '--',
       '--locked',
     ]);
-    const id = sha256(stripped).slice(0, 12);
-    expect(manifest.leptos).toMatchObject({
+    const id = sha256(STRIPPED).slice(0, 12);
+    expect(manifest).toMatchObject({
+      schemaVersion: 2,
       framework: 'leptos',
       version: '0.9.0-rc1',
+      target: 'wasm32-unknown-unknown',
       entry: 'app/index.html',
       buildId: id,
-      wasm: { path: `pkg/${id}/aac_web_bg.wasm`, bytes: stripped.length, sha256: sha256(stripped) },
+      wasm: { path: `pkg/${id}/aac_web_bg.wasm`, bytes: STRIPPED.length, sha256: sha256(STRIPPED) },
     });
-    expect(manifest.leptos.buildId).not.toBe(manifest.buildId);
+    expect(manifest).not.toHaveProperty('leptos');
     const ui = path.join(root, 'dist', 'ui');
     // The debug name section is gone and nothing else changed.
-    expect(fs.readFileSync(path.join(ui, manifest.leptos.wasm.path)).equals(stripped)).toBe(true);
+    expect(fs.readFileSync(path.join(ui, manifest.wasm.path)).equals(STRIPPED)).toBe(true);
     const page = fs.readFileSync(path.join(ui, 'app', 'index.html'), 'utf8');
     expect(page).toContain(`'/pkg/${id}/aac_web.js'`);
+    expect(page).toContain(`'/pkg/${id}/aac_web_bg.wasm'`);
     expect(page).not.toContain('{{PKG}}');
     expect(page).not.toContain('{{CSS}}');
     expect(page).toMatch(/href="\/app\/app\.css\?v=[0-9a-f]{12}"/);
@@ -231,19 +206,21 @@ describe('Leptos pages in the UI build', () => {
     ]) {
       expect(fs.existsSync(path.join(ui, file))).toBe(true);
     }
-    expect(fs.existsSync(path.join(ui, 'pkg', id, '.gitignore'))).toBe(false);
-    // Compressed like the rest, with the usual modes, and the bundle still verifies.
+    for (const file of ['.gitignore', 'package.json'])
+      expect(fs.existsSync(path.join(ui, 'pkg', id, file))).toBe(false);
+    // no classic page, bridge or Slint runtime
+    for (const file of ['index.html', 'bridge.js'])
+      expect(fs.existsSync(path.join(ui, file))).toBe(false);
     expect(
       manifest.precompressed.some((entry: { path: string }) => entry.path === 'app/index.html')
     ).toBe(true);
     expect(mode(path.join(ui, 'app'))).toBe(0o755);
     expect(mode(path.join(ui, 'app', 'index.html'))).toBe(0o644);
-    expect(() => verifyBundle(ui)).not.toThrow();
+    expect(verifyBundle(ui).manifest).toEqual(manifest);
   });
 
-  it('refuses a page source change after the build, like the Slint fingerprint', () => {
+  it('refuses a source change after the build', () => {
     const root = fixture();
-    addLeptosCrate(root);
     build({ repoRoot: root, run: runner([]) });
     expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
     fs.appendFileSync(
@@ -251,11 +228,21 @@ describe('Leptos pages in the UI build', () => {
       'p{color:red}\n'
     );
     expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow(
-      'Leptos page source changed after the build'
+      'Dashboard source changed after the build'
     );
   });
 
-  it('requires Cargo.lock to resolve the pinned Leptos version', () => {
+  it('refuses a changed shared computer registry after the build', () => {
+    const root = fixture();
+    const registry = path.join(root, 'web-dashboard', 'public', 'computers.json');
+    fs.writeFileSync(registry, '{}');
+    build({ repoRoot: root, run: runner([]) });
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
+    fs.writeFileSync(registry, '{"future":{}}');
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow('source changed');
+  });
+
+  it('requires Cargo.lock to resolve the pinned Leptos and wasm-bindgen versions', () => {
     expect(() =>
       assertLockedLeptos({ package: [{ name: 'leptos', version: '0.9.0-rc1' }] })
     ).not.toThrow();
@@ -263,6 +250,17 @@ describe('Leptos pages in the UI build', () => {
       'must resolve leptos to 0.9.0-rc1'
     );
     expect(() => assertLockedLeptos({ package: [] })).toThrow('must resolve leptos');
+    expect(() =>
+      assertLockedWasmBindgen({ package: [{ name: 'wasm-bindgen', version: '0.2.129' }] }, 'Leptos')
+    ).toThrow('Leptos Cargo.lock must resolve wasm-bindgen to 0.2.130');
+    const root = fixture();
+    fs.writeFileSync(
+      path.join(root, 'web-dashboard', 'leptos', 'Cargo.lock'),
+      LEPTOS_LOCK.replace('0.9.0-rc1', '0.8.23')
+    );
+    const before = existingOutput(root);
+    expect(() => build({ repoRoot: root, run: runner([]) })).toThrow('must resolve leptos');
+    expect(fs.readFileSync(before, 'utf8')).toBe('existing');
   });
 
   it('refuses a linked crate root, a linked parent folder and a dangling link among the inputs', () => {
@@ -288,7 +286,6 @@ describe('Leptos pages in the UI build', () => {
 
   it('refuses a linked shared registry or its linked public folder', () => {
     const root = fixture();
-    addLeptosCrate(root);
     const crate = path.join(root, 'web-dashboard');
     const registry = path.join(crate, 'public', 'computers.json');
     fs.symlinkSync(path.join(root, 'missing.json'), registry);
@@ -299,79 +296,32 @@ describe('Leptos pages in the UI build', () => {
     expect(() => leptosFingerprint(path.join(crate, 'leptos'))).toThrow('must not be symlinks');
   });
 
-  it('builds no pages and adds nothing to the manifest when the crate is absent', () => {
+  it('refuses a missing or dangling crate instead of building nothing', () => {
     const root = fixture();
-    const manifest = build({ repoRoot: root, run: runner([]) });
-    expect(manifest.leptos).toBeUndefined();
-    expect(fs.existsSync(path.join(root, 'dist', 'ui', 'app'))).toBe(false);
-  });
-});
-
-describe('Slint browser build integration', () => {
-  it('requires exact Slint runtime and compiler pins', () => {
-    expect(() =>
-      assertSlintPin({
-        dependencies: { slint: '^1.18.1' },
-        'build-dependencies': { 'slint-build': '=1.18.1' },
-      })
-    ).toThrow();
-    expect(() => assertLockedSlint({ package: [{ name: 'slint', version: '1.18.2' }] })).toThrow();
-  });
-
-  it('builds locked browser output directly into the packaged dashboard', () => {
-    const root = fixture();
-    const calls: Array<[string, string[]]> = [];
-    const manifest = build({ repoRoot: root, run: runner(calls) });
-    expect(manifest.version).toBe('1.18.1');
-    expect(calls.find(([, args]) => args[0] === 'build')?.[1]).toEqual([
-      'build',
-      path.join(root, 'web-dashboard'),
-      '--release',
-      '--target',
-      'web',
-      '--out-dir',
-      'pkg',
-      '--out-name',
-      'ccs_account_dashboard',
-      '--',
-      '--locked',
-    ]);
-    expect(calls.at(-1)?.[1]).toEqual([
-      path.join(root, 'web-dashboard', 'build-tools', 'tail-call-compat.mjs'),
-      path.join(root, 'web-dashboard', 'pkg', 'ccs_account_dashboard_bg.wasm'),
-    ]);
-    expect(manifest.wasm.compatibility).toEqual({
-      policy: 'webkit-ipint-boundaries-v1',
-      imported: 1,
-      indirect: 1,
-      internal: 10,
-    });
-    const output = path.join(root, 'dist', 'ui');
-    expect(verifyBundle(output).manifest).toEqual(manifest);
-    expect(fs.readFileSync(path.join(output, 'index.html'), 'utf8')).not.toContain('react');
-    expect(fs.existsSync(path.join(output, 'pkg', '.gitignore'))).toBe(false);
-    expect(fs.existsSync(path.join(root, 'ui'))).toBe(false);
+    build({ repoRoot: root, run: runner([]) });
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
+    const leptos = path.join(root, 'web-dashboard', 'leptos');
+    fs.renameSync(leptos, path.join(root, 'moved'));
+    expect(() => build({ repoRoot: root, run: runner([]) })).toThrow('must be a real folder');
+    fs.symlinkSync(path.join(root, 'nowhere'), leptos);
+    expect(() => build({ repoRoot: root, run: runner([]) })).toThrow();
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow();
   });
 
   it('rejects an older Rust compiler before modifying the existing browser output', () => {
     const root = fixture();
-    const calls: Array<[string, string[]]> = [];
-    const oldUi = path.join(root, 'dist', 'ui');
-    fs.mkdirSync(oldUi, { recursive: true });
-    fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
-    expect(() => build({ repoRoot: root, run: runner(calls, 'rustc 1.91.0 (fixture)') })).toThrow(
+    const before = existingOutput(root);
+    expect(() => build({ repoRoot: root, run: runner([], 'rustc 1.91.0 (fixture)') })).toThrow(
       '1.99.1'
     );
-    expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
+    expect(fs.readFileSync(before, 'utf8')).toBe('existing');
   });
 
   it('rejects an outdated wasm-pack before replacing the packaged dashboard', () => {
     const root = fixture();
     const calls: Array<[string, string[]]> = [];
     const run = runner(calls);
-    const oldUi = path.join(root, 'dist', 'ui');
-    fs.mkdirSync(oldUi, { recursive: true });
-    fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
+    const before = existingOutput(root);
     expect(() =>
       build({
         repoRoot: root,
@@ -382,16 +332,16 @@ describe('Slint browser build integration', () => {
       })
     ).toThrow('requires wasm-pack 0.15.1');
     expect(calls.some(([, args]) => args[0] === 'build')).toBe(false);
-    expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
+    expect(fs.readFileSync(before, 'utf8')).toBe('existing');
   });
 
   it('uses the crate toolchain when the computer default compiler is older', () => {
     const root = fixture();
-    const crate = path.join(root, 'web-dashboard');
+    const leptos = path.join(root, 'web-dashboard', 'leptos');
     const run = runner([]);
     const pinnedRun = (command: string, args: string[], options: { cwd?: string }) => {
-      if (command.includes('rustc') && options.cwd !== crate) return 'rustc 1.93.0 (default)';
-      if (command.includes('cargo') && args[0] === 'fmt' && options.cwd !== crate)
+      if (command.includes('rustc') && options.cwd !== leptos) return 'rustc 1.93.0 (default)';
+      if (command.includes('cargo') && args[0] === 'fmt' && options.cwd !== leptos)
         throw new Error('Formatter did not use the crate toolchain');
       return run(command, args);
     };
@@ -399,50 +349,51 @@ describe('Slint browser build integration', () => {
     expect(() => validateUi({ repoRoot: root, run: pinnedRun })).not.toThrow();
   });
 
-  it('refuses a dangling link where the Leptos crate should be instead of skipping the pages', () => {
-    const root = fixture();
-    build({ repoRoot: root, run: runner([]) });
-    expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
-    fs.symlinkSync(path.join(root, 'nowhere'), path.join(root, 'web-dashboard', 'leptos'));
-    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow();
-  });
-
-  it('invalidates packaged output when Wasm compiler features change', () => {
-    const root = fixture();
-    const config = path.join(root, 'web-dashboard', '.cargo', 'config.toml');
-    fs.mkdirSync(path.dirname(config));
-    fs.writeFileSync(config, '[target.wasm32-unknown-unknown]\nrustflags = []\n');
-    build({ repoRoot: root, run: runner([]) });
-    expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
-    fs.writeFileSync(
-      config,
-      '[target.wasm32-unknown-unknown]\nrustflags = ["-C", "target-feature=+simd128"]\n'
-    );
-    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow(
-      'Dashboard source changed after the build'
-    );
+  it('invalidates packaged output when Wasm compiler features or the toolchain change', () => {
+    for (const [file, first, next] of [
+      [
+        '.cargo/config.toml',
+        '[target.wasm32-unknown-unknown]\nrustflags = []\n',
+        '[target.wasm32-unknown-unknown]\nrustflags = ["-C", "target-feature=+simd128"]\n',
+      ],
+      [
+        'rust-toolchain.toml',
+        '[toolchain]\nchannel = "1.99.1"\n',
+        '[toolchain]\nchannel = "1.99.2"\n',
+      ],
+    ]) {
+      const root = fixture();
+      const config = path.join(root, 'web-dashboard', 'leptos', file);
+      fs.mkdirSync(path.dirname(config), { recursive: true });
+      fs.writeFileSync(config, first);
+      build({ repoRoot: root, run: runner([]) });
+      expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
+      fs.writeFileSync(config, next);
+      expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow(
+        'Dashboard source changed after the build'
+      );
+    }
   });
 
   it('detects a mismatched packaged Wasm binary', () => {
     const root = fixture();
-    const calls: Array<[string, string[]]> = [];
-    const manifest = build({ repoRoot: root, run: runner(calls) });
+    const manifest = build({ repoRoot: root, run: runner([]) });
     const output = path.join(root, 'dist', 'ui');
     fs.appendFileSync(path.join(output, manifest.wasm.path), Buffer.from([1]));
     expect(() => verifyBundle(output)).toThrow('does not match');
   });
 
-  it('validates current Slint inputs, fixtures and artifacts without rebuilding', () => {
+  it('validates current inputs, fixtures and artifacts without rebuilding', () => {
     const root = fixture();
     const calls: Array<[string, string[]]> = [];
     const manifest = build({ repoRoot: root, run: runner(calls) });
     calls.length = 0;
     expect(validateUi({ repoRoot: root, run: runner(calls) })).toEqual(manifest.source);
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
     expect(calls[0]?.[1]).toEqual([
       'fmt',
       '--manifest-path',
-      path.join(root, 'web-dashboard', 'Cargo.toml'),
+      path.join(root, 'web-dashboard', 'leptos', 'Cargo.toml'),
       '--check',
     ]);
     expect(calls[1]?.[1][0]).toBe('--test');
@@ -451,92 +402,54 @@ describe('Slint browser build integration', () => {
       'analytics.test.mjs',
       'data.test.mjs',
     ]);
-    expect(calls[2]?.[1][0]).toBe('--check');
     expect(calls.some(([command]) => command.includes('wasm-pack'))).toBe(false);
   });
 
-  it('rejects a stale browser bridge after source changes even when Wasm is valid', () => {
+  it('rejects a stale shell after a public file changes even when the wasm is valid', () => {
     const root = fixture();
-    const calls: Array<[string, string[]]> = [];
-    build({ repoRoot: root, run: runner(calls) });
-    fs.appendFileSync(path.join(root, 'web-dashboard', 'public', 'bridge.js'), '\n// changed');
-    expect(() => validateUi({ repoRoot: root, run: runner(calls) })).toThrow('source changed');
+    build({ repoRoot: root, run: runner([]) });
+    fs.appendFileSync(path.join(root, 'web-dashboard', 'public', 'view-model.mjs'), '\n// changed');
+    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow(
+      'Dashboard shell changed after the build'
+    );
   });
 
   it('puts the wasm-pack output only in pkg/<buildId>/, named after the wasm hash', () => {
     const root = fixture();
     const manifest = build({ repoRoot: root, run: runner([]), readCommit: () => null });
     const output = path.join(root, 'dist', 'ui');
-    const buildId = sha256(WASM).slice(0, 12);
+    const buildId = sha256(STRIPPED).slice(0, 12);
     expect(manifest.buildId).toBe(buildId);
     expect(manifest.wasm).toEqual({
-      path: `pkg/${buildId}/ccs_account_dashboard_bg.wasm`,
-      bytes: WASM.length,
-      sha256: sha256(WASM),
-      compatibility: {
-        policy: 'webkit-ipint-boundaries-v1',
-        imported: 1,
-        indirect: 1,
-        internal: 10,
-      },
+      path: `pkg/${buildId}/aac_web_bg.wasm`,
+      bytes: STRIPPED.length,
+      sha256: sha256(STRIPPED),
     });
     expect(fs.readdirSync(path.join(output, 'pkg'))).toEqual([buildId]);
-    expect(fs.existsSync(path.join(output, 'pkg', 'ccs_account_dashboard_bg.wasm'))).toBe(false);
-    expect(fs.existsSync(path.join(output, 'pkg', 'ccs_account_dashboard.js'))).toBe(false);
-    expect(fs.existsSync(path.join(output, 'pkg', buildId, '.gitignore'))).toBe(false);
-    expect(fs.readFileSync(path.join(output, manifest.wasm.path)).equals(WASM)).toBe(true);
+    expect(fs.existsSync(path.join(output, 'pkg', 'aac_web_bg.wasm'))).toBe(false);
+    expect(fs.existsSync(path.join(output, 'pkg', 'aac_web.js'))).toBe(false);
+    expect(fs.readFileSync(path.join(output, manifest.wasm.path)).equals(STRIPPED)).toBe(true);
     expect(manifest).not.toHaveProperty('commit');
   });
 
-  it('hashes and compresses the final compatibility output', () => {
+  it('refuses a page template without its runtime and stylesheet placeholders, and keeps the existing output', () => {
     const root = fixture();
-    const finalWasm = Buffer.concat([WASM, Buffer.from('compatibility-output')]);
-    const run = runner([]);
-    const manifest = build({
-      repoRoot: root,
-      run: (command: string, args: string[]) => {
-        if (args[0]?.endsWith('tail-call-compat.mjs')) fs.writeFileSync(args[1], finalWasm);
-        return run(command, args);
-      },
-    });
-    expect(manifest.buildId).toBe(sha256(finalWasm).slice(0, 12));
-    expect(manifest.wasm.sha256).toBe(sha256(finalWasm));
-    expect(verifyBundle(path.join(root, 'dist', 'ui')).manifest).toEqual(manifest);
-  });
-
-  it('invalidates the UI when the compatibility build tool changes', () => {
-    const root = fixture();
-    const helper = path.join(root, 'web-dashboard', 'build-tools', 'tail-call-compat.mjs');
-    fs.mkdirSync(path.dirname(helper), { recursive: true });
-    fs.writeFileSync(helper, '// compatibility build fixture');
-    build({ repoRoot: root, run: runner([]) });
-    fs.appendFileSync(helper, '\n// policy changed');
-    expect(() => validateUi({ repoRoot: root, run: runner([]) })).toThrow('source changed');
-  });
-
-  it('rejects an invalid compatibility receipt before replacing the packaged UI', () => {
-    const root = fixture();
-    const output = path.join(root, 'dist', 'ui');
-    fs.mkdirSync(output, { recursive: true });
-    fs.writeFileSync(path.join(output, 'index.html'), 'existing');
-    const run = runner([]);
-    expect(() =>
-      build({
-        repoRoot: root,
-        run: (command: string, args: string[]) =>
-          args[0]?.endsWith('tail-call-compat.mjs')
-            ? JSON.stringify({ policy: 'unknown', imported: -1, indirect: 0, internal: 0 })
-            : run(command, args),
-      })
-    ).toThrow('Invalid tail-call compatibility');
-    expect(fs.readFileSync(path.join(output, 'index.html'), 'utf8')).toBe('existing');
+    fs.writeFileSync(
+      path.join(root, 'web-dashboard', 'leptos', 'index.html'),
+      '<!doctype html><script src="/pkg/aac_web.js"></script>'
+    );
+    const before = existingOutput(root);
+    expect(() => build({ repoRoot: root, run: runner([]) })).toThrow(
+      'must reference {{PKG}} and {{CSS}}'
+    );
+    expect(fs.readFileSync(before, 'utf8')).toBe('existing');
   });
 
   it('stamps the shell build id into the packaged sw.js and leaves the source worker unchanged', () => {
     const root = fixture();
     const source = path.join(root, 'web-dashboard', 'public', 'sw.js');
     const before = fs.readFileSync(source, 'utf8');
-    const manifest = buildUi({ repoRoot: root, run: runner([]) });
+    const manifest = build({ repoRoot: root, run: runner([]) });
     const packaged = fs.readFileSync(path.join(root, 'dist', 'ui', 'sw.js'), 'utf8');
     expect(packaged).toBe(
       `importScripts('./sw-route.js');\nvar BUILD_ID = '${manifest.shellBuildId}';\n`
@@ -564,6 +477,10 @@ describe('Slint browser build integration', () => {
     expect(third.buildId).toBe(first.buildId);
     expect(third.shellBuildId).not.toBe(first.shellBuildId);
     expect(fs.readFileSync(swPath, 'utf8')).not.toBe(swFirst);
+    // A stylesheet change rolls it too (the frame page names its stylesheet by content).
+    fs.appendFileSync(path.join(root, 'web-dashboard', 'leptos', 'style', 'app.css'), 'p{}\n');
+    const fourth = build({ repoRoot: root, run: runner([]), readCommit: () => null });
+    expect(fourth.shellBuildId).not.toBe(third.shellBuildId);
     // The validator agrees the new output matches the new shell inputs.
     expect(() => validateUi({ repoRoot: root, run: runner([]) })).not.toThrow();
   });
@@ -574,52 +491,20 @@ describe('Slint browser build integration', () => {
       path.join(root, 'web-dashboard', 'public', 'sw.js'),
       "var BUILD_ID = 'already-stamped';\n"
     );
-    const oldUi = path.join(root, 'dist', 'ui');
-    fs.mkdirSync(oldUi, { recursive: true });
-    fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
+    const before = existingOutput(root);
     expect(SW_BUILD_ID_ERROR).toBe(
       'sw.js must name the __AAC_BUILD_ID__ placeholder exactly once.'
     );
-    expect(() => buildUi({ repoRoot: root, run: runner([]) })).toThrow(SW_BUILD_ID_ERROR);
-    expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
+    expect(() => build({ repoRoot: root, run: runner([]) })).toThrow(SW_BUILD_ID_ERROR);
+    expect(fs.readFileSync(before, 'utf8')).toBe('existing');
   });
 
   it('leaves a fixture public dir without sw.js alone', () => {
     const root = fixture();
     fs.rmSync(path.join(root, 'web-dashboard', 'public', 'sw.js'));
-    const manifest = buildUi({ repoRoot: root, run: runner([]) });
+    const manifest = build({ repoRoot: root, run: runner([]) });
     expect(manifest.buildId).toMatch(/^[a-f0-9]{12}$/);
     expect(fs.existsSync(path.join(root, 'dist', 'ui', 'sw.js'))).toBe(false);
-  });
-
-  it('rewrites only the packaged bridge.js import and leaves the source bridge unchanged', () => {
-    const root = fixture();
-    const source = path.join(root, 'web-dashboard', 'public', 'bridge.js');
-    const before = fs.readFileSync(source, 'utf8');
-    const manifest = build({ repoRoot: root, run: runner([]) });
-    const packaged = fs.readFileSync(path.join(root, 'dist', 'ui', 'bridge.js'), 'utf8');
-    expect(packaged).toBe(`import './pkg/${manifest.buildId}/ccs_account_dashboard.js';`);
-    expect(fs.readFileSync(source, 'utf8')).toBe(before);
-  });
-
-  it.each([
-    ['no import literal', "import './pkg/other.js';"],
-    [
-      'two import literals',
-      "import './pkg/ccs_account_dashboard.js';\nimport('./pkg/ccs_account_dashboard.js');",
-    ],
-    ['a double-quoted import only', 'import "./pkg/ccs_account_dashboard.js";'],
-  ])('fails the build on %s and keeps the existing output', (_name, bridge) => {
-    const root = fixture();
-    fs.writeFileSync(path.join(root, 'web-dashboard', 'public', 'bridge.js'), bridge);
-    const oldUi = path.join(root, 'dist', 'ui');
-    fs.mkdirSync(oldUi, { recursive: true });
-    fs.writeFileSync(path.join(oldUi, 'index.html'), 'existing');
-    expect(BRIDGE_IMPORT_ERROR).toBe(
-      'bridge.js must import ./pkg/ccs_account_dashboard.js exactly once.'
-    );
-    expect(() => build({ repoRoot: root, run: runner([]) })).toThrow(BRIDGE_IMPORT_ERROR);
-    expect(fs.readFileSync(path.join(oldUi, 'index.html'), 'utf8')).toBe('existing');
   });
 
   it('precompresses large wasm and text files with byte-identical, listed variants', () => {
@@ -633,11 +518,15 @@ describe('Slint browser build integration', () => {
     const manifest = build({ repoRoot: root, run: runner([]) });
     const output = path.join(root, 'dist', 'ui');
     const wasmPath = manifest.wasm.path;
-    const gluePath = `pkg/${manifest.buildId}/ccs_account_dashboard.js`;
+    const gluePath = `pkg/${manifest.buildId}/aac_web.js`;
     expect(manifest.precompressed.map((row: { file: string }) => row.file).sort()).toEqual(
       [
         'large.mjs.br',
         'large.mjs.gz',
+        'app/index.html.br',
+        'app/index.html.gz',
+        'app/app.css.br',
+        'app/app.css.gz',
         `${gluePath}.br`,
         `${gluePath}.gz`,
         `${wasmPath}.br`,
@@ -655,7 +544,7 @@ describe('Slint browser build integration', () => {
         row.encoding === 'br' ? zlib.brotliDecompressSync(variant) : zlib.gunzipSync(variant);
       expect(decoded.equals(original)).toBe(true);
     }
-    for (const skipped of ['small.css', 'noise.json', 'image.png', 'index.html', 'bridge.js']) {
+    for (const skipped of ['small.css', 'noise.json', 'image.png', 'sw.js']) {
       expect(fs.existsSync(path.join(output, `${skipped}.br`))).toBe(false);
       expect(fs.existsSync(path.join(output, `${skipped}.gz`))).toBe(false);
     }
@@ -680,7 +569,7 @@ describe('Slint browser build integration', () => {
     fs.chmodSync(path.join(publicDir, 'analytics-data.mjs'), 0o600);
     fs.chmodSync(path.join(publicDir, 'assets', 'mark.svg'), 0o600);
     fs.chmodSync(path.join(publicDir, 'assets'), 0o700);
-    fs.chmodSync(path.join(root, 'web-dashboard', 'pkg', 'ccs_account_dashboard.js'), 0o600);
+    fs.chmodSync(path.join(root, 'web-dashboard', 'leptos', 'pkg', 'aac_web.js'), 0o600);
     build({ repoRoot: root, run: runner([]) });
     const output = path.join(root, 'dist', 'ui');
     const entries = filesBelow(output);
@@ -740,7 +629,7 @@ describe('Slint browser build integration', () => {
     expect(readBuildCommit(nested)).toBeNull();
   });
 
-  it('rejects tampered, stray, unversioned or wrongly permissioned packaged files', () => {
+  it('rejects tampered, stray, unversioned, retired or wrongly permissioned packaged files', () => {
     const cases: Array<[string, (output: string, manifest: any) => void, string]> = [
       [
         'tampered variant',
@@ -750,23 +639,37 @@ describe('Slint browser build integration', () => {
       ],
       [
         'stray variant',
-        (output) => fs.writeFileSync(path.join(output, 'index.html.gz'), zlib.gzipSync('x')),
+        (output) => fs.writeFileSync(path.join(output, 'sw.js.gz'), zlib.gzipSync('x')),
         'precompressed',
       ],
       [
         'unversioned runtime',
-        (output) =>
-          fs.writeFileSync(path.join(output, 'pkg', 'ccs_account_dashboard_bg.wasm'), WASM),
+        (output) => fs.writeFileSync(path.join(output, 'pkg', 'aac_web_bg.wasm'), STRIPPED),
         'unversioned',
       ],
       [
-        'unrewritten bridge',
+        'a frame page that starts another runtime',
         (output) =>
           fs.writeFileSync(
-            path.join(output, 'bridge.js'),
-            "import './pkg/ccs_account_dashboard.js';"
+            path.join(output, 'app', 'index.html'),
+            "<script>import('/pkg/000000000000/aac_web.js')</script>"
           ),
         'versioned WebAssembly runtime',
+      ],
+      [
+        'the retired classic page',
+        (output) =>
+          fs.writeFileSync(path.join(output, 'index.html'), '<canvas id="canvas"></canvas>'),
+        'retired Slint app',
+      ],
+      [
+        'the retired Slint runtime',
+        (output, manifest) =>
+          fs.writeFileSync(
+            path.join(output, 'pkg', manifest.buildId, 'ccs_account_dashboard_bg.wasm'),
+            STRIPPED
+          ),
+        'retired Slint app',
       ],
       [
         'unstamped worker',
@@ -778,6 +681,11 @@ describe('Slint browser build integration', () => {
         'stamped shell build id',
       ],
       [
+        'missing mono font',
+        (output) => fs.rmSync(path.join(output, 'app', 'MartianMono.ttf')),
+        'Missing browser asset',
+      ],
+      [
         'manifest icon removed',
         (output) => fs.rmSync(path.join(output, 'icons', 'fixture-192.png')),
         'Missing browser asset',
@@ -786,8 +694,8 @@ describe('Slint browser build integration', () => {
         'private file mode',
         (output) =>
           process.platform === 'win32'
-            ? fs.writeFileSync(path.join(output, 'index.html.br'), 'x')
-            : fs.chmodSync(path.join(output, 'index.html'), 0o600),
+            ? fs.writeFileSync(path.join(output, 'app', 'app.css.br'), 'x')
+            : fs.chmodSync(path.join(output, 'app', 'index.html'), 0o600),
         process.platform === 'win32' ? 'precompressed' : '0644',
       ],
     ];

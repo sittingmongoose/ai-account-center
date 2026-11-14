@@ -88,9 +88,7 @@ pub fn start() -> RwSignal<SessionView> {
     if call("start", None).is_none() {
         view.set(SessionView {
             state: "default".into(),
-            message: Some(
-                "This page could not start its sign-in. Reload it, or open the classic app.".into(),
-            ),
+            message: Some("This page could not start its sign-in. Reload it.".into()),
             ..Default::default()
         });
     }
@@ -458,9 +456,6 @@ pub fn SignIn(view: RwSignal<SessionView>) -> impl IntoView {
                 {move || view.with(|v| v.transport_note.clone()).filter(|n| !n.is_empty()).map(|n| view! { <p class="signin-note q3">{n}</p> })}
                 <p class="signin-note q3">{move || view.with(|v| session_line(v.session_hours))}</p>
                 <p class="signin-note q3">"The Mac and Windows trays stay signed in with their own device tokens"</p>
-                <p class="signin-note"><a class="link" href="/" on:click=|_| {
-                    if let Some(s) = window().local_storage().ok().flatten() { let _ = s.set_item("aac-frame", "classic"); }
-                }>"Open the classic app"</a></p>
             </form>
         </div>
     }

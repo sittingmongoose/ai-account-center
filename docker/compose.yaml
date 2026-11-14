@@ -1,4 +1,4 @@
-# AI Account Center: build and run this checkout's Slint dashboard.
+# AI Account Center: build and run this checkout's Leptos dashboard.
 # From the repository root: docker compose -f docker/compose.yaml up -d --build
 # Port 3000 is published on loopback by default. Host credentials and SSH
 # configuration require explicit mounts; this file does not import host logins.

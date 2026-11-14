@@ -132,18 +132,19 @@ describe('startServer host binding', () => {
     expect(['0.0.0.0', '::']).toContain(address.address);
   });
 
-  it('serves the same Slint assets in dev mode with streaming WebAssembly MIME', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-slint-static-'));
+  it('serves the same dashboard assets in dev mode with streaming WebAssembly MIME', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-ui-static-'));
     staticDirs.push(dir);
-    fs.writeFileSync(path.join(dir, 'index.html'), '<canvas id="slint-dashboard"></canvas>');
+    fs.mkdirSync(path.join(dir, 'app'));
+    fs.writeFileSync(path.join(dir, 'app', 'index.html'), '<main id="aac-frame-fixture"></main>');
     const wasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
     fs.writeFileSync(path.join(dir, 'dashboard.wasm'), wasm);
     const instance = await startServer({ port: 0, host: '127.0.0.1', dev: true, staticDir: dir });
     instances.push(instance);
     const address = instance.server.address() as AddressInfo;
     const root = `http://127.0.0.1:${address.port}`;
-    expect(await (await fetch(root)).text()).toContain('slint-dashboard');
-    expect(await (await fetch(`${root}/login`)).text()).toContain('slint-dashboard');
+    expect(await (await fetch(root)).text()).toContain('aac-frame-fixture');
+    expect(await (await fetch(`${root}/login`)).text()).toContain('aac-frame-fixture');
     const previousDashboard = await fetch(`${root}/codex/accounts`, { redirect: 'manual' });
     expect(previousDashboard.status).toBe(302);
     expect(previousDashboard.headers.get('location')).toBe('/');

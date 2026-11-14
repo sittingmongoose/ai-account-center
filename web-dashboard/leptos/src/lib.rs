@@ -1,10 +1,11 @@
 //! AI Account Center pages drawn with Leptos (client-side rendered, served by the TypeScript server).
 //!
-//! Opened on its own, `/app/<page>` is the app frame (PLAN step 4): the header, tab bar, Duo strip and band, sign-in,
-//! and all five tabs, every one drawn here and reading its own data: Home and Accounts the dashboard's (dash.rs,
-//! `public/frame-dashboard.mjs`), so the frame never loads the Slint dashboard. With `?embed=1` today's Slint shell shows
-//! the Status or Scoreboard content in its iframe
-//! and sends the theme (`{type: "aac-theme", mode}`).
+//! The server answers every page address with this app (`/app/<page>`, and the classic app's `/`, `/analytics`,
+//! `/accounts/<provider>` and the rest, which open the same tabs: `page_from_location`). It is the app frame (PLAN step
+//! 4): the header, tab bar, Duo strip and band, sign-in, and all five tabs, every one drawn here and reading its own
+//! data: Home and Accounts the dashboard's (dash.rs, `public/frame-dashboard.mjs`). The Slint app it replaced was
+//! retired in Leptos finish (step 9). With `?embed=1` a Status or Scoreboard page is its content alone (it was shown in
+//! the retired Slint shell's iframe, which sent the theme as `{type: "aac-theme", mode}`).
 
 mod accounts;
 mod activation;
@@ -174,6 +175,63 @@ pub(crate) fn page_from_path(path: &str) -> Page {
         .unwrap_or(Page::Status)
 }
 
+/// The tab an address opens. The frame's own addresses are `/app/<page>` (anything else under `/app` is Status, as
+/// before). The classic app's addresses, which bookmarks, old links and the installed app's start page still use, open
+/// the same tabs (the rules of the classic `page-route.mjs`): `?view=<page>` first, then `/analytics`, `/accounts` and
+/// `/accounts/<provider>`, `/status` and `/scoreboard`; `/`, `/login` and anything else is Home.
+pub(crate) fn page_from_location(path: &str, search: &str) -> Page {
+    if path == "/app" || path.starts_with("/app/") {
+        return page_from_path(path);
+    }
+    if let Some(page) = query_value(search, "view").and_then(Page::from_id) {
+        return page;
+    }
+    match path.trim_end_matches('/') {
+        "/analytics" => Page::Analytics,
+        "/accounts" => Page::Accounts,
+        "/status" => Page::Status,
+        "/scoreboard" => Page::Scoreboard,
+        other => match other.strip_prefix("/accounts/") {
+            Some(provider) if provider_id(provider) => Page::Accounts,
+            _ => Page::Home,
+        },
+    }
+}
+
+/// A provider id in an `/accounts/<provider>` address: a lower-case letter or digit, then up to 63 of them or `-`.
+fn provider_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && id.len() <= 64
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// One query value, as written (page ids need no decoding).
+fn query_value<'a>(search: &'a str, key: &str) -> Option<&'a str> {
+    search.trim_start_matches('?').split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        (k == key).then_some(v)
+    })
+}
+
+/// The query the frame keeps when it writes its own address: the classic app's `view`, `classic` and `content` go (the
+/// tab is in the path now); everything else (`e2e`, `safe` and the rest) stays.
+pub(crate) fn kept_search(search: &str) -> String {
+    let kept: Vec<&str> = search
+        .trim_start_matches('?')
+        .split('&')
+        .filter(|pair| {
+            let key = pair.split_once('=').map_or(*pair, |(k, _)| k);
+            !pair.is_empty() && !matches!(key, "view" | "classic" | "content")
+        })
+        .collect();
+    if kept.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", kept.join("&"))
+    }
+}
+
 fn embedded(search: &str) -> bool {
     web_sys::UrlSearchParams::new_with_str(search)
         .ok()
@@ -292,8 +350,9 @@ fn listen_to_shell() {
 pub fn start() {
     console_error_panic_hook::set_once();
     let location = window().location();
-    let page = page_from_path(&location.pathname().unwrap_or_default());
-    let embed = embedded(&location.search().unwrap_or_default());
+    let search = location.search().unwrap_or_default();
+    let page = page_from_location(&location.pathname().unwrap_or_default(), &search);
+    let embed = embedded(&search);
     ui::device::start(embed);
     if embed {
         // Today's Slint shell shows this page in its iframe: the content only.
@@ -350,6 +409,50 @@ mod tests {
             assert_eq!(theme_color("dark", media), THEME_COLOR_DARK);
             assert_eq!(theme_color("light", media), THEME_COLOR_LIGHT);
         }
+    }
+
+    #[test]
+    fn the_classic_addresses_open_the_same_tabs() {
+        for (path, search, page) in [
+            ("/", "", Page::Home),
+            ("/login", "", Page::Home),
+            ("/analytics", "", Page::Analytics),
+            ("/analytics/", "", Page::Analytics),
+            ("/accounts", "", Page::Accounts),
+            ("/accounts/claude", "", Page::Accounts),
+            ("/accounts/opencode-go", "", Page::Accounts),
+            ("/accounts/Claude", "", Page::Home),
+            ("/accounts/-x", "", Page::Home),
+            ("/status", "", Page::Status),
+            ("/scoreboard", "", Page::Scoreboard),
+            ("/nowhere", "", Page::Home),
+            // ?view= is the alias, before the path
+            ("/", "?view=analytics", Page::Analytics),
+            ("/", "?e2e&view=accounts", Page::Accounts),
+            ("/analytics", "?view=status", Page::Status),
+            ("/", "?view=bogus", Page::Home),
+            ("/", "?classic=1", Page::Home),
+            ("/", "?content=1", Page::Home),
+            // the frame's own addresses are read as before; ?view= doesn't move them
+            ("/app/scoreboard", "?view=home", Page::Scoreboard),
+            ("/app/home", "", Page::Home),
+            ("/app/", "", Page::Status),
+        ] {
+            assert_eq!(page_from_location(path, search), page, "{path}{search}");
+        }
+    }
+
+    #[test]
+    fn the_frame_drops_the_classic_query_from_its_own_address() {
+        assert_eq!(kept_search(""), "");
+        assert_eq!(kept_search("?view=analytics"), "");
+        assert_eq!(kept_search("?classic=1"), "");
+        assert_eq!(kept_search("?content=1&e2e"), "?e2e");
+        assert_eq!(
+            kept_search("?e2e&view=accounts&safe=1,2,3,4"),
+            "?e2e&safe=1,2,3,4"
+        );
+        assert_eq!(kept_search("?embed=1"), "?embed=1");
     }
 
     #[test]

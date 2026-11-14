@@ -106,7 +106,7 @@ jobs:
       - name: Build
         run: bun run build:all
 
-      - name: Validate Slint dashboard
+      - name: Validate Leptos dashboard
         run: bun run ui:validate
 
       - name: History store crate (format, lints, crash-cut and corruption suites)

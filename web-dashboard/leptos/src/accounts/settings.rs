@@ -734,6 +734,18 @@ pub fn LogSourcesCard(page: Page) -> impl IntoView {
     }
 }
 
+/// The version line under the name: the server's version, and what the app is built with.
+pub(crate) fn about_line(version: &str) -> String {
+    if version.is_empty() {
+        "Built with Leptos".into()
+    } else {
+        format!("{version} · built with Leptos")
+    }
+}
+
+/// The credits About shows since Slint was retired (public/assets/THIRD-PARTY-NOTICES.txt has the full list).
+pub(crate) const ABOUT_CREDITS: &str = "Leptos (MIT) · Instrument Sans and Martian Mono (SIL Open Font License 1.1) · Lucide icons (ISC)";
+
 #[component]
 pub fn AboutCard(page: Page) -> impl IntoView {
     let version = Memo::new(move |_| {
@@ -750,8 +762,8 @@ pub fn AboutCard(page: Page) -> impl IntoView {
                 <Logo/>
                 <span class="ab-text">
                     <b>"AI Account Center"</b>
-                    <span class="q3">{move || format!("{} · this page built with Leptos · Home and Analytics built with Slint 1.18.1", version.get())}</span>
-                    <a class="link" href="https://slint.dev" target="_blank" rel="noopener">"Made with Slint"</a>
+                    <span class="q3">{move || about_line(&version.get())}</span>
+                    <span class="q3">{ABOUT_CREDITS}</span>
                 </span>
             </div>
         </section>
@@ -763,7 +775,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_slider_snaps_like_the_slint_one() {
+    fn about_says_what_the_app_is_built_with_and_credits_no_retired_slint() {
+        assert_eq!(
+            about_line("Version 8.10.0"),
+            "Version 8.10.0 · built with Leptos"
+        );
+        assert_eq!(about_line(""), "Built with Leptos");
+        assert!(ABOUT_CREDITS.contains("Leptos") && ABOUT_CREDITS.contains("Open Font License"));
+        assert!(!ABOUT_CREDITS.contains("Slint") && !about_line("v").contains("Slint"));
+    }
+
+    #[test]
+    fn the_slider_snaps_like_the_classic_one() {
         assert_eq!(refresh_from_position(0.0), 30);
         assert_eq!(refresh_from_position(1.0), 3600);
         assert_eq!(refresh_from_position(refresh_position(300) + 0.02), 300);

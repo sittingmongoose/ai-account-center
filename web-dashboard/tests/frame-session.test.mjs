@@ -243,3 +243,49 @@ test("sign out's fallback: a session still signed in gets exactly one logout", a
   assert.equal(server.calls.filter((c) => c.path === '/api/auth/logout').length, 1);
   assert.equal(last().signedIn, false);
 });
+
+// Ported from bridge-session.test.mjs when bridge.js was retired (Leptos finish, step 9).
+const flushAll = async (rounds = 8) => { for (let i = 0; i < rounds; i++) await new Promise((resolve) => setImmediate(resolve)); };
+const checkWithTrust = (trusted, authenticated = true) => ({
+  status: 200,
+  body: { authenticated, authRequired: true, accessMode: 'login', username: authenticated ? 'labadmin' : null, signedOutReason: null, secureTransport: trusted, trustedLocalNetwork: trusted, connection: { peer: '192.168.10.20', trusted } },
+});
+
+test('after trust is turned off, the signed-out page says so from a fresh check at sign-out', async () => {
+  let trusted = true;
+  const { s, last } = session({
+    '/api/auth/check': () => checkWithTrust(trusted),
+    '/api/auth/logout': { status: 200, body: { ok: true } },
+  });
+  await s.start();
+  assert.match(last().transportNote, /^Local network trusted\./);
+  // trust turned off in another browser (or by Turn off here), then Sign out
+  trusted = false;
+  await s.signOut();
+  await flushAll();
+  assert.deepEqual([last().signedIn, last().state, last().message], [false, 'default', 'Signed out.']);
+  assert.match(last().transportNote, /local network trust is off/);
+});
+
+test('an ended session shows the sign-in page with the trust as it is now, not as it was at sign-in', async () => {
+  let trusted = true;
+  let authenticated = true;
+  const { s, last } = session({ '/api/auth/check': () => checkWithTrust(trusted, authenticated) });
+  await s.start();
+  assert.equal(last().signedIn, true);
+  trusted = false;
+  authenticated = false;
+  s.ended('revoked');
+  await flushAll();
+  assert.deepEqual([last().signedIn, last().state], [false, 'expired']);
+  assert.ok(last().bannerTitle);
+  assert.match(last().transportNote, /local network trust is off/);
+});
+
+test('a server error on the launch check shows the offline card with its retry, not the sign-in form', async () => {
+  // A proxy's 502 while the dashboard restarts says nothing about the sign-in, which may still be valid.
+  const { s, timers, last } = session({ '/api/auth/check': { status: 502, body: null } });
+  await s.start();
+  assert.deepEqual([last().signedIn, last().state], [false, 'offline']);
+  assert.equal(timers.length, 1);
+});

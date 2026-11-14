@@ -1,6 +1,6 @@
 //! The app frame's chrome (PLAN step 4): the desktop header, the phone's top and tab bars, the Duo's status-strip rail,
-//! or its status-band head with a tab row. Which one shows is `html[data-chrome]` (device.rs). Inside today's Slint
-//! shell (`?embed=1`) the shell draws the chrome and a page is the content only (`PageShell`).
+//! or its status-band head with a tab row. Which one shows is `html[data-chrome]` (device.rs). With `?embed=1` a page is
+//! the content only (`PageShell`; the retired Slint shell drew the chrome around it).
 
 use super::controls::Spinner;
 use super::icons::{Icon, Logo};
@@ -197,7 +197,7 @@ pub(crate) fn menu_escapes(key: &str, open: bool) -> bool {
     key == "Escape" && open
 }
 
-/// The account menu: who is signed in, the theme, the way back to the classic app, and Sign out.
+/// The account menu: who is signed in, the theme, a reload, the device facts, and Sign out.
 #[component]
 fn AccountMenu(ctx: FrameCtx) -> impl IntoView {
     let theme = ctx.theme;
@@ -230,7 +230,6 @@ fn AccountMenu(ctx: FrameCtx) -> impl IntoView {
                     </div>
                 </div>
                 <button class="menu-item" role="menuitem" on:click=move |_| { ctx.menu_open.set(false); ctx.go(Page::Accounts); }>"Accounts & Settings"</button>
-                <button class="menu-item" role="menuitem" on:click=move |_| ctx.classic()>"Classic app"<span class="q3">" · the previous look"</span></button>
                 <button class="menu-item" role="menuitem" on:click=move |_| { let _ = window().location().reload(); }>"Reload app"<span class="q3">" · get the newest version"</span></button>
                 <button class="menu-item" role="menuitem" on:click=move |_| {
                     ctx.menu_open.set(false);

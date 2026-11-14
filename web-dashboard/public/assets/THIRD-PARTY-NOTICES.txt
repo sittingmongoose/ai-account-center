@@ -1,39 +1,43 @@
 Third-party artwork, icons and fonts in the AI Account Center dashboard
 
-The dashboard UI (web-dashboard/ui) embeds the files below into its WebAssembly bundle.
+The dashboard (the Leptos app in web-dashboard/leptos) embeds or serves the files below.
 Product names and marks remain their respective owners' trademarks; they identify the
 corresponding services only.
 
-Fonts (web-dashboard/ui/fonts)
+Libraries
+- Leptos 0.9 (https://leptos.dev) and wasm-bindgen, js-sys and web-sys
+  (https://github.com/wasm-bindgen/wasm-bindgen): MIT or Apache-2.0, compiled into the
+  WebAssembly runtime.
+
+Fonts
 - Instrument Sans: Copyright 2022 The Instrument Sans Project Authors
   (https://github.com/Instrument/instrument-sans). SIL Open Font License 1.1, full text in
-  ui/fonts/OFL-InstrumentSans.txt. Shipped as InstrumentSans.ttf (width axis pinned at 100,
-  subset to Latin) and InstrumentSansTab.ttf, a renamed copy with the OpenType tnum feature
-  frozen into its character map ("Instrument Sans Tab"). ui/fonts/build_fonts.py rebuilds both.
-  An identical copy of InstrumentSans.ttf ships as public/assets/InstrumentSans.ttf, the font of the
-  sign-in page's HTML username and password inputs, so their text matches the Slint fields under them.
-- Inter: Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter). SIL Open Font License 1.1
-  with Reserved Font Name "Inter", full text in ui/fonts/OFL-Inter.txt. Slint embeds Inter as its fallback
-  font and draws masked passwords with its U+25CF glyph; that one glyph ships as public/assets/AACMask.ttf,
-  renamed "AAC Mask", so the HTML password input's dots match. ui/fonts/build_mask_font.py rebuilds it.
+  public/assets/OFL-InstrumentSans.txt. Shipped as public/assets/InstrumentSans.ttf (width axis
+  pinned at 100, subset to Latin).
 - Martian Mono: Copyright 2021 The Martian Mono Project Authors (https://github.com/evilmartians/mono).
-  SIL Open Font License 1.1, full text in ui/fonts/OFL-MartianMono.txt. Shipped as MartianMono.ttf
-  (width axis pinned at 87.5, subset to Latin).
+  SIL Open Font License 1.1, full text in web-dashboard/leptos/fonts/OFL-MartianMono.txt (served at
+  /app/OFL-MartianMono.txt). Shipped as MartianMono.ttf (width axis pinned at 87.5, subset to Latin).
 
-Icons (web-dashboard/ui/icons)
+Icons (web-dashboard/leptos/src/ui/icons.rs)
 - Lucide 0.460.0 icon geometry (https://lucide.dev), ISC License, full text in
-  ui/icons/LICENSE-lucide.txt. Portions are from Feather (MIT), Copyright (c) 2013-2022 Cole Bemis.
+  web-dashboard/leptos/src/ui/LICENSE-lucide.txt. Portions are from Feather (MIT), Copyright (c)
+  2013-2022 Cole Bemis.
 
-Platform glyphs (web-dashboard/ui/marks/platform-*.svg)
+Platform glyphs (web-dashboard/leptos/src/ui/marks/platform-*.svg)
 - Apple, Windows and Ubuntu glyphs from Simple Icons 16.33.0 (https://simpleicons.org), CC0 1.0,
-  licence in ui/marks/simple-icons-LICENSE.md. Used only as platform indicators.
+  licence in web-dashboard/leptos/src/ui/marks/simple-icons-LICENSE.md. Used only as platform indicators.
 
-Provider marks (web-dashboard/ui/marks)
-Official artwork, unmodified apart from the crop recorded in ui/marks/sources.json, which also lists
-each source URL and SHA-256 and the optical scale the dashboard applies:
+Provider marks (web-dashboard/leptos/src/ui/marks)
+Official artwork, unmodified apart from the crop recorded in leptos/src/ui/marks/sources.json, which
+also lists each source URL and SHA-256 and the optical scale the dashboard applies:
 - Claude Spark (Anthropic press kit), Codex: OpenAI Blossom (OpenAI brand pack), Google Antigravity,
   Cursor 2D cube (Cursor brand assets), Muse Code: Meta mark, Kimi Code app icon (Moonshot AI,
   downscaled to 128 px with its own plate), Qwen symbol (Alibaba Qwen), Z.ai, OpenCode Go.
+
+Historical credit
+- From 2026-10 to 2026-11-14 Home, Analytics and Accounts & Settings were drawn with Slint 1.18.1
+  (https://slint.dev) under its Royalty-free license; the Slint UI and its embedded copies of these
+  fonts and of Inter were removed with it.
 
 OpenCode
 Official OpenCode mark from anomalyco/opencode.
@@ -61,5 +65,5 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 AI Account Center logo
-The Apex Soft logo (ui/components/logo.slint, public/assets/aac-logo.svg, favicon.svg) is this
+The Apex Soft logo (leptos/src/ui/icons.rs Logo, public/assets/aac-logo.svg, favicon.svg) is this
 project's own artwork.

@@ -9,8 +9,8 @@ if [[ "${CCS_SKIP_PREPUSH_GATE:-}" == "1" ]]; then
   exit 0
 fi
 
-if [[ ! -f package.json || ! -f web-dashboard/Cargo.toml ]]; then
-  echo "[X] Missing product package or Slint dashboard source in this worktree."
+if [[ ! -f package.json || ! -f web-dashboard/leptos/Cargo.toml ]]; then
+  echo "[X] Missing product package or Leptos dashboard source in this worktree."
   echo "    Ensure you are in a valid AI Account Center repository/worktree before pushing."
   exit 1
 fi

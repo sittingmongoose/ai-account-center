@@ -1,8 +1,8 @@
 //! Accounts & Settings (PLAN step 6), drawn from the dashboard's Accounts & Settings view v3 (`public/accounts-view.mjs`)
 //! through the seam (dash.rs). Every word, every enabled, refused or "coming" control and every server call stays
 //! where it is: the view says what to draw, and each control sends the same action kind and value the Slint page sent
-//! (`accounts-controller.mjs` and bridge.js run them, with the pending-switch hold, the one-use remove and restore
-//! tokens and the sign-in jobs that survive a reload).
+//! (`accounts-controller.mjs` and the dashboard controller run them, with the pending-switch hold, the one-use remove
+//! and restore tokens and the sign-in jobs that survive a reload).
 //!
 //! Layout: every card (Update apps first, then one per provider, then the settings groups) goes into as many columns
 //! as the width allows, filled in order and balanced by each card's expected height (`layout::columns`). The expected

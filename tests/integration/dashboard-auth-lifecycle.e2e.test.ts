@@ -259,7 +259,8 @@ async function startE2E(host: string = '127.0.0.1'): Promise<E2E> {
   fs.mkdirSync(homeDir, { recursive: true });
   fs.mkdirSync(ccsHome, { recursive: true });
   fs.mkdirSync(staticDir, { recursive: true });
-  fs.writeFileSync(path.join(staticDir, 'index.html'), '<canvas id="slint-dashboard"></canvas>');
+  fs.mkdirSync(path.join(staticDir, 'app'));
+  fs.writeFileSync(path.join(staticDir, 'app', 'index.html'), '<main id="aac-frame-fixture"></main>');
   const ccsDir = path.join(ccsHome, '.ccs');
   process.env.HOME = homeDir;
   process.env.CCS_HOME = ccsHome;

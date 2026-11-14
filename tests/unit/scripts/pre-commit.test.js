@@ -16,7 +16,7 @@ function runHook(failedPhase) {
       '#!/bin/sh\nprintf "%s\\n" "$2" >> "$AAC_HOOK_FIXTURE_LOG"\n' +
       'if [ "$2" = "$AAC_HOOK_FIXTURE_FAIL" ]; then exit 17; fi\n', {mode: 0o700});
     fs.writeFileSync(path.join(directory, 'git'),
-      '#!/bin/sh\nprintf "%s\\n" "web-dashboard/ui/dashboard.slint"\n', {mode: 0o700});
+      '#!/bin/sh\nprintf "%s\\n" "web-dashboard/leptos/src/lib.rs"\n', {mode: 0o700});
     const log = path.join(directory, 'phases');
     const result = spawnSync('/bin/sh', ['-e', hook], {
       cwd: directory,

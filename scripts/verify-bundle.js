@@ -8,11 +8,13 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 
 const UI_DIR = path.join(__dirname, '../dist/ui');
-// Whole dist/ui, gzipped. Most of it is the classic Slint app, which the Leptos
-// frame no longer loads (G5), so new frame pages hit this guard without growing
-// what a page downloads. A per-entry guard for the frame is a follow-up.
-const MAX_SIZE = 9 * 1024 * 1024;
-const WASM_NAME = 'ccs_account_dashboard';
+// Whole dist/ui, gzipped: the Leptos runtime, the JavaScript data layer, fonts and icons.
+const MAX_SIZE = 4 * 1024 * 1024;
+const LEPTOS_NAME = 'aac_web';
+const LEPTOS_VERSION = '0.9.0-rc1';
+const APP_ENTRY = 'app/index.html';
+/** What the retired Slint app shipped; none of it may come back into a package. */
+const RETIRED_SLINT_FILES = ['index.html', 'bridge.js', 'renderer.mjs', 'shell-frame.mjs'];
 const BUILD_ID = /^[a-f0-9]{12}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const VARIANT_SUFFIX = new Map([
@@ -157,11 +159,11 @@ function verifyBundle(uiDir = UI_DIR) {
   const buildId = manifest.buildId;
   const shellBuildId = manifest.shellBuildId;
   if (
-    manifest.schemaVersion !== 1 ||
-    manifest.framework !== 'slint' ||
-    manifest.version !== '1.18.1' ||
+    manifest.schemaVersion !== 2 ||
+    manifest.framework !== 'leptos' ||
+    manifest.version !== LEPTOS_VERSION ||
     manifest.target !== 'wasm32-unknown-unknown' ||
-    manifest.entry !== 'index.html' ||
+    manifest.entry !== APP_ENTRY ||
     !/^[a-f0-9]{64}$/.test(manifest.source?.sha256 ?? '') ||
     !Number.isSafeInteger(manifest.source?.files) ||
     manifest.source.files < 1 ||
@@ -173,17 +175,31 @@ function verifyBundle(uiDir = UI_DIR) {
     !Number.isSafeInteger(manifest.shell?.files) ||
     manifest.shell.files < 1 ||
     shellBuildId !== manifest.shell.sha256.slice(0, 12) ||
-    manifest.wasm?.path !== `pkg/${buildId}/${WASM_NAME}_bg.wasm`
+    manifest.wasm?.path !== `pkg/${buildId}/${LEPTOS_NAME}_bg.wasm`
   ) {
-    throw new Error('The packaged dashboard must be Slint 1.18.1 for WebAssembly.');
+    throw new Error(`The packaged dashboard must be Leptos ${LEPTOS_VERSION} for WebAssembly.`);
   }
-  for (const file of ['index.html', 'bridge.js', `pkg/${buildId}/${WASM_NAME}.js`]) {
+  for (const file of [
+    APP_ENTRY,
+    'app/app.css',
+    'app/MartianMono.ttf',
+    'app/OFL-MartianMono.txt',
+    `pkg/${buildId}/${LEPTOS_NAME}.js`,
+  ]) {
     if (!fs.existsSync(path.join(uiDir, file))) throw new Error(`Missing browser asset: ${file}.`);
   }
-  for (const file of [`pkg/${WASM_NAME}.js`, `pkg/${WASM_NAME}_bg.wasm`]) {
+  for (const file of [`pkg/${LEPTOS_NAME}.js`, `pkg/${LEPTOS_NAME}_bg.wasm`]) {
     if (fs.existsSync(path.join(uiDir, file)))
       throw new Error('The packaged dashboard must not keep an unversioned WebAssembly runtime.');
   }
+  const retired = RETIRED_SLINT_FILES.filter((file) => fs.existsSync(path.join(uiDir, file)));
+  const pkgDir = path.join(uiDir, 'pkg');
+  if (fs.existsSync(pkgDir)) {
+    for (const file of listFiles(pkgDir))
+      if (file.includes('ccs_account_dashboard')) retired.push(`pkg/${file}`);
+  }
+  if (retired.length > 0)
+    throw new Error(`The packaged dashboard still carries the retired Slint app: ${retired[0]}.`);
   const wasm = fs.readFileSync(path.join(uiDir, manifest.wasm.path));
   const hash = sha256(wasm);
   if (
@@ -194,12 +210,15 @@ function verifyBundle(uiDir = UI_DIR) {
   ) {
     throw new Error('The packaged WebAssembly binary does not match its build manifest.');
   }
-  const bridge = fs.readFileSync(path.join(uiDir, 'bridge.js'), 'utf8');
+  // The frame page starts this build's runtime, and no template placeholder is left.
+  const page = fs.readFileSync(path.join(uiDir, APP_ENTRY), 'utf8');
   if (
-    countLiteral(bridge, `'./pkg/${buildId}/${WASM_NAME}.js'`) !== 1 ||
-    countLiteral(bridge, `'./pkg/${WASM_NAME}.js'`) !== 0
+    countLiteral(page, `/pkg/${buildId}/${LEPTOS_NAME}.js`) < 1 ||
+    countLiteral(page, `/pkg/${buildId}/${LEPTOS_NAME}_bg.wasm`) < 1 ||
+    page.includes('{{PKG}}') ||
+    page.includes('{{CSS}}')
   ) {
-    throw new Error('The packaged bridge.js must import the versioned WebAssembly runtime.');
+    throw new Error('The packaged app/index.html must start the versioned WebAssembly runtime.');
   }
   verifyPwaShell(uiDir, shellBuildId);
   verifyPrecompressed(uiDir, manifest);
@@ -336,7 +355,7 @@ if (require.main === module) {
   try {
     const result = verifyBundle();
     console.log(
-      `[OK] Slint ${result.manifest.version} bundle: ${(result.totalSize / 1024).toFixed(1)}KB gzipped.`
+      `[OK] Leptos ${result.manifest.version} bundle: ${(result.totalSize / 1024).toFixed(1)}KB gzipped.`
     );
   } catch (error) {
     console.error(

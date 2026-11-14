@@ -46,7 +46,8 @@ beforeEach(async () => {
   saved = Object.fromEntries(ENVIRONMENT.map((name) => [name, process.env[name]]));
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-visibility-server-'));
   staticDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-visibility-server-ui-'));
-  fs.writeFileSync(path.join(staticDir, 'index.html'), '<canvas id="slint-dashboard"></canvas>');
+  fs.mkdirSync(path.join(staticDir, 'app'));
+  fs.writeFileSync(path.join(staticDir, 'app', 'index.html'), '<main id="aac-frame-fixture"></main>');
   process.env.CCS_HOME = home;
   process.env.CCS_DIR = path.join(home, '.ccs');
   process.env.CODEX_HOME = path.join(home, '.codex');

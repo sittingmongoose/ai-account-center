@@ -1,4 +1,4 @@
-//! The Analytics view, `ANALYTICS_VIEW_VERSION` 7, exactly as bridge.js hands it to Slint (`analyticsSlintModel` in
+//! The Analytics view, `ANALYTICS_VIEW_VERSION` 7, exactly as the classic app handed it to Slint (`analyticsSlintModel` in
 //! public/analytics-data.mjs, with `usageView`, `quotaView` and `agendaView`). Every word, number and pixel position is
 //! decided there; the page only lays it out. Text and lists read through `nullable` (a `null` is empty); geometry
 //! numbers default to 0 when missing, and the page never shows a number it was not given as text.

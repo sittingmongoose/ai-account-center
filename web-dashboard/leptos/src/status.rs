@@ -104,30 +104,9 @@ pub fn StatusPage(embedded: bool) -> impl IntoView {
                         <PhonesPanel/>
                         <SpendPanel/>
                     </div>
-                    {embedded.then(frame_offer)}
                 </Show>
             </div>
         </PageShell>
-    }
-}
-
-/// The way back into the app frame from the classic app, for a device that chose Classic app (the frame is the default,
-/// FRAME_DEFAULT in index.html). The installed app keeps its own storage on iOS, so it is chosen from inside the installed
-/// app.
-fn frame_offer() -> impl IntoView {
-    let turn_on = move |_| {
-        if let Some(s) = window().local_storage().ok().flatten() {
-            let _ = s.set_item("aac-frame", "new");
-        }
-        let target = window().top().ok().flatten().unwrap_or_else(window);
-        let _ = target.location().set_href("/app/status");
-    };
-    view! {
-        <p class="frame-offer">
-            <b>"New app frame"</b>
-            <span>"Every tab in the new layout, with the Duo strip and band. Classic app in its account menu brings this one back."</span>
-            <button class="link" on:click=turn_on>"Try it"</button>
-        </p>
     }
 }
 

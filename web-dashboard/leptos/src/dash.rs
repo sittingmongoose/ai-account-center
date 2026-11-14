@@ -1,8 +1,8 @@
 //! The dashboard's data for the frame's pages that take it (Home, Accounts & Settings, Details and the switch approval).
 //! The frame reads it itself (G5): `public/frame-dashboard.mjs` runs in this window the same server calls, timers,
-//! guards and pure modules bridge.js runs in the classic app (the accounts controller, the target-bound switch
-//! approvals, the one-use remove and restore tokens), and hands the same versioned views. No tab loads the Slint
-//! dashboard or its bridge any more; Analytics reads its own (analytics/feed.rs).
+//! guards and pure modules bridge.js ran (the accounts controller, the target-bound switch approvals, the one-use
+//! remove and restore tokens), and hands the same versioned views (tests/frame-dashboard-golden.test.mjs replays what
+//! bridge.js did). Analytics reads its own (analytics/feed.rs).
 //!
 //! `index.html` installs `window.aacLoadDashboard()` (a dynamic import, started early on `/app/home` and
 //! `/app/accounts`); it resolves to the module, and the page installs its controller (`installFrameDashboard`, which

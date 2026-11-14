@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # =============================================================================
-# Build the checked-out AI Account Center source and pinned Slint browser UI.
+# Build the checked-out AI Account Center source and pinned Leptos browser UI.
 # Both build and runtime dependencies resolve from the committed bun.lock.
 # =============================================================================
 FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS build
@@ -38,10 +38,10 @@ COPY . .
 
 RUN bun run build:all
 
-# Verify the executable and actual Slint browser artifacts before packaging.
+# Verify the executable and actual Leptos browser artifacts before packaging.
 # The wasm lives in dist/ui/pkg/<buildId>/; verify-bundle.js checks it against the manifest.
 RUN test -s dist/ccs.js \
-  && test -s dist/ui/index.html \
+  && test -s dist/ui/app/index.html \
   && test -s dist/ui/ui-build-manifest.json \
   && node scripts/verify-bundle.js
 

@@ -1,15 +1,17 @@
-// The Leptos pages' stylesheet: its colours match the Slint theme, and the shapes the redesign removed stay gone
-// (DESIGN-SYSTEM.md section 1: no pills, chips, dots, side bars or tinted boxes).
+// The Leptos pages' stylesheet: its theme colours are set for light and for dark alike, and the shapes the redesign
+// removed stay gone (DESIGN-SYSTEM.md section 1: no pills, chips, dots, side bars or tinted boxes). The colour block was
+// generated from the Slint theme (theme.slint) while Slint shipped; since Slint was retired it is the colours' source.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { TOKENS, THEME_SLINT, APP_CSS, BEGIN, END, readTheme, renderTokens } from '../leptos/build/theme-tokens.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const APP_CSS = path.resolve(here, '../leptos/style/app.css');
+const BEGIN = '/* BEGIN THEME TOKENS (first generated from the retired web-dashboard/ui/theme.slint; this block is their source now) */';
+const END = '/* END THEME TOKENS */';
 const cssSource = fs.readFileSync(APP_CSS, 'utf8');
-const theme = readTheme(fs.readFileSync(THEME_SLINT, 'utf8'));
 const leptosSrc = path.resolve(here, '../leptos/src');
 
 function stripComments(css) {
@@ -24,26 +26,27 @@ function rustFiles(dir) {
 	});
 }
 
-test('every token has a theme.slint colour', () => {
-	for (const [token, name] of Object.entries(TOKENS)) assert.ok(theme.has(name), `--${token} maps to ${name}, which is not in theme.slint`);
-});
+/** `--name: value;` pairs of one block. */
+function declared(block) {
+	return new Map([...block.matchAll(/--([a-z0-9-]+): ([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
+}
 
-test('the generated token block is what theme.slint produces', () => {
-	const expected = renderTokens(fs.readFileSync(THEME_SLINT, 'utf8'));
+test('the theme block is there once, with a light set and two identical dark sets', () => {
 	const from = cssSource.indexOf(BEGIN);
 	const to = cssSource.indexOf(END);
-	assert.ok(from >= 0 && to > from, 'style/app.css has no GENERATED TOKENS markers');
-	const actual = cssSource.slice(from, to + END.length);
-	assert.equal(actual, expected, 'style/app.css has drifted from theme.slint: run node web-dashboard/leptos/build/theme-tokens.mjs');
-});
-
-test('each theme colour is set for light and for dark', () => {
-	const block = cssSource.slice(cssSource.indexOf(BEGIN), cssSource.indexOf(END));
+	assert.ok(from >= 0 && to > from, 'style/app.css has no THEME TOKENS markers');
+	assert.equal(cssSource.indexOf(BEGIN, from + 1), -1, 'one theme block');
+	const block = cssSource.slice(from, to);
 	const [light, ...darkParts] = block.split(/@media|:root\[data-theme='dark'\]/);
-	for (const [token, name] of Object.entries(TOKENS)) {
-		const { light: l, dark: d } = theme.get(name);
-		assert.ok(light.includes(`--${token}: ${l};`), `light --${token} is not ${l}`);
-		for (const part of darkParts) assert.ok(part.includes(`--${token}: ${d};`), `dark --${token} is not ${d}`);
+	assert.equal(darkParts.length, 2, 'dark by the system scheme and by the explicit theme');
+	const lightSet = declared(light);
+	assert.ok(lightSet.size >= 30, `the light set names every colour (saw ${lightSet.size})`);
+	const [systemDark, chosenDark] = darkParts.map(declared);
+	assert.deepEqual([...systemDark], [...chosenDark], 'Dark chosen and dark by the system draw the same colours');
+	assert.deepEqual([...systemDark.keys()].sort(), [...lightSet.keys()].sort(), 'every colour is set for light and for dark');
+	for (const [name, value] of lightSet) {
+		assert.match(value, /#[0-9A-Fa-f]{3,8}\b|rgba?\(/, `--${name} is a colour`);
+		if (!/shadow/.test(name)) assert.notEqual(value, systemDark.get(name), `--${name} differs between light and dark`);
 	}
 });
 

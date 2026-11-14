@@ -1,6 +1,6 @@
-//! The target-bound switch approval (Slint `dashboard.slint` dialog), drawn by the frame over any tab. bridge.js keeps
-//! the one-use token in `activation-confirmation.mjs` (and the Antigravity one) and sends only what to show through the
-//! seam's `activation` view; `''` closes it. The two buttons send the dashboard's own `activation-confirm` and
+//! The target-bound switch approval (once the Slint `dashboard.slint` dialog), drawn by the frame over any tab. The
+//! dashboard controller keeps the one-use token in `activation-confirmation.mjs` (and the Antigravity one) and sends
+//! only what to show as the `activation` view; `''` closes it. The two buttons send the dashboard's own `activation-confirm` and
 //! `activation-cancel`; nothing here can approve a different target or reuse an approval.
 
 use crate::api::nullable;

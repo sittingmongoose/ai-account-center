@@ -18,7 +18,7 @@
   --sel-line: color-mix(in srgb, var(--accent) 45%, var(--rule));
   --band: color-mix(in srgb, var(--accent) 16%, transparent);
 }
-/* BEGIN GENERATED TOKENS (build/theme-tokens.mjs, from web-dashboard/ui/theme.slint) */
+/* BEGIN THEME TOKENS (first generated from the retired web-dashboard/ui/theme.slint; this block is their source now) */
 :root {
   color-scheme: light;
   --bg: #ECF0F3;
@@ -234,7 +234,7 @@
   --shadow-2: 0 8px 24px #00000073;
   --shadow-pop: 0 16px 40px #0000008C;
 }
-/* END GENERATED TOKENS */
+/* END THEME TOKENS */
 
 /* ---------- base ---------- */
 * { box-sizing: border-box; }
@@ -2412,8 +2412,6 @@ details.block > summary { cursor: pointer; font-weight: 560; font-variation-sett
 .strength { display: grid; gap: 4px; font-size: 12px; }
 
 /* The classic app's way into the frame (on its Status tab). */
-.frame-offer { margin-top: 16px; font-size: var(--fs-small); color: var(--ink-3); display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
-.frame-offer b { color: var(--ink-2); }
 /* The band's tab row is 46 px tall: each tab and tool takes the row's whole height to tap, around its 36 px pill. */
 .band-tabs a, .band-tabs .icon-btn { position: relative; }
 .band-tabs a::after { content: ''; position: absolute; inset: -5px 0; }
