@@ -4,7 +4,7 @@ The production account dashboard is the app frame: a Leptos 0.9 app (client-side
 from `leptos/`) in the Daylight Atlas design, with Instrument Sans, Martian Mono, Lucide icons, the official provider
 marks and the Apex Soft logo. The server answers every page address with it (`/`, `/app/<tab>` and the older
 `/analytics`, `/accounts`, `/status`, `/scoreboard` addresses). Its controllers in `public/` (`frame-session.mjs`,
-`frame-dashboard.mjs`, `frame-analytics.mjs`) own the network, the session, the timers, switch approvals and every
+`frame-dashboard.mjs`, `frame-analytics.mjs`) own the network, the session, the timers and every
 server call, and build each page's versioned view with the tested pure modules (`view-model.mjs`,
 `accounts-view.mjs`, `analytics-*.mjs` and the rest); the pages draw those views and send their action kinds back.
 [README-ARCHITECTURE.md](README-ARCHITECTURE.md) is the map. Until 2026-11-14 a Slint 1.18.1 canvas app drew Home,
@@ -35,17 +35,17 @@ URL.
 ## Data and controls
 
 - GET `/api/accounts/dashboard` supplies consolidated provider accounts.
-- Home shows Claude, then Codex and Antigravity as switchable sections, then one
-  card per account of the other providers. Meters show provider-reported
-  percentages with severity colours (warning from 80%, critical from 95%), the
-  auto-switch threshold notch and reported overage; they never invent token
+- Home shows Claude, then Codex and Antigravity (the live login on Ubuntu marked
+  Active), then one card per account of the other providers. Meters show
+  provider-reported percentages with severity colours (warning from 80%, critical
+  from 95%) and reported overage; they never invent token
   denominators or reset times, and a missing reading is drawn as unavailable,
   never as zero. Fable appears only for Claude Max plans, from the
   `seven_day_fable` window ("Not reported yet" when absent). A window whose
   reset time has passed while its reading was sampled before that reset (or at
-  an unknown time) hides the old percent, fill and notch and reads "Reset at
+  an unknown time) hides the old percent and fill and reads "Reset at
   10:15 AM · new reading pending" over a dashed track until a newer reading
-  arrives; it never shows 0%, and it does not count toward a switch point.
+  arrives; it never shows 0%.
 - Details (a slide-over opened by clicking any account row or card; closed by a
   click anywhere outside it, including header buttons, nested row actions and
   Analytics cards, or Escape; a click on another row swaps it to that account)
@@ -63,12 +63,8 @@ URL.
   also appears as a toast. The POST is never sent again by the poller, a second
   click while an Open runs sends nothing, and nothing resumes after a reload or
   a server restart (`public/claude-open.mjs`, `tests/claude-open.test.mjs`).
-- Codex and Antigravity activation and auto-switch settings reuse authenticated
-  guarded APIs. Thresholds are shown in percent used (Codex sends percent
-  remaining). Busy activation opens the frame's review dialog listing the blocking
-  programs. Yes submits the server-issued, target-bound approval token; Cancel
-  sends no mutation. Expired or stale approvals require a fresh Activate review.
-  The active account is the selected row, marked Active.
+- AI Account Center does not switch accounts (removed on 2026-11-14). The live
+  Codex and Antigravity login on Ubuntu is marked Active.
 - Update apps is its own header button. It starts the allowlisted asynchronous
   update job only after the user presses it, shows progress in place ("Updating
   3 of 21" with a spinner, then a check) and the result as a toast; it is never
@@ -104,9 +100,8 @@ URL.
   the browser; per-model and session data then say which logs they cover.
 - Accounts & Settings lists every provider with its accounts: status only for
   an exception, the last sample, how it signs in, and fixed, aligned action
-  slots. Codex and Antigravity Activate, Claude Open on Mac or Windows, the
-  Codex and Antigravity auto-switch policies, the refresh interval and the
-  appearance are live, and so is every sign-in and sign-out control the server
+  slots. Claude Open on Mac or Windows, the refresh interval and the appearance
+  are live, and so is every sign-in and sign-out control the server
   offers: Add account (Codex device code with the page and code, a Claude
   profile on Mac and Windows, an API key in a masked field that shows only its
   last 4 afterwards), Sign in again, Replace key, Remove with a confirmation
@@ -148,9 +143,8 @@ bun run ui:validate          # pins, cargo fmt, these tests, and that dist/ui is
 cargo test --locked          # in web-dashboard/leptos, on a build host
 ```
 
-The data tests cover unknown versus genuine zero, credit units/expiration, additional counters, confirmed
-auto-switch thresholds, complete details, the version 2 dashboard view models (sections, Fable, switchable
-providers, hidden providers) and the version 7 analytics model (rate mirror parity with `model-pricing.ts`, per-type
+The data tests cover unknown versus genuine zero, credit units/expiration, additional counters, complete
+details, the version 3 dashboard view models (sections, Fable, the live login, hidden providers) and the version 7 analytics model (rate mirror parity with `model-pricing.ts`, per-type
 cost reconciliation, unavailable activity and cost, ranges and local-time buckets, the provider filter, heatmap gaps,
 quota history, focus-chart label placement and the resets agenda), the version 3 Accounts & Settings model, the
 Accounts & Settings controller against a fake server, the frame's controllers (`frame-dashboard.test.mjs`, with

@@ -1,11 +1,12 @@
 # AI Account Center Codex Account Contract
 
 The retained CLI surface is `ai-account-center codex-auth` with create, login,
-import-default, show, remove and activate operations. See the current
+import-default, show and remove operations. See the current
 [help owner](../src/codex-auth/codex-auth-help.ts) rather than copying every option.
 `ccs codex-auth` remains compatible; `ccsx` and the other retired runtime bins
 only give migration guidance. The former shell-export/use/switch/runtime-launch
-flows are retired.
+flows and `activate` are retired: AI Account Center reads each saved login's usage
+and no longer switches the shared login ([retirement note](activate-in-place.md)).
 
 ## Existing credentials and storage
 
@@ -20,10 +21,10 @@ The [profile resource helper](../src/codex-auth/codex-profile-resources.ts),
 compatibility boundaries. Existing profile names, session aliases and home
 overrides are not renamed with the product.
 
-Removing a saved login shares the activation lock and rechecks the native login
+Removing a saved login shares the Codex login lock and rechecks the native login
 before changing profile files. Every saved alias matching the current native
-account stays protected, including with `--yes` or `--force`; activate another
-saved login first. Unreadable native authentication or an unverifiable saved
+account stays protected, including with `--yes` or `--force`; sign `~/.codex` in
+to another account first. Unreadable native authentication or an unverifiable saved
 identity also keeps the profile while a native login exists. `--force` only
 overrides the saved-default selection. Confirmation, backup and rollback remain
 part of removal.
@@ -33,19 +34,18 @@ part of removal.
 The server renews idle saved logins itself. About four days before a saved
 login's access token expires (the token lasts 10 days), AAC refreshes it with
 OpenAI. The check runs three to five minutes after the server starts, then every
-six hours, plus or minus 30 minutes. A busy account switch, sign-in or removal
-makes the check retry shortly.
+six hours, plus or minus 30 minutes. A busy sign-in or removal makes the check
+retry shortly.
 
 AAC leaves these logins alone: the login Codex is using (Codex renews it itself),
 a login that a running Codex app uses directly, and a login that another Codex
 home on this machine shares (the same refresh token, session id or sign-in time).
 Renewing one copy would sign the other out, so Sign in again on one of the copies
-to separate them. Renewal shares the activation lock and never waits for it.
+to separate them. Renewal shares the Codex login lock and never waits for it.
 Renewed tokens are written atomically, only back into the same profile folder.
 
 The dashboard and `GET /api/codex/profiles/quotas` report a login that OpenAI
-rejected as needing Sign in again, and Sign in again restores it. Automatic
-switching never chooses such a login. Set `CCS_CODEX_RENEWAL=0` to turn renewal
+rejected as needing Sign in again, and Sign in again restores it. Set `CCS_CODEX_RENEWAL=0` to turn renewal
 off; a rejected login still shows Sign in again.
 
 Usage requests keep their timeout through response-body reads. A stalled body
@@ -55,17 +55,10 @@ successful reading as cached and do not change saved credentials. Banked resets
 are totaled across all expiration groups for that account; Details retains each
 group's own expiration. Reading usage never redeems a reset.
 
-## Activation and automatic switching
+## The live login
 
-[Activation](activate-in-place.md) changes the selected native login in the
-shared Ubuntu home through the existing guarded transaction. Busy work requires
-explicit review; target-bound approvals, stale-token rejection and rollback stay
-intact. A dashboard refresh cannot approve a switch.
-
-The server's [auto-switch service](../src/web-server/services/codex-auto-switch-service.ts)
-uses configured thresholds and fresh provider usage, waits until idle and rechecks
-the active identity. Browser Settings displays server-confirmed values; missing
-usage or local activity estimates cannot trigger a switch. Claude stays manual.
+The account in the shared `~/.codex/auth.json` is shown as **Active on Ubuntu**.
+It is a fact the dashboard reads; AI Account Center never changes it.
 
 The retained account tests, dashboard service and native clients own validation.
 Use offline fixtures and isolated private paths; signing in or live provider

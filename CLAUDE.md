@@ -6,9 +6,12 @@ Preserve history, original author metadata, copyright notices and LICENSE.
 
 ## Product scope
 
-The product owns account usage, dashboard authentication, existing profiles,
-guarded Codex activation/auto-switch, Analytics, explicit app-update jobs and
-native Mac/Windows bars. The TypeScript server stays; the web UI is Leptos
+The product owns account usage and limits, reset claims, sign-in health,
+dashboard authentication, existing profiles (add, remove, sign in again),
+Analytics, explicit app-update jobs and native Mac/Windows bars. It does not
+switch accounts: account switching (Codex activation and auto-switch,
+Antigravity activation and auto-switch) was removed on 2026-11-14, because the
+agents pick their own accounts; do not add it back. The TypeScript server stays; the web UI is Leptos
 **0.9** (client-side rendered) compiled to WebAssembly. Native bars remain Swift and WPF. Every new
 server piece is written in Rust as a native module like `native/aac-store`.
 Existing TypeScript modules are not ported unless the owner asks.
@@ -30,8 +33,8 @@ or API routing product.
   fixtures and screenshots.
 - Keep private storage paths, profile/provider IDs, session aliases, native
   messaging identities and existing `CCS_*` settings compatible.
-- Preserve authentication/origin/session checks, target-bound switch approvals,
-  idle-only auto-switch, provider identity guards, migrations and rollback.
+- Preserve authentication/origin/session checks, removal and reset-claim
+  approvals, provider identity guards, migrations and rollback.
 - Failed providers remain unavailable or honestly cached. Never invent zero
   usage, reset times, quota denominators or account attribution.
 - Provider refresh, software installation, remote writes, publication, new

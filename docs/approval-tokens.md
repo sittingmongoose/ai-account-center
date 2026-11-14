@@ -22,17 +22,18 @@ Existing guarded actions keep their issuers and tests:
 | Mechanism | Existing responsibility |
 | --- | --- |
 | `AccountConfirmationStore` | Account removal and trash restore/purge |
-| `codex-activation-confirmation.ts` | Target profile, auth hash and reviewed process identities; 60-second one-use offer |
-| `antigravity/confirmation.ts` | Existing Antigravity activation offer and process review |
-| `ConfirmationBindings` | Caller overlay for existing activation routes; strict Codex binding and the existing Antigravity pass-through |
 
 `signin-again-active` is reserved in the action union; no current caller issues it.
 
-The overlay's ten-minute retention does not extend an issuer's lifetime: the
-issuer still validates expiry and target/state. Do not migrate existing tokens or
-change lifetimes, caps, binding modes or idle-only automatic switching as part of
-this decision. Reset-claim tokens retain their separate transaction protocol.
+Account switching was removed on 2026-11-14, and with it the Codex activation
+offer (`codex-activation-confirmation.ts`), the Antigravity activation offer
+(`antigravity/confirmation.ts`) and the `ConfirmationBindings` caller overlay.
+`callerKey` (`src/web-server/routes/caller-key.ts`) stays: reset claims bind
+their transactions to it.
 
-Verification stays with the account-confirmations, caller-bound-confirmations,
-activation route, lifecycle, reset-claim and idle-switch suites. A future issuer
-migration requires a separate change and its full safety checks.
+Do not migrate existing tokens or change lifetimes or caps as part of this
+decision. Reset-claim tokens retain their separate transaction protocol.
+
+Verification stays with the account-confirmations, caller-key, lifecycle and
+reset-claim suites. A future issuer migration requires a separate change and its
+full safety checks.

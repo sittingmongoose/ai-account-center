@@ -10,7 +10,7 @@ contracts from the original CCS fork.
 | Installed command and compatibility bins | [package.json](../package.json) |
 | Dashboard HTTP/session boundary | [web server](../src/web-server/index.ts), [auth middleware](../src/web-server/middleware/auth-middleware.ts) |
 | Account projection | [account dashboard service](../src/web-server/services/account-dashboard-service.ts) |
-| Codex controls | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [activation](../src/codex-auth/activate-codex-profile.ts), [auto-switch](../src/web-server/services/codex-auto-switch-service.ts) |
+| Codex saved logins | [account service](../src/codex-auth/codex-auth-dashboard-service.ts), [renewal](../src/codex-auth/codex-profile-renewal.ts), [quota reader](../src/web-server/usage/codex-quota/quota-fetcher-codex.ts) |
 | Analytics | [analytics service](../src/web-server/services/account-analytics-service.ts) |
 | Explicit app updates | [app-update service](../src/web-server/services/app-update-service.ts), [host invocation and helper sync](../src/web-server/services/app-update-hosts.ts), [update helpers](../scripts/app-updates/) |
 | Leptos app frame | [lib.rs](../web-dashboard/leptos/src/lib.rs), [frame.rs](../web-dashboard/leptos/src/frame.rs) and the pages beside them; map of pages, controllers, view models and rules: [UI architecture](../web-dashboard/README-ARCHITECTURE.md) |
@@ -49,4 +49,4 @@ guides describe their independent offline checks. Source-built
 [Docker](../docker/README.md) runs the dashboard only; it does not start CLIProxy
 or import host sessions. Publication is outside the normal build.
 
-Fork cleanup: unused session-launch and Claude config-linking code is removed. CLIProxy is held for central-logins research. See [migration notes](user-guide.md#existing-ccs-installations) and [approval tokens](approval-tokens.md).
+Fork cleanup: unused session-launch and Claude config-linking code is removed. The CLIProxy manager was deleted on 2026-11-14 after its Codex quota reader moved to `src/web-server/usage/codex-quota/`; account switching was removed the same day. See [migration notes](user-guide.md#existing-ccs-installations) and [approval tokens](approval-tokens.md).

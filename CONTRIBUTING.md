@@ -75,8 +75,8 @@ computer. Keep fixtures sanitized and offline.
 
 The rename preserves `~/.ccs/`, session aliases, profile/provider IDs, environment
 settings and native messaging identities. Preserve authentication, origin/session
-guards, target-bound switch reviews, idle-only auto-switch, truthful Analytics,
-migrations and rollback.
+guards, removal and reset-claim approvals, truthful Analytics, migrations and
+rollback.
 
 Retired `ccsx`, `ccs-codex`, `ccsd`, `ccs-droid` and `ccsxp` bins give migration
 guidance. Use provider CLIs directly for sessions and AI Account Center for

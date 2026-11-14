@@ -1,41 +1,25 @@
-# Activate a Codex account in the shared Ubuntu home
+# Account activation (retired)
 
-Use `ai-account-center codex-auth activate <name>` or the dashboard's Codex
-**Activate** control. Both reach the retained activation transaction.
-`ccs codex-auth activate` remains compatible; retired `ccsx` does not launch
-or activate accounts.
+AI Account Center no longer switches accounts. Codex activation and automatic
+switching, and Antigravity activation and automatic switching, were removed on
+2026-11-14: the agents pick their own accounts by burn rate and availability.
 
-Activation retains one shared `~/.codex` and changes its login without substituting
-a profile directory for the native home. Existing sessions, configuration,
-automations, attachments and project links remain there. The transaction locks
-activation/daemon startup, checks active work, retains the outgoing login in its
-matching profile, installs the target login atomically and validates the result.
-Failures use the existing rollback path.
+- **What is gone:** the dashboard and tray Activate controls, the switch review
+  dialog, the auto-switch settings, `ai-account-center codex-auth activate` and
+  `ai-account-center antigravity activate` (both now print a retired-command
+  message), and the routes `POST /api/codex/profiles/:name/activate`,
+  `GET`/`PUT /api/codex/profiles/auto-switch`,
+  `POST /api/antigravity/profiles/:id/activate`, `.../confirm`,
+  `GET`/`PUT /api/antigravity/auto-switch` and `POST /api/antigravity/recover`.
+- **What stays:** usage, limits and resets for every saved login, the live login
+  on Ubuntu marked **Active on Ubuntu**, saved-login renewal, sign-in health,
+  add/remove and Sign in again. `ai-account-center antigravity recover` stays
+  for one release to finish a switch an older version or a managed update left
+  unfinished.
+- **Files left behind:** `~/.ccs/codex-auto-switch.json` and
+  `~/.ccs/antigravity-switching/antigravity-auto-switch.json` are no longer read
+  or written. They are never deleted automatically; an older install can still
+  use them.
 
-When programs would be affected, dashboard activation opens a review containing
-the server's warning and blocking programs. Confirm submits the server-issued,
-target-bound approval; cancel sends no mutation. Expired/stale approvals require
-a fresh review. Automatic switching never treats that review as consent.
-
-The active identity is explicitly **Active on Ubuntu**, distinct from saved
-profile metadata. Account mutations require authenticated same-origin JSON
-requests; credentials/tokens never enter dashboard responses. See
-[Codex account contract](codex-auth.md) and its source links.
-
-## Automatic switching
-
-Settings displays the server-confirmed enabled state, used-percent threshold
-and refresh interval. The server monitor continues while the dashboard server
-runs, even if the browser is closed. It only considers fresh provider quota and
-validates identity again before activation. Unknown, stale or locally estimated
-usage cannot select a new account.
-
-Automatic switching waits while Codex is doing work. Disabling cancels queued
-decisions; a transaction already started must finish or roll back. It does not
-continue an interrupted request under another account. Claude account launchers
-remain manually selected.
-
-The [auto-switch owner](../src/web-server/services/codex-auto-switch-service.ts)
-and [activation transaction](../src/codex-auth/activate-codex-profile.ts)
-define settings and transaction behavior. Provider IDs, private homes and
-session aliases stay compatible with existing installations.
+The dashboard response still carries a fixed `codexAutoSwitch` (always off) for
+the trays installed before the removal. See [Codex account contract](codex-auth.md).

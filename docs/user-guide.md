@@ -15,11 +15,10 @@ in source, not set in Settings ([system architecture](system-architecture/index.
 The dashboard serves three pages (`/`, `/analytics`, `/accounts`) with a
 sign-in page when its own login is configured.
 
-- **Home** shows Claude, then Codex and Antigravity as switchable sections,
+- **Home** shows Claude, then Codex and Antigravity (the live login on Ubuntu marked Active),
   then one card per account of the other providers (Cursor, Muse Code,
   Kimi Code, Qwen, Z.ai, OpenCode Go). Meters show provider-reported
-  percentages with severity colours, the auto-switch threshold notch and
-  reported overage. A missing reading is drawn as unavailable, never as zero.
+  percentages with severity colours and reported overage. A missing reading is drawn as unavailable, never as zero.
   Fable appears only for Claude Max plans, from the `seven_day_fable` window.
   A window whose reset time has passed while its reading predates the reset
   reads "Reset at 10:15 AM · new reading pending" over a dashed track until a
@@ -51,10 +50,8 @@ sign-in page when its own login is configured.
   leave it out say "partial". Settings can add extra usage-log roots per
   computer.
 - **Accounts & Settings** lists every provider with its accounts: status,
-  last sample, how it signs in, and fixed action slots. Codex and Antigravity
-  Activate, Claude Open on Mac or Windows, the Codex and Antigravity
-  auto-switch policies, the usage-refresh interval and the appearance are
-  live, and so is every sign-in and sign-out control the server offers. The
+  last sample, how it signs in, and fixed action slots. Claude Open on Mac or
+  Windows, the usage-refresh interval and the appearance are live, and so is every sign-in and sign-out control the server offers. The
   settings column holds the Dashboard sign-in block, Update apps results by
   computer, read-only connection facts and About (the version and the
   credits).
@@ -68,7 +65,7 @@ Accounts & Settings, both saved on the server: **Show on dashboard** and
 `accounts[].trayHidden`. Each account can therefore be shown in both, on one
 only, or in neither. The two lists are stored as four independent lists, so a
 dashboard switch never changes a tray list and the reverse holds. Hidden
-accounts are still collected and stay auto-switch candidates.
+accounts are still collected.
 
 ## Account add, sign-in again and remove
 
@@ -297,8 +294,7 @@ app shows an Offline card with Try again instead of last-known numbers.
 ## Native trays
 
 The Mac menu bar app and the Windows tray app show the same accounts and
-usage, with Claude launch controls and guarded Codex activation and
-auto-switch settings. Both honour only the "Show in tray" switches. Each
+usage, with Claude launch controls. Both honour only the "Show in tray" switches. Each
 tray pairs once over the trusted local network: the password is sent once,
 the new key must answer before anything is saved, and the stored password is
 then deleted. A password change on the dashboard leaves paired trays signed
@@ -349,7 +345,7 @@ until they start again, except Windows Codex CLI: when a newer npm version is
 verified, Update apps forces its package processes to stop so locked files can
 be replaced. Background work is not replayed; its result says to start those
 sessions again. The Antigravity CLI is held at the newest reviewed
-build, so switching never meets an unreviewed version. No update runs merely
+build, so the managed runtime never meets an unreviewed version. No update runs merely
 by opening the dashboard or reading its status. See
 [app update setup and behavior](../scripts/app-updates/README.md).
 
@@ -392,33 +388,22 @@ dashboard's user needs that alias (reachable without a prompt) and
   primary source. An explicit primary source there uses `platform: "ubuntu"`
   with that computer's `sshHost`. The packaged usage helper runs in memory
   over SSH; no helper installation or credential copying is required.
-- **Never there.** Account switching, Codex and Antigravity activation, key
-  storage, sign-in and Claude desktop flows do not run there. The dashboard
+- **Never there.** Key storage, sign-in and Claude desktop flows do not run there. The dashboard
   computer runs exactly these fixed commands on it: the helper hash query,
   the helper extract, the update helper, the read-only analytics helper and
   the read-only usage bundle.
 
-## Antigravity switching
+## Antigravity on Ubuntu
 
-Antigravity account switching is released: Activate and the
-`ai-account-center antigravity` commands switch the Antigravity CLI (`agy`)
-between saved profiles on the Linux dashboard computer, as a guarded
-transaction (prove the identity, swap the login, verify, roll back on any
-mismatch). When the CLI is running, a manual switch needs a one-use
-confirmation of the exact processes it will stop; busy or unmanaged sessions
-stay deferred. It needs:
-
-- the official Antigravity CLI at `~/.local/bin/agy`, at a reviewed build
-  (a newer, unreviewed build pauses switching until it is reviewed);
-- at least two saved profiles (`ai-account-center antigravity signin <profile>`);
-- the switching runtime installed and adopted, and its user service running.
-
-**Automatic switching is opt-in and off by default** (default threshold 95%
-used, checked every 60 seconds, no quota pool chosen). Turn it on in the
-Antigravity auto-switch policy and choose a quota pool that both accounts
-report; it stops only an idle CLI it can prove it owns. `ai-account-center antigravity status` reports every prerequisite
-read-only and names the next step. The install, adoption, verify and rollback
-steps are in [the Antigravity runtime guide](antigravity-runtime.md).
+`ai-account-center antigravity signin <profile>` adds or signs in again a saved
+profile of the Antigravity CLI (`agy`) on the Linux dashboard computer; the
+dashboard reads every saved profile's usage and marks the live login. AI Account
+Center does not switch the live login: account switching was removed on
+2026-11-14. `ai-account-center antigravity status` reports what the managed
+runtime needs, read-only, and `ai-account-center antigravity recover` finishes a
+switch an older version or a managed update left unfinished. The runtime's
+install, adoption and rollback steps are in
+[the Antigravity runtime guide](antigravity-runtime.md).
 
 ## Platforms
 
@@ -428,8 +413,8 @@ steps are in [the Antigravity runtime guide](antigravity-runtime.md).
 | Browser dashboard | A current browser on a computer or phone (Chrome, Edge, Firefox or Safari); served by the dashboard server |
 | Mac menu bar | macOS 26+, Xcode 26+ for source installation |
 | Windows tray | Native .NET 10 WPF, Windows x64; source builds require an existing .NET 10 SDK |
-| Shared Codex activation / auto-switch | Linux only (activation refuses any other platform: "In-place Codex activation currently requires Linux"); an existing configured Codex runtime and saved logins |
-| Antigravity activation / auto-switch | Linux dashboard computer with the official `agy` CLI at a reviewed build and the switching runtime (see [Antigravity switching](#antigravity-switching)) |
+| Saved Codex logins | Linux dashboard computer; an existing configured Codex runtime |
+| Saved Antigravity profiles | Linux dashboard computer with the official `agy` CLI (see [Antigravity on Ubuntu](#antigravity-on-ubuntu)) |
 | Usage collectors / app updates | Existing credentials and installed apps on the owner computer; Python 3 there (`/usr/bin/python3` on Linux and Mac, `python.exe` on Windows) and SSH from the dashboard computer for remote ones |
 | Optional second Linux computer | `/usr/bin/python3`, reached over its fixed SSH alias for app updates, Analytics and verified usage fallback; no AI Account Center install, dashboard or managed account state |
 
@@ -534,18 +519,17 @@ its local dashboard and opens the installed app.
 | `ai-account-center dashboard auth setup/show/disable` | Manage dashboard login; `status` aliases `show` |
 | `ai-account-center codex-auth create/login/import-default` | Manage saved Codex logins; native login uses the provider's own CLI |
 | `ai-account-center codex-auth show [name]` | Inspect saved logins; `list` and `status` are aliases |
-| `ai-account-center codex-auth activate <name>` | Guarded activation of the shared native login |
 | `ai-account-center codex-auth remove <name>` | Remove an inactive saved login with confirmation; `--force` overrides only saved-default protection |
 | `ai-account-center antigravity signin <profile>` | Sign in an Antigravity profile from a terminal on Ubuntu |
-| `ai-account-center antigravity status` | Read-only report of the Antigravity switching gates |
+| `ai-account-center antigravity status` | Read-only report of the Antigravity runtime gates |
 | `ai-account-center bar` | Mac local dashboard/app launch; `serve`, `stop`, `status`, `install`, `uninstall`, `version` are available |
 | `ai-account-center help` / `version` | Current command help / product version |
 
 `--config-dir PATH` selects the existing account configuration directory.
 Use `ai-account-center help dashboard`, `help codex-auth`, `help antigravity` or `help bar` for options.
 `ccs` runs the same retained commands; **`ccs config` remains the dashboard alias**.
-The [Codex guide](codex-auth.md) documents import/resource compatibility and
-[activation review](activate-in-place.md).
+The [Codex guide](codex-auth.md) documents import/resource compatibility; account
+activation is [retired](activate-in-place.md).
 
 ## Update and recovery
 
@@ -595,8 +579,8 @@ not require renaming private directories or copying credentials.
 
 `ccsx`, `ccs-codex`, `ccsd`, `ccs-droid` and `ccsxp` are retained retirement-guidance
 stubs. They no longer launch or route AI runtimes. `codex-auth use/switch` no
-longer prints shell exports. Use `codex-auth activate` for shared login selection,
-and a provider's own CLI for an AI session. Old routing/API-profile/proxy examples
+longer prints shell exports, and `codex-auth activate` is retired with account
+switching. Use a provider's own CLI for an AI session. Old routing/API-profile/proxy examples
 remain upstream history rather than current setup instructions.
 
 The unused Claude launcher, shared Claude-config linker, old profile registry,
