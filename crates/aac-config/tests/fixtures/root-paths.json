@@ -1,0 +1,147 @@
+[
+  {
+    "name": "default",
+    "environment": {},
+    "cli": null,
+    "expected": "default-home/.ccs"
+  },
+  {
+    "name": "empty-dir",
+    "environment": {
+      "CCS_DIR": ""
+    },
+    "cli": null,
+    "expected": "default-home/.ccs"
+  },
+  {
+    "name": "empty-home",
+    "environment": {
+      "CCS_HOME": ""
+    },
+    "cli": null,
+    "expected": "default-home/.ccs"
+  },
+  {
+    "name": "both-empty",
+    "environment": {
+      "CCS_DIR": "",
+      "CCS_HOME": ""
+    },
+    "cli": null,
+    "expected": "default-home/.ccs"
+  },
+  {
+    "name": "absolute-dir",
+    "environment": {
+      "CCS_DIR": "$ROOT/absolute-dir"
+    },
+    "cli": null,
+    "expected": "absolute-dir"
+  },
+  {
+    "name": "relative-dir",
+    "environment": {
+      "CCS_DIR": "relative-dir"
+    },
+    "cli": null,
+    "expected": "cwd/relative-dir"
+  },
+  {
+    "name": "empty-dir-home",
+    "environment": {
+      "CCS_DIR": "",
+      "CCS_HOME": "$ROOT/fixture-home"
+    },
+    "cli": null,
+    "expected": "fixture-home/.ccs"
+  },
+  {
+    "name": "relative-home",
+    "environment": {
+      "CCS_HOME": "relative-home"
+    },
+    "cli": null,
+    "expected": "cwd/relative-home/.ccs"
+  },
+  {
+    "name": "absolute-home",
+    "environment": {
+      "CCS_HOME": "$ROOT/fixture-home"
+    },
+    "cli": null,
+    "expected": "fixture-home/.ccs"
+  },
+  {
+    "name": "current-dir",
+    "environment": {
+      "CCS_DIR": "."
+    },
+    "cli": null,
+    "expected": "cwd"
+  },
+  {
+    "name": "parent-dir",
+    "environment": {
+      "CCS_DIR": "../selected"
+    },
+    "cli": null,
+    "expected": "selected"
+  },
+  {
+    "name": "dot-segments",
+    "environment": {
+      "CCS_DIR": "nested/../selected/."
+    },
+    "cli": null,
+    "expected": "cwd/selected"
+  },
+  {
+    "name": "trailing-slashes",
+    "environment": {
+      "CCS_DIR": "relative-dir///"
+    },
+    "cli": null,
+    "expected": "cwd/relative-dir"
+  },
+  {
+    "name": "whitespace-is-not-empty",
+    "environment": {
+      "CCS_DIR": "  "
+    },
+    "cli": null,
+    "expected": "cwd/  "
+  },
+  {
+    "name": "dir-wins-home",
+    "environment": {
+      "CCS_DIR": "relative-dir",
+      "CCS_HOME": "$ROOT/fixture-home"
+    },
+    "cli": null,
+    "expected": "cwd/relative-dir"
+  },
+  {
+    "name": "cli-relative",
+    "environment": {
+      "CCS_DIR": "ignored"
+    },
+    "cli": "cli-root",
+    "expected": "cwd/cli-root"
+  },
+  {
+    "name": "cli-absolute",
+    "environment": {
+      "CCS_HOME": "ignored"
+    },
+    "cli": "$ROOT/cli-root",
+    "expected": "cli-root"
+  },
+  {
+    "name": "cli-empty",
+    "environment": {
+      "CCS_DIR": "relative-dir"
+    },
+    "cli": "",
+    "expected": "cwd/relative-dir"
+  }
+]

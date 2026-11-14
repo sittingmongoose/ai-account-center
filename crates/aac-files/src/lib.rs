@@ -66,6 +66,50 @@ pub struct Registry {
     stores: BTreeMap<PathBuf, StoreSpec>,
 }
 
+/// Resolve a root once with Node's lexical path.resolve semantics: relative paths use the
+/// supplied absolute base, dot segments collapse, and no filesystem symlink is followed.
+/// The result may name a directory that does not exist yet. Store claims still refuse symlinks.
+pub fn resolve_root(base: &Path, selected: &Path) -> Result<PathBuf, Failure> {
+    let path = if selected.is_absolute() {
+        selected.to_path_buf()
+    } else {
+        if !base.is_absolute() {
+            return Err(Failure::new(
+                Cause::Refused,
+                "relative root requires an absolute base",
+            ));
+        }
+        base.join(selected)
+    };
+    canonical_absolute(&path)
+}
+
+fn canonical_absolute(path: &Path) -> Result<PathBuf, Failure> {
+    if !path.is_absolute() {
+        return Err(Failure::new(Cause::Refused, "store root must be absolute"));
+    }
+    let mut result = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if result.file_name().is_some() {
+                    result.pop();
+                }
+            }
+            _ => result.push(part.as_os_str()),
+        }
+    }
+    Ok(result)
+}
+
+fn require_absolute(path: &Path) -> Result<(), Failure> {
+    if canonical_absolute(path)?.as_os_str() != path.as_os_str() {
+        return Err(Failure::new(Cause::Refused, "store root must be canonical"));
+    }
+    Ok(())
+}
+
 fn relative(path: &Path) -> bool {
     !path.as_os_str().is_empty()
         && path.components().all(|c| matches!(c, Component::Normal(_)))
@@ -94,8 +138,11 @@ impl Registry {
     }
 
     /// Acquire a nonblocking advisory writer lease for a registered path and owner role.
-    /// The root and all parents must be private directories, never symlinks.
+    /// The root must be absolute and lexically canonical. Existing ancestors must be real
+    /// directories, never symlinks; new directories are 0700 on Unix. Existing owner/mode
+    /// validation is the caller's responsibility until the private-root hardening follow-up.
     pub fn claim(&self, root: &Path, path: &Path, owner: &str) -> Result<OwnedStore, Failure> {
+        require_absolute(root)?;
         let spec = self
             .stores
             .get(path)
@@ -107,7 +154,7 @@ impl Registry {
             ));
         }
         ensure_directory(root)?;
-        let file = root.join(&spec.path);
+        let file = resolve_root(root, &spec.path)?;
         let parent = file
             .parent()
             .ok_or_else(|| Failure::new(Cause::Refused, "missing store parent"))?;
@@ -141,6 +188,7 @@ pub struct OwnedStore {
 impl OwnedStore {
     /// Read only a regular file and enforce the declared cap during streaming.
     pub fn read(&self) -> Result<Vec<u8>, Failure> {
+        require_absolute(&self.path)?;
         read_bounded(&self.path, self.spec.max_size)
     }
 
@@ -156,6 +204,7 @@ impl OwnedStore {
         &self,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
     ) -> Result<(), Failure> {
+        require_absolute(&self.path)?;
         reject_special(&self.path, true)?;
         let parent = self
             .path
@@ -191,6 +240,7 @@ impl OwnedStore {
     /// Atomically move the store into a unique private trash directory beside it.
     /// Trash stays on the same filesystem and is never purged implicitly.
     pub fn trash(&self) -> Result<PathBuf, Failure> {
+        require_absolute(&self.path)?;
         reject_special(&self.path, false)?;
         let parent = self
             .path
