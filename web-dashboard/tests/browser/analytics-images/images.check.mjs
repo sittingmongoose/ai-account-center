@@ -1,7 +1,7 @@
-// Side-by-side images for review: the Slint Analytics page (the classic app, its canvas scrolled screen by screen and
-// stacked) beside the native Analytics page in the app frame (one whole-page shot), on the same made-up data
+// Images for review: the Analytics page in the app frame (one whole-page shot) on made-up data
 // (../device/analytics-fixture.mjs), at 1024, 1440 and 2560 wide and in the phone and Duo formats, light and dark.
-// Writes slint-*, leptos-* and side-*.png into `--set out=<folder>`. Test data only: invented names.
+// Writes leptos-*.png into `--set out=<folder>`. (Until the classic Slint app was retired, its page was shot and set
+// beside each one.) Test data only: invented names.
 import fs from 'node:fs';
 import path from 'node:path';
 import { analyticsFixture } from '../device/analytics-fixture.mjs';
@@ -60,39 +60,6 @@ async function leptos(t, f, theme) {
 	return t.page.screenshot({ fullPage: true });
 }
 
-/** The Slint page: the canvas scrolls inside itself, so each screen is shot and they are stacked. */
-async function slint(t, f, theme) {
-	await prepare(t, f, theme);
-	await t.goto(`/analytics?e2e${f.mobile ? `&safe=${f.safe}` : ''}`, { settleMs: 300 });
-	await t.until('Slint analytics drawn', () => !!window.__aacLastAnalytics?.usage?.ready && !!document.querySelector('#loading')?.hidden, null, { timeout: 60000, hard: true });
-	await t.page.waitForTimeout(3000);
-	const shots = [];
-	await t.page.mouse.move(f.width / 2, f.height * 0.6);
-	for (let i = 0; i < 8; i++) {
-		shots.push(await t.page.screenshot());
-		const before = await t.page.screenshot({ clip: { x: 0, y: f.height * 0.3, width: f.width, height: f.height * 0.4 } });
-		await t.page.mouse.wheel(0, Math.round(f.height * 0.7));
-		await t.page.waitForTimeout(900);
-		const after = await t.page.screenshot({ clip: { x: 0, y: f.height * 0.3, width: f.width, height: f.height * 0.4 } });
-		if (Buffer.compare(before, after) === 0) break;
-	}
-	return shots;
-}
-
-/** One image: Slint's screens stacked on the left, the native page on the right, each under its name. */
-async function side(t, f, theme, slintShots, leptosShot, file) {
-	const img = (b) => `<img src="data:image/png;base64,${b.toString('base64')}">`;
-	await t.page.setViewportSize({ width: f.width * 2 + 72, height: 600 });
-	await t.page.setContent(`<!doctype html><style>
-		body { margin: 0; background: ${theme === 'dark' ? '#05080B' : '#9AA6B1'}; font: 600 22px system-ui; color: ${theme === 'dark' ? '#E6ECF2' : '#15202B'}; }
-		.row { display: flex; gap: 24px; padding: 24px; align-items: flex-start; }
-		figure { margin: 0; display: grid; gap: 8px; } img { display: block; width: ${f.width}px; } .stack { display: grid; gap: 6px; }
-	</style><div class="row"><figure><figcaption>Slint (classic), ${f.name} ${theme}: ${slintShots.length} screens of its scrolling canvas</figcaption><div class="stack">${slintShots.map(img).join('')}</div></figure>
-	<figure><figcaption>Leptos (app frame), ${f.name} ${theme}: whole page</figcaption>${img(leptosShot)}</figure></div>`);
-	await t.page.waitForTimeout(300);
-	await t.page.screenshot({ path: file, fullPage: true });
-}
-
 export const tests = Object.fromEntries(
 	FORMATS.flatMap((f) =>
 		['light', 'dark'].map((theme) => [
@@ -100,13 +67,10 @@ export const tests = Object.fromEntries(
 			async (t) => {
 				const out = t.args.out || path.join(process.cwd(), 'analytics-images-out');
 				fs.mkdirSync(out, { recursive: true });
-				const native = await leptos(t, f, theme);
-				fs.writeFileSync(path.join(out, `leptos-${f.name}-${theme}.png`), native);
-				const screens = await slint(t, f, theme);
-				screens.forEach((b, i) => fs.writeFileSync(path.join(out, `slint-${f.name}-${theme}-${i + 1}.png`), b));
-				const file = path.join(out, `side-${f.name}-${theme}.png`);
-				await side(t, f, theme, screens, native, file);
-				await t.check(`${f.name} ${theme}: side by side saved`, fs.statSync(file).size > 20000);
+				const file = path.join(out, `leptos-${f.name}-${theme}.png`);
+				fs.writeFileSync(file, await leptos(t, f, theme));
+				await t.check(`${f.name} ${theme}: saved`, fs.statSync(file).size > 20000);
+				await t.check(`${f.name} ${theme}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 			},
 		])
 	)

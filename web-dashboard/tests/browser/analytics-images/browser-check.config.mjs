@@ -1,4 +1,4 @@
-// Analytics images: the native page beside the Slint page it replaces, in each width, format and theme, on the kit's
+// Analytics images: the native page in each width, format and theme, on the kit's
 // real test server (../browser-check.config.mjs: a temporary home, the Status and Scoreboard fixtures, synthetic
 // accounts answered in the page). Needs dist/ built, like the kit.
 //   browser-check run web-dashboard/tests/browser/analytics-images --set out=<folder>

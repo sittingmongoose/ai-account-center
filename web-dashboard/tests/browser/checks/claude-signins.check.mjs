@@ -1,7 +1,8 @@
 // Claude sign-in renewal on the dashboard (dashboard payload `claudeSignIns`, written by the
 // renewal runner in scripts/claude-signin): the Claude header says when a person is needed, a
 // notice is raised once, each Claude row names its renewal state, and Details lists the runner,
-// the browser session and every computer's sign-in. Synthetic accounts and emails only.
+// the browser session and every computer's sign-in. In the app frame (ported from the classic
+// canvas when Slint was retired). Synthetic accounts and emails only.
 const NOW = Date.parse('2026-11-03T15:00:00Z');
 const at = (hours) => new Date(NOW + hours * 3600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
@@ -49,12 +50,15 @@ const FIXTURE = {
 
 const toasts = (t) => t.page.evaluate(() => (globalThis.__aacToasts || []).map((item) => item.title));
 
+/** Nothing on the page runs past the right edge, and the page does not scroll sideways. */
+const noSideways = async (t, name) => t.check(name, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+
 export const tests = {
 	async 'sign-in renewal: header, notice, rows and Details'(t) {
 		await t.app.stub('/api/accounts/dashboard', FIXTURE);
 		await t.viewport(1920, 1080);
 		await t.app.open({ page: 'home' });
-		await t.painted('#canvas', 'home painted with sign-in renewal data');
+		await t.page.waitForSelector('.route:not([hidden]) .page.home .hsec', { timeout: 30000 });
 		await t.step('a notice names the account that needs a person, once', async () => {
 			await t.until('the notice was raised', () => (globalThis.__aacToasts || []).length > 0);
 			const titles = (await toasts(t)).filter((title) => title.startsWith('Claude sign-in needs you'));
@@ -65,20 +69,19 @@ export const tests = {
 		await t.shot('home-signin-renewal',
 			'Claude header ends "1 sign-in step needs you" (warning tone); row metas read "Auto-renews · next end ..." and "Sign-in renewal needs you"; the red notice names two@example.invalid');
 		await t.audit('home with sign-in renewal');
-		await t.app.noProbeOverflow('no control past the edge with sign-in renewal lines');
-		// Home rows carry no probes; the Accounts page rows open the same Details panel.
+		await noSideways(t, 'no sideways scroll with sign-in renewal lines');
+		// The Accounts page rows open the same Details as Home's.
 		await t.app.open({ page: 'accounts' });
-		const rows = Object.keys(await t.app.probes()).filter((id) => /^row:claude-/.test(id));
-		await t.check('both Claude rows are on the Accounts page', rows.length === 2);
-		for (const id of rows) {
-			await t.app.click(id);
-			await t.page.waitForTimeout(700);
-			// At 1920 px Details is the right-hand side panel, which carries no probe of its own.
-			await t.crop(`details-${id}`, { x: 1344, y: 0, width: 576, height: 1080 },
+		await t.until('both Claude rows are on the Accounts page', () => document.querySelectorAll('.route:not([hidden]) .acc-item[data-row^="claude-"]').length === 2, null, { timeout: 30000 });
+		for (const id of ['claude-1', 'claude-2']) {
+			await t.page.click(`.route:not([hidden]) .acc-item[data-row="${id}"] .acc-email`);
+			await t.page.waitForSelector('.details', { timeout: 10000 });
+			await t.page.waitForTimeout(500);
+			await t.crop(`details-${id}`, '.details',
 				`Details for ${id}: Needs you (two only), Sign-in renewal, Browser session, then one "Sign-in · <computer>" line per profile with its end and renewal state`);
-			await t.app.noProbeOverflow(`no control past the edge with Details open for ${id}`);
+			await noSideways(t, `no sideways scroll with Details open for ${id}`);
 			await t.page.keyboard.press('Escape');
-			await t.page.waitForTimeout(400);
+			await t.until('Details closed', () => !document.querySelector('.details'), null, { timeout: 5000 });
 		}
 	},
 };

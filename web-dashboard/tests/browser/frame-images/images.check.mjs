@@ -31,8 +31,6 @@ const FORMATS = [
 	{ name: 'duo-landscape', width: 951, height: 669, safe: '0,84,34,0', mobile: true, duo: true },
 ];
 const TABS = ['status', 'scoreboard', 'home', 'analytics', 'accounts'];
-const SLINT = new Set();
-const DASH_PATH = { home: '/', analytics: '/analytics', accounts: '/accounts' };
 const UNPIN = `html { scrollbar-width: none; }
 .rail, .tabbar, .topbar, .chrome, .band-head { position: static !important; }
 .rail { height: auto !important; align-self: stretch !important; }`;
@@ -70,24 +68,20 @@ export const tests = Object.fromEntries(
 					// Analytics (drawn by the frame): made-up usage logs and quota history for the same accounts
 					await t.page.route((u) => new URL(u).pathname === '/api/accounts/analytics', (r) => r.fulfill({ json: analyticsFixture({ range: new URL(r.request().url()).searchParams.get('range') || '7d', accounts: ACCOUNTS.accounts }) }));
 					await t.goto(`/app/${tab}?e2e&safe=${f.safe}`, { settleMs: 300 });
-					await t.until(`${tab} shown`, ({ tab, slint, dash }) => {
+					await t.until(`${tab} shown`, (tab) => {
 						const shown = [...document.querySelectorAll('.route')].filter((r) => !r.hidden);
 						if (shown.length !== 1) return false;
-						if (!slint) return !!shown[0].querySelector({ status: '.q-card', accounts: '.ac-page .prov', analytics: '.ax-page .kpi', home: '.home .hsec' }[tab] || '.picks');
-						try {
-							const w = shown[0].querySelector('iframe.slint-frame')?.contentWindow;
-							return !!(w && w.__aacLastAuth?.signedIn && w.location.pathname === dash && w.document.querySelector('#loading')?.hidden);
-						} catch { return false; }
-					}, { tab, slint: SLINT.has(tab), dash: DASH_PATH[tab] }, { timeout: 60000, hard: true });
+						return !!shown[0].querySelector({ status: '.q-card', accounts: '.ac-page .prov', analytics: '.ax-page .kpi', home: '.home .hsec' }[tab] || '.picks');
+					}, tab, { timeout: 60000, hard: true });
 					// the dashboard draws its readings a moment after it is signed in
-					await t.page.waitForTimeout(SLINT.has(tab) || tab === 'analytics' ? 2500 : 400);
+					await t.page.waitForTimeout(tab === 'analytics' ? 2500 : 400);
 					await t.page.evaluate(() => document.activeElement?.blur?.());
-					if (!SLINT.has(tab)) await t.page.addStyleTag({ content: UNPIN });
+					await t.page.addStyleTag({ content: UNPIN });
 					await t.page.waitForTimeout(250);
 					const out = t.args.out || path.join(process.cwd(), 'frame-images-out');
 					fs.mkdirSync(out, { recursive: true });
 					const file = path.join(out, `${tab}-${f.name}-${theme}.png`);
-					await t.page.screenshot({ path: file, fullPage: !SLINT.has(tab) });
+					await t.page.screenshot({ path: file, fullPage: true });
 					await t.check(`${tab} ${f.name} ${theme}: saved`, fs.statSync(file).size > 5000);
 					await t.check(`${tab} ${f.name} ${theme}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 				},

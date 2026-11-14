@@ -1,6 +1,5 @@
-// Home in the app frame, whole page, in each format and theme (`home-<format>-<theme>.png`), and the classic Slint Home
-// on the same data (`slint-home-<format>-<theme>.png`, drawn in a window tall enough for the whole page, since the canvas
-// scrolls inside itself) for side-by-side review. Made-up data only (home-fixture.mjs).
+// Home in the app frame, whole page, in each format and theme (`home-<format>-<theme>.png`), for review. (Until the
+// classic Slint app was retired, its Home was shot beside it on the same data.) Made-up data only (home-fixture.mjs).
 import fs from 'node:fs';
 import path from 'node:path';
 import { homeAccounts, homeProfiles } from '../home-fixture.mjs';
@@ -38,7 +37,7 @@ function out(t, file) {
 
 export const tests = Object.fromEntries(
 	FORMATS.flatMap((f) =>
-		['light', 'dark'].flatMap((theme) => [
+		['light', 'dark'].map((theme) =>
 			[
 				`home ${f.name} ${theme}`,
 				async (t) => {
@@ -55,21 +54,7 @@ export const tests = Object.fromEntries(
 					await t.check(`home ${f.name} ${theme}: saved`, fs.statSync(file).size > 5000);
 					await t.check(`home ${f.name} ${theme}: no sideways scroll`, await t.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 				},
-			],
-			[
-				`slint ${f.name} ${theme}`,
-				async (t) => {
-					if (t.args.slint === '0' || (only(t) && !only(t).test(`slint-home-${f.name}-${theme}`))) return;
-					// The classic app, in a window tall enough to show its whole Home (the canvas scrolls inside itself).
-					await prepare(t, { ...f, height: f.mobile ? 2600 : 2000 }, theme);
-					await t.goto('/?e2e', { settleMs: 300 });
-					await t.until('Slint Home drawn', () => !!window.__aacLastAuth?.signedIn && document.querySelector('#loading')?.hidden, null, { timeout: 60000, hard: true });
-					await t.page.waitForTimeout(3500);
-					const file = out(t, `slint-home-${f.name}-${theme}.png`);
-					await t.page.screenshot({ path: file });
-					await t.check(`slint ${f.name} ${theme}: saved`, fs.statSync(file).size > 5000);
-				},
-			],
-		])
+			]
+		)
 	)
 );

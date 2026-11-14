@@ -190,14 +190,10 @@ for (const theme of ['light', 'dark']) {
       serviceWorkers: 'block',
     });
     await t.page.addInitScript(() => {
-      localStorage.setItem('aac-frame', 'classic');
       const set = () => document.documentElement.style.setProperty('--safe-top', '62px');
       if (document.documentElement) set();
       else document.addEventListener('DOMContentLoaded', set, { once: true });
     });
-    await t.page.route('**/bridge.js', (r) =>
-      r.fulfill({ body: '', contentType: 'text/javascript' })
-    );
     for (const page of ['start-cover', 'offline-cover']) {
       await t.goto('/__fixture/' + page);
       await t.equal(
