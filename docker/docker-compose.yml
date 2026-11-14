@@ -20,7 +20,7 @@ services:
       - CCS_SESSION_SECRET
     volumes:
       - ccs_home:/home/node/.ccs
-    # The canonical image healthcheck probes only the dashboard entry point.
+    # The canonical image healthcheck probes only the public /api/health endpoint.
     deploy:
       resources:
         limits:

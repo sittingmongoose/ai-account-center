@@ -25,6 +25,7 @@ const slowTests = [
   'tests/integration/logging-request-context.test.ts',
   'tests/integration/web-server/codex-profiles-endpoint.test.ts',
   'tests/unit/docker/dockerfile-lifecycle-scripts.test.ts',
+  'tests/unit/docker/docker-hygiene.test.ts',
   'tests/unit/web-server/muse-failure-contract-interop.test.ts',
   'tests/unit/web-server/usage-failover-transport.test.ts',
   'tests/unit/web-server/usage-failover-codex.test.ts',
