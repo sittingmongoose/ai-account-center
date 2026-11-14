@@ -1,5 +1,5 @@
-// The Analytics page's state rules, shared by bridge.js (the classic app) and frame-analytics.mjs (the app frame, which
-// fetches and builds the page itself): the page state, which ranges a response covers, how often a page still being
+// The Analytics page's state rules, used by frame-analytics.mjs (the app frame's Analytics controller, which fetches
+// and builds the page itself; the retired classic app's bridge.js shared them): the page state, which ranges a response covers, how often a page still being
 // read polls, the switch thresholds the quota charts mark, and what each page action changes. Pure; the view itself is
 // built by analytics-usage.mjs, analytics-quota.mjs and analytics-data.mjs (tests/analytics-page.test.mjs).
 import { RANGES, parseIsoDay, addDays, dayStart, apiRangeFor, payloadViewKey, H, D } from './analytics-usage.mjs';

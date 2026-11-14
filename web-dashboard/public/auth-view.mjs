@@ -1,6 +1,6 @@
 import { lazyFormat } from './time-format.mjs';
-// The sign-in page's words and rules (c-daylight-atlas/app-auth.js), as pure functions bridge.js uses to build
-// the AuthView it hands Slint (ui/shell/signin.slint). Covered by tests/auth-view.test.mjs.
+// The sign-in page's words and rules (c-daylight-atlas/app-auth.js), as pure functions frame-session.mjs uses to
+// build the sign-in view the frame draws (leptos/src/session.rs). Covered by tests/auth-view.test.mjs.
 //
 // What the server says (CONTRACT-auth-devices sections 4 and 10, the round-2 CLIENT API SHEET):
 // - GET /api/auth/check: accessMode open | login | setup, authenticated, username, signedOutReason ('revoked'

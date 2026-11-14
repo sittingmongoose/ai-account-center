@@ -2,7 +2,8 @@ import { COMPUTERS } from './computers.mjs';
 // The Accounts & Settings controller: the state behind every sign-in and sign-out control (the inline flows,
 // the lines under rows, the trash, show and hide, the password change, other browsers, paired trays and the
 // trusted local network) and what each action sends. All I/O is injected, so tests/accounts-controller.test.mjs
-// drives every action and every error code with a fake server; bridge.js wires it to fetch, toasts and Slint.
+// drives every action and every error code with a fake server; frame-dashboard.mjs wires it to fetch, toasts and the
+// Accounts & Settings page.
 //
 // deps:
 //   call(request) -> { status, payload }       one request (account-actions.mjs `requests`); a refusal throws an
@@ -37,8 +38,8 @@ const label = provider => PROVIDER_LABELS[provider] || 'This provider';
 const dayFmt = lazyFormat({ month: 'short', day: 'numeric' });
 const REFUSALS = new Set(['account_active', 'account_default', 'account_protected', 'last_account', 'activation_running', 'signin_running', 'app_running', 'app_state_unknown']);
 /**
- * The actions that send a change. While an account-switch confirmation is pending, bridge.js holds these (the
- * page did before this controller existed); the local ones (open or close a flow, copy the code, type, cancel a
+ * The actions that send a change. While an account-switch confirmation is pending, the dashboard controller holds
+ * these (frame-dashboard.mjs, as bridge.js did); the local ones (open or close a flow, copy the code, type, cancel a
  * sign-in) stay live.
  */
 export const MUTATING_ACTIONS = Object.freeze(new Set([

@@ -1,6 +1,6 @@
 import { HOST_LABELS } from './computers.mjs';
 // Account and sign-in actions: what each control sends and what each answer means, as pure functions that
-// bridge.js uses and tests/account-actions.test.mjs covers. The routes and codes are the CLIENT API SHEET of the
+// the frame's controllers use and tests/account-actions.test.mjs covers. The routes and codes are the CLIENT API SHEET of the
 // round-2 base (CONTRACT-registry-lifecycle 6, CONTRACT-auth-devices 3 to 6, the trusted local network rule).
 //
 // Every server error is `{ error, code, ...extra }`; the page never shows the server's sentence. It shows its own
