@@ -56,6 +56,8 @@ const noSideways = async (t, name) => t.check(name, await t.page.evaluate(() => 
 export const tests = {
 	async 'sign-in renewal: header, notice, rows and Details'(t) {
 		await t.app.stub('/api/accounts/dashboard', FIXTURE);
+		// Accounts draws the registry too: answered empty, so only the fixture's accounts are on the page
+		await t.app.stub('/api/accounts/registry', { providers: [], accounts: [], jobs: [], trash: [] });
 		await t.app.noResets();
 		await t.viewport(1920, 1080);
 		await t.app.open({ page: 'home' });
