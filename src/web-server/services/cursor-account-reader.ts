@@ -15,7 +15,9 @@ import { execFile } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ProviderError } from '../../errors/error-types';
 import { getCcsDir } from '../../utils/config-manager';
+import type { DashboardAccount } from './account-dashboard-types';
 import type { AnalyticsRemoteRow } from './analytics-remote-transport';
 import { localUsageScanTarget, type UsageScanTarget } from './usage-scan-binary';
 
@@ -374,4 +376,183 @@ export async function cursorAccountOutside(
     ...(rows.some((row) => row.costBasis === 'unknown') ? { costPartial: true } : {}),
     rows,
   };
+}
+
+/** Quota transport only: the Rust reader owns credentials and Cursor's protocol. */
+export class CursorQuotaReader {
+  private pending: Promise<DashboardAccount | null> | null = null;
+  private current: DashboardAccount | null = null;
+
+  constructor(private readonly deps: CursorAccountReaderDeps = {}) {}
+
+  peek(base: DashboardAccount) {
+    return this.current ? { ...base, ...this.current, id: base.id, label: base.label } : null;
+  }
+
+  read(base: DashboardAccount, force = false) {
+    this.pending ??= this.collect(base, force).finally(() => {
+      this.pending = null;
+    });
+    return this.pending.then((row) => (row ? { ...row, id: base.id, label: base.label } : null));
+  }
+
+  private async collect(base: DashboardAccount, force: boolean) {
+    const ccsDir = this.deps.ccsDir ?? getCcsDir();
+    const file = path.join(
+      this.deps.cacheDir ?? path.join(ccsDir, 'cache'),
+      'cursor-quota-v1.json'
+    );
+    const run = this.deps.run ?? runCursorAccount;
+    const now = (this.deps.now ?? Date.now)();
+    const at = new Date(now).toISOString();
+    let fingerprint: string | null = null;
+    let previous: {
+      version: number;
+      fingerprint: string;
+      checkedAt: string;
+      account: DashboardAccount;
+    } | null = null;
+    let answer: Record<string, unknown> = {};
+    try {
+      // Only the reader opens the store. A missing/unsafe reader is not proof of no key.
+      const status = (await run(['key', 'status', '--ccs-dir', ccsDir], '')) as Record<
+        string,
+        unknown
+      >;
+      if (status.present === false && !status.error) {
+        this.current = null;
+        try {
+          fs.unlinkSync(file);
+        } catch {
+          /* No saved quota. */
+        }
+        return null;
+      }
+      if (status.present !== true || typeof status.fingerprint !== 'string')
+        throw new ProviderError('Cursor key status is unavailable.', 'cursor');
+      fingerprint = status.fingerprint;
+      try {
+        if (fs.statSync(file).size <= 64 * 1024)
+          previous = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch {
+        /* No saved quota. */
+      }
+      if (
+        previous?.version !== 1 ||
+        previous.fingerprint !== fingerprint ||
+        !previous.account ||
+        !Array.isArray(previous.account.windows) ||
+        !['ok', 'cached', 'needs_sign_in', 'unavailable'].includes(previous.account.status) ||
+        !Number.isFinite(Date.parse(previous.checkedAt)) ||
+        previous.account.windows.some(
+          (window) =>
+            !window ||
+            typeof window.key !== 'string' ||
+            typeof window.label !== 'string' ||
+            typeof window.usedPercent !== 'number' ||
+            !Number.isFinite(window.usedPercent) ||
+            window.usedPercent < 0 ||
+            (window.resetAt !== null && !Number.isFinite(Date.parse(window.resetAt)))
+        ) ||
+        (previous.account.windows.length > 0 &&
+          !Number.isFinite(Date.parse(previous.account.sampledAt ?? '')))
+      )
+        previous = null;
+      if (
+        previous &&
+        !force &&
+        now >= Date.parse(previous.checkedAt) &&
+        now - Date.parse(previous.checkedAt) < CURSOR_ACCOUNT_TTL_MS
+      ) {
+        this.current = previous.account;
+        return this.peek(base);
+      }
+      answer = (await run(['quota', '--ccs-dir', ccsDir], '')) as Record<string, unknown>;
+    } catch {
+      answer = { state: 'unavailable' };
+    }
+    const quota = answer?.quota as Record<string, unknown> | undefined;
+    const plan = quota?.planUsage as Record<string, unknown> | undefined;
+    const percentage = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0;
+    const resetMs = quota?.billingCycleEndMs;
+    const resetAt =
+      typeof resetMs === 'number' && Number.isFinite(resetMs) && Math.abs(resetMs) <= 8.64e15
+        ? new Date(resetMs).toISOString()
+        : null;
+    const valid =
+      answer?.state === 'read' &&
+      percentage(plan?.totalPercentUsed) &&
+      percentage(plan?.autoPercentUsed);
+    const sampledAt =
+      typeof answer?.readAt === 'number' &&
+      Number.isFinite(answer.readAt) &&
+      Math.abs(answer.readAt) <= 8.64e15
+        ? new Date(answer.readAt).toISOString()
+        : at;
+    const windows = valid
+      ? [
+          ['plan-reported', 'Included usage', plan?.totalPercentUsed],
+          ['autoPercentUsed', 'Cursor models', plan?.autoPercentUsed],
+        ].map(([key, label, value]) => ({
+          key: key as string,
+          label: label as string,
+          usedPercent: value as number,
+          remainingPercent: Math.max(0, 100 - (value as number)),
+          resetAt,
+          windowMinutes: null,
+          used: null,
+          limit: null,
+          unit: null,
+        }))
+      : [];
+    const keep =
+      !valid &&
+      answer?.state !== 'key_rejected' &&
+      previous?.account.sampledAt &&
+      previous.account.windows.length
+        ? previous.account
+        : null;
+    this.current = {
+      ...base,
+      email: null,
+      plan: null,
+      host: undefined,
+      platform:
+        process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'windows' : 'ubuntu',
+      source: 'Cursor API key',
+      fetchedAt: at,
+      sampledAt: valid ? sampledAt : (keep?.sampledAt ?? null),
+      status: valid
+        ? 'ok'
+        : answer?.state === 'key_rejected'
+          ? 'needs_sign_in'
+          : keep
+            ? 'cached'
+            : 'unavailable',
+      message: valid
+        ? null
+        : answer?.state === 'key_rejected'
+          ? 'The key was rejected.'
+          : keep
+            ? `Cursor read failed; showing the cached reading from ${keep.sampledAt}.`
+            : 'Cursor quota could not be read.',
+      windows: valid ? windows : (keep?.windows ?? []),
+    };
+    if (fingerprint) {
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+        const temporary = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(
+          temporary,
+          JSON.stringify({ version: 1, fingerprint, checkedAt: at, account: this.current }),
+          { mode: 0o600 }
+        );
+        fs.renameSync(temporary, file);
+      } catch {
+        /* Serve the answer even if persistence is unavailable. */
+      }
+    }
+    return this.current;
+  }
 }

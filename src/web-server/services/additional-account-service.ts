@@ -1,4 +1,5 @@
 import path from 'path';
+import { CursorQuotaReader } from './cursor-account-reader';
 import { getCcsDir } from '../../utils/config-manager';
 import { LOCAL_FILE_DEADLINE_MS, withDeadline } from '../../utils/settle-deadline';
 import type {
@@ -58,6 +59,7 @@ const MUSE_TRANSIENT_FAILURES = new Set(['rate_limited', 'provider_error', 'netw
 
 export interface AdditionalAccountDeps {
   ccsDir?: string;
+  cursorQuota?: CursorQuotaReader | null;
   /** Version 1 manifest contents (`account-usage-sources.json`), read when registry v2 is absent. */
   readManifest?: () => Promise<string | null>;
   /** Registry v2 (`account-usage-accounts.json`); absent, invalid or valid. */
@@ -373,6 +375,7 @@ const DEFAULT_SOURCES = parseSourceManifest(null).sources;
 export class AdditionalAccountService {
   private readonly ccsDir: string;
   private readonly failover: Pick<UsageFailoverService, 'collect' | 'peek'> | null;
+  private readonly cursorQuota: CursorQuotaReader | null;
   private fingerprint = '';
   private caches = new Map<string, SourceCache>();
   private manifestPending: Promise<Manifest> | null = null;
@@ -380,6 +383,12 @@ export class AdditionalAccountService {
 
   constructor(private readonly deps: AdditionalAccountDeps = {}) {
     this.ccsDir = path.resolve(deps.ccsDir ?? getCcsDir());
+    this.cursorQuota =
+      deps.cursorQuota === undefined
+        ? deps.runSource || deps.failover !== undefined
+          ? null
+          : new CursorQuotaReader({ ccsDir: this.ccsDir, now: deps.now })
+        : deps.cursorQuota;
     // Existing injected transports remain isolated fixtures. Production uses
     // the shared coordinator so every account keeps one verified identity.
     this.failover =
@@ -488,8 +497,19 @@ export class AdditionalAccountService {
 
   private async collect(
     source: AdditionalUsageSource,
-    cache: SourceCache
+    cache: SourceCache,
+    force = false
   ): Promise<DashboardAccount> {
+    if (source.provider === 'cursor' && this.cursorQuota) {
+      const quota = await this.cursorQuota.read(unavailable(source), force);
+      if (quota) {
+        cache.result = quota;
+        cache.lastGood = null;
+        cache.fetchedAt = (this.deps.now ?? Date.now)();
+        cache.failed = !['ok', 'cached'].includes(quota.status);
+        return quota;
+      }
+    }
     if (this.failover) {
       try {
         cache.result = await this.failover.collect(
@@ -609,7 +629,7 @@ export class AdditionalAccountService {
     if (force) cache.refreshedAt = now;
     if (!cache.pending && !backoff && (force || expired || !cache.result)) {
       const current = cache;
-      current.pending = this.collect(source, current).finally(() => {
+      current.pending = this.collect(source, current, force).finally(() => {
         current.pending = null;
       });
     }
@@ -696,6 +716,11 @@ export class AdditionalAccountService {
               ? 'Account list could not be read safely.'
               : 'Account usage is temporarily unavailable.'
           );
+          const quota =
+            config.valid && source.provider === 'cursor'
+              ? this.cursorQuota?.peek(placeholder)
+              : null;
+          if (quota) return quota;
           return config.valid && this.failover
             ? this.failover.peek(this.failoverTarget(source), placeholder)
             : placeholder;
