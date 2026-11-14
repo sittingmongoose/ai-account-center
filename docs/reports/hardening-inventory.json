@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1233,
-    "filesAffected": 119,
-    "hotpathOccurrences": 541,
-    "hotpathFilesAffected": 60,
+    "totalOccurrences": 1248,
+    "filesAffected": 120,
+    "hotpathOccurrences": 556,
+    "hotpathFilesAffected": 61,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",
@@ -157,17 +157,16 @@
         "markers": []
       },
       {
-        "file": "src/web-server/services/account-refresh-settings.ts",
+        "file": "src/web-server/rust-service-lifecycle.ts",
         "count": 15,
         "calls": [
-          "closeSync",
-          "fsyncSync",
+          "existsSync",
           "lstatSync",
           "mkdirSync",
-          "openSync",
-          "readdirSync",
           "readFileSync",
+          "realpathSync",
           "renameSync",
+          "rmSync",
           "unlinkSync",
           "writeFileSync"
         ],
@@ -527,16 +526,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 729,
-      "typedThrows": 212,
+      "totalThrows": 730,
+      "typedThrows": 213,
       "plainThrows": 56,
       "otherThrows": 461,
-      "adoptionRatio": 0.2908,
+      "adoptionRatio": 0.2918,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 389,
-          "typed": 156,
+          "count": 390,
+          "typed": 157,
           "plain": 7
         },
         {
@@ -608,9 +607,9 @@
       "targetRatio": 0.4
     },
     "loggerCoverage": {
-      "filesWithCreateLogger": 45,
-      "totalSourceFiles": 473,
-      "coverageRatio": 0.0951,
+      "filesWithCreateLogger": 46,
+      "totalSourceFiles": 476,
+      "coverageRatio": 0.0966,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "auth",
@@ -636,8 +635,8 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 235,
-          "withLogger": 30
+          "count": 238,
+          "withLogger": 31
         },
         {
           "subdomain": "antigravity",

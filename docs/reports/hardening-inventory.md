@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1233 |
-| Sync fs files affected (all) | 119 |
-| Sync fs occurrences (runtime hotpaths) | 541 |
-| Sync fs files affected (runtime hotpaths) | 60 |
+| Sync fs occurrences (all) | 1248 |
+| Sync fs files affected (all) | 120 |
+| Sync fs occurrences (runtime hotpaths) | 556 |
+| Sync fs files affected (runtime hotpaths) | 61 |
 | Legacy shim markers | 180 |
 | Legacy shim files affected | 62 |
 
@@ -26,7 +26,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/status/answer-signing.ts` | 18 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync |
 | `src/web-server/status/writer-lock.ts` | 18 | closeSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync |
 | `src/cliproxy/accounts/registry.ts` | 17 | existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync |
-| `src/web-server/services/account-refresh-settings.ts` | 15 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync |
+| `src/web-server/rust-service-lifecycle.ts` | 15 | existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync |
 
 ## Top Legacy Shim Marker Files
 
@@ -53,11 +53,11 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 29.1% (212/729) |
+| typed-error adoption (typed/total throws) | 29.2% (213/730) |
 | typed-error adoption (P4 locked subdomains) | 100.0% (3/3), target 40% |
 | hotpath console.error/warn occurrences | 57 (226 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 14 |
-| files with createLogger | 45/473 |
+| files with createLogger | 46/476 |
 | subdomains with zero createLogger | 20 (antigravity, auth, bin, cliproxy, cliproxy/accounts, cliproxy/ai-providers, cliproxy/auth, cliproxy/binary, cliproxy/config, cliproxy/proxy, cliproxy/services, cliproxy/types, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 66 |
 | files > 600 LOC | 29 |
