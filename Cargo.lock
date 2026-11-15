@@ -9,6 +9,7 @@ dependencies = [
  "aac-config",
  "aac-core",
  "aac-protocol",
+ "aac-providers",
  "aac-status",
  "aac-transport",
  "aac-usage",
@@ -83,6 +84,7 @@ dependencies = [
  "aac-core",
  "aac-diag",
  "aac-files",
+ "aac-providers",
  "aac-status",
  "aac-store",
  "aac-views",
@@ -103,6 +105,13 @@ version = "0.1.0"
 dependencies = [
  "aac-core",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aac-providers"
+version = "0.1.0"
+dependencies = [
  "serde_json",
 ]
 
@@ -167,6 +176,7 @@ version = "0.1.0"
 dependencies = [
  "aac-api",
  "aac-core",
+ "aac-providers",
  "aac-status",
  "serde",
  "serde_json",

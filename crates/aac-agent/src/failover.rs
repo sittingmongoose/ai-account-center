@@ -12,18 +12,6 @@ use std::{
 
 const CORE_CAP: usize = 1_048_576;
 const DESKTOP_CAP: usize = 65_536;
-const PROVIDERS: &[&str] = &[
-    "codex",
-    "claude",
-    "antigravity",
-    "muse",
-    "cursor",
-    "kimi-code",
-    "qwen",
-    "zai",
-    "opencode-go",
-    "opencode-wallet",
-];
 
 fn matches(pattern: &str, value: &str) -> bool {
     regex::Regex::new(pattern).is_ok_and(|re| re.is_match(value))
@@ -846,7 +834,9 @@ fn additional(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
         "kimi-code" => &["kimi-for-coding", "kimi-code"],
         "zai" => &["zai", "zai-coding-plan"],
         "qwen" => &["alibaba-token-plan"],
-        _ => &["opencode-go"],
+        "opencode-go" => &["opencode-go"],
+        // A table row with no reader here (DESIGN-M3-COMPLETE 2.4): decline, never another's.
+        _ => return proof_rejected(),
     };
     let auth = read(
         &home.join(".local/share/opencode/auth.json"),
@@ -939,7 +929,12 @@ fn collect(args: &Value) -> Value {
     if !proof::proven(args) || args["version"] != 1 || args["action"] != "inventory" {
         return proof::fallback();
     }
-    let Some(provider) = args["provider"].as_str().filter(|p| PROVIDERS.contains(p)) else {
+    // Every provider row has a failover inventory (config/tables/providers.json); an id the
+    // table does not list delegates, and so does a row with no reader below.
+    let Some(provider) = args["provider"]
+        .as_str()
+        .filter(|p| aac_providers::provider(p).is_some())
+    else {
         return proof::fallback();
     };
     // No native keychain/DPAPI/platform-variant store has been qualified here.
@@ -982,4 +977,50 @@ fn collect(args: &Value) -> Value {
 }
 pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
     Ok(proof::scope(|| collect(args)))
+}
+
+#[cfg(test)]
+mod table_tests {
+    //! Failover's providers are the shared table's rows. A row with no reader here declines to
+    //! Python: it never falls through to another provider's credentials (DESIGN-M3-COMPLETE 2.4).
+    use super::*;
+
+    fn inventory(provider: &str, home: &Path) -> Value {
+        run(&json!({
+            "version": 1,
+            "action": "inventory",
+            "provider": provider,
+            "homeDir": home.to_string_lossy(),
+            "ccsDir": home.join(".ccs").to_string_lossy(),
+        }))
+        .expect("inventory")
+    }
+
+    #[test]
+    fn synthetic_failover_row_declines_instead_of_reading_opencode_go() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let home = tempfile::tempdir().expect("home");
+        let store = home.path().join(".local/share/opencode");
+        fs::create_dir_all(&store).expect("store");
+        fs::create_dir_all(home.path().join(".ccs")).expect("ccs");
+        fs::write(
+            store.join("auth.json"),
+            r#"{"opencode-go":{"type":"api","key":"sk-fixture-opencode-go"}}"#,
+        )
+        .expect("auth");
+        let control = inventory("opencode-go", home.path());
+        assert!(
+            control["candidates"]
+                .as_array()
+                .is_some_and(|c| !c.is_empty()),
+            "the fixture holds an OpenCode Go key: {control}"
+        );
+        assert_eq!(inventory("zz-synthetic", home.path()), proof::fallback());
+        assert_eq!(
+            inventory("retired-provider", home.path()),
+            proof::fallback()
+        );
+    }
 }

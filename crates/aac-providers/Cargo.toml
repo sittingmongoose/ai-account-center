@@ -1,0 +1,23 @@
+[package]
+name = "aac-providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The shared provider, tool and host tables (config/tables), as typed constants"
+
+[features]
+# Tests only: the tables plus one synthetic provider and tool (build.rs `add_synthetic`), so each
+# consumer's `synthetic_*` test shows the new row appears there or is declined. Never in a release.
+synthetic-table = []
+
+[build-dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+[lints]
+workspace = true

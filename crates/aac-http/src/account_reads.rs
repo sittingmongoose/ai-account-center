@@ -9,6 +9,9 @@ use serde_json::{Map, Value, json};
 type Object = Map<String, Value>;
 use crate::private_file::{Capped, read_capped};
 use std::{fs, os::unix::fs::MetadataExt, path::Path};
+// The dashboard providers, usage-log tools, field-mapping keys and the frozen legacy storage
+// hosts are the shared tables' (config/tables, `aac-providers`), which TS reads too.
+use aac_providers::{LEGACY_STORAGE_HOSTS, USAGE_LOG_FIELD_MAPPING, is_dashboard_provider};
 
 const VISIBILITY_FILE: &str = "account-visibility.json";
 const MAX_VISIBILITY_BYTES: u64 = 32 * 1024;
@@ -16,24 +19,6 @@ const PREFERENCES_FILE: &str = "dashboard-preferences.json";
 const EXTRA_SOURCES_FILE: &str = "dashboard-preferences-extra-sources.json";
 const MAX_PREFERENCES_BYTES: u64 = 64 * 1024;
 pub(crate) const COMPUTERS: &str = include_str!("../../../web-dashboard/public/computers.json");
-
-/// `DASHBOARD_PROVIDER_IDS` (src/web-server/services/dashboard-provider-table.ts).
-const PROVIDERS: &[&str] = &[
-    "claude",
-    "codex",
-    "antigravity",
-    "cursor",
-    "muse",
-    "kimi-code",
-    "qwen",
-    "zai",
-    "opencode-go",
-];
-/// `USAGE_LOG_TOOLS` (dashboard-preferences.ts).
-const USAGE_LOG_TOOLS: &[&str] = &["omp", "muse", "zcode", "claude-code", "codex", "jsonl"];
-/// `LEGACY_STORAGE_HOSTS` (dashboard-hosts.ts): an immutable compatibility allowlist.
-const LEGACY_STORAGE_HOSTS: &[&str] = &["ubuntu", "mac", "windows", "nas1"];
-const MAPPING_KEYS: &[&str] = &["timestamp", "model", "inputTokens", "outputTokens", "cost"];
 
 /// IANA zones Rust admits for the saved display zone. `tests/spec/account-read-parity.ts`
 /// requires the running TS `isAccountAnalyticsTimeZone` to accept every one; any other zone
@@ -182,7 +167,9 @@ fn known_providers(value: &Value) -> Option<Vec<Value>> {
     Some(
         values
             .iter()
-            .filter(|v| v.as_str().is_some_and(|id| PROVIDERS.contains(&id)))
+            // TS `filter(isDashboardProviderId)`, from the same table: an id it does not list
+            // is dropped by both readers alike.
+            .filter(|v| v.as_str().is_some_and(is_dashboard_provider))
             .cloned()
             .collect(),
     )
@@ -351,7 +338,7 @@ fn usage_log_source(value: &Value, allow_remote_jsonl: bool, hosts: &[(String, S
             && (b[2] == b'\\' || b[2] == b'/')
     };
     if !source_id(id)
-        || !USAGE_LOG_TOOLS.contains(&tool)
+        || !aac_providers::is_usage_log_tool(tool)
         || length == 0
         || length > 1024
         || path.contains('\0')
@@ -368,16 +355,18 @@ fn usage_log_source(value: &Value, allow_remote_jsonl: bool, hosts: &[(String, S
         return false;
     };
     let names: Vec<&str> = mapping.keys().map(String::as_str).collect();
-    if names.is_empty() || names.len() > MAPPING_KEYS.len() {
+    if names.is_empty() || names.len() > USAGE_LOG_FIELD_MAPPING.len() {
         return false;
     }
-    if mapping.get("timestamp").and_then(Value::as_str).is_none()
-        || mapping.get("model").and_then(Value::as_str).is_none()
+    if USAGE_LOG_FIELD_MAPPING
+        .iter()
+        .filter(|key| key.required)
+        .any(|key| mapping.get(key.name).and_then(Value::as_str).is_none())
     {
         return false;
     }
     names.iter().all(|name| {
-        MAPPING_KEYS.contains(name)
+        USAGE_LOG_FIELD_MAPPING.iter().any(|key| key.name == *name)
             && mapping
                 .get(*name)
                 .and_then(Value::as_str)
@@ -551,5 +540,74 @@ pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
             aac_views::analytics::compose(envelope).ok()
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    //! The shared tables reach these readers (DESIGN-M3-COMPLETE 2.4). Under
+    //! `--features aac-providers/synthetic-table` the synthetic rows must appear here.
+    use super::*;
+
+    #[test]
+    fn synthetic_provider_reaches_the_visibility_filter() {
+        let list = json!([
+            "claude",
+            "zz-synthetic",
+            "retired-provider",
+            "opencode-wallet"
+        ]);
+        let kept = known_providers(&list).expect("all strings");
+        let expected = if aac_providers::SYNTHETIC {
+            json!(["claude", "zz-synthetic"])
+        } else {
+            json!(["claude"])
+        };
+        assert_eq!(Value::Array(kept), expected);
+    }
+
+    #[test]
+    fn synthetic_usage_log_tool_reaches_the_source_rule() {
+        let hosts = vec![("ubuntu".to_owned(), "linux".to_owned())];
+        let source = |tool: &str| json!({"id": "fixture", "host": "ubuntu", "tool": tool, "path": "/var/log/fixture"});
+        assert!(usage_log_source(&source("codex"), false, &hosts));
+        assert!(!usage_log_source(&source("retired-tool"), false, &hosts));
+        assert_eq!(
+            usage_log_source(&source("zz-log"), false, &hosts),
+            aac_providers::SYNTHETIC
+        );
+    }
+
+    #[test]
+    fn field_mapping_needs_the_required_keys_only() {
+        let hosts = vec![("ubuntu".to_owned(), "linux".to_owned())];
+        let source = |mapping: Value| json!({"id": "fixture", "host": "ubuntu", "tool": "jsonl", "path": "/var/log/fixture", "fieldMapping": mapping});
+        assert!(usage_log_source(
+            &source(json!({"timestamp": "ts", "model": "m"})),
+            false,
+            &hosts
+        ));
+        assert!(usage_log_source(
+            &source(
+                json!({"timestamp": "ts", "model": "m", "inputTokens": "a", "outputTokens": "b", "cost": "c"})
+            ),
+            false,
+            &hosts
+        ));
+        assert!(!usage_log_source(
+            &source(json!({"timestamp": "ts"})),
+            false,
+            &hosts
+        ));
+        assert!(!usage_log_source(
+            &source(json!({"model": "m"})),
+            false,
+            &hosts
+        ));
+        assert!(!usage_log_source(
+            &source(json!({"timestamp": "ts", "model": "m", "extra": "x"})),
+            false,
+            &hosts
+        ));
     }
 }

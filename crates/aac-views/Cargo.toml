@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 aac-api.workspace = true
 aac-core.workspace = true
+aac-providers.workspace = true
 aac-status = { path = "../../native/aac-status", default-features = false }
 serde.workspace = true
 # preserve_order: objects keep JavaScript insertion order; float_roundtrip: every number parses

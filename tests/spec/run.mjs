@@ -6,6 +6,7 @@ for (const [program, args] of [
   ['python3', ['tests/spec/parsers.py']],
   ['node', ['tests/spec/parser-ts.mjs']],
   ['node', ['tests/spec/inventory.mjs']],
+  ['bun', ['test', 'tests/spec/tables.test.ts']],
   [
     'bun',
     [

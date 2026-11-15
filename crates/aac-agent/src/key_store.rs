@@ -30,7 +30,7 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
     let provider = args["provider"].as_str().ok_or_else(refused)?;
     let id = args["keyId"].as_str().ok_or_else(refused)?;
     if !matches!(action, "put" | "delete")
-        || !matches!(provider, "kimi-code" | "zai" | "opencode-go")
+        || !aac_providers::provider(provider).is_some_and(|p| p.key_store)
         || id.len() != 8
         || !id
             .bytes()

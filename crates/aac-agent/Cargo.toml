@@ -12,6 +12,7 @@ parity-fixtures = []
 [dependencies]
 aac-core.workspace = true
 aac-protocol.workspace = true
+aac-providers.workspace = true
 aac-usage = { path = "../../native/aac-usage" }
 aac-status = { path = "../../native/aac-status", default-features = false }
 tempfile.workspace = true

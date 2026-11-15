@@ -2,6 +2,9 @@
 mod parse;
 use crate::{files, proof};
 use aac_core::{Cause, Failure, UtcMs};
+// Plan-common's retry policy, including its invalid-header default, is the table's
+// `planRetryAfter`; the plan providers and their labels are its `quota: true` rows.
+use aac_providers::{PLAN_RETRY_AFTER, ProviderId};
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -9,14 +12,6 @@ use std::{
 };
 
 const CAP: usize = 1_048_576;
-const PROVIDERS: [(&str, &str); 4] = [
-    ("kimi-code", "Kimi Code"),
-    ("qwen", "Qwen Token Plan"),
-    ("zai", "Z.ai Coding Plan"),
-    ("opencode-go", "OpenCode Go"),
-];
-// Plan-common's retry policy is declared once, including its invalid-header default.
-const RETRY_BOUNDS: (u64, u64, u64) = (30, 86400, 600);
 struct Response {
     status: u16,
     retry: Option<String>,
@@ -271,8 +266,11 @@ fn retry(value: Option<&str>, now: f64) -> f64 {
                 }
             }
         })
-        .unwrap_or(RETRY_BOUNDS.2 as f64);
-    seconds.clamp(RETRY_BOUNDS.0 as f64, RETRY_BOUNDS.1 as f64)
+        .unwrap_or(PLAN_RETRY_AFTER.default_s as f64);
+    seconds.clamp(
+        PLAN_RETRY_AFTER.floor_s as f64,
+        PLAN_RETRY_AFTER.ceiling_s as f64,
+    )
 }
 async fn fetch(
     client: &impl Http,
@@ -400,9 +398,17 @@ async fn run_inner(args: &Value) -> Result<Value, Failure> {
         return Ok(proof::fallback());
     }
     let provider = args["provider"].as_str().unwrap_or("");
-    let Some((_, label)) = PROVIDERS.iter().find(|(p, _)| *p == provider) else {
+    let Some(row) = aac_providers::provider(provider).filter(|p| p.quota) else {
         return Err(Failure::new(Cause::Refused, "unsupported quota provider"));
     };
+    // The plan readers below; a `quota: true` row without one declines to Python.
+    if !matches!(
+        row.id,
+        ProviderId::KimiCode | ProviderId::Qwen | ProviderId::Zai | ProviderId::OpencodeGo
+    ) {
+        return Ok(proof::fallback());
+    }
+    let label = row.label;
     let platform = args["platform"]
         .as_str()
         .unwrap_or(if cfg!(target_os = "macos") {
@@ -740,6 +746,42 @@ async fn qwen(client: &impl Http, secret: &str, now: i64) -> Value {
         }
     }
     proof::scope(|| parse::qwen(&payloads))
+}
+
+#[cfg(test)]
+mod table_tests {
+    //! Plan providers come from the shared table (`quota: true`); a row the readers do not
+    //! implement declines to Python, an id the table does not list is refused as before.
+    use super::*;
+
+    fn ask(provider: &str) -> Result<Value, Failure> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        runtime.block_on(run_inner(
+            &json!({"provider": provider, "home": "/nonexistent-aac-l4"}),
+        ))
+    }
+
+    #[test]
+    fn synthetic_quota_row_declines_and_unknown_ids_are_refused() {
+        assert!(ask("retired-provider").is_err());
+        assert!(ask("claude").is_err(), "a provider without quota: true");
+        let synthetic = ask("zz-synthetic");
+        if aac_providers::SYNTHETIC {
+            assert_eq!(synthetic.ok(), Some(proof::fallback()));
+        } else {
+            assert!(synthetic.is_err());
+        }
+    }
+
+    #[test]
+    fn retry_after_policy_is_the_tables() {
+        assert_eq!(retry(None, 0.0), 600.0);
+        assert_eq!(retry(Some("5"), 0.0), 30.0);
+        assert_eq!(retry(Some("999999"), 0.0), 86400.0);
+        assert_eq!(retry(Some("120"), 0.0), 120.0);
+    }
 }
 
 #[cfg(test)]

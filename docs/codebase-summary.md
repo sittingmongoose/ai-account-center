@@ -34,6 +34,16 @@ there only when saved as `platform: "ubuntu"` plus the Nas1 `sshHost`. The
 [computers table](system-architecture/index.md#computers) lists what runs where
 and names the alias.
 
+Providers, Analytics and usage-log tools, and the frozen storage host allowlist
+live in [config/tables/](../config/tables/) (`providers.json`, `tools.json`,
+`hosts.json`). TypeScript reads them through
+[src/shared/tables.ts](../src/shared/tables.ts). The Rust crate
+[aac-providers](../crates/aac-providers/) generates typed constants from the same
+files, and its consumers hold no list literals of their own. To add a provider or
+tool, edit the JSON. `tests/spec/tables.test.ts`, `cargo test -p aac-providers` and
+`tsc` then name each hand list (Python helpers, page JS, Leptos, native modules)
+and each typed union that still needs the new row.
+
 The root TypeScript build compiles `src/` into `dist/` and
 [bundles](../scripts/build-codex-update-runtime.js) the Codex stop/start runtime
 into `dist/app-updates/`; the update helpers carry that bundle to Linux hosts
