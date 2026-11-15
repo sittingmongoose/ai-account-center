@@ -77,7 +77,9 @@ const { AgentReportsReader } = load('web-server/status/agent-reports-reader.js')
 const { QuotaReportReader } = load('web-server/status/quota-report.js');
 const { statusFedService } = load('web-server/status/status-feed.js');
 const { pushRustFeedText } = load('web-server/rust-service-transport.js');
-const helpers = await import(path.join(repo, 'tests/unit/web-server/status/status-test-helpers.ts'));
+const helpers = await import(
+  path.join(repo, 'tests/unit/web-server/status/status-test-helpers.ts')
+);
 // The shared quota fixture (read-view-fixtures.ts imports without extensions, which Node's own loader refuses).
 const quotaDocument = (fields = {}) => {
   const made = spawnSync(
@@ -172,7 +174,10 @@ function app(rust) {
     res.locals.rustService = rust;
     next();
   });
-  instance.use('/api/status', createStatusRouter(() => owner));
+  instance.use(
+    '/api/status',
+    createStatusRouter(() => owner)
+  );
   return new Promise((resolve) => {
     const server = instance.listen(0, '127.0.0.1', () =>
       resolve(`http://127.0.0.1:${server.address().port}`)
@@ -221,7 +226,8 @@ try {
     const b = await get(fedUrl);
     const served = fedServed - before === 1;
     report.steps.push({ name, status: b.status, bytes: b.body.length, served });
-    if (!same(a, b)) report.failures.push(`${name}: the fed server answered other bytes or headers`);
+    if (!same(a, b))
+      report.failures.push(`${name}: the fed server answered other bytes or headers`);
     if (mustServe && !served) report.failures.push(`${name}: the fed path did not serve`);
     return b;
   }
@@ -238,7 +244,10 @@ try {
     share,
     'mac.second',
     'thread.json',
-    helpers.threadDoc('mac.second', { state: 'blocked', writtenAt: new Date(clock - 5000).toISOString() })
+    helpers.threadDoc('mac.second', {
+      state: 'blocked',
+      writtenAt: new Date(clock - 5000).toISOString(),
+    })
   );
   await owner.scanReports();
   await step('a new report scanned');

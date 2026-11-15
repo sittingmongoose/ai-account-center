@@ -180,7 +180,11 @@ function collected(data: unknown, now: number) {
     asOf,
     error: chance(0.2) ? { reason: pick(WORDS) || 'Down.', since: asOf - 60_000 } : null,
     ...(chance(0.2)
-      ? { problems: [{ item: pick(['disk', 'cpu', 'memory']), reason: 'Fuzz problem.', since: asOf }] }
+      ? {
+          problems: [
+            { item: pick(['disk', 'cpu', 'memory']), reason: 'Fuzz problem.', since: asOf },
+          ],
+        }
       : {}),
   };
 }
@@ -271,10 +275,16 @@ function caseOf(base: { reports: any; quota: any }) {
   const reports = structuredClone(base.reports);
   if (chance(0.1)) reports.state = pick(['missing', 'error']);
   if (chance(0.2))
-    reports.problems.push({ file: 'writers/fuzz/thread.json', reason: pick(WORDS) || 'Bad.', since: now - 6e4 });
+    reports.problems.push({
+      file: 'writers/fuzz/thread.json',
+      reason: pick(WORDS) || 'Bad.',
+      since: now - 6e4,
+    });
   const quota = structuredClone(base.quota);
   if (quota.good && chance(0.6))
-    for (const period of Object.values(quota.good.doc.streamEstimates ?? quota.good.doc.periods ?? {}) as any[])
+    for (const period of Object.values(
+      quota.good.doc.streamEstimates ?? quota.good.doc.periods ?? {}
+    ) as any[])
       for (const row of period?.rows ?? []) if (chance(0.5)) row.value = pick(NUMBERS);
   const ids = ['vm', 'mac', 'windows', 'nas1', 'alexis'];
   const input: any = {
@@ -356,7 +366,9 @@ function firstDifference(a: unknown, b: unknown, at = '$'): string {
 const service = new RustService('on');
 const report: Record<string, any> = { seeds: {}, differences: [] as string[] };
 try {
-  await service.start(process.env.AAC_RUST_SERVICE_BINARY ?? path.join(root, 'dist/native/aac-http'));
+  await service.start(
+    process.env.AAC_RUST_SERVICE_BINARY ?? path.join(root, 'dist/native/aac-http')
+  );
   const boot = JSON.parse(fs.readFileSync(path.join(ccs, 'run/aac-http.json'), 'utf8'));
   const active = new Set<import('node:http').ClientRequest>();
   for (const seed of seeds) {
@@ -404,7 +416,9 @@ try {
   assert.deepEqual(report.differences, [], 'no fuzzed Status case differs from TS');
   const served = Object.values(report.seeds).reduce((n: number, c: any) => n + c.fedServed, 0);
   assert.ok(served > 0, 'the fuzz serves cases through the fed path');
-  console.log(`[OK] status-fuzz: ${seeds.length} seeds, ${served} fed answers byte-equal, 0 differences`);
+  console.log(
+    `[OK] status-fuzz: ${seeds.length} seeds, ${served} fed answers byte-equal, 0 differences`
+  );
 } finally {
   service.stop();
   fs.rmSync(home, { recursive: true, force: true });

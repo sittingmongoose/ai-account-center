@@ -189,6 +189,11 @@ pub fn s(v: &V) -> &str {
 pub fn array(v: &V) -> Vec<V> {
     v.as_array().cloned().unwrap_or_default()
 }
+/// [`array`] without the copy: the rows of an array, or none. For rows that are only read (R2: a per-row copy of
+/// every card or thread made the large share's view take 170 ms).
+pub fn rows(v: &V) -> &[V] {
+    v.as_array().map(Vec::as_slice).unwrap_or(&[])
+}
 pub fn number(v: &V) -> Option<f64> {
     v.as_f64().filter(|n| n.is_finite())
 }

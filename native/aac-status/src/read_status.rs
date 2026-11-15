@@ -1,6 +1,8 @@
 //! Status view composition over collected snapshots. Collectors and guarded write protocols keep
 //! their owners; every value and sentence in the read response is composed here.
-use crate::read_context::{Context, Envelope, age, age_of, array, js_whitespace, number, plural, s};
+use crate::read_context::{
+    Context, Envelope, age, age_of, array, js_whitespace, number, plural, rows, s,
+};
 use aac_num::{ecma, view};
 use serde_json::{Value as V, json};
 use std::collections::{HashMap, HashSet};
@@ -38,6 +40,23 @@ struct Inputs<'a> {
     data: Data<'a>,
     ctx: Context,
     now: i64,
+    /// The writers of open question, judgement and action cards, found once per view (`stale_thread` asks for
+    /// every thread and every card's asker).
+    owner_cards: std::cell::OnceCell<OwnerCards>,
+}
+/// Writer values, compared as `Value`s compare: strings by text, anything else by value.
+#[derive(Default)]
+struct OwnerCards {
+    strings: HashSet<String>,
+    other: Vec<V>,
+}
+impl OwnerCards {
+    fn has(&self, writer: &V) -> bool {
+        match writer.as_str() {
+            Some(text) => self.strings.contains(text),
+            None => self.other.contains(writer),
+        }
+    }
 }
 impl Inputs<'_> {
     fn at(&self, v: &V) -> Option<i64> {
@@ -61,11 +80,25 @@ impl Inputs<'_> {
             return Some(true);
         }
         let owner = row["doc"]["blockedOn"]["kind"] == "owner"
-            || array(&self.data["reports"]["cards"]).iter().any(|c| {
-                c["writer"] == row["writer"]
-                    && c["doc"]["state"] == "open"
-                    && ["question", "judgement", "action"].contains(&s(&c["doc"]["kind"]))
-            });
+            || self
+                .owner_cards
+                .get_or_init(|| {
+                    let mut found = OwnerCards::default();
+                    for c in rows(&self.data["reports"]["cards"]) {
+                        if c["doc"]["state"] == "open"
+                            && ["question", "judgement", "action"].contains(&s(&c["doc"]["kind"]))
+                        {
+                            match c["writer"].as_str() {
+                                Some(text) => {
+                                    found.strings.insert(text.to_owned());
+                                }
+                                None => found.other.push(c["writer"].clone()),
+                            }
+                        }
+                    }
+                    found
+                })
+                .has(&row["writer"]);
         if owner {
             return Some(false);
         }
@@ -298,8 +331,8 @@ fn reports_source(i: &Inputs) -> Option<V> {
                 "ok",
                 format!(
                     "{} and {} read {}.{limits}",
-                    plural(array(&r["threads"]).len(), "thread"),
-                    plural(array(&r["cards"]).len(), "card"),
+                    plural(rows(&r["threads"]).len(), "thread"),
+                    plural(rows(&r["cards"]).len(), "card"),
                     i.clock(at?)
                 ),
             )
@@ -324,8 +357,8 @@ fn thread_name(row: &V) -> String {
 fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
     let mut rows = Vec::new();
     let mut reporting = HashSet::new();
-    for row in array(&i.data["reports"]["threads"]) {
-        let name = thread_name(&row);
+    for row in crate::read_context::rows(&i.data["reports"]["threads"]) {
+        let name = thread_name(row);
         reporting.insert(name.clone());
         reporting.insert(s(&row["writer"]).split_once('.')?.1.to_owned());
         let at = i.seen(&row)?;
@@ -338,8 +371,9 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
         let d = &row["doc"];
         rows.push(json!({"name":name,"writer":row["writer"],"machine":s(&row["writer"]).split_once('.')?.0,"project":d["project"],"stream":d["stream"],"state":d["state"],"doing":d["doing"],"blockedOn":d["blockedOn"],"progress":d["progress"],"model":d["agent"]["model"],"effort":d["agent"]["effort"],"account":d["agent"]["account"],"source":"report","lastSeen":i.iso(Some(at)),"ageSeconds":i.age(Some(at)),"stale":i.stale_thread(&row)?,"clockAheadSeconds":if ahead>120.0{json!(ecma::math_round(ahead))}else{V::Null},"problem":row["problem"]["reason"],"registrySource":null}));
     }
-    for thread in array(&i.data["registry"]["data"]) {
-        if reporting.contains(s(&thread["name"])) || array(&i.data["hiddenThreadNames"]).contains(&thread["name"]) {
+    let hidden = crate::read_context::rows(&i.data["hiddenThreadNames"]);
+    for thread in crate::read_context::rows(&i.data["registry"]["data"]) {
+        if reporting.contains(s(&thread["name"])) || hidden.contains(&thread["name"]) {
             continue;
         }
         let Some(at) = i.at(&thread["lastSeen"]) else {
@@ -405,7 +439,7 @@ fn completion(c: &V) -> Option<V> {
 }
 fn projects(i: &Inputs) -> Option<Vec<V>> {
     let mut groups: Vec<(String, V, Vec<V>)> = Vec::new();
-    let mut tasks = array(&i.data["reports"]["tasks"]);
+    let mut tasks: Vec<&V> = rows(&i.data["reports"]["tasks"]).iter().collect();
     tasks.sort_by(|a, b| {
         i.seen(b)
             .cmp(&i.seen(a))
@@ -437,7 +471,7 @@ fn projects(i: &Inputs) -> Option<Vec<V>> {
         let seen = i.seen(&row)?;
         groups[at].2.push(json!({"id":d["stream"],"label":d.get("streamLabel").filter(|v|!v.is_null()).unwrap_or(&d["stream"]),"owner":d["owner"],"goal":d["goal"],"writer":row["writer"],"board":i.board(&d["board"]),"source":"tasks","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":!row["problem"].is_null()||i.now-seen>86_400_000,"problem":row["problem"]["reason"],"counts":counts,"completion":completion(&counts)?,"items":items}));
     }
-    let mut threads = array(&i.data["reports"]["threads"]);
+    let mut threads: Vec<&V> = rows(&i.data["reports"]["threads"]).iter().collect();
     threads.sort_by_key(|r| std::cmp::Reverse(i.seen(r)));
     for row in threads {
         let d = &row["doc"];
@@ -482,6 +516,7 @@ pub fn compose(envelope: Envelope) -> Option<V> {
         data: Data::Whole(envelope.data),
         ctx: Context::new(envelope.presentation),
         now,
+        owner_cards: std::cell::OnceCell::new(),
     };
     let view = view(&i)?;
     i.ctx.valid().then_some(view)
@@ -506,6 +541,7 @@ pub fn compose_fed(
         data: Data::Parts(parts),
         ctx: Context::shared(facts, Some(now)),
         now: at,
+        owner_cards: std::cell::OnceCell::new(),
     };
     let view = view(&i);
     match view {
@@ -558,7 +594,7 @@ fn view(i: &Inputs) -> Option<V> {
     view["simlock"] = json!({"source":"simlock","capacity":i.data["simlock"]["data"].get("capacity").cloned().unwrap_or(json!([])),"leases":i.data["simlock"]["data"].get("leases").cloned().unwrap_or(json!([]))});
     view["usage"] = panels::usage(i, &usage_source)?;
     view["spend"] = spend::compose(i)?;
-    let mut view = crate::http_views::status(&view)?;
+    let mut view = crate::http_views::status_owned(view)?;
     view["headline"]["strip"] = strip::compose(&view)?;
     Some(view)
 }

@@ -71,7 +71,11 @@ export async function checkStatusFed(
   const expected = buildStatusView(input as never);
   const outcome = await statusFed(service, input);
   if (!outcome.served) return false;
-  assert.equal(outcome.bytes?.toString('utf8'), JSON.stringify(expected), `${label}: fed bytes differ`);
+  assert.equal(
+    outcome.bytes?.toString('utf8'),
+    JSON.stringify(expected),
+    `${label}: fed bytes differ`
+  );
   assert.equal(outcome.etag, revalidatedEtag(expected), `${label}: fed ETag differs`);
   return true;
 }
