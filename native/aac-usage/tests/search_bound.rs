@@ -113,3 +113,39 @@ fn deep_known_candidate_never_looks_complete() {
         "{answer}"
     );
 }
+
+// Big review Wonder L7: the depth cap marks partial only when it leaves an entry unread. An empty
+// folder past the cap (or one holding only names every walk skips) is a complete read, as in the
+// Python reference; a log past the cap is still partial.
+#[test]
+fn depth_cap_is_partial_only_when_it_leaves_an_entry_unread() {
+    let deep = |home: &Path| {
+        let mut folder = home.join(".codex/sessions");
+        for _ in 0..65 {
+            folder = folder.join("d");
+        }
+        folder
+    };
+    let partial = |home: &Path| scan(home, json!({}))["kinds"]["codex"]["partial"] == true;
+
+    let empty = tempfile::tempdir().unwrap();
+    write(&empty.path().join(".codex/sessions/rollout-fixture.jsonl"), &rollout());
+    fs::create_dir_all(deep(empty.path())).unwrap();
+    assert!(
+        !partial(empty.path()),
+        "an empty folder past the cap left nothing unread"
+    );
+
+    let skipped = tempfile::tempdir().unwrap();
+    write(
+        &skipped.path().join(".codex/sessions/rollout-fixture.jsonl"),
+        &rollout(),
+    );
+    fs::create_dir_all(deep(skipped.path()).join("node_modules")).unwrap();
+    assert!(!partial(skipped.path()), "a skipped name past the cap is never read");
+
+    let log = tempfile::tempdir().unwrap();
+    write(&log.path().join(".codex/sessions/rollout-fixture.jsonl"), &rollout());
+    write(&deep(log.path()).join("rollout-deep.jsonl"), &rollout());
+    assert!(partial(log.path()), "a log past the cap is unread");
+}
