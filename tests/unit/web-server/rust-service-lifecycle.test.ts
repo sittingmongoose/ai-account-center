@@ -91,6 +91,12 @@ afterEach(async () => {
       for (const name of fs.readdirSync(base, { withFileTypes: true }))
         if (name.name.includes(shortName(ccs)))
           fs.rmSync(path.join(base, name.name), { recursive: true, force: true });
+  // The shared /tmp/aac-<uid> folder goes too once empty (the lifecycle makes it again).
+  try {
+    fs.rmdirSync(`/tmp/aac-${process.getuid?.()}`);
+  } catch {
+    /* Absent, or another root's folder is in it. */
+  }
   process.env.CCS_HOME = saved.home;
   process.env.CCS_DIR = saved.dir;
   fs.rmSync(scratch, { recursive: true, force: true });
