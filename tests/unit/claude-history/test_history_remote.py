@@ -19,6 +19,14 @@ spec = importlib.util.spec_from_file_location('history_helper_fixture', SOURCE)
 h = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(h)
 
+class Ssh(unittest.TestCase):
+    def test_transcript_probe_refuses_host_key_updates(self):
+        text = SOURCE.read_text()
+        start = text.index("subprocess.run(['ssh'")
+        call = text[start:text.index('], input=', start)]
+        self.assertIn("'UpdateHostKeys=no'", call)
+
+
 class Fixtures(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='history-helper-fixture-')

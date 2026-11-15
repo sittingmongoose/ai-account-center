@@ -126,13 +126,14 @@ pub fn to_fixed(x: f64, places: u32) -> Option<String> {
 }
 
 /// `x.toPrecision(p)`: the `p`-digit `n` and exponent `e` for which `n × 10^(e-p+1) - x` is closest to zero on the
-/// exact value, the larger on a tie. Domain: all of binary64 with `1 <= p <= 100` (`RangeError` beyond is `None`).
+/// exact value, the larger on a tie. Domain: all of binary64. ECMA-262 checks finiteness before `RangeError`, so a
+/// non-finite `x` is `String(x)` for any `p`; a finite `x` with `p` outside `1..=100` is `None`.
 pub fn to_precision(x: f64, p: u32) -> Option<String> {
-    if !(1..=100).contains(&p) {
-        return None;
-    }
     if !x.is_finite() {
         return Some(to_string(x));
+    }
+    if !(1..=100).contains(&p) {
+        return None;
     }
     let p = p as i32;
     let sign = if x < 0.0 { "-" } else { "" };
@@ -313,6 +314,18 @@ mod tests {
         assert_eq!(to_precision(-1.25, 2).as_deref(), Some("-1.3"));
         assert_eq!(to_precision(123.0, 3).as_deref(), Some("123"));
         assert_eq!(to_precision(5.0, 1).as_deref(), Some("5"));
+        assert_eq!(to_precision(f64::NAN, 0).as_deref(), Some("NaN"));
+        assert_eq!(
+            to_precision(f64::INFINITY, 101).as_deref(),
+            Some("Infinity")
+        );
+        assert_eq!(
+            to_precision(-f64::INFINITY, 0).as_deref(),
+            Some("-Infinity")
+        );
+        assert_eq!(to_precision(1.0, 0), None);
+        assert_eq!(to_fixed(-0.3, 1).as_deref(), Some("-0.3"));
+        assert_eq!(to_fixed(-1e-9, 1).as_deref(), Some("-0.0"));
         assert_eq!(
             precision_value(-0.0, 4).map(f64::is_sign_positive),
             Some(true)

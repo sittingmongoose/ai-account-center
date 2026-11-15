@@ -300,6 +300,15 @@ Rust build and starts its servers inside the capture's closed boundary
 `--home` (R1) measures Home instead: off `GET /api/accounts/dashboard`, D7's Home and the fed Home in
 the same rounds, with the design's server-time and RSS bars evaluated in the report.
 
+## L5: agent lifecycle
+
+`tests/spec/agent/lifecycle.mjs` is not in `run.mjs`. It needs the Nas1-built `aac-agent` and
+`aac-http` plus a built `dist/`, and it is documented next to `tests/spec/agent/transport.py`:
+
+```sh
+node tests/spec/agent/lifecycle.mjs <aac-agent> <aac-http>
+```
+
 ## R1: Home, fed
 
 `home-read-parity.mjs` (run by `run.mjs` after the lifecycle) answers `GET /api/views/home` through the

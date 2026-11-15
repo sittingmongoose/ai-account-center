@@ -209,7 +209,8 @@ describe('fixed app update service', () => {
       heldVersion: '1.3.0',
       updateAttempted: false,
     });
-    expect(value[0].message).toContain('waiting for a switching review');
+    expect(value[0].message).toContain('waiting for a review');
+    expect(value[0].message).not.toContain('switching');
     // Only the Antigravity CLI is ever held.
     expect(value[1].status).toBe('failed');
     expect(value[1].heldVersion).toBeUndefined();
@@ -250,7 +251,8 @@ describe('fixed app update service', () => {
       'ubuntu'
     )[0];
     expect(unreviewed).toMatchObject({ status: 'updated', version: '1.3.1' });
-    expect(unreviewed.message).toContain('switching is paused');
+    expect(unreviewed.message).toContain('stays paused');
+    expect(unreviewed.message).not.toContain('switching');
     expect(unreviewed.heldVersion).toBeUndefined();
   });
   it('names a stopped or paused Antigravity runtime instead of a generic update failure', () => {
@@ -632,7 +634,11 @@ describe('fixed app update service', () => {
     expect(events).not.toContain('run:mac');
     expect(events.indexOf('sync:windows')).toBeLessThan(events.indexOf('run:windows'));
     expect(events.indexOf('sync:nas1')).toBeLessThan(events.indexOf('run:nas1'));
-    expect(events.filter((event) => event.startsWith('sync:')).sort()).toEqual(DASHBOARD_HOSTS.filter(id => id !== 'ubuntu').map(id => `sync:${id}`).sort());
+    expect(events.filter((event) => event.startsWith('sync:')).sort()).toEqual(
+      DASHBOARD_HOSTS.filter((id) => id !== 'ubuntu')
+        .map((id) => `sync:${id}`)
+        .sort()
+    );
     expect(events).not.toContain('sync:ubuntu');
     expect(service.getStatus().job!.state).toBe('failed');
     expect(

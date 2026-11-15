@@ -94,10 +94,16 @@ fn c_round(x: f64) -> f64 {
     }
 }
 
+/// Years `datetime.fromtimestamp` accepts on Windows (`gmtime_s` raises outside this). Linux and macOS accept
+/// years 1 to 9999. Do not add a caller outside this range: the helpers run on Windows too.
+pub const WINDOWS_FROMTIMESTAMP_YEARS: core::ops::RangeInclusive<i64> = 1970..=3000;
+
 /// The seconds and microseconds `datetime.fromtimestamp(t, timezone.utc)` holds for a float `t`: CPython's
 /// `_PyTime_ObjectToTimeval(t, ROUND_HALF_EVEN)`, which splits `t` with `modf`, scales the fraction by 1e6 in
 /// binary64, rounds it half-even and carries a full second. Domain: finite `t` with `|t| < 2^53` whose second falls
-/// in years 1 to 9999 (outside it Python raises: `None`).
+/// in years 1 to 9999 on Linux and macOS (outside it Python raises: `None`). Windows CPython uses
+/// `gmtime_s`, which raises before 1970 and after 3000 ([`WINDOWS_FROMTIMESTAMP_YEARS`]). Sign-in
+/// (2001–2286) and reset (2000–2200) stay inside that narrower range.
 pub fn fromtimestamp(t: f64) -> Option<(i64, u32)> {
     if !t.is_finite() || crate::abs(t) >= 9_007_199_254_740_992.0 {
         return None;
@@ -140,7 +146,8 @@ fn utc_iso(seconds: i64, micros: u32, millis: bool) -> String {
 
 /// `datetime.datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="milliseconds")` with `Z`
 /// (`signin_expiry.py` `iso`). Python divides in binary64 and rounds to the microsecond first, so some far-future
-/// milliseconds print as the one before (8796093022210 gives `.209Z`). Domain: `|ms| < 2^53` in years 1 to 9999.
+/// milliseconds print as the one before (8796093022210 gives `.209Z`). Domain: `|ms| < 2^53` in years 1 to 9999
+/// on Linux and macOS. Windows raises outside [`WINDOWS_FROMTIMESTAMP_YEARS`]; today's callers do not.
 pub fn iso_millis(ms: i64) -> Option<String> {
     if ms.unsigned_abs() >= 1 << 53 {
         return None;
@@ -158,7 +165,7 @@ pub fn iso_seconds_of_timestamp(t: f64) -> Option<(String, i64)> {
 }
 
 /// A whole UTC second written `YYYY-MM-DDTHH:MM:SSZ` (`isoformat(timespec="seconds")` with `Z`). Domain: years 1 to
-/// 9999.
+/// 9999 on Linux and macOS. Windows raises outside [`WINDOWS_FROMTIMESTAMP_YEARS`].
 pub fn iso_seconds(seconds: i64) -> Option<String> {
     let year = civil::civil_from_days(seconds.div_euclid(86_400)).0;
     (1..=9999)
@@ -257,6 +264,11 @@ mod tests {
             Some("2026-01-01T00:00:00.000Z")
         );
         assert_eq!(iso_millis(-1).as_deref(), Some("1969-12-31T23:59:59.999Z"));
+        assert_eq!(*WINDOWS_FROMTIMESTAMP_YEARS.start(), 1970);
+        assert_eq!(*WINDOWS_FROMTIMESTAMP_YEARS.end(), 3000);
+        for year in [2000, 2001, 2200, 2286] {
+            assert!(WINDOWS_FROMTIMESTAMP_YEARS.contains(&year), "{year}");
+        }
         assert_eq!(
             parse_z_seconds("2026-01-01T00:00:00Z"),
             Some((1_767_225_600, 2026))

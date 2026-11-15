@@ -49,6 +49,8 @@ const slowTests = [
   'tests/unit/web-server/rust-service-lifecycle.test.ts',
   // Binds loopback ports to compare the view writers through Express.
   'tests/unit/web-server/rust-view-reply.test.ts',
+  // Reads package.json at the repo root.
+  'tests/unit/foundation/npm-rust-files.test.ts',
 ];
 // CommonJS-heavy JS suites stay slow by default because many of them mutate
 // module cache or process state. Opt them into `test:fast` only after they are

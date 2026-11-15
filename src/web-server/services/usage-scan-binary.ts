@@ -211,7 +211,16 @@ export type SshRunner = (
   options: { input?: Buffer | string; timeoutMs: number; file?: string }
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
-const SSH_OPTIONS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1'];
+const SSH_OPTIONS = [
+  '-o',
+  'BatchMode=yes',
+  '-o',
+  'ConnectTimeout=5',
+  '-o',
+  'ConnectionAttempts=1',
+  '-o',
+  'UpdateHostKeys=no',
+];
 
 /** One ssh or scp process; never rejects, the exit code says what happened. */
 export const runSsh: SshRunner = (args, options) =>

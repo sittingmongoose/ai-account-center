@@ -435,8 +435,9 @@ the update runs idle-only: it installs only while no Antigravity process runs,
 because the runtime cannot restart a managed session on an unreviewed build. A
 running process makes the row `action_required` / `in_use` and nothing stops.
 After an unreviewed install the row reads "Updated, but this Antigravity version
-has no switching review yet; Antigravity switching is paused until it is
-reviewed." `agy` itself keeps working: the managed launcher runs the native CLI
+has no review yet; Antigravity stays paused until it is reviewed." Saved rows
+that still say "switching review" restore as the same result. `agy` itself keeps
+working: the managed launcher runs the native CLI
 directly when the hash does not match the pin. The switching gate stays
 hash-based, so activation answers `unsupported-runtime-probe` until that build
 has its review, receipt and release commit, followed by the runtime refresh and

@@ -22,19 +22,27 @@ import {
   type AppUpdateHostProgress,
   type AppUpdatePhase,
 } from '../../src/web-server/services/app-update-contract';
-import { LEGACY_MESSAGES } from '../../src/web-server/services/app-update-messages';
+import { isLegacyMessage } from '../../src/web-server/services/app-update-messages';
 
 const PLATFORMS: UpdatePlatform[] = ['ubuntu', 'mac', 'windows', 'nas1'];
 const EXPECTED_RESULTS = 40;
 // The row decoder is shared, but both persisted app allowlists must stay frozen.
 const UPDATE_APP_LABELS = {
-  'antigravity-cli': 'Antigravity CLI', 'muse-code': 'Muse Code', omp: 'OMP',
-  'codex-cli': 'Codex CLI', 'codex-desktop': 'Codex Desktop',
-  'claude-code': 'Claude Code', 'claude-desktop': 'Claude Desktop', zcode: 'ZCode',
-  't3-acp-adapters': 'T3 ACP adapters', 't3-code': 'T3 Code',
+  'antigravity-cli': 'Antigravity CLI',
+  'muse-code': 'Muse Code',
+  omp: 'OMP',
+  'codex-cli': 'Codex CLI',
+  'codex-desktop': 'Codex Desktop',
+  'claude-code': 'Claude Code',
+  'claude-desktop': 'Claude Desktop',
+  zcode: 'ZCode',
+  't3-acp-adapters': 'T3 ACP adapters',
+  't3-code': 'T3 Code',
 };
 function isUpdateAppId(value: unknown): value is UpdateAppId {
-  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(UPDATE_APP_LABELS, value);
+  return (
+    typeof value === 'string' && Object.prototype.hasOwnProperty.call(UPDATE_APP_LABELS, value)
+  );
 }
 
 export const DEFAULT_DASHBOARD_TIME_ZONE = 'America/New_York';
@@ -373,8 +381,7 @@ export class LegacyAppUpdateReader {
               (appId === 'antigravity-cli' &&
                 candidate === 'updated' &&
                 MESSAGES.updated === row.message) ||
-              (LEGACY_MESSAGES[candidate] !== undefined &&
-                LEGACY_MESSAGES[candidate] === row.message)
+              isLegacyMessage(candidate, row.message)
           ) ?? 'helper_invalid';
         const restored = normalizeAppUpdateResults(
           JSON.stringify({ results: [{ ...row, messageCode: code }] }),

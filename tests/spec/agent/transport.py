@@ -4,6 +4,9 @@
 As a runner: transport.py <aac-agent> <aac-http>. It runs each unchanged agent harness both
 in place and through a generated executable proxy, compares their printed counts, then checks
 the long-lived service's refusal, reuse, breaker, streaming and control boundaries.
+The real service lifecycle regressions (home, scan, ssh, deadline) are the sibling
+`tests/spec/agent/lifecycle.mjs <aac-agent> <aac-http>`, not part of `tests/spec/run.mjs`:
+that runner has no agent binary. Run this file and lifecycle.mjs together on Nas1.
 All binaries stay at their build paths. No keys or trust files are created.
 """
 import concurrent.futures

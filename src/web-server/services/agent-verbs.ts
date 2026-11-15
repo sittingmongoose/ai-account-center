@@ -352,12 +352,29 @@ export async function collectAgentWithFallback<T>(
   return helper();
 }
 
-/** Inventory retains the existing Status machine DTO; the collector validates its fields. */
+/**
+ * Inventory retains the existing Status machine DTO; the collector validates its fields.
+ * The attempt is 8s, not the verb's 15s plus 5s grace: the TypeScript probe that follows a miss
+ * is another 20s, and the two must not add up to 40s (L5 review L6). The agent is told 6s, so it
+ * ends with its own answer before the kill; the worst case is 8s plus the 20s probe, 28s.
+ */
 export async function runInventoryAgent(
   host: Pick<UsageHost, 'platform' | 'sshHost'>,
-  accepts: (value: unknown) => boolean
+  accepts: (value: unknown) => boolean,
+  options: Partial<AgentCallOptions> = {}
 ): Promise<unknown | null> {
-  const result = await runAgentVerb(host, 'inventory', {}, { deadlineMs: 15000, maxBytes: 65536 });
+  const result = await runAgentVerb(
+    host,
+    'inventory',
+    {},
+    {
+      ...options,
+      // The agent's own deadline ends first, so it answers (or declines) before the 8s kill.
+      deadlineMs: 6000,
+      timeoutMs: 8000,
+      maxBytes: 65536,
+    }
+  );
   if (result === null) return null;
   const value: unknown = JSON.parse(result);
   const row = value as { schemaVersion?: unknown; machine?: unknown };
