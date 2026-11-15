@@ -1066,3 +1066,95 @@ fn a_catalog_text_the_policy_refuses_is_never_stored() {
     engine.close().unwrap();
     assert_eq!(store_holds(&store, USERINFO.as_bytes()), Vec::<String>::new());
 }
+
+#[test]
+fn correction_fixture_resolves_before_native_query_filters() {
+    let fixture: Json = serde_json::from_str(include_str!("../../../tests/fixtures/run-corrections.json")).unwrap();
+    let share = Share::new("run-corrections-share");
+    for doc in fixture["runs"].as_array().unwrap() {
+        let dir = share
+            .root
+            .join("v1/writers")
+            .join(doc["writer"].as_str().unwrap())
+            .join("runs/2026-11-06");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(format!("{}.json", doc["id"].as_str().unwrap())),
+            doc.to_string(),
+        )
+        .unwrap();
+    }
+    let db = temp_dir("run-corrections-store");
+    let engine = open(&db);
+    pass(&engine, &share, T0 + 10 * DAY, 1000, true);
+    let mut ids: Vec<_> = query(&engine, json!({}))
+        .iter()
+        .map(|r| r["doc"]["id"].clone())
+        .collect();
+    ids.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    assert_eq!(json!(ids), fixture["ids"]);
+    assert_eq!(call(&engine, "runsStatus", json!({}))["runs"], 7);
+    assert_eq!(call(&engine, "runsAudit", json!({}))["runs"], 7);
+    let page = call(&engine, "runsQuery", json!({"taskType":"build","limit":2}));
+    assert_eq!(page["runs"].as_array().unwrap().len(), 2);
+    assert_eq!(page["problems"].as_array().unwrap().len(), 5);
+    let next = call(
+        &engine,
+        "runsQuery",
+        json!({"taskType":"build","limit":2,"after":page["next"]}),
+    );
+    assert_eq!(next["runs"].as_array().unwrap().len(), 2);
+    let before = query(&engine, json!({"toMs": T0 + 5 * DAY}));
+    assert!(before.is_empty());
+    let reviews = query(&engine, json!({"reviewsOnly":true}));
+    assert_eq!(reviews.len(), 2);
+    assert!(
+        reviews
+            .iter()
+            .any(|r| r["doc"]["review"]["of"] == "vm.corrections--build-new")
+    );
+    let original = share.run(
+        "vm.corrections",
+        "filter-old",
+        1,
+        T0 + DAY,
+        "openai/gpt-6.1-sol",
+        Some("high"),
+        Some("codex"),
+        Some("build"),
+    );
+    let original = share.root.join("v1").join(original);
+    let mut corrected: Json = serde_json::from_str(&fs::read_to_string(&original).unwrap()).unwrap();
+    corrected["id"] = json!("vm.corrections--filter-new");
+    corrected["corrects"] = json!("vm.corrections--filter-old");
+    corrected["endedAt"] = json!(iso(T0 + 7 * DAY));
+    corrected["writtenAt"] = json!(iso(T0 + 7 * DAY));
+    corrected["task"]["type"] = json!("fix");
+    fs::write(
+        original.with_file_name("vm.corrections--filter-new.json"),
+        corrected.to_string(),
+    )
+    .unwrap();
+    pass(&engine, &share, T0 + 11 * DAY, 1000, true);
+    assert!(
+        query(&engine, json!({"toMs":T0 + 2 * DAY})).is_empty(),
+        "a correction outside the date filter suppresses its original"
+    );
+    assert!(
+        !query(&engine, json!({"taskType":"build"}))
+            .iter()
+            .any(|r| r["doc"]["id"] == "vm.corrections--filter-old")
+    );
+    assert_eq!(query(&engine, json!({"taskType":"fix"})).len(), 1);
+    let receipts = call(&engine, "runsQuery", json!({"includeReceipts":true}));
+    assert!(
+        receipts["accepted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["doc"]["id"] == "vm.corrections--void")
+    );
+    drop(engine);
+    fs::remove_dir_all(db).unwrap();
+    fs::remove_dir_all(share.root).unwrap();
+}

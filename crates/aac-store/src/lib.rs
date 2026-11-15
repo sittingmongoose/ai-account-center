@@ -45,3 +45,6 @@ pub fn build_identity() -> serde_json::Value {
         "bindingVersion": BINDING_VERSION,
     })
 }
+
+#[path = "../../../native/shared/run_corrections.rs"]
+pub mod run_corrections;

@@ -68,6 +68,7 @@
     "tests/spec/wire-words.json",
     "tests/fixtures/secret-policy-cases.json",
     "tests/fixtures/secret-policy-cases.ts",
+    "tests/fixtures/run-corrections.json",
     "crates/aac-status/Cargo.toml",
     "crates/aac-status/build.rs",
     "crates/aac-status/rust-toolchain.toml",

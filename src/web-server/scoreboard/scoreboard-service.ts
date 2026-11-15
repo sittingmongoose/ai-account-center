@@ -147,7 +147,7 @@ export class ScoreboardService {
     // The check file's runs rows. The Status scan's rows live under the same root, so one file
     // per writer carries both. Fire and forget (F2): a hung share never stalls the build.
     const check = this.deps.readersCheck ?? new ReadersCheckWriter({ root: () => this.root });
-    check.recordRuns(runs);
+    check.recordRuns({ ...runs, runs: runs.accepted ?? runs.runs });
     check.flushSoon();
   }
 

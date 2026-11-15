@@ -713,7 +713,24 @@ pub fn compose(envelope: Envelope) -> Option<V> {
         return None;
     }
     let ctx = Context::new(envelope.presentation);
-    let input = envelope.data;
+    let mut input = envelope.data;
+    crate::run_corrections::resolve_state(&mut input["runs"], |v| ctx.epoch(v))?;
+    let effective: HashMap<String, V> = input["runs"]["runs"]
+        .as_array()?
+        .iter()
+        .map(|r| (s(&r["doc"]["id"]).to_owned(), r["doc"].clone()))
+        .collect();
+    let mut normalized = Vec::new();
+    for doc in input["docs"].as_array()? {
+        if let Some(raw) = effective.get(s(&doc["id"])) {
+            let mut doc = doc.clone();
+            if raw["review"].is_object() {
+                doc["review"] = raw["review"].clone();
+            }
+            normalized.push(doc);
+        }
+    }
+    input["docs"] = json!(normalized);
     let now = input["now"].as_i64()?;
     let catalog = &input["catalog"];
     let docs = input["docs"].as_array()?;

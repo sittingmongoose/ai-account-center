@@ -1,0 +1,154 @@
+import { afterEach, expect, it, spyOn } from 'bun:test';
+import fs from 'fs';
+import path from 'path';
+import fixture from '../../../fixtures/run-corrections.json';
+import { ReadersCheckWriter } from '../../../../src/web-server/status/readers-check';
+import { ScoreboardService } from '../../../../src/web-server/scoreboard/scoreboard-service';
+import { RunsReader } from '../../../../src/web-server/scoreboard/runs-reader';
+import { CatalogReader, seedCatalog } from '../../../../src/web-server/scoreboard/catalog';
+import { buildScoreboardView } from '../../../../src/web-server/scoreboard/scoreboard-view';
+import { NOW, tempDirs } from '../status/status-test-helpers';
+import { runDoc, writeRun } from './scoreboard-test-helpers';
+
+const dirs = tempDirs();
+afterEach(() => dirs.cleanup());
+async function read() {
+  const root = dirs.make('run-corrections-');
+  for (const doc of fixture.runs) writeRun(root, doc as ReturnType<typeof runDoc>);
+  fs.mkdirSync(path.join(root, 'v1/catalog'), { recursive: true });
+  await seedCatalog(root);
+  const options = { root: () => root, now: () => NOW };
+  const reader = new RunsReader(options);
+  const catalog = new CatalogReader(options);
+  await Promise.all([reader.scan(), catalog.scan()]);
+  return { root, reader, catalog };
+}
+
+it('resolves the shared correction fixture before counting, with honest refusals', async () => {
+  const { reader } = await read();
+  const state = reader.snapshot();
+  expect(state.runs.map((r) => r.doc.id)).toEqual(fixture.ids);
+  for (const [id, reason] of Object.entries(fixture.refusals)) {
+    expect(state.problems.find((p) => p.file.endsWith(`--${id}.json`))?.reason).toContain(reason);
+  }
+  expect(state.runs.find((r) => r.doc.id.endsWith('--retarget'))?.doc.review?.of).toBe(
+    'vm.corrections--build-new'
+  );
+  const hook = state.runs.find((r) => r.doc.id.endsWith('--hook-fixed'))?.doc;
+  expect(hook?.model).toMatchObject({ provider: 'openai', effort: 'max' });
+});
+
+it('debits only the right builder after correcting a review of the wrong build', async () => {
+  const { reader, catalog, root } = await read();
+  const view = buildScoreboardView({
+    root,
+    now: NOW,
+    timeZone: 'UTC',
+    runs: reader.snapshot(),
+    catalog: catalog.snapshot(),
+  });
+  const rows = view.uses
+    .find((u) => u.id === 'building')
+    ?.taskTypes.find((t) => t.id === 'build')?.rows;
+  const opus = rows?.find((r) => r.model.includes('opus'))?.observed;
+  expect(opus?.measures.quality).toMatchObject({ of: 0, per: 1 });
+  const sol = rows?.filter((r) => r.model.includes('sol')) ?? [];
+  const originalBuilder = sol.find((r) => r.effort === 'low')?.observed;
+  expect(originalBuilder?.measures.quality).toMatchObject({ of: 1, per: 1 });
+  expect(originalBuilder?.measures.overclaim.value).toBe(0);
+  expect(sol.reduce((n, r) => n + (r.observed?.n ?? 0), 0)).toBe(4);
+  expect(view.recent.some((r) => r.id.endsWith('--duplicate') || r.id.endsWith('--void'))).toBe(
+    false
+  );
+});
+
+it('resolves chains across date folders on each rescan and restores nothing from a losing branch', async () => {
+  const { reader, root } = await read();
+  writeRun(
+    root,
+    runDoc('vm.corrections', 'hook-final', { corrects: 'vm.corrections--hook-fixed' }),
+    '2026-11-07'
+  );
+  writeRun(
+    root,
+    runDoc('vm.corrections', 'fork-child', { corrects: 'vm.corrections--fork-early' })
+  );
+  await reader.scan();
+  expect(reader.snapshot().runs.some((r) => r.doc.id.endsWith('--hook-fixed'))).toBe(false);
+  expect(reader.snapshot().runs.some((r) => r.doc.id.endsWith('--hook-final'))).toBe(true);
+  expect(reader.snapshot().runs.some((r) => r.doc.id.endsWith('--fork-child'))).toBe(false);
+  // The reports are all fixture files under the test's temporary root.
+  expect(fs.existsSync(path.join(root, 'v1/writers/vm.corrections/runs'))).toBe(true);
+});
+
+it('refuses malformed correction fields without changing the original', async () => {
+  const { reader, root } = await read();
+  for (const [id, fields] of Object.entries({
+    'empty-corrects': { corrects: '' },
+    'orphan-void': { void: { reason: 'Duplicate' } },
+    'empty-reason': { corrects: 'vm.corrections--wrong', void: { reason: '' } },
+    'null-void': { corrects: 'vm.corrections--wrong', void: null },
+  }))
+    writeRun(root, runDoc('vm.corrections', id, fields));
+  await reader.scan();
+  expect(reader.snapshot().runs.some((r) => r.doc.id === 'vm.corrections--wrong')).toBe(true);
+  for (const id of ['empty-corrects', 'orphan-void', 'empty-reason', 'null-void'])
+    expect(reader.snapshot().problems.some((p) => p.file.endsWith(`--${id}.json`))).toBe(true);
+});
+
+it('uses real timestamp instants for conflicts and a stable id tie-break', async () => {
+  const root = dirs.make();
+  const docs = [
+    runDoc('vm.corrections', 'base'),
+    runDoc('vm.corrections', 'older', {
+      corrects: 'vm.corrections--base',
+      seq: 90,
+      writtenAt: '2026-11-06T16:00:00.090Z',
+    }),
+    runDoc('vm.corrections', 'newer-a', {
+      corrects: 'vm.corrections--base',
+      writtenAt: '2026-11-06T16:00:00.1Z',
+    }),
+    runDoc('vm.corrections', 'newer-z', {
+      corrects: 'vm.corrections--base',
+      writtenAt: '2026-11-06T16:00:00.100Z',
+    }),
+  ];
+  for (const doc of docs.reverse()) writeRun(root, doc);
+  const reader = new RunsReader({ root: () => root, now: () => NOW });
+  await reader.scan();
+  expect(reader.snapshot().runs.map((r) => r.doc.id)).toEqual(['vm.corrections--newer-z']);
+  expect(reader.snapshot().problems.filter((p) => p.reason.includes('conflict'))).toHaveLength(2);
+});
+
+it('acknowledges voids and superseded records while refusing invalid corrections', async () => {
+  const { root } = await read();
+  const check = new ReadersCheckWriter({ root: () => root, now: () => NOW });
+  const service = new ScoreboardService({
+    root: () => root,
+    now: () => NOW,
+    timeZone: () => 'UTC',
+    native: null,
+    store: () => null,
+    readersCheck: check,
+  });
+  // Publish once after composition; do not race the service's courtesy flush.
+  const queued = spyOn(check, 'flushSoon').mockImplementation(() => undefined);
+  try {
+    await service.view();
+  } finally {
+    queued.mockRestore();
+  }
+  await check.flush();
+  const receipt = JSON.parse(
+    fs.readFileSync(path.join(root, 'v1/readers/aac/vm.corrections.json'), 'utf8')
+  );
+  for (const id of ['review', 'duplicate', 'void'])
+    expect(
+      receipt.files.find((f: { file: string }) => f.file.endsWith(`--${id}.json`))?.result
+    ).toBe('accepted');
+  for (const id of ['missing', 'foreign', 'cycle-a', 'cycle-b', 'fork-early'])
+    expect(
+      receipt.files.find((f: { file: string }) => f.file.endsWith(`--${id}.json`))?.result
+    ).toBe('refused');
+});

@@ -28,7 +28,7 @@ for (const receipt of ['missing', 'stale']) {
       );
       // The number layer the crate composes with is a build input too (L3).
       for (const name of ['Cargo.toml', 'Cargo.lock'])
-      fs.copyFileSync(path.join(root, name), path.join(fixture, name));
+        fs.copyFileSync(path.join(root, name), path.join(fixture, name));
       for (const name of ['Cargo.toml', 'src'])
         fs.cpSync(
           path.join(root, 'crates/aac-num', name),
@@ -45,6 +45,7 @@ for (const receipt of ['missing', 'stale']) {
         'crates/aac-core/src',
         'config/private-files.json',
         'tests/spec/wire-words.json',
+        'native/shared/run_corrections.rs',
       ])
         fs.cpSync(path.join(root, input), path.join(fixture, input), { recursive: true });
       const builder = require(path.join(fixture, 'scripts/build-status-native.js'));

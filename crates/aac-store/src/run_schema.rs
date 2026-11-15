@@ -550,7 +550,7 @@ pub fn project_run(doc: &Json, writer: &str) -> R<Json> {
         }))
     })?;
     let unknown_model = bool_or(doc.get("unknownModel"), "unknownModel", false)?;
-    Ok(json!({
+    let mut out = json!({
         "writer": writer,
         "seq": seq,
         "writtenAt": written_at,
@@ -574,7 +574,23 @@ pub fn project_run(doc: &Json, writer: &str) -> R<Json> {
         "metrics": Json::Object(metrics),
         "imported": imported,
         "unknownModel": unknown_model,
-    }))
+    });
+    if doc.contains_key("corrects") {
+        let target = bounded_text(doc.get("corrects"), "corrects", RUN_ID_MAX)?;
+        let writer = target.split("--").next().unwrap_or("");
+        if id_problem(Some(&json!(target)), writer).is_some() {
+            return fail("corrects");
+        }
+        out["corrects"] = json!(target);
+    }
+    if doc.contains_key("void") {
+        if !doc.contains_key("corrects") {
+            return fail("void requires corrects");
+        }
+        let value = obj(doc.get("void"), "void")?;
+        out["void"] = json!({"reason":bounded_text(value.get("reason"), "void.reason", 500)?});
+    }
+    Ok(out)
 }
 
 /// Bytes of one run file to its projection (the size, NUL, UTF-8 and JSON rules of

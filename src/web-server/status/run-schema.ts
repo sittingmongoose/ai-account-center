@@ -54,6 +54,8 @@ export type RunSize = Record<'records' | 'files' | 'items' | 'words' | 'tasks', 
 
 export interface RunDoc extends DocHead {
   id: string;
+  corrects?: string;
+  void?: { reason: string };
   source: 'observed' | 'benchmark';
   benchmark: string | null;
   project: string | null;
@@ -178,6 +180,17 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
   const base = head(doc, RUN_SCHEMA, writer);
   const idRefusal = idProblem(doc.id, writer, RUN_LOCAL_ID_MAX);
   if (idRefusal) throw new Invalid(idRefusal);
+  const correction: Pick<RunDoc, 'corrects' | 'void'> = {};
+  if (doc.corrects !== undefined) {
+    correction.corrects = boundedText(doc.corrects, 'corrects', RUN_ID_MAX);
+    const targetWriter = correction.corrects.split('--')[0];
+    if (idProblem(correction.corrects, targetWriter, RUN_LOCAL_ID_MAX)) fail('corrects');
+  }
+  if (doc.void !== undefined) {
+    if (!correction.corrects) fail('void requires corrects');
+    const value = obj(doc.void, 'void');
+    correction.void = { reason: boundedText(value.reason, 'void.reason', 500) };
+  }
   const task = obj(doc.task, 'task');
   const model = obj(doc.model, 'model');
   const metricsRaw =
@@ -191,6 +204,7 @@ export function run(doc: Record<string, unknown>, writer: string): RunDoc {
   }
   return {
     ...base,
+    ...correction,
     id: doc.id as string,
     source: oneOf(doc.source, 'source', ['observed', 'benchmark'] as const),
     benchmark: optText(doc.benchmark, 'benchmark', 120),

@@ -1,0 +1,593 @@
+{
+  "runs": [
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--wrong",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "wrong",
+        "type": "build",
+        "title": "wrong",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--right",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "right",
+        "type": "build",
+        "title": "right",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "anthropic/claude-opus-5-5",
+        "provider": "anthropic",
+        "harness": "claude-code",
+        "effort": "high"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--review",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "review",
+        "type": "review",
+        "title": "Review"
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "review": {
+        "of": "vm.corrections--wrong",
+        "verdict": "fail",
+        "findings": {
+          "high": 0,
+          "medium": 1,
+          "low": 0
+        },
+        "overturned": true
+      }
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--review-fixed",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "review",
+        "type": "review",
+        "title": "Review"
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "vm.corrections--review",
+      "review": {
+        "of": "vm.corrections--right",
+        "verdict": "fail",
+        "findings": {
+          "high": 0,
+          "medium": 1,
+          "low": 0
+        },
+        "overturned": true
+      }
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--duplicate",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "duplicate",
+        "type": "build",
+        "title": "duplicate",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--void",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "void",
+        "type": "build",
+        "title": "void",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "vm.corrections--duplicate",
+      "void": {
+        "reason": "Duplicate copy"
+      }
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--hook",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "hook",
+        "type": "build",
+        "title": "hook",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--hook-fixed",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "hook-fixed",
+        "type": "build",
+        "title": "hook-fixed",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "openai",
+        "harness": "codex",
+        "effort": "max"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "vm.corrections--hook"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--missing",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "missing",
+        "type": "build",
+        "title": "missing",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "vm.corrections--absent"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--foreign",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "foreign",
+        "type": "build",
+        "title": "foreign",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "mac.other--build"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--cycle-a",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "cycle-a",
+        "type": "build",
+        "title": "cycle-a",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "vm.corrections--cycle-b"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--cycle-b",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "cycle-b",
+        "type": "build",
+        "title": "cycle-b",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "vm.corrections--cycle-a"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--fork",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "fork",
+        "type": "build",
+        "title": "fork",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--fork-early",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "fork-early",
+        "type": "build",
+        "title": "fork-early",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "vm.corrections--fork"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--fork-late",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:01:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "fork-late",
+        "type": "build",
+        "title": "fork-late",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "vm.corrections--fork"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--build-old",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "build-old",
+        "type": "build",
+        "title": "build-old",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--build-new",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "build-new",
+        "type": "build",
+        "title": "build-new",
+        "size": {
+          "tasks": 1
+        }
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "corrects": "vm.corrections--build-old"
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--retarget",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "retarget",
+        "type": "review",
+        "title": "Review"
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "review": {
+        "of": "vm.corrections--build-old",
+        "verdict": "pass",
+        "findings": {
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "overturned": false
+      }
+    },
+    {
+      "schema": "agent-reports/run@1",
+      "id": "vm.corrections--void-review",
+      "writer": "vm.corrections",
+      "seq": 1,
+      "writtenAt": "2026-11-06T16:00:00Z",
+      "source": "observed",
+      "project": "proj",
+      "stream": null,
+      "task": {
+        "id": "void-review",
+        "type": "review",
+        "title": "Review"
+      },
+      "model": {
+        "id": "openai/gpt-6.1-sol",
+        "provider": "claude",
+        "harness": "codex",
+        "effort": "low"
+      },
+      "startedAt": null,
+      "endedAt": "2026-11-06T15:00:00Z",
+      "wallSeconds": 100,
+      "outcome": "done",
+      "review": {
+        "of": "vm.corrections--duplicate",
+        "verdict": "pass",
+        "findings": {
+          "high": 0,
+          "medium": 0,
+          "low": 0
+        },
+        "overturned": false
+      }
+    }
+  ],
+  "ids": [
+    "vm.corrections--build-new",
+    "vm.corrections--fork-late",
+    "vm.corrections--hook-fixed",
+    "vm.corrections--retarget",
+    "vm.corrections--review-fixed",
+    "vm.corrections--right",
+    "vm.corrections--wrong"
+  ],
+  "refusals": {
+    "missing": "missing run",
+    "foreign": "another writer",
+    "cycle-a": "cycle",
+    "cycle-b": "cycle",
+    "fork-early": "conflict"
+  }
+}
