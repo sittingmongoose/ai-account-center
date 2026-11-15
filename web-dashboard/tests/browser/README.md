@@ -59,6 +59,17 @@ polling. It uses only synthetic status responses and media.
 viewport and combined probe dimensions. For those edge regressions, add `--set rawProbe=1` to exercise the
 computed-padding seam. Each edge must update safe properties and content clearance without a viewport event.
 
+**Home built by Rust (D7, opt-in).** `--set rustHome=1` starts the server with `AAC_RUST_SERVICE=on` and
+`AAC_RUST_HOME_VIEW=on` and the binary in `dist/native/aac-http` (`--set rustBinary=<path>` for another; build it on
+a build host). Without it both are explicitly off. Stubbed Home data never reaches the server, so the kit runs an
+aac-http of its own (`rust-home-builder.mjs`): `t.app.stub` then offers the server view on the dashboard answer and
+answers `/api/views/home` with the Rust view of the stubbed data, from the first read. The envelope is the real
+front door's (`homeReadInput`, run under Bun by `tests/spec/views/home/envelope.ts`, so `bun` must be on PATH).
+`t.app.rustHome()` and the run folder's `rust-home.json` count what it built and refused. `checks/home-server-view.check.mjs` covers the
+switch, the real front-door wiring, and the fixture Home drawn from Rust against the page's own draw (same JSON,
+DOM and pixels). The device fixture proxy takes `AAC_FIXTURE_RUST_HOME=<aac-http>` for the same, and then serves
+`/__d7/home-spec`, which runs the Home spec in the device's own browser.
+
 ## Recording, machines and parallel runs
 
 - **Parallel runs:** each gets its own browser, temporary home and reserved port. Use a worktree per candidate or `--set repo=<tree>`: rebuilding `dist/` during a run breaks that run. `--set port=N` fixes the port, so don't use it in parallel.

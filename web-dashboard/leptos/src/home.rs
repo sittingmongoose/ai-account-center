@@ -11,163 +11,20 @@
 //! from 1600 px on desktop; provider cards tile in equal-width rows with no gap at the end of a row.
 
 use crate::Page;
-use crate::api::{Run, nullable};
 use crate::dash::DashCtx;
 use crate::frame::FrameCtx;
 use crate::ui::*;
 use leptos::prelude::*;
-use serde::Deserialize;
 
-/// The view model version this page draws (view-model.mjs `VIEW_MODEL_VERSION`). Another version is refused, not
-/// half drawn.
-pub const VIEW_MODEL_VERSION: u32 = 3;
+/// The view model version this page draws (view-model.mjs `VIEW_MODEL_VERSION`, aac-api `HOME_VIEW_VERSION`). Another
+/// version is refused, not half drawn.
+pub const VIEW_MODEL_VERSION: u32 = aac_api::home::HOME_VIEW_VERSION;
 
 // ---------------------------------------------------------------- view model v3 (README-ARCHITECTURE.md)
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct DashboardView {
-    pub version: u32,
-    #[serde(deserialize_with = "nullable")]
-    pub sections: Vec<SectionView>,
-    #[serde(deserialize_with = "nullable")]
-    pub cards: Vec<CardView>,
-    pub chrome: ChromeWords,
-}
-
-/// The header's words; Home only uses them when there is nothing else to show (sign-in turned off).
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ChromeWords {
-    #[serde(deserialize_with = "nullable")]
-    pub status_lead: String,
-    #[serde(deserialize_with = "nullable")]
-    pub status_more: String,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct SectionView {
-    #[serde(deserialize_with = "nullable")]
-    pub id: String,
-    #[serde(deserialize_with = "nullable")]
-    pub kind: String,
-    #[serde(deserialize_with = "nullable")]
-    pub label: String,
-    #[serde(deserialize_with = "nullable")]
-    pub meta_runs: Vec<Run>,
-    pub foot: FootView,
-    #[serde(deserialize_with = "nullable")]
-    pub active_id: String,
-    #[serde(deserialize_with = "nullable")]
-    pub empty: String,
-    #[serde(deserialize_with = "nullable")]
-    pub columns: Vec<ColumnView>,
-    #[serde(deserialize_with = "nullable")]
-    pub rows: Vec<RowView>,
-}
-
-/// A section's footer line (the Antigravity runtime's warnings).
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct FootView {
-    pub shown: bool,
-    pub warn: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub runs: Vec<Run>,
-    #[serde(deserialize_with = "nullable")]
-    pub when: String,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ColumnView {
-    #[serde(deserialize_with = "nullable")]
-    pub key: String,
-    #[serde(deserialize_with = "nullable")]
-    pub label: String,
-    #[serde(deserialize_with = "nullable")]
-    pub short_label: String,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct RowView {
-    #[serde(deserialize_with = "nullable")]
-    pub id: String,
-    #[serde(deserialize_with = "nullable")]
-    pub provider: String,
-    #[serde(deserialize_with = "nullable")]
-    pub profile: String,
-    #[serde(deserialize_with = "nullable")]
-    pub email: String,
-    #[serde(deserialize_with = "nullable")]
-    pub meta: String,
-    #[serde(deserialize_with = "nullable")]
-    pub platform: String,
-    pub active: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub active_label: String,
-    pub setup: bool,
-    pub can_mac: bool,
-    pub can_windows: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub amounts_runs: Vec<Run>,
-    #[serde(deserialize_with = "nullable")]
-    pub cells: Vec<MeterView>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct CardView {
-    #[serde(deserialize_with = "nullable")]
-    pub id: String,
-    #[serde(deserialize_with = "nullable")]
-    pub provider: String,
-    #[serde(deserialize_with = "nullable")]
-    pub account_id: String,
-    #[serde(deserialize_with = "nullable")]
-    pub label: String,
-    #[serde(deserialize_with = "nullable")]
-    pub identity: String,
-    #[serde(deserialize_with = "nullable")]
-    pub plan: String,
-    #[serde(deserialize_with = "nullable")]
-    pub flag: String,
-    #[serde(deserialize_with = "nullable")]
-    pub sampled: String,
-    #[serde(deserialize_with = "nullable")]
-    pub platform: String,
-    #[serde(deserialize_with = "nullable")]
-    pub plan_note: String,
-    #[serde(deserialize_with = "nullable")]
-    pub packs_note: String,
-    #[serde(deserialize_with = "nullable")]
-    pub note: String,
-    #[serde(deserialize_with = "nullable")]
-    pub meters: Vec<MeterView>,
-    #[serde(deserialize_with = "nullable")]
-    pub amounts: Vec<AmountView>,
-}
-
-/// Packs, balances, credits and spend: amounts, never fake meters.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct AmountView {
-    #[serde(deserialize_with = "nullable")]
-    pub key: String,
-    #[serde(deserialize_with = "nullable")]
-    pub label: String,
-    #[serde(deserialize_with = "nullable")]
-    pub value: String,
-    #[serde(deserialize_with = "nullable")]
-    pub unit: String,
-    #[serde(deserialize_with = "nullable")]
-    pub sub: String,
-    #[serde(deserialize_with = "nullable")]
-    pub icon: String,
-    pub spent: bool,
-}
+// The types are the ones the Rust server writes (crates/aac-api, D7): the page reads the server's view and the
+// controller's own JavaScript view through the same structs, so a shape drift is a compile error.
+pub use aac_api::home::{HomeView as DashboardView, RowView, SectionView};
 
 /// What the page can draw from the seam's `dashboard` JSON.
 #[derive(Clone, Debug, PartialEq)]

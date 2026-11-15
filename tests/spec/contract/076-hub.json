@@ -1,0 +1,10 @@
+{
+  "request": {
+    "method": "UPGRADE",
+    "path": "/ws",
+    "role": "hub"
+  },
+  "response": {
+    "status": 403
+  }
+}

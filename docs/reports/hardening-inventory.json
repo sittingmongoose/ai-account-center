@@ -362,9 +362,32 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 201,
-    "filesAffected": 60,
+    "totalMarkers": 208,
+    "filesAffected": 61,
     "topFiles": [
+      {
+        "file": "src/web-server/rust-service.ts",
+        "count": 27,
+        "calls": [],
+        "markers": [
+          ": legacy();",
+          "? service.compose(req, route, input, legacy, accepts)",
+          "? service.ownedValue(req, route, root, accept, legacy)",
+          "* and returns the 200 body it sent (undefined otherwise). Shadow runs legacy and compares; it",
+          "* Compute in Rust first from immutable inputs the guarded TS handler already read; legacy",
+          "* the desktop profiles through it, D7): the accepted Rust value, or what `legacy` returns (the",
+          "* warning), applied only when Rust's answer is served. `legacy` runs the original handler once",
+          "/* Bounded, logged legacy fallback. */",
+          "/** Guarded route adapters use this with immutable reader inputs and a lazy legacy composer. */",
+          "else await legacy();",
+          "if (!verified) return legacy();",
+          "if (service instanceof RustService) await service.owned(req, res, route, root, accept, legacy);",
+          "legacy: () => Promise<unknown>",
+          "legacy: () => unknown | Promise<unknown>,",
+          "reference = await legacy();",
+          "return legacy();"
+        ]
+      },
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
         "count": 24,
@@ -385,28 +408,6 @@
           "it('rejects foreign canonical and legacy bundles without falling back', () => {",
           "it('supports appsDir overrides and an owned real legacy fallback', () => {",
           "legacy: path.join(appsDir, MAC_LEGACY_APP_NAME),"
-        ]
-      },
-      {
-        "file": "src/web-server/rust-service.ts",
-        "count": 21,
-        "calls": [],
-        "markers": [
-          ": legacy();",
-          "? service.compose(req, route, input, legacy, accepts)",
-          "* and returns the 200 body it sent (undefined otherwise). Shadow runs legacy and compares; it",
-          "* Compute in Rust first from immutable inputs the guarded TS handler already read; legacy",
-          "* warning), applied only when Rust's answer is served. `legacy` runs the original handler once",
-          "/* Bounded, logged legacy fallback. */",
-          "/** Guarded route adapters use this with immutable reader inputs and a lazy legacy composer. */",
-          "await legacy();",
-          "else await legacy();",
-          "if (!verified) return legacy();",
-          "if (service instanceof RustService) await service.owned(req, res, route, root, accept, legacy);",
-          "legacy: () => Promise<unknown>",
-          "legacy: () => unknown | Promise<unknown>,",
-          "reference = await legacy();",
-          "return legacy();"
         ]
       },
       {
@@ -543,16 +544,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 656,
-      "typedThrows": 212,
+      "totalThrows": 657,
+      "typedThrows": 213,
       "plainThrows": 47,
       "otherThrows": 397,
-      "adoptionRatio": 0.3232,
+      "adoptionRatio": 0.3242,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 385,
-          "typed": 161,
+          "count": 386,
+          "typed": 162,
           "plain": 7
         },
         {
@@ -613,8 +614,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 442,
-      "coverageRatio": 0.0995,
+      "totalSourceFiles": 445,
+      "coverageRatio": 0.0989,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -630,7 +631,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 250,
+          "count": 253,
           "withLogger": 30
         },
         {

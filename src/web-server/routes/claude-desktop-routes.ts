@@ -1,3 +1,4 @@
+import type { Request, Response } from 'express';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
 import { ConfigError, ProfileError } from '../../errors/error-types';
@@ -28,7 +29,7 @@ import {
   type ClaudeDesktopUsage,
 } from '../services/claude-desktop-usage-service';
 import { getCcsDir } from '../../utils/config-manager';
-import { composeWithRust, readOwnedWithRust } from '../rust-service';
+import { composeWithRust, readOwnedValueWithRust, readOwnedWithRust } from '../rust-service';
 import {
   acceptRustDesktopProfiles,
   isRustDesktopUsage,
@@ -54,8 +55,12 @@ export function prefersRespondAsync(header: string | string[] | undefined): bool
   );
 }
 
-router.get('/desktop-profiles', async (req, res): Promise<void> => {
-  if (!requireDashboardSession(req, res)) return;
+/**
+ * GET /desktop-profiles' read, after its caller's session guard: the M3 Rust service reads the
+ * manifest through its capped descriptor read (part 4) and TS adds each Open's progress; the TS
+ * reader is the fallback. GET /api/views/home (D7) reads Home's profiles through it too.
+ */
+function desktopProfilesRead() {
   const operations = getClaudeOpenOperations();
   const scope = getCcsDir();
   // `openOperation` is the progress of a 202 Open (null when none is known). Only a
@@ -67,10 +72,30 @@ router.get('/desktop-profiles', async (req, res): Promise<void> => {
         ? { ...profile, openOperation: operations.forProfile(scope, profile.id) }
         : profile
     );
+  return {
+    route: '/api/claude/desktop-profiles',
+    scope,
+    accept: acceptRustDesktopProfiles(withOperations),
+    read: async () => ({ profiles: withOperations(await listClaudeDesktopProfileMetadata()) }),
+  };
+}
+
+/** Home's profiles (D7): GET /desktop-profiles' list, read the same way; throws when it cannot be. */
+export async function readClaudeDesktopProfiles(req: Request, res: Response): Promise<unknown[]> {
+  const { route, scope, accept, read } = desktopProfilesRead();
+  const body = await readOwnedValueWithRust(req, res, route, scope, accept, read);
+  const profiles = (body as { profiles?: unknown } | undefined)?.profiles;
+  if (!Array.isArray(profiles)) throw new ProfileError('Claude desktop profiles were not read.');
+  return profiles;
+}
+
+router.get('/desktop-profiles', async (req, res): Promise<void> => {
+  if (!requireDashboardSession(req, res)) return;
+  const { route, scope, accept, read } = desktopProfilesRead();
   // After the guard above, the M3 Rust service may read the same manifest; this is the fallback.
   const legacy = async (): Promise<unknown> => {
     try {
-      const body = { profiles: withOperations(await listClaudeDesktopProfileMetadata()) };
+      const body = await read();
       res.json(body);
       return body;
     } catch {
@@ -78,14 +103,7 @@ router.get('/desktop-profiles', async (req, res): Promise<void> => {
       return undefined;
     }
   };
-  await readOwnedWithRust(
-    req,
-    res,
-    '/api/claude/desktop-profiles',
-    scope,
-    acceptRustDesktopProfiles(withOperations),
-    legacy
-  );
+  await readOwnedWithRust(req, res, route, scope, accept, legacy);
 });
 
 router.get('/desktop-profiles/usage', async (req, res): Promise<void> => {

@@ -1,4 +1,6 @@
-//! Portable HTTP DTOs for the first strangler routes. No filesystem or runtime dependencies.
+//! Portable HTTP DTOs for the strangler routes. No filesystem or runtime dependencies.
+pub mod home;
+
 use serde::{Deserialize, Serialize};
 
 /// Public liveness only; no readiness or provider claims.

@@ -1,21 +1,20 @@
 {
   "request": {
-    "method": "GET",
-    "path": "/v0/management/auth-files",
-    "role": "hub"
+    "method": "POST",
+    "path": "/v0/management/api-call",
+    "role": "hub",
+    "body": {}
   },
   "response": {
     "body": {
-      "code": "rate_limited",
-      "error": "Too many wrong usage hub keys. Try again later.",
-      "retryAfterSeconds": 900
+      "code": "invalid_request",
+      "error": "auth_index must be a string from auth-files."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
-      "etag": "<etag>",
-      "retry-after": "900"
+      "etag": "<etag>"
     },
-    "status": 429
+    "status": 400
   }
 }

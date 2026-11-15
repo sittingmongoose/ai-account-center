@@ -134,6 +134,7 @@ fn unsigned_socket_requests_are_401_and_permissions_are_private() -> Result<()> 
         "/api/health",
         "/api/accounts/settings",
         "/api/diag",
+        "/api/views/home",
         "/missing",
     ] {
         for (secret, p) in [
@@ -374,5 +375,124 @@ fn bounded_file_reads_are_confined_and_never_follow_a_writer_root_symlink() -> R
     fs::rename(root.join("share"), root.join("saved"))?;
     std::os::unix::fs::symlink(&outside, root.join("share"))?;
     assert!(request(&input)?.starts_with("HTTP/1.1 503"));
+    Ok(())
+}
+
+/// D7: the front door's envelope for one case of tests/spec/views/home/cases.json, and its JS view.
+fn home_case(name: &str) -> Result<(Value, Value)> {
+    let table: Value =
+        serde_json::from_str(include_str!("../../../tests/spec/views/home/cases.json"))?;
+    let case = table["cases"]
+        .as_array()
+        .ok_or("no cases")?
+        .iter()
+        .find(|c| c["name"] == name)
+        .ok_or("no such case")?;
+    let envelope = json!({
+        "data": {
+            "ctx": case["ctx"],
+            "dashboard": case["dashboard"],
+            "profiles": case["profiles"],
+            "antigravity": case["antigravity"],
+        },
+        "presentation": case["presentation"],
+    });
+    let expected = match case["expected"].as_str() {
+        Some(text) => serde_json::from_str(text)?,
+        None => Value::Null,
+    };
+    Ok((envelope, expected))
+}
+
+#[test]
+fn home_view_is_the_js_view_or_the_shared_read_fallback() -> Result<()> {
+    let s = Service::start()?;
+    let secret = "b".repeat(64);
+    let session = principal("session", "admin");
+    let home = |path: &str, principal: Option<&str>, method: &str, input: Option<&Value>| {
+        s.request_input(path, Some(&secret), principal, method, input)
+    };
+    let split = |reply: &str| -> Result<(String, String)> {
+        let (head, body) = reply.split_once("\r\n\r\n").ok_or("no body")?;
+        Ok((
+            head.lines().next().unwrap_or("").to_owned(),
+            body.to_owned(),
+        ))
+    };
+    // The JS view, value for value (the front door re-serializes it, so JSON number spelling is its own).
+    for name in [
+        "view-model#1",
+        "zone/Pacific/Chatham#1",
+        "probe/narrow",
+        "probe/safari",
+        "edge/hidden",
+    ] {
+        let (envelope, expected) = home_case(name)?;
+        let (status, got) = split(&home(
+            "/api/views/home",
+            Some(&session),
+            "GET",
+            Some(&envelope),
+        )?)?;
+        assert_eq!(status, "HTTP/1.1 200 OK", "{name}");
+        assert_eq!(serde_json::from_str::<Value>(&got)?, expected, "{name}");
+    }
+    // Refusals and inputs the front door never sends take the read routes' one fallback.
+    let (envelope, _) = home_case("view-model#1")?;
+    let mut extra = envelope.clone();
+    extra["data"]["more"] = json!(1);
+    let mut unranked = envelope.clone();
+    unranked["presentation"]["dates"] = json!({});
+    let mut no_ctx = envelope.clone();
+    no_ctx["data"]["ctx"] = json!({});
+    let mut refused = vec![
+        extra,
+        unranked,
+        no_ctx,
+        json!([]),
+        json!({}),
+        json!({"data": envelope["data"]}),
+    ];
+    for name in ["decline/facts", "decline/locale", "decline/open-progress"] {
+        refused.push(home_case(name)?.0);
+    }
+    for input in &refused {
+        let (status, got) = split(&home(
+            "/api/views/home",
+            Some(&session),
+            "GET",
+            Some(input),
+        )?)?;
+        assert_eq!(status, "HTTP/1.1 503 Service Unavailable", "{input:.80}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&got)?,
+            json!({"error":"TypeScript read fallback required"})
+        );
+    }
+    assert!(home("/api/views/home", Some(&session), "GET", None)?.starts_with("HTTP/1.1 503"));
+    assert!(
+        home(
+            "/api/views/home?refresh=true",
+            Some(&session),
+            "GET",
+            Some(&envelope)
+        )?
+        .starts_with("HTTP/1.1 503"),
+        "a query is not the read the front door proved"
+    );
+    // Only a verified dashboard session; GET only. These answer before any body is read, so none is sent (the
+    // service may close while a body is still being written).
+    for p in [
+        principal("device", "device"),
+        principal("hub", "hub"),
+        principal("session", "public"),
+    ] {
+        assert!(
+            home("/api/views/home", Some(&p), "GET", None)?.starts_with("HTTP/1.1 401"),
+            "{p}"
+        );
+    }
+    assert!(home("/api/views/home", None, "GET", None)?.starts_with("HTTP/1.1 401"));
+    assert!(home("/api/views/home", Some(&session), "POST", None)?.starts_with("HTTP/1.1 405"));
     Ok(())
 }

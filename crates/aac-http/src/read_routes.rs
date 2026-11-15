@@ -26,6 +26,16 @@ pub async fn answer(req: Request, root: PathBuf) -> Response {
         Err(_) => return fallback(),
     };
     let result = tokio::task::spawn_blocking(move || {
+        // D7: Home's view from the page's context and the three answers it reads, in the envelope.
+        if path == "/api/views/home" {
+            return if query {
+                None
+            } else {
+                let envelope =
+                    crate::json_object::from_slice(&bytes, &["data", "presentation"]).ok()?;
+                aac_views::home::compose(envelope).ok()
+            };
+        }
         if path.starts_with("/api/accounts/") {
             // TS refused any query before forwarding; anything else is not the read it proved.
             return if query {

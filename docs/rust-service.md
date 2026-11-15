@@ -137,6 +137,39 @@ the canonical root) and `ENOENT` keep the owner's meaning per file. The TS owner
 same hardening where practical: `readPrivateJsonFile` adds `O_NONBLOCK`, and the preference
 reader reads through one no-follow, nonblocking descriptor after its `lstat`.
 
+## Home view (D7)
+
+`AAC_RUST_HOME_VIEW=on`, with the service `on`, lets the server build Home's view model
+(`crates/aac-views` `home`, view model v3); the default is `off`. Off, `GET /api/views/home` is not
+offered: it answers the 404 every unknown endpoint gets, and the dashboard answer is unchanged. On,
+the dashboard answer adds `server.views: ["home"]` and the page asks that route instead of its three
+reads (the dashboard, `/api/claude/desktop-profiles`, `/api/antigravity/profiles`).
+
+The route keeps the dashboard route's session, query and failure rules and answers those three answers
+plus `view`. It reads each one the way its own route answers it: the desktop profiles through part 4's
+capped manifest read (`ownedValue()`, the value form of `owned()`, with TS adding each Open's progress)
+and the Antigravity copy through part 4's composition, both with the TS fallback. It uses the shared
+pieces: the page's context (clock, display zone, platform, refresh
+interval, user, host and a format probe of its `Intl` formatters, sent in `X-AAC-Home-Context`) and the
+three answers are the data of the M3 presentation envelope (`homeReadInput` in
+`src/web-server/views/home-context.ts`, over `rustReadInput`: this engine's clock and day words in the
+page's display zone, ISO epochs, and the ranks of the account ids and sign-in profiles Home sorts by);
+`compose()` forwards it, and `read_routes` dispatches it to `aac_views::home::compose`. Rust joins the
+words in the style the probe proves (Chrome and Node, U+202F before AM/PM, or iOS Safari's
+`Jan 5 at 12:07 AM`), compares ASCII ids by the envelope's ranks, and admits only date strings with an
+explicit zone. Anything it cannot prove equal to `web-dashboard/public/view-model.mjs` (another locale,
+a local-time or date-only date, a non-ASCII sort pair, a missing fact, a Claude Open in progress, an
+unexpected shape) is the shared fallback, and `view` is null: the page then builds its own view, as it
+does for an unreadable context, missing profiles, a context that changed while the view was read, and
+any route failure but a sign-out. The page remembers the offer, so the first read after a reload asks
+too; while the switch is off nothing is stored.
+
+The spec is `tests/spec/views/home` (`cases.json` from the dashboard's own JS tests plus zone, edge,
+style and decline cases, each with its envelope facts; `declines.json`; `fuzz.mjs` for seeded runs),
+checked by `crates/aac-views/tests/home_spec.rs`, `web-dashboard/tests/home-view-spec.test.mjs` and
+`tests/unit/web-server/home-view-routes.test.ts`. `node tests/spec/views/home/generate.mjs [--check]`
+rewrites or checks it (Bun computes the envelopes, `envelope.ts`).
+
 ## Boundary and lifecycle
 
 The service binds no TCP port. It accepts only its Unix socket, mode 0600, in a

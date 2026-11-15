@@ -5,6 +5,9 @@
 //   node web-dashboard/tests/browser/device/fixture-proxy.mjs <listen port> <dashboard port>
 // With AAC_FIXTURE_ACCOUNTS=rich, the account routes come from ../accounts-fixture.mjs instead (every provider, a trash
 // entry, paired trays, an Update apps run, and the sign-in and remove flows), for Accounts & Settings device checks.
+// D7: with AAC_FIXTURE_RUST_HOME=<aac-http binary> (the dashboard's Rust Home switch on), the dashboard answer offers
+// the server's Home view and GET /api/views/home is answered from the same fixtures, the view built by the proxy's own
+// Rust service (../rust-home-builder.mjs), as the switch-on server would build it from these answers.
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -33,6 +36,51 @@ const analytics = (url) => {
   return analyticsFixture({ range, days, accounts: accounts().accounts });
 };
 const ANSWERS = { '/api/accounts/dashboard': accounts, '/api/claude/desktop-profiles': homeProfiles, '/api/accounts/analytics': analytics, '/api/status': status, '/api/scoreboard': scoreboard };
+const rustHome = process.env.AAC_FIXTURE_RUST_HOME
+	? await (await import('../rust-home-builder.mjs')).startRustBuilder(path.resolve(process.env.AAC_FIXTURE_RUST_HOME), path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..'))
+	: null;
+if (rustHome) {
+	ANSWERS['/api/accounts/dashboard'] = () => rustHome.offered(accounts());
+	for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { rustHome.stop(); process.exit(0); });
+}
+// D7 device spec (with AAC_FIXTURE_RUST_HOME): /__d7/home-spec runs every case of tests/spec/views/home/cases.json
+// (and AAC_FIXTURE_HOME_FUZZ, a fuzz.mjs table, when set) through this browser's own view-model.mjs, and the proxy
+// builds each with Rust for this browser's format probe: equal bytes, a decline, or a named difference. Test harness
+// only (loopback, made-up data); the dashboard has no such route.
+const SPEC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../tests/spec/views/home');
+function specCases() {
+	const tables = [path.join(SPEC_DIR, 'cases.json'), ...(process.env.AAC_FIXTURE_HOME_FUZZ ? [process.env.AAC_FIXTURE_HOME_FUZZ] : [])];
+	return tables.flatMap((file) => JSON.parse(fs.readFileSync(file, 'utf8')).cases)
+		.map(({ name, dashboard, profiles, antigravity, ctx, presentation }) => ({ name, dashboard, profiles, antigravity, ctx, presentation }));
+}
+const SPEC_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>D7 Home spec</title><body style="font:15px -apple-system,sans-serif;margin:16px"><h3>D7 Home spec in this browser</h3>
+<pre id="out" style="white-space:pre-wrap">running...</pre><script type="module">
+const out = document.getElementById('out');
+try {
+  const vm = await import('/view-model.mjs');
+  const tf = await import('/time-format.mjs');
+  const cases = await (await fetch('/__d7/home-cases')).json();
+  const results = cases.map((c) => {
+    tf.setDisplayTimeZone(c.ctx.timeZone);
+    try {
+      return { name: c.name, json: JSON.stringify(vm.dashboardViewModel(c.dashboard, { now: c.ctx.now, profiles: c.profiles, platform: c.ctx.platform, antigravityInventory: c.antigravity, intervalSeconds: c.ctx.intervalSeconds, username: c.ctx.username, host: c.ctx.host })) };
+    } catch { return { name: c.name, json: null }; }
+  });
+  const answer = await (await fetch('/__d7/home-check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ probe: vm.homeFormatProbe(), engine: navigator.userAgent, results }) })).json();
+  out.textContent = JSON.stringify(answer, null, 1);
+  document.title = answer.differ.length ? 'D7 spec: DIFFERENT' : 'D7 spec: EQUAL';
+} catch (e) { out.textContent = 'error: ' + e; }
+</script>`;
+/** The real server's answer to a GET with this browser's cookie (the Antigravity inventory), or null. */
+const upstreamJson = (p, cookie) => new Promise((resolve) => {
+	const r = http.request({ host: '127.0.0.1', port: target, path: p, headers: { cookie: cookie || '' } }, (res) => {
+		let text = '';
+		res.on('data', (d) => (text += d)).on('end', () => { try { resolve(res.statusCode === 200 ? JSON.parse(text) : null); } catch { resolve(null); } });
+	});
+	r.on('error', () => resolve(null));
+	r.end();
+});
 
 const { fakeServer, updateJob } = await import('../accounts-fixture.mjs');
 const rich = process.env.AAC_FIXTURE_ACCOUNTS === 'rich' ? fakeServer({ rich: true, update: updateJob() }) : null;
@@ -71,6 +119,62 @@ const server = http.createServer((req, res) => {
 			check.on('error', () => { res.writeHead(502); res.end(); });
 			check.end();
 		});
+		return;
+	}
+	if (rustHome && pathname.startsWith('/__d7/')) {
+		if (req.method === 'GET' && pathname === '/__d7/home-spec') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); res.end(SPEC_PAGE); return; }
+		if (req.method === 'GET' && pathname === '/__d7/home-cases') { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(specCases())); return; }
+		if (req.method === 'POST' && pathname === '/__d7/home-check') {
+			const chunks = [];
+			req.on('data', (d) => chunks.push(d)).on('end', async () => {
+				const { probe, engine, results } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+				const byName = new Map(specCases().map((c) => [c.name, c]));
+				const summary = { engine, probe, cases: results.length, equal: 0, refused: 0, differ: [] };
+				for (const r of results) {
+					const c = byName.get(r.name);
+					if (!c) { summary.refused++; continue; }
+					// the stored envelope facts, with this browser's own probe as the page's context would carry it
+					const data = { ctx: { ...c.ctx, formatProbe: probe }, dashboard: c.dashboard, profiles: c.profiles, antigravity: c.antigravity };
+					const view = await rustHome.build({ data, presentation: c.presentation });
+					if (!view) { summary.refused++; continue; }
+					const rust = JSON.stringify(view);
+					if (rust === r.json) { summary.equal++; continue; }
+					let i = 0;
+					const js = r.json ?? '';
+					while (i < js.length && js[i] === rust[i]) i++;
+					summary.differ.push({ name: r.name, at: i, js: js.slice(Math.max(0, i - 40), i + 60), rust: rust.slice(Math.max(0, i - 40), i + 60) });
+				}
+				console.log(`home spec in ${engine.slice(0, 80)}: ${summary.equal} equal, ${summary.refused} refused, ${summary.differ.length} differ`);
+				res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+				res.end(JSON.stringify(summary));
+			});
+			return;
+		}
+	}
+	if (rustHome && req.method === 'GET' && pathname === '/api/views/home') {
+		const check = http.request({ host: '127.0.0.1', port: target, path: '/api/auth/check', headers: { cookie: req.headers.cookie || '', host: req.headers.host } }, (r) => {
+			let body = '';
+			r.on('data', (d) => (body += d)).on('end', async () => {
+				let signedIn = false;
+				try { const s = JSON.parse(body); signedIn = s.authenticated === true || s.authRequired === false; } catch {}
+				if (!signedIn) { res.writeHead(401, { 'content-type': 'application/json' }); res.end('{"error":"Sign in first.","code":"auth_required"}'); return; }
+				const reply = await rustHome.reply({
+					dashboard: ANSWERS['/api/accounts/dashboard'](url),
+					profiles: homeProfiles().profiles,
+					antigravity: await upstreamJson('/api/antigravity/profiles', req.headers.cookie),
+					contextHeader: req.headers['x-aac-home-context'],
+					platform: url.searchParams.get('platform') ?? 'mac',
+				});
+				// a decline names what this browser's formatters wrote (fixed reference values, no account data)
+				let probe = null;
+				try { probe = JSON.parse(decodeURIComponent(req.headers['x-aac-home-context'] || '')).formatProbe; } catch {}
+				console.log(`home view: ${reply.view ? 'built by Rust' : `refused, probe ${JSON.stringify(probe)}`} ${JSON.stringify(rustHome.stats)}`);
+				res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+				res.end(JSON.stringify(reply));
+			});
+		});
+		check.on('error', () => { res.writeHead(502); res.end(); });
+		check.end();
 		return;
 	}
 	if (req.method === 'GET' && ANSWERS[pathname]) {

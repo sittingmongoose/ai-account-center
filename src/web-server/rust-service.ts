@@ -229,6 +229,26 @@ export class RustService {
     accept: (body: unknown) => { value: unknown; effect?: () => void } | null,
     legacy: () => Promise<unknown>
   ): Promise<void> {
+    let answered = false;
+    const value = await this.ownedValue(req, route, root, accept, () => {
+      answered = true;
+      return legacy();
+    });
+    if (!answered) res.json(value);
+  }
+
+  /**
+   * `owned`'s read for a handler that uses the answer rather than sending it (Home's view reads
+   * the desktop profiles through it, D7): the accepted Rust value, or what `legacy` returns (the
+   * TS reader's value; it may throw). The same gate, root check, shadow comparison and effect.
+   */
+  async ownedValue(
+    req: Request,
+    route: string,
+    root: string,
+    accept: (body: unknown) => { value: unknown; effect?: () => void } | null,
+    legacy: () => Promise<unknown>
+  ): Promise<unknown> {
     let verified = this.forwardable(req, route);
     // Rust reads its own canonical boot root. Another or symlinked folder (whose one-time
     // warning TS logs) stays with the TS reader.
@@ -236,10 +256,7 @@ export class RustService {
       this.fallback();
       verified = null;
     }
-    if (!verified) {
-      await legacy();
-      return;
-    }
+    if (!verified) return legacy();
     const pending = this.forward(route, verified);
     if (this.mode === 'shadow') {
       let reference: unknown;
@@ -250,7 +267,7 @@ export class RustService {
         throw error;
       }
       this.shadowCompare(route, pending, reference, (body) => accept(body)?.value);
-      return;
+      return reference;
     }
     try {
       const result = await pending;
@@ -263,14 +280,13 @@ export class RustService {
         } catch {
           /* Logging is best effort. */
         }
-        res.json(accepted.value);
-        return;
+        return accepted.value;
       }
     } catch {
       /* Bounded, logged legacy fallback. */
     }
     this.fallback();
-    await legacy();
+    return legacy();
   }
 
   async respond(
@@ -401,4 +417,19 @@ export async function readOwnedWithRust(
   const service: unknown = res.locals.rustService;
   if (service instanceof RustService) await service.owned(req, res, route, root, accept, legacy);
   else await legacy();
+}
+
+/** `readOwnedWithRust` for a handler that uses the answer itself: the value, not a response. */
+export async function readOwnedValueWithRust(
+  req: Request,
+  res: Response,
+  route: string,
+  root: string,
+  accept: (body: unknown) => { value: unknown; effect?: () => void } | null,
+  legacy: () => Promise<unknown>
+): Promise<unknown> {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService
+    ? service.ownedValue(req, route, root, accept, legacy)
+    : legacy();
 }

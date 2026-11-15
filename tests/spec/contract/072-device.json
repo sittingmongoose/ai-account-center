@@ -1,7 +1,7 @@
 {
   "request": {
-    "method": "POST",
-    "path": "/v0/management/api-call",
+    "method": "ALL",
+    "path": "/v0/management/fixture-missing",
     "role": "device",
     "body": {}
   },

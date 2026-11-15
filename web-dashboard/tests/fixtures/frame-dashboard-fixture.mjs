@@ -54,15 +54,15 @@ export function respond(answer) {
 }
 
 /** The controller, started as the frame starts it, with the same server. */
-export async function loadController(server, { width = 1440, page = 'home', check = undefined } = {}) {
-  const calls = [], emitted = [], intervals = [], historyCalls = [];
-  const stored = new Map();
+export async function loadController(server, { width = 1440, page = 'home', check = undefined, stored = new Map() } = {}) {
+  const calls = [], headers = [], emitted = [], intervals = [], historyCalls = [];
   let depth = 0;
   const c = createFrameDashboard({
     fetch: async (path, options = {}) => {
       const method = options.method || 'GET';
       const body = options.body ? JSON.parse(options.body) : null;
       calls.push({ method, path, body });
+      headers.push({ path, headers: options.headers ?? {} });
       return respond(await server(method, path, body));
     },
     storage: { getItem: (k) => (stored.has(k) ? stored.get(k) : null), setItem: (k, v) => stored.set(k, String(v)), removeItem: (k) => stored.delete(k) },
@@ -81,7 +81,7 @@ export async function loadController(server, { width = 1440, page = 'home', chec
   await c.start({ check: sessionCheck, username: 'owner' });
   await flush(16);
   return {
-    c, calls, emitted, intervals, historyCalls, stored,
+    c, calls, headers, emitted, intervals, historyCalls, stored,
     act: async (kind, value = '') => { assert.equal(c.act(kind, value), true, `${kind} is a page action`); await flush(16); },
     command: async (action) => { assert.equal(c.command(action), true); await flush(16); },
     toasts: () => emitted.filter((e) => e.key === 'toast').map((e) => JSON.parse(e.json)),

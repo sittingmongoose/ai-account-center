@@ -16,5 +16,5 @@ pub(crate) use overlay::reconcile_overlay_focus;
 pub use chrome::{ChromeInfo, FrameShell, PageShell, apply_theme, stored_theme};
 pub use controls::*;
 pub use icons::{Icon, IconOf, Logo, Mark, PlatformGlyph, ProviderMark};
-pub use meter::{MeterMode, MeterView, UsageMeter, motion_on};
+pub use meter::{MeterMode, UsageMeter, motion_on};
 pub use parts::*;
