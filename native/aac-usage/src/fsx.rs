@@ -269,6 +269,19 @@ fn listing(collector: &mut Collector, kind: &str, directory: &Path) -> Option<Ve
     }
 }
 
+/// True when a folder past the depth cap holds an entry a walk would have looked at. Python drops
+/// such folders silently; this port says partial instead, but only when the cap leaves something
+/// unread: an empty folder (or one holding only skipped names) is a complete read (big review
+/// Wonder L7). An unreadable listing is unread.
+fn leaves_unread(directory: &Path) -> bool {
+    match fs::read_dir(directory) {
+        Ok(entries) => entries
+            .into_iter()
+            .any(|entry| entry.map_or(true, |e| !skipped(&e.file_name().to_string_lossy()))),
+        Err(_) => true,
+    }
+}
+
 /// Python's `_iter_jsonl_files`: depth-first (a stack), names sorted, links never descended, caps
 /// flag truncation. `skip_dir` names folders that never hold logs.
 pub fn walk_files(
@@ -315,7 +328,7 @@ pub fn walk_files(
                 }
                 if depth < 64 {
                     pending.push((path, depth + 1));
-                } else {
+                } else if leaves_unread(&path) {
                     // The depth cap leaves this folder unread: the tool is partial, never a
                     // complete read that found nothing (search-bound REVIEW-cheap M1).
                     collector.usage_partial.insert(kind.to_string());
@@ -561,7 +574,7 @@ pub fn walk_t3_files(
             if meta.is_dir() {
                 if depth < 64 {
                     pending.push((real, depth + 1));
-                } else {
+                } else if leaves_unread(&real) {
                     collector.usage_partial.insert(kind.to_string());
                 }
             } else if accept(&name) && meta.is_file() && !placeholder(&meta) {

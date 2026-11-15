@@ -161,15 +161,101 @@ pub(crate) fn read_regular(path: &Path, cap: usize) -> Regular {
     Regular::Read(bytes, meta)
 }
 
+/// Python's `failover_core.SAFE_NAME` (`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, ASCII): the folder
+/// names its sibling discovery keeps as saved or T3 homes.
+pub(crate) fn safe_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    (1..=64).contains(&b.len())
+        && b[0].is_ascii_alphanumeric()
+        && b.iter()
+            .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(c))
+}
+
+/// True when the file is not the caller's own: Python's readers (`failover_core._read_present`)
+/// refuse a file whose owner is not `os.getuid()`. Windows has no such check.
+pub(crate) fn foreign(meta: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        meta.uid() != crate::key_store::uid()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
 /// True when a component strictly between `base` and `path` is a link, or cannot be checked.
 /// Readers that must not be redirected below a home (plan credentials) decline those paths.
 pub(crate) fn linked_below(base: &Path, path: &Path) -> bool {
+    linked(base, path, false)
+}
+
+/// [`linked_below`], and `path` itself too. Python's `failover_core._local_path` follows a link
+/// below the home only while each written target stays inside it, hop by hop; no port proves that
+/// chain, so readers that Python sends through it (T3 settings, sibling homes) decline any link.
+pub(crate) fn linked_within(base: &Path, path: &Path) -> bool {
+    linked(base, path, true)
+}
+
+/// Where Python's `failover_core._local_path(scope, link)` leads for one link whose own folders
+/// below `scope` hold no link: its written target, made absolute as text (`os.path.abspath`).
+pub(crate) enum Hop {
+    /// Inside the scope with no further link: whether that path is a folder (Python's
+    /// `S_ISDIR(os.lstat(validated))`).
+    Inside(bool),
+    /// Refused without a counted failure: the target leaves the scope, or is spelled "//".
+    Outside,
+    /// The path the target names is not there: Python counts a failed read.
+    Missing,
+    /// A second link, a target spelling no port proves (backslashes, not UTF-8) or an error.
+    Unproved,
+}
+
+/// One hop of Python's `_local_path`; a chain longer than one link is [`Hop::Unproved`].
+pub(crate) fn hop(scope: &Path, link: &Path) -> Hop {
+    let Ok(target) = fs::read_link(link) else {
+        return Hop::Unproved;
+    };
+    let Some(text) = target.to_str() else {
+        return Hop::Unproved;
+    };
+    if text.starts_with("//") {
+        return Hop::Outside;
+    }
+    let Some(parent) = link
+        .parent()
+        .filter(|_| !text.is_empty() && !text.contains('\\'))
+    else {
+        return Hop::Unproved;
+    };
+    let next = lexical(&parent.join(text));
+    if !next.starts_with(scope) {
+        return Hop::Outside;
+    }
+    if linked_within(scope, &next) {
+        return Hop::Unproved;
+    }
+    match fs::symlink_metadata(&next) {
+        Ok(m) => Hop::Inside(m.is_dir()),
+        Err(e) if missing(&e) => Hop::Missing,
+        Err(_) => Hop::Unproved,
+    }
+}
+
+fn linked(base: &Path, path: &Path, leaf: bool) -> bool {
     let Ok(rest) = path.strip_prefix(base) else {
         return true;
     };
     let mut current = base.to_path_buf();
     let parts: Vec<_> = rest.components().collect();
-    for part in parts.iter().take(parts.len().saturating_sub(1)) {
+    let checked = if leaf {
+        parts.len()
+    } else {
+        parts.len().saturating_sub(1)
+    };
+    for part in parts.iter().take(checked) {
         current.push(part.as_os_str());
         match fs::symlink_metadata(&current) {
             Ok(m) if m.file_type().is_symlink() => return true,
@@ -207,6 +293,25 @@ mod tests {
                 crate::proof::fallback(),
                 "{raw:?}"
             );
+        }
+    }
+
+    #[test]
+    fn sibling_names_are_pythons_safe_names() {
+        for name in ["a", "A9", "work-1_b", &"y".repeat(64)] {
+            assert!(safe_name(name), "{name:?}");
+        }
+        for name in [
+            "",
+            "_under",
+            "-dash",
+            ".hidden",
+            "a.b",
+            "a b",
+            "caf\u{e9}",
+            &"y".repeat(65),
+        ] {
+            assert!(!safe_name(name), "{name:?}");
         }
     }
 
@@ -249,6 +354,40 @@ mod tests {
             assert!(linked_below(dir.path(), &alias.join("x.json")));
             assert!(!linked_below(dir.path(), &sub.join("x.json")));
             assert!(!linked_below(dir.path(), &dir.path().join("gone/x.json")));
+            // The leaf counts too: a final link, a link above it, or a dangling link.
+            assert!(!linked_below(dir.path(), &link));
+            assert!(linked_within(dir.path(), &link));
+            assert!(linked_within(dir.path(), &alias));
+            assert!(linked_within(dir.path(), &alias.join("x.json")));
+            assert!(!linked_within(dir.path(), &sub.join("x.json")));
+            assert!(!linked_within(dir.path(), &dir.path().join("gone/x.json")));
+            std::os::unix::fs::symlink(dir.path().join("none"), dir.path().join("dead"))?;
+            assert!(linked_within(dir.path(), &dir.path().join("dead")));
+            assert!(linked_within(dir.path(), &dir.path().join("dead/x.json")));
+            assert!(!foreign(&fs::symlink_metadata(&file)?));
+            // One hop of `_local_path`: in the scope, out of it, missing, or a second link.
+            let scope = dir.path();
+            let cases: [(&str, String); 7] = [
+                ("in-dir", "sub".into()),
+                ("in-file", scope.join("a.json").to_string_lossy().into()),
+                ("out", "../..".into()),
+                ("network", format!("/{}", scope.join("sub").display())),
+                ("gone", "nothing".into()),
+                ("second", "alias".into()),
+                ("slash", "sub\\x".into()),
+            ];
+            for (name, target) in &cases {
+                std::os::unix::fs::symlink(target, scope.join(name))?;
+            }
+            let hop = |name: &str| hop(scope, &scope.join(name));
+            assert!(matches!(hop("in-dir"), Hop::Inside(true)));
+            assert!(matches!(hop("in-file"), Hop::Inside(false)));
+            assert!(matches!(hop("out"), Hop::Outside));
+            assert!(matches!(hop("network"), Hop::Outside));
+            assert!(matches!(hop("gone"), Hop::Missing));
+            assert!(matches!(hop("second"), Hop::Unproved));
+            assert!(matches!(hop("slash"), Hop::Unproved));
+            assert!(matches!(hop("a.json"), Hop::Unproved));
         }
         Ok(())
     }

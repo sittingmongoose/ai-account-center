@@ -66,11 +66,17 @@ fn confined(root: &Path, base: &str, relative: &str) -> Option<(File, u64)> {
     Some((file, meta.len()))
 }
 
+/// TS `isWriterName`: the machine is one of computers.json's `machineId`s, never a copied list
+/// (big review Wonder L6).
 fn writer_ok(writer: &str) -> bool {
+    crate::account_reads::machine_ids().is_some_and(|machines| writer_in(writer, &machines))
+}
+
+fn writer_in(writer: &str, machines: &[String]) -> bool {
     let Some((machine, name)) = writer.split_once('.') else {
         return false;
     };
-    ["vm", "nas1", "mac", "windows", "alexis"].contains(&machine)
+    machines.iter().any(|m| m == machine)
         && writer.len() <= 64
         && !writer.contains("--")
         && !name.is_empty()
@@ -487,4 +493,29 @@ fn confined_media(root: &Path, writer: &str, path: &str) -> Option<(File, u64)> 
         return None;
     }
     Some((file, metadata.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_writers_are_the_computer_tables_machines() {
+        let machines = crate::account_reads::machine_ids().expect("computers.json machine ids");
+        assert!(machines.len() >= 2, "{machines:?}");
+        for machine in &machines {
+            assert!(writer_ok(&format!("{machine}.lead")), "{machine}");
+            assert!(!writer_ok(&format!("{machine}.Lead")), "{machine}");
+        }
+        assert!(!writer_ok("lab.lead"));
+        assert!(!writer_ok("vm"));
+        // A computer added to the table is a writer machine without editing this module.
+        let mut table: Value =
+            serde_json::from_str(crate::account_reads::COMPUTERS).expect("computers.json");
+        table["lab"] = json!({"machineId": "lab"});
+        let machines =
+            crate::account_reads::machine_ids_in(&table.to_string()).expect("machine ids");
+        assert!(writer_in("lab.lead", &machines));
+        assert!(!writer_in("lab2.lead", &machines));
+    }
 }

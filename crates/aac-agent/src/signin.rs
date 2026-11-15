@@ -221,26 +221,53 @@ fn dir_state(path: &Path) -> (bool, bool) {
     }
 }
 fn read(path: &Path) -> Option<Value> {
-    read_with_cap(path, 65536, false)
-}
-fn read_with_cap(path: &Path, cap: usize, bom: bool) -> Option<Value> {
     if let Some(raw) = fixture_io("reads", path) {
         use base64::Engine;
         return raw
             .as_str()
             .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
-            .and_then(|b| crate::proof::json(&b, cap, bom));
+            .and_then(|b| crate::proof::json(&b, 65536, false));
     }
     // Python's `_read_regular_bytes`: only an oversized file is unproved; anything else that is
     // not one ordinary file reads as absent.
-    match crate::files::read_regular(path, cap) {
-        crate::files::Regular::Read(bytes, _) => crate::proof::json(&bytes, cap, bom),
+    match crate::files::read_regular(path, 65536) {
+        crate::files::Regular::Read(bytes, _) => crate::proof::json(&bytes, 65536, false),
         crate::files::Regular::TooLarge => {
             crate::proof::reject();
             None
         }
         _ => None,
     }
+}
+/// The T3 settings file as Python's `failover_core._read` reads it: through `_local_path`, then
+/// `_read_present` (one ordinary file of at most 1 MiB that this user owns), then one JSON
+/// object. Nothing there is silent; a file that is present but not read marks discovery
+/// incomplete, as Python's `read_failed()` does.
+fn read_settings(home: &Path, complete: &mut bool) -> Option<Value> {
+    const CAP: usize = 1_048_576;
+    let path = home.join(".t3/userdata/settings.json");
+    // Python follows a link on this path only while every written target stays inside the home,
+    // and otherwise reads no settings at all. Nothing here proves that chain, so a link anywhere
+    // below the home, the file included, declines the verb (big review Wonder M1).
+    if crate::files::linked_within(home, &path) {
+        crate::proof::reject();
+        return None;
+    }
+    let value = match crate::files::read_regular(&path, CAP) {
+        crate::files::Regular::Missing => return None,
+        crate::files::Regular::TooLarge => {
+            crate::proof::reject();
+            return None;
+        }
+        crate::files::Regular::Read(bytes, meta) if !crate::files::foreign(&meta) => {
+            crate::proof::json(&bytes, CAP, true)
+        }
+        _ => None,
+    };
+    if !value.as_ref().is_some_and(Value::is_object) {
+        *complete = false;
+    }
+    value
 }
 fn json_bytes(bytes: &[u8]) -> Option<Value> {
     crate::proof::json(bytes, 65536, false)
@@ -444,7 +471,10 @@ fn add(roots: &mut Vec<Root>, root: Root, platform: &str) {
         roots.push(root);
     }
 }
-fn scan(base: &Path, complete: &mut bool, safe_only: bool) -> Vec<PathBuf> {
+/// One folder's homes. `sibling` names the scope of `failover_core._children` (the CCS folder
+/// for saved profiles, the home for T3 ones) when this pass stands in for it; `None` is the
+/// collector's own scan, which keeps every folder.
+fn scan(base: &Path, complete: &mut bool, sibling: Option<&Path>) -> Vec<PathBuf> {
     let (exists, failed) = dir_state(base);
     *complete &= !failed;
     if !exists {
@@ -466,24 +496,39 @@ fn scan(base: &Path, complete: &mut bool, safe_only: bool) -> Vec<PathBuf> {
         };
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with('.')
-            || (safe_only
-                && !name
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c)))
-        {
+        if name.starts_with('.') || (sibling.is_some() && !crate::files::safe_name(&name)) {
             continue;
         }
+        // `_children` sends a linked entry through `_local_path`: it is a sibling home only when
+        // the link stays inside the scope and names a folder; one refused for leaving the scope
+        // joins later, from the collector's own scan (big review Wonder M1).
+        let candidate = match sibling {
+            Some(scope) if entry.file_type().map_or(true, |t| t.is_symlink()) => {
+                match crate::files::hop(scope, &entry.path()) {
+                    crate::files::Hop::Inside(folder) => folder,
+                    crate::files::Hop::Outside => false,
+                    crate::files::Hop::Missing => {
+                        *complete = false;
+                        false
+                    }
+                    crate::files::Hop::Unproved => {
+                        crate::proof::reject();
+                        continue;
+                    }
+                }
+            }
+            _ => true,
+        };
         let (is_dir, failed) = dir_state(&entry.path());
         *complete &= !failed;
-        if is_dir {
+        if is_dir && candidate {
             out.push(entry.path());
             if out.len() > 64 {
                 out.truncate(64);
                 *complete = false;
                 // Python sorts the whole listing before it takes 64; this pass keeps the first
                 // 64 found, so past the bound the chosen homes differ: fall back (big review MED-1).
-                if safe_only {
+                if sibling.is_some() {
                     crate::proof::reject();
                 }
                 break;
@@ -515,6 +560,10 @@ fn roots(
     let mut roots = vec![make("default".into(), default.clone(), "default")];
     let (_, failed) = dir_state(&default);
     complete &= !failed;
+    // Python admits a configured home by its spelling alone (`_settings_homes`,
+    // `_launcher_spelling`); a home whose real path leaves the allowed roots still publishes its
+    // own row, which `profile` refuses (big review Wonder M1).
+    let admitted = |p: &Path| p.is_absolute() && (p.starts_with(home) || p.starts_with(ccs));
     #[cfg(not(feature = "parity-fixtures"))]
     let injected: Option<Value> = None;
     #[cfg(feature = "parity-fixtures")]
@@ -524,7 +573,7 @@ fn roots(
             for pair in pairs {
                 let raw = pair[0].as_str().unwrap_or("");
                 let p = normalized(crate::proof::strip(raw));
-                if !allowed(&p, home, ccs) {
+                if !admitted(&p) {
                     complete = false;
                     continue;
                 }
@@ -557,8 +606,18 @@ fn roots(
         }
     } else {
         // Sibling discovery order: saved profiles, T3 directories, configured homes.
-        for base in [ccs.join("instances"), home.join(".claude-t3")] {
-            for p in scan(&base, &mut complete, true) {
+        // `failover_core._children` reaches each folder through `_local_path` from its own
+        // scope, and lists a linked folder under its target's spelling. That is not ported: a
+        // link to a folder declines (big review Wonder M1). A dangling link or a link to a
+        // file lists nothing in either scan.
+        for (scope, base) in [
+            (ccs, ccs.join("instances")),
+            (home, home.join(".claude-t3")),
+        ] {
+            if crate::files::linked_within(scope, &base) && dir_state(&base).0 {
+                crate::proof::reject();
+            }
+            for p in scan(&base, &mut complete, Some(scope)) {
                 let name = p
                     .file_name()
                     .map(|n| n.to_string_lossy().into())
@@ -566,97 +625,84 @@ fn roots(
                 add(&mut roots, make(name, p, "dir"), platform);
             }
         }
-        let settings_path = home.join(".t3/userdata/settings.json");
-        let settings = read_with_cap(&settings_path, 1_048_576, true);
-        if settings.is_none()
-            && (fs::symlink_metadata(&settings_path).is_ok() || dir_state(&settings_path).1)
+        if let Some(settings) = read_settings(home, &mut complete)
+            && let Some(instances) = settings.get("providerInstances").filter(|v| !v.is_null())
         {
-            complete = false;
-        }
-        if let Some(settings) = settings {
-            if !settings.is_object() {
-                complete = false;
-            }
-            if let Some(instances) = settings.get("providerInstances").filter(|v| !v.is_null()) {
-                if let Some(instances) = instances.as_object() {
-                    if instances.len() > 64 {
-                        complete = false;
-                    }
-                    for item in instances.values().take(64) {
-                        if item.is_null() {
-                            continue;
-                        }
-                        if !item.is_object() {
-                            complete = false;
-                            continue;
-                        }
-                        if item["driver"] != "claudeAgent" {
-                            continue;
-                        }
-                        let config = &item["config"];
-                        if !config.is_null() && !config.is_object() {
-                            complete = false;
-                            continue;
-                        }
-                        let v = &config["homePath"];
-                        if v.is_null() {
-                            continue;
-                        }
-                        let Some(raw) = v
-                            .as_str()
-                            .filter(|s| s.chars().count() <= 1024 && !s.contains('\0'))
-                        else {
-                            complete = false;
-                            continue;
-                        };
-                        let raw = crate::proof::strip(raw);
-                        if raw.is_empty() {
-                            continue;
-                        }
-                        let expanded = if raw == "~" {
-                            home.to_path_buf()
-                        } else if let Some(s) =
-                            raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\"))
-                        {
-                            home.join(s)
-                        } else {
-                            PathBuf::from(raw)
-                        };
-                        // pathlib keeps a leading "//" as its own root and refuses the home;
-                        // normalizing it to "/" would admit it (big review MED-2).
-                        if crate::files::double_root(&expanded.to_string_lossy()) {
-                            continue;
-                        }
-                        let p = normalized(&expanded.to_string_lossy());
-                        if !p.is_absolute()
-                            || !(p.starts_with(home) || p.starts_with(ccs))
-                            || !allowed(&p, home, ccs)
-                        {
-                            complete = false;
-                            continue;
-                        }
-                        let (is_dir, failed) = dir_state(&p);
-                        complete &= !failed;
-                        if failed || (!is_dir && !(platform == "darwin" && ambient)) {
-                            continue;
-                        }
-                        let name = if p == default {
-                            "default-configured".into()
-                        } else {
-                            p.file_name()
-                                .map(|s| s.to_string_lossy().into())
-                                .unwrap_or_default()
-                        };
-                        add(&mut roots, make(name, p, "dir"), platform);
-                    }
-                } else {
+            if let Some(instances) = instances.as_object() {
+                if instances.len() > 64 {
                     complete = false;
                 }
+                for item in instances.values().take(64) {
+                    if item.is_null() {
+                        continue;
+                    }
+                    if !item.is_object() {
+                        complete = false;
+                        continue;
+                    }
+                    if item["driver"] != "claudeAgent" {
+                        continue;
+                    }
+                    let config = &item["config"];
+                    if !config.is_null() && !config.is_object() {
+                        complete = false;
+                        continue;
+                    }
+                    let v = &config["homePath"];
+                    if v.is_null() {
+                        continue;
+                    }
+                    let Some(raw) = v
+                        .as_str()
+                        .filter(|s| s.chars().count() <= 1024 && !s.contains('\0'))
+                    else {
+                        complete = false;
+                        continue;
+                    };
+                    let raw = crate::proof::strip(raw);
+                    if raw.is_empty() {
+                        continue;
+                    }
+                    let expanded = if raw == "~" {
+                        home.to_path_buf()
+                    } else if let Some(s) =
+                        raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\"))
+                    {
+                        home.join(s)
+                    } else {
+                        PathBuf::from(raw)
+                    };
+                    // pathlib keeps a leading "//" as its own root and refuses the home;
+                    // normalizing it to "/" would admit it (big review MED-2).
+                    if crate::files::double_root(&expanded.to_string_lossy()) {
+                        continue;
+                    }
+                    let p = normalized(&expanded.to_string_lossy());
+                    if !admitted(&p) {
+                        complete = false;
+                        continue;
+                    }
+                    let (is_dir, failed) = dir_state(&p);
+                    complete &= !failed;
+                    if failed || (!is_dir && !(platform == "darwin" && ambient)) {
+                        continue;
+                    }
+                    let name = if p == default {
+                        "default-configured".into()
+                    } else {
+                        p.file_name()
+                            .map(|s| s.to_string_lossy().into())
+                            .unwrap_or_default()
+                    };
+                    add(&mut roots, make(name, p, "dir"), platform);
+                }
+            } else {
+                complete = false;
             }
         }
     }
     for base in [ccs.join("instances"), home.join(".claude-t3")] {
-        for p in scan(&base, &mut complete, false) {
+        for p in scan(&base, &mut complete, None) {
             let name = p
                 .file_name()
                 .map(|s| s.to_string_lossy().into())
@@ -979,14 +1025,20 @@ fn run_inner(args: &Value) -> Result<Value, Failure> {
         "linux"
     };
     #[allow(unused_mut)]
-    let mut env: BTreeMap<String, String> = if fixture {
-        BTreeMap::new()
-    } else {
-        SELECTORS
-            .iter()
-            .filter_map(|n| std::env::var(n).ok().map(|v| (n.to_string(), v)))
-            .collect()
-    };
+    let mut env: BTreeMap<String, String> = BTreeMap::new();
+    if !fixture {
+        for name in SELECTORS {
+            let Some(value) = std::env::var_os(name) else {
+                continue;
+            };
+            // Python reads a selector that is not UTF-8 as text (surrogateescape) and keeps it
+            // as an identity; this port only spells text, so it declines (big review Wonder L8).
+            let Some(value) = value.to_str() else {
+                return Ok(crate::proof::fallback());
+            };
+            env.insert(name.to_string(), value.to_string());
+        }
+    }
     #[allow(unused_mut)]
     let mut ambient = !fixture;
     #[cfg(feature = "parity-fixtures")]

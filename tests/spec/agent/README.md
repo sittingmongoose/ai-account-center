@@ -352,3 +352,28 @@ reference. Witnesses:
 - `part4.py`: `key-twins-*` (Python cuts slot names to 128 before deduplicating) and
   `default-home-*` (the environment's home spelled with `//`, `/.`, `/`, `/..`).
 - `inventory.json`: `review-big-L6-cpu-grouping` rows from the real TS parser.
+
+## Big review fix round 2
+
+signin-expiry reads the T3 settings file and its sibling homes by Python's
+`failover_core` rules (`_local_path`, `_read_present`, `SAFE_NAME`), through the same
+`files.rs` helpers:
+
+- **Settings path:** a link anywhere below the home (`.t3`, `userdata` or
+  `settings.json`, dangling, looping, in or out of the home) delegates the verb. A file
+  another user owns, a folder, a FIFO or an unreadable file marks discovery incomplete,
+  as Python's `read_failed()` does; a missing one is silent.
+- **Configured homes:** admitted by spelling alone, as Python does; one whose real path
+  leaves the home publishes its own "outside the allowed roots" row.
+- **Sibling homes:** names follow `SAFE_NAME` exactly. A linked entry takes one hop of
+  `_local_path` (`files::hop`): inside the scope it is a sibling home, outside it joins
+  from the collector's own scan, and a second link delegates. A linked `.claude-t3` or
+  `instances` folder that leads to a folder delegates.
+- **Ambient selectors:** one that is not UTF-8 delegates.
+
+`signin_review.py <aac-agent> [--production] [--foreign-root DIR]` checks 41 real-directory
+witnesses, Wonder's five among them (their Python rows are pinned). Each shape must give
+Python's answer or the fallback, as listed in `SHAPES`. The two ambient witnesses send no
+`home`, so the agent reads HOME and the selector from its own environment. `--foreign-root`
+names a folder whose new files have another owner (an NFS export that maps every file to one
+user); without it the owner witness is skipped.
