@@ -776,12 +776,12 @@
           "loc": 1023
         },
         {
-          "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 958
+          "file": "src/web-server/status/status-collectors.ts",
+          "loc": 973
         },
         {
-          "file": "src/web-server/status/status-collectors.ts",
-          "loc": 957
+          "file": "src/web-server/services/account-dashboard-service.ts",
+          "loc": 958
         },
         {
           "file": "src/web-server/services/account-analytics-service.ts",

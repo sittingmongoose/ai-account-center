@@ -90,8 +90,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/antigravity/registry.ts` | 1104 |
 | `src/web-server/services/usage-failover-service.ts` | 1053 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
+| `src/web-server/status/status-collectors.ts` | 973 |
 | `src/web-server/services/account-dashboard-service.ts` | 958 |
-| `src/web-server/status/status-collectors.ts` | 957 |
 | `src/web-server/services/account-analytics-service.ts` | 887 |
 | `src/web-server/status/status-view.ts` | 870 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
