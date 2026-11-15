@@ -402,7 +402,8 @@ pub fn omp_config_roots(home: &Path, instances: &[T3Instance]) -> Vec<PathBuf> {
     roots
 }
 
-fn has_binary(home: &Path, env: &Env, names: &[&str]) -> bool {
+fn binary_mtime(home: &Path, env: &Env, names: &[&str]) -> Option<i64> {
+    let mut newest: Option<i64> = None;
     let mut dirs: Vec<PathBuf> = env
         .get("PATH")
         .map(|path| std::env::split_paths(path).collect())
@@ -425,18 +426,36 @@ fn has_binary(home: &Path, env: &Env, names: &[&str]) -> bool {
                     {
                         use std::os::unix::fs::PermissionsExt;
                         if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
-                            return true;
+                            newest = newest.into_iter().chain([util::mtime_ms(&meta)]).max();
                         }
                     }
                     #[cfg(not(unix))]
                     if meta.is_file() {
-                        return true;
+                        newest = newest.into_iter().chain([util::mtime_ms(&meta)]).max();
                     }
                 }
             }
         }
     }
-    false
+    newest
+}
+
+fn has_binary(home: &Path, env: &Env, names: &[&str]) -> bool {
+    binary_mtime(home, env, names).is_some()
+}
+
+fn tool_binaries(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "antigravity" => &["agy", "antigravity"],
+        "claude" => &["claude"],
+        "codex" => &["codex"],
+        "omp" => &["omp"],
+        "muse" => &["muse"],
+        "zcode" => &["zcode"],
+        "cursor" => &["cursor-agent"],
+        "devin" => &["devin"],
+        _ => &[],
+    }
 }
 
 fn driver_enabled(instances: &[T3Instance], drivers: &[&str], word: Option<&str>) -> bool {
@@ -475,19 +494,7 @@ pub fn installed_signals(home: &Path, env: &Env, kind: &str, instances: &[T3Inst
     {
         homes.push(dir);
     }
-    let binaries: &[&str] = match kind {
-        "antigravity" => &["agy", "antigravity"],
-        other => match other {
-            "claude" => &["claude"],
-            "codex" => &["codex"],
-            "omp" => &["omp"],
-            "muse" => &["muse"],
-            "zcode" => &["zcode"],
-            "cursor" => &["cursor-agent"],
-            "devin" => &["devin"],
-            _ => &[],
-        },
-    };
+    let binaries = tool_binaries(kind);
     let (drivers, word): (&[&str], Option<&str>) = match kind {
         "claude" => (&["claudeAgent"], None),
         "codex" => (&["codex"], None),
@@ -575,7 +582,7 @@ pub fn freshness(newest_data: Option<i64>, newest_activity: Option<i64>, min_dat
     json!({"state": state, "newestDataMs": newest_data, "newestActivityMs": newest_activity})
 }
 
-fn install_activity(home: &Path, kind: &str) -> Option<i64> {
+fn install_activity(home: &Path, env: &Env, kind: &str) -> Option<i64> {
     let relative = match kind {
         "claude" => ".claude",
         "codex" => ".codex",
@@ -591,6 +598,9 @@ fn install_activity(home: &Path, kind: &str) -> Option<i64> {
     fs::symlink_metadata(home.join(relative))
         .ok()
         .map(|m| util::mtime_ms(&m))
+        .into_iter()
+        .chain(binary_mtime(home, env, tool_binaries(kind)))
+        .max()
 }
 
 /// Read only T3's provider projection metadata. The tool's own instance configuration resolves
@@ -947,7 +957,7 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         m.keys().filter(|k| !failed.is_some_and(|f| f.contains(*k))).count()
     }) + failed.map_or(0, |s| s.len());
     let newest = roots.iter().filter_map(|r| r["counts"]["newestMtime"].as_i64()).max();
-    let mut activity = newest.into_iter().chain(install_activity(home, kind)).max();
+    let mut activity = newest.into_iter().chain(install_activity(home, env, kind)).max();
     let activity_deadline = collector.deadline().min(Instant::now() + Duration::from_millis(750));
     let mut activity_limited = false;
     // Independent metadata also catches log formats the usage reader did not recognize.

@@ -20,6 +20,26 @@ fn freshness_cycle_boundary_and_missing_numbers_are_honest() {
 }
 
 #[test]
+fn a_new_install_signal_without_measured_data_is_not_current() {
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join(".local/bin").join(if cfg!(windows) {
+        "cursor-agent.cmd"
+    } else {
+        "cursor-agent"
+    });
+    fs::create_dir_all(bin.parent().unwrap()).unwrap();
+    fs::write(&bin, "fixture marker; never executed").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let answer = scan(home.path(), None);
+    assert_eq!(answer["discovery"]["kinds"]["cursor"]["freshness"]["state"], "stale");
+    assert!(answer["rows"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn installed_desktop_clients_are_reported_as_unmeasured_instead_of_omitted() {
     let home = tempfile::tempdir().unwrap();
     let env = Env::from([(
