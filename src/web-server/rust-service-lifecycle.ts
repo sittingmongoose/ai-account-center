@@ -125,14 +125,31 @@ export function socketLayout(
 
 /** sha256 of the binary file, cached by its identity so a restart does not hash it again. */
 const binaryHashes = new Map<string, { key: string; sha256: string }>();
-export function binarySha256(binary: string): string {
-  const stat = fs.statSync(binary);
-  const key = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-  const cached = binaryHashes.get(binary);
-  if (cached?.key === key) return cached.sha256;
-  const sha256 = createHash('sha256').update(fs.readFileSync(binary)).digest('hex');
-  binaryHashes.set(binary, { key, sha256 });
-  return sha256;
+export async function binarySha256(binary: string, signal?: AbortSignal): Promise<string> {
+  // O_NONBLOCK prevents a pathname swap to a FIFO from blocking a libuv worker forever.
+  const file = await fs.promises.open(binary, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) throw new ConfigError('Rust service image must be a regular file');
+    signal?.throwIfAborted();
+    const key = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    const cached = binaryHashes.get(binary);
+    if (cached?.key === key) return cached.sha256;
+    const hash = createHash('sha256');
+    const buffer = Buffer.alloc(64 * 1024);
+    for (;;) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    signal?.throwIfAborted();
+    const sha256 = hash.digest('hex');
+    binaryHashes.set(binary, { key, sha256 });
+    return sha256;
+  } finally {
+    await file.close();
+  }
 }
 
 export function parseBuild(text: string | null | undefined): RustBuild | null {
@@ -249,7 +266,11 @@ function refuses(socketPath: string): Promise<boolean> {
  * the short folder) older than a minute whose socket refuses a connection. Only private folders
  * of this account are touched; no process is signalled.
  */
-export async function sweepStaleBoots(ccsDir: string, keep: string | null): Promise<number> {
+export async function sweepStaleBoots(
+  ccsDir: string,
+  keep: string | null,
+  signal?: AbortSignal
+): Promise<number> {
   const parents = new Set<string>([path.join(ccsDir, 'run')]);
   const short = socketLayout(ccsDir, '0'.repeat(24));
   if (short) parents.add(path.dirname(path.dirname(short.socketPath)));
@@ -262,12 +283,14 @@ export async function sweepStaleBoots(ccsDir: string, keep: string | null): Prom
       continue;
     }
     for (const name of names) {
+      signal?.throwIfAborted();
       if (!/^aac-http-[a-f0-9]{24}$/.test(name) || name === keep) continue;
       const folder = path.join(parent, name);
       try {
         const stat = fs.lstatSync(folder);
         if (!isPrivateDirectory(folder) || Date.now() - stat.mtimeMs < 60_000) continue;
         if (!(await refuses(path.join(folder, 'http.sock')))) continue;
+        signal?.throwIfAborted();
         fs.rmSync(folder, { recursive: true, force: true });
         swept++;
       } catch {
@@ -298,14 +321,39 @@ export async function acquireRustService(
 export async function acquireRustServiceDetailed(
   privateRoot: string,
   binaryPath: string,
-  active: Set<http.ClientRequest>
+  active: Set<http.ClientRequest>,
+  signal?: AbortSignal
+): Promise<AcquireResult> {
+  const budget = AbortSignal.timeout(5000);
+  const stopped = signal ? AbortSignal.any([signal, budget]) : budget;
+  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped);
+  // Async filesystem work may finish late; every continuation checks the signal before adoption.
+  return new Promise((resolve) => {
+    const aborted = () =>
+      resolve({ lease: null, failure: 'unhealthy', refusedAttach: false, swept: 0 });
+    stopped.addEventListener('abort', aborted, { once: true });
+    if (stopped.aborted) aborted();
+    void pending
+      .then(resolve, () =>
+        resolve({ lease: null, failure: 'binary', refusedAttach: false, swept: 0 })
+      )
+      .finally(() => stopped.removeEventListener('abort', aborted));
+  });
+}
+
+async function acquireWithinBudget(
+  privateRoot: string,
+  binaryPath: string,
+  active: Set<http.ClientRequest>,
+  signal: AbortSignal
 ): Promise<AcquireResult> {
   const result: AcquireResult = { lease: null, failure: null, refusedAttach: false, swept: 0 };
   if (process.platform === 'win32') return { ...result, failure: 'platform' };
-  if (!fs.existsSync(binaryPath)) return { ...result, failure: 'binary' };
-  const ccsDir = fs.realpathSync(privateRoot);
-  const binary = fs.realpathSync(binaryPath);
-  const sha256 = binarySha256(binary);
+  const ccsDir = await fs.promises.realpath(privateRoot);
+  signal.throwIfAborted();
+  const binary = await fs.promises.realpath(binaryPath);
+  const sha256 = await binarySha256(binary, signal);
+  signal.throwIfAborted();
   const run = path.join(ccsDir, 'run');
   privateDirectory(run);
   const descriptor = path.join(run, 'aac-http.json');
@@ -313,6 +361,10 @@ export async function acquireRustServiceDetailed(
   if (existing) {
     const agent = rustAgent();
     const build = await healthBuild({ ...existing, agent }, active);
+    if (signal.aborted) {
+      agent.destroy();
+      signal.throwIfAborted();
+    }
     if (build && sameBuild(build, existing.build) && buildMatches(build, sha256))
       return {
         ...result,
@@ -328,7 +380,12 @@ export async function acquireRustServiceDetailed(
     // A healthy boot of another build stays with its owner; this front door starts its own.
     if (build) result.refusedAttach = true;
   }
-  result.swept = await sweepStaleBoots(ccsDir, existing ? `aac-http-${existing.bootId}` : null);
+  result.swept = await sweepStaleBoots(
+    ccsDir,
+    existing ? `aac-http-${existing.bootId}` : null,
+    signal
+  );
+  signal.throwIfAborted();
   const bootId = randomBytes(12).toString('hex');
   const layout = socketLayout(ccsDir, bootId);
   if (!layout) return { ...result, failure: 'socket_path' };
@@ -381,6 +438,7 @@ export async function acquireRustServiceDetailed(
   const close = () => {
     if (closed) return;
     closed = true;
+    signal.removeEventListener('abort', close);
     agent.destroy();
     child?.stdin?.end();
     child?.kill('SIGTERM');
@@ -395,7 +453,9 @@ export async function acquireRustServiceDetailed(
     }
   };
   let failure: RustAcquireFailure = 'unhealthy';
+  signal.addEventListener('abort', close, { once: true });
   try {
+    signal.throwIfAborted();
     child = spawn(binary, [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {
@@ -433,6 +493,7 @@ export async function acquireRustServiceDetailed(
     // The service hashes its own image before it binds; allow a slow disk about 5 s.
     for (let attempt = 0; attempt < 200 && !failed && !closed; attempt++) {
       const build = fs.existsSync(boot.socketPath) ? await healthBuild(boot, active) : null;
+      if (closed || signal.aborted) break;
       if (build) {
         if (!buildMatches(build, sha256)) {
           // The file changed between hashing and spawning, or speaks another protocol.
@@ -445,6 +506,7 @@ export async function acquireRustServiceDetailed(
         const { agent: _agent, ...stored } = boot;
         fs.writeFileSync(temporary, JSON.stringify(stored), { flag: 'wx', mode: 0o600 });
         fs.renameSync(temporary, descriptor);
+        signal.removeEventListener('abort', close);
         const owned = child;
         return {
           ...result,

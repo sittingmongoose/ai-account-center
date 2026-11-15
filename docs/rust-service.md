@@ -230,6 +230,7 @@ inert while the service is off.
 
 | Piece | Behaviour |
 | --- | --- |
+| Startup | Public routes and the listener do not await Rust acquisition. Hashing uses asynchronous nonblocking reads of a regular image; one 5 s elapsed budget covers identity, attach, stale cleanup and readiness. Stop cancels acquisition and closes an unadopted child. Requests decline to TS until ready. |
 | Connection | One keep-alive `http.Agent` per boot (16 sockets), replaced when the boot changes. A request on a kept-alive connection the service had closed is retried once on a new one, inside the same 500 ms. |
 | Route table | `rust-service-routes.json` rows carry `group`, `roles`, `budgetMs` and `handler`. Rust builds its dispatch from them (startup refuses a row without a known handler, a read without a budget, a public route open to the `service` role or an internal route open to any other); TS gates forwarding on the same roles. |
 | Deadline | Each route's budget in Rust (400 ms for reads). Blocking work runs on two semaphore pools: 8 permits for reads, 4 for the store group. A full pool is a `busy` decline at once; a task that outlives its budget keeps its permit until it ends, so no more than 8 (or 4) blocking tasks ever exist; work whose request was dropped before it started never runs. The runtime caps blocking threads at 16. |

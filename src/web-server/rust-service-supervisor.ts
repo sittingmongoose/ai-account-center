@@ -68,6 +68,7 @@ export class RustSupervisor {
   protected inFlight = 0;
   protected readonly shadowInFlight = new Map<string, number>();
   protected stopped = false;
+  private readonly acquisition = new AbortController();
   protected binary: string | null = null;
   protected restartTimer: NodeJS.Timeout | null = null;
   protected minuteTimer: NodeJS.Timeout | null = null;
@@ -93,6 +94,7 @@ export class RustSupervisor {
   async start(
     binary = process.env.AAC_RUST_SERVICE_BINARY ?? path.join(__dirname, '../native/aac-http')
   ): Promise<void> {
+    if (this.stopped) return;
     if (this.mode === 'off') {
       let transport: unknown = process.env.AAC_AGENT_TRANSPORT;
       if (transport === undefined) {
@@ -111,8 +113,17 @@ export class RustSupervisor {
     this.removeMonitorFields = addEventLoopMonitorFields(() => this.monitorFields());
     let failure: string | null = 'unhealthy';
     try {
-      const result = await acquireRustServiceDetailed(getCcsDir(), binary, this.active);
+      const result = await acquireRustServiceDetailed(
+        getCcsDir(),
+        binary,
+        this.active,
+        this.acquisition.signal
+      );
       failure = result.failure;
+      if (this.stopped) {
+        result.lease?.close();
+        return;
+      }
       if (result.lease) {
         this.adopt(result.lease);
         logger.info('rust.service.ready', 'Private Rust service ready', {
@@ -136,6 +147,7 @@ export class RustSupervisor {
 
   stop(): void {
     this.stopped = true;
+    this.acquisition.abort();
     if (this.restartTimer) clearTimeout(this.restartTimer);
     if (this.minuteTimer) clearInterval(this.minuteTimer);
     this.restartTimer = null;
@@ -150,6 +162,10 @@ export class RustSupervisor {
   }
 
   protected adopt(lease: RustLease): void {
+    if (this.stopped) {
+      lease.close();
+      return;
+    }
     this.timeouts = 0;
     // The breakers counted the previous process's failures; a new boot starts closed.
     this.breakers.reset();
@@ -195,7 +211,12 @@ export class RustSupervisor {
       void (async () => {
         let failure: string | null = 'unhealthy';
         try {
-          const result = await acquireRustServiceDetailed(getCcsDir(), binary, this.active);
+          const result = await acquireRustServiceDetailed(
+            getCcsDir(),
+            binary,
+            this.active,
+            this.acquisition.signal
+          );
           failure = result.failure;
           if (result.lease) {
             if (this.stopped) result.lease.close();
