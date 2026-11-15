@@ -367,7 +367,8 @@ text }`, worst first, only from current readings: `bad` "claude main (7-day): at
 reset", `warn` "claude main (7-day): full in 1d 11h, before its Nov 12 reset".
 
 **Pinned** (`pinned`): the threads pinned in T3, each as the status update its owner would get by asking
-"status?" (PINNED-THREADS.md section 1). Composed in the `aac-status` native module from every machine's T3 pins
+"status?" (PINNED-THREADS.md section 1). Pins include delegated child threads: pinning is the owner's explicit choice,
+whatever the lineage. Invalid lineage shapes still refuse the read. Composed in the `aac-status` native module from every machine's T3 pins
 (the VM's database read locally, the Mac's, Windows' and Nas1's fetched with one short read-only `sqlite3 -json`
 command over the dashboard's ssh aliases) plus the agent reports above and the `agent-reports/status@1` documents
 (`writers/<writer>/status.json`, read with the agent-reports rules). TypeScript checks status reports for secrets

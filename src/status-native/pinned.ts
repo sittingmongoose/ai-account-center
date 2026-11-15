@@ -78,7 +78,7 @@ export function openStatusHandle(
 }
 
 /**
- * The pinned top-level threads from T3's state database (`AAC_T3_STATE_DB`, else
+ * All pinned threads, including delegated children, from T3's state database (`AAC_T3_STATE_DB`, else
  * `~/.t3/userdata/statev2.sqlite`; the native reader resolves the default), in pin order.
  */
 export async function readPinnedThreads(

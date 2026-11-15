@@ -319,6 +319,19 @@ describe('the readers check file', () => {
     ).toBe('/reports/here');
   });
 
+  it('matches encoded and decoded delegated ids without matching other children', () => {
+    const encoded = 'thread:delegated-task:command%3Amcp%3Afixture%3Adelegate-task%3Astream-f';
+    const decoded = encoded.replace(/%3A/g, ':');
+    const pin = { ...pins[0], id: encoded, title: 'Stream F' };
+    expect(normaliseThreadId(encoded)).toBe(normaliseThreadId(decoded));
+    expect(matchPin(decoded, [pin])).toEqual({ t3Thread: encoded, title: 'Stream F' });
+    expect(matchPin(encoded, [{ ...pin, id: decoded }])).toEqual({
+      t3Thread: decoded,
+      title: 'Stream F',
+    });
+    expect(matchPin(encoded.replace('stream-f', 'stream-e'), [pin])).toBeNull();
+  });
+
   it('normalises the id forms the composer tolerates, and matches no pin by title', () => {
     const hex = '320669b2e6cf23a317d2030821cc8a74289073eab144883a2c9b47acdade3c44';
     const plain = `mcp:launch:${hex}`;
@@ -721,5 +734,4 @@ describe('the readers check file', () => {
       console.error = original;
     }
   });
-
 });

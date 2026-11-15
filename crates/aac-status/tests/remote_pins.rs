@@ -129,10 +129,10 @@ fn a_changed_shape_is_refused_never_guessed() {
 }
 
 #[test]
-fn lineage_shape_facts_decide_top_level_and_wrong_shapes_are_refused() {
+fn valid_lineages_include_children_and_wrong_shapes_are_refused() {
     // The query carries the lineage's own json_type facts; the parser applies the same rule
     // as the local read: absent, null, or an object whose parent is absent or null is
-    // top-level, an object with a thread-id parent is a child, and every other shape is a
+    // valid, as is an object with a text parent (a pinned child). Every other shape is a
     // changed shape for that machine (Astra M1), never a silently included or excluded row.
     let mut child = row("child", "Child", json!("x"), "text", json!("k"), "text");
     child["lineageType"] = json!("object");
@@ -150,7 +150,7 @@ fn lineage_shape_facts_decide_top_level_and_wrong_shapes_are_refused() {
     let bare = row("bare", "No lineage", json!("x"), "text", json!("k"), "text");
     let rows = parse_remote_pins("mac", &format!("[{child},{object_null},{bare}]")).unwrap();
     let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
-    assert_eq!(ids, ["object-null", "bare"]);
+    assert_eq!(ids, ["child", "object-null", "bare"]);
 
     // A `lineage` that is JSON null prints "null" in its type column: top-level too.
     let mut null_lineage = row("null-lineage", "Null lineage", json!("x"), "text", json!("k"), "text");
@@ -357,7 +357,7 @@ fn a_remote_null_order_key_row_is_parsed_not_refused() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].pin_order_key, Value::Null);
 
-    // Child rows with a null key are skipped, as with the local read.
+    // Pinned child rows with a null key are included, as with the local read.
     let mut child = row("child", "Child", json!("x"), "text", Value::Null, "null");
     child["orderType"] = json!("null");
     child["pinOrderKey"] = Value::Null;
@@ -365,8 +365,10 @@ fn a_remote_null_order_key_row_is_parsed_not_refused() {
     child["parentType"] = json!("text");
     let top = row("top", "Top", json!("x"), "text", json!("a"), "text");
     let rows = parse_remote_pins("mac", &json!([top, child]).to_string()).unwrap();
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].id, "top");
+    assert_eq!(rows[1].id, "child");
+    assert_eq!(rows[1].pin_order_key, Value::Null);
 }
 
 #[test]
