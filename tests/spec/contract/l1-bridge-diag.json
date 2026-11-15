@@ -6,7 +6,7 @@
     "build": {
       "commit": "<commit>",
       "sha256": "<sha256>",
-      "protocol": 2,
+      "protocol": 3,
       "storeSchema": 2
     },
     "restarts": 0,
