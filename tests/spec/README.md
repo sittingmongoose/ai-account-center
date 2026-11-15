@@ -203,7 +203,8 @@ These are fixture measurements, not production capacity claims.
 
 ### M3 part 2 rounding regression
 
-`read-numbers.json` now carries 120,992 Node-generated reference forms. It retains
+`read-numbers.json` now carries 120,992 Node-generated reference forms (checked against `aac_num::view`
+by `crates/aac-num/tests/corpus.rs` since L3). It retains
 the original precision/fixed cases and adds both neighboring doubles and the
 center at every terminal x5 digit for decimal magnitudes 1e-23 through 1e12,
 plus integer prefixes and the 2^51/2^52/2^53 transitions. Both signs, signed zero,
@@ -296,3 +297,27 @@ service-only internal routes) is `crates/aac-http/tests/lifecycle.rs`.
 `bridge-measure.mjs` times a built `dist/` under Node (see `docs/rust-service.md`); it needs no
 Rust build and starts its servers inside the capture's closed boundary
 (`bridge-measure-server.cjs`). `large-home.mjs <dir>` writes the large synthetic home it uses.
+
+## L3: one numeric layer (`aac-num`)
+
+`crates/aac-num` is the one implementation of the number and date semantics the Rust side reproduces: ECMAScript
+`Number#toString`, `JSON.stringify`, `Math.round`, `toFixed`, `toPrecision` and the `reduce` sum; the ISO
+`Date.parse` forms, `toISOString` and civil-day math; `Intl.NumberFormat` en-US (two-fraction decimal, USD, short
+compact), zone clock and day words, and printable-ASCII collation; CPython `round(x, n)`, `repr`, `json.dumps` float
+text and the `datetime.fromtimestamp`/`fromisoformat` forms the helpers use. Each function states its domain and
+answers `None` outside it.
+
+The corpora in `num/` are written by the reference runtimes themselves and checked row by row by
+`crates/aac-num/tests/corpus.rs`. Both scripts are seeded and deterministic; rerun them after changing them:
+
+```
+node tests/spec/num/make-node-corpus.mjs      # ecma.json, intl.json, dates.json, collation.json (records Node and ICU)
+python3 tests/spec/num/make-python-corpus.py  # python.json (records the Python version)
+```
+
+Values cover signed zero, NaN and the infinities, the extremes and subnormals, both neighbouring doubles of powers of
+ten and two, of decimal halves at every place and of the reviewers' witnesses, exact shortest-digit ties, eighth
+steps near 2^38 to 2^53, random bit patterns over all of binary64 and human-sized decimals. The Python corpus adds
+exact ties at 0 to 60 places, the Kimi and Z.ai `round(x, 8)` witnesses, and the far-future sign-in milliseconds
+(8796093022210, 9999999999001 and their neighbours). The test also reproduces each deleted copy and shows where it
+disagreed with its reference while aac-num agrees.
