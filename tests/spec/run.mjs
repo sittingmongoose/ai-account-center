@@ -27,6 +27,7 @@ for (const [program, args] of [
     'read-http-parity',
     'account-read-parity',
     'profile-read-parity',
+    'home-number-admission',
   ].map((name) => [
     'bun',
     [

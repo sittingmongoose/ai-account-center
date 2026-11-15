@@ -22464,6 +22464,1402 @@
    "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"1 account · desktop profiles\",\"metaRuns\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"},{\"key\":\"seven_day_fable\",\"label\":\"Fable\"}],\"rows\":[{\"id\":\"claude:a\",\"provider\":\"claude\",\"profile\":\"a\",\"email\":\"a@example.test\",\"plan\":\"max\",\"meta\":\"Max · 1m ago\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"mac\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"claude:a|seven_day\",\"label\":\"Weekly\",\"fullLabel\":\"Weekly usage\",\"hasValue\":true,\"value\":0.000001,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"claude:a|missing\",\"label\":\"Fable\",\"fullLabel\":\"Fable\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Not reported yet\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"1 account\",\"metaRuns\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[{\"id\":\"codex:one\",\"provider\":\"codex\",\"profile\":\"one\",\"email\":\"one@example.test\",\"plan\":\"pro\",\"meta\":\"Pro · Ubuntu · 1m ago\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"on Ubuntu\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"codex:one|seven_day\",\"label\":\"Weekly\",\"fullLabel\":\"Weekly usage\",\"hasValue\":true,\"value\":33.333333333333336,\"valueText\":\"33.33\",\"overText\":\"\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]},{\"id\":\"antigravity\",\"kind\":\"accounts\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"meta\":\"Google Antigravity CLI · 1 account\",\"metaRuns\":[{\"text\":\"Google Antigravity CLI · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"Google\",\"strong\":false,\"tone\":\"\"},{\"text\":\"Antigravity\",\"strong\":false,\"tone\":\"\"},{\"text\":\"CLI\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Antigravity accounts are reported yet.\",\"columns\":[{\"key\":\"gemini-5h\",\"label\":\"Gemini 5-hour\",\"shortLabel\":\"Gemini 5hr\"},{\"key\":\"gemini-weekly\",\"label\":\"Gemini weekly\",\"shortLabel\":\"Gemini wk\"},{\"key\":\"3p-5h\",\"label\":\"Claude and GPT 5-hour\",\"shortLabel\":\"Claude GPT 5hr\"},{\"key\":\"3p-weekly\",\"label\":\"Claude and GPT weekly\",\"shortLabel\":\"Claude GPT wk\"}],\"rows\":[{\"id\":\"antigravity:a\",\"provider\":\"antigravity\",\"profile\":\"\",\"email\":\"ag@example.test\",\"plan\":\"pro\",\"meta\":\"pro · Ubuntu · 1m ago\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:a|gemini-5h\",\"label\":\"Gemini 5-hour\",\"fullLabel\":\"Gemini 5-hour\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:a|gemini-weekly\",\"label\":\"Gemini weekly\",\"fullLabel\":\"Gemini Models · Weekly\",\"hasValue\":true,\"value\":99.995,\"valueText\":\"100\",\"overText\":\"\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:a|3p-5h\",\"label\":\"Claude and GPT 5-hour\",\"fullLabel\":\"Claude and GPT 5-hour\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:a|3p-weekly\",\"label\":\"Claude and GPT weekly\",\"fullLabel\":\"Claude and GPT weekly\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]}],\"cards\":[{\"id\":\"cursor:a\",\"provider\":\"cursor\",\"accountId\":\"cursor:a\",\"label\":\"Cursor\",\"identity\":\"c@example.test\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live · Native quota\",\"flag\":\"\",\"sampled\":\"sampled 1m ago\",\"platform\":\"Ubuntu\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:a|plan-reported\",\"label\":\"Included\",\"fullLabel\":\"Included usage\",\"hasValue\":true,\"value\":1e-7,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[]},{\"id\":\"kimi-code:a\",\"provider\":\"kimi-code\",\"accountId\":\"kimi-code:a\",\"label\":\"Kimi Code\",\"identity\":\"k@example.test\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live · Native quota\",\"flag\":\"\",\"sampled\":\"sampled 1m ago\",\"platform\":\"Ubuntu\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"kimi-code:a|weekly\",\"label\":\"Weekly\",\"fullLabel\":\"Weekly\",\"hasValue\":true,\"value\":100.5,\"valueText\":\"100.5\",\"overText\":\"0.5\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
   },
   {
+   "name": "decline/number-1e14#0",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 100000000000000.11,
+        "limit": 200000000000000.22,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 100000000000000.11
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 100000000000000.11,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 100000000000000.11,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":100000000000000.11,\"valueText\":\"100,000,000,000,000.11\",\"overText\":\"99,999,999,999,900.11\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$100,000,000,000,000.11\",\"unit\":\"of $200,000,000,000,000.22 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$100,000,000,000,000.11\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"100,000,000,000,000.11 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "decline/number-1e14#1",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 100000000000000.12,
+        "limit": 200000000000000.25,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 100000000000000.12
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 100000000000000.12,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 100000000000000.12,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":100000000000000.12,\"valueText\":\"100,000,000,000,000.12\",\"overText\":\"99,999,999,999,900.12\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$100,000,000,000,000.12\",\"unit\":\"of $200,000,000,000,000.25 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$100,000,000,000,000.12\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"100,000,000,000,000.12 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "decline/number-1e14#2",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 100000000000000.14,
+        "limit": 200000000000000.28,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 100000000000000.14
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 100000000000000.14,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 100000000000000.14,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":100000000000000.14,\"valueText\":\"100,000,000,000,000.14\",\"overText\":\"99,999,999,999,900.14\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$100,000,000,000,000.14\",\"unit\":\"of $200,000,000,000,000.28 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$100,000,000,000,000.14\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"100,000,000,000,000.14 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "decline/number-2^47#0",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 140737488355327.11,
+        "limit": 281474976710654.22,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 140737488355327.11
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 140737488355327.11,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 140737488355327.11,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":140737488355327.11,\"valueText\":\"140,737,488,355,327.11\",\"overText\":\"140,737,488,355,227.11\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$140,737,488,355,327.11\",\"unit\":\"of $281,474,976,710,654.22 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$140,737,488,355,327.11\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"140,737,488,355,327.11 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "decline/number-2^47#1",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 140737488355327.12,
+        "limit": 281474976710654.25,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 140737488355327.12
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 140737488355327.12,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 140737488355327.12,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":140737488355327.12,\"valueText\":\"140,737,488,355,327.12\",\"overText\":\"140,737,488,355,227.12\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$140,737,488,355,327.12\",\"unit\":\"of $281,474,976,710,654.25 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$140,737,488,355,327.12\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"140,737,488,355,327.12 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "decline/number-2^47#2",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 140737488355327.14,
+        "limit": 281474976710654.28,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 140737488355327.14
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 140737488355327.14,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 140737488355327.14,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":140737488355327.14,\"valueText\":\"140,737,488,355,327.14\",\"overText\":\"140,737,488,355,227.14\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$140,737,488,355,327.14\",\"unit\":\"of $281,474,976,710,654.28 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$140,737,488,355,327.14\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"140,737,488,355,327.14 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "decline/number-2^51#0",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 2251799813685247,
+        "limit": 4503599627370494,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 2251799813685247
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 2251799813685247,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 2251799813685247,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     },
+     "2251799813685247": {
+      "iso": "+073326-09-11T20:14:45.247Z",
+      "clock": "4:14 PM",
+      "day": "Sep 11"
+     },
+     "4503599627370494": {
+      "iso": "+144683-05-23T16:29:30.494Z",
+      "clock": "12:29 PM",
+      "day": "May 23"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":2251799813685247,\"valueText\":\"2,251,799,813,685,247\",\"overText\":\"2,251,799,813,685,147\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$2,251,799,813,685,247.00\",\"unit\":\"of $4,503,599,627,370,494.00 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$2,251,799,813,685,247.00\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"2,251,799,813,685,247 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "decline/number-2^51#1",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 2251799813685247.2,
+        "limit": 4503599627370494.5,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 2251799813685247.2
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 2251799813685247.2,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 2251799813685247.2,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":2251799813685247.2,\"valueText\":\"2,251,799,813,685,247.2\",\"overText\":\"2,251,799,813,685,147.2\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$2,251,799,813,685,247.20\",\"unit\":\"of $4,503,599,627,370,494.50 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$2,251,799,813,685,247.20\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"2,251,799,813,685,247.2 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "decline/number-2^51#2",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 2251799813685247.5,
+        "limit": 4503599627370495,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 2251799813685247.5
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 2251799813685247.5,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 2251799813685247.5,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     },
+     "4503599627370495": {
+      "iso": "+144683-05-23T16:29:30.495Z",
+      "clock": "12:29 PM",
+      "day": "May 23"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":2251799813685247.5,\"valueText\":\"2,251,799,813,685,247.5\",\"overText\":\"2,251,799,813,685,147.5\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$2,251,799,813,685,247.50\",\"unit\":\"of $4,503,599,627,370,495.00 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$2,251,799,813,685,247.50\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"2,251,799,813,685,247.5 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "edge/number-control",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60,
+     "hiddenProviders": [],
+     "hiddenAccountIds": []
+    },
+    "accounts": [
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "cursor:fixture",
+      "provider": "cursor",
+      "providerLabel": "Cursor",
+      "label": "Cursor",
+      "windows": [
+       {
+        "key": "fixture-spend",
+        "label": "Spend",
+        "kind": "spend",
+        "used": 1234.56,
+        "limit": 2469.12,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-rate",
+        "label": "Usage",
+        "usedPercent": 1234.56
+       }
+      ]
+     },
+     {
+      "platform": "mac",
+      "status": "ok",
+      "plan": "pro",
+      "fetchedAt": "2026-10-01T15:16:00.000Z",
+      "id": "zai:fixture",
+      "provider": "zai",
+      "providerLabel": "Z.ai Coding Plan",
+      "label": "Z.ai Coding Plan",
+      "windows": [
+       {
+        "key": "fixture-balance",
+        "label": "Balance",
+        "kind": "balance",
+        "remaining": 1234.56,
+        "used": 0,
+        "limit": null,
+        "unit": "USD"
+       },
+       {
+        "key": "fixture-credits",
+        "label": "Credits",
+        "kind": "balance",
+        "remaining": 1234.56,
+        "used": 0,
+        "limit": null,
+        "unit": "credits"
+       }
+      ]
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000
+    },
+    "order": {
+     "cursor:fixture": 0,
+     "zai:fixture": 1
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"0 accounts · desktop profiles\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[],\"rows\":[]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"0 accounts\",\"metaRuns\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\" accounts · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"0\",\"strong\":true,\"tone\":\"\"},{\"text\":\"accounts\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[]}],\"cards\":[{\"id\":\"cursor:fixture\",\"provider\":\"cursor\",\"accountId\":\"cursor:fixture\",\"label\":\"Cursor\",\"identity\":\"Cursor\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:fixture|fixture-rate\",\"label\":\"Usage\",\"fullLabel\":\"Usage\",\"hasValue\":true,\"value\":1234.56,\"valueText\":\"1,234.56\",\"overText\":\"1,134.56\",\"reset\":\"no reset reported\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"\",\"source\":\"Unknown source · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[{\"key\":\"cursor:fixture|fixture-spend\",\"label\":\"Spend\",\"value\":\"$1,234.56\",\"unit\":\"of $2,469.12 spent\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]},{\"id\":\"zai:fixture\",\"provider\":\"zai\",\"accountId\":\"zai:fixture\",\"label\":\"Z.ai Coding Plan\",\"identity\":\"Z.ai Coding Plan\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live\",\"flag\":\"\",\"sampled\":\"sampled just now\",\"platform\":\"Mac\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"Usage unavailable\",\"meters\":[],\"amounts\":[{\"key\":\"zai:fixture|fixture-balance\",\"label\":\"Balance\",\"value\":\"$1,234.56\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false},{\"key\":\"zai:fixture|fixture-credits\",\"label\":\"Credits\",\"value\":\"1,234.56 credits\",\"unit\":\"\",\"sub\":\"\",\"icon\":\"wallet\",\"spent\":false}]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":0},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
+   "name": "edge/fractional-readings-proved",
+   "dashboard": {
+    "schemaVersion": 1,
+    "updatedAt": "2026-10-01T15:16:00.000Z",
+    "settings": {
+     "refreshIntervalSeconds": 60
+    },
+    "accounts": [
+     {
+      "id": "codex:one",
+      "provider": "codex",
+      "providerLabel": "Codex",
+      "label": "Codex",
+      "email": "one@example.test",
+      "plan": "pro",
+      "platform": "ubuntu",
+      "source": "Native quota",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T15:15:00.000Z",
+      "sampledAt": "2026-10-01T15:15:00.000Z",
+      "isActive": false,
+      "windows": [
+       {
+        "key": "seven_day",
+        "label": "Weekly usage",
+        "kind": "rate_limit",
+        "usedPercent": 0.000001,
+        "remainingPercent": 99.999999,
+        "resetAt": "2026-10-02T15:16:00.000Z",
+        "windowMinutes": 10080,
+        "used": null,
+        "limit": null,
+        "unit": null
+       }
+      ],
+      "capabilities": {
+       "codexProfile": "one",
+       "claudeProfileId": null,
+       "claudePlatforms": []
+      }
+     },
+     {
+      "id": "claude:a",
+      "provider": "claude",
+      "providerLabel": "Claude",
+      "label": "Codex",
+      "email": "a@example.test",
+      "plan": "max",
+      "platform": "mac",
+      "source": "Native quota",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T15:15:00.000Z",
+      "sampledAt": "2026-10-01T15:15:00.000Z",
+      "isActive": false,
+      "windows": [
+       {
+        "key": "seven_day",
+        "label": "Weekly usage",
+        "kind": "rate_limit",
+        "usedPercent": 99.995,
+        "remainingPercent": 0.005,
+        "resetAt": "2026-10-02T15:16:00.000Z",
+        "windowMinutes": 10080,
+        "used": null,
+        "limit": null,
+        "unit": null
+       }
+      ],
+      "capabilities": {
+       "codexProfile": null,
+       "claudeProfileId": "a",
+       "claudePlatforms": [
+        "mac",
+        "windows"
+       ]
+      }
+     },
+     {
+      "id": "antigravity:a",
+      "provider": "antigravity",
+      "providerLabel": "Codex",
+      "label": "Codex",
+      "email": "ag@example.test",
+      "plan": "pro",
+      "platform": "ubuntu",
+      "source": "Native quota",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T15:15:00.000Z",
+      "sampledAt": "2026-10-01T15:15:00.000Z",
+      "isActive": false,
+      "windows": [
+       {
+        "key": "gemini-weekly",
+        "label": "Gemini Models · Weekly",
+        "kind": "rate_limit",
+        "usedPercent": 100.5,
+        "remainingPercent": 0,
+        "resetAt": "2026-10-02T15:16:00.000Z",
+        "windowMinutes": 10080,
+        "used": null,
+        "limit": null,
+        "unit": null
+       }
+      ],
+      "capabilities": {}
+     },
+     {
+      "id": "kimi-code:a",
+      "provider": "kimi-code",
+      "providerLabel": "Codex",
+      "label": "Codex",
+      "email": "k@example.test",
+      "plan": "pro",
+      "platform": "ubuntu",
+      "source": "Native quota",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T15:15:00.000Z",
+      "sampledAt": "2026-10-01T15:15:00.000Z",
+      "isActive": false,
+      "windows": [
+       {
+        "key": "weekly",
+        "label": "Weekly",
+        "kind": "rate_limit",
+        "usedPercent": 1e-7,
+        "remainingPercent": 99.9999999,
+        "resetAt": "2026-10-02T15:16:00.000Z",
+        "windowMinutes": 10080,
+        "used": null,
+        "limit": null,
+        "unit": null
+       }
+      ],
+      "capabilities": {
+       "codexProfile": "one",
+       "claudeProfileId": null,
+       "claudePlatforms": []
+      }
+     },
+     {
+      "id": "cursor:a",
+      "provider": "cursor",
+      "providerLabel": "Codex",
+      "label": "Codex",
+      "email": "c@example.test",
+      "plan": "pro",
+      "platform": "ubuntu",
+      "source": "Native quota",
+      "status": "ok",
+      "message": null,
+      "fetchedAt": "2026-10-01T15:15:00.000Z",
+      "sampledAt": "2026-10-01T15:15:00.000Z",
+      "isActive": false,
+      "windows": [
+       {
+        "key": "plan-reported",
+        "label": "Included usage",
+        "kind": "rate_limit",
+        "usedPercent": 12.345,
+        "remainingPercent": 87.655,
+        "resetAt": "2026-10-02T15:16:00.000Z",
+        "windowMinutes": null,
+        "used": null,
+        "limit": null,
+        "unit": null
+       }
+      ],
+      "capabilities": {
+       "codexProfile": "one",
+       "claudeProfileId": null,
+       "claudePlatforms": []
+      }
+     }
+    ],
+    "codexAutoSwitch": {
+     "enabled": true,
+     "thresholdPercent": 5,
+     "pollIntervalSeconds": 60,
+     "outcome": "healthy",
+     "message": "Healthy",
+     "activationInProgress": false
+    }
+   },
+   "profiles": [],
+   "antigravity": null,
+   "ctx": {
+    "now": 1790867760000,
+    "timeZone": "America/New_York",
+    "platform": "mac",
+    "intervalSeconds": 60,
+    "username": "",
+    "host": "",
+    "formatProbe": [
+     "-1,234.57",
+     "1.23M",
+     "-$1,234.50",
+     "Jan 5, 12:07 AM",
+     "1:07 PM",
+     "Mon, Jan 5, 1:07 PM",
+     "Jan 5",
+     "_abB"
+    ]
+   },
+   "presentation": {
+    "dates": {
+     "1790867760000": {
+      "iso": "2026-10-01T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 1"
+     },
+     "1790867700000": {
+      "iso": "2026-10-01T15:15:00.000Z",
+      "clock": "11:15 AM",
+      "day": "Oct 1"
+     },
+     "1790954160000": {
+      "iso": "2026-10-02T15:16:00.000Z",
+      "clock": "11:16 AM",
+      "day": "Oct 2"
+     }
+    },
+    "epochs": {
+     "2026-10-01T15:16:00.000Z": 1790867760000,
+     "2026-10-01T15:15:00.000Z": 1790867700000,
+     "2026-10-02T15:16:00.000Z": 1790954160000
+    },
+    "order": {
+     "antigravity:a": 0,
+     "claude:a": 1,
+     "codex:one": 2,
+     "cursor:a": 3,
+     "kimi-code:a": 4
+    }
+   },
+   "expected": "{\"version\":3,\"sections\":[{\"id\":\"claude\",\"kind\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"meta\":\"1 account · desktop profiles\",\"metaRuns\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account · desktop profiles\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"desktop\",\"strong\":false,\"tone\":\"\"},{\"text\":\"profiles\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Claude accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"},{\"key\":\"seven_day_fable\",\"label\":\"Fable\"}],\"rows\":[{\"id\":\"claude:a\",\"provider\":\"claude\",\"profile\":\"a\",\"email\":\"a@example.test\",\"plan\":\"max\",\"meta\":\"Max · 1m ago\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"mac\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"claude:a|seven_day\",\"label\":\"Weekly\",\"fullLabel\":\"Weekly usage\",\"hasValue\":true,\"value\":99.995,\"valueText\":\"100\",\"overText\":\"\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"claude:a|missing\",\"label\":\"Fable\",\"fullLabel\":\"Fable\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Not reported yet\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Mac · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]},{\"id\":\"codex\",\"kind\":\"accounts\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"meta\":\"1 account\",\"metaRuns\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"none active\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"none\",\"strong\":false,\"tone\":\"\"},{\"text\":\"active\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Codex accounts are reported yet.\",\"columns\":[{\"key\":\"weekly\",\"label\":\"Weekly\"}],\"rows\":[{\"id\":\"codex:one\",\"provider\":\"codex\",\"profile\":\"one\",\"email\":\"one@example.test\",\"plan\":\"pro\",\"meta\":\"Pro · Ubuntu · 1m ago\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"on Ubuntu\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"codex:one|seven_day\",\"label\":\"Weekly\",\"fullLabel\":\"Weekly usage\",\"hasValue\":true,\"value\":0.000001,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]},{\"id\":\"antigravity\",\"kind\":\"accounts\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"meta\":\"Google Antigravity CLI · 1 account\",\"metaRuns\":[{\"text\":\"Google Antigravity CLI · \",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\" account\",\"strong\":false,\"tone\":\"\"}],\"metaWords\":[{\"text\":\"Google\",\"strong\":false,\"tone\":\"\"},{\"text\":\"Antigravity\",\"strong\":false,\"tone\":\"\"},{\"text\":\"CLI\",\"strong\":false,\"tone\":\"\"},{\"text\":\"·\",\"strong\":false,\"tone\":\"\"},{\"text\":\"1\",\"strong\":true,\"tone\":\"\"},{\"text\":\"account\",\"strong\":false,\"tone\":\"\"}],\"foot\":{\"shown\":false,\"warn\":false,\"runs\":[],\"words\":[],\"when\":\"\"},\"activeId\":\"\",\"activeLabel\":\"\",\"empty\":\"No Antigravity accounts are reported yet.\",\"columns\":[{\"key\":\"gemini-5h\",\"label\":\"Gemini 5-hour\",\"shortLabel\":\"Gemini 5hr\"},{\"key\":\"gemini-weekly\",\"label\":\"Gemini weekly\",\"shortLabel\":\"Gemini wk\"},{\"key\":\"3p-5h\",\"label\":\"Claude and GPT 5-hour\",\"shortLabel\":\"Claude GPT 5hr\"},{\"key\":\"3p-weekly\",\"label\":\"Claude and GPT weekly\",\"shortLabel\":\"Claude GPT wk\"}],\"rows\":[{\"id\":\"antigravity:a\",\"provider\":\"antigravity\",\"profile\":\"\",\"email\":\"ag@example.test\",\"plan\":\"pro\",\"meta\":\"pro · Ubuntu · 1m ago\",\"status\":\"Live\",\"note\":\"\",\"platform\":\"Ubuntu\",\"active\":false,\"activeLabel\":\"\",\"setup\":false,\"canMac\":false,\"canWindows\":false,\"amountsLine\":\"\",\"amountsRuns\":[],\"amountsWords\":[],\"cells\":[{\"key\":\"antigravity:a|gemini-5h\",\"label\":\"Gemini 5-hour\",\"fullLabel\":\"Gemini 5-hour\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:a|gemini-weekly\",\"label\":\"Gemini weekly\",\"fullLabel\":\"Gemini Models · Weekly\",\"hasValue\":true,\"value\":100.5,\"valueText\":\"100.5\",\"overText\":\"0.5\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:a|3p-5h\",\"label\":\"Claude and GPT 5-hour\",\"fullLabel\":\"Claude and GPT 5-hour\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"},{\"key\":\"antigravity:a|3p-weekly\",\"label\":\"Claude and GPT weekly\",\"fullLabel\":\"Claude and GPT weekly\",\"hasValue\":false,\"value\":0,\"valueText\":\"\",\"overText\":\"\",\"reset\":\"\",\"resetExact\":\"\",\"resetSoon\":false,\"naText\":\"Unavailable\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}]}]}],\"cards\":[{\"id\":\"cursor:a\",\"provider\":\"cursor\",\"accountId\":\"cursor:a\",\"label\":\"Cursor\",\"identity\":\"c@example.test\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live · Native quota\",\"flag\":\"\",\"sampled\":\"sampled 1m ago\",\"platform\":\"Ubuntu\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"cursor:a|plan-reported\",\"label\":\"Included\",\"fullLabel\":\"Included usage\",\"hasValue\":true,\"value\":12.345,\"valueText\":\"12.35\",\"overText\":\"\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[]},{\"id\":\"kimi-code:a\",\"provider\":\"kimi-code\",\"accountId\":\"kimi-code:a\",\"label\":\"Kimi Code\",\"identity\":\"k@example.test\",\"plan\":\"Pro\",\"status\":\"Live\",\"source\":\"Live · Native quota\",\"flag\":\"\",\"sampled\":\"sampled 1m ago\",\"platform\":\"Ubuntu\",\"planNote\":\"\",\"packsNote\":\"\",\"note\":\"\",\"meters\":[{\"key\":\"kimi-code:a|weekly\",\"label\":\"Weekly\",\"fullLabel\":\"Weekly\",\"hasValue\":true,\"value\":1e-7,\"valueText\":\"0\",\"overText\":\"\",\"reset\":\"resets in 1d 0h\",\"resetExact\":\"Resets Oct 2, 11:16 AM\",\"resetSoon\":false,\"naText\":\"\",\"naSub\":\"\",\"amount\":\"\",\"left\":\"\",\"sampled\":\"Oct 1, 11:15 AM · 1m ago\",\"source\":\"Native quota · Ubuntu · Live\",\"caption\":\"\",\"captionTip\":\"\"}],\"amounts\":[]}],\"registry\":[{\"id\":\"claude\",\"label\":\"Claude\",\"longLabel\":\"Claude\",\"signIn\":\"Desktop profile\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"codex\",\"label\":\"Codex\",\"longLabel\":\"Codex\",\"signIn\":\"Device-code sign-in\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"antigravity\",\"label\":\"Antigravity\",\"longLabel\":\"Google Antigravity CLI\",\"signIn\":\"Supervised CLI login\",\"multi\":true,\"visible\":true,\"count\":1},{\"id\":\"cursor\",\"label\":\"Cursor\",\"longLabel\":\"Cursor\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"muse\",\"label\":\"Muse Code\",\"longLabel\":\"Muse Code\",\"signIn\":\"Desktop app session\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"kimi-code\",\"label\":\"Kimi Code\",\"longLabel\":\"Kimi Code\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":1},{\"id\":\"qwen\",\"label\":\"Qwen Token Plan\",\"longLabel\":\"Qwen Token Plan\",\"signIn\":\"API key, web extras by browser extension\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"zai\",\"label\":\"Z.ai Coding Plan\",\"longLabel\":\"Z.ai Coding Plan\",\"signIn\":\"API key\",\"multi\":false,\"visible\":true,\"count\":0},{\"id\":\"opencode-go\",\"label\":\"OpenCode Go\",\"longLabel\":\"OpenCode Go\",\"signIn\":\"API key, console wallet by browser session\",\"multi\":true,\"visible\":true,\"count\":0}],\"chrome\":{\"statusLead\":\"Updated\",\"statusStrong\":\"just now\",\"statusMore\":\"live\",\"statusTip\":\"Last refresh Oct 1, 11:16 AM · live · every 1 min\",\"refreshing\":false,\"username\":\"\",\"host\":\"\"}}"
+  },
+  {
    "name": "edge/other-computers",
    "dashboard": {
     "schemaVersion": 1,

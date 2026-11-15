@@ -572,8 +572,10 @@ pub fn expiry_text(cx: &Ctx, value: Option<&Value>, prefix: &str) -> R<String> {
 }
 
 /// view-model.mjs `unitAmount`.
-pub fn unit_amount(value: Option<f64>, unit: Option<&str>) -> String {
-    let Some(x) = value else { return String::new() };
+pub fn unit_amount(value: Option<f64>, unit: Option<&str>) -> R<String> {
+    let Some(x) = value else {
+        return Ok(String::new());
+    };
     if unit == Some("USD") {
         return money(x);
     }
@@ -587,14 +589,14 @@ pub fn unit_amount(value: Option<f64>, unit: Option<&str>) -> String {
         }
         _ => "",
     };
-    if u.is_empty() {
-        nf2(x)
+    Ok(if u.is_empty() {
+        nf2(x)?
     } else {
-        format!("{} {u}", nf2(x))
-    }
+        format!("{} {u}", nf2(x)?)
+    })
 }
 
-fn compact_amount(x: f64) -> String {
+fn compact_amount(x: f64) -> R<String> {
     if x.abs() >= 1e6 { compact(x) } else { nf2(x) }
 }
 
@@ -644,8 +646,8 @@ pub fn meter_view(cx: &Ctx, account: Acc, w: Option<&Win>, opts: MeterOpts) -> R
     let amount = match (num("used"), num("limit")) {
         (Some(used), Some(limit)) if !pending && !restates && limit > 0.0 => format!(
             "{} of {}{}",
-            compact(used),
-            compact_amount(limit),
+            compact(used)?,
+            compact_amount(limit)?,
             if unit.is_empty() {
                 String::new()
             } else {
@@ -685,9 +687,9 @@ pub fn meter_view(cx: &Ctx, account: Acc, w: Option<&Win>, opts: MeterOpts) -> R
         full_label,
         has_value,
         value: Some(if has_value { v } else { 0.0 }),
-        value_text: if has_value { nf2(v) } else { String::new() },
+        value_text: if has_value { nf2(v)? } else { String::new() },
         over_text: if has_value && v > 100.0 {
-            nf2(v - 100.0)
+            nf2(v - 100.0)?
         } else {
             String::new()
         },
@@ -725,7 +727,7 @@ pub fn meter_view(cx: &Ctx, account: Acc, w: Option<&Win>, opts: MeterOpts) -> R
         amount,
         left: match num("remaining") {
             Some(r) if !pending && !unit.is_empty() => {
-                format!("{} left", unit_amount(Some(r), Some(unit)))
+                format!("{} left", unit_amount(Some(r), Some(unit))?)
             }
             _ => String::new(),
         },
@@ -854,12 +856,12 @@ pub fn amount_view(cx: &Ctx, account: Acc, w: &Win, no_expiry: bool) -> R<Amount
     };
     if rolled_up_packs(account, w) && num("limit").is_some() {
         icon = "pack";
-        value = or_unavailable(unit_amount(num("remaining"), None));
-        suffix = format!("of {} left", unit_amount(num("limit"), unit_opt));
+        value = or_unavailable(unit_amount(num("remaining"), None)?);
+        suffix = format!("of {} left", unit_amount(num("limit"), unit_opt)?);
         spent = remaining_zero;
         sub = joined(&[
             match num("used") {
-                Some(u) if u > 0.0 => format!("{} used", nf2(u)),
+                Some(u) if u > 0.0 => format!("{} used", nf2(u)?),
                 _ => String::new(),
             },
             if no_expiry {
@@ -875,8 +877,8 @@ pub fn amount_view(cx: &Ctx, account: Acc, w: &Win, no_expiry: bool) -> R<Amount
         ]);
     } else if ci_contains(w.text("label"), "pack") && num("limit").is_some() {
         icon = "pack";
-        value = or_unavailable(unit_amount(num("remaining"), None));
-        suffix = format!("of {} left", unit_amount(num("limit"), unit_opt));
+        value = or_unavailable(unit_amount(num("remaining"), None)?);
+        suffix = format!("of {} left", unit_amount(num("limit"), unit_opt)?);
         spent = remaining_zero;
         sub = joined(&[
             if spent {
@@ -887,9 +889,9 @@ pub fn amount_view(cx: &Ctx, account: Acc, w: &Win, no_expiry: bool) -> R<Amount
             expires,
         ]);
     } else if is_str(w.get("kind"), "spend") {
-        value = or_unavailable(unit_amount(num("used"), unit_opt));
+        value = or_unavailable(unit_amount(num("used"), unit_opt)?);
         suffix = match num("limit") {
-            Some(l) => format!("of {} spent", unit_amount(Some(l), unit_opt)),
+            Some(l) => format!("of {} spent", unit_amount(Some(l), unit_opt)?),
             None => "spent".into(),
         };
         sub = exact(cx, w.get("resetAt"), "Resets ")?;
@@ -898,15 +900,15 @@ pub fn amount_view(cx: &Ctx, account: Acc, w: &Win, no_expiry: bool) -> R<Amount
         if is_false(w.get("enabled")) {
             value = "Off".into();
             sub = match (num("limit"), num("used")) {
-                (Some(l), _) => format!("Limit {}", unit_amount(Some(l), unit_opt)),
+                (Some(l), _) => format!("Limit {}", unit_amount(Some(l), unit_opt)?),
                 (None, Some(u)) if !unit.is_empty() => {
-                    format!("{} used", unit_amount(Some(u), unit_opt))
+                    format!("{} used", unit_amount(Some(u), unit_opt)?)
                 }
                 _ => String::new(),
             };
         } else {
             value = match num("used") {
-                Some(u) => unit_amount(Some(u), unit_opt),
+                Some(u) => unit_amount(Some(u), unit_opt)?,
                 None => "Unavailable".into(),
             };
             suffix = if num("used").is_some() {
@@ -915,17 +917,17 @@ pub fn amount_view(cx: &Ctx, account: Acc, w: &Win, no_expiry: bool) -> R<Amount
                 String::new()
             };
             sub = match num("limit") {
-                Some(l) => format!("of {}", unit_amount(Some(l), unit_opt)),
+                Some(l) => format!("of {}", unit_amount(Some(l), unit_opt)?),
                 None => String::new(),
             };
         }
     } else if unit == "resets" {
         icon = "rotate";
         if let (Some(u), Some(l)) = (num("used"), num("limit")) {
-            value = nf2(u);
-            suffix = format!("of {} used", unit_amount(Some(l), Some("resets")));
+            value = nf2(u)?;
+            suffix = format!("of {} used", unit_amount(Some(l), Some("resets"))?);
         } else {
-            value = or_unavailable(unit_amount(num("remaining"), Some("resets")));
+            value = or_unavailable(unit_amount(num("remaining"), Some("resets"))?);
         }
         sub = joined(&[
             expires,
@@ -938,11 +940,11 @@ pub fn amount_view(cx: &Ctx, account: Acc, w: &Win, no_expiry: bool) -> R<Amount
         ]);
     } else if unit == "packs" {
         icon = "pack";
-        value = or_unavailable(unit_amount(num("remaining"), Some("packs")));
+        value = or_unavailable(unit_amount(num("remaining"), Some("packs"))?);
     } else {
         value = match (num("remaining"), num("used")) {
-            (Some(r), _) => unit_amount(Some(r), unit_opt),
-            (None, Some(u)) => format!("{} used", unit_amount(Some(u), unit_opt)),
+            (Some(r), _) => unit_amount(Some(r), unit_opt)?,
+            (None, Some(u)) => format!("{} used", unit_amount(Some(u), unit_opt)?),
             _ => "Unavailable".into(),
         };
         sub = joined(&[

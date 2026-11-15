@@ -617,13 +617,13 @@ fn codex_amounts(cx: &Ctx, account: Acc) -> R<Vec<Run>> {
             parts.push(vec![plain("Credits off")]);
         } else if let Some(r) = finite(c.get("remaining")) {
             parts.push(vec![
-                run(if r >= 10000.0 { compact(r) } else { nf2(r) }, true, ""),
+                run(if r >= 10000.0 { compact(r)? } else { nf2(r)? }, true, ""),
                 plain(" credits"),
             ]);
         }
     }
     if let Some(t) = total {
-        parts.push(vec![run(nf2(t), true, ""), plain(" banked")]);
+        parts.push(vec![run(nf2(t)?, true, ""), plain(" banked")]);
     }
     let mut notes: Vec<String> = Vec::new();
     for w in credits.iter().chain(banked.iter()) {

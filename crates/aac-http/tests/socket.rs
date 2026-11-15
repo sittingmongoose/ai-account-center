@@ -426,6 +426,7 @@ fn home_view_is_the_js_view_or_the_shared_read_fallback() -> Result<()> {
         "probe/narrow",
         "probe/safari",
         "edge/hidden",
+        "edge/number-control",
     ] {
         let (envelope, expected) = home_case(name)?;
         let (status, got) = split(&home(
@@ -455,6 +456,13 @@ fn home_view_is_the_js_view_or_the_shared_read_fallback() -> Result<()> {
     ];
     for name in ["decline/facts", "decline/locale", "decline/open-progress"] {
         refused.push(home_case(name)?.0);
+    }
+    // Big review M4/L4: amounts outside the proved number domain (the reviewers' tie witnesses and
+    // both neighbouring doubles) are never served; the front door builds the page's own view.
+    for label in ["1e14", "2^47", "2^51"] {
+        for i in 0..3 {
+            refused.push(home_case(&format!("decline/number-{label}#{i}"))?.0);
+        }
     }
     for input in &refused {
         let (status, got) = split(&home(

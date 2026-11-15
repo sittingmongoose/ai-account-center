@@ -19,7 +19,12 @@ where
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
-/// `Number.prototype.toString` for a finite number (shortest round-trip digits, JS notation rules). `-0` is `"0"`.
+/// `Number.prototype.toString` notation over Rust's shortest round-trip digits. `-0` is `"0"`.
+///
+/// Those digits equal ECMAScript's only where the shortest digits are unique: Rust breaks some ties the other way
+/// (2251799813685247.25 writes `.3`, JS `.2`). This crate cannot depend on the native Status crate, so the proof lives
+/// with the producer: `aac-views` writes only numbers `aac_status::read_context::js_number` admits (its own text and
+/// a meter `value` only beside an admitted `valueText`), and tests both writers agree on that domain.
 pub fn js_number_text(x: f64) -> String {
     if x == 0.0 {
         return "0".into();

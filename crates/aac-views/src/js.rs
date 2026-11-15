@@ -228,9 +228,10 @@ pub fn string_of(v: Option<&Value>) -> R<String> {
         None => "undefined".into(),
         Some(Value::Null) => "null".into(),
         Some(Value::Bool(b)) => b.to_string(),
-        Some(Value::Number(n)) => {
-            aac_api::home::js_number_text(n.as_f64().ok_or(Decline("number"))?)
-        }
+        Some(Value::Number(n)) => n
+            .as_f64()
+            .and_then(aac_status::read_context::js_number)
+            .ok_or(Decline("number"))?,
         Some(Value::String(s)) => s.clone(),
         Some(_) => return Err(Decline("type")),
     })
@@ -591,20 +592,30 @@ struct Decimal {
     frac: String,
 }
 
-/// The shortest round-trip decimal of `|x|` (what ICU formats), split at the point.
-fn decimal(x: f64) -> Decimal {
-    let sci = format!("{:e}", x.abs());
-    let (mantissa, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let point = exp.parse::<i64>().unwrap_or(0) + 1;
-    if digits == "0" {
-        return Decimal {
+/// The digits ECMAScript and ICU write for `|x|`, split at the point. They come from Status's
+/// `read_context::js_number`, the one conversion proved equal to JS `String(x)`: on its domain the
+/// shortest round-trip digits are unique, so the host's choice is the browser's. Rust's own shortest
+/// formatter breaks some ties differently (2251799813685247.25 writes .3 where JS writes .2), so
+/// anything outside that domain declines and the page builds its own view.
+fn decimal(x: f64) -> R<Decimal> {
+    let text = aac_status::read_context::js_number(x.abs()).ok_or(Decline("number"))?;
+    let (mantissa, exp) = match text.split_once('e') {
+        Some((m, e)) => (m, e.parse::<i64>().map_err(|_| Decline("number"))?),
+        None => (text.as_str(), 0),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let all = format!("{int}{frac}");
+    let digits = all.trim_start_matches('0');
+    if digits.is_empty() {
+        return Ok(Decimal {
             int: "0".into(),
             frac: String::new(),
-        };
+        });
     }
     let k = digits.len() as i64;
-    if point <= 0 {
+    // Where the point falls after the first significant digit's position in `digits`.
+    let point = int.len() as i64 + exp - (all.len() - digits.len()) as i64;
+    Ok(if point <= 0 {
         Decimal {
             int: "0".into(),
             frac: format!("{}{digits}", "0".repeat((-point) as usize)),
@@ -619,7 +630,7 @@ fn decimal(x: f64) -> Decimal {
             int: digits[..point as usize].into(),
             frac: digits[point as usize..].into(),
         }
-    }
+    })
 }
 
 /// Moves the decimal point left by `places` (dividing by 10^places).
@@ -711,41 +722,52 @@ fn sign(x: f64) -> &'static str {
     if x.is_sign_negative() { "-" } else { "" }
 }
 
-/// `new Intl.NumberFormat('en-US', {maximumFractionDigits: 2}).format(x)`.
-pub fn nf2(x: f64) -> String {
+/// `new Intl.NumberFormat('en-US', {maximumFractionDigits: 2}).format(x)`, or a decline outside
+/// [`decimal`]'s proved domain.
+pub fn nf2(x: f64) -> R<String> {
     if !x.is_finite() {
-        return if x.is_nan() {
+        return Ok(if x.is_nan() {
             "NaN".into()
         } else {
             format!("{}∞", sign(x))
-        };
+        });
     }
-    format!("{}{}", sign(x), written(&round(&decimal(x), 2), 0, 1))
+    Ok(format!(
+        "{}{}",
+        sign(x),
+        written(&round(&decimal(x)?, 2), 0, 1)
+    ))
 }
 
-/// `new Intl.NumberFormat('en-US', {style:'currency', currency:'USD', maximumFractionDigits: 2}).format(x)`.
-pub fn money(x: f64) -> String {
+/// `new Intl.NumberFormat('en-US', {style:'currency', currency:'USD', maximumFractionDigits: 2}).format(x)`,
+/// or a decline outside [`decimal`]'s proved domain.
+pub fn money(x: f64) -> R<String> {
     if !x.is_finite() {
-        return if x.is_nan() {
+        return Ok(if x.is_nan() {
             "$NaN".into()
         } else {
             format!("{}$∞", sign(x))
-        };
+        });
     }
-    format!("{}${}", sign(x), written(&round(&decimal(x), 2), 2, 1))
+    Ok(format!(
+        "{}${}",
+        sign(x),
+        written(&round(&decimal(x)?, 2), 2, 1)
+    ))
 }
 
 /// `new Intl.NumberFormat('en-US', {notation:'compact', maximumFractionDigits: 2}).format(x)` (ICU's short compact
-/// patterns K, M, B, T; a rounding that reaches the next power picks that power's pattern; grouping from 5 digits).
-pub fn compact(x: f64) -> String {
+/// patterns K, M, B, T; a rounding that reaches the next power picks that power's pattern; grouping from 5 digits),
+/// or a decline outside [`decimal`]'s proved domain.
+pub fn compact(x: f64) -> R<String> {
     if !x.is_finite() {
-        return if x.is_nan() {
+        return Ok(if x.is_nan() {
             "NaN".into()
         } else {
             format!("{}∞", sign(x))
-        };
+        });
     }
-    let d = decimal(x);
+    let d = decimal(x)?;
     let magnitude = |d: &Decimal| -> i64 {
         if d.int != "0" {
             d.int.len() as i64 - 1
@@ -783,7 +805,7 @@ pub fn compact(x: f64) -> String {
         12 => "T",
         _ => "",
     };
-    format!("{}{}{suffix}", sign(x), written(&r, 0, 2))
+    Ok(format!("{}{}{suffix}", sign(x), written(&r, 0, 2)))
 }
 
 #[cfg(test)]
@@ -792,12 +814,12 @@ mod tests {
 
     #[test]
     fn numbers_match_node_intl() {
-        let nf: [(f64, &str); 12] = [
+        let ok = |s: &str| Ok(s.to_string());
+        let nf: [(f64, &str); 11] = [
             (-0.0, "-0"),
             (1.005, "1.01"),
             (1234.565, "1,234.57"),
             (0.005, "0.01"),
-            (1e21, "1,000,000,000,000,000,000,000"),
             (-1234.5, "-1,234.5"),
             (2.675, "2.68"),
             (1e-7, "0"),
@@ -807,9 +829,9 @@ mod tests {
             (12.0, "12"),
         ];
         for (x, want) in nf {
-            assert_eq!(nf2(x), want, "nf2 {x}");
+            assert_eq!(nf2(x), ok(want), "nf2 {x}");
         }
-        let compacts: [(f64, &str); 22] = [
+        let compacts: [(f64, &str); 18] = [
             (999.0, "999"),
             (999.995, "1K"),
             (1000.0, "1K"),
@@ -820,21 +842,17 @@ mod tests {
             (1_234_567.0, "1.23M"),
             (1e9, "1B"),
             (1e12, "1T"),
-            (1e15, "1000T"),
-            (1.5e18, "1,500,000T"),
             (-62500.0, "-62.5K"),
             (0.001, "0"),
             (-0.0, "-0"),
             (1049.99, "1.05K"),
             (1004.9, "1K"),
             (12345.678, "12.35K"),
-            (9_007_199_254_740_992.0, "9007.2T"),
-            (1e21, "1,000,000,000T"),
             (0.005, "0.01"),
             (99.995, "100"),
         ];
         for (x, want) in compacts {
-            assert_eq!(compact(x), want, "compact {x}");
+            assert_eq!(compact(x), ok(want), "compact {x}");
         }
         for (x, want) in [
             (12.5, "$12.50"),
@@ -842,8 +860,71 @@ mod tests {
             (1234.567, "$1,234.57"),
             (0.005, "$0.01"),
             (-0.0, "-$0.00"),
+            (1.5e-7, "$0.00"),
+            (999_999_999_999.0, "$999,999,999,999.00"),
         ] {
-            assert_eq!(money(x), want, "money {x}");
+            assert_eq!(money(x), ok(want), "money {x}");
+        }
+    }
+
+    /// Big review M4/L4: Rust's shortest digits break ties differently from ECMAScript (JS writes
+    /// 140737488355327.12 and 2251799813685247.2; Rust's formatter wrote .13 and .3). Only the
+    /// domain Status's `js_number` proves is formatted; these and their neighbouring doubles decline.
+    #[test]
+    fn numbers_outside_the_proved_domain_decline() {
+        let mut witnesses = vec![1e21, 1e15, 1.5e18, 9_007_199_254_740_992.0, 1e12 + 0.5];
+        for x in [
+            100000000000000.12_f64,
+            140737488355327.12,
+            2251799813685247.2,
+        ] {
+            witnesses.extend([
+                f64::from_bits(x.to_bits() - 1),
+                x,
+                f64::from_bits(x.to_bits() + 1),
+            ]);
+        }
+        witnesses.extend([33.333333333333336, 0.1 + 0.2, 1e-23]);
+        for x in witnesses {
+            for v in [x, -x] {
+                assert_eq!(nf2(v), Err(Decline("number")), "nf2 {v}");
+                assert_eq!(money(v), Err(Decline("number")), "money {v}");
+                assert_eq!(compact(v), Err(Decline("number")), "compact {v}");
+                assert_eq!(
+                    string_of(Some(&json!(v))),
+                    Err(Decline("number")),
+                    "String {v}"
+                );
+            }
+        }
+    }
+
+    /// The meter's `value` is written by aac-api's serializer, which cannot depend on Status; Home
+    /// only sets it to numbers `nf2` admitted, and there both writers agree with JS `String(x)`.
+    #[test]
+    fn the_view_serializer_agrees_with_the_proved_writer_on_its_domain() {
+        for x in [
+            0.5,
+            37.5,
+            0.1,
+            1e-7,
+            1.5e-7,
+            0.000001,
+            123.456,
+            1e12,
+            -2.5,
+            0.146484375,
+            99.85351562,
+            100.5,
+            79.99,
+            1234.5678,
+        ] {
+            assert!(nf2(x).is_ok(), "{x}");
+            assert_eq!(
+                Some(aac_api::home::js_number_text(x)),
+                aac_status::read_context::js_number(x),
+                "{x}"
+            );
         }
     }
 

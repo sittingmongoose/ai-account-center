@@ -5,9 +5,19 @@
   "decline/date-only": "date",
   "decline/facts": "fact",
   "decline/locale": "locale",
+  "decline/number-1e14#0": "number",
+  "decline/number-1e14#1": "number",
+  "decline/number-1e14#2": "number",
+  "decline/number-2^47#0": "number",
+  "decline/number-2^47#1": "number",
+  "decline/number-2^47#2": "number",
+  "decline/number-2^51#0": "number",
+  "decline/number-2^51#1": "number",
+  "decline/number-2^51#2": "number",
   "decline/open-progress": "open-progress",
   "decline/proto-key": "proto-key",
   "decline/shape-no-accounts": "shape",
   "decline/shape-null-account": "shape",
-  "decline/type": "type"
+  "decline/type": "type",
+  "edge/fractional-readings": "number"
 }

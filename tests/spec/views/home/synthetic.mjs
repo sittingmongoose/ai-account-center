@@ -170,6 +170,45 @@ export function synthetic(recorded) {
           }
     })
   );
+  // Big review M4/L4: amounts whose shortest round-trip digits tie. JS writes 100000000000000.12, 140737488355327.12
+  // and 2251799813685247.2 where Rust's own formatter wrote .13, .13 and .3; outside Status's proved number domain the
+  // Rust view declines, neighbouring doubles included. A Cursor spend/usage card and a Z.ai balance card show them.
+  const neighbours = (x) => {
+    const bits = new BigInt64Array(new Float64Array([x]).buffer)[0];
+    return [bits - 1n, bits, bits + 1n].map((b) => new Float64Array(new BigInt64Array([b]).buffer)[0]);
+  };
+  const amountCards = (input, value, limit) => {
+    input.dashboard.settings = { ...(input.dashboard.settings ?? {}), hiddenProviders: [], hiddenAccountIds: [] };
+    const base = { platform: 'mac', status: 'ok', plan: 'pro', fetchedAt: input.dashboard.updatedAt ?? null };
+    input.dashboard.accounts = [
+      { ...base, id: 'cursor:fixture', provider: 'cursor', providerLabel: 'Cursor', label: 'Cursor', windows: [
+        { key: 'fixture-spend', label: 'Spend', kind: 'spend', used: value, limit, unit: 'USD' },
+        { key: 'fixture-rate', label: 'Usage', usedPercent: value },
+      ] },
+      { ...base, id: 'zai:fixture', provider: 'zai', providerLabel: 'Z.ai Coding Plan', label: 'Z.ai Coding Plan', windows: [
+        { key: 'fixture-balance', label: 'Balance', kind: 'balance', remaining: value, used: 0, limit: null, unit: 'USD' },
+        { key: 'fixture-credits', label: 'Credits', kind: 'balance', remaining: value, used: 0, limit: null, unit: 'credits' },
+      ] },
+    ];
+  };
+  for (const [label, x] of [['1e14', 100000000000000.12], ['2^47', 140737488355327.12], ['2^51', 2251799813685247.2]])
+    neighbours(x).forEach((value, i) =>
+      out.push(variant(rich, `decline/number-${label}#${i}`, (input) => amountCards(input, value, value * 2)))
+    );
+  out.push(variant(rich, 'edge/number-control', (input) => amountCards(input, 1234.56, 2469.12)));
+  // edge/fractional-readings now declines on 100/3 (outside the proved number domain, big review M4); this
+  // companion keeps fractional readings served, with values the domain proves and their exact remainders.
+  const PROVED = [[0.000001, 99.999999], [99.995, 0.005], [100.5, 0], [1e-7, 99.9999999], [12.345, 87.655], [79.99999, 20.00001], [95, 5], [0, 100]];
+  out.push(
+    variant(rich, 'edge/fractional-readings-proved', (input) => {
+      let n = 0;
+      for (const a of accountsOf(input))
+        for (const w of Array.isArray(a?.windows) ? a.windows : [])
+          if (w && typeof w.usedPercent === 'number') {
+            [w.usedPercent, w.remainingPercent] = PROVED[n++ % PROVED.length];
+          }
+    })
+  );
   out.push(
     variant(rich, 'edge/other-computers', (input) => {
       const words = [
