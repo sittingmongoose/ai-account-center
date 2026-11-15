@@ -80,6 +80,7 @@ async function capabilities(): Promise<string[]> {
               env,
               encoding: 'utf8',
               timeout: 2000,
+              killSignal: 'SIGKILL',
               maxBuffer: 128 * 1024,
               windowsHide: true,
             },
@@ -148,17 +149,10 @@ export function sshConnectionOptions(alias: string): string[] {
   return args;
 }
 
-/** The fixture home selects fixture config; production leaves the complete SSH config intact. */
+/** Keep both user and system connection config; only the capability probe uses -F none. */
 export async function sshOptions(host: string): Promise<string[]> {
   const connection = sshConnectionOptions(host);
-  const fixtureConfig = process.env.CCS_HOME
-    ? ['-F', path.join(process.env.CCS_HOME, '.ssh/config')]
-    : [];
-  // A missing fixture config must not fall through to the user's real home.
-  if (fixtureConfig.length) {
-    if (!fs.existsSync(fixtureConfig[1] ?? 'none')) fixtureConfig[1] = 'none';
-  }
-  return [...SSH_ISOLATION, ...(await capabilities()), ...connection, ...fixtureConfig];
+  return [...SSH_ISOLATION, ...(await capabilities()), ...connection];
 }
 
 /** One remote command argument; the caller owns quoting and its process deadline. */

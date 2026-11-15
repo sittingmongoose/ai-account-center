@@ -62,11 +62,13 @@ it.skipIf(!process.env.AAC_TEST_OPENSSH_81)(
       );
       const argv = await sshArgv('fixture', 'unused');
       expect(argv).not.toContain('KnownHostsCommand=none');
-      expect(await run('ssh', ['-G', ...argv.slice(0, -1)])).toContain('hostname 127.0.0.1');
+      expect(await run('ssh', ['-G', '-F', 'none', ...argv.slice(0, -1)])).toContain(
+        'hostname 127.0.0.1'
+      );
       // No explicit endpoint: config evaluation belongs to the asynchronous SSH process.
       fs.writeFileSync(path.join(root, 'config.yaml'), JSON.stringify(createEmptyUnifiedConfig()));
       expect(
-        await run('ssh', ['-G', ...(await sshArgv('fixture', 'unused')).slice(0, -1)])
+        await run('ssh', ['-G', '-F', 'none', ...(await sshArgv('fixture', 'unused')).slice(0, -1)])
       ).toContain('hostname fixture');
     } finally {
       process.env = saved;

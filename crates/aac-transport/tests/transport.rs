@@ -15,6 +15,16 @@ struct Fixture {
     root: tempfile::TempDir,
     computer: Computer,
 }
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let run = self.root.path().join("run");
+        let hash = aac_core::sha256_hex(run.to_string_lossy().as_bytes());
+        let directory =
+            Path::new("/tmp").join(format!("aac-{}-{}", aac_files::path::uid(), &hash[..8]));
+        let _ = std::fs::remove_dir(directory);
+    }
+}
+
 impl Fixture {
     fn new() -> Self {
         Self::for_os(OperatingSystem::Linux)
@@ -688,7 +698,11 @@ async fn l5_openssh_option_paths_with_spaces_are_one_literal_path() {
 async fn l5_early_exit_keeps_87_instead_of_epipe_and_does_not_open_breaker() {
     let fixture = Fixture::new();
     let ssh = fixture.root.path().join("ssh");
-    std::fs::write(&ssh, "#!/bin/sh\nif [ \"$1\" = \"-G\" ]; then exit 0; fi\nexit 87\n").unwrap();
+    std::fs::write(
+        &ssh,
+        "#!/bin/sh\nif [ \"$1\" = \"-G\" ]; then exit 0; fi\nexit 87\n",
+    )
+    .unwrap();
     for _ in 0..4 {
         let output = fixture
             .computer

@@ -350,15 +350,22 @@ fn native_helper_accepts_real_pinned_ssh_argv_and_keeps_a_bound() {
         "computers":{"fixture":{"transport":{"host":"127.0.0.1","user":"fixture","port":2222,"key":root.join("key")}}},
         "agentTransportSsh":{"knownHostsFile":root.join("known_hosts")}
     })).unwrap()).unwrap();
-    let module = serde_json::to_string(&source_root.join("src/web-server/services/usage-failover-transport.ts")).unwrap();
-    let script = format!("import {{privateUsageInvocation}} from {module}; const value=await privateUsageInvocation({{host:'fixture',platform:'mac',sshHost:'fixture'}},{{version:1,action:'inventory',provider:'claude'}},'fixture-source'); console.log(JSON.stringify(value.args));");
-    let output = std::process::Command::new("bun").args(["-e", &script])
-        .env("CCS_HOME", root).env("CCS_DIR", root).output().unwrap();
+    let module =
+        serde_json::to_string(&source_root.join("src/web-server/services/usage-failover-transport.ts")).unwrap();
+    let script = format!(
+        "import {{privateUsageInvocation}} from {module}; const value=await privateUsageInvocation({{host:'fixture',platform:'mac',sshHost:'fixture'}},{{version:1,action:'inventory',provider:'claude'}},'fixture-source'); console.log(JSON.stringify(value.args));"
+    );
+    let output = std::process::Command::new("bun")
+        .args(["-e", &script])
+        .env("CCS_HOME", root)
+        .env("CCS_DIR", root)
+        .output()
+        .unwrap();
     assert!(output.status.success(), "real SSH argv builder failed");
     command.args = serde_json::from_slice(&output.stdout).unwrap();
-    // 50 is today's longest policy (explicit endpoint/key, fixture config, keepalive).
-    // 64 admits that policy plus 14 slots of margin, while bounding future callers.
-    assert_eq!(command.args.len(), 50);
+    // 48 is today's longest policy (explicit endpoint/key and keepalive).
+    // 64 admits that policy plus 16 slots of margin, while bounding future callers.
+    assert_eq!(command.args.len(), 48);
     let bootstrap = "import sys,json,io;p=json.loads(sys.stdin.buffer.read().decode('utf-8'));sys.stdin=io.StringIO(json.dumps(p['request']));exec(compile(p['helperSource'],'managed-fixture','exec'))";
     let ssh = root.join("ssh");
     std::fs::write(&ssh, format!("#!/usr/bin/python3\n{bootstrap}\n")).unwrap();

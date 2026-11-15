@@ -118,8 +118,8 @@ impl SshPolicy {
     }
 
     fn control_directory(&self) -> PathBuf {
-        // %C expands to 40 hex characters; leave room for the policy hash on Unix sockets.
-        if self.run_dir.as_os_str().len() <= 40 {
+        // %C expands to 40 hex characters; OpenSSH also appends a 17-byte temporary suffix.
+        if self.run_dir.as_os_str().len() <= 24 {
             return self.run_dir.clone();
         }
         let identity = aac_core::sha256_hex(self.run_dir.to_string_lossy().as_bytes());
@@ -131,7 +131,7 @@ impl SshPolicy {
         let owner = aac_files::path::uid();
         #[cfg(not(unix))]
         let owner = std::process::id();
-        root.join(format!("aac-cm-{owner}-{}", &identity[..10]))
+        root.join(format!("aac-{owner}-{}", &identity[..8]))
     }
 
     fn prepare_control_directory(&self) -> Result<(), Failure> {

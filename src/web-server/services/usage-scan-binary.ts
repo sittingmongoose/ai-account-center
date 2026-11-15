@@ -299,7 +299,7 @@ export async function installUsageScan(
   // 2. The bytes, by scp: never through a PowerShell stdin read (large reads hang over Windows OpenSSH).
   const remotePart = `${windows && /^[A-Za-z]:/.test(dir) ? `/${dir}` : dir}/${name}.part`;
   const copied = await ssh(
-    ['-q', ...(await sshOptions(alias)), '--', local, `${alias}:${remotePart}`],
+    ['-q', '-S', 'ssh', ...(await sshOptions(alias)), '--', local, `${alias}:${remotePart}`],
     {
       timeoutMs: 120_000,
       file: 'scp',

@@ -1,10 +1,10 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1115,
-    "filesAffected": 112,
-    "hotpathOccurrences": 543,
-    "hotpathFilesAffected": 62,
+    "totalOccurrences": 1114,
+    "filesAffected": 111,
+    "hotpathOccurrences": 542,
+    "hotpathFilesAffected": 61,
     "topHotpathFiles": [
       {
         "file": "src/web-server/usage/account-activity-collector.ts",

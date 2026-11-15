@@ -25,7 +25,7 @@ it('keeps config identities, jumps and matching in OpenSSH without preflight dis
     'Host fixture\n ProxyJump jump\n IdentityFile missing\n IdentityFile wrong\n IdentityFile authorized\n'
   );
   const argv = await sshArgv('fixture', 'command');
-  expect(argv).toContain(path.join(home, '.ssh/config'));
+  expect(argv).not.toContain('-F');
   expect(argv).not.toContain('IdentitiesOnly=yes');
   expect(argv).not.toContain('-i');
   expect(argv).toContain('ForwardAgent=no');

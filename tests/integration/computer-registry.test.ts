@@ -73,7 +73,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     expect(updates.PLATFORMS).toContain('future');
     expect(updates.EXPECTED_RESULTS).toBe(72);
     const transport = await load('src/web-server/services/app-update-hosts.ts');
-    expect(transport.appUpdateInvocation('future', '').args.slice(-2)).toEqual([
+    expect((await transport.appUpdateInvocation('future', '')).args.slice(-2)).toEqual([
       'future-linux',
       'AAC_UPDATE_PROGRESS=1 /usr/bin/python3 "$HOME/.ccs/app-updates/app_updates.py" --apply --platform ubuntu',
     ]);

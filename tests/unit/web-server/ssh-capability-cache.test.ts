@@ -36,23 +36,26 @@ it('coalesces concurrent no-connect probes and caches an unsupported option', as
   );
 });
 it('bounds and caches failed probes without blocking the JS timer', async () => {
-  await fixture('time.sleep(5)', async (root) => {
-    const start = Date.now();
-    let timerAt = 0;
-    const timer = new Promise<void>((resolve) =>
-      setTimeout(() => {
-        timerAt = Date.now() - start;
-        resolve();
-      }, 50)
-    );
-    const values = await Promise.allSettled(
-      Array.from({ length: 3 }, () => sshArgv('fixture', 'unused'))
-    );
-    await timer;
-    expect(values.every((value) => value.status === 'rejected')).toBe(true);
-    expect(timerAt).toBeLessThan(500);
-    expect(Date.now() - start).toBeLessThan(3000);
-    await expect(sshArgv('fixture', 'unused')).rejects.toThrow('SSH capability probe failed');
-    expect(fs.readFileSync(path.join(root, 'calls'), 'utf8').trim().split('\n')).toHaveLength(1);
-  });
+  await fixture(
+    'import signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\ntime.sleep(5)',
+    async (root) => {
+      const start = Date.now();
+      let timerAt = 0;
+      const timer = new Promise<void>((resolve) =>
+        setTimeout(() => {
+          timerAt = Date.now() - start;
+          resolve();
+        }, 50)
+      );
+      const values = await Promise.allSettled(
+        Array.from({ length: 3 }, () => sshArgv('fixture', 'unused'))
+      );
+      await timer;
+      expect(values.every((value) => value.status === 'rejected')).toBe(true);
+      expect(timerAt).toBeLessThan(500);
+      expect(Date.now() - start).toBeLessThan(3000);
+      await expect(sshArgv('fixture', 'unused')).rejects.toThrow('SSH capability probe failed');
+      expect(fs.readFileSync(path.join(root, 'calls'), 'utf8').trim().split('\n')).toHaveLength(1);
+    }
+  );
 }, 5000);

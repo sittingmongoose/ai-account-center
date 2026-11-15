@@ -609,7 +609,6 @@ class BoundProfile:
         alias = self.policy['ssh'][self.platform]['alias']
         endpoint = self.policy['ssh'][self.platform]
         ssh_home = Path(os.environ.get('CCS_HOME', str(Path.home())))
-        ssh_config = ssh_home / '.ssh/config'
         identity = os.environ.get('AAC_AGENT_IDENTITY_FILE')
         identity_args = []
         if identity:
@@ -624,11 +623,10 @@ class BoundProfile:
         capabilities = ssh_capability_options(str(Path(executable).resolve()))
         if capabilities is None:
             refuse('ssh_configuration_unknown')
-        config_args = ['-F', str(ssh_config) if ssh_config.is_file() else 'none'] if 'CCS_HOME' in os.environ else []
         pin = os.environ.get('AAC_AGENT_KNOWN_HOSTS_FILE', str(ssh_home / '.ssh/known_hosts'))
         if not Path(pin).is_absolute() or any(c in pin for c in '\n\r%"'):
             refuse('ssh_configuration_unknown')
-        result = subprocess.run([executable, '-T', *config_args, *capabilities, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+        result = subprocess.run([executable, '-T', *capabilities, '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'UpdateHostKeys=no', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'GlobalKnownHostsFile=none',
             *identity_args, '-o', 'UserKnownHostsFile="' + pin + '"',
             '-o', 'Hostname=' + endpoint['hostname'], '-l', endpoint['username'], '-p', str(endpoint['port']),

@@ -111,11 +111,16 @@ class Service:
         except subprocess.TimeoutExpired:
             self.child.kill(); self.child.wait()
         self.child.stderr.close()
+        control_hash = hashlib.sha256(str(self.root / 'run/agent-ssh').encode()).hexdigest()[:8]
+        control_dir = Path('/tmp') / ('aac-' + str(os.getuid()) + '-' + control_hash)
+        if control_dir.exists(): control_dir.rmdir()
         self.temp.cleanup()
     def __enter__(self): return self
     def __exit__(self, *unused): self.close()
 
 def record(root, agent):
+    if '-G' in sys.argv[1:]:
+        sys.exit(0)  # No-connect capability probes are not agent launcher calls.
     root = Path(root)
     command = shlex.split(sys.argv[-1])[-1]
     stage = re.search(r"case '(probe|prepare|commit|run)'", command)
