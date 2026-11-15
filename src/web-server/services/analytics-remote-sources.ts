@@ -2079,8 +2079,8 @@ export async function loadAnalyticsRemoteSources(
                             ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
                             : oversized
                               ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
-                              : kind?.optionalSearchLimited
-                                ? 'the optional search for additional experiment folders hit its limit; previously read logs not confirmed this time remain included'
+                              : kind?.unconfirmedFiles
+                                ? `${kind.unconfirmedFiles.toLocaleString('en-US')} previously read log${kind.unconfirmedFiles === 1 ? ' was' : 's were'} not confirmed this time; their earlier usage remains included`
                                 : kept
                                   ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
                                   : 'the remote scan hit its time bound partway through this tool; the next scan continues',

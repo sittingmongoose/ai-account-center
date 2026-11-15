@@ -216,14 +216,14 @@ describe('what the scanner says about failures reaches the cell', () => {
 
   it('keeps unconfirmed earlier logs and their full-read clock when optional discovery was bounded', async () => {
     const partial = answer({
-      kinds: { codex: { state: 'ok', partial: true, optionalSearchLimited: true, fingerprints: { [FILE_2]: print } } },
+      kinds: { codex: { state: 'ok', partial: true, optionalSearchLimited: true, unconfirmedFiles: 1, fingerprints: { [FILE_2]: print } } },
       rows: [row(FILE_2, 7)],
     });
     const { cell, input } = await scans([answer({}), partial]);
     expect(input).toBe(17);
     expect(cell?.state).toBe('cached');
     expect(cell?.lastScanAt).toBe('2026-10-02T00:10:00.000Z');
-    expect(cell?.detail).toContain('previously read logs not confirmed this time remain included');
+    expect(cell?.detail).toContain('1 previously read log was not confirmed this time; their earlier usage remains included');
   });
 
   it('keeps actual read failures explicit beside an optional search cutoff', async () => {
@@ -233,6 +233,15 @@ describe('what the scanner says about failures reaches the cell', () => {
     const { cell } = await scans([partial]);
     expect(cell?.state).toBe('cached');
     expect(cell?.detail).toContain('1 logs could not be read');
+    expect(cell?.detail).toContain('optional search');
+  });
+
+  it('keeps the actual read deadline explicit beside an optional search cutoff', async () => {
+    const partial = answer({
+      kinds: { codex: { state: 'ok', partial: true, optionalSearchLimited: true, fingerprints: { [FILE_1]: print } } },
+    });
+    const { cell } = await scans([partial]);
+    expect(cell?.detail).toContain('time bound partway through this tool');
     expect(cell?.detail).toContain('optional search');
   });
 

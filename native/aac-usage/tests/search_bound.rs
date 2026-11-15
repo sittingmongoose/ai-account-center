@@ -49,6 +49,7 @@ fn optional_search_bound_keeps_complete_known_roots_complete_and_unknown_prior_f
     let mut prior = answer["kinds"]["codex"]["fingerprints"].clone();
     prior["ab".repeat(32)] = json!({"size":10,"mtimeMs":20});
     let answer = scan(home.path(), json!({"codex":prior}));
+    assert_eq!(answer["kinds"]["codex"]["unconfirmedFiles"], 1);
     assert_eq!(
         answer["kinds"]["codex"]["partial"], true,
         "a real previously read candidate was not confirmed; do not advance its clock or drop its usage"

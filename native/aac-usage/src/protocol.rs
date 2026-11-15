@@ -404,24 +404,6 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
             "devin" => read::devin::collect(&mut collector, home, env),
             _ => read::antigravity::collect(&mut collector, home, env),
         };
-        // A bounded optional search proves nothing about unknown locations. It does leave a
-        // real unread candidate when a previously read file was not confirmed (nor replaced)
-        // this time: retain its rows and do not advance the complete-read clock.
-        if found.as_ref().is_some_and(|f| f.optional_limited)
-            && ["claude", "codex", "omp", "muse"].contains(&kind.as_str())
-            && request
-                .fingerprints
-                .get(kind)
-                .and_then(Value::as_object)
-                .is_some_and(|prior| {
-                    prior.keys().any(|key| {
-                        !collector.fresh.get(kind).is_some_and(|fresh| fresh.contains_key(key))
-                            && !(kind == "claude" && collector.replaced_files.contains(key))
-                    })
-                })
-        {
-            collector.usage_partial.insert(kind.clone());
-        }
         states.insert(kind.clone(), json!(state));
         if collector.usage_partial.contains(kind)
             || (collector.truncated && !cut_before)
@@ -493,6 +475,25 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
             && found.as_ref().is_some_and(|f| f.optional_limited)
         {
             entry.insert("optionalSearchLimited".into(), json!(true));
+            // Previously observed files are real candidates whose disappearance this optional
+            // cutoff cannot confirm. Preserve their usage and complete-read clock.
+            let unconfirmed = request
+                .fingerprints
+                .get(kind)
+                .and_then(Value::as_object)
+                .map_or(0, |prior| {
+                    prior
+                        .keys()
+                        .filter(|key| {
+                            !collector.fresh.get(kind).is_some_and(|fresh| fresh.contains_key(*key))
+                                && !(kind == "claude" && collector.replaced_files.contains(*key))
+                        })
+                        .count()
+                });
+            if unconfirmed > 0 {
+                entry.insert("partial".into(), json!(true));
+                entry.insert("unconfirmedFiles".into(), json!(unconfirmed));
+            }
         }
         // A discovery bound that left this kind's roots unlooked-at (FIX-ROUND-BIG 6).
         if let Some((read, seen)) = collector.search_limits.get(kind) {
