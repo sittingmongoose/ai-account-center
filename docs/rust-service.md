@@ -462,6 +462,22 @@ nothing below runs.
 - **Generations are per boot:** a restarted service holds none, and the front door pushes again on the next
   request. Generation numbers start from the clock (ms x 1000), and a push that finds a newer one held moves
   past it, so a front door that attaches to a service an earlier process fed is not declined for long.
+- **R1b, the clock-independent parts are kept** (`aac_views::home::memo`). For one held dashboard generation and
+  one page zone and style, the service keeps the results of the view builder's pure calls that read neither `now`
+  nor the per-request inputs: an account's visible windows, a window's labels, exact reset text, amounts and source
+  line, a card's plan, platform and plan note, the dashboard's shape check, number texts and zone words. Each call
+  site asks the memo with the same arguments at the same point, so the builder runs the same calls in the same order;
+  objects are named by their exact address in the held generation (a table built per memo), and the memo is dropped
+  with the generation (at most 4 per generation, 65,536 entries each). Per request only the clock-dependent words and
+  decisions (relative times, reset-in, reset-due, stale, same-day, expiry passed) and the passed-reset holes are
+  computed. The manifest is still read every request; its composition and the profiles' text are reused while its
+  bytes and the Open generation are the same.
+- **The Home ETag** (R1b, review L2) is the SHA-256 of everything the bytes are a function of: the build, the three
+  generations' content digests, the manifest's bytes, the front door's per-request facts and the page's context. An
+  equal tag means equal bytes, clock-named members included; the 200 KB answer is not hashed per request.
+- **A window the per-response pass reads differently from its JSON** (an own `undefined` member, a `Date`, a
+  non-finite number, a non-enumerable or inherited member) is refused per request (`input`, review L1); a push over
+  the transport's 4 MiB cap is refused once per change key (`cap`, review L4).
 
 The checks: `crates/aac-http/tests/lifecycle.rs` (the fed answer and its ETag, a missing, stale or unproven
 generation, a late push, a restarted service), `aac_views::home::fed` and `js_json` unit tests,

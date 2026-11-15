@@ -224,3 +224,100 @@ impl Memos {
         memo
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::js::Decline;
+    use serde_json::json;
+    use std::cell::Cell;
+
+    fn zone(offset: i64) -> Zone {
+        Zone::proven(0, 10_000_000_000_000, &[[0, offset]]).expect("a proven zone")
+    }
+
+    #[test]
+    fn only_the_held_generations_own_objects_are_named() {
+        let dashboard = json!({"accounts": [{"id": "a", "windows": [{"key": "w"}, 3]}, "x"]});
+        let memo = Memo::new(&dashboard, zone(0), crate::js::STYLES[0]);
+        let account = dashboard["accounts"][0].as_object().expect("an account");
+        let window = dashboard["accounts"][0]["windows"][0]
+            .as_object()
+            .expect("a window");
+        assert_eq!(memo.account(account), Some(0));
+        assert_eq!(memo.window(window), Some((0, 0)));
+        assert_eq!(memo.account(window), None);
+        assert_eq!(memo.window(account), None);
+        // An equal object elsewhere (another generation, a request's own data) is not this one.
+        let copy = dashboard.clone();
+        assert_eq!(
+            memo.account(copy["accounts"][0].as_object().expect("a copy")),
+            None
+        );
+        assert!(memo.is_for(&dashboard) && !memo.is_for(&copy));
+    }
+
+    #[test]
+    fn a_kept_result_is_computed_once_declines_included() {
+        let memo = Memo::new(&json!({"accounts": []}), zone(0), crate::js::STYLES[0]);
+        let calls = Cell::new(0);
+        for _ in 0..3 {
+            let got = memo.text(Key::Nf2(1), || {
+                calls.set(calls.get() + 1);
+                Err(Decline("number"))
+            });
+            assert_eq!(got, Err(Decline("number")));
+        }
+        assert_eq!((calls.get(), memo.len()), (1, 1));
+        assert_eq!(
+            memo.text(Key::Nf2(2), || Ok("2".into())),
+            Ok("2".to_string())
+        );
+        assert_eq!(
+            memo.text(Key::Nf2(2), || Ok("other".into())),
+            Ok("2".into())
+        );
+    }
+
+    #[test]
+    fn a_memo_holds_at_most_cap_entries_and_a_generation_at_most_slots_memos() {
+        let memo = Memo::new(&json!({"accounts": []}), zone(0), crate::js::STYLES[0]);
+        for i in 0..CAP as i64 + 10 {
+            let _ = memo.text(Key::DateTime(i), || Ok(String::new()));
+        }
+        assert_eq!(memo.len(), CAP);
+        // Past the cap a result is still right, only not kept.
+        assert_eq!(
+            memo.text(Key::DateTime(-1), || Ok("x".into())),
+            Ok("x".into())
+        );
+        assert_eq!(
+            memo.text(Key::DateTime(-1), || Ok("y".into())),
+            Ok("y".into())
+        );
+        let dashboard = json!({"accounts": []});
+        let memos = Memos::default();
+        let first = memos.get(&dashboard, &zone(0), crate::js::STYLES[0]);
+        assert!(Arc::ptr_eq(
+            &first,
+            &memos.get(&dashboard, &zone(0), crate::js::STYLES[0])
+        ));
+        // Another zone or style is another memo; the oldest goes past SLOTS.
+        assert!(!Arc::ptr_eq(
+            &first,
+            &memos.get(&dashboard, &zone(60), crate::js::STYLES[0])
+        ));
+        assert!(!Arc::ptr_eq(
+            &first,
+            &memos.get(&dashboard, &zone(0), crate::js::STYLES[2])
+        ));
+        for offset in 1..=SLOTS as i64 {
+            let _ = memos.get(&dashboard, &zone(offset * 30), crate::js::STYLES[0]);
+        }
+        assert!(memos.0.lock().map(|slots| slots.len()).unwrap_or(0) <= SLOTS);
+        assert!(!Arc::ptr_eq(
+            &first,
+            &memos.get(&dashboard, &zone(0), crate::js::STYLES[0])
+        ));
+    }
+}

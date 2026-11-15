@@ -419,6 +419,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-views/src/home/memo.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-views/src/home/windows.rs",
       "kind": "internal",
       "evidence": [],
