@@ -750,7 +750,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-sources.ts",
-          "loc": 2221
+          "loc": 2232
         },
         {
           "file": "src/web-server/status/answers.ts",
@@ -758,7 +758,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
-          "loc": 1634
+          "loc": 1658
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
