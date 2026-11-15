@@ -56,6 +56,19 @@ afterEach(() => {
 });
 
 describe('scan-usage opt-in', () => {
+  it('keeps the real local scan caller inside the service deadline slack', async () => {
+    let budget: { deadlineMs: number; timeoutMs?: number } | undefined;
+    const result = await runLocalUsageScan(request, {
+      scanner: { ok: false, cause: 'binary_not_built' },
+      agent: async (_host, _verb, _args, options) => {
+        budget = options;
+        return JSON.stringify(answer);
+      },
+    });
+    expect(result.reader?.name).toBe('aac-usage-scan');
+    expect(budget!.deadlineMs).toBe(45000);
+    expect(budget!.timeoutMs).toBe(50000);
+  });
   it('runs a verified remote agent with the identical scanner request and no helper', async () => {
     const result = await runAnalyticsRemoteScan('nas1-agent', 'nas1', request, {
       manifest: null,

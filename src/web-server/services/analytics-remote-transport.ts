@@ -1307,14 +1307,16 @@ async function scanWithAgent(
   agent: typeof runAgentVerb = runAgentVerb
 ): Promise<AnalyticsRemoteResponse | null> {
   try {
+    // Include the scanner's existing watchdog grace inside the outer process deadline. The outer
+    // timer stays at most 5 s past that deadline, the most the Rust service admits (L5 review M2).
+    const agentDeadlineMs = Math.min(deadlineMs + 5000, timeoutMs);
     const stdout = await agent(
       { platform, sshHost },
       'scan-usage',
       usageScanRequest(request, deadlineMs),
       {
-        // Include the scanner's existing watchdog grace inside the outer process deadline.
-        deadlineMs: Math.min(deadlineMs + 5000, timeoutMs),
-        timeoutMs,
+        deadlineMs: agentDeadlineMs,
+        timeoutMs: Math.min(timeoutMs, agentDeadlineMs + 5000),
         maxBytes: MAX_RESPONSE_BYTES + 1024,
       }
     );

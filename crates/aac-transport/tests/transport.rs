@@ -230,6 +230,8 @@ fn ssh_policy_matches_the_design_for_short_and_scan_calls() {
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",
+            "UpdateHostKeys=no",
+            "-o",
             "UserKnownHostsFile=/fixture/data/ssh/known_hosts",
             "-o",
             "IdentitiesOnly=yes",
@@ -635,18 +637,22 @@ fn regression_m4_option_paths_survive_openssh_parsing_or_are_refused() {
 #[test]
 fn l5_openssh_option_paths_with_spaces_are_one_literal_path() {
     let policy = SshPolicy::new("/fixture/known hosts".into(), "/fixture/run space".into());
+    let argv = policy
+        .argv(Path::new("/fixture/key with space"), false)
+        .unwrap();
+    assert!(
+        argv.windows(2)
+            .any(|a| a[0] == "-o" && a[1] == "UpdateHostKeys=no")
+    );
     let output = std::process::Command::new("/usr/bin/ssh")
         .args(["-G", "-F", "/dev/null"])
-        .args(
-            policy
-                .argv(Path::new("/fixture/key with space"), false)
-                .unwrap(),
-        )
+        .args(argv)
         .arg("fixture.invalid")
         .output()
         .unwrap();
     assert!(output.status.success());
     let config = String::from_utf8(output.stdout).unwrap();
+    assert!(config.lines().any(|line| line == "updatehostkeys false"));
     assert!(
         config
             .lines()

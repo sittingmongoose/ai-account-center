@@ -74,6 +74,8 @@ const BASE_OPTIONS = [
   'ConnectTimeout=5',
   '-o',
   'ConnectionAttempts=1',
+  '-o',
+  'UpdateHostKeys=no',
 ];
 const keepalive = (interval: number, countMax: number): string[] => [
   '-o',

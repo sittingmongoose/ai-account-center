@@ -157,7 +157,7 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
       for (let index = 0; index < pairs.length; index += 2) {
         expect(pairs[index]).toBe('-o');
         expect(pairs[index + 1]).toMatch(
-          /^(BatchMode|ConnectTimeout|ConnectionAttempts|ServerAliveInterval|ServerAliveCountMax)=\w+$/
+          /^(BatchMode|ConnectTimeout|ConnectionAttempts|UpdateHostKeys|ServerAliveInterval|ServerAliveCountMax)=\w+$/
         );
       }
       expect(forbiddenWordsIn(call.args)).toEqual([]);

@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Request, Response } from 'express';
 import { RustService } from '../../../src/web-server/rust-service';
-import { shortName } from '../../../src/web-server/rust-service-lifecycle';
+import { rustServiceEnvironment, shortName } from '../../../src/web-server/rust-service-lifecycle';
 
 const fake = path.join(import.meta.dir, 'fixtures/fake-aac-http.mjs');
 let scratch = '';
@@ -347,5 +347,53 @@ describe('Rust service lifecycle (L1)', () => {
     expect(paired.ts.samples).toBe(1);
     expect(paired.rust.samples).toBe(1);
     expect(paired.rust.p50Ms).toBeGreaterThan(0);
+  });
+});
+
+describe('Rust service environment (L5 review M1)', () => {
+  it('passes only the allowlisted names a local agent verb reads', () => {
+    const env = rustServiceEnvironment(
+      {
+        PATH: '/bin',
+        HOME: '/fixture/home',
+        CCS_DIR: '/fixture/home/.ccs',
+        XDG_CONFIG_HOME: '/fixture/home/.config',
+        KIMI_API_KEY: 'fixture-only',
+        https_proxy: 'http://proxy.invalid:3128',
+        CCS_SESSION_SECRET: 'fixture-only',
+        NODE_OPTIONS: '--require /fixture/x.js',
+        LD_PRELOAD: '/fixture/x.so',
+        AAC_UNLISTED: 'x',
+      },
+      false
+    );
+    expect(env).toEqual({
+      PATH: '/bin',
+      HOME: '/fixture/home',
+      CCS_DIR: '/fixture/home/.ccs',
+      XDG_CONFIG_HOME: '/fixture/home/.config',
+      KIMI_API_KEY: 'fixture-only',
+      https_proxy: 'http://proxy.invalid:3128',
+    });
+  });
+
+  it('matches Windows names case-insensitively and never passes one twice', () => {
+    const env = rustServiceEnvironment(
+      {
+        Path: 'C:\\Windows',
+        SystemRoot: 'C:\\Windows',
+        UserProfile: 'C:\\Users\\fixture',
+        HTTPS_PROXY: 'http://a.invalid',
+        https_proxy: 'http://b.invalid',
+        Node_Options: '--inspect',
+      },
+      true
+    );
+    expect(env).toEqual({
+      Path: 'C:\\Windows',
+      SystemRoot: 'C:\\Windows',
+      UserProfile: 'C:\\Users\\fixture',
+      HTTPS_PROXY: 'http://a.invalid',
+    });
   });
 });

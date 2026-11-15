@@ -8,6 +8,7 @@ import type http from 'http';
 import { ConfigError } from '../errors/error-types';
 import { requestRust, rustAgent, type RustConnection } from './rust-service-transport';
 import { privateFileOwners, type PrivateFileRole } from '../shared/private-files';
+import { rustServiceEnvironment } from './rust-service-env';
 
 /** The private socket protocol this front door speaks (aac-http `identity::PROTOCOL`). */
 export const RUST_SERVICE_PROTOCOL = 2;
@@ -398,7 +399,7 @@ export async function acquireRustServiceDetailed(
     child = spawn(binary, [], {
       stdio: ['pipe', 'ignore', 'ignore'],
       env: {
-        PATH: process.env.PATH,
+        ...rustServiceEnvironment(),
         AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
         AAC_AGENT_CATALOG: path.resolve(__dirname, 'services/agent-artifacts.json'),
         AAC_AGENT_TRANSPORT: process.env.AAC_AGENT_TRANSPORT,
