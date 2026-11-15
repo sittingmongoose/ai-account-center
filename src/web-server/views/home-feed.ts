@@ -41,10 +41,11 @@ interface Held {
   generation: string | null;
 }
 
-type Generation = { generation: string } | { declined: string };
+/** R2 (Status) reuses these: the generation a source holds, or why the request declines. */
+export type Generation = { generation: string } | { declined: string };
 
 /** What the front door has pushed to one boot. */
-class BootFeeds {
+export class BootFeeds {
   readonly held = new Map<string, Held>();
   readonly pending = new Map<string, { key: string; done: Promise<Generation> }>();
   constructor(readonly boot: string) {}
@@ -80,7 +81,7 @@ function feedsOf(service: RustService, boot: string): BootFeeds {
  * Concurrent requests with the same new content share one push. A push that lost a race (the service names a
  * newer generation) or did not land is a decline for this request only.
  */
-function ensure(
+export function ensure(
   service: RustService,
   feeds: BootFeeds,
   source: string,

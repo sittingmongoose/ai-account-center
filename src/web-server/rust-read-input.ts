@@ -29,30 +29,33 @@ export function rustScoreboardInput(input: ScoreboardInputs, finish?: unknown): 
   return rustReadInput({ ...input, docs, ...(finish ? { finish } : {}) }, input.timeZone, keys);
 }
 
+/** The JSON text the envelope carries for `input`: Maps as objects; a non-finite number throws (TS's own answer). */
+export function rustInputText(input: unknown): string {
+  return JSON.stringify(input, (_key, value: unknown) => {
+    if (typeof value === 'number' && !Number.isFinite(value))
+      throw new ValidationError('non-finite Rust read input');
+    return value instanceof Map ? Object.fromEntries(value) : value;
+  });
+}
+
+/** What one parsed value contributes to the envelope's facts: the words it ranks, its time values, its epochs. */
+export interface ReadFacts {
+  words: Set<string>;
+  times: Set<number>;
+  epochs: Record<string, number>;
+}
+
 /**
- * The M3 presentation envelope: `Date.parse` epochs of ISO-shaped strings, ISO/clock/day words of
- * every time value and `localeCompare` ranks, all computed by this engine. `rankAll: false` ranks
- * only `extras`; `clockAndDay: false` supplies ISO words only (a composer that reads a clock or
- * day word then refuses). Defaults are the Status/Scoreboard envelope.
+ * The envelope's facts of `data` (parsed JSON): every string as a word (and its part after the first `.`), every
+ * ISO-shaped string's finite `Date.parse` (an epoch and a time) and every safe-integer millisecond time. R2 runs
+ * it once per fed generation; the envelope runs it over the whole input.
  */
-export function rustReadInput(
-  input: unknown,
-  timeZone: string,
-  extras: string[] = [],
-  options: { rankAll?: boolean; clockAndDay?: boolean } = {}
-): unknown {
-  const rankAll = options.rankAll ?? true;
-  const clockAndDay = options.clockAndDay ?? true;
-  const data: unknown = JSON.parse(
-    JSON.stringify(input, (_key, value: unknown) => {
-      if (typeof value === 'number' && !Number.isFinite(value))
-        throw new ValidationError('non-finite Rust read input');
-      return value instanceof Map ? Object.fromEntries(value) : value;
-    })
-  );
-  const words = new Set(extras);
-  const times = new Set<number>();
-  const epochs: Record<string, number> = {};
+export function readFacts(
+  data: unknown,
+  rankAll = true,
+  facts: ReadFacts = { words: new Set(), times: new Set(), epochs: {} }
+): ReadFacts {
+  const { words, times, epochs } = facts;
   const visit = (value: unknown): void => {
     if (typeof value === 'string') {
       if (rankAll) {
@@ -77,6 +80,17 @@ export function rustReadInput(
     else if (value && typeof value === 'object') Object.values(value).forEach(visit);
   };
   visit(data);
+  return facts;
+}
+
+export interface DateWords {
+  iso: string;
+  clock?: string;
+  day?: string;
+}
+
+/** The envelope's clock and day formats in `timeZone` (UTC when this engine does not know the zone). */
+export function dateWordsIn(timeZone: string): (ms: number) => DateWords {
   const formatter = (options: Intl.DateTimeFormatOptions) => {
     try {
       return new Intl.DateTimeFormat('en-US', { timeZone, ...options });
@@ -86,17 +100,36 @@ export function rustReadInput(
   };
   const clock = formatter({ hour: 'numeric', minute: '2-digit' });
   const day = formatter({ month: 'short', day: 'numeric' });
+  return (ms) => ({
+    iso: new Date(ms).toISOString(),
+    clock: clock.format(ms).replace(/[\u202f\u00a0]/g, ' '),
+    day: day.format(ms).replace(/[\u202f\u00a0]/g, ' '),
+  });
+}
+
+/**
+ * The M3 presentation envelope: `Date.parse` epochs of ISO-shaped strings, ISO/clock/day words of
+ * every time value and `localeCompare` ranks, all computed by this engine. `rankAll: false` ranks
+ * only `extras`; `clockAndDay: false` supplies ISO words only (a composer that reads a clock or
+ * day word then refuses). Defaults are the Status/Scoreboard envelope.
+ */
+export function rustReadInput(
+  input: unknown,
+  timeZone: string,
+  extras: string[] = [],
+  options: { rankAll?: boolean; clockAndDay?: boolean } = {}
+): unknown {
+  const rankAll = options.rankAll ?? true;
+  const clockAndDay = options.clockAndDay ?? true;
+  const data: unknown = JSON.parse(rustInputText(input));
+  const { words, times, epochs } = readFacts(data, rankAll, {
+    words: new Set(extras),
+    times: new Set(),
+    epochs: {},
+  });
+  const format = clockAndDay ? dateWordsIn(timeZone) : null;
   const dates = Object.fromEntries(
-    [...times].map((ms) => [
-      String(ms),
-      clockAndDay
-        ? {
-            iso: new Date(ms).toISOString(),
-            clock: clock.format(ms).replace(/[\u202f\u00a0]/g, ' '),
-            day: day.format(ms).replace(/[\u202f\u00a0]/g, ' '),
-          }
-        : { iso: new Date(ms).toISOString() },
-    ])
+    [...times].map((ms) => [String(ms), format ? format(ms) : { iso: new Date(ms).toISOString() }])
   );
   return { data, presentation: { dates, epochs, order: localeRanks(words) } };
 }

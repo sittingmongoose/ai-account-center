@@ -13,6 +13,9 @@
 //! the reply names the generation held, so the front door knows. A generation is immutable: the
 //! same id with other bytes is refused. A request names the generations its front door read; any
 //! other held generation, or none, is `stale`, and TS answers.
+//!
+//! R2: Status's six sources (`status-*`, crate::status_fed) are parsed once when they arrive, like Home's, and
+//! need numeric generations too.
 use aac_views::decline::Decline;
 use aac_views::home::fed;
 use axum::body::{Body, Bytes};
@@ -39,6 +42,8 @@ pub(crate) enum Prepared {
     Dashboard(Result<fed::Dashboard, Decline>),
     Opens(Result<fed::Opens, Decline>),
     Antigravity(Result<serde_json::Value, Decline>),
+    /// R2: a Status source's data object (and, for `status-facts`, its presentation facts).
+    Status(Result<crate::status_fed::Part, Decline>),
 }
 
 /// One held generation: immutable.
@@ -109,6 +114,8 @@ fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Prepared {
         Prepared::Opens(fed::prepare_opens(bytes))
     } else if source == HOME_ANTIGRAVITY {
         Prepared::Antigravity(fed::prepare_antigravity(bytes))
+    } else if crate::status_fed::source(source) {
+        Prepared::Status(crate::status_fed::prepare(source, data, facts))
     } else {
         Prepared::Held
     }
@@ -163,9 +170,11 @@ impl Feeds {
         }
         let put: Put = crate::json_object::from_slice(body, &["generation", "data", "facts"])
             .map_err(|_| Decline::Shape)?;
+        let ordered = home_source(source) || crate::status_fed::source(source);
         if !generation_word(&put.generation)
             || (source.starts_with("home-") && !home_source(source))
-            || (home_source(source) && number(&put.generation).is_none())
+            || (source.starts_with("status-") && !crate::status_fed::source(source))
+            || (ordered && number(&put.generation).is_none())
         {
             return Err(Decline::Shape);
         }
@@ -246,6 +255,7 @@ impl Feeds {
             Prepared::Dashboard(r) => r.as_ref().err().copied(),
             Prepared::Opens(r) => r.as_ref().err().copied(),
             Prepared::Antigravity(r) => r.as_ref().err().copied(),
+            Prepared::Status(r) => r.as_ref().err().copied(),
         };
         Ok(json!({
             "source": source,

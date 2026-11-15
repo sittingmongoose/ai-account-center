@@ -21,10 +21,12 @@ import {
   type StepState,
 } from '../status/answers';
 import { openCardFile, parseByteRange, sendFileBytes } from '../status/status-files';
+import { answerStatusFed, statusFedService } from '../status/status-feed';
+import { getCcsDir } from '../../utils/config-manager';
 
 /**
  * The Status tab API (docs/status-tab.md):
- * - `GET /api/status`: the whole view;
+ * - `GET /api/status`: the whole view (R2: from fed generations when the Status group is on, status-feed.ts);
  * - `GET /api/status/answers?limit=N`: the owner's answers and notes, newest first;
  * - `POST /api/status/answers`: an answer set from the deck, one result per entry;
  * - `GET /api/status/files/<writer>/<path>`: card media (images, videos with byte ranges).
@@ -151,6 +153,10 @@ export function createStatusRouter(service: () => StatusService = getStatusServi
       return;
     }
     const input = current.readInputs();
+    // R2 (`rustService.groups.status: on`): the same answer from fed generations; on any decline the handler
+    // below answers from this same read, as before.
+    const fed = statusFedService(res);
+    if (fed && (await answerStatusFed(req, res, fed, input, getCcsDir()))) return;
     sendRevalidatedView(
       res,
       await composeWithRust(

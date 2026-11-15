@@ -12,12 +12,34 @@ mod panels;
 mod spend;
 #[path = "read_status_strip.rs"]
 mod strip;
-struct Inputs {
-    data: V,
+/// The composer's input object: the presentation envelope's `data` (owned), or R2's fed generations, each a JSON
+/// object of some of its top-level members, borrowed from the generations a request names (no copy per request).
+/// Indexing by a top-level key reads like `Value` indexing: an absent member is `null`.
+pub(crate) enum Data<'a> {
+    Whole(V),
+    Parts(Vec<(&'a str, &'a V)>),
+}
+static NULL: V = V::Null;
+impl Data<'_> {
+    pub(crate) fn get(&self, key: &str) -> Option<&V> {
+        match self {
+            Data::Whole(v) => v.get(key),
+            Data::Parts(parts) => parts.iter().find(|(k, _)| *k == key).map(|(_, v)| *v),
+        }
+    }
+}
+impl std::ops::Index<&str> for Data<'_> {
+    type Output = V;
+    fn index(&self, key: &str) -> &V {
+        self.get(key).unwrap_or(&NULL)
+    }
+}
+struct Inputs<'a> {
+    data: Data<'a>,
     ctx: Context,
     now: i64,
 }
-impl Inputs {
+impl Inputs<'_> {
     fn at(&self, v: &V) -> Option<i64> {
         self.ctx.epoch(v)
     }
@@ -454,49 +476,86 @@ pub fn compose(envelope: Envelope) -> Option<V> {
     }
     let now = envelope.data["now"].as_i64()?;
     let i = Inputs {
-        data: envelope.data,
+        data: Data::Whole(envelope.data),
         ctx: Context::new(envelope.presentation),
         now,
     };
+    let view = view(&i)?;
+    i.ctx.valid().then_some(view)
+}
+/// Why a fed composition did not build: a fact it read is missing (a time's words, an epoch, a rank), or an input
+/// it cannot prove (a shape, a number outside the proved domain).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unproven {
+    Facts,
+    Input,
+}
+/// R2: the same view from fed generations. `parts` are the generations' top-level members (each generation
+/// already passed [`fed_part`]); `facts` the facts generation's presentation; `now` the request's clock and its
+/// date facts. Byte-equal to [`compose`] of the envelope those parts and facts make.
+pub fn compose_fed(
+    parts: Vec<(&str, &V)>,
+    facts: std::sync::Arc<crate::read_context::Presentation>,
+    now: (i64, crate::read_context::Date),
+) -> Result<V, Unproven> {
+    let at = now.0;
+    let i = Inputs {
+        data: Data::Parts(parts),
+        ctx: Context::shared(facts, Some(now)),
+        now: at,
+    };
+    let view = view(&i);
+    match view {
+        Some(view) if i.ctx.valid() => Ok(view),
+        _ if !i.ctx.valid() => Err(Unproven::Facts),
+        _ => Err(Unproven::Input),
+    }
+}
+/// R2: one fed generation's data as the composer reads it: a JSON object of top-level members, none of which holds
+/// an `Object.prototype` member name (the envelope's own gate, applied once per generation). None declines it.
+pub fn fed_part(data: &V) -> Option<()> {
+    (data.is_object() && !crate::read_context::proto_named(data)).then_some(())
+}
+fn view(i: &Inputs) -> Option<V> {
     for key in ["threads", "tasks", "cards", "problems"] {
         i.data["reports"][key].as_array()?;
     }
-    let registry = collected_source(&i, "pm-mail", "pm-mail registry", &i.data["registry"], 120, true)?;
+    let registry = collected_source(i, "pm-mail", "pm-mail registry", &i.data["registry"], 120, true)?;
     let browsers = collected_source(
-        &i,
+        i,
         "browsers",
         "Browsers and recordings",
         &i.data["browsers"],
         180,
         false,
     )?;
-    let machines = panels::machines(&i, &browsers)?;
-    let reports = reports_source(&i)?;
-    let quota = spend::source(&i)?;
-    let usage_source = panels::usage_source(&i)?;
+    let machines = panels::machines(i, &browsers)?;
+    let reports = reports_source(i)?;
+    let quota = spend::source(i)?;
+    let usage_source = panels::usage_source(i)?;
     let sources = vec![
         reports,
         registry.clone(),
-        panels::machines_source(&i, &machines)?,
+        panels::machines_source(i, &machines)?,
         browsers,
-        collected_source(&i, "simlock", "Simlock", &i.data["simlock"], 180, false)?,
+        collected_source(i, "simlock", "Simlock", &i.data["simlock"], 180, false)?,
         usage_source.clone(),
         quota,
     ];
-    let mut view = json!({"version":1,"generatedAt":i.iso(Some(now)),"refresh":{"pollSeconds":30},"headline":{"strip":null},"sources":sources,"cards":cards::compose(&i)?});
+    let mut view = json!({"version":1,"generatedAt":i.iso(Some(i.now)),"refresh":{"pollSeconds":30},"headline":{"strip":null},"sources":sources,"cards":cards::compose(i)?});
     if let Some(p) = i.data.get("pinned") {
         view["pinned"] = p.clone();
     }
     if let Some(s) = i.data.get("spendByStream") {
         view["spendByStream"] = s.clone();
     }
-    view["projects"] = json!(projects(&i)?);
-    view["threads"] = json!({"source":"agent-reports","also":["pm-mail"],"rows":threads(&i,&registry)?});
+    view["projects"] = json!(projects(i)?);
+    view["threads"] = json!({"source":"agent-reports","also":["pm-mail"],"rows":threads(i,&registry)?});
     view["machines"] = json!({"source":"machines","also":["browsers"],"rows":machines});
     view["simlock"] = json!({"source":"simlock","capacity":i.data["simlock"]["data"].get("capacity").cloned().unwrap_or(json!([])),"leases":i.data["simlock"]["data"].get("leases").cloned().unwrap_or(json!([]))});
-    view["usage"] = panels::usage(&i, &usage_source)?;
-    view["spend"] = spend::compose(&i)?;
+    view["usage"] = panels::usage(i, &usage_source)?;
+    view["spend"] = spend::compose(i)?;
     let mut view = crate::http_views::status(&view)?;
     view["headline"]["strip"] = strip::compose(&view)?;
-    i.ctx.valid().then_some(view)
+    Some(view)
 }

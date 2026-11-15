@@ -371,6 +371,32 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                 Err(reason) => decline(row.handler, reason),
             }
         }
+        // R2: Status from the fed generations, the same way (no body; the ids and the clock in `x-aac-feed`).
+        // Without it, the envelope or snapshot read below.
+        Handler::Status if req.headers().contains_key(crate::home_fed::FEED_HEADER) => {
+            let feed = one_header(req.headers(), crate::home_fed::FEED_HEADER).map(str::to_owned);
+            let query = req.uri().query().is_some();
+            let Ok(body) = to_bytes(req.into_body(), 0).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let (Some(feed), false, true) = (feed, query, body.is_empty()) else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let feeds = shared.feeds.clone();
+            match shared
+                .limits
+                .blocking(row.pool, move || crate::status_fed::answer(&feeds, &feed))
+                .await
+            {
+                Ok((bytes, etag)) => crate::view_reply::respond_tagged(
+                    crate::status_fed::VIEW,
+                    crate::status_fed::VERSION,
+                    bytes,
+                    &etag,
+                ),
+                Err(reason) => decline(row.handler, reason),
+            }
+        }
         Handler::Events => {
             let mut response = shared.feeds.stream().into_response();
             response.headers_mut().insert(

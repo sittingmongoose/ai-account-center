@@ -731,3 +731,243 @@ fn a_restarted_service_holds_no_feed_until_the_front_door_pushes_again() -> Resu
     assert_eq!(fed_home(&s, &feed(["1", "1", "1"]), "")?.status, 200);
     Ok(())
 }
+
+// R2: Status from fed generations. Six sources, each a JSON object of some of the composer's input members; the
+// facts source carries the presentation facts of the whole set. The oracle is the envelope read of the same
+// members and facts (the M3 path TS's handler uses today), written as Node writes it.
+const STATUS_NOW: i64 = 1_794_650_400_500;
+const STATUS_REPORTS: &str = r#"{"reports":{"root":"/fixture/share","state":"ok","scannedAt":1794650390000,"complete":true,"threads":[],"tasks":[],"cards":[],"problems":[],"boards":{}}}"#;
+const STATUS_COLLECTED: &str = r#"{"registry":{"data":[{"name":"mail-worker","kind":"codex","machine":"vm","about":"Fixture task","lastSeen":"2026-11-14T11:59:00.000Z","readAt":1794650370000,"problem":null}],"asOf":1794650400000,"error":null},"machines":{"vm":{"data":null,"asOf":1794650370000,"error":{"reason":"Fixture host unavailable.","since":1794650350000}},"mac":{"data":null,"asOf":null,"error":null}},"browsers":{"data":null,"asOf":null,"error":null},"simlock":{"data":null,"asOf":null,"error":null},"usage":null}"#;
+const STATUS_ANSWERS: &str = r#"{"answers":[],"sends":[],"answerHistoryProblem":null}"#;
+const STATUS_CONTEXT: &str = r#"{"timeZone":"UTC","hiddenThreadNames":["aac-doorbell"],"machineIds":["vm","mac"],"machineLabels":{"vm":"VM","mac":"Mac"}}"#;
+
+/// The envelope's facts of these parts, as rustReadInput computes them (a byte-order ranking stands in for
+/// `localeCompare`: both paths read the same facts). `extra` adds the request's own clock.
+fn status_facts(parts: &[&str], extra: Option<i64>) -> Result<Value> {
+    fn walk(v: &Value, words: &mut Vec<String>, times: &mut Vec<i64>) {
+        match v {
+            Value::String(s) => {
+                words.push(s.clone());
+                if let Some(i) = s.find('.') {
+                    words.push(s[i + 1..].to_owned());
+                }
+                if s == "2026-11-14T11:59:00.000Z" {
+                    times.push(1_794_650_340_000);
+                }
+            }
+            Value::Number(n) => {
+                if let Some(t) = n.as_i64().filter(|t| *t >= 100_000_000_000) {
+                    times.push(t);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|i| walk(i, words, times)),
+            Value::Object(map) => map.values().for_each(|i| walk(i, words, times)),
+            _ => {}
+        }
+    }
+    let (mut words, mut times) = (Vec::new(), Vec::new());
+    for part in parts {
+        walk(&serde_json::from_str(part)?, &mut words, &mut times);
+    }
+    times.extend(extra);
+    words.sort();
+    words.dedup();
+    let order: serde_json::Map<String, Value> = words
+        .into_iter()
+        .enumerate()
+        .map(|(i, w)| (w, json!(i)))
+        .collect();
+    // UTC words: the fixture's times all fall on Nov 14 between 11 AM and noon.
+    let mut dates = serde_json::Map::new();
+    for t in times {
+        let seconds = t.div_euclid(1000) % 86_400;
+        let (h, m) = (seconds / 3600, seconds % 3600 / 60);
+        let clock = format!(
+            "{}:{m:02} {}",
+            if h % 12 == 0 { 12 } else { h % 12 },
+            if h < 12 { "AM" } else { "PM" }
+        );
+        let iso = format!(
+            "2026-11-14T{h:02}:{m:02}:{:02}.{:03}Z",
+            seconds % 60,
+            t.rem_euclid(1000)
+        );
+        dates.insert(
+            t.to_string(),
+            json!({"iso": iso, "clock": clock, "day": "Nov 14"}),
+        );
+    }
+    Ok(json!({"dates": dates, "epochs": {"2026-11-14T11:59:00.000Z": 1_794_650_340_000_i64}, "order": order}))
+}
+
+fn status_sources() -> [(&'static str, &'static str); 6] {
+    [
+        ("status-reports", STATUS_REPORTS),
+        ("status-quota", "{}"),
+        ("status-pinned", "{}"),
+        ("status-collected", STATUS_COLLECTED),
+        ("status-answers", STATUS_ANSWERS),
+        ("status-facts", STATUS_CONTEXT),
+    ]
+}
+
+fn push_status(s: &Service, generation: &str) -> Result<()> {
+    let parts: Vec<&str> = status_sources().iter().map(|(_, d)| *d).collect();
+    let facts = status_facts(&parts, None)?.to_string();
+    for (source, data) in status_sources() {
+        let facts = if source == "status-facts" { facts.as_str() } else { "{}" };
+        let reply = push(s, source, generation, data, facts)?;
+        assert_eq!(
+            (reply.status, reply.json()?["generation"].clone()),
+            (200, json!(generation)),
+            "{source}: {}",
+            reply.body
+        );
+    }
+    Ok(())
+}
+
+fn status_feed(ids: [&str; 6], now: i64) -> String {
+    json!({
+        "now": now, "clock": "12:00 PM", "day": "Nov 14",
+        "reports": ids[0], "quota": ids[1], "pinned": ids[2], "collected": ids[3], "answers": ids[4],
+        "facts": ids[5],
+    })
+    .to_string()
+}
+
+/// GET /api/status with the fed header (no body).
+fn fed_status(s: &Service, feed: &str) -> Result<Reply> {
+    let mut stream = UnixStream::connect(&s.socket)?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    write!(
+        stream,
+        "GET /api/status HTTP/1.1\r\nHost: private\r\nConnection: close\r\nx-aac-boot-secret: {SECRET}\r\nx-aac-principal: {}\r\nx-aac-feed: {feed}\r\n\r\n",
+        admin()
+    )?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw)?;
+    parse(&raw)
+}
+
+/// The envelope read of the same members and facts, with now's date: the bytes Node writes for it and its ETag.
+fn status_envelope(s: &Service, now: i64) -> Result<(String, String)> {
+    let mut data = serde_json::Map::new();
+    data.insert("now".into(), json!(now));
+    for (_, part) in status_sources() {
+        let Value::Object(members) = serde_json::from_str(part)? else {
+            return Err("part".into());
+        };
+        data.extend(members);
+    }
+    let parts: Vec<&str> = status_sources().iter().map(|(_, d)| *d).collect();
+    let presentation = status_facts(&parts, Some(now))?;
+    let body = json!({"data": data, "presentation": presentation}).to_string();
+    let reply = s.call("GET", "/api/status", &admin(), Some(body.as_bytes()))?;
+    assert_eq!(reply.status, 200, "envelope: {}", reply.body);
+    let mut writer = aac_views::js_json::Writer::default();
+    writer.value(&reply.json()?);
+    let (full, identity) = writer.finish();
+    let digest: String = Sha256::digest(&identity)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Ok((String::from_utf8(full)?, format!("W/\"{digest}\"")))
+}
+
+#[test]
+fn status_is_answered_from_the_fed_generations_byte_equal_to_the_envelope_read() -> Result<()> {
+    let s = Service::start(&[])?;
+    push_status(&s, "1")?;
+    for now in [STATUS_NOW, STATUS_NOW + 1, STATUS_NOW + 4_000] {
+        let reply = fed_status(&s, &status_feed(["1"; 6], now))?;
+        assert_eq!(reply.status, 200, "{}", reply.body);
+        assert_eq!(reply.header("x-aac-view"), Some("status@1"));
+        let (want, etag) = status_envelope(&s, now)?;
+        assert_eq!(reply.body, want, "now {now}");
+        assert_eq!(reply.header("etag"), Some(etag.as_str()), "now {now}");
+        // The clock-only members move with `now`; the rest is its generations'.
+        assert!(reply.body.contains("\"ageSeconds\""), "{}", reply.body);
+    }
+    // The same second and generations: the ETag is the identity's, whether or not it was kept.
+    let a = fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?;
+    let b = fed_status(&s, &status_feed(["1"; 6], STATUS_NOW + 2))?;
+    assert_eq!(a.header("etag"), b.header("etag"));
+    Ok(())
+}
+
+#[test]
+fn status_declines_a_missing_stale_or_unproven_generation() -> Result<()> {
+    let s = Service::start(&[])?;
+    let named = |reply: Reply| {
+        (
+            reply.status,
+            reply.header("x-aac-decline").map(str::to_owned),
+        )
+    };
+    let reason = |word: &str| (503, Some(word.to_owned()));
+    // Nothing pushed to this boot.
+    assert_eq!(named(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?), reason("stale"));
+    push_status(&s, "1")?;
+    assert_eq!(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.status, 200);
+    // A push during a request: the request names 1, the service now holds 2 of the reports.
+    assert_eq!(
+        push(&s, "status-reports", "2", STATUS_REPORTS, "{}")?.json()?["generation"],
+        json!("2")
+    );
+    assert_eq!(named(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?), reason("stale"));
+    // A late push of 1 is not taken; the reply names 2, and the request naming 2 is served.
+    assert_eq!(
+        push(&s, "status-reports", "1", STATUS_REPORTS, "{}")?.json()?["generation"],
+        json!("2")
+    );
+    let ids = ["2", "1", "1", "1", "1", "1"];
+    assert_eq!(fed_status(&s, &status_feed(ids, STATUS_NOW))?.status, 200);
+    // A clock `toISOString` cannot write (before 1970): the request's own date fact cannot be made.
+    assert_eq!(named(fed_status(&s, &status_feed(ids, -1))?), reason("date"));
+    // Facts that miss a word the composer ranks: the view cannot be proved (`date`), TS answers.
+    let thin = status_facts(&[STATUS_REPORTS], None)?.to_string();
+    push(&s, "status-facts", "3", STATUS_CONTEXT, &thin)?;
+    let ids = ["2", "1", "1", "1", "1", "3"];
+    assert_eq!(named(fed_status(&s, &status_feed(ids, STATUS_NOW))?), reason("date"));
+    // A generation that does not round-trip as Node writes it, or holds an Object.prototype name, is held declined.
+    for (generation, data) in [("4", r#"{"reports":1.0}"#), ("5", r#"{"reports":{"constructor":[]}}"#)] {
+        assert_eq!(push(&s, "status-reports", generation, data, "{}")?.status, 200);
+        let status = s.get("/internal/feed/status-reports", &front_door())?.json()?;
+        assert_eq!(status["declined"], json!("shape"), "{data}");
+        let ids = [generation, "1", "1", "1", "1", "3"];
+        assert_eq!(named(fed_status(&s, &status_feed(ids, STATUS_NOW))?), reason("shape"));
+    }
+    // Status sources take numeric generations and known names only.
+    assert_eq!(push(&s, "status-reports", "g6", STATUS_REPORTS, "{}")?.status, 503);
+    assert_eq!(push(&s, "status-other", "6", "{}", "{}")?.status, 503);
+    // An unreadable feed header is not the fed read.
+    assert_eq!(named(fed_status(&s, "{\"now\":1}")?), reason("shape"));
+    // Sessions only: the front door's own principal never reads Status.
+    let mut stream = UnixStream::connect(&s.socket)?;
+    write!(
+        stream,
+        "GET /api/status HTTP/1.1\r\nHost: private\r\nConnection: close\r\nx-aac-boot-secret: {SECRET}\r\nx-aac-principal: {}\r\nx-aac-feed: {}\r\n\r\n",
+        front_door(),
+        status_feed(["1"; 6], STATUS_NOW)
+    )?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw)?;
+    assert_eq!(parse(&raw)?.status, 401);
+    Ok(())
+}
+
+#[test]
+fn a_restarted_service_holds_no_status_feed_until_the_front_door_pushes_again() -> Result<()> {
+    let s = Service::start(&[])?;
+    push_status(&s, "1")?;
+    assert_eq!(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.status, 200);
+    drop(s);
+    let s = Service::start(&[])?;
+    assert_eq!(push(&s, "status-reports", "1", STATUS_REPORTS, "{}")?.status, 200);
+    let reply = fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?;
+    assert_eq!((reply.status, reply.header("x-aac-decline")), (503, Some("stale")));
+    push_status(&s, "1")?;
+    assert_eq!(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.status, 200);
+    Ok(())
+}
