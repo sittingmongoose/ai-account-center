@@ -4,6 +4,7 @@
 //! must be the one declines.json names for that case, and only those cases may decline.
 use aac_api::home::HomeContext;
 use aac_status::read_context::Envelope;
+use aac_views::home::memo::Memos;
 use aac_views::home::{FedInput, build, build_fed};
 use aac_views::js::Ranks;
 use serde::Deserialize;
@@ -80,14 +81,41 @@ fn build_fed_case(
     }
     let ranks: Ranks = serde_json::from_value(case.presentation["order"].clone())
         .map_err(|e| format!("{}: order {e}", case.name))?;
-    Ok(build_fed(FedInput {
+    let plain = build_fed(FedInput {
         ctx: &ctx,
         dashboard: &case.dashboard,
         profiles: &case.profiles,
         antigravity: &case.antigravity,
-        ranks: Arc::new(ranks),
+        ranks: Arc::new(ranks.clone()),
         updated_at: None,
-    }))
+        memos: None,
+    });
+    // R1b: the same case through the generation's memo, twice: the first build fills it, the second reads only the
+    // kept clock-independent parts. All three must be the same view (or the same decline).
+    let memos = Memos::default();
+    for round in ["filling", "kept"] {
+        let with_memo = build_fed(FedInput {
+            ctx: &ctx,
+            dashboard: &case.dashboard,
+            profiles: &case.profiles,
+            antigravity: &case.antigravity,
+            ranks: Arc::new(ranks.clone()),
+            updated_at: None,
+            memos: Some(&memos),
+        });
+        let same = match (&plain, &with_memo) {
+            (Ok(a), Ok(b)) => serde_json::to_string(a).ok() == serde_json::to_string(b).ok(),
+            (Err(a), Err(b)) => a == b,
+            _ => false,
+        };
+        if !same {
+            return Err(format!(
+                "{}: the {round} memo build differs from the plain one",
+                case.name
+            ));
+        }
+    }
+    Ok(plain)
 }
 
 /// Where two texts first differ, with a little of each around it.
@@ -366,5 +394,47 @@ fn synthetic_provider_reaches_the_registry_and_cards() -> Result<(), String> {
         &["cursor"]
     };
     assert_eq!(cards, expected);
+    Ok(())
+}
+
+/// R1b: the memo is used: the first fed build of a case keeps its clock-independent parts, and a second build at
+/// another clock reads them (it adds nothing) and still equals a build without the memo at that clock.
+#[test]
+fn the_memo_keeps_the_clock_independent_parts_once() -> Result<(), String> {
+    let text = std::fs::read_to_string(spec_dir().join("cases.json")).map_err(|e| e.to_string())?;
+    let table: Table = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let case = table
+        .cases
+        .iter()
+        .find(|c| c.name == "cursor-plans#1")
+        .ok_or("cursor-plans#1 is missing")?;
+    let mut ctx = HomeContext::deserialize(&case.ctx).map_err(|e| e.to_string())?;
+    let ranks: Ranks =
+        serde_json::from_value(case.presentation["order"].clone()).map_err(|e| e.to_string())?;
+    let style = aac_num::intl::proven_style(&ctx.format_probe).ok_or("style")?;
+    let zone =
+        aac_num::intl::Zone::proven(ctx.zone.from, ctx.zone.to, &ctx.zone.offsets).ok_or("zone")?;
+    let memos = Memos::default();
+    let build = |ctx: &HomeContext, memos: Option<&Memos>| {
+        build_fed(FedInput {
+            ctx,
+            dashboard: &case.dashboard,
+            profiles: &case.profiles,
+            antigravity: &case.antigravity,
+            ranks: Arc::new(ranks.clone()),
+            updated_at: None,
+            memos,
+        })
+        .map(|v| serde_json::to_string(&v).unwrap_or_default())
+    };
+    let first = build(&ctx, Some(&memos)).map_err(|d| d.0.to_string())?;
+    assert_eq!(Some(&first), case.expected.as_ref());
+    let kept = memos.get(&case.dashboard, &zone, style).len();
+    assert!(kept > 0, "nothing kept");
+    // Another clock: only the clock-dependent parts are computed again.
+    ctx.now += 7 * 60_000;
+    let later = build(&ctx, Some(&memos)).map_err(|d| d.0.to_string())?;
+    assert_eq!(memos.get(&case.dashboard, &zone, style).len(), kept);
+    assert_eq!(Ok(later), build(&ctx, None).map_err(|d| d.0.to_string()));
     Ok(())
 }

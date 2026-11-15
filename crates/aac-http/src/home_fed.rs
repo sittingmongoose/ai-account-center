@@ -3,12 +3,17 @@
 //! (validated by TS, URI-encoded JSON) in `x-aac-home-context` when the page sent a readable one. The service reads
 //! the desktop manifest itself (part 4's capped read under its boot root) and answers the final bytes; any
 //! generation it does not hold as named is `stale`, and TS answers.
-use crate::feed::{Feeds, HOME_ANTIGRAVITY, HOME_DASHBOARD, HOME_OPENS, Prepared};
+use crate::feed::{Feeds, Generation, HOME_ANTIGRAVITY, HOME_DASHBOARD, HOME_OPENS, Prepared};
 use aac_api::home::HomeContext;
 use aac_views::decline::Decline;
 use aac_views::home::fed;
 use serde::Deserialize;
-use std::path::Path;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 /// The front door's per-request facts.
 pub(crate) const FEED_HEADER: &str = "x-aac-feed";
@@ -59,14 +64,91 @@ fn context(text: &str, platform: &str) -> Result<HomeContext, Decline> {
     }
 }
 
+/// R1b: the profiles of the last manifest text and Open generation: the manifest's composition, its rows with each
+/// Open's progress, and their JSON text. Kept by the exact manifest bytes (read on every request, compared whole) and
+/// the Open generation's digest, so a changed file or a new Open is never answered from it.
+struct Profiles {
+    manifest: Option<Vec<u8>>,
+    opens: [u8; 32],
+    profiles: Arc<Value>,
+    text: Arc<Vec<u8>>,
+    digest: [u8; 32],
+}
+
+static PROFILES: Mutex<Option<Profiles>> = Mutex::new(None);
+
+/// One request's profiles: the rows, their JSON text and the manifest's digest (for the `ETag`).
+struct Rows {
+    profiles: Arc<Value>,
+    text: Arc<Vec<u8>>,
+    digest: [u8; 32],
+}
+
+/// This request's profiles and their text, from the cache when the manifest bytes and the Open generation are the
+/// last request's.
+fn profiles(
+    manifest: Option<Vec<u8>>,
+    opens: &Generation,
+    held: &fed::Opens,
+) -> Result<Rows, Decline> {
+    if let Ok(kept) = PROFILES.lock()
+        && let Some(kept) = kept.as_ref()
+        && kept.opens == opens.digest
+        && kept.manifest == manifest
+    {
+        return Ok(Rows {
+            profiles: kept.profiles.clone(),
+            text: kept.text.clone(),
+            digest: kept.digest,
+        });
+    }
+    // GET /api/claude/desktop-profiles's Rust read; a manifest it refuses stays with the TS reader.
+    let composed =
+        crate::profile_reads::compose_manifest(manifest.as_deref()).ok_or(Decline::Unsupported)?;
+    let rows = Arc::new(fed::profiles_with_opens(&composed, held)?);
+    let text = Arc::new(aac_views::js_json::write(&rows));
+    let mut hash = Sha256::new();
+    match &manifest {
+        Some(bytes) => {
+            hash.update(b"manifest");
+            hash.update(bytes);
+        }
+        None => hash.update(b"absent"),
+    }
+    let digest: [u8; 32] = hash.finalize().into();
+    if let Ok(mut kept) = PROFILES.lock() {
+        *kept = Some(Profiles {
+            manifest,
+            opens: opens.digest,
+            profiles: rows.clone(),
+            text: text.clone(),
+            digest,
+        });
+    }
+    Ok(Rows {
+        profiles: rows,
+        text,
+        digest,
+    })
+}
+
+/// One fed Home answer: its bytes and the identity its `ETag` hashes.
+pub(crate) struct Answer {
+    pub(crate) bytes: Vec<u8>,
+    /// R1b (review L2): a digest of everything the bytes are a function of (this build, the three generations'
+    /// contents, the manifest bytes, the front door's per-request facts and the page's context), so an equal tag means
+    /// equal bytes, clock-named members included. It costs a few hundred bytes of hashing, not the answer's 200 KB.
+    pub(crate) identity: Vec<u8>,
+}
+
 /// The answer of one fed Home request. Runs on the blocking pool (it reads the manifest).
 pub(crate) fn answer(
     feeds: &Feeds,
     root: &Path,
     feed: &str,
     page: Option<&str>,
-) -> Result<fed::Answer, Decline> {
-    let feed: Feed = crate::json_object::from_slice(
+) -> Result<Answer, Decline> {
+    let header: Feed = crate::json_object::from_slice(
         feed.as_bytes(),
         &[
             "platform",
@@ -79,40 +161,61 @@ pub(crate) fn answer(
         ],
     )
     .map_err(|_| Decline::Shape)?;
-    if feed.platform != "mac" && feed.platform != "windows" {
+    if header.platform != "mac" && header.platform != "windows" {
         return Err(Decline::Shape);
     }
     let source = format!(
         "{HOME_DASHBOARD}{}-{}",
-        feed.platform,
-        u8::from(feed.secure)
+        header.platform,
+        u8::from(header.secure)
     );
-    let dashboard = feeds.current(&source, &feed.dashboard)?;
-    let opens = feeds.current(HOME_OPENS, &feed.opens)?;
-    let antigravity = feeds.current(HOME_ANTIGRAVITY, &feed.antigravity)?;
+    let dashboard_gen = feeds.current(&source, &header.dashboard)?;
+    let opens_gen = feeds.current(HOME_OPENS, &header.opens)?;
+    let antigravity_gen = feeds.current(HOME_ANTIGRAVITY, &header.antigravity)?;
     let (
         Prepared::Dashboard(dashboard),
         Prepared::Opens(opens),
         Prepared::Antigravity(antigravity),
-    ) = (&dashboard.prepared, &opens.prepared, &antigravity.prepared)
+    ) = (
+        &dashboard_gen.prepared,
+        &opens_gen.prepared,
+        &antigravity_gen.prepared,
+    )
     else {
         return Err(Decline::Internal);
     };
     let dashboard = dashboard.as_ref().map_err(|d| *d)?;
     let opens = opens.as_ref().map_err(|d| *d)?;
     let antigravity = antigravity.as_ref().map_err(|d| *d)?;
-    let page = page.map(|text| context(text, &feed.platform)).transpose()?;
-    // GET /api/claude/desktop-profiles's Rust read; a manifest it refuses stays with the TS reader.
-    let manifest = crate::profile_reads::desktop_profiles(root).ok_or(Decline::Unsupported)?;
-    fed::respond(fed::Request {
+    let context = page
+        .map(|text| context(text, &header.platform))
+        .transpose()?;
+    let manifest = crate::profile_reads::desktop_manifest(root).ok_or(Decline::Unsupported)?;
+    let rows = profiles(manifest, &opens_gen, opens)?;
+    let manifest_digest = rows.digest;
+    let bytes = fed::respond(fed::Request {
         dashboard,
-        opens,
         antigravity,
-        manifest: &manifest,
-        context: page.as_ref(),
-        now: feed.now,
-        updated_at: &feed.updated_at,
-    })
+        profiles: &rows.profiles,
+        profiles_text: &rows.text,
+        context: context.as_ref(),
+        now: header.now,
+        updated_at: &header.updated_at,
+    })?;
+    let mut identity = Vec::with_capacity(256 + feed.len() + page.map_or(0, str::len));
+    for part in [
+        concat!("home@3\0", env!("AAC_BUILD_COMMIT"), "\0").as_bytes(),
+        &dashboard_gen.digest,
+        &opens_gen.digest,
+        &antigravity_gen.digest,
+        &manifest_digest,
+        feed.as_bytes(),
+        b"\0",
+        page.unwrap_or("-").as_bytes(),
+    ] {
+        identity.extend_from_slice(part);
+    }
+    Ok(Answer { bytes, identity })
 }
 
 #[cfg(test)]

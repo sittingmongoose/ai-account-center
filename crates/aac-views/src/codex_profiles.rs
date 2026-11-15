@@ -125,7 +125,7 @@ fn predates_reset(
         Some(Value::String(text)) => req(date_parse(ctx, text))?,
         _ => None,
     };
-    Ok(sampled.is_none_or(|sampled| sampled < reset))
+    Ok(crate::js::reading_predates_reset(Some(reset), sampled, now))
 }
 
 /// `a ?? b` over JSON members: a defined, non-null `a` is kept.

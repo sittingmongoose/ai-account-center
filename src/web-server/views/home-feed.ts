@@ -39,7 +39,12 @@ interface Held {
   key: string;
   /** The generation the service holds for `key`; null when the input could not be pushed exactly. */
   generation: string | null;
+  /** Why `generation` is null when it is not `input` (`cap`: too large to push). */
+  refused?: string;
 }
+
+/** `requestRust`'s request cap: a feed body above it is never sent. */
+const RUST_FEED_CAP = 4 * 1024 * 1024;
 
 type Generation = { generation: string } | { declined: string };
 
@@ -90,7 +95,9 @@ function ensure(
   const held = feeds.held.get(source);
   if (held && held.key === key)
     return Promise.resolve(
-      held.generation === null ? { declined: 'input' } : { generation: held.generation }
+      held.generation === null
+        ? { declined: held.refused ?? 'input' }
+        : { generation: held.generation }
     );
   const pending = feeds.pending.get(source);
   if (pending && pending.key === key) return pending.done;
@@ -105,6 +112,14 @@ function ensure(
     return Promise.resolve({ declined: 'input' });
   }
   const generation = nextGeneration();
+  // Review L4: a push the transport's cap would refuse is not tried again for the same content.
+  if (
+    Buffer.byteLength(built.data) + Buffer.byteLength(built.facts) + generation.length + 64 >
+    RUST_FEED_CAP
+  ) {
+    feeds.held.set(source, { key, generation: null, refused: 'cap' });
+    return Promise.resolve({ declined: 'cap' });
+  }
   const done = service
     .pushFeed(feeds.boot, source, generation, built.data, built.facts)
     .then((now): Generation => {
@@ -151,6 +166,51 @@ export function resetEpochs(dashboard: AccountDashboard): Record<string, number 
   );
 }
 
+const plainObject = (value: object): boolean => {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+const jsonPlain = (value: unknown): boolean =>
+  value === null ||
+  typeof value === 'string' ||
+  typeof value === 'boolean' ||
+  (typeof value === 'number' && Number.isFinite(value));
+/** An own member the pass reads is absent, or an enumerable plain JSON value. */
+const faithfulMember = (object: object, key: string): boolean =>
+  !Object.prototype.hasOwnProperty.call(object, key) ||
+  (Object.prototype.propertyIsEnumerable.call(object, key) &&
+    jsonPlain((object as Record<string, unknown>)[key]));
+
+/**
+ * Review L1: the per-response pass (`markPassedResets`) reads each account's `sampledAt` and each window's
+ * `resetAt`, `sampledAt` and `resetPassed` from the value itself, while the service reads them from its JSON text.
+ * They agree only when those members are plain JSON values on plain objects: an own member JSON drops
+ * (`resetPassed: undefined` keeps its place in TS's spread, but Rust would append the flag), changes (a `Date`,
+ * a non-finite number, which `??` keeps but JSON writes as `null`) or cannot see (non-enumerable, inherited) is
+ * refused, and today's handler answers. Checked on every request: the change key is the text, which cannot tell
+ * such a value from a plain one.
+ */
+export function passFaithful(dashboard: AccountDashboard): boolean {
+  for (const account of dashboard.accounts as unknown[]) {
+    // Anything but an object with a window list is the service's decline (TS's pass throws there).
+    if (!account || typeof account !== 'object' || Array.isArray(account)) continue;
+    if (!plainObject(account) || !faithfulMember(account, 'sampledAt')) return false;
+    const windows = (account as Record<string, unknown>).windows;
+    if (!Array.isArray(windows)) continue;
+    for (const window of windows as unknown[]) {
+      if (!window || typeof window !== 'object' || Array.isArray(window)) continue;
+      if (
+        !plainObject(window) ||
+        !faithfulMember(window, 'resetAt') ||
+        !faithfulMember(window, 'sampledAt') ||
+        !faithfulMember(window, 'resetPassed')
+      )
+        return false;
+    }
+  }
+  return true;
+}
+
 export interface HomeFedRequest {
   platform: 'mac' | 'windows';
   secure: boolean;
@@ -184,10 +244,16 @@ export async function answerHomeFed(
   if (typeof dashboard.updatedAt !== 'string' || !Array.isArray(dashboard.accounts))
     return declined('input');
   if (input.context && !homeZoneAgrees(input.context)) return declined('zone');
+  if (!passFaithful(dashboard)) return declined('input');
   const feeds = feedsOf(service, boot);
   const dashboardText = JSON.stringify({ ...dashboard, updatedAt: '' });
   const opens = JSON.stringify(getClaudeOpenOperations().forScope(input.scope));
-  const antigravity = JSON.stringify(rustAntigravityInventoryInput(input.inventory) ?? null);
+  // R1b: the inventory's own JSON text is its change key: its ISO envelope (`rustReadInput`) is a function of
+  // that text, so it is computed only when the key changes. A value JSON cannot carry exactly is pushed as null.
+  const inventoryExact = jsonExact(input.inventory);
+  const antigravityKey = inventoryExact
+    ? `inventory:${JSON.stringify(input.inventory)}`
+    : 'inexact';
   const generations = await Promise.all([
     ensure(
       service,
@@ -206,8 +272,10 @@ export async function answerHomeFed(
           : null
     ),
     ensure(service, feeds, 'home-opens', opens, () => ({ data: opens, facts: 'null' })),
-    ensure(service, feeds, 'home-antigravity', antigravity, () => ({
-      data: antigravity,
+    ensure(service, feeds, 'home-antigravity', antigravityKey, () => ({
+      data: inventoryExact
+        ? JSON.stringify(rustAntigravityInventoryInput(input.inventory) ?? null)
+        : 'null',
       facts: 'null',
     })),
   ]);

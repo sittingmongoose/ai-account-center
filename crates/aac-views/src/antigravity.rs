@@ -608,13 +608,11 @@ fn account(ctx: &Context, value: &Value, now: f64, clock: f64) -> Admit<Value> {
         for window in list.iter().take(MAX_WINDOWS) {
             if let Some((mut window, reset)) = pool_window(ctx, window)? {
                 // readingPredatesReset(resetAt, account.sampledAt, now); a window has no sampledAt.
-                #[allow(clippy::cast_precision_loss)]
-                let passed = reset.is_some_and(|reset| {
-                    reset as f64 <= now
-                        && sampled_at
-                            .as_ref()
-                            .is_none_or(|(_, sampled)| *sampled < reset)
-                });
+                let passed = crate::js::reading_predates_reset(
+                    reset,
+                    sampled_at.as_ref().map(|(_, sampled)| *sampled),
+                    now,
+                );
                 if passed {
                     window.insert("resetPassed".into(), json!(true));
                 }

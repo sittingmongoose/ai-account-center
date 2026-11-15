@@ -65,6 +65,16 @@ impl Writer {
         }
     }
 
+    /// R1b: a writer of the full text only (no identity text is kept).
+    pub fn plain(capacity: usize) -> Self {
+        Writer {
+            full: Vec::with_capacity(capacity),
+            identity: Vec::new(),
+            // Permanently inside a "hidden" member: nothing reaches the identity side.
+            hidden: 1,
+        }
+    }
+
     /// Raw text, on both sides unless inside a clock-only member.
     pub fn raw(&mut self, bytes: &[u8]) {
         self.full.extend_from_slice(bytes);
