@@ -4,7 +4,8 @@
 //! is strict: it opens the file read-only (`SQLITE_OPEN_READ_ONLY`) with a busy timeout,
 //! never writes, never holds a transaction, checks the table and payload shape it relies
 //! on, and reports `shape` ("T3's state file changed shape") instead of guessing when
-//! anything differs. Only id, title, pinnedAt and pinOrderKey leave this module.
+//! anything differs. Public pins carry only id, title, pinnedAt and pinOrderKey;
+//! remote helper rows additionally retain SQLite type and lineage shape facts.
 //!
 //! T3 stores each pin in the T3 of the machine that runs the thread, so the same rows are
 //! also fetched from the other machines as `sqlite3 -json` text over the dashboard's ssh
@@ -155,6 +156,19 @@ fn scalar(value: SqlValue) -> Result<Json> {
 /// from the expected shape, `io` when the file could not be read, `limit` when the read
 /// passes [`MAX_PINNED_ROWS`] or [`MAX_PIN_BYTES`].
 pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
+    read(path, false).map(|(pinned, _)| pinned)
+}
+
+/// Read the same bounded SQLite cursor in the remote helper's complete nine-column
+/// row format. Preserve child rows, absent/null type columns and scalar types so an
+/// agent reply can replace sqlite3 JSON without normalizing or dropping any field.
+/// The existing local reader retains its original top-level-only bounds; this remote
+/// representation additionally bounds every transported row and serialized byte.
+pub fn read_remote_rows(path: &Path) -> Result<Vec<Json>> {
+    read(path, true).map(|(_, rows)| rows)
+}
+
+fn read(path: &Path, remote: bool) -> Result<(Vec<PinnedThread>, Vec<Json>)> {
     if !path.is_file() {
         return Err(missing());
     }
@@ -227,6 +241,8 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
 
     let mut pinned = Vec::new();
     let mut spent = 0usize;
+    let mut remote_rows = Vec::new();
+    let mut remote_bytes = 0usize;
     for row in rows {
         let (id, title, pinned_at, pinned_type, pin_order_key, order_type, root_type, lineage_type, parent_type) =
             match row {
@@ -241,7 +257,22 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
         {
             return Err(shape());
         }
-        if let Lineage::Child = lineage_of(lineage_type.as_deref(), parent_type.as_deref())? {
+        let lineage = lineage_of(lineage_type.as_deref(), parent_type.as_deref())?;
+        if remote {
+            let row = serde_json::json!({
+                "thread_id": id, "title": title,
+                "pinnedAt": scalar(pinned_at.clone())?, "pinnedType": pinned_type,
+                "pinOrderKey": if matches!(pin_order_key, SqlValue::Null) { Json::Null } else { scalar(pin_order_key.clone())? },
+                "orderType": order_type, "rootType": root_type,
+                "lineageType": lineage_type, "parentType": parent_type,
+            });
+            remote_bytes += serde_json::to_vec(&row).map_err(|_| shape())?.len();
+            if remote_rows.len() >= MAX_PINNED_ROWS || remote_bytes > MAX_PIN_BYTES {
+                return Err(limit());
+            }
+            remote_rows.push(row);
+        }
+        if let Lineage::Child = lineage {
             continue;
         }
         let pinned_at = scalar(pinned_at)?;
@@ -276,7 +307,7 @@ pub fn read_pinned_threads(path: &Path) -> Result<Vec<PinnedThread>> {
             pin_order_key,
         });
     }
-    Ok(pinned)
+    Ok((pinned, remote_rows))
 }
 
 /// The columns the remote query returns, and the only keys a row of `sqlite3 -json` output

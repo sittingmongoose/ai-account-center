@@ -9,6 +9,7 @@ dependencies = [
  "aac-config",
  "aac-core",
  "aac-protocol",
+ "aac-status",
  "aac-transport",
  "aac-usage",
  "base64 0.22.1",

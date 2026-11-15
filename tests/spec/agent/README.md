@@ -226,3 +226,66 @@ deadline failure delegates; normal known HTTP status replies retain their fixed
 messages. The four-second reqwest total timeout is not claimed to equal Python's
 per-socket timeout: a continuously progressing five-second response is explicitly
 a whole-verb fallback, after which TS uses Python.
+
+## M2 part 3: pins, keys and Claude history
+
+Run the part 1 harness with `--part3` against a fixture-enabled Nas1/Mac build:
+
+```sh
+python3 tests/spec/agent/run.py target/debug/aac-agent --part3
+python3 tests/spec/agent/part3.py /path/to/production/aac-agent --production
+```
+
+The additional runner executes the unchanged key-store and history Python tests.
+It intercepts their real fixture-home requests and compares the Rust terminal
+reply on those same files. Key writes additionally restore the initial fixture
+and compare every resulting file byte, mode and symlink, including absence of
+atomic-write scratch. The clock is fixed. Python exceptions match a classified
+agent refusal or exact whole-verb fallback, never an ordinary success. The
+production run repeats key/pin cases without fixture features and checks that
+history fixture injection delegates. It does not claim native Mac/Windows proof.
+
+Pins use `native/aac-status` as a path dependency without its Node feature:
+one read-only SQLite cursor, five-second busy timeout, 1,000 rows and 1 MiB of
+pin data. Its remote entry point preserves all nine original SQL columns,
+including child rows, scalar types, and absent versus explicit-null type facts.
+The existing local read and remote entry point share that cursor; neither SQL
+nor parser is copied into the agent. Parity compares complete JSON rows with
+the exact TS SQL query on the same fixture database. It drops no fields, sorts
+no arrays and rewrites no metadata. Tests verify no database bytes change or
+sidecar files appear. The existing native parser and machine merge stay in
+place on the TS side. Native reader error words are preserved in
+`Failure.reason`; an unclassified `io` is not guessed to mean a lock or a
+permission error.
+
+Unix keys preserve the Python record path/format, key-directory ownership and
+0700 mode, 0600 file, exclusive temporary file, file fsync and atomic replacement.
+Only the response fingerprint and last four characters leave the verb. Windows
+DPAPI is explicitly unqualified and delegates before reading or writing a path.
+The dashboard's in-process local key store stays as-is; the remote store selects
+the verified agent through the existing `agentVerbs` switch.
+
+History supports bounded index collection, closed checks and protected checks
+without new candidates. Native Mac collection requires the exact existing app
+version and ASAR member digest, with no active Claude process. Apple's fixed
+`plutil` reads the checked Info.plist bytes over stdin; it receives no path from a
+request. Active processes (whose argv/alias guard is not ported), Windows probes,
+unproven inputs, candidate-bearing checks, transcript verification, append and
+snapshot cleanup delegate as a whole. The SHA-pinned Python/Node transaction and
+all durable pending-marker/receipt rules stay authoritative for writes. No native
+history result claims writer quiescence or acknowledges an append. The TypeScript
+adapter delegates write modes before launching an agent.
+
+`_historyFixture` is a feature-only seam for a synthetic home, closed state and
+native guard receipt. All index/protection files still use real bounded,
+no-follow filesystem reads, directory identities, hashes and stable snapshots.
+Source-test mocked IO/races delegate explicitly. Original transaction, bridge,
+microbatch and pending-marker tests continue to exercise the unchanged writer.
+The proven-grammar and ASCII-only boundary applies before text processing.
+Additional real-file witnesses cover VT/FF/CR SSH directives and a dangling
+`waiting-input` symlink. No private home, provider or T3 database is used.
+
+All three TS adapters run the current helper after any unavailable artifact,
+explicit delegation, timeout, exit, malformed envelope or invalid result.
+Fallbacks are labelled `fallback: python` (`fallback: sqlite3` for pins).
+The artifact catalog remains empty; this change does not ship or install agents.

@@ -1,4 +1,4 @@
-/** Read-only opt-in adapter. Never ships, installs, or refreshes an agent. */
+/** Opt-in adapter. Never ships, installs, or refreshes an agent. */
 import fs from 'fs';
 import { ConfigError } from '../../errors/error-types';
 import path from 'path';
@@ -13,6 +13,8 @@ import manifest from './agent-artifacts.json';
 
 const logger = createLogger('agent-verbs');
 export type AgentVerbs = 'off' | 'on';
+export type AgentVerb =
+  'signin-expiry' | 'quota-read' | 'scan-usage' | 't3-pins' | 'key-store' | 'claude-history';
 export interface AgentArtifact {
   target: string;
   version: string;
@@ -111,7 +113,7 @@ export function localAgentReady(
 /** Every unavailable, unproven or failed agent delegates to the labelled Python helper. */
 export async function runAgentVerb(
   host: Pick<UsageHost, 'platform' | 'sshHost'>,
-  verb: 'signin-expiry' | 'quota-read' | 'scan-usage',
+  verb: AgentVerb,
   verbArgs: Record<string, unknown>,
   options: AgentCallOptions
 ): Promise<string | null> {
@@ -259,4 +261,103 @@ export async function collectQuotaWithFallback(
   }
   logger.info('agent.verbs.fallback', 'fallback: python', { verb: 'quota-read' });
   return python();
+}
+
+/** New verbs keep their reference helper visible on every failure. */
+export async function collectAgentWithFallback<T>(
+  verb: 't3-pins' | 'key-store' | 'claude-history',
+  agent: () => Promise<T | null>,
+  helper: () => Promise<T>
+): Promise<T> {
+  try {
+    const value = await agent();
+    if (value !== null) return value;
+  } catch {
+    /* The reference helper owns unqualified inputs and failed executions. */
+  }
+  logger.info(
+    'agent.verbs.fallback',
+    verb === 't3-pins' ? 'fallback: sqlite3' : 'fallback: python',
+    { verb }
+  );
+  return helper();
+}
+
+/** Remote pins keep the existing sqlite row contract and native shape validator. */
+export async function runPinsAgent(
+  host: Pick<UsageHost, 'platform' | 'sshHost'>,
+  options: Partial<AgentCallOptions> = {}
+): Promise<string | null> {
+  const result = await runAgentVerb(
+    host,
+    't3-pins',
+    {},
+    {
+      deadlineMs: 25000,
+      maxBytes: 1024 * 1024,
+      ...options,
+    }
+  );
+  return result !== null && Array.isArray(JSON.parse(result)) ? result : null;
+}
+
+/** Keys travel only on the protocol stdin pipe, never argv, environment or logs. */
+export async function runKeyStoreAgent(
+  host: Pick<UsageHost, 'platform' | 'sshHost'>,
+  args: Record<string, unknown>,
+  options: Partial<AgentCallOptions> = {}
+): Promise<string | null> {
+  const result = await runAgentVerb(host, 'key-store', args, {
+    deadlineMs: 20000,
+    maxBytes: 4096,
+    ...options,
+  });
+  if (result === null) return null;
+  const row = JSON.parse(result);
+  const keys = Object.keys(row).sort().join(',');
+  if (args.action === 'delete') return keys === 'ok' && row.ok === true ? result : null;
+  if (typeof args.secret !== 'string') return null;
+  const fingerprint = `sha256:${createHash('sha256').update(args.secret).digest('hex').slice(0, 16)}`;
+  return keys === 'fingerprint,last4,ok' &&
+    row.ok === true &&
+    row.fingerprint === fingerprint &&
+    row.last4 === args.secret.slice(-4)
+    ? result
+    : null;
+}
+
+/** History replies are private pipe data; existing service validation remains in place. */
+export async function runHistoryAgent(
+  host: Pick<UsageHost, 'platform' | 'sshHost'>,
+  args: Record<string, unknown>,
+  options: Partial<AgentCallOptions> = {}
+): Promise<Buffer | null> {
+  if (!['collect', 'closed-check', 'protected-check'].includes(String(args.mode))) return null;
+  const result = await runAgentVerb(host, 'claude-history', args, {
+    deadlineMs: 25000,
+    maxBytes: 1024 * 1024,
+    ...options,
+  });
+  if (result === null) return null;
+  const row = JSON.parse(result);
+  if (Array.isArray(row)) return null;
+  if (args.mode === 'closed-check') {
+    if (Object.keys(row).join(',') !== 'closed' || typeof row.closed !== 'boolean') return null;
+  } else if (args.mode === 'protected-check') {
+    if (Object.keys(row).join(',') !== 'unchanged' || typeof row.unchanged !== 'boolean')
+      return null;
+  } else if (args.mode === 'collect') {
+    if (
+      row.profileId !== args.profileId ||
+      row.platform !== args.platform ||
+      !Array.isArray(row.records) ||
+      typeof row.revision !== 'string'
+    )
+      return null;
+  } else {
+    // No native mutation has been qualified. Keep append, receipts and pending markers
+    // on the packaged Python/Node writer even if an artifact claims otherwise.
+    return null;
+  }
+  return Buffer.from(result);
 }

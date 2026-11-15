@@ -28,6 +28,7 @@ import { NetworkError, ValidationError } from '../../errors/error-types';
 import { runManagedCommand } from '../../utils/managed-process';
 import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
 import { sshArgv } from '../services/ssh-policy';
+import { collectAgentWithFallback, runPinsAgent } from '../services/agent-verbs';
 import { PERSISTENT_SHARE_ERROR, TransientMisses } from './agent-reports-reader';
 import { findSecret, MACHINES, type MachineId } from './report-schema';
 import { readRegularFile } from './share-read';
@@ -947,11 +948,26 @@ export async function readRemotePins(
 ): Promise<string> {
   const alias = machineSshAlias(machine);
   if (!alias) throw new ValidationError('No ssh host is configured for this machine.');
-  const result = await run(
-    'ssh',
-    sshArgv(alias, remotePinsCommand(REMOTE_MACHINES[machine]), { interval: 5, countMax: 2 }),
-    { timeoutMs: 30_000, maxBytes: 1024 * 1024, coalesce: true }
+  return collectAgentWithFallback(
+    't3-pins',
+    () =>
+      runPinsAgent({
+        platform:
+          REMOTE_MACHINES[machine] === 'windows'
+            ? 'windows'
+            : REMOTE_MACHINES[machine] === 'mac'
+              ? 'mac'
+              : 'ubuntu',
+        sshHost: alias,
+      }),
+    async () => {
+      const result = await run(
+        'ssh',
+        sshArgv(alias, remotePinsCommand(REMOTE_MACHINES[machine]), { interval: 5, countMax: 2 }),
+        { timeoutMs: 30_000, maxBytes: 1024 * 1024, coalesce: true }
+      );
+      if (result.code !== 0) throw new NetworkError(commandFailure('ssh', result));
+      return result.stdout;
+    }
   );
-  if (result.code !== 0) throw new NetworkError(commandFailure('ssh', result));
-  return result.stdout;
 }

@@ -600,3 +600,54 @@ fn db_path_resolution_prefers_explicit_then_env_then_home() {
     );
     assert_eq!(resolve_db_path(None, None, None), None);
 }
+
+#[test]
+fn remote_read_preserves_child_rows_and_every_sqlite_shape_column() {
+    use aac_status::pins::{parse_remote_pins, read_remote_rows};
+    let dir = tempfile::tempdir().unwrap();
+    let (file, conn) = fixture(dir.path());
+    insert(
+        &conn,
+        "child",
+        "Child",
+        None,
+        None,
+        &payload("child", "Child", json!(1), json!("a"), json!("parent")),
+    );
+    insert(
+        &conn,
+        "absent",
+        "Absent",
+        None,
+        None,
+        &json!({"pinnedAt":2}).to_string(),
+    );
+    insert(
+        &conn,
+        "null",
+        "Null",
+        None,
+        None,
+        &json!({"pinnedAt":3,"pinOrderKey":null}).to_string(),
+    );
+    drop(conn);
+    let rows = read_remote_rows(&file).unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            json!({"thread_id":"child","title":"Child","pinnedAt":1,"pinnedType":"integer",
+            "pinOrderKey":"a","orderType":"text","rootType":"object",
+            "lineageType":"object","parentType":"text"}),
+            json!({"thread_id":"absent","title":"Absent","pinnedAt":2,"pinnedType":"integer",
+            "pinOrderKey":null,"orderType":null,"rootType":"object",
+            "lineageType":null,"parentType":null}),
+            json!({"thread_id":"null","title":"Null","pinnedAt":3,"pinnedType":"integer",
+            "pinOrderKey":null,"orderType":"null","rootType":"object",
+            "lineageType":null,"parentType":null}),
+        ]
+    );
+    assert_eq!(
+        parse_remote_pins("mac", &serde_json::to_string(&rows).unwrap()).unwrap(),
+        read_pinned_threads(&file).unwrap()
+    );
+}
