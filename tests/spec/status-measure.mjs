@@ -10,7 +10,7 @@
  * same second, checked before the rounds).
  *
  *   node tests/spec/status-measure.mjs --dist <dist> --binary <aac-http> --out <file.json>
- *        [--rounds 10] [--samples 40] [--clients 0] [--seconds 30]
+ *        [--rounds 10] [--samples 40] [--clients 16] [--seconds 20]
  * Called by `read-http-parity.ts --measure`. Fixture data only; the processes it starts are its own.
  */
 import assert from 'node:assert/strict';
@@ -32,8 +32,8 @@ const binary = path.resolve(option('binary', path.join(dist, 'native/aac-http'))
 const out = option('out', null);
 const rounds = Number(option('rounds', 10));
 const samples = Number(option('samples', 40));
-const clients = Number(option('clients', 0));
-const seconds = Number(option('seconds', 30));
+const clients = Number(option('clients', 16));
+const seconds = Number(option('seconds', 20));
 assert.ok(out, '--out <file.json> is required');
 assert.ok(fs.existsSync(binary), `no aac-http at ${binary}`);
 const scratch = fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), 'aac-r2-measure-'));

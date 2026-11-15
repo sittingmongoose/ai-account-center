@@ -797,7 +797,9 @@ fn status_facts(parts: &[&str], extra: Option<i64>) -> Result<Value> {
             json!({"iso": iso, "clock": clock, "day": "Nov 14"}),
         );
     }
-    Ok(json!({"dates": dates, "epochs": {"2026-11-14T11:59:00.000Z": 1_794_650_340_000_i64}, "order": order}))
+    Ok(
+        json!({"dates": dates, "epochs": {"2026-11-14T11:59:00.000Z": 1_794_650_340_000_i64}, "order": order}),
+    )
 }
 
 fn status_sources() -> [(&'static str, &'static str); 6] {
@@ -815,7 +817,11 @@ fn push_status(s: &Service, generation: &str) -> Result<()> {
     let parts: Vec<&str> = status_sources().iter().map(|(_, d)| *d).collect();
     let facts = status_facts(&parts, None)?.to_string();
     for (source, data) in status_sources() {
-        let facts = if source == "status-facts" { facts.as_str() } else { "{}" };
+        let facts = if source == "status-facts" {
+            facts.as_str()
+        } else {
+            "{}"
+        };
         let reply = push(s, source, generation, data, facts)?;
         assert_eq!(
             (reply.status, reply.json()?["generation"].clone()),
@@ -907,15 +913,24 @@ fn status_declines_a_missing_stale_or_unproven_generation() -> Result<()> {
     };
     let reason = |word: &str| (503, Some(word.to_owned()));
     // Nothing pushed to this boot.
-    assert_eq!(named(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?), reason("stale"));
+    assert_eq!(
+        named(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?),
+        reason("stale")
+    );
     push_status(&s, "1")?;
-    assert_eq!(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.status, 200);
+    assert_eq!(
+        fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.status,
+        200
+    );
     // A push during a request: the request names 1, the service now holds 2 of the reports.
     assert_eq!(
         push(&s, "status-reports", "2", STATUS_REPORTS, "{}")?.json()?["generation"],
         json!("2")
     );
-    assert_eq!(named(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?), reason("stale"));
+    assert_eq!(
+        named(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?),
+        reason("stale")
+    );
     // A late push of 1 is not taken; the reply names 2, and the request naming 2 is served.
     assert_eq!(
         push(&s, "status-reports", "1", STATUS_REPORTS, "{}")?.json()?["generation"],
@@ -924,22 +939,42 @@ fn status_declines_a_missing_stale_or_unproven_generation() -> Result<()> {
     let ids = ["2", "1", "1", "1", "1", "1"];
     assert_eq!(fed_status(&s, &status_feed(ids, STATUS_NOW))?.status, 200);
     // A clock `toISOString` cannot write (before 1970): the request's own date fact cannot be made.
-    assert_eq!(named(fed_status(&s, &status_feed(ids, -1))?), reason("date"));
+    assert_eq!(
+        named(fed_status(&s, &status_feed(ids, -1))?),
+        reason("date")
+    );
     // Facts that miss a word the composer ranks: the view cannot be proved (`date`), TS answers.
     let thin = status_facts(&[STATUS_REPORTS], None)?.to_string();
     push(&s, "status-facts", "3", STATUS_CONTEXT, &thin)?;
     let ids = ["2", "1", "1", "1", "1", "3"];
-    assert_eq!(named(fed_status(&s, &status_feed(ids, STATUS_NOW))?), reason("date"));
+    assert_eq!(
+        named(fed_status(&s, &status_feed(ids, STATUS_NOW))?),
+        reason("date")
+    );
     // A generation that does not round-trip as Node writes it, or holds an Object.prototype name, is held declined.
-    for (generation, data) in [("4", r#"{"reports":1.0}"#), ("5", r#"{"reports":{"constructor":[]}}"#)] {
-        assert_eq!(push(&s, "status-reports", generation, data, "{}")?.status, 200);
-        let status = s.get("/internal/feed/status-reports", &front_door())?.json()?;
+    for (generation, data) in [
+        ("4", r#"{"reports":1.0}"#),
+        ("5", r#"{"reports":{"constructor":[]}}"#),
+    ] {
+        assert_eq!(
+            push(&s, "status-reports", generation, data, "{}")?.status,
+            200
+        );
+        let status = s
+            .get("/internal/feed/status-reports", &front_door())?
+            .json()?;
         assert_eq!(status["declined"], json!("shape"), "{data}");
         let ids = [generation, "1", "1", "1", "1", "3"];
-        assert_eq!(named(fed_status(&s, &status_feed(ids, STATUS_NOW))?), reason("shape"));
+        assert_eq!(
+            named(fed_status(&s, &status_feed(ids, STATUS_NOW))?),
+            reason("shape")
+        );
     }
     // Status sources take numeric generations and known names only.
-    assert_eq!(push(&s, "status-reports", "g6", STATUS_REPORTS, "{}")?.status, 503);
+    assert_eq!(
+        push(&s, "status-reports", "g6", STATUS_REPORTS, "{}")?.status,
+        503
+    );
     assert_eq!(push(&s, "status-other", "6", "{}", "{}")?.status, 503);
     // An unreadable feed header is not the fed read.
     assert_eq!(named(fed_status(&s, "{\"now\":1}")?), reason("shape"));
@@ -961,13 +996,25 @@ fn status_declines_a_missing_stale_or_unproven_generation() -> Result<()> {
 fn a_restarted_service_holds_no_status_feed_until_the_front_door_pushes_again() -> Result<()> {
     let s = Service::start(&[])?;
     push_status(&s, "1")?;
-    assert_eq!(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.status, 200);
+    assert_eq!(
+        fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.status,
+        200
+    );
     drop(s);
     let s = Service::start(&[])?;
-    assert_eq!(push(&s, "status-reports", "1", STATUS_REPORTS, "{}")?.status, 200);
+    assert_eq!(
+        push(&s, "status-reports", "1", STATUS_REPORTS, "{}")?.status,
+        200
+    );
     let reply = fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?;
-    assert_eq!((reply.status, reply.header("x-aac-decline")), (503, Some("stale")));
+    assert_eq!(
+        (reply.status, reply.header("x-aac-decline")),
+        (503, Some("stale"))
+    );
     push_status(&s, "1")?;
-    assert_eq!(fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.status, 200);
+    assert_eq!(
+        fed_status(&s, &status_feed(["1"; 6], STATUS_NOW))?.status,
+        200
+    );
     Ok(())
 }

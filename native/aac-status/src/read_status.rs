@@ -1,8 +1,6 @@
 //! Status view composition over collected snapshots. Collectors and guarded write protocols keep
 //! their owners; every value and sentence in the read response is composed here.
-use crate::read_context::{
-    Context, Envelope, age, age_of, array, js_whitespace, number, plural, rows, s,
-};
+use crate::read_context::{Context, Envelope, age, age_of, array, js_whitespace, number, plural, rows, s};
 use aac_num::{ecma, view};
 use serde_json::{Value as V, json};
 use std::collections::{HashMap, HashSet};
@@ -361,7 +359,7 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
         let name = thread_name(row);
         reporting.insert(name.clone());
         reporting.insert(s(&row["writer"]).split_once('.')?.1.to_owned());
-        let at = i.seen(&row)?;
+        let at = i.seen(row)?;
         if i.now - at > 86_400_000 && row["doc"]["state"] != "blocked" {
             continue;
         }
@@ -369,7 +367,7 @@ fn threads(i: &Inputs, registry: &V) -> Option<Vec<V>> {
             - number(&row["firstSeenAt"])?)
             / 1000.0;
         let d = &row["doc"];
-        rows.push(json!({"name":name,"writer":row["writer"],"machine":s(&row["writer"]).split_once('.')?.0,"project":d["project"],"stream":d["stream"],"state":d["state"],"doing":d["doing"],"blockedOn":d["blockedOn"],"progress":d["progress"],"model":d["agent"]["model"],"effort":d["agent"]["effort"],"account":d["agent"]["account"],"source":"report","lastSeen":i.iso(Some(at)),"ageSeconds":i.age(Some(at)),"stale":i.stale_thread(&row)?,"clockAheadSeconds":if ahead>120.0{json!(ecma::math_round(ahead))}else{V::Null},"problem":row["problem"]["reason"],"registrySource":null}));
+        rows.push(json!({"name":name,"writer":row["writer"],"machine":s(&row["writer"]).split_once('.')?.0,"project":d["project"],"stream":d["stream"],"state":d["state"],"doing":d["doing"],"blockedOn":d["blockedOn"],"progress":d["progress"],"model":d["agent"]["model"],"effort":d["agent"]["effort"],"account":d["agent"]["account"],"source":"report","lastSeen":i.iso(Some(at)),"ageSeconds":i.age(Some(at)),"stale":i.stale_thread(row)?,"clockAheadSeconds":if ahead>120.0{json!(ecma::math_round(ahead))}else{V::Null},"problem":row["problem"]["reason"],"registrySource":null}));
     }
     let hidden = crate::read_context::rows(&i.data["hiddenThreadNames"]);
     for thread in crate::read_context::rows(&i.data["registry"]["data"]) {
@@ -468,7 +466,7 @@ fn projects(i: &Inputs) -> Option<Vec<V>> {
             }
             item["ageSeconds"] = i.age(i.at(&item["updatedAt"]));
         }
-        let seen = i.seen(&row)?;
+        let seen = i.seen(row)?;
         groups[at].2.push(json!({"id":d["stream"],"label":d.get("streamLabel").filter(|v|!v.is_null()).unwrap_or(&d["stream"]),"owner":d["owner"],"goal":d["goal"],"writer":row["writer"],"board":i.board(&d["board"]),"source":"tasks","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":!row["problem"].is_null()||i.now-seen>86_400_000,"problem":row["problem"]["reason"],"counts":counts,"completion":completion(&counts)?,"items":items}));
     }
     let mut threads: Vec<&V> = rows(&i.data["reports"]["threads"]).iter().collect();
@@ -490,8 +488,8 @@ fn projects(i: &Inputs) -> Option<Vec<V>> {
         if groups[at].2.iter().any(|s| s["id"] == d["stream"]) {
             continue;
         }
-        let seen = i.seen(&row)?;
-        groups[at].2.push(json!({"id":d["stream"],"label":d["stream"],"owner":thread_name(&row),"goal":null,"writer":row["writer"],"board":i.board(&link["path"]),"source":"board-only","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":i.stale_thread(&row)?,"problem":row["problem"]["reason"],"counts":null,"completion":null,"items":[]}));
+        let seen = i.seen(row)?;
+        groups[at].2.push(json!({"id":d["stream"],"label":d["stream"],"owner":thread_name(row),"goal":null,"writer":row["writer"],"board":i.board(&link["path"]),"source":"board-only","asOf":i.iso(Some(seen)),"ageSeconds":i.age(Some(seen)),"stale":i.stale_thread(row)?,"problem":row["problem"]["reason"],"counts":null,"completion":null,"items":[]}));
     }
     let mut out = Vec::new();
     for (id, label, mut streams) in groups {

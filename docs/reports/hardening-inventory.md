@@ -55,7 +55,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 12 |
-| files with createLogger | 44/455 |
+| files with createLogger | 44/456 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 64 |
 | files > 600 LOC | 24 |

@@ -47,7 +47,12 @@ fn members(source: &str) -> &'static [&'static str] {
         PINNED => &["pinned"],
         COLLECTED => &["registry", "machines", "browsers", "simlock", "usage"],
         ANSWERS => &["answers", "sends", "answerHistoryProblem"],
-        FACTS => &["timeZone", "hiddenThreadNames", "machineIds", "machineLabels"],
+        FACTS => &[
+            "timeZone",
+            "hiddenThreadNames",
+            "machineIds",
+            "machineLabels",
+        ],
         _ => &[],
     }
 }
@@ -103,10 +108,7 @@ pub(crate) fn prepare(source: &str, data: &RawValue, facts: &RawValue) -> Result
         }
         None
     };
-    Ok(Part {
-        data: value,
-        facts,
-    })
+    Ok(Part { data: value, facts })
 }
 
 /// The front door's per-request facts: the clock, now's two words (formatted by TS in the facts' time zone) and
@@ -196,12 +198,13 @@ pub(crate) fn answer(feeds: &Feeds, feed: &str) -> Result<(Vec<u8>, String), Dec
     }
     let presentation = presentation.ok_or(Decline::Internal)?;
     let date = Date::of_now(feed.now, feed.clock, feed.day).ok_or(Decline::Date)?;
-    let view = read_status::compose_fed(parts, presentation, (feed.now, date)).map_err(
-        |reason| match reason {
-            Unproven::Facts => Decline::Date,
-            Unproven::Input => Decline::Unsupported,
-        },
-    )?;
+    let view =
+        read_status::compose_fed(parts, presentation, (feed.now, date)).map_err(|reason| {
+            match reason {
+                Unproven::Facts => Decline::Date,
+                Unproven::Input => Decline::Unsupported,
+            }
+        })?;
     let mut writer = Writer::with_capacity(64 * 1024);
     writer.value(&view);
     let (bytes, identity) = writer.finish();
@@ -229,15 +232,37 @@ mod tests {
     #[test]
     fn a_generation_is_exactly_its_members_written_as_node_writes_them() {
         assert!(prepare(REPORTS, &raw(r#"{"reports":{"a":[1,2.5]}}"#), &raw("{}")).is_ok());
-        assert!(prepare(COLLECTED, &raw(r#"{"registry":null,"usage":null}"#), &raw("{}")).is_ok());
+        assert!(
+            prepare(
+                COLLECTED,
+                &raw(r#"{"registry":null,"usage":null}"#),
+                &raw("{}")
+            )
+            .is_ok()
+        );
         for (source, data, facts, reason) in [
             // Another member, a member out of order, a repeated member, not an object.
             (REPORTS, r#"{"reports":{},"x":1}"#, "{}", Decline::Shape),
-            (QUOTA, r#"{"spendByStream":{},"quota":{}}"#, "{}", Decline::Shape),
-            (REPORTS, r#"{"reports":{},"reports":{}}"#, "{}", Decline::Shape),
+            (
+                QUOTA,
+                r#"{"spendByStream":{},"quota":{}}"#,
+                "{}",
+                Decline::Shape,
+            ),
+            (
+                REPORTS,
+                r#"{"reports":{},"reports":{}}"#,
+                "{}",
+                Decline::Shape,
+            ),
             (REPORTS, "[1]", "{}", Decline::Shape),
             // An Object.prototype name anywhere declines, as the envelope does.
-            (REPORTS, r#"{"reports":{"constructor":1}}"#, "{}", Decline::Shape),
+            (
+                REPORTS,
+                r#"{"reports":{"constructor":1}}"#,
+                "{}",
+                Decline::Shape,
+            ),
             // Text Node would not write (an escape it does not use, a number it spells otherwise).
             (REPORTS, r#"{"reports":"a\/b"}"#, "{}", Decline::Shape),
             (REPORTS, r#"{"reports":1.0}"#, "{}", Decline::Shape),
@@ -262,7 +287,9 @@ mod tests {
         let facts = prepare(
             FACTS,
             &raw(r#"{"timeZone":"UTC","machineIds":["vm"]}"#),
-            &raw(r#"{"dates":{"1":{"iso":"x","clock":"c","day":"d"}},"epochs":{},"order":{"a":0}}"#),
+            &raw(
+                r#"{"dates":{"1":{"iso":"x","clock":"c","day":"d"}},"epochs":{},"order":{"a":0}}"#,
+            ),
         )
         .expect("facts");
         assert!(facts.facts.is_some());

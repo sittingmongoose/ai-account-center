@@ -473,3 +473,45 @@ measures off `GET /api/accounts/dashboard`, D7's Home and the fed Home in the sa
 synthetic home (whose 30 x 12 dashboard rows reach the real dashboard service through the additional-accounts
 snapshot).
 
+## Status, fed (R2)
+
+R2 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 1.2): Status at the **fed** level. Off by default:
+`rustService.groups.status: on` in `config.yaml` (or `AAC_RUST_GROUP_STATUS=on`), under `rustService.mode: on`.
+With the group off nothing below runs and `GET /api/status` is today's handler.
+
+- **StatusService keeps reading and collecting.** Its sources are pushed through R1's feed
+  (`status/status-feed.ts`), each a JSON object of some of the composer's input members, as the envelope writes
+  them: `status-reports` (reports), `status-quota` (quota, spendByStream), `status-pinned` (pinned),
+  `status-collected` (registry, machines, browsers, simlock, usage), `status-answers` (answers, sends,
+  answerHistoryProblem). `status-facts` holds the time zone and the fixed lists (hiddenThreadNames, machineIds,
+  machineLabels) with that generation's `Intl` facts, computed once by `rustReadInput`'s code over the whole
+  set: the clock and day words of every time value, the `Date.parse` epochs and the `localeCompare` ranks.
+- **Change keys cost no serialization** where the owner replaces what it changes: each member is compared with
+  what was pushed by identity, to the depth `readInputs()` builds fresh (the reports snapshot's arrays hold the
+  reader's immutable rows; the collected panels are replaced per collection). The answers change in place, so
+  their key is their JSON text. A changed member pushes its source and the facts.
+- **A request carries only** the clock, now's clock and day words (two cached `Intl` formats) and the six
+  generation ids (`x-aac-feed`; no body).
+- **The service** (`crates/aac-http/src/status_fed.rs`) parses each generation once when it arrives (proving it
+  re-writes to the very text TS sent and holds no `Object.prototype` name), composes with the existing Status
+  composer (`aac_status::read_status::compose_fed`: the same code as the envelope's `compose`, over the borrowed
+  generations and the facts plus now's date) and writes the bytes as Node does (`aac_views::js_json`) with the
+  revalidated-view ETag and `x-aac-view: status@1`. The ETag is kept per (generations, second) and reused only for
+  the same identity bytes. TS writes the reply unparsed (`sendRustView`, `private, no-cache`), with a 304 for a
+  matching `If-None-Match`.
+- **Anything unproven declines with a named reason and today's handler answers from the same read:** another
+  root (`root`), an input member the front door does not know or a value JSON cannot carry (`input`), a push that
+  did not land (`feed`), a generation the service does not hold as named (`stale`; the next request pushes again),
+  and every service decline (`shape` for a generation that does not round-trip, `date` for a missing fact or a
+  clock `toISOString` cannot write, `unsupported` for a view the composer cannot prove).
+- **Stays in TS:** the answers writer and the POST, the process collectors, the pinned-threads collector, the
+  usage listener, the WebSocket and the report captures into the store.
+
+The checks: `crates/aac-http/tests/lifecycle.rs` (the fed answer byte-equal to the envelope read with its ETag;
+a missing, stale or unproven generation; a late push; a restarted service), `status_fed.rs` unit tests,
+`tests/unit/web-server/status-feed.test.ts`, and under `tests/spec`: `read-view-parity.ts` (the 21 raw Status
+cases, the 4 board ages and the prototype name through the fed path, plus a negative control),
+`read-rounding-parity.ts` (the 37 numeric admissions through the fed path), `status-fuzz.ts` and
+`status-read-parity.mjs` (end to end on the real binary and the real owner). `status-measure.mjs` times off, the
+M3 envelope path and the fed path under Node on the large home (`read-http-parity.ts --measure` runs it).
+
