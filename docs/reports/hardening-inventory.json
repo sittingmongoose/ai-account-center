@@ -361,8 +361,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 157,
-    "filesAffected": 50,
+    "totalMarkers": 180,
+    "filesAffected": 54,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -434,6 +434,22 @@
         ]
       },
       {
+        "file": "src/web-server/rust-service.ts",
+        "count": 13,
+        "calls": [],
+        "markers": [
+          ": legacy();",
+          "? service.compose(req, route, input, legacy, accepts)",
+          "/* Bounded, logged legacy fallback. */",
+          "/** Compute in Rust first; legacy composition is lazy in on mode. Collectors remain owners. */",
+          "/** Guarded route adapters use this with immutable reader inputs and a lazy legacy composer. */",
+          "/** Match the legacy serializer's property order without replacing any candidate values. */",
+          "legacy: () => unknown | Promise<unknown>,",
+          "reference = await legacy();",
+          "return legacy();"
+        ]
+      },
+      {
         "file": "src/web-server/services/app-update-service.ts",
         "count": 9,
         "calls": [],
@@ -462,6 +478,17 @@
           "let legacy: OwnedMacApp | null = null;",
           "return canonical ?? legacy;",
           "throw new ConfigError(`Refusing a foreign native app alias: ${paths.legacy}`);"
+        ]
+      },
+      {
+        "file": "src/web-server/scoreboard/scoreboard-service.ts",
+        "count": 7,
+        "calls": [],
+        "markers": [
+          ": legacy();",
+          "? composer.compose(input, { ...finish, native: this.native !== null }, legacy)",
+          "const legacy = () =>",
+          "legacy: () => Promise<ScoreboardView>"
         ]
       },
       {
@@ -499,28 +526,6 @@
           "? [paths.legacy, paths.canonical]",
           "(!target.stat.isSymbolicLink() && target.source === paths.legacy)",
           "const executables = [paths.canonical, paths.legacy].map((app) =>"
-        ]
-      },
-      {
-        "file": "src/config/schemas/auth.ts",
-        "count": 4,
-        "calls": [],
-        "markers": [
-          "* `session_lifetime_days` wins; otherwise a legacy `session_timeout_hours`",
-          "* Disabled by default for backward compatibility.",
-          "/** A legacy `session_timeout_hours` value maps to the nearest offered lifetime. */",
-          "/** Session timeout in hours (default: 24; legacy mirror of session_lifetime_days) */"
-        ]
-      },
-      {
-        "file": "src/utils/profile-compat.ts",
-        "count": 4,
-        "calls": [],
-        "markers": [
-          "* - `kimi` remains as legacy API profile name in existing user configs",
-          "* Check whether a resolved profile name came from a legacy alias.",
-          "* Order: exact input -> lowercase form (if different) -> legacy aliases.",
-          "* Resolve a legacy alias to its canonical profile name."
         ]
       }
     ],
@@ -601,8 +606,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 435,
-      "coverageRatio": 0.1011,
+      "totalSourceFiles": 437,
+      "coverageRatio": 0.1007,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -618,7 +623,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 244,
+          "count": 246,
           "withLogger": 30
         },
         {
@@ -757,6 +762,10 @@
           "loc": 1104
         },
         {
+          "file": "src/web-server/services/usage-failover-service.ts",
+          "loc": 1053
+        },
+        {
           "file": "src/web-server/services/account-analytics-service.ts",
           "loc": 1026
         },
@@ -765,16 +774,12 @@
           "loc": 1023
         },
         {
-          "file": "src/web-server/services/usage-failover-service.ts",
-          "loc": 994
-        },
-        {
           "file": "src/web-server/status/status-collectors.ts",
           "loc": 957
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
-          "loc": 907
+          "loc": 950
         },
         {
           "file": "src/web-server/status/status-view.ts",
@@ -782,7 +787,7 @@
         },
         {
           "file": "src/web-server/usage/native-quota-collector.ts",
-          "loc": 811
+          "loc": 815
         },
         {
           "file": "src/web-server/usage/codex-quota/quota-fetcher-codex.ts",
