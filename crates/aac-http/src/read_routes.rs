@@ -9,6 +9,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::path::PathBuf;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,13 +17,23 @@ struct Snapshot {
     snapshot: Value,
 }
 
-pub async fn answer(req: Request) -> Response {
+/// `root` is the service's own canonical boot root (never a path from the TS input).
+pub async fn answer(req: Request, root: PathBuf) -> Response {
     let path = req.uri().path().to_owned();
+    let query = req.uri().query().is_some();
     let bytes = match to_bytes(req.into_body(), 4 * 1024 * 1024).await {
         Ok(bytes) => bytes,
         Err(_) => return fallback(),
     };
     let result = tokio::task::spawn_blocking(move || {
+        if path.starts_with("/api/accounts/") {
+            // TS refused any query before forwarding; anything else is not the read it proved.
+            return if query {
+                None
+            } else {
+                crate::account_reads::answer(&path, &root, &bytes)
+            };
+        }
         if path.starts_with("/api/status/files/") || path == "/api/status/deliverable" {
             return crate::read_files::answer(&path, &bytes);
         }

@@ -68,6 +68,17 @@ function isPrivate(stat: Stats): boolean {
   return process.platform === 'win32' || (stat.mode & 0o077) === 0;
 }
 
+/**
+ * The same one-time folder line, for a read the M3 Rust service answered from this folder: the
+ * TS reader would have logged it, so it still logs exactly once per folder and kind.
+ */
+export function notePrivateStoreFolder(
+  directory: string,
+  kind: 'group-writable' | 'symlink'
+): void {
+  warnOnce(directory, kind);
+}
+
 /** One fixed line per folder and kind; the folder path is never logged (rule 7). */
 function warnOnce(directory: string, kind: 'group-writable' | 'symlink'): void {
   const key = `${kind}\0${directory}`;

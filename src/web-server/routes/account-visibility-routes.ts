@@ -5,6 +5,8 @@ import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware
 import { createLogger } from '../../services/logging';
 import { getCcsDir } from '../../utils/config-manager';
 import { broadcastDashboardEvent } from '../dashboard-events';
+import { readOwnedWithRust } from '../rust-service';
+import { acceptRustVisibility } from '../rust-account-input';
 import {
   parseVisibilityBody,
   parseVisibilityDelta,
@@ -76,13 +78,30 @@ export function createAccountVisibilityRouter(deps: AccountVisibilityRouterDeps 
     next();
   });
 
-  router.get('/visibility', async (_req, res): Promise<void> => {
-    const current = await read().catch((): AccountVisibilityRead => ({ state: 'unavailable' }));
-    if (current.state !== 'ok') {
-      fail(res, 500, 'visibility_unavailable', 'Account visibility could not be read safely.');
+  router.get('/visibility', async (req, res): Promise<void> => {
+    // After the guards above, the M3 Rust service may read the same file; this is the fallback.
+    const legacy = async (): Promise<unknown> => {
+      const current = await read().catch((): AccountVisibilityRead => ({ state: 'unavailable' }));
+      if (current.state !== 'ok') {
+        fail(res, 500, 'visibility_unavailable', 'Account visibility could not be read safely.');
+        return undefined;
+      }
+      res.json(current.visibility);
+      return current.visibility;
+    };
+    if (deps.read) {
+      await legacy();
       return;
     }
-    res.json(current.visibility);
+    const directory = getCcsDir();
+    await readOwnedWithRust(
+      req,
+      res,
+      '/api/accounts/visibility',
+      directory,
+      acceptRustVisibility(directory),
+      legacy
+    );
   });
 
   router.route('/visibility').put(save).patch(save);

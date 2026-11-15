@@ -13,7 +13,12 @@ import {
   relabel,
   submitJobCode,
 } from '../services/account-lifecycle-extras';
-import { registryListing } from '../services/account-lifecycle-listing';
+import {
+  composeRegistryListing,
+  registryListingFacts,
+} from '../services/account-lifecycle-listing';
+import { composeWithRust } from '../rust-service';
+import { isRustRegistryListing, rustRegistryInput } from '../rust-account-input';
 import {
   defaultLifecycleEnv,
   type LifecycleContext,
@@ -136,11 +141,23 @@ export function createAccountLifecycleRouter(deps: AccountLifecycleRouterDeps = 
     return id;
   };
 
-  router.get(
-    '/registry',
-    guard,
-    read((req) => registryListing(env(), context(req)))
-  );
+  router.get('/registry', guard, async (req: Request, res: Response): Promise<void> => {
+    try {
+      // Every owner read stays in TS; the M3 Rust service may compose the listing from them.
+      const facts = await registryListingFacts(env(), context(req));
+      const body = await composeWithRust(
+        req,
+        res,
+        '/api/accounts/registry',
+        () => rustRegistryInput(facts),
+        () => composeRegistryListing(facts),
+        isRustRegistryListing
+      );
+      answer(res, { status: 200, body });
+    } catch (error) {
+      fail(res, error);
+    }
+  });
   router.post(
     '/add',
     guard,

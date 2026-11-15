@@ -516,31 +516,25 @@ try {
       });
     }
   assert.equal(
-    fs
-      .readdirSync(path.join(spec, 'contract'))
-      .filter(
-        (file) =>
-          ![
-            'm3-read-snapshots.json',
-            'm3-read-files.json',
-            'm3-read-views.json',
-            'm3-read-http.json',
-          ].includes(file)
-      ).length,
+    // Route/role documents only; named m3-*.json corpora belong to their own parity checks.
+    fs.readdirSync(path.join(spec, 'contract')).filter((file) => /^\d{3}-[a-z-]+\.json$/.test(file))
+      .length,
     inventory.length * roles.length,
     'Stale or missing golden files'
   );
   if (rustMode === 'on')
     assert.equal(
       instance.rustService.stats.served,
-      9,
-      'must actually serve health/settings/diag from Rust after TS role guards'
+      15,
+      'must actually serve health/settings/diag and the session/bar visibility, preferences and registry reads from Rust after TS role guards'
     );
   if (rustMode === 'shadow') {
-    for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 12; i++)
+    // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide
+    // raw reader inputs. The six session/bar account reads (visibility, preferences, registry) are
+    // compared; the Analytics stub stops at its query check before any Rust composition.
+    for (let i = 0; i < 100 && instance.rustService.stats.shadowed < 18; i++)
       await new Promise((r) => setTimeout(r, 10));
-    // The three M0 store-status stubs explicitly fall back; Status/Scoreboard stubs do not provide raw reader inputs.
-    assert.equal(instance.rustService.stats.shadowed, 12);
+    assert.equal(instance.rustService.stats.shadowed, 18);
     assert.equal(instance.rustService.stats.served, 0);
     assert.equal(instance.rustService.stats.differences, 0);
   }

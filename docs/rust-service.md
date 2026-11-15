@@ -64,6 +64,40 @@ It reports no Rust jobs/computers yet, scheduler `unavailable` / `jobs_not_migra
 and store `unavailable` / `store_owned_by_ts`. It does not open the native store or
 refresh any provider.
 
+## Account reads (M3 part 3)
+
+GET `/api/accounts/visibility`, `/preferences`, `/registry` and `/analytics` are also
+`rust` in the ownership table. Each is forwarded only from inside its existing TS
+handler, after that handler's session, query and origin checks; Rust repeats the
+signed-in session check. Every route answers only what is proven identical to the TS
+reader or composer and returns a private 503 otherwise, which the bridge logs as
+`rust.service.fallback` before running the original TS handler once.
+
+| Route | What Rust does | TS keeps |
+| --- | --- | --- |
+| visibility | Reads `account-visibility.json` under the boot root (0600, 32 KiB, no symlink, folder bits, `parseVisibilityFile`) and returns the four lists plus the folder's one-time group-writable line, which TS logs through the same once-per-folder warning. | Writes; every unavailable/500 case; a symlinked or other folder. |
+| preferences | Reads `dashboard-preferences.json` and the extra-sources companion with the same validation, key order and merge. Zones are admitted only from a fixed list that the spec proves the running TS accepts. | Writes; every case TS logs (corrupt, migrated remote JSONL); any zone outside the list. |
+| registry | Composes the listing (`composeRegistryListing`) from the facts TS read: dashboard rows, removal refusals, sign-in availability, key metadata, jobs and trash. | Every owner read; rows whose JavaScript meaning is not proven. |
+| analytics | Composes the answer around the activity block (`analyticsAvailableRange` + `composeAccountAnalytics`): range, history, summary, providers and quota series. It recomputes the range and refuses unless it equals the one TS used for its history read. | Dashboard, history-store records, activity (local scans and remote caches), saved views and the `stale`/`refreshing`/`cached` read state; TS appends `activity`. |
+
+These routes use the same pieces as the M3 part 2 reads: the one ownership table,
+`RustService.compose()` / `composeWithRust` for the two compositions (its shadow check
+compares serialized bytes, key order included), the `read_routes` dispatch with its
+single private 503, the raw object gate on every input envelope, and serde_json values
+with `preserve_order` and `float_roundtrip`. Engine facts come from the shared
+presentation envelope (`rustReadInput` → `aac_status::read_context::Context`): Analytics
+asks for `Date.parse` epochs, ISO words and provider-id `localeCompare` ranks only
+(`clockAndDay: false`, `rankAll: false`), and a missing fact refuses the candidate.
+Objects the composer spreads (dashboard accounts and windows) travel as ordered entry
+lists inside that envelope, so an own member whose value is undefined keeps its position.
+The account identity reuses `aac_core::AccountKey` and admits ASCII addresses only.
+File reads parse with serde_json, which gives a duplicate key JSON.parse's answer (the
+last value at the first position); lone surrogates and invalid UTF-8 use the TS reader.
+`RustService.owned()` serves the file reads: Rust reads its own canonical boot root,
+never applies the folder warning in shadow mode, and every TS reader or composer runs
+exactly once per request. Requests with bodies keep part 2's 4 MiB input and 2 MiB
+reply caps; larger answers use the TS fallback.
+
 ## Boundary and lifecycle
 
 The service binds no TCP port. It accepts only its Unix socket, mode 0600, in a
@@ -129,6 +163,11 @@ AAC_RUST_SERVICE=off node tests/spec/run.mjs
 AAC_RUST_SERVICE=on node tests/spec/run.mjs
 AAC_RUST_SERVICE=shadow node tests/spec/run.mjs
 ```
+
+`account-read-parity.ts` runs the four account read routes through the real TS
+routers in all three modes against `contract/m3-part3-account-reads.json`, then
+compares the TS composers with the Rust socket over generated Analytics and
+registry tables (see the spec README).
 
 `settings-numeric-forms.json` and `settings-parity.ts` compare 65 numeric/document
 forms against the real TS reader and the actual Rust socket, then run them through

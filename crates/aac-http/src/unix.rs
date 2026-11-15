@@ -139,10 +139,11 @@ async fn boundary(State(state): State<AppState>, mut req: Request, next: Next) -
 }
 
 async fn route(State(state): State<AppState>, req: Request) -> Response {
-    let Some(principal) = req.extensions().get::<VerifiedPrincipal>() else {
+    let Some(principal) = req.extensions().get::<VerifiedPrincipal>().cloned() else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    match req.uri().path() {
+    let path = req.uri().path().to_owned();
+    match path.as_str() {
         "/api/health" => Json(aac_diag::health()).into_response(),
         "/api/accounts/settings" | "/api/diag" if !principal.dashboard_session() => (
             StatusCode::UNAUTHORIZED,
@@ -150,6 +151,24 @@ async fn route(State(state): State<AppState>, req: Request) -> Response {
         )
             .into_response(),
         "/api/diag" => Json(aac_diag::diagnostics()).into_response(),
+        "/api/accounts/visibility"
+        | "/api/accounts/preferences"
+        | "/api/accounts/registry"
+        | "/api/accounts/analytics"
+            if !principal.dashboard_session() =>
+        {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error":"Authentication required"})),
+            )
+                .into_response()
+        }
+        "/api/accounts/visibility"
+        | "/api/accounts/preferences"
+        | "/api/accounts/registry"
+        | "/api/accounts/analytics" => {
+            crate::read_routes::answer(req, state.0.ccs_dir.clone()).await
+        }
         "/api/accounts/settings" => {
             if req.uri().query().is_some_and(|q| !q.is_empty()) {
                 return (
@@ -172,15 +191,15 @@ async fn route(State(state): State<AppState>, req: Request) -> Response {
             if principal.role == aac_api::PrincipalRole::Device
                 || principal.dashboard_session() =>
         {
-            crate::read_routes::answer(req).await
+            crate::read_routes::answer(req, state.0.ccs_dir.clone()).await
         }
         "/api/status" | "/api/scoreboard" | "/api/status/deliverable"
             if principal.dashboard_session() =>
         {
-            crate::read_routes::answer(req).await
+            crate::read_routes::answer(req, state.0.ccs_dir.clone()).await
         }
         path if path.starts_with("/api/status/files/") && principal.dashboard_session() => {
-            crate::read_routes::answer(req).await
+            crate::read_routes::answer(req, state.0.ccs_dir.clone()).await
         }
         _ => StatusCode::NOT_FOUND.into_response(),
     }
@@ -245,6 +264,10 @@ pub async fn serve(
                         | "/api/status"
                         | "/api/status/files/{*path}"
                         | "/api/status/deliverable"
+                        | "/api/accounts/visibility"
+                        | "/api/accounts/preferences"
+                        | "/api/accounts/registry"
+                        | "/api/accounts/analytics"
                 )
             {
                 return Err(failure());
