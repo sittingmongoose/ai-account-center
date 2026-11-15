@@ -130,6 +130,12 @@ def record(root, agent):
             identity['version'] = '0.0.0'
             print(json.dumps(identity)); sys.exit(0)
         os.execv(agent, [agent, '--version'])
+    if scenario == 'burst':
+        request = json.loads(sys.stdin.buffer.readline())
+        for n in range(16):
+            print(json.dumps({'type':'progress','protocol':1,'id':request['id'],'data':{'n':n}}))
+        print(json.dumps({'type':'result','protocol':1,'id':request['id'],'value':{'fixture':True}}),flush=True)
+        sys.exit(0)
     if scenario in ('flood', 'pool'):
         request = json.loads(sys.stdin.buffer.readline())
         if scenario == 'flood':
@@ -217,6 +223,11 @@ def gates(agent, service):
         assert len(list(s.root.glob('pid.*')))==8
     with Service(agent, service, scenario='flood') as s:
         assert s.call(cap=4096)[-1]['type']=='fallback'
+    with Service(agent, service, scenario='burst') as s:
+        for n in range(10):
+            events=s.call(id='burst'+str(n))
+            assert [e.get('data',{}).get('n') for e in events[:-1]]==list(range(16)), events
+            assert events[-1]['type']=='result'
     for scenario in ['stream', 'ignore-cancel']:
 
         with Service(agent, service, scenario=scenario) as s:

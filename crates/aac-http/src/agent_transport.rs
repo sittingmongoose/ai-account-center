@@ -322,6 +322,15 @@ impl Agents {
         let Some(client) = client else {
             return unavailable(&call.call_id, "unavailable");
         };
+        let wire = format!(
+            "{{\"protocol\":1,\"verb\":\"{verb}\",\"id\":\"{}\",\"deadlineMs\":{},\"args\":{}}}",
+            call.call_id,
+            call.deadline_ms,
+            call.args.get()
+        );
+        let Ok(request) = serde_json::from_str::<Request>(&wire) else {
+            return unavailable(&call.call_id, "shape");
+        };
         let mut options = CallOptions::new(Duration::ZERO, call.max_bytes);
         options.deadline = deadline;
         options.scan = verb == "scan-usage";
@@ -345,15 +354,6 @@ impl Agents {
                 },
             );
         }
-        let wire = format!(
-            "{{\"protocol\":1,\"verb\":\"{verb}\",\"id\":\"{}\",\"deadlineMs\":{},\"args\":{}}}",
-            call.call_id,
-            call.deadline_ms,
-            call.args.get()
-        );
-        let Ok(request) = serde_json::from_str::<Request>(&wire) else {
-            return unavailable(&call.call_id, "shape");
-        };
         let agents = self.clone();
         tokio::spawn(async move {
             let _permit = permit;
@@ -383,6 +383,18 @@ impl Agents {
                     }
                 }
             };
+            // Completion can win select while earlier validated progress is still queued.
+            // Drain that queue before the terminal frame, under the same backpressure budget.
+            while let Ok(event) = events.try_recv() {
+                let bytes = line(&serde_json::to_value(event).unwrap_or(Value::Null));
+                if !matches!(
+                    tokio::time::timeout_at(options.deadline, output.send(bytes)).await,
+                    Ok(Ok(()))
+                ) {
+                    options.cancel.cancel();
+                    break;
+                }
+            }
             let mut cancelled = false;
             let terminal = match result {
                 Ok(events) => match events.last() {
