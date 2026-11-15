@@ -201,6 +201,51 @@ describe('what the scanner says about failures reaches the cell', () => {
     expect(cell?.detail).toContain('search limit reached: 64 of 65');
   });
 
+  it('reports optional search coverage without calling a complete known-root read partial', async () => {
+    const complete = answer({
+      kinds: { codex: { state: 'ok', optionalSearchLimited: true, fingerprints: { [FILE_1]: print } } },
+    });
+    expect(complete.kinds.codex?.optionalSearchLimited).toBe(true);
+    const { cell, input } = await scans([complete]);
+    expect(cell?.state).toBe('ok');
+    expect(input).toBe(10);
+    expect(cell?.detail).toContain('known log folders were read');
+    expect(cell?.detail).toContain('other locations may exist');
+    expect(cell?.lastScanAt).not.toBeNull();
+  });
+
+  it('keeps unconfirmed earlier logs and their full-read clock when optional discovery was bounded', async () => {
+    const partial = answer({
+      kinds: { codex: { state: 'ok', partial: true, optionalSearchLimited: true, fingerprints: { [FILE_2]: print } } },
+      rows: [row(FILE_2, 7)],
+    });
+    const { cell, input } = await scans([answer({}), partial]);
+    expect(input).toBe(17);
+    expect(cell?.state).toBe('cached');
+    expect(cell?.lastScanAt).toBe('2026-10-02T00:10:00.000Z');
+    expect(cell?.detail).toContain('previously read logs not confirmed this time remain included');
+  });
+
+  it('keeps actual read failures explicit beside an optional search cutoff', async () => {
+    const partial = answer({
+      kinds: { codex: { state: 'ok', partial: true, readFailures: 1, optionalSearchLimited: true, fingerprints: { [FILE_1]: print } } },
+    });
+    const { cell } = await scans([partial]);
+    expect(cell?.state).toBe('cached');
+    expect(cell?.detail).toContain('1 logs could not be read');
+    expect(cell?.detail).toContain('optional search');
+  });
+
+  it('never describes an unknown discovery total as zero of more folders', async () => {
+    const limited = answer({
+      kinds: { codex: { state: 'ok', partial: true, searchLimit: { read: 0, found: null }, fingerprints: { [FILE_1]: print } } },
+    });
+    const { cell } = await scans([limited]);
+    expect(cell?.detail).not.toContain('0 of more');
+    expect(cell?.detail).toContain('additional folders may remain');
+    expect(cell?.detail).not.toContain('logs in the others are not counted');
+  });
+
   // FIX-ROUND-BIG 1: the Python fallback keys Codex logs by path, the scanner by conversation.
   // After a switch, a partial answer never keeps the other reader's rows beside its own.
   it('never keeps rows of the other reader after a switch', async () => {

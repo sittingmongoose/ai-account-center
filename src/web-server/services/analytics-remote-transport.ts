@@ -271,6 +271,8 @@ export interface AnalyticsRemoteKindResult {
   /** A discovery bound left roots unlooked-at: how many were kept, of how many seen (null: the
    * search stopped before it could count them all). FIX-ROUND-BIG 6. */
   searchLimit?: { read: number; found: number | null };
+  /** Optional experiment discovery stopped; known log roots may still be completely read. */
+  optionalSearchLimited?: boolean;
 }
 
 /** Where a root came from (the usage-report contract's `origin`). */
@@ -903,6 +905,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
       unreadableRecords?: unknown;
       unreadableFolders?: unknown;
       searchLimit?: unknown;
+      optionalSearchLimited?: unknown;
     };
     if (
       entry.state !== 'ok' &&
@@ -961,6 +964,11 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
         entry.partial !== true)
     )
       throw new AnalyticsRemoteTransportError();
+    if (
+      entry.optionalSearchLimited !== undefined &&
+      typeof entry.optionalSearchLimited !== 'boolean'
+    )
+      throw new AnalyticsRemoteTransportError();
     const limit = entry.searchLimit as { read?: unknown; found?: unknown } | undefined;
     if (
       limit !== undefined &&
@@ -1002,6 +1010,7 @@ export function parseAnalyticsRemoteResponse(stdout: string | Buffer): Analytics
               ? 'pending'
               : 'ok',
       ...(entry.partial === true ? { partial: true } : {}),
+      ...(entry.optionalSearchLimited === true ? { optionalSearchLimited: true } : {}),
       ...(entry.compressedUnread !== undefined
         ? { compressedUnread: entry.compressedUnread as number }
         : {}),

@@ -2072,16 +2072,18 @@ export async function loadAnalyticsRemoteSources(
                     : kind?.unreadableRecords
                       ? `${kind.unreadableRecords.toLocaleString('en-US')} ${tool === 'cursor' ? 'Cursor runs' : 'replies'} could not be read (${tool === 'cursor' ? "their token counts fit neither of the SDK's two conventions, or their usage JSON is damaged" : 'their token counts or time are missing'}); they are counted as unreadable, never guessed`
                       : limit
-                        ? `search limit reached: ${limit.read.toLocaleString('en-US')} of ${limit.found === null ? 'more' : limit.found.toLocaleString('en-US')} folders looked at, so logs in the others are not counted; ${kept ? 'showing what was read' : 'nothing counted yet'}`
+                        ? `search limit reached: ${limit.found === null ? `${limit.read.toLocaleString('en-US')} folders checked; additional folders may remain` : `${limit.read.toLocaleString('en-US')} of ${limit.found.toLocaleString('en-US')} folders checked`}; discovery is incomplete; ${kept ? 'showing what was read' : 'nothing counted yet'}`
                         : tool === 'codex' && kind?.compressedUnread
                           ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
                           : kind?.readFailures
                             ? `${kind.readFailures} logs could not be read on this computer; ${kept ? 'showing previously read usage' : 'waiting for readable logs'}`
                             : oversized
                               ? 'oversized log lines may contain usage that could not be read; showing partial aggregates'
-                              : kept
-                                ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
-                                : 'the remote scan hit its time bound partway through this tool; the next scan continues',
+                              : kind?.optionalSearchLimited
+                                ? 'the optional search for additional experiment folders hit its limit; previously read logs not confirmed this time remain included'
+                                : kept
+                                  ? 'the remote scan hit its time bound partway through this tool; showing partial aggregates'
+                                  : 'the remote scan hit its time bound partway through this tool; the next scan continues',
             });
             continue;
           }
@@ -2091,8 +2093,9 @@ export async function loadAnalyticsRemoteSources(
             state: kept ? 'ok' : 'no_usage',
             lastScanAt: scannedAt,
             rowCount: events,
-            detail:
-              tool === 'omp' && response.discoveryTruncated === true
+            detail: response.kinds[tool]?.optionalSearchLimited
+              ? 'known log folders were read; the optional search for additional experiment folders hit its limit, so other locations may exist'
+              : tool === 'omp' && response.discoveryTruncated === true
                 ? 'the search for custom OMP session folders hit its bounds; folders it did not reach are not read'
                 : (tool === 'zcode' || tool === 'cursor' || tool === 'devin') &&
                     response.kinds[tool]?.walUnread === true
@@ -2117,6 +2120,14 @@ export async function loadAnalyticsRemoteSources(
           );
           if (links.length && entry.state !== 'unreadable' && entry.cause !== 'unreadable_folder') {
             const note = rootFailureText(links);
+            entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+          }
+          if (
+            response.kinds[entry.tool as AnalyticsRemoteKind]?.optionalSearchLimited &&
+            !entry.detail?.includes('optional search')
+          ) {
+            const note =
+              'the optional search for additional experiment folders hit its limit, so other locations may exist';
             entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
           }
           // A network folder that did not answer may hold logs a walk from home would have found.
