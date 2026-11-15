@@ -90,6 +90,9 @@ impl Role {
 pub(crate) enum Pool {
     Reads,
     Store,
+    /// Fed Status. Not a route-table group: the fed arm chooses it, and the envelope read stays
+    /// on [`Pool::Reads`].
+    Status,
 }
 
 /// One `rust` row, checked.

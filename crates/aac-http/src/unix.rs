@@ -385,7 +385,7 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
             let feeds = shared.feeds.clone();
             match shared
                 .limits
-                .blocking(row.pool, move || crate::status_fed::answer(&feeds, &feed))
+                .blocking_status(move || crate::status_fed::answer(&feeds, &feed))
                 .await
             {
                 Ok((bytes, etag)) => crate::view_reply::respond_tagged(
@@ -543,7 +543,8 @@ mod dto_tests {
     }
     #[test]
     fn boot_principal_and_route_dtos_cannot_use_sequence_as_struct() {
-        let boot = br#"{"ccsDir":"/tmp/fixture","socketPath":"/tmp/fixture/socket","secret":"fixture","bootId":"fixture"}"#;
+        let boot =
+            br#"{"ccsDir":"/tmp/fixture","socketPath":"/tmp/fixture/socket","secret":"fixture","bootId":"fixture"}"#;
         assert!(Boot::from_json(boot).is_ok());
         for raw in [
             r#"["/tmp/fixture","/tmp/fixture/socket","fixture","fixture"]"#,

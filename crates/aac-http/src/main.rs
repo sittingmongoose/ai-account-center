@@ -1,11 +1,11 @@
 //! Unix-only skeleton service; its boot secret arrives on stdin, never argv or logs.
 #[cfg(unix)]
 fn main() {
-    // Two async workers; at most 16 blocking threads: the 8 read and 4 store permits (L1), the
-    // stdin reader and spare. The permits, not this cap, are the bound the routes rely on.
+    // Two async workers; at most 20 blocking threads: the 8 read, 4 store and 4 fed-Status
+    // permits, plus spare. The permits, not this cap, are the bound the routes rely on.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
-        .max_blocking_threads(16)
+        .max_blocking_threads(20)
         .enable_all()
         .build();
     let Ok(runtime) = runtime else {

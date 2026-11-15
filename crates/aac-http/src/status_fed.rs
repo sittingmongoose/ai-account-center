@@ -148,7 +148,12 @@ fn etag(key: String, identity: &[u8]) -> String {
     tag
 }
 
-/// The answer of one fed Status request: the view's bytes and its ETag. Runs on the blocking pool.
+/// The answer of one fed Status request: the view's bytes and its ETag. Runs on the status pool.
+///
+/// The clock-independent bytes are kept per the six generation ids and the request's clock and day
+/// words ([`crate::status_cache`]). A hit fills `generatedAt` and reuses the ETag, which does not
+/// cover that field. A miss composes, and the kept trace refuses the bytes for a later instant
+/// whose ages or thresholds differ.
 pub(crate) fn answer(feeds: &Feeds, feed: &str) -> Result<(Vec<u8>, String), Decline> {
     let feed: Feed = crate::json_object::from_slice(
         feed.as_bytes(),
@@ -177,6 +182,22 @@ pub(crate) fn answer(feeds: &Feeds, feed: &str) -> Result<(Vec<u8>, String), Dec
     for (source, id) in ids {
         held.push(feeds.current(source, id)?);
     }
+    let key_ids = [
+        feed.reports.clone(),
+        feed.quota.clone(),
+        feed.pinned.clone(),
+        feed.collected.clone(),
+        feed.answers.clone(),
+        feed.facts.clone(),
+    ];
+    // Named generations only: `current` already refused an id the service does not hold. The date
+    // is checked before a hit so a clock `toISOString` cannot write still declines.
+    let date = Date::of_now(feed.now, feed.clock.clone(), feed.day.clone()).ok_or(Decline::Date)?;
+    if let Some(hit) = crate::status_cache::hit(&key_ids, &feed.clock, &feed.day, feed.now)
+        && let Some(bytes) = crate::status_cache::fill(&hit.bytes, hit.at, date.iso_text())
+    {
+        return Ok((bytes, hit.etag));
+    }
     let mut parts: Vec<(&str, &Value)> = Vec::with_capacity(20);
     let now = Value::from(feed.now);
     parts.push(("now", &now));
@@ -197,13 +218,11 @@ pub(crate) fn answer(feeds: &Feeds, feed: &str) -> Result<(Vec<u8>, String), Dec
         }
     }
     let presentation = presentation.ok_or(Decline::Internal)?;
-    let date = Date::of_now(feed.now, feed.clock, feed.day).ok_or(Decline::Date)?;
-    let view =
-        read_status::compose_fed(parts, presentation, (feed.now, date)).map_err(|reason| {
-            match reason {
-                Unproven::Facts => Decline::Date,
-                Unproven::Input => Decline::Unsupported,
-            }
+    let iso = date.iso_text().to_owned();
+    let (view, traced) = read_status::compose_fed_traced(parts, presentation, (feed.now, date))
+        .map_err(|reason| match reason {
+            Unproven::Facts => Decline::Date,
+            Unproven::Input => Decline::Unsupported,
         })?;
     let mut writer = Writer::with_capacity(64 * 1024);
     writer.value(&view);
@@ -218,7 +237,19 @@ pub(crate) fn answer(feeds: &Feeds, feed: &str) -> Result<(Vec<u8>, String), Dec
         feed.facts,
         feed.now.div_euclid(1000)
     );
-    Ok((bytes, etag(key, &identity)))
+    let tag = etag(key, &identity);
+    if let Some(at) = crate::status_cache::generated_at(&bytes, &iso) {
+        crate::status_cache::remember(crate::status_cache::Kept {
+            ids: key_ids,
+            clock: feed.clock,
+            day: feed.day,
+            trace: traced,
+            bytes: bytes.clone(),
+            etag: tag.clone(),
+            at,
+        });
+    }
+    Ok((bytes, tag))
 }
 
 #[cfg(test)]
@@ -306,5 +337,10 @@ mod tests {
         assert_eq!(etag("k".into(), b"{\"a\":1}"), a);
         assert_ne!(etag("k".into(), b"{\"a\":2}"), a);
         assert_eq!(etag("other".into(), b"{\"a\":1}"), a);
+        // One changed identity byte is a different tag. The cache stores that tag with the bytes
+        // it was hashed from and will not serve it for another generation.
+        let mut flipped = b"{\"a\":1}".to_vec();
+        flipped[5] ^= 1;
+        assert_ne!(etag("k".into(), &flipped), a);
     }
 }

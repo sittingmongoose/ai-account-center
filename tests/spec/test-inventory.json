@@ -253,6 +253,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/status_cache.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/status_fed.rs",
       "kind": "internal",
       "evidence": [],
@@ -500,6 +506,12 @@
     },
     {
       "file": "native/aac-status/src/read_context.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/src/read_status_trace.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
