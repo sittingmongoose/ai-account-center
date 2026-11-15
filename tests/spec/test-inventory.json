@@ -815,6 +815,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-usage/tests/cross_platform_test.py",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "native/aac-usage/tests/discovery.rs",
       "kind": "internal",
       "evidence": [],
