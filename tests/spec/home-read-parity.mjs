@@ -10,6 +10,7 @@
  *     `zone`/`fact` decline may build there), equal up to the view (a built view's equality to the JS view is the
  *     spec's gate, crates/aac-views/tests/home_spec.rs);
  *   - a fed decline is answered by today's handler (so its bytes are today's).
+ * Each case the fed path answers is asked again: built from the generation's memo, it must be the same bytes (R1b).
  * Then the lifecycle on the real binary: the ETag revalidates (304), a push during a request answers through
  * today's handler and the next request is served, and a service killed mid-feed is pushed again after its restart.
  *
@@ -184,6 +185,14 @@ try {
     const a = await get(todayUrl, c.ctx);
     const b = await get(fedUrl, c.ctx);
     const rust = fedAnswered(b);
+    // R1b: the same request again is built from the generation's memo (its clock-independent parts kept by the
+    // first): the same bytes and tag.
+    if (rust) {
+      const again = await get(fedUrl, c.ctx);
+      if (again.body !== b.body || again.headers.etag !== b.headers.etag)
+        report.failures.push(`${c.name}: the memo's second answer differs from the first`);
+      else report.memoAgain = (report.memoAgain ?? 0) + 1;
+    }
     if (a.status !== b.status) {
       report.failures.push(`${c.name}: status ${a.status} today, ${b.status} fed`);
       continue;
@@ -281,7 +290,7 @@ try {
   console.log(JSON.stringify(report, null, 1));
   assert.deepEqual(report.failures, [], 'no served byte differs from today');
   console.log(
-    `[OK] home-read-parity: ${report.cases} cases, ${report.equal} byte-equal, ${report.fedViewOnly} equal but for a view only the fed path built, ${report.fedDeclined} declined to today's handler, ${report.statusOnly} equal refusals`
+    `[OK] home-read-parity: ${report.cases} cases, ${report.equal} byte-equal (${report.memoAgain ?? 0} asked again from the memo), ${report.fedViewOnly} equal but for a view only the fed path built, ${report.fedDeclined} declined to today's handler, ${report.statusOnly} equal refusals`
   );
 } finally {
   for (const server of servers) server.close();
