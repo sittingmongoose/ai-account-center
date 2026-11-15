@@ -98,6 +98,14 @@ it('a stalled service respects the caller budget and does not consume the Python
   expect(Date.now() - started).toBeLessThan(500);
   expect(healthFailures).toEqual(['deadline']);
 });
+it('headers alone do not reset L1 health between repeated stalled agent streams', async () => {
+  await service((_body, res) => res.flushHeaders());
+  for (let n = 0; n < 3; n++) {
+    expect(await runAgentVerb(host, 'signin-expiry', {}, { ...options, timeoutMs: 50 })).toBeNull();
+  }
+  expect(healthFailures).toEqual(['deadline', 'deadline', 'deadline']);
+  expect(healthReplies).toBe(0);
+});
 
 it('Status machine collection consumes inventory through the actual verb caller', async () => {
   const { readRemoteMachine, validAgentMachineSample } = await import('../../../src/web-server/status/status-collectors');

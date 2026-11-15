@@ -317,7 +317,9 @@ export async function requestRustAgent(
         resolve(null);
         return;
       }
-      held.health.replied?.();
+      // Headers can precede a stalled NDJSON body. Only a completed response resets L1's
+      // consecutive transport timeouts, as on the ordinary read path.
+      response.once('end', () => held.health.replied?.());
       if (response.statusCode === 404 || response.statusCode === 405) {
         response.resume();
         resolve(undefined);
