@@ -48,7 +48,7 @@ export class RustService extends RustSupervisor {
           ? 'down'
           : this.inFlight >= IN_FLIGHT
             ? 'inflight'
-            : !this.breakers.allow(route)
+            : this.breakers.blocked(route)
               ? 'breaker'
               : null;
     if (reason) {
@@ -74,19 +74,43 @@ export class RustService extends RustSupervisor {
     };
   }
 
-  private forward(route: string, verified: VerifiedRustPrincipal, input?: unknown, query = '') {
-    const lease = this.lease as RustLease;
+  /**
+   * Dispatch one request. The lease is read here, not at admission: shadow awaits the TS answer
+   * in between, and the service may have gone meanwhile (review M1). Nothing here throws: every
+   * outcome is the returned promise, so callers always release their slot and keep their TS
+   * answer. The half-open breaker probe is reserved only here, once the request really goes.
+   */
+  private forward(
+    route: string,
+    verified: VerifiedRustPrincipal,
+    input?: unknown,
+    query = ''
+  ): Promise<RustReply> {
+    const lease: RustLease | null = this.lease;
+    if (!lease || this.stopped)
+      return Promise.reject(Object.assign(new Error('Rust service down'), { unavailable: 'down' }));
+    if (!this.breakers.allow(route))
+      return Promise.reject(
+        Object.assign(new Error('Rust route breaker'), { unavailable: 'breaker' })
+      );
     this.inFlight++;
-    return requestRust(
-      lease.connection,
-      route.replace('{*path}', 'read') + query,
-      verified,
-      this.active,
-      input
-    )
+    let pending: Promise<RustReply>;
+    try {
+      pending = requestRust(
+        lease.connection,
+        route.replace('{*path}', 'read') + query,
+        verified,
+        this.active,
+        input
+      );
+    } catch (error) {
+      pending = Promise.reject(error);
+    }
+    return pending
       .then(
         (reply) => {
           this.breakers.success(route);
+          this.replied(lease);
           return reply;
         },
         (error: unknown) => {
@@ -96,7 +120,7 @@ export class RustService extends RustSupervisor {
               route,
               reason: kind,
             });
-          if (kind === 'connect' || kind === 'boot') this.checkLease();
+          this.transportFailed(lease, kind);
           throw Object.assign(error as object, { rustFailure: kind });
         }
       )
@@ -106,6 +130,11 @@ export class RustService extends RustSupervisor {
   }
 
   private failed(route: string, error: unknown): void {
+    const unavailable = (error as { unavailable?: string } | undefined)?.unavailable;
+    if (unavailable) {
+      this.fallback(route, { kind: 'unavailable', reason: unavailable });
+      return;
+    }
     const kind =
       (error as { rustFailure?: string } | undefined)?.rustFailure ?? rustFailureKind(error);
     this.fallback(route, { kind: 'failed', reason: kind });
