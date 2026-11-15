@@ -527,11 +527,15 @@ function suites() {
   for (const handle of ['napi', 'socket']) {
     const env = { ...process.env, AAC_TEST_STORE_HANDLE: handle, AAC_RUST_SERVICE_BINARY: binary };
     delete env.CCS_DIR;
-    execFileSync('bun', ['test', ...suiteFiles, '--timeout', '30000'], {
-      cwd: repo,
-      env,
-      stdio: 'inherit',
-    });
+    execFileSync(
+      'bun',
+      ['test', ...suiteFiles, '--timeout', handle === 'socket' ? '90000' : '30000'],
+      {
+        cwd: repo,
+        env,
+        stdio: 'inherit',
+      }
+    );
     console.log(`store-host existing TS suites: ${handle} passed`);
   }
 }

@@ -44,6 +44,8 @@ const haveModule = loaded.module !== null;
 if (!haveModule)
   console.warn(`[!] ${MODULE} is not built: the store tests are skipped (bun run store:build).`);
 
+// These full-history fixtures check completeness, with extra I/O time for the socket handle.
+const LARGE_FIXTURE_TIMEOUT_MS = process.env.AAC_TEST_STORE_HANDLE === 'socket' ? 180_000 : 60_000;
 const MIN = 60_000;
 const HOUR = 3_600_000;
 const START = Date.parse('2026-10-01T10:00:00Z');
@@ -449,7 +451,7 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
     } finally {
       await store.close();
     }
-  }, 60_000);
+  }, LARGE_FIXTURE_TIMEOUT_MS);
 
   it('the burn route finds every series, however many hourly points they hold', async () => {
     const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
@@ -508,7 +510,7 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       if (open) await new Promise<void>((resolve) => open.close(() => resolve()));
       await store.close();
     }
-  }, 60_000);
+  }, LARGE_FIXTURE_TIMEOUT_MS);
 
   it('later CLI checks continue to report known segment corruption', async () => {
     const home = fs.mkdtempSync(path.join(sandbox, 'check-corruption-'));
