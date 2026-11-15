@@ -6,8 +6,8 @@ use aac_transport::{AgentArtifact, AgentClient, CallOptions, CancellationToken, 
 use axum::{body::{Body, Bytes}, response::{IntoResponse, Response}, Json};
 use serde::Deserialize;
 use serde_json::{Value, json, value::RawValue};
-use std::{collections::BTreeMap, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::Duration};
-use tokio::sync::{OnceCell, Semaphore, mpsc, watch};
+use std::{collections::BTreeMap, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
+use tokio::sync::{Semaphore, mpsc, watch};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,14 +38,19 @@ struct Active {
 
 pub(crate) struct Agents {
     root: PathBuf,
-    registry: OnceCell<Result<Registry, Failure>>,
+    registry: watch::Sender<Option<Arc<Result<Registry, Failure>>>>,
+    loading: AtomicBool,
     slots: Arc<Semaphore>,
     active: Mutex<BTreeMap<String, Active>>,
 }
 
 fn refused() -> Failure { Failure::new(Cause::Refused, "agent transport unavailable") }
-fn target(os: OperatingSystem) -> &'static str {
-    match os { OperatingSystem::Linux => "x86_64-unknown-linux-musl", OperatingSystem::Mac => "aarch64-apple-darwin", OperatingSystem::Windows => "x86_64-pc-windows-msvc" }
+fn compatible_target(os: OperatingSystem, target: &str) -> bool {
+    match os {
+        OperatingSystem::Linux => matches!(target,"x86_64-unknown-linux-musl"|"x86_64-unknown-linux-gnu"),
+        OperatingSystem::Mac => matches!(target,"aarch64-apple-darwin"|"x86_64-apple-darwin"),
+        OperatingSystem::Windows => target=="x86_64-pc-windows-msvc",
+    }
 }
 fn word(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
@@ -72,6 +77,7 @@ impl Registry {
         let settings=&config.values()["agentTransportSsh"];
         let identity=std::env::var_os("AAC_AGENT_IDENTITY_FILE").map(PathBuf::from).or_else(||settings["identityFile"].as_str().map(PathBuf::from));
         let hosts=std::env::var_os("AAC_AGENT_KNOWN_HOSTS_FILE").map(PathBuf::from).or_else(||settings["knownHostsFile"].as_str().map(PathBuf::from));
+        if config.computers().len() > 128 { return Err(refused()); }
         let mut entries=Vec::new();
         for definition in config.computers() {
             let mut definition=definition.clone();
@@ -82,7 +88,7 @@ impl Registry {
             }
             let client=if admitted {
                 let policy=SshPolicy::new(hosts.clone().unwrap_or_default(),root.join("run/agent-ssh"));
-                let artifact=catalog.artifacts.iter().find(|a|a.target==target(definition.os));
+                let artifact=catalog.artifacts.iter().find(|a|compatible_target(definition.os,&a.target));
                 artifact.and_then(|a| {
                     let path=package.join(&a.file);
                     AgentArtifact::load(path,a.sha256.clone(),Handshake{name:"aac-agent".into(),version:a.version.clone(),protocol:PROTOCOL_VERSION,target:a.target.clone()}).ok()
@@ -107,7 +113,7 @@ impl Registry {
 }
 
 impl Agents {
-    pub(crate) fn new(root: PathBuf) -> Self { Self { root,registry:OnceCell::new(),slots:Arc::new(Semaphore::new(16)),active:Mutex::new(BTreeMap::new()) } }
+    pub(crate) fn new(root: PathBuf) -> Self { Self { root,registry:watch::channel(None).0,loading:AtomicBool::new(false),slots:Arc::new(Semaphore::new(16)),active:Mutex::new(BTreeMap::new()) } }
     pub(crate) async fn call(self: &Arc<Self>, verb: &str, bytes: &[u8]) -> Response {
         let started=tokio::time::Instant::now();
         let Ok(call)=crate::json_object::from_slice::<Call>(bytes,&["computer","args","deadlineMs","timeoutMs","maxBytes","callId"]) else { return unavailable("","shape"); };
@@ -116,11 +122,24 @@ impl Agents {
             || call.max_bytes==0 || call.max_bytes>frame_cap(verb)*2 || !call.args.get().trim_start().starts_with('{') { return unavailable(&call.call_id,"shape"); }
         let Ok(permit)=self.slots.clone().try_acquire_owned() else { return unavailable(&call.call_id,"busy"); };
         let deadline=started+Duration::from_millis(call.timeout_ms.min(call.deadline_ms));
-        let root=self.root.clone();
-        let registry=tokio::time::timeout_at(deadline,self.registry.get_or_init(||async move {
-            tokio::task::spawn_blocking(move ||Registry::load(&root)).await.unwrap_or_else(|_|Err(refused()))
-        })).await;
-        let client=match registry { Ok(Ok(registry))=>registry.client(&call.computer),_=>None };
+        let mut loaded = self.registry.subscribe();
+        if !self.loading.swap(true, Ordering::AcqRel) {
+            let root = self.root.clone();
+            let ready = self.registry.clone();
+            tokio::spawn(async move {
+                // Exactly one initialization job per boot, even if its waiting HTTP request
+                // expires. A slow mount cannot accumulate abandoned config/hash workers.
+                let result = tokio::task::spawn_blocking(move || Registry::load(&root)).await.unwrap_or_else(|_| Err(refused()));
+                ready.send_replace(Some(Arc::new(result)));
+            });
+        }
+        let registry = tokio::time::timeout_at(deadline, async {
+            loop {
+                if let Some(registry) = loaded.borrow_and_update().clone() { break Some(registry); }
+                if loaded.changed().await.is_err() { break None; }
+            }
+        }).await.ok().flatten();
+        let client = registry.as_deref().and_then(|result| result.as_ref().ok()).and_then(|registry| registry.client(&call.computer));
         let Some(client)=client else { return unavailable(&call.call_id,"unavailable"); };
         let mut options=CallOptions::new(Duration::ZERO,call.max_bytes);
         options.deadline=deadline;

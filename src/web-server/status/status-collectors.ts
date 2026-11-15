@@ -28,7 +28,12 @@ import { NetworkError, ValidationError } from '../../errors/error-types';
 import { runManagedCommand } from '../../utils/managed-process';
 import { APP_UPDATE_SSH_HOSTS } from '../services/app-update-hosts';
 import { sshArgv } from '../services/ssh-policy';
-import { collectAgentWithFallback, runPinsAgent } from '../services/agent-verbs';
+import {
+  agentVerbs,
+  collectAgentWithFallback,
+  runInventoryAgent,
+  runPinsAgent,
+} from '../services/agent-verbs';
 import { PERSISTENT_SHARE_ERROR, TransientMisses } from './agent-reports-reader';
 import { findSecret, MACHINES, type MachineId } from './report-schema';
 import { readRegularFile } from './share-read';
@@ -886,6 +891,27 @@ export async function readRemoteMachine(
 ): Promise<MachineSample> {
   const alias = machineSshAlias(machine);
   if (!alias) throw new ValidationError('No ssh host is configured for this machine.');
+  if (agentVerbs() === 'off') return readRemoteMachineTsFallback(machine, alias, run);
+  const platform = REMOTE_MACHINES[machine];
+  return collectAgentWithFallback(
+    'inventory',
+    async () => {
+      const sample = await runInventoryAgent(
+        { platform: platform === 'linux' ? 'ubuntu' : platform, sshHost: alias },
+        validAgentMachineSample
+      );
+      return sample as MachineSample | null;
+    },
+    async () => readRemoteMachineTsFallback(machine, alias, run)
+  );
+}
+
+/** The existing read-only probe remains the labelled one-release fallback. */
+async function readRemoteMachineTsFallback(
+  machine: Exclude<MachineId, 'vm'>,
+  alias: string,
+  run: CommandRunner
+): Promise<MachineSample> {
   const result = await run(
     'ssh',
     sshArgv(alias, machineProbeCommand(REMOTE_MACHINES[machine]), { interval: 5, countMax: 2 }),
@@ -895,6 +921,67 @@ export async function readRemoteMachine(
   const sample = parseMachineProbe(REMOTE_MACHINES[machine], result.stdout);
   if (!sample) throw new NetworkError('The machine answered without a reading.');
   return sample;
+}
+
+/** Admit only the complete inventory machine DTO, with unknown readings explicitly null. */
+export function validAgentMachineSample(value: unknown): value is MachineSample {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const fields = [
+    'cores',
+    'load1',
+    'busyPct',
+    'memAvailableBytes',
+    'memTotalBytes',
+    'disk',
+    'cpuTimes',
+  ];
+  const errors = {
+    diskError: 'The machine did not report its system disk.',
+    memoryError: 'The machine did not report its memory.',
+    cpuError: 'The machine did not report its CPU.',
+  };
+  if (
+    fields.some((key) => !(key in row)) ||
+    Object.keys(row).some((key) => !fields.includes(key) && !(key in errors))
+  )
+    return false;
+  const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+  if (fields.slice(0, 5).some((key) => row[key] !== null && !number(row[key]))) return false;
+  if (
+    row.cores === 0 ||
+    row.memTotalBytes === 0 ||
+    (typeof row.busyPct === 'number' && row.busyPct > 100)
+  )
+    return false;
+  for (const [key, text] of Object.entries(errors))
+    if (key in row && row[key] !== text) return false;
+  if (row.disk !== null) {
+    const disk = row.disk as Record<string, unknown>;
+    if (
+      !disk ||
+      typeof disk !== 'object' ||
+      Object.keys(disk).sort().join(',') !== 'freeBytes,mount,totalBytes' ||
+      !number(disk.freeBytes) ||
+      !number(disk.totalBytes) ||
+      disk.totalBytes === 0 ||
+      typeof disk.mount !== 'string' ||
+      shortText(disk.mount, 80) !== disk.mount
+    )
+      return false;
+  }
+  if (row.cpuTimes !== null) {
+    const cpu = row.cpuTimes as Record<string, unknown>;
+    if (
+      !cpu ||
+      typeof cpu !== 'object' ||
+      Object.keys(cpu).sort().join(',') !== 'busy,total' ||
+      !number(cpu.busy) ||
+      !number(cpu.total)
+    )
+      return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -241,11 +241,14 @@ export function openRustEvents(
 }
 
 /** L5: current private connections, owned by the supervisors, bound to their exact AAC root. */
-const agentConnections = new Map<symbol, {
-  root: string;
-  connection: RustConnection;
-  active: Set<http.ClientRequest>;
-}>();
+const agentConnections = new Map<
+  symbol,
+  {
+    root: string;
+    connection: RustConnection;
+    active: Set<http.ClientRequest>;
+  }
+>();
 
 export function registerRustAgentConnection(
   root: string,
@@ -265,7 +268,14 @@ export function registerRustAgentConnection(
 export async function requestRustAgent(
   root: string,
   verb: string,
-  payload: { computer: unknown; args: unknown; deadlineMs: number; timeoutMs: number; maxBytes: number; callId: string },
+  payload: {
+    computer: unknown;
+    args: unknown;
+    deadlineMs: number;
+    timeoutMs: number;
+    maxBytes: number;
+    callId: string;
+  },
   onProgress?: (data: unknown) => void
 ): Promise<string | null | undefined> {
   const held = [...agentConnections.values()].reverse().find((entry) => entry.root === root);
@@ -287,19 +297,31 @@ export async function requestRustAgent(
     });
     held.active.add(request);
     const timer = setTimeout(() => request.destroy(), payload.timeoutMs);
-    request.once('close', () => { clearTimeout(timer); held.active.delete(request); });
+    request.once('close', () => {
+      clearTimeout(timer);
+      held.active.delete(request);
+    });
     request.once('error', (error: NodeJS.ErrnoException) => {
       resolve(['ENOENT', 'ECONNREFUSED'].includes(error.code ?? '') ? undefined : null);
     });
     request.once('response', (response) => {
       if (response.headers['x-aac-service-boot'] !== held.connection.bootId) {
-        response.resume(); resolve(null); return;
+        response.resume();
+        resolve(null);
+        return;
       }
       if (response.statusCode === 404 || response.statusCode === 405) {
-        response.resume(); resolve(undefined); return;
+        response.resume();
+        resolve(undefined);
+        return;
       }
-      if (response.statusCode !== 200 || !String(response.headers['content-type']).startsWith('application/x-ndjson')) {
-        response.resume(); resolve(null); return;
+      if (
+        response.statusCode !== 200 ||
+        !String(response.headers['content-type']).startsWith('application/x-ndjson')
+      ) {
+        response.resume();
+        resolve(null);
+        return;
       }
       let size = 0;
       let buffer = '';
@@ -308,7 +330,11 @@ export async function requestRustAgent(
       response.setEncoding('utf8');
       response.on('data', (chunk: string) => {
         size += Buffer.byteLength(chunk);
-        if (size > payload.maxBytes) { request.destroy(); resolve(null); return; }
+        if (size > payload.maxBytes) {
+          request.destroy();
+          resolve(null);
+          return;
+        }
         buffer += chunk;
         let end: number;
         while ((end = buffer.indexOf('\n')) !== -1) {
@@ -316,13 +342,26 @@ export async function requestRustAgent(
           buffer = buffer.slice(end + 1);
           try {
             const event = JSON.parse(text);
-            if (terminal || event.protocol !== 1 || event.id !== payload.callId) throw new Error();
-            if (event.type === 'progress') { onProgress?.(event.data); continue; }
+            if (terminal || event.protocol !== 1 || event.id !== payload.callId)
+              throw new RustTransportError('reply', 'Invalid agent stream');
+            if (event.type === 'progress') {
+              onProgress?.(event.data);
+              continue;
+            }
             terminal = true;
             if (event.type === 'result' && event.value && typeof event.value === 'object') {
-              result = JSON.stringify(event.value) === '{"fallback":"python"}' ? null : JSON.stringify(event.value);
-            } else if (!['fallback', 'failure'].includes(event.type)) throw new Error();
-          } catch { result = null; request.destroy(); resolve(null); return; }
+              result =
+                JSON.stringify(event.value) === '{"fallback":"python"}'
+                  ? null
+                  : JSON.stringify(event.value);
+            } else if (!['fallback', 'failure'].includes(event.type))
+              throw new RustTransportError('reply', 'Invalid agent stream');
+          } catch {
+            result = null;
+            request.destroy();
+            resolve(null);
+            return;
+          }
         }
       });
       response.once('end', () => resolve(terminal && buffer === '' ? result : null));

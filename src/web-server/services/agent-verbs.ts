@@ -17,12 +17,18 @@ import { PROVIDER_ROWS } from '../../shared/tables';
 const logger = createLogger('agent-verbs');
 /** Independent transport switch. Invalid or absent values never start Rust transport. */
 export function agentTransport(): 'off' | 'on' {
-  try { return (process.env.AAC_AGENT_TRANSPORT ?? loadUnifiedConfig()?.agentTransport) === 'on' ? 'on' : 'off'; }
-  catch { return 'off'; }
+  try {
+    return (process.env.AAC_AGENT_TRANSPORT ?? loadUnifiedConfig()?.agentTransport) === 'on'
+      ? 'on'
+      : 'off';
+  } catch {
+    return 'off';
+  }
 }
 
 export type AgentVerbs = 'off' | 'on';
 export type AgentVerb =
+  | 'inventory'
   | 'signin-expiry'
   | 'quota-read'
   | 'scan-usage'
@@ -139,19 +145,34 @@ export async function runAgentVerb(
     const mode = options.mode ?? agentVerbs();
     if (mode === 'off') return null;
     if ((options.transport ?? agentTransport()) === 'on') {
-      const result = await requestRustAgent(getCcsDir(), verb, {
-        computer: { platform: host.platform, sshHost: host.sshHost ?? null },
-        args: verbArgs,
-        deadlineMs: options.deadlineMs,
-        timeoutMs: options.timeoutMs ?? options.deadlineMs + 5000,
-        maxBytes: options.maxBytes,
-        callId: randomBytes(16).toString('hex'),
-      }, options.onProgress);
+      const started = Date.now();
+      const result = await requestRustAgent(
+        getCcsDir(),
+        verb,
+        {
+          computer: { platform: host.platform, sshHost: host.sshHost ?? null },
+          args: verbArgs,
+          deadlineMs: options.deadlineMs,
+          timeoutMs: options.timeoutMs ?? options.deadlineMs + 5000,
+          maxBytes: options.maxBytes,
+          callId: randomBytes(16).toString('hex'),
+        },
+        options.onProgress
+      );
       if (result !== undefined) return result;
       logger.info('agent.transport.fallback', 'fallback: typescript transport', { verb });
+      const remaining = (options.timeoutMs ?? options.deadlineMs + 5000) - (Date.now() - started);
+      if (remaining <= 0) return null;
+      return runAgentVerbTsFallback(host, verb, verbArgs, {
+        ...options,
+        timeoutMs: remaining,
+        deadlineMs: Math.min(options.deadlineMs, remaining),
+      });
     }
     return runAgentVerbTsFallback(host, verb, verbArgs, options);
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 /** Labelled one-release transport fallback while the Rust service is absent or old. */
@@ -309,7 +330,7 @@ export async function collectQuotaWithFallback(
 
 /** New verbs keep their reference helper visible on every failure. */
 export async function collectAgentWithFallback<T>(
-  verb: 't3-pins' | 'key-store' | 'claude-history' | 'failover-inventory',
+  verb: 'inventory' | 't3-pins' | 'key-store' | 'claude-history' | 'failover-inventory',
   agent: () => Promise<T | null>,
   helper: () => Promise<T>
 ): Promise<T> {
@@ -321,10 +342,26 @@ export async function collectAgentWithFallback<T>(
   }
   logger.info(
     'agent.verbs.fallback',
-    verb === 't3-pins' ? 'fallback: sqlite3' : 'fallback: python',
+    verb === 'inventory'
+      ? 'fallback: typescript probe'
+      : verb === 't3-pins'
+        ? 'fallback: sqlite3'
+        : 'fallback: python',
     { verb }
   );
   return helper();
+}
+
+/** Inventory retains the existing Status machine DTO; the collector validates its fields. */
+export async function runInventoryAgent(
+  host: Pick<UsageHost, 'platform' | 'sshHost'>,
+  accepts: (value: unknown) => boolean
+): Promise<unknown | null> {
+  const result = await runAgentVerb(host, 'inventory', {}, { deadlineMs: 15000, maxBytes: 65536 });
+  if (result === null) return null;
+  const value: unknown = JSON.parse(result);
+  const row = value as { schemaVersion?: unknown; machine?: unknown };
+  return row.schemaVersion === 1 && accepts(row.machine) ? row.machine : null;
 }
 
 /** Remote pins keep the existing sqlite row contract and native shape validator. */

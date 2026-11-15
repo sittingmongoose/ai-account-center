@@ -9,7 +9,7 @@ Starting the dashboard never builds, downloads or installs this binary.
 
 | Mode | Answer and failure behavior |
 | --- | --- |
-| `off` | All routes use TypeScript. No Rust process is started. |
+| `off` | All public routes use TypeScript. No Rust process starts unless the independent `agentTransport` switch is on. |
 | `shadow` | TypeScript answers first. A bounded background request compares status and canonical JSON; differences are logged without response bodies. |
 | `on` | The owned read routes below use Rust after their existing TS guards. Missing/unhealthy service, deadline, response cap or invalid DTO uses the TS handler and logs `rust.service.fallback`. |
 
@@ -335,3 +335,51 @@ to round the exact binary significand within their admitted domain. Integer word
 outside the proven decimal formatting domain request logged TS fallback. The
 production bridge/Status-validator regression is driven by the Node-generated
 number table; it catches the pre-fix 0.049999999999999996 -> 0.1 wrong answer.
+
+## Agent transport (L5, off by default)
+
+`agentVerbs: on` enables the existing verb adapters. Independently, `agentTransport: on`
+(or `AAC_AGENT_TRANSPORT=on`) sends those calls to `POST /internal/agent/<verb>` on the
+private service. It can start the service while public Rust read routes remain off.
+The endpoint requires the boot secret and the reserved front-door service principal;
+it is never exposed as a public dashboard route. Shadow read mode does not duplicate
+agent operations. Absent/invalid settings leave the original TS behavior intact.
+
+The service owns one four-channel `Computer` and one verified client per configured
+computer, loaded through `aac-config` and the packaged `computers.json` seed. Calls
+resolve a configured id/SSH alias and OS; an unknown or ambiguous selector refuses.
+A successful handshake is cached for that client's lifetime. Hash verification and
+fixed launchers live in `aac-transport`; the labelled TS fallback keeps its previous
+verification while the service is absent/old. Both use the 64 MiB artifact cap from
+`config/agent-transport-policy.json`.
+
+**Shipping is disabled on the service path.** Only an already installed hash-pinned
+agent is admitted. Missing, damaged or old agents return the labelled helper fallback;
+no prepare, SCP or commit step runs. The catalog stays empty. M3D4 and M3D5 remain open:
+this implementation creates no SSH identity and edits no trust or authorization file.
+
+SSH requires an explicit existing identity file (`computers[].transport.key`, or
+`agentTransportSsh.identityFile` for seeded computers) and an explicit pinned source
+(`agentTransportSsh.knownHostsFile`). `AAC_AGENT_IDENTITY_FILE` and
+`AAC_AGENT_KNOWN_HOSTS_FILE` override those global paths for isolated gates. No path is
+guessed from a home directory. `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes` and the
+shared ControlMaster policy apply; whitespace in option paths is quoted for OpenSSH.
+Changing configuration or the catalog requires a service restart.
+
+The response is bounded NDJSON: progress, then a result, failure or explicit fallback.
+A handled refusal goes to the caller's helper; an absent/old service uses the labelled
+TS transport. POSTs are never retried. The caller's existing helper reserve stays in
+TS and covers both bridge and legacy attempts. Keys remain stdin/pipe data, never argv.
+
+`POST /internal/agent/<callId>/control` accepts a bounded `{"input":"..."}` or
+`{"cancel":true}` frame. Input acknowledgement means queued, not handled by an
+interactive verb (M4 adds those). Cancel acknowledgement is true only after the agent's
+cancelled terminal frame and the SSH/local process exit. If no acknowledgement arrives
+within two seconds, the owned transport is terminated and the response says false;
+that is never a claim that a real remote descendant stopped. Closing a result stream
+also cancels its owned transport. Fixtures exercise a far-process recorder, not live SSH.
+
+`python3 tests/spec/agent/transport.py <fixture-agent> <aac-http>` runs the unchanged
+agent corpora directly and through the private socket/SSH recorder and compares their
+counts. It also checks pooled reuse, breaker, byte/hash caps, no shipping, authentication,
+progress/input and acknowledged cancellation. All binaries stay on the build host.

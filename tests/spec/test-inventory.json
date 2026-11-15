@@ -2413,6 +2413,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/agent-transport.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/agent-usage-golden.test.ts",
       "kind": "internal",
       "evidence": [],

@@ -93,3 +93,77 @@ it('a stalled service respects the caller budget and does not consume the Python
   expect(await runAgentVerb(host, 'signin-expiry', {}, { ...options, timeoutMs: 50 })).toBeNull();
   expect(Date.now() - started).toBeLessThan(500);
 });
+
+it('Status machine collection consumes inventory through the actual verb caller', async () => {
+  const { readRemoteMachine, validAgentMachineSample } = await import('../../../src/web-server/status/status-collectors');
+  const sample = { cores: 4, load1: null, busyPct: null, memAvailableBytes: 1024, memTotalBytes: 2048, disk: null, cpuTimes: { busy: 10, total: 20 } };
+  expect(validAgentMachineSample(sample)).toBe(true);
+  expect(validAgentMachineSample({ ...sample, memTotalBytes: undefined })).toBe(false);
+  expect(validAgentMachineSample({ ...sample, disk: { mount: '/', freeBytes: 1, totalBytes: 0 } })).toBe(false);
+  const original = process.env.AAC_AGENT_VERBS;
+  const originalTransport = process.env.AAC_AGENT_TRANSPORT;
+  process.env.AAC_AGENT_VERBS = 'on';
+  process.env.AAC_AGENT_TRANSPORT = 'on';
+  server = http.createServer((req, res) => {
+    expect(req.url).toBe('/internal/agent/inventory');
+    let text = ''; req.on('data', (chunk) => text += chunk); req.on('end', () => {
+      const body = JSON.parse(text);
+      res.setHeader('x-aac-service-boot', 'fixture');
+      res.setHeader('content-type', 'application/x-ndjson');
+      res.end(JSON.stringify({ type: 'result', protocol: 1, id: body.callId, value: { schemaVersion: 1, machine: sample, tools: {} } }) + '\n');
+    });
+  });
+  const socketPath = path.join(root, 'inventory.sock');
+  await new Promise<void>((resolve) => server!.listen(socketPath, resolve));
+  disconnect = registerRustAgentConnection(process.env.CCS_DIR!, { socketPath, secret: 'private-fixture', bootId: 'fixture' }, new Set());
+  try {
+    expect(await readRemoteMachine('nas1', async () => { throw new Error('legacy probe ran'); })).toEqual(sample);
+  } finally {
+    if (original === undefined) delete process.env.AAC_AGENT_VERBS; else process.env.AAC_AGENT_VERBS = original;
+    if (originalTransport === undefined) delete process.env.AAC_AGENT_TRANSPORT; else process.env.AAC_AGENT_TRANSPORT = originalTransport;
+  }
+});
+
+it('the real helper retains its reserved time after the service consumes its whole agent budget', async () => {
+  const { runUsageHelper, localUsageHost, REFERENCE_RESERVE_MS, AGENT_MIN_MS } = await import('../../../src/web-server/services/usage-failover-transport');
+  const { stopProcessBroker } = await import('../../../src/utils/managed-process');
+  const savedMode = process.env.AAC_AGENT_VERBS;
+  const savedTransport = process.env.AAC_AGENT_TRANSPORT;
+  process.env.AAC_AGENT_VERBS = 'on'; process.env.AAC_AGENT_TRANSPORT = 'on';
+  let calls = 0;
+  server = http.createServer((req) => {
+    let text = ''; req.on('data', (chunk) => text += chunk); req.on('end', () => {
+      calls++; const body = JSON.parse(text);
+      expect(req.url).toBe('/internal/agent/failover-inventory');
+      expect(body.timeoutMs).toBeLessThanOrEqual(AGENT_MIN_MS + 1000);
+    });
+  });
+  const socketPath = path.join(root, 'reserve.sock');
+  await new Promise<void>((resolve) => server!.listen(socketPath, resolve));
+  disconnect = registerRustAgentConnection(process.env.CCS_DIR!, { socketPath, secret: 'private-fixture', bootId: 'fixture' }, new Set());
+  try {
+    const request = { version: 1 as const, action: 'inventory' as const, provider: 'codex' as const, homeDir: root, ccsDir: process.env.CCS_DIR! };
+    expect(await runUsageHelper(localUsageHost(), request, Date.now() + REFERENCE_RESERVE_MS + AGENT_MIN_MS + 1000)).toEqual({ version: 1, action: 'inventory', candidates: [] });
+    expect(calls).toBe(1);
+  } finally {
+    await stopProcessBroker();
+    if (savedMode === undefined) delete process.env.AAC_AGENT_VERBS; else process.env.AAC_AGENT_VERBS = savedMode;
+    if (savedTransport === undefined) delete process.env.AAC_AGENT_TRANSPORT; else process.env.AAC_AGENT_TRANSPORT = savedTransport;
+  }
+}, 25000);
+
+it('the labelled local fallback also refuses artifacts over the shared 64 MiB cap', async () => {
+  const { createHash } = await import('node:crypto');
+  const file = path.join(root, 'oversize-artifact');
+  const fd = fs.openSync(file, 'w'); fs.ftruncateSync(fd, 64 * 1024 * 1024 + 1); fs.closeSync(fd);
+  const sha256 = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  let launches = 0;
+  expect(await runAgentVerb({ platform: 'linux', sshHost: null }, 'signin-expiry', {}, {
+    ...options, transport: 'off', artifacts: [{ ...artifact, file, sha256 }],
+    run: async (_file, args, opts) => {
+      launches++;
+      return args.includes('--version') ? result({ name: 'aac-agent', version: artifact.version, protocol: 1, target: artifact.target }) : result({ type: 'result', protocol: 1, id: JSON.parse(opts.input!).id, value: { fixture: true } });
+    },
+  })).toBeNull();
+  expect(launches).toBe(0);
+});

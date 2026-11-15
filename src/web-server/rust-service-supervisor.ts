@@ -92,7 +92,11 @@ export class RustSupervisor {
     if (this.mode === 'off') {
       let transport: unknown = process.env.AAC_AGENT_TRANSPORT;
       if (transport === undefined) {
-        try { transport = loadUnifiedConfig()?.agentTransport; } catch { transport = undefined; }
+        try {
+          transport = loadUnifiedConfig()?.agentTransport;
+        } catch {
+          transport = undefined;
+        }
       }
       if (transport !== 'on') return;
     }
@@ -146,7 +150,11 @@ export class RustSupervisor {
     // The breakers counted the previous process's failures; a new boot starts closed.
     this.breakers.reset();
     this.removeAgentConnection?.();
-    this.removeAgentConnection = registerRustAgentConnection(lease.connection.ccsDir, lease.connection, this.active);
+    this.removeAgentConnection = registerRustAgentConnection(
+      lease.connection.ccsDir,
+      lease.connection,
+      this.active
+    );
     this.lease = lease;
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
   }

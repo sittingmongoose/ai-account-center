@@ -92,7 +92,8 @@ impl AgentClient {
         Self { allow_shipping: false, ..Self::new(computer, artifact) }
     }
 
-    /// Check SHA-256 and handshake before every use. Exit 87 permits exactly one upload to
+    /// Check SHA-256 before every use and cache a successful handshake for this client.
+    /// When shipping is allowed, exit 87 permits exactly one upload to
     /// `.part`, remote verification and atomic rename. Other errors never trigger an upload.
     /// All stages share the original deadline, cancellation token and byte cap.
     pub async fn ensure(&self, options: &CallOptions) -> Result<(), Failure> {
@@ -102,7 +103,7 @@ impl AgentClient {
             _ = tokio::time::sleep_until(options.deadline) => return Err(Failure::new(Cause::Timeout, "shipping deadline exceeded")),
             lease = self.computer.shipping_lock() => lease,
         };
-        self.artifact.verify()?;
+        self.verify(options).await?;
         let mut ready = self.ready.lock().await;
         if *ready { return Ok(()); }
         self.ensure_locked(options).await?;
@@ -111,7 +112,6 @@ impl AgentClient {
     }
 
     async fn ensure_locked(&self, options: &CallOptions) -> Result<(), Failure> {
-        self.artifact.verify()?;
         if matches!(self.computer.config.transport, TransportConfig::Local) {
             let output = self
                 .computer
@@ -175,7 +175,7 @@ impl AgentClient {
                 self.artifact.hash
             )
         };
-        self.artifact.verify()?;
+        self.verify(options).await?;
         let upload = self
             .computer
             .scp(&self.artifact.path, &part, options)
@@ -188,6 +188,21 @@ impl AgentClient {
             .execute(&self.launcher("commit"), &[], options)
             .await?;
         self.handshake(installed)
+    }
+
+    async fn verify(&self, options: &CallOptions) -> Result<(), Failure> {
+        static VERIFY: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+        let semaphore = VERIFY.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4))).clone();
+        let artifact = self.artifact.clone();
+        tokio::select! {
+            biased;
+            _ = options.cancel.cancelled() => Err(Failure::new(Cause::Cancelled, "verification cancelled")),
+            _ = tokio::time::sleep_until(options.deadline) => Err(Failure::new(Cause::Timeout, "verification deadline exceeded")),
+            result = async move {
+                let permit = semaphore.acquire_owned().await.map_err(|_| Failure::new(Cause::Bug, "verification pool closed"))?;
+                tokio::task::spawn_blocking(move || { let _permit = permit; artifact.verify() }).await.map_err(|_| Failure::new(Cause::Bug, "verification failed"))?
+            } => result,
+        }
     }
 
     /// Execute a request after verifying its agent, then validate bounded NDJSON correlation,
