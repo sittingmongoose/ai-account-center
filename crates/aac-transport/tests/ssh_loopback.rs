@@ -81,3 +81,134 @@ async fn control_path_changes_with_pin_identity_and_stays_short_on_long_roots() 
             < 104
     );
 }
+
+const OLD_CLIENT: &str = "#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nwith Path(__file__).with_name('calls').open('a') as f: f.write('old\\n')\nif 'KnownHostsCommand=none' in sys.argv:\n print('command-line: Bad configuration option: knownhostscommand', file=sys.stderr); sys.exit(255)\n";
+const MODERN_CLIENT: &str = "#!/usr/bin/python3\nfrom pathlib import Path\nwith Path(__file__).with_name('calls').open('a') as f: f.write('modern\\n')\n";
+
+fn client(path: &std::path::Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, body).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+fn fixture_policy(root: &std::path::Path, bin: &std::path::Path) -> SshPolicy {
+    let mut policy = SshPolicy::new(root.join("known_hosts"), root.join("control"));
+    policy.path = Some(std::env::join_paths([bin, std::path::Path::new("/usr/bin")]).unwrap());
+    policy
+}
+
+fn text(args: Vec<std::ffi::OsString>) -> Vec<String> {
+    args.into_iter().map(|s| s.into_string().unwrap()).collect()
+}
+
+fn control(args: &[String]) -> String {
+    args.iter()
+        .find(|s| s.starts_with("ControlPath="))
+        .unwrap()
+        .clone()
+}
+
+#[tokio::test]
+async fn capability_cache_follows_a_same_path_executable_replacement() {
+    let root = tempfile::tempdir().unwrap();
+    let ssh = root.path().join("ssh");
+    client(&ssh, OLD_CLIENT);
+    let policy = fixture_policy(root.path(), root.path());
+    let key = root.path().join("key");
+    let old = text(policy.argv(&key, false).await.unwrap());
+    assert!(!old.iter().any(|arg| arg == "KnownHostsCommand=none"));
+    let inode = std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&ssh).unwrap());
+    // In-place rewrite: same path and inode, new size/mtime/ctime.
+    std::fs::write(&ssh, MODERN_CLIENT).unwrap();
+    assert_eq!(
+        inode,
+        std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&ssh).unwrap())
+    );
+    let modern = text(policy.argv(&key, false).await.unwrap());
+    assert!(modern.iter().any(|arg| arg == "KnownHostsCommand=none"));
+    assert_ne!(control(&old), control(&modern), "master must not be shared");
+    let again = text(policy.argv(&key, false).await.unwrap());
+    assert_eq!(control(&modern), control(&again));
+    let calls = std::fs::read_to_string(root.path().join("calls")).unwrap();
+    assert_eq!(calls.lines().count(), 4, "{calls}");
+}
+
+#[tokio::test]
+async fn capability_cache_follows_symlink_and_path_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let (first, second) = (root.path().join("first"), root.path().join("second"));
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    client(&root.path().join("old"), OLD_CLIENT);
+    client(&root.path().join("modern"), MODERN_CLIENT);
+    std::os::unix::fs::symlink(root.path().join("old"), first.join("ssh")).unwrap();
+    std::os::unix::fs::symlink(root.path().join("modern"), second.join("ssh")).unwrap();
+    let key = root.path().join("key");
+    let mut policy = fixture_policy(root.path(), &first);
+    let has = |args: Vec<String>| args.iter().any(|arg| arg == "KnownHostsCommand=none");
+    assert!(!has(text(policy.argv(&key, false).await.unwrap())));
+    std::fs::remove_file(first.join("ssh")).unwrap();
+    std::os::unix::fs::symlink(root.path().join("modern"), first.join("ssh")).unwrap();
+    assert!(has(text(policy.argv(&key, false).await.unwrap())));
+    std::fs::remove_file(first.join("ssh")).unwrap();
+    std::os::unix::fs::symlink(root.path().join("old"), first.join("ssh")).unwrap();
+    assert!(!has(text(policy.argv(&key, false).await.unwrap())));
+    policy = fixture_policy(root.path(), &second);
+    assert!(has(text(policy.argv(&key, false).await.unwrap())));
+}
+
+#[tokio::test]
+async fn actual_openssh_81_replaced_at_its_path_is_reprobed() {
+    let Some(old) = std::env::var_os("AAC_TEST_OPENSSH_81") else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    let ssh = root.path().join("ssh");
+    std::fs::copy(old, &ssh).unwrap();
+    let policy = fixture_policy(root.path(), root.path());
+    let key = root.path().join("key");
+    let before = text(policy.argv(&key, false).await.unwrap());
+    assert!(!before.iter().any(|arg| arg == "KnownHostsCommand=none"));
+    std::fs::copy("/usr/bin/ssh", &ssh).unwrap();
+    let after = text(policy.argv(&key, false).await.unwrap());
+    assert!(after.iter().any(|arg| arg == "KnownHostsCommand=none"));
+    assert_ne!(control(&before), control(&after));
+}
+
+#[tokio::test]
+#[ignore = "requires AAC_TEST_OPENSSH_81, sudo, mount namespaces and an owned loopback sshd"]
+async fn replaced_openssh_81_policy_refuses_the_empty_pin() {
+    let old = std::env::var_os("AAC_TEST_OPENSSH_81").expect("AAC_TEST_OPENSSH_81");
+    let root = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let ssh = bin.path().join("ssh");
+    std::fs::copy(old, &ssh).unwrap();
+    let policy = fixture_policy(root.path(), bin.path());
+    let key = root.path().join("key");
+    std::fs::write(root.path().join("known_hosts"), "fixture trust identity").unwrap();
+    let stale = text(policy.argv(&key, false).await.unwrap());
+    assert!(!stale.iter().any(|arg| arg == "KnownHostsCommand=none"));
+    std::fs::copy("/usr/bin/ssh", &ssh).unwrap();
+    let trusted = text(policy.argv(&key, false).await.unwrap());
+    std::fs::write(root.path().join("known_hosts"), "").unwrap();
+    let empty = text(policy.argv(&key, false).await.unwrap());
+    assert!(empty.iter().any(|arg| arg == "KnownHostsCommand=none"));
+    let args = serde_json::json!({"trusted": trusted, "empty": empty});
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/spec/agent/ssh_loopback.py");
+    let output = std::process::Command::new("sudo")
+        .args(["-n", "unshare", "--mount", "--fork", "python3"])
+        .arg(script)
+        .arg(root.path())
+        .arg(serde_json::to_string(&args).unwrap())
+        .arg("0")
+        .arg(&ssh)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -43,27 +43,51 @@ impl SshPolicy {
         }
     }
 
-    async fn capabilities(&self) -> Result<Vec<OsString>, Failure> {
-        type Probe = Arc<tokio::sync::OnceCell<Result<Vec<OsString>, Failure>>>;
-        static PROBES: OnceLock<Mutex<std::collections::HashMap<(PathBuf, OsString), Probe>>> =
-            OnceLock::new();
+    /// Capabilities belong to one executable file, not its pathname: a same-path upgrade,
+    /// PATH change or symlink retarget re-probes. Returns the identity for the master hash.
+    async fn capabilities(&self) -> Result<(String, Vec<OsString>), Failure> {
         let path = self
             .path
             .clone()
             .or_else(|| std::env::var_os("PATH"))
             .unwrap_or_default();
+        // A file replaced while its probe runs is probed again; results match the file now there.
+        for _ in 0..3 {
+            let (file, identity) = executable_identity(&self.ssh, &path).await?;
+            let args = self.probe(&file, &identity).await?;
+            if executable_identity(&self.ssh, &path).await?.1 == identity {
+                return Ok((identity, args));
+            }
+        }
+        Err(Failure::new(
+            Cause::Refused,
+            "SSH executable changed during capability probe",
+        ))
+    }
+
+    async fn probe(&self, file: &Path, identity: &str) -> Result<Vec<OsString>, Failure> {
+        type Probe = Arc<tokio::sync::OnceCell<Result<Vec<OsString>, Failure>>>;
+        static PROBES: OnceLock<Mutex<std::collections::HashMap<PathBuf, (String, Probe)>>> =
+            OnceLock::new();
         let probe = {
             let mut probes = PROBES
                 .get_or_init(Mutex::default)
                 .lock()
                 .map_err(|_| Failure::new(Cause::Bug, "SSH capability cache unavailable"))?;
-            probes.entry((self.ssh.clone(), path)).or_default().clone()
+            let entry = probes
+                .entry(file.to_path_buf())
+                .or_insert_with(|| (identity.to_owned(), Probe::default()));
+            if entry.0 != identity {
+                // Failed results stay cached too, until the executable itself changes.
+                *entry = (identity.to_owned(), Probe::default());
+            }
+            entry.1.clone()
         };
         probe
             .get_or_init(|| async {
                 let mut args = Vec::new();
                 for option in ["KnownHostsCommand=none", "SetEnv=AAC_SSH_POLICY=1"] {
-                    let mut command = Command::new(&self.ssh);
+                    let mut command = Command::new(file);
                     ssh_environment(&mut command);
                     if let Some(path) = &self.path {
                         command.env("PATH", path);
@@ -182,8 +206,9 @@ impl SshPolicy {
     /// letters/digits and `/._-:`; unsupported quoting, whitespace and expansion are refused.
     pub async fn argv(&self, key: &Path, scan: bool) -> Result<Vec<OsString>, Failure> {
         let mut argv = self.base_argv(key, scan)?;
-        argv.extend(self.capabilities().await?);
-        let policy_hash = self.policy_hash(&argv).await?;
+        let (executable, capabilities) = self.capabilities().await?;
+        argv.extend(capabilities);
+        let policy_hash = self.policy_hash(&argv, &executable).await?;
         let control = format!(
             "ControlPath={}",
             quote_option_path(&format!(
@@ -195,7 +220,7 @@ impl SshPolicy {
         Ok(argv)
     }
 
-    async fn policy_hash(&self, argv: &[OsString]) -> Result<String, Failure> {
+    async fn policy_hash(&self, argv: &[OsString], executable: &str) -> Result<String, Failure> {
         let pin = self.known_hosts.clone();
         let metadata = tokio::task::spawn_blocking(move || match std::fs::metadata(&pin) {
             Ok(meta) => {
@@ -222,6 +247,9 @@ impl SshPolicy {
         hash.update(b"aac-ssh-policy-v2");
         hash.update(self.known_hosts.to_string_lossy().as_bytes());
         hash.update(metadata.as_bytes());
+        // A replaced client gets its own master, never one opened under another client's policy.
+        hash.update([0]);
+        hash.update(executable.as_bytes());
         for arg in argv {
             hash.update([0]);
             hash.update(arg.to_string_lossy().as_bytes());
@@ -283,6 +311,80 @@ impl SshPolicy {
         argv.extend(["-o".into(), "ControlPersist=120".into()]);
         Ok(argv)
     }
+}
+
+/// Resolve SSH as the child's PATH lookup would (that path is what the probe runs), then name
+/// the file by its identity: canonical path, size and modification time, plus device, inode and
+/// change time on Unix (creation time on Windows, whose stable std API has no file index).
+async fn executable_identity(
+    program: &Path,
+    path: &std::ffi::OsStr,
+) -> Result<(PathBuf, String), Failure> {
+    let program = program.to_path_buf();
+    let path = path.to_os_string();
+    tokio::task::spawn_blocking(move || {
+        let unavailable = || Failure::new(Cause::Refused, "SSH executable unavailable");
+        let candidates: Vec<PathBuf> = if program.components().count() > 1 {
+            vec![program]
+        } else {
+            std::env::split_paths(&path)
+                .filter(|directory| directory.is_absolute())
+                .flat_map(|directory| {
+                    let plain = directory.join(&program);
+                    let exe = plain.with_extension("exe");
+                    if cfg!(windows) && program.extension().is_none() {
+                        vec![exe, plain]
+                    } else {
+                        vec![plain]
+                    }
+                })
+                .collect()
+        };
+        for candidate in candidates {
+            let Ok(file) = std::fs::canonicalize(&candidate) else {
+                continue;
+            };
+            let Ok(meta) = std::fs::metadata(&file) else {
+                continue;
+            };
+            #[cfg(unix)]
+            let runnable = {
+                use std::os::unix::fs::PermissionsExt;
+                meta.is_file() && meta.permissions().mode() & 0o111 != 0
+            };
+            #[cfg(not(unix))]
+            let runnable = meta.is_file();
+            if !runnable {
+                continue;
+            }
+            let mut identity = format!(
+                "{}\0{}\0{:?}",
+                file.to_string_lossy(),
+                meta.len(),
+                meta.modified()
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                identity.push_str(&format!(
+                    "\0{}\0{}\0{}\0{}",
+                    meta.dev(),
+                    meta.ino(),
+                    meta.ctime(),
+                    meta.ctime_nsec()
+                ));
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                identity.push_str(&format!("\0{}", meta.creation_time()));
+            }
+            return Ok((candidate, identity));
+        }
+        Err(unavailable())
+    })
+    .await
+    .map_err(|_| Failure::new(Cause::Bug, "SSH executable identity unavailable"))?
 }
 
 /// Only connection/authentication environment reaches SSH or SCP; Local verbs keep theirs.

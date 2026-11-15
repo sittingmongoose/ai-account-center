@@ -412,8 +412,12 @@ Command-line overrides enforce `StrictHostKeyChecking=yes`, `UpdateHostKeys=no`,
 `ForwardAgent=no`, `ForwardX11=no`, `GlobalKnownHostsFile=none`, `PermitLocalCommand=no`
 and `ClearAllForwardings=yes`. The pin is the configured file (legacy TS/Python default:
 `~/.ssh/known_hosts`); alternate global trust and `known_hosts2` do not supplement it.
-A bounded asynchronous no-connect capability probe, cached per executable, enables
-`KnownHostsCommand=none` when supported (OpenSSH 8.1 lacks it). It also probes
+A bounded asynchronous no-connect capability probe enables
+`KnownHostsCommand=none` when supported (OpenSSH 8.1 lacks it). Its result is cached
+per executable file, not per pathname: canonical path, device, inode, size and
+modification/change time (Windows: volume serial and file index in TS/Python, creation
+time in Rust). Replacing or retargeting the client re-probes it, and Rust's AAC master
+socket name includes that identity. It also probes
 `SetEnv=AAC_SSH_POLICY=1`: the harmless single assignment takes precedence over the
 config's SetEnv list. Unsupported options are omitted with one compatibility warning.
 On a client unable to suppress SetEnv, literal values in its own config can still reach

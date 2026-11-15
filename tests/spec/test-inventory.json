@@ -1001,8 +1001,9 @@
     },
     {
       "file": "tests/spec/agent/ssh-policy-compatibility.test.ts",
-      "kind": "helper",
+      "kind": "HTTP",
       "evidence": [
+        "HTTP",
         "helper"
       ]
     },

@@ -7,6 +7,8 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 argv = json.loads(sys.argv[2])
+# Optional argv[4]: the exact client the policy probed (e.g. one replaced at its path).
+ssh = sys.argv[4] if len(sys.argv) > 4 else 'ssh'
 trusted_argv = argv.get('trusted') if isinstance(argv, dict) else None
 argv = argv['empty'] if isinstance(argv, dict) else argv
 master = None
@@ -85,7 +87,7 @@ try:
         master_args = ['-M', '-S', str(root/'user-master.sock'), '-o', 'PermitLocalCommand=no', '-o', 'ForwardAgent=no']
         config = root/'home/.ssh/config'
         config.write_text(config.read_text() + f'    ControlMaster auto\n    ControlPath {root}/user-master.sock\n')
-    master = subprocess.Popen(['ssh', '-N', *master_args, *base], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    master = subprocess.Popen([ssh, '-N', *master_args, *base], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     control_ready = False
     for _ in range(100):
         if any(p.is_socket() and p.name != 'agent.sock' for directory in control_dirs for p in directory.rglob('*')):
@@ -95,7 +97,7 @@ try:
         time.sleep(.01)
     assert control_ready, 'owned fixture master did not create its control socket'
     (root/'known_hosts').write_text('')
-    command = ['ssh', '-o', 'ControlPersist=no', *argv, *base,
+    command = [ssh, '-o', 'ControlPersist=no', *argv, *base,
                'printf "key=%s set=%s agent=%s\\n" "$KIMI_API_KEY" "$AAC_FIXTURE_SETENV" "$SSH_AUTH_SOCK"']
     rejected = subprocess.run(command, env=env, capture_output=True, timeout=8)
     assert rejected.returncode != 0, ('empty AAC pin accepted alternate trust or existing master', rejected.stdout)

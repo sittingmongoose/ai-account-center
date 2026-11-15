@@ -48,8 +48,51 @@ export function sshEnvironment(
   ) as Record<string, string>;
 }
 
-const probes = new Map<string, Promise<string[]>>();
+/** Capabilities belong to one executable file, not its pathname: same-path upgrades re-probe. */
+const probes = new Map<string, { identity: string; pending: Promise<string[]> }>();
 const warned = new Set<string>();
+async function executableIdentity(candidate: string): Promise<{ file: string; identity: string }> {
+  const file = await fs.promises.realpath(candidate);
+  // dev/ino are the volume serial and file index on Windows; bigint keeps them exact.
+  const info = await fs.promises.stat(file, { bigint: true });
+  if (!info.isFile()) throw new ConfigError('SSH executable unavailable');
+  return {
+    file,
+    identity: [file, info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join('\0'),
+  };
+}
+function probe(executable: string, env: Record<string, string>): Promise<string[]> {
+  return (async () => {
+    const args: string[] = [];
+    for (const option of ['KnownHostsCommand=none', 'SetEnv=AAC_SSH_POLICY=1']) {
+      const supported = await new Promise<boolean>((resolve, reject) => {
+        execFile(
+          executable,
+          ['-G', '-F', 'none', '-o', option, '--', 'localhost'],
+          {
+            env,
+            encoding: 'utf8',
+            timeout: 2000,
+            killSignal: 'SIGKILL',
+            maxBuffer: 128 * 1024,
+            windowsHide: true,
+          },
+          (error, _stdout, stderr) => {
+            if (!error) resolve(true);
+            else if (/Bad configuration option:/i.test(String(stderr))) resolve(false);
+            else reject(new ConfigError('SSH capability probe failed'));
+          }
+        );
+      });
+      if (supported) args.push('-o', option);
+      else if (!warned.has(executable + option)) {
+        warned.add(executable + option);
+        console.warn(`[AAC SSH] ${option.split('=')[0]} unsupported; compatibility downgrade`);
+      }
+    }
+    return args;
+  })();
+}
 /** Bounded, coalesced probe. -F none keeps Match exec and live hosts out of capability checks. */
 async function capabilities(): Promise<string[]> {
   const env = sshEnvironment();
@@ -59,50 +102,29 @@ async function capabilities(): Promise<string[]> {
     const candidate = path.resolve(directory, process.platform === 'win32' ? 'ssh.exe' : 'ssh');
     try {
       await fs.promises.access(candidate, fs.constants.X_OK);
-      executable = await fs.promises.realpath(candidate);
+      executable = candidate;
       break;
     } catch {
       /* Continue through PATH without executing a helper. */
     }
   }
   if (!executable) throw new ConfigError('SSH executable unavailable');
-  const key = executable;
-  let pending = probes.get(key);
-  if (!pending) {
-    pending = (async () => {
-      const args: string[] = [];
-      for (const option of ['KnownHostsCommand=none', 'SetEnv=AAC_SSH_POLICY=1']) {
-        const supported = await new Promise<boolean>((resolve, reject) => {
-          execFile(
-            key,
-            ['-G', '-F', 'none', '-o', option, '--', 'localhost'],
-            {
-              env,
-              encoding: 'utf8',
-              timeout: 2000,
-              killSignal: 'SIGKILL',
-              maxBuffer: 128 * 1024,
-              windowsHide: true,
-            },
-            (error, _stdout, stderr) => {
-              if (!error) resolve(true);
-              else if (/Bad configuration option:/i.test(String(stderr))) resolve(false);
-              else reject(new ConfigError('SSH capability probe failed'));
-            }
-          );
-        });
-        if (supported) args.push('-o', option);
-        else if (!warned.has(key + option)) {
-          warned.add(key + option);
-          console.warn(`[AAC SSH] ${option.split('=')[0]} unsupported; compatibility downgrade`);
-        }
-      }
-      return args;
-    })();
-    // A failed probe stays cached too: callers never repeatedly pause/retry discovery.
-    probes.set(key, pending);
+  // A file replaced while its probe runs is probed again; the result must match the file now there.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = await executableIdentity(executable).catch(() => {
+      throw new ConfigError('SSH executable unavailable');
+    });
+    let entry = probes.get(current.file);
+    if (entry?.identity !== current.identity) {
+      // A failed probe stays cached too, until the executable itself changes.
+      entry = { identity: current.identity, pending: probe(current.file, env) };
+      probes.set(current.file, entry);
+    }
+    const result = await entry.pending;
+    const after = await executableIdentity(executable).catch(() => undefined);
+    if (after?.identity === current.identity) return result;
   }
-  return pending;
+  throw new ConfigError('SSH executable changed during capability probe');
 }
 
 const expandHome = (file: string, home: string) =>

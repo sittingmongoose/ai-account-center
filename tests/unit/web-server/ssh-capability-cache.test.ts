@@ -59,3 +59,56 @@ it('bounds and caches failed probes without blocking the JS timer', async () => 
     }
   );
 }, 5000);
+const oldClient =
+  "if 'KnownHostsCommand=none' in sys.argv:\n print('command-line: Bad configuration option: knownhostscommand',file=sys.stderr);sys.exit(255)";
+it('re-probes when the executable is replaced at the same path', async () => {
+  await fixture(oldClient, async (root) => {
+    const calls = () => fs.readFileSync(path.join(root, 'calls'), 'utf8').trim().split('\n').length;
+    expect(await sshArgv('fixture', 'unused')).not.toContain('KnownHostsCommand=none');
+    expect(calls()).toBe(2);
+    const ssh = path.join(root, 'ssh');
+    const inode = fs.statSync(ssh).ino;
+    // In-place rewrite keeps the inode: size, mtime and ctime still identify the new client.
+    fs.writeFileSync(
+      ssh,
+      "#!/usr/bin/python3\nfrom pathlib import Path\nwith Path(__file__).with_name('calls').open('a') as f: f.write('modern\\n')\n"
+    );
+    expect(fs.statSync(ssh).ino).toBe(inode);
+    expect(await sshArgv('fixture', 'unused')).toContain('KnownHostsCommand=none');
+    expect(calls()).toBe(4);
+    await sshArgv('fixture', 'unused');
+    expect(calls()).toBe(4);
+  });
+});
+it('re-probes when PATH ssh is retargeted and when a failed client is replaced', async () => {
+  await fixture('sys.exit(3)', async (root) => {
+    const calls = () => fs.readFileSync(path.join(root, 'calls'), 'utf8').trim().split('\n').length;
+    await expect(sshArgv('fixture', 'unused')).rejects.toThrow('SSH capability probe failed');
+    const ssh = path.join(root, 'ssh');
+    fs.renameSync(ssh, path.join(root, 'failed'));
+    const write = (name: string, body: string) =>
+      fs.writeFileSync(
+        path.join(root, name),
+        `#!/usr/bin/python3\nimport sys\nfrom pathlib import Path\nwith Path(__file__).with_name('calls').open('a') as f: f.write('${name}\\n')\n${body}\n`,
+        { mode: 0o700 }
+      );
+    write('old', oldClient);
+    write('modern', '');
+    fs.symlinkSync(path.join(root, 'old'), ssh);
+    expect(await sshArgv('fixture', 'unused')).not.toContain('KnownHostsCommand=none');
+    fs.unlinkSync(ssh);
+    fs.symlinkSync(path.join(root, 'modern'), ssh);
+    expect(await sshArgv('fixture', 'unused')).toContain('KnownHostsCommand=none');
+    expect(calls()).toBe(5);
+  });
+});
+it('a replacement during the probe is probed again before argv is returned', async () => {
+  await fixture(`time.sleep(.3)\n${oldClient}`, async (root) => {
+    const pending = sshArgv('fixture', 'unused');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const next = path.join(root, 'next');
+    fs.writeFileSync(next, '#!/usr/bin/python3\n', { mode: 0o700 });
+    fs.renameSync(next, path.join(root, 'ssh'));
+    expect(await pending).toContain('KnownHostsCommand=none');
+  });
+});

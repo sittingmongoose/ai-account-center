@@ -382,12 +382,33 @@ async def probe_ssh_capabilities(executable):
             refuse('ssh_configuration_unknown')
     return tuple(options)
 
+def ssh_executable_identity(executable):
+    """Capabilities belong to one file: a same-path replacement has another identity."""
+    real = os.path.realpath(executable)
+    info = os.stat(real)
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError('ssh is not a regular file')
+    # On Windows st_dev/st_ino are the volume serial number and file index.
+    return (real, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
 @functools.lru_cache(maxsize=16)
-def ssh_capability_options(executable):
+def ssh_capability_options(identity):
     try:
-        return asyncio.run(probe_ssh_capabilities(executable))
+        return asyncio.run(probe_ssh_capabilities(identity[0]))
     except Exception:
         return None
+
+def ssh_capabilities_for(executable):
+    """Re-probe when the file changes, including during its own probe."""
+    for _ in range(3):
+        try:
+            identity = ssh_executable_identity(executable)
+            options = ssh_capability_options(identity)
+            if ssh_executable_identity(executable) == identity:
+                return options
+        except OSError:
+            return None
+    return None
 
 
 class BoundProfile:
@@ -620,7 +641,7 @@ class BoundProfile:
         executable = shutil.which('ssh')
         if not executable:
             refuse('ssh_configuration_unknown')
-        capabilities = ssh_capability_options(str(Path(executable).resolve()))
+        capabilities = ssh_capabilities_for(executable)
         if capabilities is None:
             refuse('ssh_configuration_unknown')
         pin = os.environ.get('AAC_AGENT_KNOWN_HOSTS_FILE', str(ssh_home / '.ssh/known_hosts'))
