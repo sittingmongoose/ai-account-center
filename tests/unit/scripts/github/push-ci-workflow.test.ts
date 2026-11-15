@@ -26,7 +26,7 @@ describe('push ci workflow', () => {
     );
     expect(workflow).not.toContain('ui/bun.lock');
     expect(workflow).not.toContain('restore-keys:');
-    expect(workflow).toContain("name: ${{ matrix.check.name }}");
+    expect(workflow).toContain('name: ${{ matrix.check.name }}');
     expect(workflow).toContain("cmd: 'bun run typecheck'");
     expect(workflow).toContain("cmd: 'bun run lint'");
     expect(workflow).toContain("cmd: 'bun run format:check'");
@@ -47,6 +47,34 @@ describe('push ci workflow', () => {
     );
     expect(workflow).not.toContain('CCS_E2E_SKIP_BUILD');
     expect(workflow).not.toContain('test:e2e');
-    expect(workflow).not.toMatch(/npm publish|semantic-release|gh release|docker\/build-push-action/);
+    expect(workflow).not.toMatch(
+      /npm publish|semantic-release|gh release|docker\/build-push-action/
+    );
+  });
+
+  test('ships the Linux history store and status readers the spec suite needs', () => {
+    const workflow = fs.readFileSync(
+      resolvePath('../../../../.github/workflows/push-ci.yml'),
+      'utf8'
+    );
+    const build = workflow.indexOf('run: bun run build:all');
+    const natives = workflow.indexOf('bun run store:build\n          bun run status:build');
+    const upload = workflow.indexOf('name: Upload dist artifact');
+    // tests/spec/read-http-parity.ts refuses a stub store; the modules must be in dist/ before upload.
+    expect(build).toBeGreaterThan(-1);
+    expect(natives).toBeGreaterThan(build);
+    expect(upload).toBeGreaterThan(natives);
+  });
+
+  test('keeps the in-checkout Bun cache out of every git-listed scan', () => {
+    const workflow = fs.readFileSync(
+      resolvePath('../../../../.github/workflows/push-ci.yml'),
+      'utf8'
+    );
+    const ignore = fs.readFileSync(resolvePath('../../../../.gitignore'), 'utf8');
+    // CI keeps BUN_INSTALL_CACHE_DIR inside the checkout; untracked scans (tests/spec/inventory.mjs
+    // uses `git ls-files --others --exclude-standard`) must not see the cached packages' tests.
+    expect(workflow).toContain('BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.bun/install/cache');
+    expect(ignore).toMatch(/^\.bun\/$/m);
   });
 });

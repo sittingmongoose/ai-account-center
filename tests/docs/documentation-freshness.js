@@ -159,8 +159,14 @@ const markdownFiles = [
 ];
 const linkPattern = /!?\[[^\]]*]\(([^)]+)\)/g;
 
+// Code is not a link: drop fenced blocks and inline code spans before scanning, so prose that
+// quotes Markdown such as `[link](url)` is not read as a link.
+function withoutCode(text) {
+  return text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, '').replace(/(`+)[^`\n]*?\1/g, '');
+}
+
 for (const markdownPath of markdownFiles) {
-  const source = fs.readFileSync(markdownPath, 'utf8');
+  const source = withoutCode(fs.readFileSync(markdownPath, 'utf8'));
   for (const match of source.matchAll(linkPattern)) {
     let target = match[1].trim().replace(/^<|>$/g, '');
     if (!target || target.startsWith('#') || /^(https?:|mailto:|tel:)/i.test(target)) {
@@ -176,6 +182,15 @@ for (const markdownPath of markdownFiles) {
     }
 
     const resolved = path.resolve(path.dirname(markdownPath), target);
+    // A link outside the checkout (an absolute path, or one that climbs out) may resolve on the
+    // machine that wrote it, but never on CI or for a reader: fail it everywhere.
+    const inside = path.relative(root, resolved);
+    if (path.isAbsolute(target) || inside.startsWith('..') || path.isAbsolute(inside)) {
+      failures.push(
+        `${path.relative(root, markdownPath)} links outside the repository: ${match[1]}`
+      );
+      continue;
+    }
     if (!fs.existsSync(resolved)) {
       failures.push(`${path.relative(root, markdownPath)} has missing relative link: ${match[1]}`);
     }

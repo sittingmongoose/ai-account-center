@@ -75,3 +75,6 @@ native/aac-usage/target/
 native/aac-usage/prebuilt/
 native/aac-cursor-account/target/
 native/aac-cursor-account/prebuilt/
+
+# Bun package cache that CI keeps inside the checkout (BUN_INSTALL_CACHE_DIR)
+.bun/

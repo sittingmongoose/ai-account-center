@@ -84,8 +84,7 @@ Retained security coverage includes
 [session middleware](./unit/web-server/auth-middleware.test.ts),
 [remote access checks](./unit/web-server/auth-check-remote-access.test.ts),
 [remote write guards](./unit/web-server/api-routes-remote-write-guard.test.ts),
-[bar access guards](./unit/web-server/api-routes-bar-local-access-guard.test.ts),
-[activation review](./unit/web-server/codex-activation-routes.test.ts), and the
+[bar access guards](./unit/web-server/api-routes-bar-local-access-guard.test.ts), and the
 [current API surface](./unit/web-server/api-product-surface.test.ts).
 See [SECURITY.md](../SECURITY.md) for reporting guidance.
 
