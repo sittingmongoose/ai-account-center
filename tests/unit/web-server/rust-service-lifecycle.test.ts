@@ -9,7 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Request, Response } from 'express';
 import { RustService } from '../../../src/web-server/rust-service';
-import { rustServiceEnvironment, shortName } from '../../../src/web-server/rust-service-lifecycle';
+import { shortName } from '../../../src/web-server/rust-service-lifecycle';
+import { rustServiceEnvironment } from '../../../src/web-server/rust-service-env';
 
 const fake = path.join(import.meta.dir, 'fixtures/fake-aac-http.mjs');
 let scratch = '';
