@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "analyticsTools": {
+    "claude": { "label": "Claude Code", "experiment": true, "extraRoots": true },
+    "codex": { "label": "Codex", "experiment": true, "extraRoots": true },
+    "omp": { "label": "OMP", "experiment": false, "extraRoots": true },
+    "muse": { "label": "Muse Code", "experiment": true, "extraRoots": true },
+    "zcode": { "label": "zcode", "experiment": true, "extraRoots": true },
+    "antigravity": { "label": "Antigravity", "experiment": false, "extraRoots": false }
+  },
+  "scannerOnlyKinds": {
+    "cursor": { "label": "Cursor" },
+    "devin": { "label": "Devin CLI" }
+  },
+  "usageLogTools": {
+    "omp": { "label": "OMP" },
+    "muse": { "label": "Muse Code" },
+    "zcode": { "label": "zcode" },
+    "claude-code": { "label": "Claude Code" },
+    "codex": { "label": "Codex" },
+    "jsonl": { "label": "Generic JSONL" }
+  },
+  "usageLogFieldMapping": {
+    "timestamp": { "required": true },
+    "model": { "required": true },
+    "inputTokens": { "required": false },
+    "outputTokens": { "required": false },
+    "cost": { "required": false }
+  }
+}

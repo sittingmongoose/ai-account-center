@@ -1,6 +1,7 @@
 import type { HourlyUsage, ModelBreakdown, SessionUsage } from '../usage/types';
 import type { UsageWorkerResult } from '../usage/worker-client';
 import type { DashboardProvider } from './account-dashboard-types';
+import { PROVIDER_ROWS } from '../../shared/tables';
 import type {
   AccountAnalyticsActivityProvider,
   AccountAnalyticsUsageProvider,
@@ -46,17 +47,16 @@ const TOOL_PROVIDERS: Readonly<
   cursor: 'cursor',
 });
 
-/** The provider order of the dashboard (Claude, Codex, then the additional providers), then "other". */
+/**
+ * The provider order of the dashboard (Claude, Codex, then the additional providers), then "other":
+ * config/tables/providers.json `analytics.order`.
+ */
 export const USAGE_PROVIDER_ORDER: readonly AccountAnalyticsUsageProvider[] = [
-  'claude',
-  'codex',
-  'antigravity',
-  'muse',
-  'cursor',
-  'kimi-code',
-  'qwen',
-  'zai',
-  'opencode-go',
+  ...PROVIDER_ROWS.flatMap(([id, row]) =>
+    row.analytics ? [[id as AccountAnalyticsUsageProvider, row.analytics.order] as const] : []
+  )
+    .sort((a, b) => a[1] - b[1])
+    .map(([id]) => id),
   'other',
 ];
 

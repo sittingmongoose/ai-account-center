@@ -62,6 +62,7 @@
     "native/aac-store/src/",
     "native/shared/",
     "src/shared/secret-policy.json",
+    "config/tables/",
     "tests/fixtures/secret-policy-cases.json",
     "tests/fixtures/secret-policy-cases.ts",
     "native/aac-status/Cargo.toml",

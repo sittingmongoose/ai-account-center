@@ -20,49 +20,18 @@ pub(crate) type Acc<'a> = &'a Map<String, Value>;
 
 const COMPUTERS_JSON: &str = include_str!("../../../../web-dashboard/public/computers.json");
 
-/// The provider registry (view-model.mjs `PROVIDER_REGISTRY`): id, label, long label, sign-in, multi.
-const REGISTRY: [(&str, &str, &str, &str, bool); 9] = [
-    ("claude", "Claude", "Claude", "Desktop profile", true),
-    ("codex", "Codex", "Codex", "Device-code sign-in", true),
-    (
-        "antigravity",
-        "Antigravity",
-        "Google Antigravity CLI",
-        "Supervised CLI login",
-        true,
+/// The page's provider registry (view-model.mjs `PROVIDER_REGISTRY`: id, label, long label,
+/// sign-in, multi) and its card providers (`CARD_PROVIDERS`) are the shared table's dashboard
+/// rows (config/tables/providers.json `page`, `card`); tests/spec/tables.test.ts binds the page's
+/// copies to the same table.
+fn registry() -> impl Iterator<
+    Item = (
+        &'static aac_providers::Provider,
+        &'static aac_providers::Page,
     ),
-    ("cursor", "Cursor", "Cursor", "Desktop app session", false),
-    (
-        "muse",
-        "Muse Code",
-        "Muse Code",
-        "Desktop app session",
-        false,
-    ),
-    ("kimi-code", "Kimi Code", "Kimi Code", "API key", false),
-    (
-        "qwen",
-        "Qwen Token Plan",
-        "Qwen Token Plan",
-        "API key, web extras by browser extension",
-        false,
-    ),
-    (
-        "zai",
-        "Z.ai Coding Plan",
-        "Z.ai Coding Plan",
-        "API key",
-        false,
-    ),
-    (
-        "opencode-go",
-        "OpenCode Go",
-        "OpenCode Go",
-        "API key, console wallet by browser session",
-        true,
-    ),
-];
-const CARD_PROVIDERS: [&str; 6] = ["cursor", "muse", "kimi-code", "qwen", "zai", "opencode-go"];
+> {
+    aac_providers::dashboard_providers().filter_map(|p| p.page.as_ref().map(|page| (p, page)))
+}
 const STALE_MS: i64 = 30 * 60_000;
 
 /// What every part of the build shares: the formatters and the computer registry.
@@ -957,7 +926,8 @@ fn without_label<'p>(plan: &'p str, label: &str) -> &'p str {
 }
 
 fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView>> {
-    let order = |p: &str| CARD_PROVIDERS.iter().position(|c| *c == p);
+    let card_rows: Vec<&aac_providers::Provider> = aac_providers::card_providers().collect();
+    let order = |p: &str| card_rows.iter().position(|c| c.id.as_str() == p);
     let mut list: Vec<(usize, Acc)> = accounts
         .iter()
         .filter_map(|a| {
@@ -982,12 +952,10 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
     }
     let mut cards = Vec::new();
     for (index, account) in list {
-        let provider = CARD_PROVIDERS[index];
-        let label = REGISTRY
-            .iter()
-            .find(|r| r.0 == provider)
-            .map(|r| r.1)
-            .unwrap_or("");
+        let provider = card_rows[index].id.as_str();
+        let label = registry()
+            .find(|(p, _)| p.id.as_str() == provider)
+            .map_or("", |(p, _)| p.label);
         let all_meters = meters_of(account)?;
         let meters = all_meters
             .iter()
@@ -1293,7 +1261,7 @@ fn view(
     let hidden: Vec<&str> = array(get(settings, "hiddenProviders"))
         .iter()
         .filter_map(|v| match v {
-            Value::String(s) if REGISTRY.iter().any(|r| r.0 == s) => Some(s.as_str()),
+            Value::String(s) if registry().any(|(p, _)| p.id.as_str() == s) => Some(s.as_str()),
             _ => None,
         })
         .collect();
@@ -1330,19 +1298,21 @@ fn view(
             antigravity,
         )?);
     }
-    let registry = REGISTRY
-        .iter()
-        .map(|(id, label, long, sign_in, multi)| RegistryRow {
-            id: (*id).into(),
-            label: (*label).into(),
-            long_label: (*long).into(),
-            sign_in: (*sign_in).into(),
-            multi: *multi,
-            visible: !hidden.contains(id),
-            count: raw
-                .iter()
-                .filter(|a| is_str(get(Some(a), "provider"), id))
-                .count() as u64,
+    let registry = registry()
+        .map(|(p, page)| {
+            let id = p.id.as_str();
+            RegistryRow {
+                id: id.into(),
+                label: p.label.into(),
+                long_label: p.long_label.into(),
+                sign_in: page.sign_in.into(),
+                multi: page.multi,
+                visible: !hidden.contains(&id),
+                count: raw
+                    .iter()
+                    .filter(|a| is_str(get(Some(a), "provider"), id))
+                    .count() as u64,
+            }
         })
         .collect();
     Ok(HomeView {

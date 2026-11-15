@@ -10,6 +10,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import { sshArgv } from './ssh-policy';
 import type { UsageHost, UsageHelperRequest } from './usage-failover-contract';
 import manifest from './agent-artifacts.json';
+import { PROVIDER_ROWS } from '../../shared/tables';
 
 const logger = createLogger('agent-verbs');
 export type AgentVerbs = 'off' | 'on';
@@ -368,19 +369,12 @@ export async function runHistoryAgent(
   return Buffer.from(result);
 }
 
+/** Each provider's failover identity kinds (config/tables/providers.json `failover.kinds`). */
+const INVENTORY_KINDS: Record<string, readonly string[]> = Object.fromEntries(
+  PROVIDER_ROWS.map(([id, row]) => [id, row.failover.kinds])
+);
+
 /** Bind a validated candidate to the requested provider before accepting an agent reply. */
 export function inventoryKind(provider: UsageHelperRequest['provider'], kind: string): boolean {
-  const kinds: Record<string, readonly string[]> = {
-    codex: ['codex-principal-v1'],
-    claude: ['claude-account-org-v1'],
-    antigravity: ['antigravity-subject'],
-    muse: ['muse-team', 'muse-native-credential'],
-    cursor: ['cursor-subject', 'cursor-credential'],
-    'kimi-code': ['kimi-code-credential'],
-    qwen: ['qwen-session'],
-    zai: ['zai-credential'],
-    'opencode-go': ['opencode-go-credential'],
-    'opencode-wallet': ['opencode-workspace'],
-  };
-  return kinds[provider]?.includes(kind) === true;
+  return INVENTORY_KINDS[provider]?.includes(kind) === true;
 }

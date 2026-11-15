@@ -202,3 +202,52 @@ fn fuzzed_cases_are_equal_or_declined() -> Result<(), String> {
     );
     Ok(())
 }
+
+/// The shared provider table reaches Home (DESIGN-M3-COMPLETE 2.4): under
+/// `--features aac-providers/synthetic-table` the synthetic provider gets a registry row and,
+/// being a card provider, a card; in the real build its account is ignored as the JS ignores it.
+#[test]
+fn synthetic_provider_reaches_the_registry_and_cards() -> Result<(), String> {
+    let text = std::fs::read_to_string(spec_dir().join("cases.json")).map_err(|e| e.to_string())?;
+    let table: Table = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let mut case = table
+        .cases
+        .into_iter()
+        .find(|c| c.name == "cursor-plans#1")
+        .ok_or("cursor-plans#1 is missing")?;
+    let accounts = case.dashboard["accounts"]
+        .as_array_mut()
+        .ok_or("accounts")?;
+    let mut extra = accounts[0].clone();
+    extra["id"] = "zz-synthetic:one".into();
+    extra["provider"] = "zz-synthetic".into();
+    extra["providerLabel"] = "Synthetic".into();
+    accounts.push(extra);
+    case.presentation["order"]["zz-synthetic:one"] = 1.into();
+    let view = serde_json::to_value(build(envelope_of(&case)?).map_err(|d| format!("{d:?}"))?)
+        .map_err(|e| e.to_string())?;
+    let registry: Vec<&str> = view["registry"]
+        .as_array()
+        .ok_or("registry")?
+        .iter()
+        .filter_map(|row| row["id"].as_str())
+        .collect();
+    let cards: Vec<&str> = view["cards"]
+        .as_array()
+        .ok_or("cards")?
+        .iter()
+        .filter_map(|card| card["provider"].as_str())
+        .collect();
+    assert_eq!(
+        registry.last() == Some(&"zz-synthetic"),
+        aac_providers::SYNTHETIC
+    );
+    assert_eq!(registry.len(), aac_providers::dashboard_providers().count());
+    let expected: &[&str] = if aac_providers::SYNTHETIC {
+        &["cursor", "zz-synthetic"]
+    } else {
+        &["cursor"]
+    };
+    assert_eq!(cards, expected);
+    Ok(())
+}

@@ -7,6 +7,7 @@
  */
 import os from 'os';
 import path from 'path';
+import { HOST_TABLE } from '../../shared/tables';
 
 export type DashboardHost = keyof typeof import('../../../web-dashboard/public/computers.json');
 export type RemoteDashboardHost = Exclude<DashboardHost, 'ubuntu'>;
@@ -38,15 +39,13 @@ export const COMPUTERS: Readonly<Record<DashboardHost, Computer>> = Object.freez
 );
 export const DASHBOARD_HOSTS = Object.freeze(Object.keys(COMPUTERS) as DashboardHost[]);
 /**
- * Immutable storage compatibility allowlist from d5ec0fc64, not a computer inventory.
+ * Immutable storage compatibility allowlist from d5ec0fc64, not a computer inventory
+ * (config/tables/hosts.json `legacyStorageHosts`, shared with the Rust readers).
  * Its readers reject later hosts/over 40 update rows. Do not expand this with the registry.
  * The registry's `legacy` flag predates Nas1 and describes a different boundary.
  */
 export const LEGACY_STORAGE_HOSTS: readonly DashboardHost[] = Object.freeze([
-  'ubuntu',
-  'mac',
-  'windows',
-  'nas1',
+  ...(HOST_TABLE.legacyStorageHosts as DashboardHost[]),
 ]);
 export const REMOTE_HOSTS = Object.freeze(
   DASHBOARD_HOSTS.filter((id): id is RemoteDashboardHost => id !== 'ubuntu')

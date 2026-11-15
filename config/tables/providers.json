@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "planRetryAfter": { "floorS": 30, "ceilingS": 86400, "defaultS": 600 },
+  "providers": {
+    "claude": {
+      "label": "Claude",
+      "longLabel": "Claude",
+      "dashboard": true,
+      "card": false,
+      "keyStore": false,
+      "analytics": { "order": 0, "label": "Claude" },
+      "page": { "signIn": "Desktop profile", "multi": true },
+      "failover": { "label": "Claude", "kinds": ["claude-account-org-v1"] },
+      "quota": false
+    },
+    "codex": {
+      "label": "Codex",
+      "longLabel": "Codex",
+      "dashboard": true,
+      "card": false,
+      "keyStore": false,
+      "analytics": { "order": 1, "label": "Codex" },
+      "page": { "signIn": "Device-code sign-in", "multi": true },
+      "failover": { "label": "Codex", "kinds": ["codex-principal-v1"] },
+      "quota": false
+    },
+    "antigravity": {
+      "label": "Antigravity",
+      "longLabel": "Google Antigravity CLI",
+      "dashboard": true,
+      "card": false,
+      "keyStore": false,
+      "analytics": { "order": 2, "label": "Antigravity" },
+      "page": { "signIn": "Supervised CLI login", "multi": true },
+      "failover": { "label": "Antigravity", "kinds": ["antigravity-subject"] },
+      "quota": false
+    },
+    "cursor": {
+      "label": "Cursor",
+      "longLabel": "Cursor",
+      "dashboard": true,
+      "card": true,
+      "keyStore": false,
+      "analytics": { "order": 4, "label": "Cursor" },
+      "page": { "signIn": "Desktop app session", "multi": false },
+      "failover": { "label": "Cursor", "kinds": ["cursor-subject", "cursor-credential"] },
+      "quota": false
+    },
+    "muse": {
+      "label": "Muse Code",
+      "longLabel": "Muse Code",
+      "dashboard": true,
+      "card": true,
+      "keyStore": false,
+      "analytics": { "order": 3, "label": "Muse Code" },
+      "page": { "signIn": "Desktop app session", "multi": false },
+      "failover": { "label": "Muse Code", "kinds": ["muse-team", "muse-native-credential"] },
+      "quota": false
+    },
+    "kimi-code": {
+      "label": "Kimi Code",
+      "longLabel": "Kimi Code",
+      "dashboard": true,
+      "card": true,
+      "keyStore": true,
+      "analytics": { "order": 5, "label": "Kimi Code" },
+      "page": { "signIn": "API key", "multi": false },
+      "failover": { "label": "Kimi Code", "kinds": ["kimi-code-credential"] },
+      "quota": true
+    },
+    "qwen": {
+      "label": "Qwen Token Plan",
+      "longLabel": "Qwen Token Plan",
+      "dashboard": true,
+      "card": true,
+      "keyStore": false,
+      "analytics": { "order": 6, "label": "Qwen token plan" },
+      "page": { "signIn": "API key, web extras by browser extension", "multi": false },
+      "failover": { "label": "Qwen", "kinds": ["qwen-session"] },
+      "quota": true
+    },
+    "zai": {
+      "label": "Z.ai Coding Plan",
+      "longLabel": "Z.ai Coding Plan",
+      "dashboard": true,
+      "card": true,
+      "keyStore": true,
+      "analytics": { "order": 7, "label": "Z.ai coding plan" },
+      "page": { "signIn": "API key", "multi": false },
+      "failover": { "label": "Z.ai", "kinds": ["zai-credential"] },
+      "quota": true
+    },
+    "opencode-go": {
+      "label": "OpenCode Go",
+      "longLabel": "OpenCode Go",
+      "dashboard": true,
+      "card": true,
+      "keyStore": true,
+      "analytics": { "order": 8, "label": "OpenCode Go" },
+      "page": { "signIn": "API key, console wallet by browser session", "multi": true },
+      "failover": { "label": "OpenCode Go", "kinds": ["opencode-go-credential"] },
+      "quota": true
+    },
+    "opencode-wallet": {
+      "label": "OpenCode",
+      "longLabel": "OpenCode",
+      "dashboard": false,
+      "card": false,
+      "keyStore": false,
+      "analytics": null,
+      "page": null,
+      "failover": { "label": "OpenCode", "kinds": ["opencode-workspace"] },
+      "quota": false
+    }
+  }
+}
