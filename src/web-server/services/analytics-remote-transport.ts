@@ -151,6 +151,8 @@ const MAX_ROWS = 100_000;
 
 export interface AnalyticsRemoteFingerprint {
   size: number;
+  /** Native reader's measured event clock; null means no numeric usage event in this file. */
+  newestUsageMs?: number | null;
   mtimeMs: number;
   head?: string;
   tail?: string;
@@ -354,6 +356,13 @@ export interface AnalyticsDiscoveryKind {
   signals: string[];
   roots: AnalyticsDiscoveryRoot[];
   counts: AnalyticsDiscoveryCounts;
+  freshness?: {
+    state: 'current' | 'stale' | 'unknown';
+    newestDataMs: number | null;
+    newestActivityMs: number | null;
+  };
+  /** Local stores whose schema exposes no numeric usage (Cursor CLI blobs, for example). */
+  unmeasuredFiles?: number;
 }
 
 /** A tool without a reader that this computer has. */
@@ -411,6 +420,17 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const entry = value as Record<string, unknown>;
   const counts = entry.counts as Record<string, unknown> | undefined;
+  const freshness = entry.freshness as Record<string, unknown> | undefined;
+  if (
+    freshness !== undefined &&
+    (!freshness ||
+      typeof freshness !== 'object' ||
+      !['current', 'stale', 'unknown'].includes(String(freshness.state)) ||
+      !epoch(freshness.newestDataMs) ||
+      !epoch(freshness.newestActivityMs))
+  )
+    return null;
+  if (entry.unmeasuredFiles !== undefined && !count(entry.unmeasuredFiles)) return null;
   if (
     typeof entry.installed !== 'boolean' ||
     !signalsOk(entry.signals) ||
@@ -460,6 +480,18 @@ function parseDiscoveryKind(value: unknown): AnalyticsDiscoveryKind | null {
   }
   return {
     installed: entry.installed,
+    ...(freshness
+      ? {
+          freshness: {
+            state: freshness.state as 'current' | 'stale' | 'unknown',
+            newestDataMs: freshness.newestDataMs as number | null,
+            newestActivityMs: freshness.newestActivityMs as number | null,
+          },
+        }
+      : {}),
+    ...(entry.unmeasuredFiles !== undefined
+      ? { unmeasuredFiles: entry.unmeasuredFiles as number }
+      : {}),
     signals: [...(entry.signals as string[])],
     roots,
     counts: {
@@ -777,6 +809,7 @@ function validFingerprint(value: unknown): value is AnalyticsRemoteFingerprint {
   return (
     nonNegative(print.size) &&
     nonNegative(print.mtimeMs) &&
+    (print.newestUsageMs === undefined || epoch(print.newestUsageMs)) &&
     (print.head === undefined || (typeof print.head === 'string' && SHA256_HEX.test(print.head))) &&
     (print.tail === undefined || (typeof print.tail === 'string' && SHA256_HEX.test(print.tail))) &&
     (print.claudeName === undefined ||

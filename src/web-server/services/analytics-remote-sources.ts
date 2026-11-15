@@ -67,6 +67,8 @@ import type { AccountAnalyticsActivityProvider } from './account-analytics-types
 export type AnalyticsSourceTool = AnalyticsTool | 'cursor' | 'devin' | AnalyticsNoReaderTool;
 export type AnalyticsSourceState =
   | 'ok'
+  /** Independent activity is newer than the newest measured usage by a scan cycle. */
+  | 'stale'
   | 'cached'
   | 'unavailable'
   | 'not_installed'
@@ -125,6 +127,35 @@ function sourceCounts(kind: AnalyticsDiscoveryKind | undefined): {
     },
     origins: [...origins].map(([origin, files]) => ({ origin, files })),
   };
+}
+
+/** Project the native reader's coverage verdict. The dates are evidence, not guessed usage. */
+function applyFreshness(
+  entry: AnalyticsRemoteSourceState,
+  found: AnalyticsDiscoveryKind | undefined
+): void {
+  if (!found) return;
+  const clock = found.freshness;
+  if (
+    clock?.state === 'stale' &&
+    ['ok', 'no_usage', 'cached', 'stale'].includes(entry.state) &&
+    !entry.cause
+  ) {
+    entry.state = 'stale';
+    entry.cause = 'newer_activity';
+    const data =
+      clock.newestDataMs === null
+        ? 'no measured usage date'
+        : new Date(clock.newestDataMs).toISOString();
+    const activity =
+      clock.newestActivityMs === null ? 'unknown' : new Date(clock.newestActivityMs).toISOString();
+    const note = `usage is stale: newest measured data ${data}; newer activity ${activity}; activity does not establish token counts or cost`;
+    entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+  }
+  if (found.unmeasuredFiles && !entry.detail?.includes('no numeric usage')) {
+    const note = `${found.unmeasuredFiles} local chat store${found.unmeasuredFiles === 1 ? '' : 's'} expose no numeric usage; their tokens and cost are not counted`;
+    entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
+  }
 }
 
 const NO_READER_LABELS: Record<AnalyticsNoReaderTool, string> = {
@@ -1111,7 +1142,12 @@ function cachedHostSources(
       states.push({
         tool,
         host,
-        state: !failed && read?.state === 'ok' ? 'ok' : 'cached',
+        state:
+          !failed && read?.state === 'stale'
+            ? 'stale'
+            : !failed && read?.state === 'ok'
+              ? 'ok'
+              : 'cached',
         lastScanAt: read?.lastScanAt ?? null,
         rowCount: kept.reduce((sum, row) => sum + Math.floor(row.n), 0),
         detail:
@@ -1169,6 +1205,8 @@ function cachedHostSources(
       });
     }
   }
+  for (const entry of states)
+    applyFreshness(entry, cached.discovery?.kinds[entry.tool as AnalyticsRemoteKind]);
   return { results, states };
 }
 
@@ -2113,6 +2151,7 @@ export async function loadAnalyticsRemoteSources(
         for (const entry of states.slice(firstState)) {
           if (entry.host !== host) continue;
           const found = discovery.kinds[entry.tool as AnalyticsRemoteKind];
+          applyFreshness(entry, found);
           if (!entry.counts) Object.assign(entry, sourceCounts(found), { reader });
           // A log folder that could not be reached is said, never silently left out (16.4).
           const links = (found?.roots ?? []).filter(
@@ -2142,6 +2181,7 @@ export async function loadAnalyticsRemoteSources(
           if (entry.host !== host) continue;
           const read = kindReads[entry.tool as AnalyticsRemoteKind];
           if (read) {
+            if (entry.state === 'stale') read.state = 'stale';
             read.detail = entry.detail;
             read.cause = entry.cause ?? undefined;
           }

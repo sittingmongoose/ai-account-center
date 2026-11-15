@@ -1324,7 +1324,7 @@ const SOURCE_TOOLS = [['claude', 'Claude Code'], ['codex', 'Codex'], ['omp', 'OM
 const NO_READER_TOOLS = new Set(['cursor', 'gemini-cli', 'opencode', 'qwen', 'kimi', 'grok', 'kiro', 'pi', 'fx']);
 /** Where discovery found a tool's logs, in plain words (DESIGN 2's origins). */
 const ORIGIN_WORDS = { default: 'default folder', env: 'env var', tool_config: "the tool's config", t3_instance: 'T3 instance', ccs_instance: 'AAC profile', signature: 'other home', extra: 'saved extra', experiment: 'experiment folder' };
-const SOURCE_STATES = ['ok', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage', 'unreadable', 'scan_failed', 'installed_no_logs', 'no_reader'];
+const SOURCE_STATES = ['ok', 'stale', 'cached', 'unavailable', 'not_installed', 'scanning', 'no_usage', 'unreadable', 'scan_failed', 'installed_no_logs', 'no_reader'];
 const andList = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 const noLocalLog = r => r.state === 'unavailable' && /no local usage log|not measured on this computer/i.test(text(r.detail));
 // Cursor on a computer the usage scanner did not read (round 2): its SDK runs are read where it runs.
@@ -1442,6 +1442,7 @@ export function includedView(payload, now = Date.now()) {
     if (r.state === 'scanning') return { id, text: 'Scanning…', tone: 'scanning', tip: `${why}${last}` };
     // A read with a note (a folder that did not answer, a write-ahead log, a cache cut) says it and is marked.
     if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: why ? 'cached' : 'ok', tip: [why.trim(), events(r), found(r), last].filter(Boolean).join(' · ') };
+    if (r.state === 'stale') return { id, text: 'Stale', tone: 'cached', tip: `${why}Measured usage is included. ${last}` };
     if (r.state === 'cached') return { id, text: r.cause === 'unreadable_folder' && r.rowCount > 0 ? 'Read, partial' : finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Usage from readable logs is included. ${last}` };
     if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
     if (r.state === 'installed_no_logs') return { id, text: 'Installed, no logs yet', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };

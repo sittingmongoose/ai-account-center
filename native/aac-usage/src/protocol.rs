@@ -420,6 +420,27 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
     if collector.truncated {
         collector.keep_confirmed();
     }
+    // Persist measured clocks with each confirmed file. Fresh scans use session event times;
+    // unchanged files retain the clock established by their previous read. No mtime is ever
+    // substituted for a usage time, including for a file that has no numeric usage records.
+    for (kind, prints) in &mut collector.fresh {
+        for (key, print) in prints {
+            let newest = collector
+                .srow_list
+                .iter()
+                .filter(|r| &r.kind == kind && &r.filekey == key)
+                .map(|r| r.last)
+                .max();
+            let prior = collector.prior.get(kind).and_then(|p| p.get(key));
+            let unchanged = util::same_print(prior, print);
+            print.newest_usage_ms = newest.or_else(|| {
+                unchanged
+                    .then(|| prior.and_then(|p| p.get("newestUsageMs")).and_then(Value::as_i64))
+                    .flatten()
+            });
+            print.usage_clock = true;
+        }
+    }
     let mut kinds = Map::new();
     for kind in &request.kinds {
         let prints: Map<String, Value> = collector

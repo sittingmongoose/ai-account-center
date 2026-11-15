@@ -92,6 +92,50 @@ function answer(
 }
 
 describe('Cursor and Devin on a scanned computer', () => {
+  it('projects native stale evidence with both clocks and preserves it on cached reads', async () => {
+    const reply = answer(
+      { state: 'ok', fingerprints: { [STORE]: { size: 1, mtimeMs: 1 } } },
+      [row('cursor', STORE, 'grok-4.7', 300)],
+      undefined,
+      {
+        discovery: {
+          kinds: {
+            cursor: {
+              installed: true,
+              signals: ['home'],
+              roots: [],
+              counts: { roots: 0, filesFound: 1, filesRead: 1, filesFailed: 0, newestMtime: NOW },
+              freshness: {
+                state: 'stale',
+                newestDataMs: Date.parse('2026-11-11T21:00:00Z'),
+                newestActivityMs: NOW,
+              },
+              unmeasuredFiles: 1,
+            },
+          },
+        },
+      }
+    );
+    const deps = {
+      cacheDir: path.join(dir, 'stale-cache'),
+      hosts: async () => ({ mac: null, windows: null, nas1: 'nas1-agent', alexis: null }),
+      now: () => NOW,
+      localScanner: () => ({ ok: false as const, cause: 'binary_not_built' }),
+      runHelper: async () => reply,
+    };
+    const first = await loadAnalyticsRemoteSources(MIN_DATE, { ...deps, force: true });
+    const cell = first.states.find((s) => s.host === 'nas1' && s.tool === 'cursor');
+    expect(cell).toMatchObject({ state: 'stale', cause: 'newer_activity', rowCount: 1 });
+    expect(cell?.detail).toContain('2026-11-11T21:00:00.000Z');
+    expect(cell?.detail).toContain('2026-11-13T16:30:00.000Z');
+    expect(cell?.detail).toContain('no numeric usage');
+    const again = await loadAnalyticsRemoteSources(MIN_DATE, deps);
+    expect(again.states.find((s) => s.host === 'nas1' && s.tool === 'cursor')).toMatchObject({
+      state: 'stale',
+      cause: 'newer_activity',
+    });
+  });
+
   it('counts both, names unreadable runs, and keeps the T3 binding as explicit evidence', async () => {
     const cache = path.join(dir, 'cache');
     const reply = answer(

@@ -28,6 +28,7 @@ fn same(prior: Option<&Value>, current: &Print) -> bool {
     };
     let get = |k: &str| prior.get(k).and_then(Value::as_i64).unwrap_or(0);
     get("size") == current.size as i64
+        && prior.contains_key("newestUsageMs")
         && get("mtimeMs") == current.mtime_ms
         && get("walSize") == current.wal_size.unwrap_or(0) as i64
         && get("walMtimeMs") == current.wal_mtime_ms.unwrap_or(0)

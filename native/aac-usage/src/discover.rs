@@ -549,6 +549,67 @@ fn count_files(root: &Path, accept: &dyn Fn(&str) -> bool, deadline: Instant) ->
     (files, newest, false)
 }
 
+/// Current CLI chat locations in addition to the older `.cursor/chats`. These stores contain
+/// blobs and metadata, not exposed token counters. Discover their activity without decoding any
+/// conversation blobs or treating a file as a numeric usage event.
+pub fn cursor_chat_roots(home: &Path, env: &Env) -> Vec<PathBuf> {
+    let config = env_dir(env, "XDG_CONFIG_HOME", home).unwrap_or_else(|| home.join(".config"));
+    let mut roots = vec![home.join(".cursor/chats"), config.join("cursor/chats")];
+    roots.push(app_dir(home, env, "cursor").join("chats"));
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// One normal Analytics scan cycle. Filesystem/T3 activity is evidence of a possible coverage
+/// gap, never proof of token use. Nevertheless it must not be advertised as current usage.
+pub const FRESHNESS_CYCLE_MS: i64 = 5 * 60 * 1000;
+
+pub fn freshness(newest_data: Option<i64>, newest_activity: Option<i64>, min_date: i64) -> Value {
+    let state = match (newest_data, newest_activity) {
+        (Some(data), Some(activity)) if activity.saturating_sub(data) > FRESHNESS_CYCLE_MS => "stale",
+        (None, Some(activity)) if activity >= min_date => "stale",
+        (Some(_), _) => "current",
+        _ => "unknown",
+    };
+    json!({"state": state, "newestDataMs": newest_data, "newestActivityMs": newest_activity})
+}
+
+/// Read only T3's provider projection metadata. The tool's own instance configuration resolves
+/// generic ACP drivers (OMP/zcode); titles, requests, responses and auth tables are never read.
+fn t3_activity(home: &Path, kind: &str, instances: &[T3Instance], deadline: Instant) -> Option<i64> {
+    let db = home.join(".t3/userdata/statev2.sqlite");
+    if !fsx::exists(&db) || Instant::now() >= deadline {
+        return None;
+    }
+    let (connection, _) = crate::read::sqlite::open(&db, deadline)?;
+    let mut statement = connection.prepare(
+        "SELECT driver, provider_instance_id, MAX(updated_at) FROM orchestration_v2_projection_provider_threads GROUP BY driver, provider_instance_id"
+    ).ok()?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .ok()?;
+    rows.filter_map(Result::ok)
+        .filter_map(|(driver, instance, at)| {
+            let matches = match kind {
+                "claude" => driver == "claudeAgent",
+                "codex" | "cursor" | "muse" | "antigravity" => driver == kind,
+                "omp" | "zcode" => instances
+                    .iter()
+                    .any(|i| i.id == instance && names_tool(&i.config, kind)),
+                _ => false,
+            };
+            matches.then(|| util::iso_ms(&at)).flatten()
+        })
+        .max()
+}
+
 fn app_dir(home: &Path, env: &Env, name: &str) -> PathBuf {
     if cfg!(windows) {
         env.get("APPDATA")
@@ -584,16 +645,14 @@ pub fn presence(home: &Path, env: &Env, instances: &[T3Instance], budget: Durati
     let specs = vec![
         Spec {
             tool: "cursor",
-            dirs: vec![
-                (
-                    home.join(".cursor").join("chats"),
-                    Box::new(|n: &str| n == "store.db") as Accept,
-                ),
-                (
+            dirs: cursor_chat_roots(home, env)
+                .into_iter()
+                .map(|root| (root, Box::new(|n: &str| n == "store.db") as Accept))
+                .chain(vec![(
                     home.join(".cursor").join("projects"),
-                    Box::new(|n: &str| n == "store.db"),
-                ),
-            ],
+                    Box::new(|n: &str| n == "store.db") as Accept,
+                )])
+                .collect(),
             homes: vec![home.join(".cursor"), app_dir(home, env, "Cursor")],
             binaries: &["cursor-agent"],
             drivers: &["cursor"],
@@ -820,10 +879,30 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         m.keys().filter(|k| !failed.is_some_and(|f| f.contains(*k))).count()
     }) + failed.map_or(0, |s| s.len());
     let newest = roots.iter().filter_map(|r| r["counts"]["newestMtime"].as_i64()).max();
+    let mut activity = newest;
+    let mut unmeasured_files = 0usize;
+    if kind == "cursor" {
+        for root in cursor_chat_roots(home, env) {
+            let (files, last, _) =
+                count_files(&root, &|n| n == "store.db" || n == "store.db-wal", collector.deadline());
+            unmeasured_files += files;
+            activity = activity.into_iter().chain((last > 0).then_some(last)).max();
+        }
+    }
+    activity = activity
+        .into_iter()
+        .chain(t3_activity(home, kind, instances, collector.deadline()))
+        .max();
+    let newest_data = collector
+        .fresh
+        .get(kind)
+        .and_then(|prints| prints.values().filter_map(|p| p.newest_usage_ms).max());
     let signals = installed_signals(home, env, kind, instances);
     json!({
         "installed": !roots.is_empty() || !signals.is_empty(),
         "signals": signals,
+        "freshness": freshness(newest_data, activity, collector.min_date_ms),
+        "unmeasuredFiles": unmeasured_files,
         "roots": roots,
         "counts": {
             "roots": roots.len(),

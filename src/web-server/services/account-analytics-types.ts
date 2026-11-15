@@ -113,6 +113,7 @@ export type AccountAnalyticsUsageProvider = DashboardProvider | 'other';
 
 export type AccountAnalyticsSourceState =
   | 'ok'
+  | 'stale'
   | 'cached'
   | 'unavailable'
   | 'not_installed'

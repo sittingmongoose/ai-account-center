@@ -57,7 +57,12 @@ export function parityView(answer: Record<string, unknown>): unknown {
                   Object.values(
                     (entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>
                   ).map((print) => {
-                    const { msgThrough: _sent, mtimeMs: _time, ...rest } = print;
+                    const {
+                      msgThrough: _sent,
+                      mtimeMs: _time,
+                      newestUsageMs: _clock,
+                      ...rest
+                    } = print;
                     return rowKey(rest);
                   })
                 ),
@@ -66,7 +71,7 @@ export function parityView(answer: Record<string, unknown>): unknown {
                 Object.entries(
                   (entry.fingerprints ?? {}) as Record<string, Record<string, unknown>>
                 ).map(([key, print]) => {
-                  const { msgThrough: _sent, ...rest } = print;
+                  const { msgThrough: _sent, newestUsageMs: _clock, ...rest } = print;
                   return [key, rest];
                 })
               ),
