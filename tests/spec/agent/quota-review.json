@@ -250,6 +250,214 @@
       },
       "disconnect": true,
       "expect": "fallback"
+    },
+    {
+      "name": "BIG-M3-kimi-3-of-2048",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 3,
+          "limit": 2048,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-11-of-2048",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 11,
+          "limit": 2048,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-2-of-2048",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 2,
+          "limit": 2048,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-4-of-2048",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 4,
+          "limit": 2048,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-10-of-2048",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 10,
+          "limit": 2048,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-12-of-2048",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 12,
+          "limit": 2048,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-1-of-2048",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 1,
+          "limit": 2048,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-5-of-2048",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 5,
+          "limit": 2048,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-7-of-2048",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 7,
+          "limit": 2048,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-1-of-512",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 1,
+          "limit": 512,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-3-of-512",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 3,
+          "limit": 512,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-5-of-1024",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 5,
+          "limit": 1024,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-9-of-4096",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 9,
+          "limit": 4096,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-13-of-4096",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 13,
+          "limit": 4096,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-3-of-1000",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 3,
+          "limit": 1000,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "BIG-M3-kimi-1-of-3",
+      "provider": "kimi-code",
+      "payload": {
+        "usage": {
+          "used": 1,
+          "limit": 3,
+          "resetTime": "2026-01-01T00:00:00Z"
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
     }
   ]
 }

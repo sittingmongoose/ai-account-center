@@ -65,6 +65,45 @@ fn reset(v: &Value) -> Value {
         .map(|d| json!(d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)))
         .unwrap_or(Value::Null)
 }
+/// Python's `round(value, places)` for a finite binary64 (`plan_common.usage_window`): CPython
+/// rounds the exact binary value half-even to `places` decimals (`_Py_dg_dtoa` mode 3) and reads
+/// that decimal back as the nearest double. Scaling by 10^places first would round twice and
+/// break ties away from zero, so the quotient and remainder here are exact integers.
+pub(super) fn python_round(value: f64, places: u32) -> f64 {
+    if !value.is_finite() || value == 0.0 || places > 17 {
+        return value;
+    }
+    let bits = value.abs().to_bits();
+    let raw_exponent = ((bits >> 52) & 0x7ff) as i32;
+    let fraction = bits & ((1u64 << 52) - 1);
+    let (mantissa, exponent) = if raw_exponent == 0 {
+        (fraction, -1074)
+    } else {
+        (fraction | (1u64 << 52), raw_exponent - 1075)
+    };
+    if exponent >= 0 {
+        // An integral double already has no fraction digits to round.
+        return value;
+    }
+    // |value| * 10^places = mantissa * 10^places / 2^shift, exactly (< 2^110 for places <= 17).
+    let scaled = u128::from(mantissa) * 10u128.pow(places);
+    let shift = exponent.unsigned_abs();
+    let units = if shift >= 128 {
+        // scaled < 2^110 <= 2^(shift-1): less than half a unit, which rounds to zero.
+        0
+    } else {
+        let quotient = scaled >> shift;
+        let remainder = scaled & ((1u128 << shift) - 1);
+        let half = 1u128 << (shift - 1);
+        quotient + u128::from(remainder > half || (remainder == half && quotient & 1 == 1))
+    };
+    let magnitude: f64 = format!("{units}e-{places}").parse().unwrap_or(f64::NAN);
+    if value.is_sign_negative() {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
 #[allow(clippy::too_many_arguments)]
 fn window(
     key: &str,
@@ -77,7 +116,7 @@ fn window(
     unit: Option<&str>,
     remaining: &Value,
 ) -> Value {
-    let mut w = json!({"key":key,"label":label,"usedPercent":ratio,"remainingPercent":ratio.map(|n| ((100.-n).max(0.) * 1e8).round()/1e8),"resetAt":reset(reset_raw),"windowMinutes":minutes,"used":used,"limit":limit,"unit":unit,"kind":"rate_limit"});
+    let mut w = json!({"key":key,"label":label,"usedPercent":ratio,"remainingPercent":ratio.map(|n| python_round((100.-n).max(0.), 8)),"resetAt":reset(reset_raw),"windowMinutes":minutes,"used":used,"limit":limit,"unit":unit,"kind":"rate_limit"});
     if !remaining.is_null() {
         w["remaining"] = json!(number(remaining));
     }
@@ -642,5 +681,35 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 43);
+    }
+}
+
+#[cfg(test)]
+mod rounding_tests {
+    use super::python_round;
+    /// CPython's own answers (tests/spec/agent/make-round-table.py): every sampled exact tie at
+    /// eight places, both neighbouring doubles of each, the review's Kimi witnesses and random
+    /// values. Scaling by 1e8 and rounding half away from zero misses 136 of these rows.
+    #[test]
+    fn remaining_percent_rounds_exactly_as_python_round() {
+        let table: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../tests/spec/agent/python-round8.json"
+        ))
+        .expect("python-round8.json");
+        let rows = table["rows"].as_array().expect("rows");
+        assert!(rows.len() > 1000);
+        for row in rows {
+            let x: f64 = row[0].as_str().expect("x").parse().expect("x parses");
+            let want: f64 = row[1].as_str().expect("y").parse().expect("y parses");
+            assert_eq!(
+                python_round(x, 8).to_bits(),
+                want.to_bits(),
+                "round({x}, 8)"
+            );
+        }
+        assert_eq!(python_round(99.853515625, 8), 99.85351562);
+        assert_eq!(python_round(99.462890625, 8), 99.46289062);
+        assert_eq!(python_round(99.951171875, 8), 99.95117188);
+        assert_eq!(python_round(100.0, 8), 100.0);
     }
 }
