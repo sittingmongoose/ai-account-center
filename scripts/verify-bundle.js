@@ -21,7 +21,12 @@ const RETIRED_SLINT_FILES = ['index.html', 'renderer.mjs', 'shell-frame.mjs'];
  * to the app frame (web-dashboard/public/bridge.js). It must stay that module, never the retired bridge.
  */
 const CLASSIC_UPGRADE = 'bridge.js';
-const CLASSIC_UPGRADE_MAX_BYTES = 8 * 1024;
+/**
+ * The upgrade module's exact bytes (web-dashboard/public/bridge.js, LF as .gitattributes keeps it). A cached classic
+ * page runs it with nothing else around it, so it is pinned whole rather than by its shape (recheck L3): change the
+ * module and this hash together, in a reviewed commit.
+ */
+const CLASSIC_UPGRADE_SHA256 = 'a38ef887dc3d89c2657765705b4c30503f64ea1d729cc57d20337839b682854c';
 const BUILD_ID = /^[a-f0-9]{12}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const VARIANT_SUFFIX = new Map([
@@ -178,15 +183,11 @@ function verifyModes(dir) {
 function verifyClassicUpgrade(uiDir) {
   const file = path.join(uiDir, CLASSIC_UPGRADE);
   if (!fs.existsSync(file)) throw new Error(`Missing browser asset: ${CLASSIC_UPGRADE}.`);
-  const source = fs.readFileSync(file, 'utf8');
-  if (
-    source.length > CLASSIC_UPGRADE_MAX_BYTES ||
-    /^\s*import[\s{*('"]/m.test(source) ||
-    /\bimport\s*\(/.test(source) ||
-    !source.includes('export function leaveClassic(')
-  ) {
+  const found = sha256(fs.readFileSync(file));
+  if (found !== CLASSIC_UPGRADE_SHA256) {
     throw new Error(
-      `The packaged ${CLASSIC_UPGRADE} must be the classic page's upgrade module, not the retired bridge.`
+      `The packaged ${CLASSIC_UPGRADE} must be the classic page's upgrade module byte for byte ` +
+        `(sha256 ${CLASSIC_UPGRADE_SHA256}), not the retired bridge or an edited copy (found ${found}).`
     );
   }
 }

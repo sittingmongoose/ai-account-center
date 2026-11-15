@@ -54,9 +54,15 @@ fn push_history(path: &str, replace: bool) {
     let Ok(history) = window().history() else {
         return;
     };
-    // the classic app's ?view=, ?classic=1 and ?content=1 go: the tab is in the path now
-    let search = crate::kept_search(&window().location().search().unwrap_or_default());
-    let url = format!("{path}{search}");
+    // the classic app's ?view=, ?classic=1 and ?content=1 go: the tab is in the path now. Taking over the address the
+    // frame was opened at (replace) keeps its #fragment; a new tab starts without one (recheck L2).
+    let location = window().location();
+    let hash = if replace {
+        location.hash().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let url = crate::frame_url(path, &location.search().unwrap_or_default(), &hash);
     let _ = if replace {
         history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url))
     } else {

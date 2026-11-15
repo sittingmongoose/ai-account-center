@@ -34,7 +34,7 @@ public/auth-view.mjs, transport.mjs   the sign-in page's words and rules: streng
 public/claude-open.mjs      Claude Open progress: the 202 poller (injected I/O) and the row's progress line
 public/*-data.mjs, visible-usage.mjs, device.mjs   truthfulness and device rules
 public/sw.js, sw-route.js   the service worker (offline copy) and its pure routing rules
-public/bridge.js            the classic page's upgrade module: forgets aac-frame=classic, opens /app/<tab>
+public/bridge.js            the classic page's upgrade module: forgets aac-frame=classic, opens /app/<tab>#fragment
 ```
 
 **Updates of the installed app.** A new build's worker downloads the whole app while installing (`PRECACHE`, the
@@ -42,7 +42,9 @@ page's addresses and every packaged asset, stamped by build-ui.js from `scripts/
 verify-bundle.js); one failed download fails the install and the installed copy stays. It activates on the next
 launch (DESIGN-MOBILE.md 6.5: no skipWaiting, no prompt) and drops the older build's cache only once its own copy is
 complete, so an offline launch after an update always finds an app. A classic start page an older worker kept still
-loads `/bridge.js`, which moves it to the frame (the same address rules as `lib.rs` `page_from_location`).
+loads `/bridge.js`, which moves it to the frame (the same address rules as `lib.rs` `page_from_location`, keeping the
+query and the #fragment, as the frame does when it takes over a classic address). `scripts/verify-bundle.js` pins that
+module's bytes (`CLASSIC_UPGRADE_SHA256`): change the module and the hash together.
 
 Rules that keep it truthful: every number, label and "unavailable" decision is made in `public/*.mjs` and covered by
 `web-dashboard/tests/*.test.mjs`. The Leptos pages only lay out and animate what they are given. Never compute a
