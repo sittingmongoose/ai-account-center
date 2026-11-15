@@ -619,8 +619,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 450,
-      "coverageRatio": 0.0978,
+      "totalSourceFiles": 451,
+      "coverageRatio": 0.0976,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -636,7 +636,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 256,
+          "count": 257,
           "withLogger": 30
         },
         {
@@ -764,7 +764,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
-          "loc": 1658
+          "loc": 1660
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
