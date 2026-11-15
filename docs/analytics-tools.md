@@ -42,3 +42,10 @@ Desktop app installation is reported separately for Claude desktop, Codex app,
 Cursor IDE and Windsurf. Presence does not establish that their logs expose
 usage or an account identity. Quota burn, shared tool totals and process/T3
 activity cannot prove per-account token attribution.
+
+zcode requests use SQLite `mode=ro`, including committed WAL records, instead of
+forcing `immutable=1` and silently reading an older checkpoint. No database or
+WAL write queries are issued. SQLite may maintain its shared-memory index, as
+in the existing local reader. An explicit immutable scanner request remains
+supported and reports its unread WAL; fingerprints distinguish that read from
+a later WAL-visible read so unchanged file sizes do not suppress the upgrade.

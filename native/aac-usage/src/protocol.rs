@@ -436,6 +436,11 @@ pub fn scan(request: &Request, home: &Path, env: &Env) -> Value {
             let prior = collector.prior.get(kind).and_then(|p| p.get(key));
             let unchanged = if print.wal_size.is_some() {
                 read::sqlite::same(prior, print)
+                    && prior
+                        .and_then(|p| p.get("walUnread"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                        == print.wal_unread.unwrap_or(false)
             } else {
                 util::same_print(prior, print)
             };

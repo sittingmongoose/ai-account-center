@@ -1224,7 +1224,9 @@ export async function runAnalyticsRemoteHelper(
       request: {
         kinds: [...new Set(request.kinds)],
         minDateMs: Math.floor(request.minDateMs),
-        immutableSqlite: true,
+        // Read-only SQLite includes committed WAL records. Immutable mode sees an older
+        // checkpoint and silently misses active zcode usage.
+        immutableSqlite: !request.kinds.includes('zcode'),
         fingerprints: request.fingerprints,
         extraRoots: request.extraRoots ?? {},
         deadlineMs: 20_000,
@@ -1326,7 +1328,7 @@ export function usageScanRequest(
   return {
     kinds: [...new Set(request.kinds)],
     minDateMs: Math.floor(request.minDateMs),
-    immutableSqlite: true,
+    immutableSqlite: !request.kinds.includes('zcode'),
     fingerprints: request.fingerprints,
     extraRoots: request.extraRoots ?? {},
     ...(request.experimentRoots && isValidExperimentRoots(request.experimentRoots)

@@ -1,5 +1,6 @@
 """Offline scanner/remote-helper checks on each native OS. Every value is made up."""
 import json
+from contextlib import closing
 import os
 from pathlib import Path
 import sqlite3
@@ -13,7 +14,7 @@ def run(binary, helper):
         home = Path(directory)
         sdk = home / ".cursor/projects/project/sdk-agent-store/store/index.db"
         sdk.parent.mkdir(parents=True)
-        with sqlite3.connect(sdk) as db:
+        with closing(sqlite3.connect(sdk)) as db:
             db.executescript("""
                 CREATE TABLE runs (run_id TEXT, agent_id TEXT, model TEXT,
                   started_at TEXT, finished_at TEXT, usage_json TEXT);
@@ -24,7 +25,7 @@ def run(binary, helper):
             """)
         chat = home / "config/cursor/chats/project/chat/store.db"
         chat.parent.mkdir(parents=True)
-        with sqlite3.connect(chat) as db:
+        with closing(sqlite3.connect(chat)) as db:
             db.executescript("CREATE TABLE blobs (id TEXT, data BLOB); CREATE TABLE meta (key TEXT, value TEXT);")
         session = home / ".omp/agent/sessions/2026-11-11T21-00-00_fixture.jsonl"
         session.parent.mkdir(parents=True)

@@ -127,3 +127,49 @@ fn cli_activity_keeps_an_older_sdk_source_from_claiming_current_coverage() {
     assert_eq!(answer["discovery"]["kinds"]["cursor"]["unmeasuredFiles"], 1);
     assert_eq!(answer["rows"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn switching_from_immutable_to_read_only_reads_committed_wal_without_changing_source_bytes() {
+    let home = tempfile::tempdir().unwrap();
+    let db = home.path().join(".zcode/cli/db/db.sqlite");
+    fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let writer = Connection::open(&db).unwrap();
+    writer.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+        CREATE TABLE model_usage (session_id TEXT, model_id TEXT, provider_id TEXT, started_at INTEGER,
+          input_tokens INTEGER, output_tokens INTEGER, cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER);
+        INSERT INTO model_usage VALUES ('s', 'fixture-model', 'builtin:zai-coding-plan', 1794430860000, 100, 20, 0, 0);
+        PRAGMA wal_checkpoint(TRUNCATE);
+        INSERT INTO model_usage VALUES ('s', 'fixture-model', 'builtin:zai-coding-plan', 1794772860000, 220, 30, 0, 0);").unwrap();
+    let wal = db.with_file_name("db.sqlite-wal");
+    let before = (fs::read(&db).unwrap(), fs::read(&wal).unwrap());
+    let env = Env::from([
+        ("HOME".into(), home.path().to_string_lossy().into_owned()),
+        ("PATH".into(), String::new()),
+    ]);
+    let ask = |immutable, prior: Value| {
+        protocol::parse_request(
+            json!({"kinds":["zcode"],"minDateMs":1790000000000u64,
+        "immutableSqlite":immutable,"fingerprints":prior})
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap()
+    };
+    let old = protocol::scan(&ask(true, json!({})), home.path(), &env);
+    assert_eq!(old["rows"][0]["i"], 100);
+    assert_eq!(old["kinds"]["zcode"]["walUnread"], true);
+    let fresh = protocol::scan(
+        &ask(false, json!({"zcode":old["kinds"]["zcode"]["fingerprints"]})),
+        home.path(),
+        &env,
+    );
+    let total: u64 = fresh["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["i"].as_u64().unwrap())
+        .sum();
+    assert_eq!(total, 320, "A mode change must reread an unchanged DB/WAL print");
+    assert!(fresh["kinds"]["zcode"].get("walUnread").is_none());
+    assert_eq!((fs::read(&db).unwrap(), fs::read(&wal).unwrap()), before);
+}
