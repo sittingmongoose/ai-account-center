@@ -1,70 +1,18 @@
-import { AntigravityError } from '../../antigravity/errors';
 import type { Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
-import { isNativeVersion } from '../../antigravity/native-version';
-import { publicRuntimeServiceProblem } from '../../antigravity/runtime-health';
-import type {
-  AntigravityApiDependencies,
-  AntigravityInventory,
-} from '../../antigravity/usage-contract';
+import type { AntigravityApiDependencies } from '../../antigravity/usage-contract';
+import { publicDashboardAccount } from '../../antigravity/usage-normalization';
+import { publicInventory, publicQuotas } from '../../antigravity/public-reads';
+import { composeWithRust } from '../rust-service';
 import {
-  displayText,
-  email,
-  safeId,
-  timestamp,
-  publicDashboardAccount as publicAccount,
-  publicDashboardAccount,
-} from '../../antigravity/usage-normalization';
-import { markPassedResets } from '../services/account-window-reset';
+  isRustAntigravityInventory,
+  isRustAntigravityQuotas,
+  rustAntigravityInventoryInput,
+  rustAntigravityQuotasInput,
+} from '../rust-profile-input';
 
-function runtimeServiceProblemField(value: unknown): Partial<AntigravityInventory> {
-  const problem = publicRuntimeServiceProblem(value);
-  return problem ? { runtimeServiceProblem: problem } : {};
-}
-
-/** All public returns are rebuilt so adapter-private fields cannot leak accidentally. */
-export function publicInventory(value: AntigravityInventory): AntigravityInventory {
-  if (value.hostId !== 'ubuntu' || !Array.isArray(value.profiles) || value.profiles.length > 16)
-    throw new AntigravityError('Invalid Antigravity inventory.');
-  const ids = new Set<string>();
-  return {
-    schemaVersion: 1,
-    hostId: 'ubuntu',
-    ...(value.nativeUpdatePaused
-      ? {
-          nativeUpdatePaused: {
-            installedVersion: isNativeVersion(value.nativeUpdatePaused.installedVersion)
-              ? value.nativeUpdatePaused.installedVersion
-              : null,
-          },
-        }
-      : {}),
-    ...runtimeServiceProblemField(value.runtimeServiceProblem),
-    profiles: value.profiles.map((profile) => {
-      if (
-        !safeId(profile.id) ||
-        ids.has(profile.id) ||
-        !email(profile.email) ||
-        profile.hostId !== 'ubuntu'
-      )
-        throw new AntigravityError('Invalid Antigravity inventory.');
-      ids.add(profile.id);
-      return {
-        id: profile.id,
-        email: email(profile.email) as string,
-        plan: displayText(profile.plan, 80),
-        hostId: 'ubuntu',
-        available: profile.available === true,
-        selected: profile.selected === true,
-        runtimeVerified: profile.runtimeVerified === true,
-        verifiedAt: timestamp(profile.verifiedAt),
-      };
-    }),
-  };
-}
-
-export { publicDashboardAccount as publicAccount };
+export { publicDashboardAccount as publicAccount, publicInventory, publicQuotas };
 
 /** A browser session, or a paired device token on a tray route (the /api guard checks scope). */
 function authenticated(req: Request, res: Response): boolean {
@@ -90,7 +38,18 @@ export function createAntigravityRouter(
       return;
     }
     try {
-      res.json(publicInventory(await deps.getInventory()));
+      // The runtime owns the read; the M3 Rust service may compose the public copy.
+      const inventory = await deps.getInventory();
+      res.json(
+        await composeWithRust(
+          req,
+          res,
+          '/api/antigravity/profiles',
+          () => rustAntigravityInventoryInput(inventory),
+          () => publicInventory(inventory),
+          isRustAntigravityInventory
+        )
+      );
     } catch {
       res.status(500).json({ error: 'Antigravity accounts could not be read safely.' });
     }
@@ -110,11 +69,16 @@ export function createAntigravityRouter(
       const accounts = await deps.getAccounts({ refresh: req.query.refresh === 'true' });
       // One instant per response, so every account is judged against the same clock.
       const at = now();
-      res.json({
-        schemaVersion: 1,
-        hostId: 'ubuntu',
-        accounts: accounts.map((account) => markPassedResets(publicAccount(account), at)),
-      });
+      res.json(
+        await composeWithRust(
+          req,
+          res,
+          '/api/antigravity/profiles/quotas',
+          () => rustAntigravityQuotasInput(accounts, at),
+          () => publicQuotas(accounts, at),
+          isRustAntigravityQuotas
+        )
+      );
     } catch {
       res.status(500).json({ error: 'Antigravity usage could not be read safely.' });
     }

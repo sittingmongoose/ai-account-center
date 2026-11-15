@@ -126,7 +126,8 @@ export async function readPrivateJsonFile(
   try {
     const link = await fs.lstat(file);
     if (link.isSymbolicLink() || !link.isFile()) return { state: 'invalid' };
-    const noFollow = process.platform === 'win32' ? 0 : constants.O_NOFOLLOW;
+    // No-follow and nonblocking: a symlink or FIFO swapped in after the lstat is refused below.
+    const noFollow = process.platform === 'win32' ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK;
     handle = await fs.open(file, constants.O_RDONLY | noFollow);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > maxBytes || !isPrivate(stat)) return { state: 'invalid' };

@@ -1,0 +1,56 @@
+//! GET /api/claude/desktop-profiles*, /api/codex/profiles* and /api/antigravity/profiles* for
+//! the shared read-route dispatch (M3 part 4). Account switching is gone, so these routes only
+//! read and report: profiles, usage and sign-in health.
+//!
+//! The Claude desktop manifest is read here, from the existing file under the boot root, with
+//! the capped descriptor read; TS remains its only writer. Every other answer is composed from
+//! what the guarded TS handler already read from its owners (remote history text, the Codex
+//! registry and display-safe login fields, collector rows, renewal notes, the Antigravity
+//! runtime). Nothing here scans, refreshes a provider or opens a credential. `None` asks for
+//! the logged TS fallback.
+use crate::private_file::{Capped, read_capped};
+use aac_status::read_context::Envelope;
+use serde_json::{Value, json};
+use std::path::Path;
+
+const DESKTOP_MANIFEST: &str = "claude-desktop-profiles.json";
+/// TS refuses more than 1 MiB of UTF-16 text; at most 1 MiB of UTF-8 is always within that.
+const MAX_DESKTOP_MANIFEST_BYTES: u64 = 1024 * 1024;
+
+/// `listClaudeDesktopProfileMetadata`'s rows. TS reads through a symlink and may accept a
+/// larger multi-byte manifest, so both stay with the TS reader.
+fn desktop_profiles(root: &Path) -> Option<Value> {
+    match read_capped(&root.join(DESKTOP_MANIFEST), MAX_DESKTOP_MANIFEST_BYTES)? {
+        Capped::Absent => Some(json!({ "profiles": [] })),
+        Capped::Bytes { bytes, .. } => aac_views::claude_desktop::profiles(&bytes).ok(),
+        Capped::Symlink | Capped::TooLarge => None,
+    }
+}
+
+fn envelope(bytes: &[u8]) -> Option<Envelope> {
+    crate::json_object::from_slice(bytes, &["data", "presentation"]).ok()
+}
+
+pub(crate) fn answer(path: &str, root: &Path, bytes: &[u8]) -> Option<Value> {
+    match path {
+        "/api/claude/desktop-profiles" if bytes.is_empty() => desktop_profiles(root),
+        "/api/claude/desktop-profiles/usage" => {
+            let input: Value =
+                crate::json_object::from_slice(bytes, &["platform", "fetchedAt", "profiles"])
+                    .ok()?;
+            aac_views::claude_desktop::usage(&input).ok()
+        }
+        "/api/codex/profiles" => {
+            let input: Value = crate::json_object::from_slice(
+                bytes,
+                &["instancesDir", "env", "registry", "profiles", "activated"],
+            )
+            .ok()?;
+            aac_views::codex_profiles::summary(&input).ok()
+        }
+        "/api/codex/profiles/quotas" => aac_views::codex_profiles::quotas(envelope(bytes)?).ok(),
+        "/api/antigravity/profiles" => aac_views::antigravity::inventory(envelope(bytes)?).ok(),
+        "/api/antigravity/profiles/quotas" => aac_views::antigravity::quotas(envelope(bytes)?).ok(),
+        _ => None,
+    }
+}

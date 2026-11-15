@@ -161,6 +161,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/private_file.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/unix.rs",
       "kind": "internal",
       "evidence": [],
@@ -168,6 +174,12 @@
     },
     {
       "file": "crates/aac-http/tests/account_reads.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/profile_reads.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -203,6 +215,30 @@
       "evidence": [
         "helper"
       ]
+    },
+    {
+      "file": "crates/aac-views/src/antigravity.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-views/src/claude_desktop.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-views/src/codex_profiles.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-views/src/js.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
     },
     {
       "file": "crates/aac-views/src/spread.rs",

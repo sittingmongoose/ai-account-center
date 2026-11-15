@@ -1,0 +1,488 @@
+[
+  {
+    "name": "absent manifest (empty registry)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[]}"
+  },
+  {
+    "name": "three profiles, Unicode launchers",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"id\":\"work\",\"email\":\"work@example.com\",\"mac\":{\"launcherName\":\"Claude — Wörk 🚀\",\"launcherPath\":\"/Applications/Claude Work.app\",\"profilePath\":\"/Users/fixture/Library/Application Support/Claude-Work\",\"isDefault\":true,\"canOpen\":true},\"windows\":{\"launcherName\":\"クロード (仕事)\",\"launcherPath\":\"C:\\\\Program Files\\\\Claude\\\\Claude.exe\",\"profilePath\":\"C:\\\\Users\\\\fixture\\\\AppData\\\\Roaming\\\\Claude-Work\",\"canOpen\":true,\"startMenuPath\":\"C:\\\\ProgramData\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Claude Work.lnk\",\"launchUri\":\"ccs-claude://launch/work\"},\"openOperation\":null},{\"id\":\"home_2\",\"email\":\"jürgen@exämple.de\",\"mac\":{\"launcherName\":\"Claude Home\",\"launcherPath\":\"/Applications/Claude Home\",\"profilePath\":\"/Users/fixture/Library/Application Support/Claude-Home\",\"canOpen\":false},\"windows\":{\"launcherName\":\"Home\",\"profilePath\":\"C:\\\\Users\\\\fixture\\\\Claude-Home\",\"canOpen\":false,\"launchUri\":\"ccs-claude://launch/home_2\"},\"openOperation\":null},{\"email\":\"plain@example.com\",\"mac\":{\"launcherName\":\"Claude\"}}]}"
+  },
+  {
+    "name": "device token reads the tray route",
+    "route": "/api/claude/desktop-profiles",
+    "role": "device",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"id\":\"work\",\"email\":\"work@example.com\",\"mac\":{\"launcherName\":\"Claude — Wörk 🚀\",\"launcherPath\":\"/Applications/Claude Work.app\",\"profilePath\":\"/Users/fixture/Library/Application Support/Claude-Work\",\"isDefault\":true,\"canOpen\":true},\"windows\":{\"launcherName\":\"クロード (仕事)\",\"launcherPath\":\"C:\\\\Program Files\\\\Claude\\\\Claude.exe\",\"profilePath\":\"C:\\\\Users\\\\fixture\\\\AppData\\\\Roaming\\\\Claude-Work\",\"canOpen\":true,\"startMenuPath\":\"C:\\\\ProgramData\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Claude Work.lnk\",\"launchUri\":\"ccs-claude://launch/work\"},\"openOperation\":null},{\"email\":\"plain@example.com\",\"mac\":{\"launcherName\":\"Claude\"}}]}"
+  },
+  {
+    "name": "an Open in progress (TS adds openOperation)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"id\":\"work\",\"email\":\"work@example.com\",\"mac\":{\"launcherName\":\"Claude — Wörk 🚀\",\"launcherPath\":\"/Applications/Claude Work.app\",\"profilePath\":\"/Users/fixture/Library/Application Support/Claude-Work\",\"isDefault\":true,\"canOpen\":true},\"windows\":{\"launcherName\":\"クロード (仕事)\",\"launcherPath\":\"C:\\\\Program Files\\\\Claude\\\\Claude.exe\",\"profilePath\":\"C:\\\\Users\\\\fixture\\\\AppData\\\\Roaming\\\\Claude-Work\",\"canOpen\":true,\"startMenuPath\":\"C:\\\\ProgramData\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Claude Work.lnk\",\"launchUri\":\"ccs-claude://launch/work\"},\"openOperation\":{\"id\":\"op_<id>\",\"platform\":\"mac\",\"state\":\"checking\",\"confirmedCount\":null,\"totalCount\":null,\"message\":null}},{\"id\":\"home_2\",\"email\":\"jürgen@exämple.de\",\"mac\":{\"launcherName\":\"Claude Home\",\"launcherPath\":\"/Applications/Claude Home\",\"profilePath\":\"/Users/fixture/Library/Application Support/Claude-Home\",\"canOpen\":false},\"windows\":{\"launcherName\":\"Home\",\"profilePath\":\"C:\\\\Users\\\\fixture\\\\Claude-Home\",\"canOpen\":false,\"launchUri\":\"ccs-claude://launch/home_2\"},\"openOperation\":null}]}"
+  },
+  {
+    "name": "duplicate JSON keys (JSON.parse keeps the last)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"email\":\"b@example.com\",\"mac\":{\"launcherName\":\"A\"}}]}"
+  },
+  {
+    "name": "mode 0644 (TS does not check the mode)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"email\":\"plain@example.com\",\"mac\":{\"launcherName\":\"Claude\"}}]}"
+  },
+  {
+    "name": "duplicate profile ids (TS 500)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop profiles could not be read safely.\"}"
+  },
+  {
+    "name": "invalid email (TS 500)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop profiles could not be read safely.\"}"
+  },
+  {
+    "name": "version 2 (TS 500)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop profiles could not be read safely.\"}"
+  },
+  {
+    "name": "control character in a launcher name (TS 500)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop profiles could not be read safely.\"}"
+  },
+  {
+    "name": "ideographic-space launcher name (TS 500)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop profiles could not be read safely.\"}"
+  },
+  {
+    "name": "1001 profiles (TS 500)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop profiles could not be read safely.\"}"
+  },
+  {
+    "name": "byte-order mark (TS 500)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop profiles could not be read safely.\"}"
+  },
+  {
+    "name": "over 1 MiB (TS 500)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop profiles could not be read safely.\"}"
+  },
+  {
+    "name": "invalid UTF-8 inside a name (TS decodes U+FFFD)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"email\":\"a@example.com\",\"mac\":{\"launcherName\":\"A�\"}}]}"
+  },
+  {
+    "name": "symlinked manifest (TS follows it)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"email\":\"plain@example.com\",\"mac\":{\"launcherName\":\"Claude\"}}]}"
+  },
+  {
+    "name": "a folder in place of the manifest (TS 500)",
+    "route": "/api/claude/desktop-profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop profiles could not be read safely.\"}"
+  },
+  {
+    "name": "usage: no manifest",
+    "route": "/api/claude/desktop-profiles/usage?platform=mac",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"platform\":\"mac\",\"fetchedAt\":\"<fetched-at>\",\"profiles\":[]}"
+  },
+  {
+    "name": "usage: cached, signed out, empty, failed, unsupported, unconfigured",
+    "route": "/api/claude/desktop-profiles/usage?platform=mac",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"platform\":\"mac\",\"fetchedAt\":\"<fetched-at>\",\"profiles\":[{\"id\":\"cached\",\"email\":\"cached@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"cached\",\"sampledAt\":\"2026-11-02T09:39:05.678Z\",\"utilization\":{\"fiveHour\":12.5,\"weekly\":40,\"weeklyOpus\":0,\"weeklySonnet\":7.25}},{\"id\":\"missing\",\"email\":\"missing@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"needs-sign-in\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"empty\",\"email\":\"empty@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"needs-sign-in\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"failed\",\"email\":\"failed@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"v1\",\"email\":\"v1@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"negative\",\"email\":\"negative@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"huge\",\"email\":\"huge@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"badtimes\",\"email\":\"badtimes@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"email\":\"unconfigured@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"pc\",\"email\":\"pc@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}}]}"
+  },
+  {
+    "name": "usage: Windows launchers without SSH (unavailable)",
+    "route": "/api/claude/desktop-profiles/usage?platform=windows",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"platform\":\"windows\",\"fetchedAt\":\"<fetched-at>\",\"profiles\":[{\"id\":\"cached\",\"email\":\"cached@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"missing\",\"email\":\"missing@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"empty\",\"email\":\"empty@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"failed\",\"email\":\"failed@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"v1\",\"email\":\"v1@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"negative\",\"email\":\"negative@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"huge\",\"email\":\"huge@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"badtimes\",\"email\":\"badtimes@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"email\":\"unconfigured@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}},{\"id\":\"pc\",\"email\":\"pc@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}}]}"
+  },
+  {
+    "name": "usage: a corrupt history (TS decides JSON.parse)",
+    "route": "/api/claude/desktop-profiles/usage?platform=mac",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"platform\":\"mac\",\"fetchedAt\":\"<fetched-at>\",\"profiles\":[{\"id\":\"cached\",\"email\":\"cached@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"unavailable\",\"sampledAt\":null,\"utilization\":{}}]}"
+  },
+  {
+    "name": "usage: a sample past year 9999 (TS formats the extended year)",
+    "route": "/api/claude/desktop-profiles/usage?platform=mac",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"platform\":\"mac\",\"fetchedAt\":\"<fetched-at>\",\"profiles\":[{\"id\":\"cached\",\"email\":\"cached@example.com\",\"cached\":true,\"fetchedAt\":\"<fetched-at>\",\"status\":\"cached\",\"sampledAt\":\"+275760-09-13T00:00:00.000Z\",\"utilization\":{\"fiveHour\":5}}]}"
+  },
+  {
+    "name": "usage: an invalid manifest (TS 500 before any read)",
+    "route": "/api/claude/desktop-profiles/usage?platform=mac",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Claude desktop usage could not be read safely.\"}"
+  },
+  {
+    "name": "codex: empty registry, no live login",
+    "route": "/api/codex/profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"active\":null,\"activated\":null,\"default\":null,\"profiles\":[]}"
+  },
+  {
+    "name": "codex: saved logins, registry default, live login activated",
+    "route": "/api/codex/profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"active\":{\"name\":\"work\",\"source\":\"default\",\"codexHome\":\"<ccs>/codex-instances/work\"},\"activated\":{\"name\":\"work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"codexHome\":\"<home>/.codex\"},\"default\":\"work\",\"profiles\":[{\"name\":\"123\",\"codexHome\":\"<ccs>/codex-instances/123\",\"email\":\"numbers@example.com\",\"plan\":\"team\",\"accountId\":\"acct-123\",\"lastUsed\":null,\"authValid\":true},{\"name\":\"work\",\"codexHome\":\"<ccs>/codex-instances/work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"accountId\":\"acct-work\",\"lastUsed\":\"2026-11-10T08:00:00.000Z\",\"authValid\":true},{\"name\":\"home\",\"codexHome\":\"<ccs>/codex-instances/home\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"sparse\",\"codexHome\":\"<ccs>/codex-instances/sparse\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":\"2026-11-01T00:00:00.000Z\",\"authValid\":true},{\"name\":\"broken\",\"codexHome\":\"<ccs>/codex-instances/broken\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"umlaut\",\"codexHome\":\"<ccs>/codex-instances/umlaut\",\"email\":\"jürgen@exämple.de\",\"plan\":\"plus\",\"accountId\":\"acct-umlaut\",\"lastUsed\":\"2026-11-12T00:00:00.000Z\",\"authValid\":true}]}"
+  },
+  {
+    "name": "codex: CODEX_HOME names a saved profile",
+    "route": "/api/codex/profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"active\":{\"name\":\"home\",\"source\":\"explicit-codex-home\",\"codexHome\":\"<ccs>/codex-instances/home\"},\"activated\":{\"name\":\"work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"codexHome\":\"<home>/.codex\"},\"default\":\"work\",\"profiles\":[{\"name\":\"123\",\"codexHome\":\"<ccs>/codex-instances/123\",\"email\":\"numbers@example.com\",\"plan\":\"team\",\"accountId\":\"acct-123\",\"lastUsed\":null,\"authValid\":true},{\"name\":\"work\",\"codexHome\":\"<ccs>/codex-instances/work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"accountId\":\"acct-work\",\"lastUsed\":\"2026-11-10T08:00:00.000Z\",\"authValid\":true},{\"name\":\"home\",\"codexHome\":\"<ccs>/codex-instances/home\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"sparse\",\"codexHome\":\"<ccs>/codex-instances/sparse\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":\"2026-11-01T00:00:00.000Z\",\"authValid\":true},{\"name\":\"broken\",\"codexHome\":\"<ccs>/codex-instances/broken\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"umlaut\",\"codexHome\":\"<ccs>/codex-instances/umlaut\",\"email\":\"jürgen@exämple.de\",\"plan\":\"plus\",\"accountId\":\"acct-umlaut\",\"lastUsed\":\"2026-11-12T00:00:00.000Z\",\"authValid\":true}]}"
+  },
+  {
+    "name": "codex: CODEX_HOME outside the saved profiles",
+    "route": "/api/codex/profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"active\":{\"name\":null,\"source\":\"explicit-codex-home\",\"codexHome\":\"<home>/.codex\"},\"activated\":{\"name\":\"work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"codexHome\":\"<home>/.codex\"},\"default\":\"work\",\"profiles\":[{\"name\":\"123\",\"codexHome\":\"<ccs>/codex-instances/123\",\"email\":\"numbers@example.com\",\"plan\":\"team\",\"accountId\":\"acct-123\",\"lastUsed\":null,\"authValid\":true},{\"name\":\"work\",\"codexHome\":\"<ccs>/codex-instances/work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"accountId\":\"acct-work\",\"lastUsed\":\"2026-11-10T08:00:00.000Z\",\"authValid\":true},{\"name\":\"home\",\"codexHome\":\"<ccs>/codex-instances/home\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"sparse\",\"codexHome\":\"<ccs>/codex-instances/sparse\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":\"2026-11-01T00:00:00.000Z\",\"authValid\":true},{\"name\":\"broken\",\"codexHome\":\"<ccs>/codex-instances/broken\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"umlaut\",\"codexHome\":\"<ccs>/codex-instances/umlaut\",\"email\":\"jürgen@exämple.de\",\"plan\":\"plus\",\"accountId\":\"acct-umlaut\",\"lastUsed\":\"2026-11-12T00:00:00.000Z\",\"authValid\":true}]}"
+  },
+  {
+    "name": "codex: whitespace CODEX_HOME, CCS_CODEX_PROFILE wins",
+    "route": "/api/codex/profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"active\":{\"name\":\"umlaut\",\"source\":\"env\",\"codexHome\":\"<ccs>/codex-instances/umlaut\"},\"activated\":{\"name\":\"work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"codexHome\":\"<home>/.codex\"},\"default\":\"work\",\"profiles\":[{\"name\":\"123\",\"codexHome\":\"<ccs>/codex-instances/123\",\"email\":\"numbers@example.com\",\"plan\":\"team\",\"accountId\":\"acct-123\",\"lastUsed\":null,\"authValid\":true},{\"name\":\"work\",\"codexHome\":\"<ccs>/codex-instances/work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"accountId\":\"acct-work\",\"lastUsed\":\"2026-11-10T08:00:00.000Z\",\"authValid\":true},{\"name\":\"home\",\"codexHome\":\"<ccs>/codex-instances/home\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"sparse\",\"codexHome\":\"<ccs>/codex-instances/sparse\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":\"2026-11-01T00:00:00.000Z\",\"authValid\":true},{\"name\":\"broken\",\"codexHome\":\"<ccs>/codex-instances/broken\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"umlaut\",\"codexHome\":\"<ccs>/codex-instances/umlaut\",\"email\":\"jürgen@exämple.de\",\"plan\":\"plus\",\"accountId\":\"acct-umlaut\",\"lastUsed\":\"2026-11-12T00:00:00.000Z\",\"authValid\":true}]}"
+  },
+  {
+    "name": "codex: stale CCS_CODEX_PROFILE (TS logs it)",
+    "route": "/api/codex/profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"active\":null,\"activated\":{\"name\":\"work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"codexHome\":\"<home>/.codex\"},\"default\":\"work\",\"profiles\":[{\"name\":\"123\",\"codexHome\":\"<ccs>/codex-instances/123\",\"email\":\"numbers@example.com\",\"plan\":\"team\",\"accountId\":\"acct-123\",\"lastUsed\":null,\"authValid\":true},{\"name\":\"work\",\"codexHome\":\"<ccs>/codex-instances/work\",\"email\":\"work@example.com\",\"plan\":\"pro\",\"accountId\":\"acct-work\",\"lastUsed\":\"2026-11-10T08:00:00.000Z\",\"authValid\":true},{\"name\":\"home\",\"codexHome\":\"<ccs>/codex-instances/home\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"sparse\",\"codexHome\":\"<ccs>/codex-instances/sparse\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":\"2026-11-01T00:00:00.000Z\",\"authValid\":true},{\"name\":\"broken\",\"codexHome\":\"<ccs>/codex-instances/broken\",\"email\":null,\"plan\":null,\"accountId\":null,\"lastUsed\":null,\"authValid\":false},{\"name\":\"umlaut\",\"codexHome\":\"<ccs>/codex-instances/umlaut\",\"email\":\"jürgen@exämple.de\",\"plan\":\"plus\",\"accountId\":\"acct-umlaut\",\"lastUsed\":\"2026-11-12T00:00:00.000Z\",\"authValid\":true}]}"
+  },
+  {
+    "name": "codex: unreadable registry (TS 500)",
+    "route": "/api/codex/profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Codex profiles could not be read.\"}"
+  },
+  {
+    "name": "quotas: empty registry",
+    "route": "/api/codex/profiles/quotas",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[]}"
+  },
+  {
+    "name": "quotas: available, stale cached, passed resets, expired, unavailable, retrieving",
+    "route": "/api/codex/profiles/quotas",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"profileName\":\"123\",\"status\":\"available\",\"windows\":[{\"key\":\"five_hour\",\"label\":\"5-hour limit\",\"usedPercent\":1,\"resetsAt\":\"2026-01-01T00:00:00-08:00\"}],\"fetchedAt\":\"2026-11-15T09:00:00Z\"},{\"profileName\":\"work\",\"status\":\"available\",\"windows\":[{\"key\":\"seven_day\",\"label\":\"Weekly limit\",\"usedPercent\":12,\"resetsAt\":\"2099-01-01T00:00:00Z\"}],\"fetchedAt\":\"2026-11-15T09:00:00.000Z\"},{\"profileName\":\"home\",\"status\":\"not_connected\",\"windows\":[],\"message\":\"No valid saved Codex login is available for this profile.\"},{\"profileName\":\"sparse\",\"status\":\"reauth_required\",\"windows\":[{\"key\":\"five_hour\",\"label\":\"5-hour limit\",\"usedPercent\":80,\"resetsAt\":\"2020-01-01T00:00:00.500Z\",\"resetPassed\":true},{\"key\":\"Límite 週\",\"label\":\"Límite 週 ✨\",\"usedPercent\":3},{\"key\":\"seven_day\",\"label\":\"Weekly limit\",\"usedPercent\":0,\"resetsAt\":\"2020-01-01T00:00:00Z\",\"resetPassed\":true}],\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"message\":\"OpenAI rejected the saved login; sign in again.\"},{\"profileName\":\"broken\",\"status\":\"not_connected\",\"windows\":[],\"message\":\"No valid saved Codex login is available for this profile.\"},{\"profileName\":\"umlaut\",\"status\":\"reauth_required\",\"windows\":[],\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"message\":\"The saved Codex login needs to be renewed.\"}]}"
+  },
+  {
+    "name": "quotas: renewal failed without a row, ok row without windows",
+    "route": "/api/codex/profiles/quotas",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"profileName\":\"123\",\"status\":\"reauth_required\",\"windows\":[]},{\"profileName\":\"work\",\"status\":\"unavailable\",\"windows\":[],\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"message\":\"Codex usage is temporarily unavailable.\"},{\"profileName\":\"home\",\"status\":\"not_connected\",\"windows\":[],\"message\":\"No valid saved Codex login is available for this profile.\"},{\"profileName\":\"sparse\",\"status\":\"unavailable\",\"windows\":[],\"message\":\"Codex usage is being retrieved.\"},{\"profileName\":\"broken\",\"status\":\"not_connected\",\"windows\":[],\"message\":\"No valid saved Codex login is available for this profile.\"},{\"profileName\":\"umlaut\",\"status\":\"unavailable\",\"windows\":[],\"message\":\"Codex usage is being retrieved.\"}]}"
+  },
+  {
+    "name": "quotas: a reset time TS parses with its legacy parser",
+    "route": "/api/codex/profiles/quotas",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"profileName\":\"123\",\"status\":\"unavailable\",\"windows\":[],\"message\":\"Codex usage is being retrieved.\"},{\"profileName\":\"work\",\"status\":\"available\",\"windows\":[{\"key\":\"five_hour\",\"label\":\"5-hour limit\",\"usedPercent\":5,\"resetsAt\":\"Jan 1 2020 00:00 GMT\"}],\"fetchedAt\":\"2026-11-15T09:00:00.000Z\"},{\"profileName\":\"home\",\"status\":\"not_connected\",\"windows\":[],\"message\":\"No valid saved Codex login is available for this profile.\"},{\"profileName\":\"sparse\",\"status\":\"unavailable\",\"windows\":[],\"message\":\"Codex usage is being retrieved.\"},{\"profileName\":\"broken\",\"status\":\"not_connected\",\"windows\":[],\"message\":\"No valid saved Codex login is available for this profile.\"},{\"profileName\":\"umlaut\",\"status\":\"unavailable\",\"windows\":[],\"message\":\"Codex usage is being retrieved.\"}]}"
+  },
+  {
+    "name": "quotas: a non-finite reading JSON cannot carry",
+    "route": "/api/codex/profiles/quotas",
+    "role": "session",
+    "status": 200,
+    "cacheControl": null,
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"profiles\":[{\"profileName\":\"123\",\"status\":\"unavailable\",\"windows\":[],\"message\":\"Codex usage is being retrieved.\"},{\"profileName\":\"work\",\"status\":\"available\",\"windows\":[{\"key\":\"five_hour\",\"label\":\"5-hour limit\",\"usedPercent\":null}],\"fetchedAt\":\"2026-11-15T09:00:00.000Z\"},{\"profileName\":\"home\",\"status\":\"not_connected\",\"windows\":[],\"message\":\"No valid saved Codex login is available for this profile.\"},{\"profileName\":\"sparse\",\"status\":\"unavailable\",\"windows\":[],\"message\":\"Codex usage is being retrieved.\"},{\"profileName\":\"broken\",\"status\":\"not_connected\",\"windows\":[],\"message\":\"No valid saved Codex login is available for this profile.\"},{\"profileName\":\"umlaut\",\"status\":\"unavailable\",\"windows\":[],\"message\":\"Codex usage is being retrieved.\"}]}"
+  },
+  {
+    "name": "inventory: empty (no runtime)",
+    "route": "/api/antigravity/profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"profiles\":[]}"
+  },
+  {
+    "name": "inventory: paused update, runtime problem, Unicode, offsets",
+    "route": "/api/antigravity/profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"nativeUpdatePaused\":{\"installedVersion\":\"1.20.3-rc.1_b\"},\"runtimeServiceProblem\":{\"reason\":\"parser-mismatch\",\"module\":\"antigravity_parser.v2\",\"python\":\"3.12\",\"builtFor\":\"3.11\",\"exitStatus\":1},\"profiles\":[{\"id\":\"main\",\"email\":\"main@example.com\",\"plan\":\"Google AI Pro ✨\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":true,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.000Z\"},{\"id\":\"tz\",\"email\":\"tz@example.com\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":false,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.123Z\"},{\"id\":\"old\",\"email\":\"old@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null},{\"id\":\"legacy\",\"email\":\"legacy@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null},{\"id\":\"bad-date\",\"email\":\"ünï@exämple.de\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null}]}"
+  },
+  {
+    "name": "inventory: device token",
+    "route": "/api/antigravity/profiles",
+    "role": "device",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"nativeUpdatePaused\":{\"installedVersion\":\"1.20.3-rc.1_b\"},\"runtimeServiceProblem\":{\"reason\":\"parser-mismatch\",\"module\":\"antigravity_parser.v2\",\"python\":\"3.12\",\"builtFor\":\"3.11\",\"exitStatus\":1},\"profiles\":[{\"id\":\"main\",\"email\":\"main@example.com\",\"plan\":\"Google AI Pro ✨\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":true,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.000Z\"},{\"id\":\"tz\",\"email\":\"tz@example.com\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":false,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.123Z\"},{\"id\":\"old\",\"email\":\"old@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null},{\"id\":\"legacy\",\"email\":\"legacy@example.com\",\"plan\":null,\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null},{\"id\":\"bad-date\",\"email\":\"ünï@exämple.de\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":null}]}"
+  },
+  {
+    "name": "inventory: truthy non-object pause, unknown problem reason",
+    "route": "/api/antigravity/profiles",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"nativeUpdatePaused\":{\"installedVersion\":null},\"profiles\":[{\"id\":\"main\",\"email\":\"main@example.com\",\"plan\":\"Google AI Pro\",\"hostId\":\"ubuntu\",\"available\":true,\"selected\":false,\"runtimeVerified\":true,\"verifiedAt\":\"2026-11-15T08:00:00.000Z\"}]}"
+  },
+  {
+    "name": "inventory: duplicate ids (TS 500)",
+    "route": "/api/antigravity/profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Antigravity accounts could not be read safely.\"}"
+  },
+  {
+    "name": "inventory: another host (TS 500)",
+    "route": "/api/antigravity/profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Antigravity accounts could not be read safely.\"}"
+  },
+  {
+    "name": "inventory: 17 profiles (TS 500)",
+    "route": "/api/antigravity/profiles",
+    "role": "session",
+    "status": 500,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Antigravity accounts could not be read safely.\"}"
+  },
+  {
+    "name": "ag quotas: no accounts",
+    "route": "/api/antigravity/profiles/quotas",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"accounts\":[]}"
+  },
+  {
+    "name": "ag quotas: every status, cache reason, plan and window form",
+    "route": "/api/antigravity/profiles/quotas",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"accounts\":[{\"id\":\"antigravity:profile:ok\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"ok@example.com\",\"email\":\"ok@example.com\",\"plan\":\"Google AI Pro\",\"antigravityPlan\":{\"class\":\"pro\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Gemini 4 Argon\",\"Gemini 4 Hydrogen\",\"Claude Sonnet 5.5\",\"Claude Opus 5.5\"],\"thirdPartyModels\":true,\"creditsOverage\":true},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"ok\",\"message\":null,\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[{\"key\":\"gemini-models\",\"label\":\"Gemini Models\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\",\"enabled\":true,\"poolId\":\"pool/gemini@models:1\",\"poolIdSource\":\"provider-id\",\"poolLabel\":\"Gemini ✨ pool\",\"modelIds\":[\"gemini-3.8-flash\",\"gemini-3.1-pro\"]},{\"key\":\"google-ai-credits\",\"label\":\"AI credits (overage)\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":null,\"windowMinutes\":300,\"used\":12.5,\"limit\":100,\"unit\":\"credits\",\"kind\":\"balance\",\"remaining\":null,\"unlimited\":false},{\"key\":\"gemini-4-argon\",\"label\":\"Gemini Models\",\"usedPercent\":30,\"remainingPercent\":70,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\",\"expiresAt\":\"2099-01-31T23:00:00.000Z\"},{\"key\":\"weekly\",\"label\":\"Model quota\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":null,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\"},{\"key\":\"passed\",\"label\":\"Límite semanal 週\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2020-01-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\"},{\"key\":\"spend\",\"label\":\"Gemini Models\",\"usedPercent\":null,\"remainingPercent\":null,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":null,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"spend\"}],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"ok\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:rate\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"rate@example.com\",\"email\":\"rate@example.com\",\"plan\":\"Google AI Ultra 5x\",\"antigravityPlan\":{\"class\":\"ultra-5x\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Claude Sonnet 5.5\",\"Claude Opus 5.5\"],\"thirdPartyModels\":true,\"creditsOverage\":true},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"cached\",\"cacheReason\":\"rate_limited\",\"message\":\"Antigravity refresh is rate limited; showing the last successful reading.\",\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"rate\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:changed\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"changed@example.com\",\"email\":\"changed@example.com\",\"plan\":\"Free\",\"antigravityPlan\":{\"class\":\"free\",\"quotaPolicy\":\"weekly\",\"summary\":\"Weekly quota only; no 5-hour refresh.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\"],\"thirdPartyModels\":false,\"creditsOverage\":false},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"cached\",\"cacheReason\":\"source_changed\",\"message\":\"The new sign-in is being read; showing the last successful Antigravity reading.\",\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"changed\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:failed\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"failed@example.com\",\"email\":\"failed@example.com\",\"plan\":\"Google AI Pro\",\"antigravityPlan\":{\"class\":\"pro\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Gemini 4 Argon\",\"Gemini 4 Hydrogen\",\"Claude Sonnet 5.5\",\"Claude Opus 5.5\"],\"thirdPartyModels\":true,\"creditsOverage\":true},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"cached\",\"cacheReason\":\"read_failed\",\"message\":\"The Antigravity usage read failed; showing the last successful reading.\",\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"failed\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:pending\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"pending@example.com\",\"email\":\"pending@example.com\",\"plan\":\"Google Workspace\",\"antigravityPlan\":{\"class\":\"workspace\",\"quotaPolicy\":\"none\",\"summary\":\"This plan does not include Antigravity coding quota.\",\"models\":[],\"thirdPartyModels\":false,\"creditsOverage\":false},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"cached\",\"cacheReason\":\"refresh_pending\",\"message\":\"The previous Antigravity read outcome was not recorded; showing the saved reading.\",\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"pending\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:unknown-cache\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"unknown-cache@example.com\",\"email\":\"unknown-cache@example.com\",\"plan\":\"Mystery Tier ✨\",\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"cached\",\"cacheReason\":\"outcome_unknown\",\"message\":\"The previous Antigravity read outcome was not recorded; showing the saved reading.\",\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"unknown-cache\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:signin\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"signin@example.com\",\"email\":\"signin@example.com\",\"plan\":\"Google AI Pro\",\"antigravityPlan\":{\"class\":\"pro\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Gemini 4 Argon\",\"Gemini 4 Hydrogen\",\"Claude Sonnet 5.5\",\"Claude Opus 5.5\"],\"thirdPartyModels\":true,\"creditsOverage\":true},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"needs_sign_in\",\"message\":\"This Antigravity profile needs to sign in again.\",\"fetchedAt\":null,\"sampledAt\":null,\"isActive\":true,\"windows\":[{\"key\":\"w\",\"label\":\"Gemini Models\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\"}],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"signin\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:down\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"down@example.com\",\"email\":\"down@example.com\",\"plan\":null,\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"unavailable\",\"message\":\"Antigravity usage is temporarily unavailable.\",\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"down\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:unbound\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"unbound@example.com\",\"email\":\"unbound@example.com\",\"plan\":\"Google Workspace\",\"antigravityPlan\":{\"class\":\"workspace\",\"quotaPolicy\":\"none\",\"summary\":\"This plan does not include Antigravity coding quota.\",\"models\":[],\"thirdPartyModels\":false,\"creditsOverage\":false},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"error\",\"statusReason\":\"identity_unbound\",\"message\":\"Antigravity usage could not be matched to this saved account.\",\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"unbound\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:weird\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"Weird@Example.org\",\"email\":\"Weird@Example.org\",\"plan\":\"Google AI Pro (trial)\",\"antigravityPlan\":{\"class\":\"pro-trial\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"Refreshes every 5 hours up to a weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Claude Sonnet 4.6\",\"Claude Opus 4.6\",\"GPT-OSS-120B\"],\"thirdPartyModels\":true,\"creditsOverage\":false},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"error\",\"statusReason\":\"identity_unbound\",\"message\":\"Antigravity usage could not be matched to this saved account.\",\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-10-01T07:00:00.000Z\",\"isActive\":false,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"weird\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:before-removal\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"before-removal@example.com\",\"email\":\"before-removal@example.com\",\"plan\":\"Free\",\"antigravityPlan\":{\"class\":\"free\",\"quotaPolicy\":\"weekly\",\"summary\":\"Weekly quota only; no 5-hour refresh.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Claude Sonnet 4.6\",\"Claude Opus 4.6\",\"GPT-OSS-120B\"],\"thirdPartyModels\":true,\"creditsOverage\":false},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"ok\",\"message\":null,\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-01T23:59:59.999Z\",\"isActive\":true,\"windows\":[{\"key\":\"passed\",\"label\":\"Gemini Models\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2026-11-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\"}],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"before-removal\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:ultra\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"ultra@example.com\",\"email\":\"ultra@example.com\",\"plan\":\"Google AI Ultra\",\"antigravityPlan\":{\"class\":\"ultra\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"Refreshes every 5 hours up to a weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Claude Sonnet 5.5\",\"Claude Opus 5.5\",\"GPT-OSS-120B\"],\"thirdPartyModels\":true,\"creditsOverage\":true},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"ok\",\"message\":null,\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-10-15T12:00:00.000Z\",\"isActive\":true,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"ultra\",\"antigravityHostIds\":[]}}]}"
+  },
+  {
+    "name": "ag quotas: refresh=true (the runtime refreshes; TS reads)",
+    "route": "/api/antigravity/profiles/quotas?refresh=true",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"accounts\":[{\"id\":\"antigravity:profile:ok\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"ok@example.com\",\"email\":\"ok@example.com\",\"plan\":\"Google AI Pro\",\"antigravityPlan\":{\"class\":\"pro\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Gemini 4 Argon\",\"Gemini 4 Hydrogen\",\"Claude Sonnet 5.5\",\"Claude Opus 5.5\"],\"thirdPartyModels\":true,\"creditsOverage\":true},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"ok\",\"message\":null,\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[{\"key\":\"gemini-models\",\"label\":\"Gemini Models\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\",\"enabled\":true,\"poolId\":\"pool/gemini@models:1\",\"poolIdSource\":\"provider-id\",\"poolLabel\":\"Gemini ✨ pool\",\"modelIds\":[\"gemini-3.8-flash\",\"gemini-3.1-pro\"]},{\"key\":\"google-ai-credits\",\"label\":\"AI credits (overage)\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":null,\"windowMinutes\":300,\"used\":12.5,\"limit\":100,\"unit\":\"credits\",\"kind\":\"balance\",\"remaining\":null,\"unlimited\":false},{\"key\":\"gemini-4-argon\",\"label\":\"Gemini Models\",\"usedPercent\":30,\"remainingPercent\":70,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\",\"expiresAt\":\"2099-01-31T23:00:00.000Z\"},{\"key\":\"weekly\",\"label\":\"Model quota\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":null,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\"},{\"key\":\"passed\",\"label\":\"Límite semanal 週\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2020-01-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\"},{\"key\":\"spend\",\"label\":\"Gemini Models\",\"usedPercent\":null,\"remainingPercent\":null,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":null,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"spend\"}],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"ok\",\"antigravityHostIds\":[\"ubuntu\"]}},{\"id\":\"antigravity:profile:rate\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"rate@example.com\",\"email\":\"rate@example.com\",\"plan\":\"Google AI Ultra 5x\",\"antigravityPlan\":{\"class\":\"ultra-5x\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"5x Google AI Pro capacity; refreshes every 5 hours up to a weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Claude Sonnet 5.5\",\"Claude Opus 5.5\"],\"thirdPartyModels\":true,\"creditsOverage\":true},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"cached\",\"cacheReason\":\"rate_limited\",\"message\":\"Antigravity refresh is rate limited; showing the last successful reading.\",\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"rate\",\"antigravityHostIds\":[\"ubuntu\"]}}]}"
+  },
+  {
+    "name": "ag quotas: another provider (TS 500)",
+    "route": "/api/antigravity/profiles/quotas",
+    "role": "session",
+    "status": 500,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Antigravity usage could not be read safely.\"}"
+  },
+  {
+    "name": "ag quotas: kind as an array (TS coerces it)",
+    "route": "/api/antigravity/profiles/quotas",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"accounts\":[{\"id\":\"antigravity:profile:x\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"x@example.com\",\"email\":\"x@example.com\",\"plan\":\"Google AI Pro\",\"antigravityPlan\":{\"class\":\"pro\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Gemini 4 Argon\",\"Gemini 4 Hydrogen\",\"Claude Sonnet 5.5\",\"Claude Opus 5.5\"],\"thirdPartyModels\":true,\"creditsOverage\":true},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"ok\",\"message\":null,\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[{\"key\":\"w\",\"label\":\"Gemini Models\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":[\"spend\"]}],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"x\",\"antigravityHostIds\":[\"ubuntu\"]}}]}"
+  },
+  {
+    "name": "ag quotas: own remaining member left undefined",
+    "route": "/api/antigravity/profiles/quotas",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"schemaVersion\":1,\"hostId\":\"ubuntu\",\"accounts\":[{\"id\":\"antigravity:profile:x\",\"provider\":\"antigravity\",\"providerLabel\":\"Antigravity\",\"label\":\"x@example.com\",\"email\":\"x@example.com\",\"plan\":\"Google AI Pro\",\"antigravityPlan\":{\"class\":\"pro\",\"quotaPolicy\":\"five-hour-weekly\",\"summary\":\"Refreshes every 5 hours up to a weekly limit. Gemini 4 Hydrogen shares the Gemini Models limits (same reset and remaining); Gemini 4 Argon has its own weekly limit.\",\"models\":[\"Gemini 3.8 Flash\",\"Gemini 3.7 Flash\",\"Gemini 3.6 Flash\",\"Gemini 3.1 Pro\",\"Gemini 4 Argon\",\"Gemini 4 Hydrogen\",\"Claude Sonnet 5.5\",\"Claude Opus 5.5\"],\"thirdPartyModels\":true,\"creditsOverage\":true},\"platform\":\"ubuntu\",\"source\":\"Antigravity saved login on Ubuntu\",\"status\":\"ok\",\"message\":null,\"fetchedAt\":\"2026-11-15T09:00:00.000Z\",\"sampledAt\":\"2026-11-15T08:59:00.000Z\",\"isActive\":true,\"windows\":[{\"key\":\"w\",\"label\":\"Gemini Models\",\"usedPercent\":40,\"remainingPercent\":60,\"resetAt\":\"2099-01-01T00:00:00.000Z\",\"windowMinutes\":300,\"used\":null,\"limit\":null,\"unit\":null,\"kind\":\"rate_limit\",\"remaining\":null}],\"capabilities\":{\"codexProfile\":null,\"claudeProfileId\":null,\"claudePlatforms\":[],\"antigravityProfileId\":\"x\",\"antigravityHostIds\":[\"ubuntu\"]}}]}"
+  },
+  {
+    "name": "hardened visibility: a FIFO (never opened)",
+    "route": "/api/accounts/visibility",
+    "role": "session",
+    "status": 500,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"error\":\"Account visibility could not be read safely.\",\"code\":\"visibility_unavailable\"}"
+  },
+  {
+    "name": "hardened preferences: a FIFO primary",
+    "route": "/api/accounts/preferences",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"timeZone\":\"America/New_York\",\"snapshotCleanup\":{\"auto\":true},\"usageLogSources\":[]}"
+  },
+  {
+    "name": "hardened preferences: a folder primary",
+    "route": "/api/accounts/preferences",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"timeZone\":\"America/New_York\",\"snapshotCleanup\":{\"auto\":true},\"usageLogSources\":[]}"
+  },
+  {
+    "name": "hardened preferences: a FIFO companion",
+    "route": "/api/accounts/preferences",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"timeZone\":\"Europe/Berlin\",\"snapshotCleanup\":{\"auto\":false},\"usageLogSources\":[]}"
+  },
+  {
+    "name": "hardened preferences: an oversized companion (primary kept)",
+    "route": "/api/accounts/preferences",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"timeZone\":\"Europe/Berlin\",\"snapshotCleanup\":{\"auto\":false},\"usageLogSources\":[]}"
+  },
+  {
+    "name": "hardened preferences: a dangling companion symlink (primary kept)",
+    "route": "/api/accounts/preferences",
+    "role": "session",
+    "status": 200,
+    "cacheControl": "no-store",
+    "contentType": "application/json; charset=utf-8",
+    "body": "{\"timeZone\":\"Europe/Berlin\",\"snapshotCleanup\":{\"auto\":false},\"usageLogSources\":[]}"
+  }
+]

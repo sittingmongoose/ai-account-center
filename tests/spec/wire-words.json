@@ -1148,6 +1148,7 @@
       "src/web-server/services/app-update-service.ts:job.state",
       "src/web-server/services/app-update-service.ts:result.status",
       "src/web-server/services/app-update-service.ts:state",
+      "src/web-server/services/claude-desktop-usage-service.ts:state",
       "src/web-server/services/claude-open-operations.ts:ClaudeOpenOperationState",
       "src/web-server/services/claude-open-operations.ts:state",
       "src/web-server/services/codex-profile-quota-service.ts:renewal?.state",
@@ -3289,7 +3290,10 @@
     "word": "read",
     "cause": null,
     "sources": [
+      "src/web-server/rust-profile-input.ts:read.state",
       "src/web-server/services/account-analytics-types.ts:state",
+      "src/web-server/services/claude-desktop-usage-service.ts:read.state",
+      "src/web-server/services/claude-desktop-usage-service.ts:state",
       "src/web-server/services/cursor-account-reader.ts:CursorAccountState",
       "src/web-server/services/cursor-account-reader.ts:STATES",
       "src/web-server/services/cursor-account-reader.ts:answer?.state",
@@ -5033,6 +5037,7 @@
     "word": "unconfigured",
     "cause": null,
     "sources": [
+      "src/web-server/services/claude-desktop-usage-service.ts:state",
       "src/web-server/status/status-view-quota.ts:state",
       "src/web-server/status/status-view-strip.ts:s.state",
       "src/web-server/status/status-view-types.ts:SourceState",

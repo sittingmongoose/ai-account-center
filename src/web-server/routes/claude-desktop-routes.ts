@@ -22,8 +22,18 @@ import {
 } from '../services/claude-open-operations';
 import { ClaudeDesktopTransportError } from '../services/claude-desktop-transport';
 import { cleanupAllHistorySnapshots } from '../services/claude-history-sync-service';
-import { getClaudeDesktopUsage } from '../services/claude-desktop-usage-service';
+import {
+  composeClaudeDesktopUsage,
+  getClaudeDesktopUsage,
+  type ClaudeDesktopUsage,
+} from '../services/claude-desktop-usage-service';
 import { getCcsDir } from '../../utils/config-manager';
+import { composeWithRust, readOwnedWithRust } from '../rust-service';
+import {
+  acceptRustDesktopProfiles,
+  isRustDesktopUsage,
+  rustDesktopUsageInput,
+} from '../rust-profile-input';
 
 const router = createApiRouter();
 
@@ -46,18 +56,36 @@ export function prefersRespondAsync(header: string | string[] | undefined): bool
 
 router.get('/desktop-profiles', async (req, res): Promise<void> => {
   if (!requireDashboardSession(req, res)) return;
-  try {
-    const operations = getClaudeOpenOperations();
-    const scope = getCcsDir();
-    // `openOperation` is the progress of a 202 Open (null when none is known). Only a
-    // profile with a manifest id can be opened, so only those rows carry the field.
-    const profiles = (await listClaudeDesktopProfileMetadata()).map((profile) =>
-      profile.id ? { ...profile, openOperation: operations.forProfile(scope, profile.id) } : profile
+  const operations = getClaudeOpenOperations();
+  const scope = getCcsDir();
+  // `openOperation` is the progress of a 202 Open (null when none is known). Only a
+  // profile with a manifest id can be opened, so only those rows carry the field. It is
+  // this process's memory, so TS adds it to the manifest rows whoever read them.
+  const withOperations = <T extends { id?: unknown }>(profiles: T[]) =>
+    profiles.map((profile) =>
+      typeof profile.id === 'string' && profile.id
+        ? { ...profile, openOperation: operations.forProfile(scope, profile.id) }
+        : profile
     );
-    res.json({ profiles });
-  } catch {
-    res.status(500).json({ error: 'Claude desktop profiles could not be read safely.' });
-  }
+  // After the guard above, the M3 Rust service may read the same manifest; this is the fallback.
+  const legacy = async (): Promise<unknown> => {
+    try {
+      const body = { profiles: withOperations(await listClaudeDesktopProfileMetadata()) };
+      res.json(body);
+      return body;
+    } catch {
+      res.status(500).json({ error: 'Claude desktop profiles could not be read safely.' });
+      return undefined;
+    }
+  };
+  await readOwnedWithRust(
+    req,
+    res,
+    '/api/claude/desktop-profiles',
+    scope,
+    acceptRustDesktopProfiles(withOperations),
+    legacy
+  );
 });
 
 router.get('/desktop-profiles/usage', async (req, res): Promise<void> => {
@@ -68,7 +96,21 @@ router.get('/desktop-profiles/usage', async (req, res): Promise<void> => {
     return;
   }
   try {
-    res.json(await getClaudeDesktopUsage(platform));
+    // The manifest and remote history reads stay in TS; the M3 Rust service may compose them.
+    res.json(
+      await getClaudeDesktopUsage(
+        platform,
+        async (facts) =>
+          (await composeWithRust(
+            req,
+            res,
+            '/api/claude/desktop-profiles/usage',
+            () => rustDesktopUsageInput(facts),
+            () => composeClaudeDesktopUsage(facts),
+            isRustDesktopUsage
+          )) as ClaudeDesktopUsage
+      )
+    );
   } catch {
     res.status(500).json({ error: 'Claude desktop usage could not be read safely.' });
   }

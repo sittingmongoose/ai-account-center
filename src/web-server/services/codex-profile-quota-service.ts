@@ -25,7 +25,7 @@ export interface CodexProfileQuota {
   message?: string;
 }
 
-interface QuotaProfile {
+export interface QuotaProfile {
   name: string;
   authValid: boolean;
 }
@@ -100,15 +100,24 @@ function buildQuota(
   };
 }
 
-/** Safe account-keyed DTO; authentication and provider calls never reach the response. */
-export async function getCodexProfileQuotas(
+/** The owner reads behind one quota answer; composing them reads nothing more. */
+export interface CodexProfileQuotaFacts {
+  profiles: QuotaProfile[];
+  rows: BarSummaryRow[];
+  renewals: ReadonlyMap<string, CodexProfileRenewalProfileStatus>;
+  now: number;
+}
+
+/** The saved profiles, collector rows (fresh within the budget, else cached) and renewal notes. */
+export async function readCodexProfileQuotaFacts(
   deps: CodexProfileQuotaDeps = {}
-): Promise<{ profiles: CodexProfileQuota[] }> {
+): Promise<CodexProfileQuotaFacts> {
   const profiles = await (
     deps.listProfiles ?? (async () => (await getCodexAuthProfilesSummary()).profiles)
   )();
   const names = profiles.map((profile) => profile.name);
-  if (names.length === 0) return { profiles: [] };
+  if (names.length === 0)
+    return { profiles: [], rows: [], renewals: new Map(), now: (deps.now ?? Date.now)() };
 
   const renewals = readCodexRenewalEntries(deps.getRenewalStatus);
   // Keep the dashboard responsive. The bounded collector continues filling all
@@ -121,12 +130,30 @@ export async function getCodexProfileQuotas(
   const freshRows = await Promise.race([pending, deadline]);
   clearTimeout(timer);
   const rows = freshRows ?? (deps.getCachedRows ?? getCachedCodexProfileQuotaRows)(names);
-  const byProfile = new Map(rows.map((row) => [row.profile, row]));
   const now = (deps.now ?? Date.now)();
-  const entries = await renewals;
+  return { profiles, rows, renewals: await renewals, now };
+}
+
+/** The quota answer from its owner reads (pure; the M3 Rust service ports it). */
+export function composeCodexProfileQuotas(facts: CodexProfileQuotaFacts): {
+  profiles: CodexProfileQuota[];
+} {
+  const byProfile = new Map(facts.rows.map((row) => [row.profile, row]));
   return {
-    profiles: profiles.map((profile) =>
-      buildQuota(profile, now, byProfile.get(profile.name), entries.get(profile.name))
+    profiles: facts.profiles.map((profile) =>
+      buildQuota(profile, facts.now, byProfile.get(profile.name), facts.renewals.get(profile.name))
     ),
   };
+}
+
+/** Safe account-keyed DTO; authentication and provider calls never reach the response. */
+export async function getCodexProfileQuotas(
+  deps: CodexProfileQuotaDeps = {},
+  compose: (
+    facts: CodexProfileQuotaFacts
+  ) =>
+    | { profiles: CodexProfileQuota[] }
+    | Promise<{ profiles: CodexProfileQuota[] }> = composeCodexProfileQuotas
+): Promise<{ profiles: CodexProfileQuota[] }> {
+  return compose(await readCodexProfileQuotaFacts(deps));
 }

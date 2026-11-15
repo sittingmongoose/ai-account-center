@@ -255,3 +255,30 @@ M0 capture counts only `NNN-role.json` documents; named `m3-*.json` corpora are
 checked by their own scripts. `run.mjs` runs the TS side in off mode and all three
 modes when `AAC_RUST_SERVICE` is on or shadow. Regenerate with
 `bun tests/spec/account-read-parity.ts --regenerate` and review the diff.
+
+
+## M3 part 4 profile reads
+
+`profile-read-parity.ts` runs GET `/api/claude/desktop-profiles` (and `/usage`),
+`/api/codex/profiles` (and `/quotas`) and `/api/antigravity/profiles` (and `/quotas`)
+through the real TS routers in off, on and shadow modes against
+`contract/m3-part4-profile-reads.json`, plus part 3's visibility/preference files in forms
+only a descriptor check can classify (FIFO, folder, oversized or dangling companion). Remote
+history reads, the Codex collector and renewal reader, and the Antigravity runtime are
+fixture closures; Codex logins are unsigned fixture JWTs in the temporary home. On mode
+requires each `rust` case to be served with zero calls of that route's TS reader/composer;
+shadow runs it exactly once with zero differences.
+
+Generated tables then compare each TS composer with the Rust socket reply byte for byte:
+every plan label and alias parsed from `src/antigravity/plan.ts` with respellings, display
+texts and secret patterns, timestamp shapes and offsets, random window/inventory/Codex
+quota/summary/usage combinations, and manifest rows. A Rust 200 must equal TS; an input TS
+throws on must be refused; `mayRefuse` marks inputs whose JavaScript meaning is TS's
+(a legacy date parse, a coerced array, a history serde cannot prove). The M0 capture clears
+the Codex summary memo before each request so its Rust reply count does not depend on timing.
+
+```sh
+bun tests/spec/profile-read-parity.ts --ts-only      # off mode only
+bun tests/spec/profile-read-parity.ts                # off, on, shadow (copied Nas1 binary)
+AAC_M3_MEASURE_OUTPUT=/absolute/result.json bun tests/spec/profile-read-parity.ts --measure
+```
