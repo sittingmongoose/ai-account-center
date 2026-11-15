@@ -19,7 +19,10 @@ export default (ctx) => {
 	// D7 switch: `--set rustHome=1` runs the server with the Rust service and its Home view on (AAC_RUST_SERVICE=on,
 	// AAC_RUST_HOME_VIEW=on) and the binary in dist/native/aac-http, or `--set rustBinary=<path>`. Off by default, and
 	// then explicitly off, so a shell variable cannot turn it on unseen.
-	const rustHome = !!ctx.args.rustHome && ctx.args.rustHome !== '0';
+	// R1: `--set rustHomeFed=1` (with rustHome) also turns the Home group on (AAC_RUST_GROUP_HOME=on): the server's own
+	// GET /api/views/home is answered from fed generations. Off by default, and then explicitly off.
+	const rustHomeFed = !!ctx.args.rustHomeFed && ctx.args.rustHomeFed !== '0';
+	const rustHome = (!!ctx.args.rustHome && ctx.args.rustHome !== '0') || rustHomeFed;
 	const rustBinary = path.resolve(String(ctx.args.rustBinary || path.join(root, 'dist', 'native', 'aac-http')));
 	if (rustHome && !fs.existsSync(rustBinary)) throw new Error(`rustHome: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
 	let builder = null;
@@ -71,8 +74,8 @@ export default (ctx) => {
 				// pins come over ssh, set up above).
 				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}),
 				...(rustHome
-					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary }
-					: { AAC_RUST_SERVICE: 'off', AAC_RUST_HOME_VIEW: 'off' }) }
+					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary, AAC_RUST_GROUP_HOME: rustHomeFed ? 'on' : 'off' }
+					: { AAC_RUST_SERVICE: 'off', AAC_RUST_HOME_VIEW: 'off', AAC_RUST_GROUP_HOME: 'off' }) }
 		}),
 		async teardown(_, s) {
 			if (builder) {

@@ -217,6 +217,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/home_fed.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/json_object.rs",
       "kind": "internal",
       "evidence": [],
@@ -407,6 +413,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-views/src/home/fed.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-views/src/home/windows.rs",
       "kind": "internal",
       "evidence": [],
@@ -414,6 +426,12 @@
     },
     {
       "file": "crates/aac-views/src/js.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-views/src/js_json.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3100,6 +3118,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/home-feed.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
     },
     {
       "file": "tests/unit/web-server/home-view-routes.test.ts",

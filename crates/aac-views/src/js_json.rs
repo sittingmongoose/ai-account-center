@@ -75,10 +75,10 @@ impl Writer {
 
     /// `JSON.stringify` of a string.
     pub fn string(&mut self, text: &str) {
-        let mut out = Vec::with_capacity(text.len() + 2);
-        out.push(b'"');
+        let bytes = text.as_bytes();
+        self.raw(b"\"");
         let mut start = 0;
-        for (i, b) in text.bytes().enumerate() {
+        for (i, &b) in bytes.iter().enumerate() {
             let escape: &[u8] = match b {
                 b'"' => b"\\\"",
                 b'\\' => b"\\\\",
@@ -90,20 +90,24 @@ impl Writer {
                 0x00..=0x1f => b"",
                 _ => continue,
             };
-            out.extend_from_slice(&text.as_bytes()[start..i]);
+            self.raw(&bytes[start..i]);
             if escape.is_empty() {
                 const HEX: &[u8; 16] = b"0123456789abcdef";
-                out.extend_from_slice(b"\\u00");
-                out.push(HEX[usize::from(b >> 4)]);
-                out.push(HEX[usize::from(b & 0xf)]);
+                self.raw(&[
+                    b'\\',
+                    b'u',
+                    b'0',
+                    b'0',
+                    HEX[usize::from(b >> 4)],
+                    HEX[usize::from(b & 0xf)],
+                ]);
             } else {
-                out.extend_from_slice(escape);
+                self.raw(escape);
             }
             start = i + 1;
         }
-        out.extend_from_slice(&text.as_bytes()[start..]);
-        out.push(b'"');
-        self.raw(&out);
+        self.raw(&bytes[start..]);
+        self.raw(b"\"");
     }
 
     /// `JSON.stringify` of a number as `JSON.parse` would have read it: an integer up to 2^53 as its digits, any
@@ -147,8 +151,14 @@ impl Writer {
             }
             Value::Object(map) => {
                 let mut object = self.object();
-                for (key, member) in ordered(map) {
-                    object.member(key, |w| w.value(member));
+                if map.keys().any(|k| array_index(k).is_some()) {
+                    for (key, member) in ordered(map) {
+                        object.member(key, |w| w.value(member));
+                    }
+                } else {
+                    for (key, member) in map {
+                        object.member(key, |w| w.value(member));
+                    }
                 }
                 object.end();
             }
@@ -163,6 +173,22 @@ impl Writer {
             first: true,
             first_identity: true,
         }
+    }
+
+    /// Text already written for both sides (a template's part, a serialized view without clock-only members).
+    pub fn raw_pair(&mut self, full: &[u8], identity: &[u8]) {
+        self.full.extend_from_slice(full);
+        if self.hidden == 0 {
+            self.identity.extend_from_slice(identity);
+        }
+    }
+
+    /// Take what was written so far (both sides), leaving the writer empty: a template's static part.
+    pub fn cut(&mut self) -> (Vec<u8>, Vec<u8>) {
+        (
+            std::mem::take(&mut self.full),
+            std::mem::take(&mut self.identity),
+        )
     }
 
     /// The full text and the identity text (the same bytes when no clock-only member was written).

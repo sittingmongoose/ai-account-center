@@ -307,12 +307,12 @@ fn meters_of(account: Acc<'_>) -> R<Vec<Win<'_>>> {
         .filter(windows::is_meter)
         .collect())
 }
-fn amounts_of(account: Acc<'_>) -> R<Vec<Win<'_>>> {
+/// [`meters_of`] and the remaining visible windows (the amounts), from one `visible` pass.
+fn meters_and_amounts(account: Acc<'_>) -> R<(Vec<Win<'_>>, Vec<Win<'_>>)> {
     let provider = str_field(account.get("provider"))?;
     Ok(windows::visible(provider, account)?
         .into_iter()
-        .filter(|w| !windows::is_meter(w))
-        .collect())
+        .partition(windows::is_meter))
 }
 
 fn meter(cx: &Ctx, account: Acc, w: Option<&Win>, label: &str) -> R<MeterView> {
@@ -960,7 +960,7 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
         let label = registry()
             .find(|(p, _)| p.id.as_str() == provider)
             .map_or("", |(p, _)| p.label);
-        let all_meters = meters_of(account)?;
+        let (all_meters, amount_windows) = meters_and_amounts(account)?;
         let meters = all_meters
             .iter()
             .take(3)
@@ -973,7 +973,6 @@ fn provider_cards(cx: &Ctx, accounts: &[Acc], hidden: &[&str]) -> R<Vec<CardView
                 break;
             }
         }
-        let amount_windows = amounts_of(account)?;
         let mut packs: Vec<Win> = Vec::new();
         for w in &amount_windows {
             if ci_contains(w.text("label"), "pack")

@@ -155,8 +155,15 @@ pub fn visible<'a>(provider: Option<&str>, account: Acc<'a>) -> R<Vec<Win<'a>>> 
         }
     }
     let mut out = Vec::new();
+    // Only these providers read the window's description below; the others keep every window (R1: Home is
+    // built per request, so the string is not made for nothing).
+    let described = matches!(provider, Some("codex" | "zai" | "qwen"));
     for w in rows {
-        let desc = description(&w);
+        let desc = if described {
+            description(&w)
+        } else {
+            String::new()
+        };
         let keep = if (provider == Some("codex") && chat_pass(&desc)) || (qwen && subscription(&w))
         {
             false

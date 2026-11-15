@@ -6,7 +6,7 @@
 //! - [`Dashboard`]: the dashboard answer before its per-response pass, as `JSON.stringify` wrote it with
 //!   `updatedAt: ""`, plus its facts (the `localeCompare` ranks of the words Home sorts by and the `Date.parse`
 //!   epochs of every `resetAt`/`sampledAt` string, both computed by the server engine once per generation). The text
-//!   must round-trip through [`js_json`] byte for byte, so every byte served is the one Node would write.
+//!   must round-trip through [`crate::js_json`] byte for byte, so every byte served is the one Node would write.
 //! - [`Opens`]: this process's Claude Open progress per profile id (`ClaudeOpenOperations.forScope`).
 //! - the public Antigravity inventory, composed from the runtime's inventory (part 4) when it arrives.
 //!
@@ -17,7 +17,7 @@
 use super::{FedInput, build_fed};
 use crate::decline::Decline;
 use crate::js::Ranks;
-use crate::js_json::{self, Writer, ordered};
+use crate::js_json::{Writer, ordered};
 use aac_api::home::{HOME_VIEW_VERSION, HomeContext};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -49,13 +49,28 @@ impl Mark {
     }
 }
 
+/// One piece of a dashboard generation's answer, written once when the generation arrived: everything but the
+/// per-response parts is fixed bytes, so a request copies them instead of writing the answer again.
+#[derive(Debug)]
+enum Part {
+    /// Fixed text: the full bytes and the identity bytes.
+    Text(Vec<u8>, Vec<u8>),
+    /// This response's `updatedAt`.
+    UpdatedAt,
+    /// A window whose reset can pass: its text as held, and with `resetPassed` flipped (`markPassedResets`).
+    Window {
+        mark: Mark,
+        held: (Vec<u8>, Vec<u8>),
+        flipped: (Vec<u8>, Vec<u8>),
+    },
+}
+
 /// A held dashboard generation.
 #[derive(Debug)]
 pub struct Dashboard {
     value: Value,
     ranks: Arc<Ranks>,
-    /// Per account, per window.
-    marks: Vec<Vec<Mark>>,
+    parts: Vec<Part>,
 }
 
 #[derive(Deserialize)]
@@ -81,9 +96,6 @@ fn epoch(
 /// a shape `markPassedResets` would throw on (TS answers its 500), a missing fact.
 pub fn prepare_dashboard(data: &[u8], facts: &[u8]) -> Result<Dashboard, Decline> {
     let value: Value = serde_json::from_slice(data).map_err(|_| Decline::Shape)?;
-    if js_json::write(&value) != data {
-        return Err(Decline::Number);
-    }
     let facts: DashboardFacts = serde_json::from_slice(facts).map_err(|_| Decline::Locale)?;
     let top = value.as_object().ok_or(Decline::Shape)?;
     if !matches!(top.get("updatedAt"), Some(Value::String(s)) if s.is_empty()) {
@@ -124,10 +136,25 @@ pub fn prepare_dashboard(data: &[u8], facts: &[u8]) -> Result<Dashboard, Decline
         }
         marks.push(row);
     }
+    let parts = template(&value, &marks);
+    // The bytes the template writes as held must be the text Node wrote: every byte served is Node's.
+    let mut held = Vec::with_capacity(data.len());
+    for part in &parts {
+        match part {
+            Part::Text(full, _) => held.extend_from_slice(full),
+            Part::UpdatedAt => held.extend_from_slice(b"\"\""),
+            Part::Window {
+                held: (full, _), ..
+            } => held.extend_from_slice(full),
+        }
+    }
+    if held != data {
+        return Err(Decline::Number);
+    }
     Ok(Dashboard {
         value,
         ranks: Arc::new(facts.order),
-        marks,
+        parts,
     })
 }
 
@@ -237,19 +264,12 @@ fn profiles_with_opens(manifest: &Value, opens: &Opens) -> Result<Value, Decline
     Ok(Value::Array(out))
 }
 
-/// A window as `markPassedResets` leaves it at `now`.
-fn write_window(w: &mut Writer, window: &Value, mark: Mark, now: i64) {
-    let passed = mark.passed(now);
-    let Value::Object(members) = window else {
-        return w.value(window);
-    };
-    if passed == mark.held {
-        return w.value(window);
-    }
+/// A window as `markPassedResets` leaves it: `passed` differs from what is held, so `resetPassed` is set in place
+/// or appended (`{ ...window, resetPassed: true }`), or removed.
+fn write_flipped(w: &mut Writer, members: &Map<String, Value>, passed: bool, member: bool) {
     let mut object = w.object();
     for (key, value) in ordered(members) {
         if key == "resetPassed" {
-            // `{ ...window, resetPassed: true }` in place, or the member removed.
             if passed {
                 object.member(key, |w| w.raw(b"true"));
             }
@@ -257,25 +277,33 @@ fn write_window(w: &mut Writer, window: &Value, mark: Mark, now: i64) {
         }
         object.member(key, |w| w.value(value));
     }
-    if passed && !mark.member {
+    if passed && !member {
         object.member("resetPassed", |w| w.raw(b"true"));
     }
     object.end();
 }
 
-/// The dashboard answer of this response: the held generation with this response's `updatedAt` and its passed
-/// resets.
-fn write_dashboard(w: &mut Writer, dashboard: &Dashboard, updated_at: &str, now: i64) {
-    let Value::Object(top) = &dashboard.value else {
-        return w.value(&dashboard.value);
+/// The generation's answer as parts: fixed text, with holes for `updatedAt` and for each window whose reset can
+/// pass (both of its texts written now).
+fn template(value: &Value, marks: &[Vec<Mark>]) -> Vec<Part> {
+    let mut parts = Vec::new();
+    let mut w = Writer::with_capacity(64 * 1024);
+    let Value::Object(top) = value else {
+        w.value(value);
+        let (full, identity) = w.cut();
+        return vec![Part::Text(full, identity)];
     };
     let mut object = w.object();
-    for (key, value) in ordered(top) {
-        match (key, value) {
-            ("updatedAt", _) => object.member(key, |w| w.string(updated_at)),
+    for (key, member) in ordered(top) {
+        match (key, member) {
+            ("updatedAt", _) => object.member(key, |w| {
+                let (full, identity) = w.cut();
+                parts.push(Part::Text(full, identity));
+                parts.push(Part::UpdatedAt);
+            }),
             ("accounts", Value::Array(accounts)) => object.member(key, |w| {
                 w.raw(b"[");
-                for (i, (account, marks)) in accounts.iter().zip(&dashboard.marks).enumerate() {
+                for (i, (account, marks)) in accounts.iter().zip(marks).enumerate() {
                     if i > 0 {
                         w.raw(b",");
                     }
@@ -284,36 +312,89 @@ fn write_dashboard(w: &mut Writer, dashboard: &Dashboard, updated_at: &str, now:
                         continue;
                     };
                     let mut row = w.object();
-                    for (name, member) in ordered(members) {
-                        match (name, member) {
+                    for (name, field) in ordered(members) {
+                        match (name, field) {
                             ("windows", Value::Array(windows)) => row.member(name, |w| {
                                 w.raw(b"[");
                                 for (j, (window, mark)) in windows.iter().zip(marks).enumerate() {
                                     if j > 0 {
                                         w.raw(b",");
                                     }
-                                    write_window(w, window, *mark, now);
+                                    match window {
+                                        // A window whose text can differ from the held one (its reset can
+                                        // pass, or it holds `resetPassed: true`, which a window that never
+                                        // passes loses): both texts now, a hole in the parts.
+                                        Value::Object(members)
+                                            if mark.reset.is_some() || mark.held =>
+                                        {
+                                            let (full, identity) = w.cut();
+                                            parts.push(Part::Text(full, identity));
+                                            let mut held = Writer::default();
+                                            held.value(window);
+                                            let mut flipped = Writer::default();
+                                            write_flipped(
+                                                &mut flipped,
+                                                members,
+                                                !mark.held,
+                                                mark.member,
+                                            );
+                                            parts.push(Part::Window {
+                                                mark: *mark,
+                                                held: held.finish(),
+                                                flipped: flipped.finish(),
+                                            });
+                                        }
+                                        _ => w.value(window),
+                                    }
                                 }
                                 w.raw(b"]");
                             }),
-                            _ => row.member(name, |w| w.value(member)),
+                            _ => row.member(name, |w| w.value(field)),
                         }
                     }
                     row.end();
                 }
                 w.raw(b"]");
             }),
-            _ => object.member(key, |w| w.value(value)),
+            _ => object.member(key, |w| w.value(member)),
         }
     }
     object.end();
+    let (full, identity) = w.cut();
+    parts.push(Part::Text(full, identity));
+    parts
+}
+
+/// The dashboard answer of this response: the generation's parts with this response's `updatedAt` and its passed
+/// resets.
+fn write_dashboard(w: &mut Writer, dashboard: &Dashboard, updated_at: &str, now: i64) {
+    for part in &dashboard.parts {
+        match part {
+            Part::Text(full, identity) => w.raw_pair(full, identity),
+            Part::UpdatedAt => w.string(updated_at),
+            Part::Window {
+                mark,
+                held,
+                flipped,
+            } => {
+                let (full, identity) = if mark.passed(now) == mark.held {
+                    held
+                } else {
+                    flipped
+                };
+                w.raw_pair(full, identity);
+            }
+        }
+    }
 }
 
 /// The finished answer of one Home request, or the reason it declines.
 pub fn respond(request: Request) -> Result<Answer, Decline> {
     let profiles = profiles_with_opens(request.manifest, request.opens)?;
+    // The view's own serializer: the Home spec proves its bytes are JSON.stringify's, and it has no clock-only
+    // member, so its identity text is the same bytes.
     let view = match request.context {
-        None => Value::Null,
+        None => b"null".to_vec(),
         Some(ctx) => {
             let built = build_fed(FedInput {
                 ctx,
@@ -324,10 +405,10 @@ pub fn respond(request: Request) -> Result<Answer, Decline> {
                 updated_at: Some(request.updated_at),
             })
             .map_err(Decline::from)?;
-            serde_json::to_value(built).map_err(|_| Decline::Internal)?
+            serde_json::to_vec(&built).map_err(|_| Decline::Internal)?
         }
     };
-    let mut w = Writer::with_capacity(64 * 1024);
+    let mut w = Writer::with_capacity(256 * 1024);
     let mut top = w.object();
     top.member("schemaVersion", |w| w.raw(b"1"));
     top.member("dashboard", |w| {
@@ -335,7 +416,7 @@ pub fn respond(request: Request) -> Result<Answer, Decline> {
     });
     top.member("profiles", |w| w.value(&profiles));
     top.member("antigravity", |w| w.value(request.antigravity));
-    top.member("view", |w| w.value(&view));
+    top.member("view", |w| w.raw_pair(&view, &view));
     top.end();
     let (bytes, identity) = w.finish();
     Ok(Answer { bytes, identity })
@@ -344,6 +425,7 @@ pub fn respond(request: Request) -> Result<Answer, Decline> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::js_json;
     use serde_json::json;
 
     fn text(value: &Value) -> Vec<u8> {
@@ -370,7 +452,9 @@ mod tests {
             {"key": "five", "resetAt": "2026-11-14T12:00:00.000Z"},
             {"key": "held", "resetAt": "2026-11-14T12:00:00.000Z", "resetPassed": true, "z": 1},
             {"key": "after", "resetAt": "2026-11-14T12:00:00.000Z", "sampledAt": "2026-11-14T12:30:00.000Z"},
-            5
+            5,
+            // Held as passed but without a reset: markPassedResets removes the flag at any clock.
+            {"key": "never", "resetPassed": true}
         ]));
         let held = prepare_dashboard(
             &data,
@@ -388,11 +472,11 @@ mod tests {
         };
         assert_eq!(
             write(reset - 1),
-            r#"{"schemaVersion":1,"updatedAt":"2026-11-14T13:00:00.000Z","accounts":[{"id":"a","sampledAt":"2026-11-14T10:00:00.000Z","windows":[{"key":"five","resetAt":"2026-11-14T12:00:00.000Z"},{"key":"held","resetAt":"2026-11-14T12:00:00.000Z","z":1},{"key":"after","resetAt":"2026-11-14T12:00:00.000Z","sampledAt":"2026-11-14T12:30:00.000Z"},5]}]}"#
+            r#"{"schemaVersion":1,"updatedAt":"2026-11-14T13:00:00.000Z","accounts":[{"id":"a","sampledAt":"2026-11-14T10:00:00.000Z","windows":[{"key":"five","resetAt":"2026-11-14T12:00:00.000Z"},{"key":"held","resetAt":"2026-11-14T12:00:00.000Z","z":1},{"key":"after","resetAt":"2026-11-14T12:00:00.000Z","sampledAt":"2026-11-14T12:30:00.000Z"},5,{"key":"never"}]}]}"#
         );
         assert_eq!(
             write(reset),
-            r#"{"schemaVersion":1,"updatedAt":"2026-11-14T13:00:00.000Z","accounts":[{"id":"a","sampledAt":"2026-11-14T10:00:00.000Z","windows":[{"key":"five","resetAt":"2026-11-14T12:00:00.000Z","resetPassed":true},{"key":"held","resetAt":"2026-11-14T12:00:00.000Z","resetPassed":true,"z":1},{"key":"after","resetAt":"2026-11-14T12:00:00.000Z","sampledAt":"2026-11-14T12:30:00.000Z"},5]}]}"#
+            r#"{"schemaVersion":1,"updatedAt":"2026-11-14T13:00:00.000Z","accounts":[{"id":"a","sampledAt":"2026-11-14T10:00:00.000Z","windows":[{"key":"five","resetAt":"2026-11-14T12:00:00.000Z","resetPassed":true},{"key":"held","resetAt":"2026-11-14T12:00:00.000Z","resetPassed":true,"z":1},{"key":"after","resetAt":"2026-11-14T12:00:00.000Z","sampledAt":"2026-11-14T12:30:00.000Z"},5,{"key":"never"}]}]}"#
         );
     }
 

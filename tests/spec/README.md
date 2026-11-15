@@ -297,6 +297,19 @@ service-only internal routes) is `crates/aac-http/tests/lifecycle.rs`.
 `bridge-measure.mjs` times a built `dist/` under Node (see `docs/rust-service.md`); it needs no
 Rust build and starts its servers inside the capture's closed boundary
 (`bridge-measure-server.cjs`). `large-home.mjs <dir>` writes the large synthetic home it uses.
+`--home` (R1) measures Home instead: off `GET /api/accounts/dashboard`, D7's Home and the fed Home in
+the same rounds, with the design's server-time and RSS bars evaluated in the report.
+
+## R1: Home, fed
+
+`home-read-parity.mjs` (run by `run.mjs` after the lifecycle) answers `GET /api/views/home` through the
+built front door and the Nas1-built service twice for every Home case: today's handler (D7, the Home
+group off) and the fed path (the group on), on the same reads. Every fed answer must be today's bytes
+(or, where only the fed path built a view, equal up to the view); every fed decline is answered by
+today's handler. Then the 304, a push during a request (`stale`), a service killed mid-feed and an Open
+in progress, on the real binary. With `--ts-only` (off mode) it checks that nothing is fed by default.
+The view itself is gated by `crates/aac-views/tests/home_spec.rs`, which runs every case and fuzz seed
+through the fed path too (equal or declined).
 
 ## L3: one numeric layer (`aac-num`)
 
