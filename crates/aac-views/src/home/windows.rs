@@ -155,19 +155,13 @@ pub fn visible<'a>(provider: Option<&str>, account: Acc<'a>) -> R<Vec<Win<'a>>> 
         }
     }
     let mut out = Vec::new();
-    // Only these providers read the window's description below; the others keep every window (R1: Home is
-    // built per request, so the string is not made for nothing).
-    let described = matches!(provider, Some("codex" | "zai" | "qwen"));
     for w in rows {
-        let desc = if described {
-            description(&w)
-        } else {
-            String::new()
-        };
-        let keep = if (provider == Some("codex") && chat_pass(&desc)) || (qwen && subscription(&w))
+        // Made only where a provider's rule below reads it (R1: Home is built per request).
+        let desc = || description(&w);
+        let keep = if (provider == Some("codex") && chat_pass(&desc())) || (qwen && subscription(&w))
         {
             false
-        } else if provider == Some("zai") && zai_pack_like(&desc) {
+        } else if provider == Some("zai") && zai_pack_like(&desc()) {
             let summary = reset_pack_summary(w.key().unwrap_or(""));
             let mut any = false;
             for k in ["used", "limit", "remaining"] {
@@ -189,7 +183,7 @@ pub fn visible<'a>(provider: Option<&str>, account: Acc<'a>) -> R<Vec<Win<'a>>> 
         // `expiration &&`: the found value is a valid (so non-empty) date string
         if qwen
             && expiration.is_some()
-            && ci_contains(&desc, "month")
+            && ci_contains(&desc(), "month")
             && valid_date(w.get("expiresAt"))?.is_none()
         {
             out.push(Win {
