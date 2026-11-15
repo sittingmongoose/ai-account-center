@@ -361,8 +361,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 180,
-    "filesAffected": 54,
+    "totalMarkers": 199,
+    "filesAffected": 59,
     "topFiles": [
       {
         "file": "src/commands/bar/__tests__/native-app-paths.test.ts",
@@ -384,6 +384,28 @@
           "it('rejects foreign canonical and legacy bundles without falling back', () => {",
           "it('supports appsDir overrides and an owned real legacy fallback', () => {",
           "legacy: path.join(appsDir, MAC_LEGACY_APP_NAME),"
+        ]
+      },
+      {
+        "file": "src/web-server/rust-service.ts",
+        "count": 21,
+        "calls": [],
+        "markers": [
+          ": legacy();",
+          "? service.compose(req, route, input, legacy, accepts)",
+          "* and returns the 200 body it sent (undefined otherwise). Shadow runs legacy and compares; it",
+          "* Compute in Rust first from immutable inputs the guarded TS handler already read; legacy",
+          "* warning), applied only when Rust's answer is served. `legacy` runs the original handler once",
+          "/* Bounded, logged legacy fallback. */",
+          "/** Guarded route adapters use this with immutable reader inputs and a lazy legacy composer. */",
+          "await legacy();",
+          "else await legacy();",
+          "if (!verified) return legacy();",
+          "if (service instanceof RustService) await service.owned(req, res, route, root, accept, legacy);",
+          "legacy: () => Promise<unknown>",
+          "legacy: () => unknown | Promise<unknown>,",
+          "reference = await legacy();",
+          "return legacy();"
         ]
       },
       {
@@ -431,22 +453,6 @@
           "// Legacy mode - read from config.json only",
           "// Legacy mode: read config.json",
           "// Merge legacy profiles into available list (avoid duplicates)"
-        ]
-      },
-      {
-        "file": "src/web-server/rust-service.ts",
-        "count": 13,
-        "calls": [],
-        "markers": [
-          ": legacy();",
-          "? service.compose(req, route, input, legacy, accepts)",
-          "/* Bounded, logged legacy fallback. */",
-          "/** Compute in Rust first; legacy composition is lazy in on mode. Collectors remain owners. */",
-          "/** Guarded route adapters use this with immutable reader inputs and a lazy legacy composer. */",
-          "/** Match the legacy serializer's property order without replacing any candidate values. */",
-          "legacy: () => unknown | Promise<unknown>,",
-          "reference = await legacy();",
-          "return legacy();"
         ]
       },
       {
@@ -606,8 +612,8 @@
     },
     "loggerCoverage": {
       "filesWithCreateLogger": 44,
-      "totalSourceFiles": 437,
-      "coverageRatio": 0.1007,
+      "totalSourceFiles": 440,
+      "coverageRatio": 0.1,
       "subdomainsWithZeroCreateLogger": [
         "antigravity",
         "bin",
@@ -623,7 +629,7 @@
       "topSubdomainsByFiles": [
         {
           "subdomain": "web-server",
-          "count": 246,
+          "count": 249,
           "withLogger": 30
         },
         {
@@ -730,7 +736,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 59,
+      "countOver400": 60,
       "countOver600": 23,
       "topOver400": [
         {
@@ -766,10 +772,6 @@
           "loc": 1053
         },
         {
-          "file": "src/web-server/services/account-analytics-service.ts",
-          "loc": 1026
-        },
-        {
           "file": "src/web-server/model-pricing-data.ts",
           "loc": 1023
         },
@@ -780,6 +782,10 @@
         {
           "file": "src/web-server/status/status-collectors.ts",
           "loc": 957
+        },
+        {
+          "file": "src/web-server/services/account-analytics-service.ts",
+          "loc": 887
         },
         {
           "file": "src/web-server/status/status-view.ts",

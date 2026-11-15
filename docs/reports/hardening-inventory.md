@@ -10,8 +10,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Sync fs files affected (all) | 110 |
 | Sync fs occurrences (runtime hotpaths) | 536 |
 | Sync fs files affected (runtime hotpaths) | 60 |
-| Legacy shim markers | 180 |
-| Legacy shim files affected | 54 |
+| Legacy shim markers | 199 |
+| Legacy shim files affected | 59 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -33,9 +33,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | File | Marker Count |
 |---|---:|
 | `src/commands/bar/__tests__/native-app-paths.test.ts` | 24 |
+| `src/web-server/rust-service.ts` | 21 |
 | `src/web-server/usage/account-activity-collector.ts` | 20 |
 | `src/utils/config-manager.ts` | 13 |
-| `src/web-server/rust-service.ts` | 13 |
 | `src/web-server/services/app-update-service.ts` | 9 |
 | `src/commands/bar/native-app-paths.ts` | 8 |
 | `src/web-server/scoreboard/scoreboard-service.ts` | 7 |
@@ -55,9 +55,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 12 |
-| files with createLogger | 44/437 |
+| files with createLogger | 44/440 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
-| files > 400 LOC | 59 |
+| files > 400 LOC | 60 |
 | files > 600 LOC | 23 |
 
 ### Top Hotpath console.error/warn Files
@@ -89,10 +89,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/codex-auth/codex-activation-runtime.ts` | 1337 |
 | `src/antigravity/registry.ts` | 1104 |
 | `src/web-server/services/usage-failover-service.ts` | 1053 |
-| `src/web-server/services/account-analytics-service.ts` | 1026 |
 | `src/web-server/model-pricing-data.ts` | 1023 |
 | `src/web-server/services/account-dashboard-service.ts` | 958 |
 | `src/web-server/status/status-collectors.ts` | 957 |
+| `src/web-server/services/account-analytics-service.ts` | 887 |
 | `src/web-server/status/status-view.ts` | 870 |
 | `src/web-server/usage/native-quota-collector.ts` | 815 |
 | `src/web-server/usage/codex-quota/quota-fetcher-codex.ts` | 799 |
