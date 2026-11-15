@@ -31,6 +31,14 @@ fn object(bytes: &[u8]) -> Checked<Value> {
 fn text(v: &Value) -> Checked<&str> {
     v.as_str().ok_or(())
 }
+/// Python's `clean_text`: nonempty, at most `limit` characters, no C0 control or DEL.
+fn clean_text(v: &Value, limit: usize) -> Checked<&str> {
+    let s = text(v)?;
+    if s.is_empty() || s.chars().count() > limit || s.chars().any(|c| c < ' ' || c == '\u{7f}') {
+        return Err(());
+    }
+    Ok(s)
+}
 fn keys(v: &Value, required: &[&str], optional: &[&str]) -> Checked<()> {
     let map = v.as_object().ok_or(())?;
     if required.iter().any(|k| !map.contains_key(*k))
@@ -199,7 +207,7 @@ impl<'a> Bound<'a> {
         {
             return Err(());
         }
-        let transcript = text(&policy["project"]["transcriptRoot"])?;
+        let transcript = clean_text(&policy["project"]["transcriptRoot"], 4096)?;
         if !transcript.starts_with('/')
             || transcript.contains('\\')
             || transcript.contains("//")

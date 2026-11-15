@@ -202,6 +202,24 @@ def history_parity():
             compare('claude-history',call('claude-history',args),expected,refused)
         finally:
             fixture_case.tearDown()
+    # REVIEW-M2-part3-cheap M1: policy text Python's clean_text refuses never becomes a success.
+    for root in ['/home/fixture/\tprojects', '/home/fixture/\nprojects', '/' + 'a' * 4096, '/home/fixture/\x7fprojects']:
+        fixture_case = module.Fixtures()
+        fixture_case.setUp()
+        try:
+            policy = json.loads(json.dumps(fixture_case.policy))
+            policy['project']['transcriptRoot'] = root
+            try:
+                helper.BoundProfile('gmail', 'mac', policy, home=fixture_case.home, closed=lambda: True,
+                                    native=lambda: fixture_case.native).collect()
+                raise AssertionError('reference accepted invalid policy text')
+            except helper.Refused:
+                pass
+            args = dict(mode='collect', profileId='gmail', platform='mac', policy=policy,
+                        _historyFixture=dict(home=str(fixture_case.home),closed=True,native=fixture_case.native))
+            compare('claude-history', call('claude-history', args), None, True)
+        finally:
+            fixture_case.tearDown()
     # Every other mode is an exact fallback before mutation. Original transaction/marker
     # suites separately verify the unchanged authoritative writer and its acknowledgements.
     for mode in ['append','protected-check','verify-transcripts','snapshot-cleanup']:
