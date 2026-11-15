@@ -134,6 +134,18 @@ still needs release-packaging checks.
 | aac-http profile-read socket test | `crates/aac-http/tests/profile_reads.rs` `profile_reads_keep_the_ts_scopes` failed once with `BrokenPipe` in a full `cargo test --workspace` on Nas1 at load average about 16: the service answers 401 before the test has written its request body. Five isolated reruns passed (4 of 4 each), on the same source. | No; a false failure only, no product failure shown. | Open for the six-hour tool batch: read the reply even when the body write fails, instead of failing on EPIPE. |
 | Stray Windows-path folder | A full `test:slow` run on Linux leaves an empty folder named `C:\Users\x` in the checkout root (seen in this and other worktrees). The suites that use that path are `claude-account-lifecycle.test.ts`, `claude-host-transport.test.ts` and `status-collectors.test.ts`; on Linux the string is a relative name. | No; checkout litter only. | Open for the six-hour tool batch: create such paths under the test's temporary root. |
 
+## Max L1-L5 review round 1 (2026-11-15)
+
+| Tool | Issue and evidence | Real false pass? | Status |
+| --- | --- | --- | --- |
+| HTTP account-read fixture socket | `crates/aac-http/tests/account_reads.rs` constructs its socket directly in TMPDIR. Astra max's long private TMPDIR exceeded Unix socket length; a short private `/tmp` root passed all four cases. | No; false failure, no demonstrated product bug. | Open for six-hour batch: use the product short-path layout or a short owned socket root. |
+| Transport exact-overlap assertion | `crates/aac-transport/tests/transport.rs:334` observed peak 3 instead of exact 4 with uncoordinated 100 ms children. Subsequent unchanged run passed. | No; false failure, no excess channel admission. | Same open barrier item above; retained for six-hour batch. Do not weaken the cap assertion. |
+| `ssh-policy.test.ts` helper query case | Wonder max T1: `app-update-hosts > queries and pushes helpers...` throws in a clean tree because `dist/app-updates` does not exist. | No; false failure without a build. | Open for six-hour batch: skip without the packaged helpers, as the native-module tests do. |
+| Agent lifecycle regressions unwired | Wonder max T2: `tests/spec/agent/lifecycle.mjs` is run by no runner, README or `transport.py`, so the L5 round-1 lifecycle regressions are manual-only; `tables.test.ts` does not observe `REMOTE_KIND_LIST`'s cursor/devin suffix (values correct today). | No product false pass shown; coverage gap. | Open for six-hour batch: wire it into a runner and observe the suffix. |
+| Textual one-file-policy gate | Wonder max T3: an aliased import (`use std::fs::read as r;`) or `std::fs::copy` would evade the patterns. No such use exists today. | No. | Open for six-hour batch. |
+| `home-zone.ts` doc drift | Wonder max T4: `home-zone.ts:14` names `tests/unit/web-server/home-zone.test.ts`, which does not exist; the binding test is in `home-feed.test.ts`. | No. | Open for six-hour batch. |
+| Reset-claims contract pin needs the status native | `tests/spec/contract/003-session.json` and `003-bar.json` pin a 503 `reset-inventory-unavailable`, captured without the native status module. With Nas1-built natives `tests/spec/capture.ts` gets the correct 200 `unavailable`/`provider-read-only` answer and fails at base `b0a05ccbc` as at this head; it stops `tests/spec/run.mjs` before the on/shadow modes. | No; the pin is stale, the product answer is right. | Open for six-hour batch: capture the pins with the natives `run.mjs` requires. |
+
 ## R1 Home fed (2026-11-15)
 
 | Tool | Issue and evidence | Real false pass? | Status |

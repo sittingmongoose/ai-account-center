@@ -216,7 +216,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   // REST API routes (modularized); big JSON answers are encoded on the way out.
   app.use('/api', apiCompression());
   const rustService = new RustService(options.rustService);
-  await rustService.start(options.rustServiceBinary);
+  void rustService.start(options.rustServiceBinary);
   app.use('/api', (_req, res, next) => {
     res.locals.rustService = rustService;
     next();

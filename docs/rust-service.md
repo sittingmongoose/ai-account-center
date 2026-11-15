@@ -230,10 +230,11 @@ inert while the service is off.
 
 | Piece | Behaviour |
 | --- | --- |
+| Startup | Public routes and the listener do not await Rust acquisition. Hashing uses asynchronous nonblocking reads of a regular image; one 5 s elapsed budget covers identity, attach, stale cleanup and readiness. Stop cancels acquisition and closes an unadopted child. Requests decline to TS until ready. |
 | Connection | One keep-alive `http.Agent` per boot (16 sockets), replaced when the boot changes. A request on a kept-alive connection the service had closed is retried once on a new one, inside the same 500 ms. |
 | Route table | `rust-service-routes.json` rows carry `group`, `roles`, `budgetMs` and `handler`. Rust builds its dispatch from them (startup refuses a row without a known handler, a read without a budget, a public route open to the `service` role or an internal route open to any other); TS gates forwarding on the same roles. |
 | Deadline | Each route's budget in Rust (400 ms for reads). Blocking work runs on two semaphore pools: 8 permits for reads, 4 for the store group. A full pool is a `busy` decline at once; a task that outlives its budget keeps its permit until it ends, so no more than 8 (or 4) blocking tasks ever exist; work whose request was dropped before it started never runs. The runtime caps blocking threads at 16. |
-| Declines | One `Decline` enum (`aac-views`) sent as `x-aac-decline: <word>` on the private 503: `shape`, `number`, `date`, `zone`, `locale`, `collation`, `stale`, `busy`, `deadline`, `unsupported`, `internal`. TS counts every TS answer per (route, reason) — the service's word, or the bridge's own (`unavailable:down`, `unavailable:breaker`, `failed:deadline`, ...) — and logs `rust.service.route_state` with the route and reason on each change of a route's state. |
+| Declines | One `Decline` enum (`aac-views`) sent as `x-aac-decline: <word>` on the private 503: `shape`, `number`, `date`, `zone`, `locale`, `collation`, `stale`, `busy`, `deadline`, `unsupported`, `internal`. TS counts every TS answer per (route, reason) — the service's word, or the bridge's own (`unavailable:down`, `unavailable:breaker`, `failed:deadline`, ...) — and bounds `rust.service.route_state` to the first two states per route per minute; the periodic summary counts suppressed comparisons. |
 | Breaker | Per route in TS: 3 transport failures or timeouts in a row open it for 30 s, then one probe goes. Declines are replies and never count. Admission only looks; the probe is reserved when the request is really sent, so a request TS keeps (no input, another root) never holds it. A new boot starts with every breaker closed. |
 | Restart | An owned service that exits is restarted after 1 s, 5 s, 30 s, 2 min, then 10 min; after 5 restarts in an hour TS logs `rust.service.gave_up` and answers alone until the next dashboard start. An attached boot that stops answering is dropped the same way. A process that accepts but never answers (stopped, deadlocked) is caught by its transport timeouts: after 3 in a row on any route, a health probe (500 ms) decides, and a hung process is retired into the same restart budget. Rust's own `deadline` and `busy` declines are replies and never count. Boot folders older than a minute whose socket refuses a connection are swept at start; no PID read from disk is ever signalled. |
 | Build check | Health replies carry `x-aac-service-build: {commit, sha256, protocol, storeSchema}`, with `sha256` the running image's own hash. The descriptor records it. A front door attaches only when the live identity equals the descriptor's, its `sha256` is that of the binary it would start, and the protocol is its own; otherwise it starts its own boot (an in-place upgrade). The public `/api/health` body stays `{"status":"ok"}`. |
@@ -401,6 +402,15 @@ SSH requires an explicit existing identity file (`computers[].transport.key`, or
 `AAC_AGENT_KNOWN_HOSTS_FILE` override those global paths for isolated gates. No path is
 guessed from a home directory. `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes` and the
 shared ControlMaster policy apply; whitespace in option paths is quoted for OpenSSH.
+SSH/SCP run with `-F none`, `ForwardAgent=no`, `GlobalKnownHostsFile=none`,
+`KnownHostsCommand=none`, `PermitLocalCommand=no` and `ClearAllForwardings=yes`.
+There are no inherited `SendEnv` or `SetEnv` rules. Rust endpoints are explicit AAC computer settings.
+The legacy TS transports prefer those settings, otherwise resolve only HostName, User, Port and
+IdentityFile using read-only `ssh -G`, cached in memory for 60 s. Unsupported proxies refuse.
+Discovery may evaluate the user's `Match exec` rules (as the previous SSH path did), with provider
+secrets and agent sockets excluded from its environment; transport itself never reads that config.
+Its pin is the explicitly configured file, or the legacy user known-hosts path written explicitly
+into argv. No key, trust or SSH config file is created or changed.
 Changing configuration or the catalog requires a service restart.
 
 The response is bounded NDJSON: progress, then a result, failure or explicit fallback.
@@ -418,7 +428,7 @@ also cancels its owned transport. Fixtures exercise a far-process recorder, not 
 
 `python3 tests/spec/agent/transport.py <fixture-agent> <aac-http>` runs the unchanged
 agent corpora directly and through the private socket/SSH recorder and compares their
-counts. It also checks pooled reuse, breaker, byte/hash caps, no shipping, authentication,
+counts. It also checks six HTTP hangs opening the three-failure circuit, pooled reuse, breaker, byte/hash caps, no shipping, authentication,
 progress/input and acknowledged cancellation. All binaries stay on the build host.
 
 ## Home, fed (R1)

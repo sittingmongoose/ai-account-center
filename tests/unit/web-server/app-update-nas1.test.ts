@@ -5,6 +5,7 @@
  * one process test puts a fake ssh alone on a private PATH.
  */
 import { afterEach, describe, expect, it } from 'bun:test';
+import { sshConnectionOptions } from '../../../src/web-server/services/ssh-policy';
 import { createHash } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
@@ -79,10 +80,15 @@ describe('Nas1 as the fourth update computer', () => {
   it('runs the helper over the fixed alias as a second Ubuntu with no local job flags', () => {
     const nas1 = appUpdateInvocation('nas1', '1.3.0,1.3.1', '/never/passed/to/a/remote/host');
     expect(nas1.binary).toBe('ssh');
-    // The same ssh options as the other remote computers.
-    expect(nas1.args.slice(0, -2)).toEqual(
-      appUpdateInvocation('mac', '1.3.0,1.3.1').args.slice(0, -2)
-    );
+    // The same ssh options as the other remote computers, with its own endpoint.
+    const mac = appUpdateInvocation('mac', '1.3.0,1.3.1').args.slice(0, -2);
+    const own = (args: string[], alias: string) => {
+      const endpoint = sshConnectionOptions(alias);
+      const at = args.indexOf(endpoint[1]) - 1;
+      expect(args.slice(at, at + endpoint.length)).toEqual(endpoint);
+      return [...args.slice(0, at), ...args.slice(at + endpoint.length)];
+    };
+    expect(own(nas1.args.slice(0, -2), 'nas1-agent')).toEqual(own(mac, APP_UPDATE_SSH_HOSTS.mac));
     expect(nas1.args.slice(-3)).toEqual([
       '--',
       'nas1-agent',

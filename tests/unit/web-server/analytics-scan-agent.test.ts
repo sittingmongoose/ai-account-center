@@ -48,6 +48,9 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-scan-agent-'));
   ccs = process.env.CCS_HOME;
   process.env.CCS_HOME = path.join(dir, 'ccs');
+  // SSH argv builders need an identity in the home; a placeholder, never a key.
+  fs.mkdirSync(path.join(dir, 'ccs', '.ssh'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'ccs', '.ssh', 'id_ed25519'), 'fixture placeholder, not a key\n');
 });
 afterEach(() => {
   if (ccs === undefined) delete process.env.CCS_HOME;

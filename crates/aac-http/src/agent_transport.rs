@@ -384,8 +384,6 @@ impl Agents {
                 tokio::pin!(work);
                 loop {
                     tokio::select! {
-                        _ = options.cancel.cancelled() => break Err(Failure::new(Cause::Cancelled,"agent receiver closed")),
-                        _ = tokio::time::sleep_until(options.deadline) => break Err(Failure::new(Cause::Timeout,"agent bridge deadline")),
                         result=&mut work=>break result,
                         Some(event)=events.recv()=>{
                             let sent = tokio::select! {
@@ -393,7 +391,7 @@ impl Agents {
                                 _ = tokio::time::sleep_until(options.deadline) => false,
                                 sent = output.send(line(&serde_json::to_value(event).unwrap_or(Value::Null))) => sent.is_ok(),
                             };
-                            if !sent { options.cancel.cancel(); break Err(Failure::new(Cause::Cancelled,"agent receiver closed")); }
+                            if !sent { options.cancel.cancel(); }
                         }
                     }
                 }

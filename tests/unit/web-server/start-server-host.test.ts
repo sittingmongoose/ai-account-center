@@ -3,6 +3,7 @@ import type { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { spawn, execFileSync } from 'child_process';
 
 import { startServer } from '../../../src/web-server';
 import { CodexProfileRenewalService } from '../../../src/web-server/services/codex-profile-renewal-service';
@@ -192,4 +193,59 @@ describe('startServer saved Codex login renewal', () => {
 
     expect(instance.server.listening).toBe(true);
   });
+});
+
+// Max review M1: real public-server startup, not a mocked supervisor.
+describe('optional Rust startup', () => {
+  for (const kind of ['silent', 'fifo'] as const) {
+    it(`serves TypeScript while Rust startup is ${kind}, without delaying JS timers`, async () => {
+      const binary = path.join(fixtureHome, 'aac-http');
+      let unblock: ReturnType<typeof spawn> | undefined;
+      if (kind === 'fifo') {
+        execFileSync('mkfifo', [binary]);
+        // Pre-fix synchronous read would hang the test process. An owned writer releases it.
+        unblock = spawn('python3', [
+          '-c',
+          'import time,sys; time.sleep(2); open(sys.argv[1], "w").close()',
+          binary,
+        ]);
+      } else {
+        const fake = fs.readFileSync(
+          path.join(import.meta.dir, 'fixtures/fake-aac-http.mjs'),
+          'utf8'
+        );
+        fs.writeFileSync(
+          binary,
+          fake.replace(
+            "if (req.url === '/api/health') {",
+            "if (req.url === '/api/health') { return;"
+          ),
+          { mode: 0o755 }
+        );
+      }
+      let timerMs = Infinity;
+      const began = performance.now();
+      const timer = setTimeout(() => {
+        timerMs = performance.now() - began;
+      }, 50);
+      try {
+        const instance = await startServer({
+          port: 0,
+          host: '127.0.0.1',
+          rustService: 'shadow',
+          rustServiceBinary: binary,
+        });
+        instances.push(instance);
+        const port = (instance.server.address() as AddressInfo).port;
+        const reply = await fetch(`http://127.0.0.1:${port}/api/health`);
+        expect(reply.status).toBe(200);
+        expect(performance.now() - began).toBeLessThan(1500);
+        await new Promise((r) => setTimeout(r, 75));
+        expect(timerMs).toBeLessThan(500);
+      } finally {
+        clearTimeout(timer);
+        unblock?.kill();
+      }
+    }, 120_000);
+  }
 });

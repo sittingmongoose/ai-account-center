@@ -1,3 +1,4 @@
+import { sshOptions } from '../../../src/web-server/services/ssh-policy';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
 import { createHash } from 'crypto';
@@ -119,7 +120,12 @@ function interceptProcesses(): { ssh: SshCall[]; other: string[] } {
       },
     };
   }) as never);
-  for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFileSync', 'fork'] as const) {
+  spyOn(childProcess, 'execFileSync').mockImplementation(((file: string, args: string[]) => {
+    expect(file).toBe('ssh');
+    expect(args[0]).toBe('-G');
+    return 'hostname fixture.invalid\nuser fixture\nport 22\nidentityfile /fixture/key\n';
+  }) as never);
+  for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'fork'] as const) {
     spyOn(childProcess, name).mockImplementation((() => {
       seen.other.push(name);
       throw new Error(`unexpected ${name}`);
@@ -150,16 +156,14 @@ describe('the only ssh command built for Nas1 by the analytics scan', () => {
       // that is Python 3.9 or later; nothing else.
       expect(command).toStartWith('/bin/sh -c ');
       // The options are the fixed non-interactive set, never forwarding, a proxy or a local command.
-      const options = call.args.slice(0, separator);
-      expect(options[0]).toBe('-T');
-      const pairs = options.slice(1);
-      expect(pairs.length % 2).toBe(0);
-      for (let index = 0; index < pairs.length; index += 2) {
-        expect(pairs[index]).toBe('-o');
-        expect(pairs[index + 1]).toMatch(
-          /^(BatchMode|ConnectTimeout|ConnectionAttempts|UpdateHostKeys|ServerAliveInterval|ServerAliveCountMax)=\w+$/
-        );
-      }
+      expect(call.args.slice(0, separator)).toEqual([
+        '-T',
+        ...sshOptions(destination),
+        '-o',
+        'ServerAliveInterval=5',
+        '-o',
+        'ServerAliveCountMax=6',
+      ]);
       expect(forbiddenWordsIn(call.args)).toEqual([]);
       // The helper arrives on stdin and is the pinned, read-only one: no other code ever runs.
       const payload = JSON.parse(call.input) as {

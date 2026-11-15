@@ -1,3 +1,4 @@
+import { sshOptions } from '../../../src/web-server/services/ssh-policy';
 /**
  * Muse Code Sign in again (`muse login` on the Mac) through the sign-in job
  * runner, behind `CCS_MUSE_SIGNIN=on` (CLI behaviour verified read-only from
@@ -52,14 +53,7 @@ describe('muse sign-in flow', () => {
     expect(command.file).toBe('ssh');
     expect(command.args).toEqual([
       '-T',
-      '-o',
-      'BatchMode=yes',
-      '-o',
-      'ConnectTimeout=5',
-      '-o',
-      'ConnectionAttempts=1',
-      '-o',
-      'UpdateHostKeys=no',
+      ...sshOptions('mac-host'),
       '-o',
       'ServerAliveInterval=5',
       '-o',

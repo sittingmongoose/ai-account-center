@@ -14,6 +14,7 @@
  * it into place, runs `--version` and checks the answer (installUsageScan). Nothing else is written:
  * the binary only reads usage logs. Older copies are removed once the new one answered.
  */
+import { sshOptions } from './ssh-policy';
 import { execFile } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
@@ -211,17 +212,6 @@ export type SshRunner = (
   options: { input?: Buffer | string; timeoutMs: number; file?: string }
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
-const SSH_OPTIONS = [
-  '-o',
-  'BatchMode=yes',
-  '-o',
-  'ConnectTimeout=5',
-  '-o',
-  'ConnectionAttempts=1',
-  '-o',
-  'UpdateHostKeys=no',
-];
-
 /** One ssh or scp process; never rejects, the exit code says what happened. */
 export const runSsh: SshRunner = (args, options) =>
   new Promise((resolve) => {
@@ -285,7 +275,7 @@ export async function installUsageScan(
   // 1. The folder, and where it is (scp needs the path).
   const made = await ssh(
     [
-      ...SSH_OPTIONS,
+      ...sshOptions(alias),
       '-T',
       '--',
       alias,
@@ -302,7 +292,7 @@ export async function installUsageScan(
     throw new UsageScanInstallError('mkdir');
   // 2. The bytes, by scp: never through a PowerShell stdin read (large reads hang over Windows OpenSSH).
   const remotePart = `${windows && /^[A-Za-z]:/.test(dir) ? `/${dir}` : dir}/${name}.part`;
-  const copied = await ssh(['-q', ...SSH_OPTIONS, '--', local, `${alias}:${remotePart}`], {
+  const copied = await ssh(['-q', ...sshOptions(alias), '--', local, `${alias}:${remotePart}`], {
     timeoutMs: 120_000,
     file: 'scp',
   });
@@ -310,7 +300,7 @@ export async function installUsageScan(
   // 3. Verify there, move into place, answer --version; then drop older copies.
   const verified = await ssh(
     [
-      ...SSH_OPTIONS,
+      ...sshOptions(alias),
       '-T',
       '--',
       alias,

@@ -10,6 +10,7 @@ import path from 'node:path';
 import type { Request, Response } from 'express';
 import { RustService } from '../../../src/web-server/rust-service';
 import { shortName } from '../../../src/web-server/rust-service-lifecycle';
+import { getRecentLogEntries, clearRecentLogEntries } from '../../../src/services/logging';
 import { rustServiceEnvironment } from '../../../src/web-server/rust-service-env';
 
 const fake = path.join(import.meta.dir, 'fixtures/fake-aac-http.mjs');
@@ -419,3 +420,71 @@ describe('Rust service environment (L5 review M1)', () => {
     });
   });
 });
+
+it('bounds repeated and alternating comparison logs through the real shadow reply path', async () => {
+  writeSettings('{"refreshIntervalSeconds":90}');
+  const service = await started('shadow', binaryCopy());
+  clearRecentLogEntries();
+  for (let n = 0; n < 40; n++) {
+    let body: unknown;
+    await service.respond(
+      request,
+      {
+        json: (v: unknown) => {
+          body = v;
+        },
+      } as Response,
+      '/api/accounts/settings',
+      () => (n % 2 ? { refreshIntervalSeconds: 90 } : { fixture: true })
+    );
+    expect(body).toBeDefined();
+    await until(() => service.stats.shadowed === n + 1);
+  }
+  const logs = getRecentLogEntries().filter(
+    (e) => e.event === 'rust.service.shadow_difference' || e.event === 'rust.service.route_state'
+  );
+  expect(service.stats.differences).toBe(20);
+  expect(logs.length).toBeLessThanOrEqual(3);
+  (service as unknown as { logMinute(): void }).logMinute();
+  const summary = getRecentLogEntries().findLast((e) => e.event === 'rust.service.minute');
+  expect(Number(summary?.context.suppressedComparisons)).toBeGreaterThan(30);
+}, 20000);
+
+it('stop cancels an acquisition and cannot adopt a late healthy child', async () => {
+  const binary = binaryCopy();
+  let fake = fs.readFileSync(binary, 'utf8');
+  fake = fake.replace(
+    'res.end(\'{"status":"ok"}\');',
+    'setTimeout(() => res.end(\'{"status":"ok"}\'), 300);'
+  );
+  fs.writeFileSync(binary, fake);
+  const service = new RustService('shadow');
+  services.push(service);
+  const starting = service.start(binary);
+  await new Promise((r) => setTimeout(r, 75));
+  service.stop();
+  await starting;
+  await new Promise((r) => setTimeout(r, 400));
+  expect(lease(service)).toBeNull();
+  expect(fs.existsSync(path.join(ccs, 'run/aac-http.json'))).toBe(false);
+});
+
+it('bounds the whole silent acquisition and closes its unadopted owned child', async () => {
+  const binary = binaryCopy();
+  const fake = fs
+    .readFileSync(binary, 'utf8')
+    .replace("if (req.url === '/api/health') {", "if (req.url === '/api/health') { return;");
+  fs.writeFileSync(binary, fake);
+  const service = new RustService('shadow');
+  services.push(service);
+  const began = performance.now();
+  await service.start(binary);
+  expect(performance.now() - began).toBeLessThan(5600);
+  expect(lease(service)).toBeNull();
+  service.stop();
+  await new Promise((r) => setTimeout(r, 200));
+  expect(fs.existsSync(path.join(ccs, 'run/aac-http.json'))).toBe(false);
+  expect(
+    fs.readdirSync(path.join(ccs, 'run')).filter((name) => name.startsWith('aac-http-'))
+  ).toEqual([]);
+}, 7000);

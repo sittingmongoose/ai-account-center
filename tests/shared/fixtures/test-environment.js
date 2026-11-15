@@ -319,6 +319,10 @@ function createIsolatedTestHome(prefix = 'ccs-test-home-') {
   fs.mkdirSync(path.join(testHome, '.config'), { recursive: true });
   fs.mkdirSync(path.join(testHome, '.cache'), { recursive: true });
   fs.mkdirSync(path.join(testHome, '.state'), { recursive: true });
+  // A placeholder default identity: SSH argv builders refuse a home with no identity at all.
+  // It is not a key and nothing connects with it.
+  fs.mkdirSync(path.join(testHome, '.ssh'), { recursive: true });
+  fs.writeFileSync(path.join(testHome, '.ssh', 'id_ed25519'), 'fixture placeholder, not a key\n');
   return testHome;
 }
 

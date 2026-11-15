@@ -52,6 +52,9 @@ beforeEach(() => {
   savedPath = process.env.PATH;
   savedCcs = process.env.CCS_HOME;
   process.env.CCS_HOME = path.join(dir, 'ccs');
+  // SSH argv builders need an identity in the home; a placeholder, never a key.
+  fs.mkdirSync(path.join(dir, 'ccs', '.ssh'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'ccs', '.ssh', 'id_ed25519'), 'fixture placeholder, not a key\n');
   resetScannerState();
 });
 afterEach(() => {
@@ -407,7 +410,7 @@ describe.skipIf(process.platform === 'win32')('the scanner or the labelled Pytho
     });
     fs.writeFileSync(
       path.join(bin, 'ssh'),
-      `#!/bin/sh\ncat >/dev/null\nn=$(cat "${bin}/n" 2>/dev/null || echo 0)\necho $((n+1)) > "${bin}/n"\ncat "${bin}/out-$n"\ncat "${bin}/err-$n" >&2\nexit $(cat "${bin}/code-$n")\n`,
+      `#!/bin/sh\nif [ "$1" = "-G" ]; then printf 'hostname fixture.invalid\\nuser fixture\\nport 22\\nidentityfile /fixture/key\\n'; exit 0; fi\ncat >/dev/null\nn=$(cat "${bin}/n" 2>/dev/null || echo 0)\necho $((n+1)) > "${bin}/n"\ncat "${bin}/out-$n"\ncat "${bin}/err-$n" >&2\nexit $(cat "${bin}/code-$n")\n`,
       { mode: 0o755 }
     );
     process.env.PATH = `${bin}${path.delimiter}${savedPath ?? ''}`;
