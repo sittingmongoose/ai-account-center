@@ -308,6 +308,10 @@ describe('consolidated account dashboard', () => {
     expect(
       result.accounts.find((account) => account.id === 'opencode-go:usage')?.windows[0].usedPercent
     ).toBe(20);
+    // REVIEW-cheap M1 (usage-cached): the primary read finished, so it stays current.
+    const primary = result.accounts.find((account) => account.id === 'opencode-go:usage');
+    expect(primary?.status).toBe('ok');
+    expect(primary?.cacheReason).toBeUndefined();
     release([]);
     await wallet;
   });
@@ -1527,31 +1531,37 @@ describe('Codex saved-login renewal in the dashboard', () => {
   });
 });
 
- it('stale-serves expired rows during collection but explicit refresh waits for it', async () => {
-    let now = 100_000;
-    let hold = false;
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    const service = new AccountDashboardService(deps({
+it('stale-serves expired rows during collection but explicit refresh waits for it', async () => {
+  let now = 100_000;
+  let hold = false;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const service = new AccountDashboardService(
+    deps({
       now: () => now,
       getCodexRows: async (names) => {
         if (hold) await gate;
         return names.map((name) => row(name));
       },
-    }));
-    await service.get('mac');
-    now += 60_001;
-    hold = true;
-    const stale = await service.get('mac');
-    expect(stale.accounts.find((account) => account.provider === 'codex')?.status).toBe('cached');
-    let finished = false;
-    const refresh = service.get('mac', true).then(() => { finished = true; });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(finished).toBe(false);
-    release();
-    await refresh;
-    expect(finished).toBe(true);
+    })
+  );
+  await service.get('mac');
+  now += 60_001;
+  hold = true;
+  const stale = await service.get('mac');
+  expect(stale.accounts.find((account) => account.provider === 'codex')?.status).toBe('cached');
+  let finished = false;
+  const refresh = service.get('mac', true).then(() => {
+    finished = true;
   });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(finished).toBe(false);
+  release();
+  await refresh;
+  expect(finished).toBe(true);
+});
 
 describe('usage freshness between dashboard refreshes', () => {
   it('keeps successful quota fresh on normal Home, Accounts and snapshot reads', async () => {
@@ -1623,23 +1633,43 @@ describe('usage freshness between dashboard refreshes', () => {
   });
 });
 
-
 it('keeps a timed-out Antigravity collection retained in its synchronous projection', async () => {
   let now = Date.parse('2026-10-01T12:00:00Z');
   let blocked = false;
   const account: AntigravityDashboardAccount = {
-    ...additional('antigravity'), id: 'antigravity:profile:fixture', platform: 'ubuntu',
-    sampledAt: new Date(now).toISOString(), fetchedAt: new Date(now).toISOString(),
-    capabilities: {codexProfile: null, claudeProfileId: null, claudePlatforms: [], antigravityProfileId: 'fixture', antigravityHostIds: ['ubuntu']},
+    ...additional('antigravity'),
+    id: 'antigravity:profile:fixture',
+    platform: 'ubuntu',
+    sampledAt: new Date(now).toISOString(),
+    fetchedAt: new Date(now).toISOString(),
+    capabilities: {
+      codexProfile: null,
+      claudeProfileId: null,
+      claudePlatforms: [],
+      antigravityProfileId: 'fixture',
+      antigravityHostIds: ['ubuntu'],
+    },
   };
-  const service = new AccountDashboardService(deps({
-    now: () => now, responseBudgetMs: 10, hasAntigravityProfiles: () => true,
-    failover: null, getAntigravityAccounts: async () => blocked ? new Promise(() => {}) : [account],
-    getCachedAntigravityAccounts: () => [account],
-  }));
-  expect((await service.get('windows')).accounts.find((a) => a.id === account.id)?.status).toBe('ok');
-  now += 61_000; blocked = true;
-  expect((await service.get('windows', true)).accounts.find((a) => a.id === account.id)).toMatchObject({
-    status: 'cached', cacheReason: 'read_failed', sampledAt: account.sampledAt,
+  const service = new AccountDashboardService(
+    deps({
+      now: () => now,
+      responseBudgetMs: 10,
+      hasAntigravityProfiles: () => true,
+      failover: null,
+      getAntigravityAccounts: async () => (blocked ? new Promise(() => {}) : [account]),
+      getCachedAntigravityAccounts: () => [account],
+    })
+  );
+  expect((await service.get('windows')).accounts.find((a) => a.id === account.id)?.status).toBe(
+    'ok'
+  );
+  now += 61_000;
+  blocked = true;
+  expect(
+    (await service.get('windows', true)).accounts.find((a) => a.id === account.id)
+  ).toMatchObject({
+    status: 'cached',
+    cacheReason: 'read_failed',
+    sampledAt: account.sampledAt,
   });
 });

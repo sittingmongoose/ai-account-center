@@ -556,6 +556,9 @@ export class AccountDashboardService {
       this.deps.hasAntigravityProfiles ?? (() => hasAntigravityProfiles(scope))
     )();
     if (refresh) (this.deps.invalidateClaudeCache ?? invalidateClaudeDesktopUsageCache)();
+    // Sources that already published a successful reading in this cycle. A slow optional
+    // part (the OpenCode wallet) must not relabel those current rows as cached on timeout.
+    const publishedThisCycle = new Set<string>();
     const parts = [
       ['codex', this.collectCodex(scope, refresh), () => this.cachedCodex(scope)],
       [
@@ -576,8 +579,10 @@ export class AccountDashboardService {
           const primary = this.additionalSnapshot(refresh, registeredAntigravity).then(
             (snapshot) => {
               // The optional wallet must never delay the existing usage rows.
-              if (state.generation === generation)
+              if (state.generation === generation) {
                 state.additional = additionalAccounts(snapshot.accounts, snapshot.registry);
+                publishedThisCycle.add('additional');
+              }
               return snapshot;
             }
           );
@@ -627,16 +632,19 @@ export class AccountDashboardService {
           return accounts;
         });
         const result = await this.bounded(retained, () =>
-          (state[key].length ? state[key] : fallback()).map((account) =>
-            account.status === 'ok'
-              ? {
-                  ...account,
-                  status: 'cached' as const,
-                  cacheReason: 'read_failed' as const,
-                  message: 'The usage read did not finish; showing the last successful reading.',
-                }
-              : account
-          )
+          publishedThisCycle.has(key)
+            ? state[key]
+            : (state[key].length ? state[key] : fallback()).map((account) =>
+                account.status === 'ok'
+                  ? {
+                      ...account,
+                      status: 'cached' as const,
+                      cacheReason: 'read_failed' as const,
+                      message:
+                        'The usage read did not finish; showing the last successful reading.',
+                    }
+                  : account
+              )
         );
         if (state.generation === generation) state[key] = result;
       })
