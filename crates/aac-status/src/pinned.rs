@@ -699,7 +699,8 @@ fn hex_byte(first: u8, second: u8) -> Option<u8> {
 /// The id forms a report may carry for one T3 thread, normalised so they all compare equal:
 /// the plain id, the same id percent-encoded (T3's own run ids spell `mcp:launch:` as
 /// `mcp%3Alaunch%3A`), a `t3-thread://` link that ends in it, and the bare tail after the
-/// `mcp:launch:` prefix. Normalisation only — a title is never fuzzy-matched.
+/// `mcp:launch:` prefix. Delegated ids with encoded command separators compare the same
+/// way. A title is never matched.
 fn normalised_thread_id(id: &str) -> String {
     // Percent-decode first: the escapes hide the separators the later steps look for.
     let bytes = id.trim().as_bytes();

@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import express from 'express';
+import type { Server } from 'http';
+import type { AddressInfo } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { nativeStatusModuleName } from '../../../../src/status-native/native-loader';
 import { AgentReportsReader } from '../../../../src/web-server/status/agent-reports-reader';
 import { PinnedThreadsCollector } from '../../../../src/web-server/status/pinned-threads';
+import { createStatusRouter } from '../../../../src/web-server/routes/status-routes';
+import { StatusAnswers } from '../../../../src/web-server/status/answers';
+import { ReadersCheckWriter } from '../../../../src/web-server/status/readers-check';
+import { PINNED_THREADS_QUERY } from '../../../../src/web-server/status/status-collectors';
+import { StatusService } from '../../../../src/web-server/status/status-service';
 import { buildStatusView } from '../../../../src/web-server/status/status-view';
 import {
   ago,
@@ -42,7 +50,14 @@ const PIN_ID = 'pin-1';
 const PIN_TITLE = 'Build PMConcept7';
 
 /** A fixture T3 state database in a temporary folder. Never the real `~/.t3`. */
-function fixturePinDb(): { file: string; cleanup: () => void } {
+function fixturePinDb(
+  id = PIN_ID,
+  parent: string | null = null
+): {
+  file: string;
+  setPinned: (pinned: boolean) => void;
+  cleanup: () => void;
+} {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-status-e2e-pins-'));
   const file = path.join(dir, 'statev2.sqlite');
   const db = new Database(file, { create: true });
@@ -58,18 +73,33 @@ function fixturePinDb(): { file: string; cleanup: () => void } {
      VALUES (?, 'proj', ?, 'claude', 'auto', 'default', '2026-11-01T00:00:00Z',
              '2026-11-02T00:00:00Z', null, null, ?)`
   ).run(
-    PIN_ID,
+    id,
     PIN_TITLE,
     JSON.stringify({
-      id: PIN_ID,
+      id,
       title: PIN_TITLE,
       pinnedAt: '2026-11-06T10:00:00Z',
       pinOrderKey: 'a',
-      lineage: { parentThreadId: null },
+      lineage: { parentThreadId: parent },
     })
   );
   db.close();
-  return { file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return {
+    file,
+    setPinned(pinned) {
+      const writer = new Database(file);
+      try {
+        writer
+          .prepare(
+            "UPDATE orchestration_v2_projection_threads SET payload_json = json_set(payload_json, '$.pinnedAt', ?)"
+          )
+          .run(pinned ? '2026-11-06T10:00:00Z' : null);
+      } finally {
+        writer.close();
+      }
+    },
+    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+  };
 }
 
 describe('the status endpoint from real files', () => {
@@ -210,4 +240,162 @@ describe('the status endpoint from real files', () => {
       fs.rmSync(reports, { recursive: true, force: true });
     }
   });
+
+  for (const machine of ['vm', 'mac'] as const) {
+    withModule(
+      `shows a pinned delegated thread from ${machine} through the API and reader receipts`,
+      async () => {
+        const reports = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-status-delegated-'));
+        // T3 stores delegated command separators as %3A; writers may carry the decoded form.
+        const id = 'thread:delegated-task:command%3Amcp%3Afixture%3Adelegate-task%3Astream-f';
+        const decoded = id.replace(/%3A/g, ':');
+        const db = fixturePinDb(id, 'pm7-build');
+        const emptyDb = fixturePinDb();
+        emptyDb.setPinned(false);
+        db.setPinned(false);
+        let server: Server | undefined;
+        let now = NOW;
+        try {
+          writeReport(
+            reports,
+            'vm.stream-f',
+            'thread.json',
+            threadDoc('vm.stream-f', {
+              agent: {
+                name: 'stream-f',
+                machine: 'vm',
+                harness: 'codex',
+                model: 'gpt-6.1-sol',
+                effort: 'high',
+                account: null,
+                t3Thread: decoded,
+                parent: 'pm7-build',
+              },
+              doing: 'Checking stream F.',
+            })
+          );
+          writeReport(reports, 'vm.stream-f', 'status.json', {
+            schema: 'agent-reports/status@1',
+            writer: 'vm.stream-f',
+            seq: 2,
+            writtenAt: ago(60_000),
+            t3Thread: id,
+            summary: 'Pinned child is reporting.',
+          });
+          const checks = new ReadersCheckWriter({ root: () => reports, now: () => now });
+          const reader = new AgentReportsReader({ root: () => reports, now: () => now });
+          const pinned = new PinnedThreadsCollector({
+            file: PREBUILT,
+            dbPath: machine === 'vm' ? db.file : emptyDb.file,
+            readRemote: async (remote) => {
+              if (remote !== machine) return '[]';
+              const fixture = new Database(db.file, { readonly: true });
+              try {
+                return JSON.stringify(fixture.query(PINNED_THREADS_QUERY).all());
+              } finally {
+                fixture.close();
+              }
+            },
+            now: () => now,
+            timeZone: () => 'UTC',
+            reportsRoot: () => reports,
+            readersCheck: checks,
+          });
+          const service = new StatusService({
+            reader,
+            pinned,
+            now: () => now,
+            timeZone: () => 'UTC',
+            notify: () => undefined,
+            answers: new StatusAnswers({
+              storeDir: () => path.join(reports, 'private-answers'),
+              reportsRoot: () => reports,
+              readCard: (card) => reader.readCardNow(card),
+            }),
+            historyStore: () => null,
+            spendNative: null,
+            run: async () => ({ code: null, stdout: '', timedOut: false, missing: true }),
+            readLocalMachine: async () => {
+              throw new Error('fixture only');
+            },
+            readRemoteMachine: async () => {
+              throw new Error('fixture only');
+            },
+          });
+          await service.scanReports();
+          expect(reader.snapshot().problems).toEqual([]);
+          expect(pinned.docs.snapshot().problems).toEqual([]);
+          await service.collect();
+          const app = express();
+          app.use((req, _res, next) => {
+            Object.assign(req, { session: { authenticated: true } });
+            next();
+          });
+          app.use(
+            '/api/status',
+            createStatusRouter(() => service)
+          );
+          server = await new Promise<Server>((resolve) => {
+            const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+          });
+          const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/status`;
+          const receipt = async () => {
+            await checks.flush();
+            const check = JSON.parse(
+              fs.readFileSync(path.join(reports, 'v1/readers/aac/vm.stream-f.json'), 'utf8')
+            );
+            expect(check.files).toHaveLength(2);
+            return check.files as Array<{ file: string; result: string; pin: unknown }>;
+          };
+          const before = await fetch(url);
+          expect(before.status).toBe(200);
+          expect((await before.json()).pinned.updates).toEqual([]);
+          // The first GET starts demand collection; finish it before changing the fixture.
+          await service.collect();
+          const oldEtag = before.headers.get('etag')!;
+          for (const row of await receipt()) expect(row.pin).toBeNull();
+
+          // Run the next normal minute collection, with no restart or report rewrite.
+          db.setPinned(true);
+          now += 60_000;
+          await service.collect();
+          const shown = await fetch(url, { headers: { 'If-None-Match': oldEtag } });
+          expect(shown.status).toBe(200);
+          expect(shown.headers.get('cache-control')).toBe('private, no-cache');
+          expect(shown.headers.get('etag')).not.toBe(oldEtag);
+          const view = await shown.json();
+          expect(view.pinned.updates).toHaveLength(1);
+          expect(view.pinned.updates[0]).toMatchObject({
+            id,
+            machine,
+            title: PIN_TITLE,
+            summary: 'Pinned child is reporting.',
+          });
+          expect(view.pinned.updates[0].who).toContain('stream-f');
+          for (const row of await receipt()) {
+            expect(row.result).toBe('accepted');
+            expect(row.pin).toEqual({ t3Thread: id, title: PIN_TITLE });
+          }
+          const shownEtag = shown.headers.get('etag')!;
+          expect((await fetch(url, { headers: { 'If-None-Match': shownEtag } })).status).toBe(304);
+
+          db.setPinned(false);
+          now += 60_000;
+          await service.collect();
+          const removed = await fetch(url, { headers: { 'If-None-Match': shownEtag } });
+          expect(removed.status).toBe(200);
+          expect((await removed.json()).pinned.updates).toEqual([]);
+          for (const row of await receipt()) expect(row.pin).toBeNull();
+        } finally {
+          if (server)
+            await new Promise<void>((resolve, reject) =>
+              server!.close((error) => (error ? reject(error) : resolve()))
+            );
+          db.cleanup();
+          emptyDb.cleanup();
+          fs.rmSync(reports, { recursive: true, force: true });
+        }
+      }
+    );
+  }
 });

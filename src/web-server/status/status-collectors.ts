@@ -997,8 +997,8 @@ export function validAgentMachineSample(value: unknown): value is MachineSample 
  * The pinned-threads query, the same predicate and order the aac-status native module's local
  * read uses: unarchived, undeleted, `pinnedAt` set, in `pinOrderKey` order, each row with the
  * lineage shape facts (`lineageType`, `parentType`) the native parser needs to apply the same
- * top-level rule as the local read — a lineage that is absent, null, or an object whose
- * parentThreadId is absent or null; a wrong-typed lineage is the parser's `shape` refusal,
+ * lineage shape check as the local read: absent, null, or an object whose parentThreadId
+ * is absent, null or text. Pinned children are included; a wrong-typed lineage is a `shape` refusal,
  * because a path extract cannot tell "no parent" from "a lineage a path cannot walk". Only
  * `orchestration_v2_projection_threads` is touched; a database of any size reads the same
  * one table.

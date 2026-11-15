@@ -33,13 +33,24 @@ function fixtureDb(rows: Array<Record<string, unknown>>): { file: string; cleanu
              '2026-11-02T00:00:00Z', ?, ?, ?)`
   );
   for (const row of rows) {
-    insert.run(row.id, row.title, row.archivedAt ?? null, row.deletedAt ?? null, JSON.stringify(row.payload));
+    insert.run(
+      row.id,
+      row.title,
+      row.archivedAt ?? null,
+      row.deletedAt ?? null,
+      JSON.stringify(row.payload)
+    );
   }
   db.close();
   return { file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
-function pinnedPayload(id: string, title: string, pinOrderKey: string, parent: string | null = null) {
+function pinnedPayload(
+  id: string,
+  title: string,
+  pinOrderKey: string,
+  parent: string | null = null
+) {
   return {
     id,
     title,
@@ -82,7 +93,12 @@ describe('pinned threads through the native module', () => {
       pinnedAt: '2026-11-08T10:00:00Z',
       pinOrderKey: 'a',
     };
-    const noKey = { id: 'no-key', title: 'No key', pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: null };
+    const noKey = {
+      id: 'no-key',
+      title: 'No key',
+      pinnedAt: '2026-11-08T10:00:00Z',
+      pinOrderKey: null,
+    };
     const read = await readPinnedThreads({
       handle: {
         call: async () => JSON.stringify({ pinned: [keyed, noKey] }),
@@ -123,30 +139,34 @@ describe('pinned threads through the native module', () => {
     });
   });
 
-  withModule('reads the pinned top-level threads from a fixture database, in pin order', async () => {
-    const { file, cleanup } = fixtureDb([
-      { id: 'second', title: 'Second', payload: pinnedPayload('second', 'Second', 'b') },
-      { id: 'first', title: 'First', payload: pinnedPayload('first', 'First', 'a') },
-      { id: 'child', title: 'Child', payload: pinnedPayload('child', 'Child', 'a0', 'first') },
-      {
-        id: 'archived',
-        title: 'Archived',
-        archivedAt: '2026-11-07T00:00:00Z',
-        payload: pinnedPayload('archived', 'Archived', 'c'),
-      },
-    ]);
-    try {
-      const result = await readPinnedThreads({ dbPath: file, file: PREBUILT, env: {} });
-      expect(result).toEqual({
-        pinned: [
-          { id: 'first', title: 'First', pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 'a' },
-          { id: 'second', title: 'Second', pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 'b' },
-        ],
-      });
-    } finally {
-      cleanup();
+  withModule(
+    'reads all pinned threads, including children, from a fixture database, in pin order',
+    async () => {
+      const { file, cleanup } = fixtureDb([
+        { id: 'second', title: 'Second', payload: pinnedPayload('second', 'Second', 'b') },
+        { id: 'first', title: 'First', payload: pinnedPayload('first', 'First', 'a') },
+        { id: 'child', title: 'Child', payload: pinnedPayload('child', 'Child', 'a0', 'first') },
+        {
+          id: 'archived',
+          title: 'Archived',
+          archivedAt: '2026-11-07T00:00:00Z',
+          payload: pinnedPayload('archived', 'Archived', 'c'),
+        },
+      ]);
+      try {
+        const result = await readPinnedThreads({ dbPath: file, file: PREBUILT, env: {} });
+        expect(result).toEqual({
+          pinned: [
+            { id: 'first', title: 'First', pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 'a' },
+            { id: 'child', title: 'Child', pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 'a0' },
+            { id: 'second', title: 'Second', pinnedAt: '2026-11-08T10:00:00Z', pinOrderKey: 'b' },
+          ],
+        });
+      } finally {
+        cleanup();
+      }
     }
-  });
+  );
 
   withModule('a missing database and a changed shape each say so', async () => {
     const missing = await readPinnedThreads({

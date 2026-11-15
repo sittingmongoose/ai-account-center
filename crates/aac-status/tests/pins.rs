@@ -60,7 +60,7 @@ fn ids(rows: &[aac_status::pins::PinnedThread]) -> Vec<&str> {
 }
 
 #[test]
-fn only_pinned_top_level_threads_are_returned() {
+fn pinned_threads_are_returned_regardless_of_lineage() {
     let dir = tempfile::tempdir().unwrap();
     let (file, conn) = fixture(dir.path());
     let at = json!("2026-11-08T10:00:00Z");
@@ -114,10 +114,10 @@ fn only_pinned_top_level_threads_are_returned() {
     drop(conn);
 
     let rows = read_pinned_threads(&file).unwrap();
-    assert_eq!(ids(&rows), ["top-null", "top-bare"]);
-    assert_eq!(rows[0].title, "Top null parent");
+    assert_eq!(ids(&rows), ["child", "top-null", "top-bare"]);
+    assert_eq!(rows[0].title, "Child thread");
     assert_eq!(rows[0].pinned_at, json!("2026-11-08T10:00:00Z"));
-    assert_eq!(rows[0].pin_order_key, json!("a1"));
+    assert_eq!(rows[0].pin_order_key, json!("a0"));
 }
 
 #[test]
@@ -520,9 +520,8 @@ fn a_top_level_null_order_key_is_listed_after_the_keyed_ones() {
 }
 
 #[test]
-fn a_child_with_a_null_key_is_still_skipped_never_a_refusal() {
-    // The shape check runs before the child skip, so a child whose pinOrderKey is null
-    // once refused the whole list. It is now skipped like any child, and the list succeeds.
+fn a_pinned_child_with_a_null_key_is_included_after_keyed_pins() {
+    // A pin is the owner's choice, including children with no order key.
     let dir = tempfile::tempdir().unwrap();
     let (file, conn) = fixture(dir.path());
     insert(
@@ -549,7 +548,7 @@ fn a_child_with_a_null_key_is_still_skipped_never_a_refusal() {
     );
     drop(conn);
 
-    assert_eq!(ids(&read_pinned_threads(&file).unwrap()), ["top"]);
+    assert_eq!(ids(&read_pinned_threads(&file).unwrap()), ["top", "child-null"]);
 }
 
 #[test]

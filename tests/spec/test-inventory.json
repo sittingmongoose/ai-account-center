@@ -3616,9 +3616,10 @@
     },
     {
       "file": "tests/unit/web-server/status/status-end-to-end.test.ts",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
     },
     {
       "file": "tests/unit/web-server/status/status-feedback.test.ts",

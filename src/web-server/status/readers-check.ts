@@ -335,7 +335,8 @@ function t3ThreadOf(doc: Record<string, unknown>): string | null {
 /**
  * The same id normalisation the composer applies (crates/aac-status/src/pinned.rs): the plain
  * id, percent-encoded (as T3's run ids spell `mcp:launch:`), a `t3-thread://` link ending in
- * it, or the bare tail — all compare equal. Titles are never matched.
+ * it, or the bare tail — all compare equal. Delegated ids with encoded command separators
+ * compare the same way. Titles are never matched.
  */
 export function normaliseThreadId(id: string): string {
   let text = decodePercent(id.trim()).toLowerCase();
