@@ -3,7 +3,7 @@
 // copy of the classic start page that its previous service worker stored (a slow launch falls back to it after 3 s),
 // and that page loads exactly one script: this address, as a module. Here it forgets the classic choice and moves the
 // page to the app frame, at the tab its address named (lib.rs page_from_location, case for case) with the rest of its
-// query. It loads nothing else, so it works whatever else the old cache holds.
+// query and its #fragment. It loads nothing else, so it works whatever else the old cache holds.
 
 const TABS = ['home', 'analytics', 'accounts', 'status', 'scoreboard'];
 /** The classic app's own query keys; the tab is in the frame's path instead (lib.rs kept_search). */
@@ -48,14 +48,17 @@ export function frameAddress(pathname, search) {
   return `/app/${tab}${kept.length ? `?${kept.join('&')}` : ''}`;
 }
 
-/** Forget the classic choice and open the frame in this page's place (no history entry for the classic page). */
+/** Forget the classic choice and open the frame in this page's place (no history entry for the classic page). The
+ * #fragment comes along as written (an empty one adds nothing), as the frame keeps it when it takes an address over. */
 export function leaveClassic(win) {
   try {
     win.localStorage.removeItem('aac-frame');
   } catch {
     // storage refused: the frame ignores the choice anyway
   }
-  win.location.replace(frameAddress(win.location.pathname, win.location.search));
+  const hash =
+    typeof win.location.hash === 'string' && win.location.hash.length > 1 ? win.location.hash : '';
+  win.location.replace(frameAddress(win.location.pathname, win.location.search) + hash);
 }
 
 if (typeof window !== 'undefined' && window.location) leaveClassic(window);

@@ -26,7 +26,7 @@ const CLASSIC_UPGRADE = 'bridge.js';
  * page runs it with nothing else around it, so it is pinned whole rather than by its shape (recheck L3): change the
  * module and this hash together, in a reviewed commit.
  */
-const CLASSIC_UPGRADE_SHA256 = 'fa4bf12c4a659a5a3ab7287581338aaf5785d2ed70f5bcd6f023675b31d0f178';
+const CLASSIC_UPGRADE_SHA256 = 'a38ef887dc3d89c2657765705b4c30503f64ea1d729cc57d20337839b682854c';
 const BUILD_ID = /^[a-f0-9]{12}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const VARIANT_SUFFIX = new Map([

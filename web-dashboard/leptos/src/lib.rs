@@ -263,6 +263,18 @@ pub(crate) fn kept_search(search: &str) -> String {
     }
 }
 
+/// The address the frame writes for a tab: its path and the kept query. When the frame takes over the address it was
+/// opened at (a classic `/status#x` becoming `/app/status#x`), that address's #fragment stays too, as written; an
+/// empty one adds nothing. A tab change starts without one (`hash` is then empty).
+pub(crate) fn frame_url(path: &str, search: &str, hash: &str) -> String {
+    let hash = if hash.len() > 1 && hash.starts_with('#') {
+        hash
+    } else {
+        ""
+    };
+    format!("{path}{}{hash}", kept_search(search))
+}
+
 fn embedded(search: &str) -> bool {
     web_sys::UrlSearchParams::new_with_str(search)
         .ok()
@@ -495,6 +507,22 @@ mod tests {
         assert_eq!(kept_search("?%76iew=analytics&safe=82%2C0"), "?safe=82%2C0");
         assert_eq!(kept_search("?cl%61ssic=1&e2e"), "?e2e");
         assert_eq!(kept_search("?viewer=1"), "?viewer=1");
+    }
+
+    #[test]
+    fn taking_over_an_address_keeps_its_fragment() {
+        // recheck L2: a classic address's #fragment survives the move to /app/<tab>, after the kept query
+        assert_eq!(
+            frame_url("/app/status", "?e2e&view=status", "#frag"),
+            "/app/status?e2e#frag"
+        );
+        assert_eq!(frame_url("/app/home", "", "#a%20b"), "/app/home#a%20b");
+        // no fragment, or an empty one: nothing added
+        assert_eq!(
+            frame_url("/app/accounts", "?view=accounts", ""),
+            "/app/accounts"
+        );
+        assert_eq!(frame_url("/app/accounts", "", "#"), "/app/accounts");
     }
 
     #[test]

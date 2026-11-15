@@ -20,7 +20,10 @@ function runIn(href, stored = { 'aac-frame': 'classic' }, { storageThrows = fals
 			store.delete(k);
 		},
 	};
-	const window = { location: { pathname: url.pathname, search: url.search, replace: (to) => replaced.push(to) }, localStorage };
+	const window = {
+		location: { pathname: url.pathname, search: url.search, hash: url.hash, replace: (to) => replaced.push(to) },
+		localStorage,
+	};
 	const ctx = vm.createContext({ window, URLSearchParams, decodeURIComponent });
 	vm.runInContext(`${SOURCE.replace(/^export /gm, '')}\n;({ frameAddress, leaveClassic })`, ctx);
 	const api = vm.runInContext('({ frameAddress, leaveClassic })', ctx);
@@ -35,6 +38,12 @@ test('a cached classic page moves to the frame and forgets the classic choice', 
 	const other = runIn('/accounts/claude?e2e&view=accounts&safe=82,0,34,0', { 'aac-frame': 'classic', 'aac-theme': 'dark' });
 	assert.deepEqual(other.replaced, ['/app/accounts?e2e&safe=82,0,34,0']);
 	assert.equal(other.store.get('aac-theme'), 'dark', 'nothing else is touched');
+});
+
+test('the #fragment comes along, after the kept query (recheck L2)', () => {
+	assert.deepEqual(runIn('/status?e2e#frag').replaced, ['/app/status?e2e#frag']);
+	assert.deepEqual(runIn('/?view=analytics#a%20b').replaced, ['/app/analytics#a%20b']);
+	assert.deepEqual(runIn('/accounts/claude#').replaced, ['/app/accounts'], 'an empty fragment adds nothing');
 });
 
 test('it moves on even when storage refuses', () => {

@@ -304,6 +304,14 @@ export const tests = {
 				await t.until(`${from} opens /app/${page}`, (p) => location.pathname === `/app/${p}` && !/[?&](view|classic|content)=/.test(location.search), page, { timeout: 15000 });
 				await routeShown(t, page);
 			}
+			// recheck L2: the #fragment survives the move to /app/<tab>; a tab change then starts without one
+			for (const [from, page, search, hash] of [['/status?e2e#kept-frag', 'status', '?e2e', '#kept-frag'], ['/?view=analytics#a%20b', 'analytics', '', '#a%20b']]) {
+				await t.goto(from, { settleMs: 200 });
+				await t.until(`${from} keeps its fragment at /app/${page}`, ([p, q, h]) => location.pathname === `/app/${p}` && location.search === q && location.hash === h, [page, search, hash], { timeout: 15000 });
+				await routeShown(t, page);
+			}
+			await t.page.click('.chrome .nav a[href="/app/home"]');
+			await t.until('a tab change drops the fragment', () => location.pathname === '/app/home' && location.hash === '', null, { timeout: 15000 });
 			const manifest = await t.page.evaluate(async () => (await (await fetch('/manifest.webmanifest')).json()).start_url);
 			await t.equal('the installed app starts at /, which is the frame', manifest, '/');
 		});
