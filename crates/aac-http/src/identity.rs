@@ -6,8 +6,9 @@ use axum::http::HeaderValue;
 use sha2::{Digest, Sha256};
 use std::{fs::File, io, io::Read, path::PathBuf};
 
-/// The private socket protocol. 1: M3; 2: L1 (table dispatch, named declines, feeds, events).
-pub const PROTOCOL: u32 = 2;
+/// The private socket protocol. 1: M3; 2: L1 (table dispatch, named declines, feeds,
+/// events); 3: R3 (the store host's internal route and boot store config).
+pub const PROTOCOL: u32 = 3;
 
 /// The header carrying the identity.
 pub(crate) const HEADER: &str = "x-aac-service-build";

@@ -6,12 +6,18 @@ import { createHash, randomBytes } from 'crypto';
 import { spawn, type ChildProcess } from 'child_process';
 import type http from 'http';
 import { ConfigError } from '../errors/error-types';
-import { requestRust, rustAgent, type RustConnection } from './rust-service-transport';
+import {
+  requestRust,
+  rustAgent,
+  type RustConnection,
+  type RustStoreBoot,
+  type RustStoreBootInput,
+} from './rust-service-transport';
 import { privateFileOwners, type PrivateFileRole } from '../shared/private-files';
 import { rustServiceEnvironment } from './rust-service-env';
 
 /** The private socket protocol this front door speaks (aac-http `identity::PROTOCOL`). */
-export const RUST_SERVICE_PROTOCOL = 2;
+export const RUST_SERVICE_PROTOCOL = 3;
 
 /** What a running service is: the build check on attach (L1). */
 export interface RustBuild {
@@ -27,6 +33,30 @@ export interface RustBoot extends RustConnection {
   build: RustBuild;
   /** Each registered private file's writer (L2), as this front door resolved it at start. */
   files: Readonly<Record<string, PrivateFileRole>>;
+  /** R3: the store host's config this boot was started with; null keeps the store in TS. */
+  store: RustStoreBoot | null;
+}
+
+/**
+ * The boot's store config for one spawn or attach: the supervisor's input plus this root's
+ * store folder. Two boots attach only on the same config, like the file owners: the store's
+ * one writer must never be shared by front doors that resolved it differently.
+ */
+export function expectedStoreBoot(
+  ccsDir: string,
+  input: RustStoreBootInput | null | undefined
+): RustStoreBoot | null {
+  return input ? { dir: path.join(ccsDir, 'store'), ...input } : null;
+}
+
+/** The same store config in a stable spelling, for the attach check. */
+function storeKey(store: unknown): string {
+  if (!store || typeof store !== 'object' || Array.isArray(store)) return '';
+  return JSON.stringify(
+    Object.entries(store as Record<string, unknown>).sort(([a], [b]) =>
+      a < b ? -1 : a > b ? 1 : 0
+    )
+  );
 }
 
 /** The same owners in a stable spelling, for the attach check. */
@@ -191,7 +221,12 @@ export function buildMatches(build: RustBuild | null, binarySha: string): build 
   return !!build && build.sha256 === binarySha && build.protocol === RUST_SERVICE_PROTOCOL;
 }
 
-function readBoot(file: string, ccsDir: string, binary: string): RustBoot | null {
+function readBoot(
+  file: string,
+  ccsDir: string,
+  binary: string,
+  store: RustStoreBoot | null = null
+): RustBoot | null {
   try {
     const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.size > 4096 || (stat.mode & 0o777) !== 0o600 || stat.uid !== uid())
@@ -204,7 +239,9 @@ function readBoot(file: string, ccsDir: string, binary: string): RustBoot | null
       !/^[a-f0-9]{64}$/.test(boot.secret) ||
       !parseBuild(JSON.stringify(boot.build)) ||
       // A boot started with other file owners is never attached (L2): one writer per file.
-      ownersKey(boot.files) !== ownersKey(privateFileOwners())
+      ownersKey(boot.files) !== ownersKey(privateFileOwners()) ||
+      // R3: likewise a boot hosting the store for another config (or none) is never attached.
+      storeKey(boot.store) !== storeKey(store)
     )
       return null;
     const layout = socketLayout(ccsDir, boot.bootId);
@@ -220,6 +257,7 @@ function readBoot(file: string, ccsDir: string, binary: string): RustBoot | null
       bootId: boot.bootId,
       build: boot.build,
       files: boot.files,
+      store: boot.store ?? null,
     };
   } catch {
     return null;
@@ -313,20 +351,22 @@ export interface AcquireResult {
 export async function acquireRustService(
   privateRoot: string,
   binaryPath: string,
-  active: Set<http.ClientRequest>
+  active: Set<http.ClientRequest>,
+  store?: RustStoreBootInput | null
 ): Promise<RustLease | null> {
-  return (await acquireRustServiceDetailed(privateRoot, binaryPath, active)).lease;
+  return (await acquireRustServiceDetailed(privateRoot, binaryPath, active, undefined, store)).lease;
 }
 
 export async function acquireRustServiceDetailed(
   privateRoot: string,
   binaryPath: string,
   active: Set<http.ClientRequest>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  storeInput?: RustStoreBootInput | null
 ): Promise<AcquireResult> {
   const budget = AbortSignal.timeout(5000);
   const stopped = signal ? AbortSignal.any([signal, budget]) : budget;
-  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped);
+  const pending = acquireWithinBudget(privateRoot, binaryPath, active, stopped, storeInput);
   // Async filesystem work may finish late; every continuation checks the signal before adoption.
   return new Promise((resolve) => {
     const aborted = () =>
@@ -345,7 +385,8 @@ async function acquireWithinBudget(
   privateRoot: string,
   binaryPath: string,
   active: Set<http.ClientRequest>,
-  signal: AbortSignal
+  signal: AbortSignal,
+  storeInput?: RustStoreBootInput | null
 ): Promise<AcquireResult> {
   const result: AcquireResult = { lease: null, failure: null, refusedAttach: false, swept: 0 };
   if (process.platform === 'win32') return { ...result, failure: 'platform' };
@@ -357,7 +398,8 @@ async function acquireWithinBudget(
   const run = path.join(ccsDir, 'run');
   privateDirectory(run);
   const descriptor = path.join(run, 'aac-http.json');
-  const existing = readBoot(descriptor, ccsDir, binary);
+  const store = expectedStoreBoot(ccsDir, storeInput);
+  const existing = readBoot(descriptor, ccsDir, binary, store);
   if (existing) {
     const agent = rustAgent();
     const build = await healthBuild({ ...existing, agent }, active);
@@ -401,6 +443,7 @@ async function acquireWithinBudget(
     // Filled from the service's own health reply once it answers.
     build: { commit: 'unknown', sha256, protocol: RUST_SERVICE_PROTOCOL, storeSchema: 0 },
     files: privateFileOwners(),
+    store,
     agent,
   };
   let child: ChildProcess | undefined;
@@ -488,6 +531,7 @@ async function acquireWithinBudget(
         secret: boot.secret,
         bootId,
         files: boot.files,
+        store: boot.store,
       }) + '\n'
     );
     // The service hashes its own image before it binds; allow a slow disk about 5 s.

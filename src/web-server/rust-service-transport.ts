@@ -1,4 +1,5 @@
 /** Bounded HTTP over a private Unix socket. Never copy caller headers into this request. */
+import fs from 'fs';
 import http from 'http';
 import { NetworkError } from '../errors/error-types';
 
@@ -423,5 +424,213 @@ export async function requestRustAgent(
       response.once('aborted', () => resolve(null));
     });
     request.end(bytes);
+  });
+}
+
+/**
+ * R3: the store host's boot config as the supervisor resolved it (the open arguments TS
+ * would have given the NAPI module, plus the backup job's share inputs). The lifecycle
+ * adds `dir` (`<canonical root>/store`) and puts the whole object in the boot JSON.
+ */
+export interface RustStoreBootInput {
+  retentionDays: number;
+  cacheBytes?: number;
+  activityRetentionDays?: number;
+  snapshotDirectory: string | null;
+  shareBackupDir: string | null;
+  shareBackupOff: boolean;
+}
+
+/** The boot JSON's store object: the input plus its folder. */
+export interface RustStoreBoot extends RustStoreBootInput {
+  dir: string;
+}
+
+interface RustStoreEntry {
+  connection: RustConnection;
+  active: Set<http.ClientRequest>;
+  health: { replied?: () => void; failed?: (kind: RustFailureKind) => void };
+}
+
+/**
+ * R3: per-root store-host state, owned by the supervisor, read by the store's socket
+ * handle (the L5 agent-connection pattern). Only an owned boot is registered: an attached
+ * boot belongs to another front door, whose store this process must not drive. Keys are
+ * canonical roots, as the lease's connection carries.
+ */
+const storeHosts = new Map<
+  string,
+  { entry: RustStoreEntry | null; attached: boolean; gaveUp: boolean }
+>();
+const storeGaveUpHandlers = new Map<string, Set<() => void>>();
+
+function storeRootKey(root: string): string {
+  try {
+    return fs.realpathSync(root);
+  } catch {
+    return root;
+  }
+}
+
+function storeHostState(root: string): {
+  entry: RustStoreEntry | null;
+  attached: boolean;
+  gaveUp: boolean;
+} {
+  const key = storeRootKey(root);
+  let state = storeHosts.get(key);
+  if (!state) {
+    state = { entry: null, attached: false, gaveUp: false };
+    storeHosts.set(key, state);
+  }
+  return state;
+}
+
+/** The supervisor resolves the switch once at start; the store opens hosted only for it. */
+export function setRustStoreHosted(root: string, hosted: boolean): void {
+  const key = storeRootKey(root);
+  if (hosted) storeHostState(key);
+  else storeHosts.delete(key);
+}
+
+export function rustStoreHosted(root: string): boolean {
+  return storeHosts.has(storeRootKey(root));
+}
+
+export function registerRustStoreConnection(
+  root: string,
+  connection: RustConnection,
+  active: Set<http.ClientRequest>,
+  health: { replied?: () => void; failed?: (kind: RustFailureKind) => void },
+  owned: boolean
+): () => void {
+  const state = storeHostState(root);
+  if (owned) state.entry = { connection, active, health };
+  else state.attached = true;
+  return () => {
+    if (owned && state.entry?.connection === connection) state.entry = null;
+    if (!owned) state.attached = false;
+  };
+}
+
+export function rustStoreConnection(root: string): RustStoreEntry | null {
+  return storeHosts.get(storeRootKey(root))?.entry ?? null;
+}
+
+/** Another front door owns the service (and its store): this process reads `lock_held`. */
+export function rustStoreAttached(root: string): boolean {
+  return storeHosts.get(storeRootKey(root))?.attached === true;
+}
+
+export function rustStoreGaveUp(root: string): boolean {
+  return storeHosts.get(storeRootKey(root))?.gaveUp === true;
+}
+
+/** The supervisor used up its restart budget: the store falls back in process (design 1.3). */
+export function notifyRustStoreGaveUp(root: string): void {
+  const key = storeRootKey(root);
+  storeHostState(key).gaveUp = true;
+  for (const handler of storeGaveUpHandlers.get(key) ?? []) {
+    try {
+      handler();
+    } catch {
+      /* A handler never stops the supervisor. */
+    }
+  }
+}
+
+export function onRustStoreGaveUp(root: string, handler: () => void): () => void {
+  const key = storeRootKey(root);
+  let handlers = storeGaveUpHandlers.get(key);
+  if (!handlers) {
+    handlers = new Set();
+    storeGaveUpHandlers.set(key, handlers);
+  }
+  handlers.add(handler);
+  return () => handlers.delete(handler);
+}
+
+/** A store error the service answered with (`<code>: <message>`), as the binding rejects. */
+export class RustStoreError extends Error {}
+
+/** The longest store request (the host's cap; `captureReports` caps its batch lower). */
+export const RUST_STORE_REQUEST_CAP = 16 * 1024 * 1024;
+/** The longest store reply this front door reads (history answers are the big ones). */
+export const RUST_STORE_REPLY_CAP = 64 * 1024 * 1024;
+
+/**
+ * R3: one store method over the socket, the NAPI `call` contract: resolves to the answer's
+ * JSON text, rejects with the store's `<code>: <message>` (a RustStoreError) or a
+ * RustTransportError when the service did not answer. No deadline and never retried:
+ * writes are not repeatable from here, and backup takes as long as it took in process.
+ */
+export function requestRustStore(
+  entry: RustStoreEntry,
+  method: string,
+  args: string
+): Promise<string> {
+  if (Buffer.byteLength(args) > RUST_STORE_REQUEST_CAP)
+    return Promise.reject(new RustStoreError('invalid: store request too large'));
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      socketPath: entry.connection.socketPath,
+      path: `/internal/store/${method}`,
+      method: 'POST',
+      agent: entry.connection.agent ?? false,
+      headers: {
+        'x-aac-boot-secret': entry.connection.secret,
+        'x-aac-principal': JSON.stringify(FRONT_DOOR_PRINCIPAL),
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(args),
+      },
+    });
+    entry.active.add(request);
+    request.once('close', () => entry.active.delete(request));
+    request.once('error', (error) => {
+      entry.health.failed?.(rustFailureKind(error));
+      reject(
+        error instanceof RustTransportError
+          ? error
+          : new RustTransportError(rustFailureKind(error), 'Rust store transport failed')
+      );
+    });
+    request.once('response', (response) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      response.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > RUST_STORE_REPLY_CAP)
+          request.destroy(new RustTransportError('cap', 'Rust store response cap'));
+        else chunks.push(chunk);
+      });
+      response.once('error', (error) => {
+        entry.health.failed?.(rustFailureKind(error));
+        reject(error);
+      });
+      response.once('end', () => {
+        if (response.headers['x-aac-service-boot'] !== entry.connection.bootId) {
+          entry.health.failed?.('boot');
+          reject(new RustTransportError('boot', 'Rust service boot mismatch'));
+          return;
+        }
+        entry.health.replied?.();
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (response.statusCode === 200) {
+          resolve(text);
+          return;
+        }
+        try {
+          const parsed = JSON.parse(text) as { error?: unknown };
+          if (typeof parsed?.error === 'string') {
+            reject(new RustStoreError(parsed.error));
+            return;
+          }
+        } catch {
+          /* Not the store's error shape: a transport refusal below. */
+        }
+        reject(new RustTransportError('reply', 'Rust store invalid response'));
+      });
+    });
+    request.end(args);
   });
 }

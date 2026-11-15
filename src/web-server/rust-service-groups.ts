@@ -23,3 +23,20 @@ export function rustGroupOn(group: RustGroup, env: NodeJS.ProcessEnv = process.e
   }
   return value === 'on';
 }
+
+/**
+ * R3: the store host's own switch, `rustService.store` in config.yaml (`AAC_RUST_STORE` wins).
+ * The supervisor also requires mode `on` (no shadow is possible for the one writer) and the
+ * store itself not disabled; this reads only the switch.
+ */
+export function rustStoreSwitchOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  let value: unknown = env.AAC_RUST_STORE;
+  if (value === undefined) {
+    try {
+      value = (loadUnifiedConfig()?.rustService as { store?: unknown } | undefined)?.store;
+    } catch {
+      value = undefined;
+    }
+  }
+  return value === 'on';
+}

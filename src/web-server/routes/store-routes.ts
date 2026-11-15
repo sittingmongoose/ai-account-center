@@ -5,7 +5,7 @@
  */
 import type { Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
-import { readWithRust } from '../rust-service';
+import { composeWithRust, readWithRust } from '../rust-service';
 import { authKind } from '../middleware/request-auth';
 import { isDashboardWebSocketOriginAllowed } from '../middleware/auth-middleware';
 import {
@@ -81,6 +81,13 @@ function time(value: string | undefined, fallback: number): number | null {
   return Number.isFinite(epoch) ? epoch : null;
 }
 
+/** R3: a hosted status answer is served only in the writer's states (Rust checks the rest). */
+function acceptRustStoreStatus(body: unknown): boolean {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const state = (body as { state?: unknown }).state;
+  return state === 'ready' || state === 'degraded' || state === 'unavailable';
+}
+
 const ACCOUNT = /^[a-zA-Z0-9][a-zA-Z0-9:@._+-]{0,159}$/;
 const WINDOW = /^[A-Za-z0-9_.:-]{1,64}$/;
 const PROVIDER = /^[a-z][a-z0-9-]{0,31}$/;
@@ -92,6 +99,30 @@ export function createStoreRouter(deps: StoreRouterDeps = {}): Router {
     if (!allowed(req, res)) return;
     if (!query(req, []) || Object.keys(req.query).length > 0)
       return fail(res, 400, 'invalid_query');
+    // R3: while the service hosts the store, it answers from its Engine in process; the
+    // snapshot-validated read below is the unchanged path for the in-process store.
+    if (aacStoreState().hosted) {
+      try {
+        res.json(
+          await composeWithRust(
+            req,
+            res,
+            '/api/store/status',
+            {},
+            async () => {
+              const current = store();
+              return current
+                ? current.status()
+                : { state: 'unavailable', reason: aacStoreState().reason ?? 'missing' };
+            },
+            acceptRustStoreStatus
+          )
+        );
+      } catch {
+        fail(res, 503, 'store_failed');
+      }
+      return;
+    }
     const current = store();
     if (!current) {
       res.json(

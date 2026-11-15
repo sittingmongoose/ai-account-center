@@ -27,6 +27,7 @@ pub(crate) enum Handler {
     Events,
     Agent,
     AgentControl,
+    Store,
 }
 
 impl Handler {
@@ -47,6 +48,7 @@ impl Handler {
             "events" => Handler::Events,
             "agent" => Handler::Agent,
             "agent-control" => Handler::AgentControl,
+            "store" => Handler::Store,
             _ => return None,
         })
     }
@@ -188,13 +190,17 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || !word(&row.group)
             || roles.is_empty()
             || row.budget_ms > 10_000
-            || (row.budget_ms == 0 && !matches!(handler, Handler::Events | Handler::Agent))
+            || (row.budget_ms == 0
+                && !matches!(handler, Handler::Events | Handler::Agent | Handler::Store))
             || internal != (row.group == "internal")
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
             || (!internal && !row.path.starts_with("/api/"))
             || (method == axum::http::Method::POST
-                && !matches!(handler, Handler::Agent | Handler::AgentControl))
+                && !matches!(
+                    handler,
+                    Handler::Agent | Handler::AgentControl | Handler::Store
+                ))
             || (method == axum::http::Method::PUT && handler != Handler::Feed)
             || rows
                 .iter()
@@ -206,7 +212,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             method,
             path: row.path,
             handler,
-            pool: if row.group == "store" {
+            pool: if row.group == "store" || handler == Handler::Store {
                 Pool::Store
             } else {
                 Pool::Reads
@@ -229,10 +235,9 @@ mod tests {
     fn the_embedded_table_parses_with_a_handler_per_row() -> io::Result<()> {
         let rows = rows(ROUTES)?;
         assert!(rows.iter().any(|r| r.handler == Handler::Health));
-        assert!(
-            rows.iter()
-                .all(|r| r.budget_ms > 0 || matches!(r.handler, Handler::Events | Handler::Agent))
-        );
+        assert!(rows.iter().all(|r| r.budget_ms > 0
+            || matches!(r.handler, Handler::Events | Handler::Agent | Handler::Store)));
+        assert!(rows.iter().any(|r| r.handler == Handler::Store));
         Ok(())
     }
 

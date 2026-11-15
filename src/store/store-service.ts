@@ -14,6 +14,13 @@ import {
   type NativeStoreHandle,
   type StoreUnavailableReason,
 } from './native-loader';
+import {
+  onRustStoreGaveUp,
+  rustStoreAttached,
+  rustStoreGaveUp,
+  rustStoreHosted,
+} from '../web-server/rust-service-transport';
+import { SocketStoreHandle } from './store-host-client';
 import type { StoreObservation } from './usage-observations';
 import type {
   ActivityRange,
@@ -271,13 +278,60 @@ export interface StoreState {
   store: AacStore | null;
   /** Why there is no store: the module's reason, or an open error's code. */
   reason: StoreUnavailableReason | string | null;
+  /** R3: the store's writer lives in the Rust service (its jobs run there too). */
+  hosted?: boolean;
 }
 
 let state: StoreState = { store: null, reason: null };
 let opening: Promise<StoreState> | null = null;
+let removeGaveUpHandler: (() => void) | null = null;
+const fallbackListeners = new Set<() => void>();
+
+/**
+ * R3: called once if the hosted store falls back to the in-process module (the server
+ * starts its maintenance loop then, as the jobs come back with the writer). Returns the
+ * unregister call; a listener registered after the fallback is called at once.
+ */
+export function onStoreHostFallback(listener: () => void): () => void {
+  fallbackListeners.add(listener);
+  if (state.store && state.hosted === false && fellBack) listener();
+  return () => fallbackListeners.delete(listener);
+}
+
+let fellBack = false;
 
 export function storeDirectory(ccsDir: string = getCcsDir()): string {
   return path.join(ccsDir, 'store');
+}
+
+/** The open arguments the environment names, shared by the NAPI open and the boot (R3). */
+export function storeOpenEnv(env: NodeJS.ProcessEnv): {
+  cacheBytes?: number;
+  activityRetentionDays?: number;
+} {
+  const cacheMb = Number(env.AAC_STORE_CACHE_MB);
+  // Analytics usage history is kept for good unless this opt-in retention is set (90 to 36,500 days).
+  const activityDays = Number(env.AAC_ANALYTICS_RETENTION_DAYS);
+  return {
+    ...(Number.isFinite(activityDays) && activityDays > 0
+      ? { activityRetentionDays: Math.round(activityDays) }
+      : {}),
+    ...(Number.isFinite(cacheMb) && cacheMb > 0
+      ? { cacheBytes: Math.round(cacheMb) * 1024 * 1024 }
+      : {}),
+  };
+}
+
+/** `AAC_STORE_SHARE_BACKUP_DIR` for the boot (R3): the folder it names, or its `off`. */
+export function shareBackupEnv(env: NodeJS.ProcessEnv): {
+  shareBackupDir: string | null;
+  shareBackupOff: boolean;
+} {
+  const explicit = env.AAC_STORE_SHARE_BACKUP_DIR?.trim();
+  if (!explicit) return { shareBackupDir: null, shareBackupOff: false };
+  return explicit.toLowerCase() === 'off'
+    ? { shareBackupDir: null, shareBackupOff: true }
+    : { shareBackupDir: explicit, shareBackupOff: false };
 }
 
 /** Opens the process's store once; later calls return the same state. */
@@ -291,32 +345,7 @@ export function openAacStore(
   if (opening) return opening;
   opening = (async () => {
     const env = options.env ?? process.env;
-    const loaded = (options.load ?? (() => loadNativeStore({ env })))();
-    if (!loaded.module) {
-      state = { store: null, reason: loaded.reason };
-      return state;
-    }
-    const directory = storeDirectory(options.ccsDir);
-    const handle = new loaded.module.NativeStore();
-    const cacheMb = Number(env.AAC_STORE_CACHE_MB);
-    // Analytics usage history is kept for good unless this opt-in retention is set (90 to 36,500 days).
-    const activityDays = Number(env.AAC_ANALYTICS_RETENTION_DAYS);
-    try {
-      await handle.call(
-        'open',
-        JSON.stringify({
-          dir: directory,
-          retentionDays: STORE_RAW_RETENTION_DAYS,
-          ...(Number.isFinite(activityDays) && activityDays > 0
-            ? { activityRetentionDays: Math.round(activityDays) }
-            : {}),
-          ...(Number.isFinite(cacheMb) && cacheMb > 0
-            ? { cacheBytes: Math.round(cacheMb) * 1024 * 1024 }
-            : {}),
-        })
-      );
-      state = { store: new AacStore(handle, directory), reason: null };
-    } catch (error) {
+    const openFailed = (error: unknown): StoreState => {
       state = { store: null, reason: storeErrorCode(error) };
       try {
         logger.warn('store.open_failed', 'The history store could not open', {
@@ -325,6 +354,79 @@ export function openAacStore(
       } catch {
         /* Logging never stops the dashboard. */
       }
+      return state;
+    };
+    if ((env.AAC_STORE ?? '').trim().toLowerCase() === 'off') {
+      state = { store: null, reason: 'disabled' };
+      return state;
+    }
+    const directory = storeDirectory(options.ccsDir);
+    const openArgs = JSON.stringify({
+      dir: directory,
+      retentionDays: STORE_RAW_RETENTION_DAYS,
+      ...storeOpenEnv(env),
+    });
+    // R3: with the store hosted, this process never opens it through NAPI (design 1.3).
+    // Test doubles (`options.load`) and other roots keep the in-process open below.
+    const root = options.ccsDir ?? getCcsDir();
+    if (!options.load && rustStoreHosted(root)) {
+      if (rustStoreAttached(root)) {
+        // Another front door owns the service and its store, as a second NAPI open read.
+        state = { store: null, reason: 'lock_held' };
+        return state;
+      }
+      if (!rustStoreGaveUp(root)) {
+        const handle = new SocketStoreHandle(root, {
+          env,
+          onFallback: () => {
+            fellBack = true;
+            if (state.store) state = { ...state, hosted: false };
+            try {
+              logger.warn(
+                'store.host_fallback',
+                'The store service gave up; the history store reopened in this process'
+              );
+            } catch {
+              /* Logging never stops the dashboard. */
+            }
+            for (const listener of fallbackListeners) {
+              try {
+                listener();
+              } catch {
+                /* A listener never stops the store. */
+              }
+            }
+          },
+        });
+        removeGaveUpHandler = onRustStoreGaveUp(root, () => handle.hostGaveUp());
+        try {
+          await handle.call('open', openArgs);
+          state = { store: new AacStore(handle, directory), reason: null, hosted: true };
+        } catch (error) {
+          if (storeErrorCode(error) === 'service_down') {
+            // The lifecycle restarts the service, and the handle reopens on its first
+            // call; until then producers read service_down, as they read lock_held today.
+            state = { store: new AacStore(handle, directory), reason: null, hosted: true };
+          } else {
+            removeGaveUpHandler();
+            removeGaveUpHandler = null;
+            return openFailed(error);
+          }
+        }
+        return state;
+      }
+    }
+    const loaded = (options.load ?? (() => loadNativeStore({ env })))();
+    if (!loaded.module) {
+      state = { store: null, reason: loaded.reason };
+      return state;
+    }
+    const handle = new loaded.module.NativeStore();
+    try {
+      await handle.call('open', openArgs);
+      state = { store: new AacStore(handle, directory), reason: null };
+    } catch (error) {
+      return openFailed(error);
     }
     return state;
   })();
@@ -344,6 +446,8 @@ export async function closeAacStore(): Promise<void> {
   const store = state.store;
   state = { store: null, reason: 'closed' };
   opening = Promise.resolve(state);
+  removeGaveUpHandler?.();
+  removeGaveUpHandler = null;
   if (store) await store.close().catch(() => undefined);
 }
 
@@ -351,6 +455,9 @@ export async function closeAacStore(): Promise<void> {
 export function resetAacStoreForTests(): void {
   state = { store: null, reason: null };
   opening = null;
+  fellBack = false;
+  removeGaveUpHandler?.();
+  removeGaveUpHandler = null;
 }
 
 /**

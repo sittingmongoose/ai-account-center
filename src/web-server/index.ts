@@ -65,7 +65,12 @@ import {
 } from './services/account-lifecycle-runtime';
 import { startCgroupForeignCheck } from './services/cgroup-foreign-check';
 import { readSnapshotSettings, startAgentUsageSnapshot } from './agent-usage/agent-usage-snapshot';
-import { openAacStore, startAacStoreMaintenance } from '../store/store-service';
+import {
+  closeAacStore,
+  onStoreHostFallback,
+  openAacStore,
+  startAacStoreMaintenance,
+} from '../store/store-service';
 import { startScoreboardService } from './scoreboard/scoreboard-service';
 import { startStatusService } from './status/status-service';
 import { getSignInHealth } from './services/signin-health-service';
@@ -314,6 +319,7 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   let stopCgroupForeignCheck: (() => void) | null = null;
   let stopAgentUsageSnapshot: (() => void) | null = null;
   let stopStoreMaintenance: (() => void) | null = null;
+  let stopStoreFallbackWatch: (() => void) | null = null;
   let stopStatusService: (() => void) | null = null;
   // Start the small command parent before analytics/collectors populate the server heap.
   await startProcessBroker().catch(() => {
@@ -336,6 +342,11 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
+    // R3 shutdown order: the store's close goes to the service before it ends (the
+    // service also closes its engine itself; the shutdown handlers await the same call).
+    stopStoreFallbackWatch?.();
+    stopStoreFallbackWatch = null;
+    void closeAacStore();
     rustService.stop();
     stopEventLoopMonitor();
     httpsServer?.close();
@@ -436,12 +447,22 @@ export async function startServer(options: ServerOptions): Promise<ServerInstanc
       });
       // The history store (docs/store.md): opened before the first sample, which waits for it;
       // without the native module the dashboard runs as before, without stored history.
+      // R3: while the service hosts the store, its jobs run there; this loop starts only
+      // for the in-process store, including after the automatic fallback.
+      const startStoreMaintenanceOnce = (): void => {
+        stopStoreMaintenance ??= startAacStoreMaintenance({
+          snapshotDirectory: async () => (await readSnapshotSettings())?.directory ?? null,
+        });
+      };
+      stopStoreFallbackWatch = onStoreHostFallback(startStoreMaintenanceOnce);
       void openAacStore().then((opened) => {
-        if (opened.store)
-          stopStoreMaintenance = startAacStoreMaintenance({
-            snapshotDirectory: async () => (await readSnapshotSettings())?.directory ?? null,
-          });
-        else if (opened.reason && opened.reason !== 'missing' && opened.reason !== 'disabled')
+        if (opened.store && !opened.hosted) startStoreMaintenanceOnce();
+        else if (
+          !opened.store &&
+          opened.reason &&
+          opened.reason !== 'missing' &&
+          opened.reason !== 'disabled'
+        )
           logger.warn('store.unavailable', 'The history store is unavailable', {
             reason: opened.reason,
           });

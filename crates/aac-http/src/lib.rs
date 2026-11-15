@@ -24,6 +24,8 @@ mod registered;
 #[cfg(unix)]
 mod status_fed;
 #[cfg(unix)]
+mod store_host;
+#[cfg(unix)]
 mod table;
 #[cfg(unix)]
 mod unix;

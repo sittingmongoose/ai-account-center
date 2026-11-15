@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const self = fileURLToPath(import.meta.url);
 const sha256 = createHash('sha256').update(fs.readFileSync(self)).digest('hex');
-const build = JSON.stringify({ commit: 'unknown', sha256, protocol: 2, storeSchema: 2 });
+const build = JSON.stringify({ commit: 'unknown', sha256, protocol: 3, storeSchema: 2 });
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -25,6 +25,69 @@ process.stdin.on('end', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
 
 const server = http.createServer();
+// R3: the fake store host's memory (the real one's semantics run on Nas1 binaries).
+const store = { opens: 0, records: 0, closed: true };
+const storeStatus = () =>
+  JSON.stringify({
+    state: 'ready',
+    instanceId: 'f'.repeat(32),
+    storeSchemaVersion: 2,
+    openedAt: 1,
+    cacheBytes: 1,
+    retentionDays: 0,
+    redbBytes: 1,
+    logs: {},
+    checkpoints: {},
+    meta: {},
+    redbStats: {},
+    capture: {},
+    storageHealth: {},
+    findings: [],
+  });
+function storeCall(boot, req, res) {
+  let principal;
+  try {
+    principal = JSON.parse(req.headers['x-aac-principal']);
+  } catch {
+    principal = null;
+  }
+  if (principal?.role !== 'service') {
+    res.statusCode = 401;
+    res.end('{"error":"Authentication required"}');
+    return;
+  }
+  if (!boot.store) {
+    res.statusCode = 500;
+    res.end('{"error":"service_down: the store host is not enabled on this boot"}');
+    return;
+  }
+  const method = req.url.slice('/internal/store/'.length);
+  let body = '';
+  req.on('data', (chunk) => (body += chunk));
+  req.on('end', () => {
+    const fail = (error) => {
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error }));
+    };
+    if (method === 'open') {
+      store.opens++;
+      store.closed = false;
+      res.end(storeStatus());
+    } else if (method === 'close') {
+      store.closed = true;
+      res.end('{"closed":true}');
+    } else if (store.closed) fail('closed: the store is not open');
+    else if (method === 'status') res.end(storeStatus());
+    else if (method === 'record') {
+      store.records += JSON.parse(body).observations?.length ?? 0;
+      res.end('{"sampled":1,"seen":0,"skipped":0,"rejected":0}');
+    } else if (method === 'counts')
+      res.end(JSON.stringify({ opens: store.opens, records: store.records }));
+    else if (method === 'hostJobs')
+      res.end('{"open":true,"bootError":null,"jobs":{"passes":0}}');
+    else fail(`invalid: unknown method ${method}`);
+  });
+}
 function start(boot) {
   server.on('request', (req, res) => {
     res.setHeader('x-aac-service-boot', boot.bootId);
@@ -65,6 +128,28 @@ function start(boot) {
       if (!Number.isInteger(n)) return decline('shape');
       if (n < 30 || n > 3600) return decline('number');
       res.end(JSON.stringify({ refreshIntervalSeconds: n }));
+      return;
+    }
+    if (req.url.startsWith('/internal/store/')) return storeCall(boot, req, res);
+    // R3: a body without the writer snapshot is the hosted status read.
+    if (req.url === '/api/store/status') {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        let snapshot;
+        try {
+          snapshot = JSON.parse(body)?.snapshot;
+        } catch {
+          snapshot = undefined;
+        }
+        if (snapshot !== undefined) return res.end(JSON.stringify(snapshot));
+        if (!boot.store || store.closed) {
+          res.statusCode = 503;
+          res.setHeader('x-aac-decline', 'unsupported');
+          return res.end('{"error":"TypeScript read fallback required"}');
+        }
+        res.end(storeStatus());
+      });
       return;
     }
     res.statusCode = 404;
