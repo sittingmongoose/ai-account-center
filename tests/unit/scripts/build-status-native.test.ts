@@ -10,16 +10,16 @@ for (const receipt of ['missing', 'stale']) {
   it(`refuses a ${receipt} native receipt before copying or verifying the package`, () => {
     const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-native-receipt-'));
     try {
-      for (const dir of ['scripts', 'native/aac-status/prebuilt', 'web-dashboard/public'])
+      for (const dir of ['scripts', 'crates/aac-status/prebuilt', 'web-dashboard/public'])
         fs.mkdirSync(path.join(fixture, dir), { recursive: true });
       fs.copyFileSync(
         path.join(root, 'scripts/build-status-native.js'),
         path.join(fixture, 'scripts/build-status-native.js')
       );
-      for (const name of ['Cargo.toml', 'Cargo.lock', 'build.rs', 'rust-toolchain.toml', 'src'])
+      for (const name of ['Cargo.toml', 'build.rs', 'rust-toolchain.toml', 'src'])
         fs.cpSync(
-          path.join(root, 'native/aac-status', name),
-          path.join(fixture, 'native/aac-status', name),
+          path.join(root, 'crates/aac-status', name),
+          path.join(fixture, 'crates/aac-status', name),
           { recursive: true }
         );
       fs.copyFileSync(
@@ -27,7 +27,8 @@ for (const receipt of ['missing', 'stale']) {
         path.join(fixture, 'web-dashboard/public/computers.json')
       );
       // The number layer the crate composes with is a build input too (L3).
-      fs.copyFileSync(path.join(root, 'Cargo.toml'), path.join(fixture, 'Cargo.toml'));
+      for (const name of ['Cargo.toml', 'Cargo.lock'])
+      fs.copyFileSync(path.join(root, name), path.join(fixture, name));
       for (const name of ['Cargo.toml', 'src'])
         fs.cpSync(
           path.join(root, 'crates/aac-num', name),
@@ -47,7 +48,7 @@ for (const receipt of ['missing', 'stale']) {
       ])
         fs.cpSync(path.join(root, input), path.join(fixture, input), { recursive: true });
       const builder = require(path.join(fixture, 'scripts/build-status-native.js'));
-      const prebuilt = path.join(fixture, 'native/aac-status/prebuilt');
+      const prebuilt = path.join(fixture, 'crates/aac-status/prebuilt');
       const file = path.join(prebuilt, builder.moduleName());
       fs.writeFileSync(file, 'module must be rejected before loading');
       if (receipt === 'stale')

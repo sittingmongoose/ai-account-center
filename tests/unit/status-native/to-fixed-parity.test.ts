@@ -16,12 +16,12 @@ import { composeSpendByStream } from '../../../src/web-server/status/spend-by-st
  */
 const PREBUILT = path.join(
   import.meta.dir,
-  '../../../native/aac-status/prebuilt',
+  '../../../crates/aac-status/prebuilt',
   nativeStatusModuleName()
 );
 const hasModule = fs.existsSync(PREBUILT);
 const withModule = hasModule ? it : it.skip;
-const FIXTURES = path.join(import.meta.dir, '../../../native/aac-status/tests/fixtures');
+const FIXTURES = path.join(import.meta.dir, '../../../crates/aac-status/tests/fixtures');
 const fixture = (name: string): Record<string, any> =>
   JSON.parse(fs.readFileSync(path.join(FIXTURES, name), 'utf8')) as Record<string, any>;
 

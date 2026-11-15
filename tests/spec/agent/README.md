@@ -245,7 +245,7 @@ agent refusal or exact whole-verb fallback, never an ordinary success. The
 production run repeats key/pin cases without fixture features and checks that
 history fixture injection delegates. It does not claim native Mac/Windows proof.
 
-Pins use `native/aac-status` as a path dependency without its Node feature:
+Pins use `crates/aac-status` as a path dependency without its Node feature:
 one read-only SQLite cursor, five-second busy timeout, 1,000 rows and 1 MiB of
 pin data. Its remote entry point preserves all nine original SQL columns,
 including child rows, scalar types, and absent versus explicit-null type facts.

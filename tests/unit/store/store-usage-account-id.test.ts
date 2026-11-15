@@ -2,7 +2,7 @@ import { loadStoreTestModule } from '../../support/store-handle';
 /**
  * Scoreboard v2 recheck 2, H1: a usage account id may be exactly `<provider>:<email address>`
  * (a Claude account without a profile id is `claude:<email>`) and nothing near it. The shared
- * table (`tests/fixtures/usage-account-id-cases.json`, also run by `native/aac-store`) goes
+ * table (`tests/fixtures/usage-account-id-cases.json`, also run by `crates/aac-store`) goes
  * through the real producer (`storeObservationFromAccount`) and the real native module; every
  * store file's bytes are checked after sealing, reopening and a rebuild from the logs. Synthetic
  * values only: every refused id holds `synthetic-pass`, no accepted one does. Skipped, and said

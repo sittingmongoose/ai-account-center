@@ -9,7 +9,7 @@ import { mergePins, readPinnedThreads } from '../../../src/status-native/pinned'
 /** The module `bun run status:build` leaves behind; the fixture tests need the real reader. */
 const PREBUILT = path.join(
   import.meta.dir,
-  '../../../native/aac-status/prebuilt',
+  '../../../crates/aac-status/prebuilt',
   nativeStatusModuleName()
 );
 const hasModule = fs.existsSync(PREBUILT);

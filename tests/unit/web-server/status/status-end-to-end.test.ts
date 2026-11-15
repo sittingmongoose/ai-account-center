@@ -28,7 +28,7 @@ import {
 /** The module `bun run status:build` leaves behind; the end-to-end path needs the real one. */
 const PREBUILT = path.join(
   import.meta.dir,
-  '../../../../native/aac-status/prebuilt',
+  '../../../../crates/aac-status/prebuilt',
   nativeStatusModuleName()
 );
 const hasModule = fs.existsSync(PREBUILT);
