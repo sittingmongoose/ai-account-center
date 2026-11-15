@@ -130,10 +130,14 @@ fn read_with_policy(path: &Path, cap: usize, bom: bool, private: bool) -> Option
         proof::reject();
         return None;
     }
+    if files::foreign(&before) {
+        proof::reject();
+        return None;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if before.uid() != crate::key_store::uid() || (private && before.mode() & 0o077 != 0) {
+        if private && before.mode() & 0o077 != 0 {
             proof::reject();
             return None;
         }
@@ -196,8 +200,7 @@ fn children(path: &Path, dirs_only: bool, cap: usize) -> Vec<PathBuf> {
     if dirs_only {
         result.retain(|p| {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            matches(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,63}\z", name)
-                && metadata(p).is_some_and(|m| m.is_dir())
+            files::safe_name(name) && metadata(p).is_some_and(|m| m.is_dir())
         });
         if result.len() > 64 {
             proof::reject();
