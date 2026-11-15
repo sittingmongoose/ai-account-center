@@ -370,6 +370,12 @@ fn zai(p: &Value) -> Value {
             && let Some(details) = item["usageDetails"].as_array()
         {
             for d in details.iter().take(30) {
+                // plan_usage.py tests `detail.get("modelCode") not in labels`: a list or object code
+                // is unhashable there, raises TypeError, and the whole collector reports an error.
+                // Skipping it would publish the parent quota as current data instead: delegate.
+                if d.is_object() && (d["modelCode"].is_array() || d["modelCode"].is_object()) {
+                    return proof::fallback();
+                }
                 let label = match d["modelCode"].as_str() {
                     Some("search-prime") => "Search",
                     Some("web-reader") => "Web reader",
@@ -625,6 +631,61 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 43);
+    }
+}
+
+#[cfg(test)]
+mod zai_feature_code_tests {
+    use super::*;
+    // Final Astra max MED-1: plan_usage.py raises on an unhashable `modelCode` in the first 30
+    // TIME_LIMIT details (a collector error), so Rust must delegate there and only there.
+    fn payload(kind: &str, details: Value) -> Value {
+        json!({"success": true, "code": 200, "data": {"level": "pro", "limits": [{
+            "type": kind, "number": 5, "unit": 3, "usage": 100, "currentValue": 25,
+            "nextResetTime": "2026-01-01T00:00:00Z", "usageDetails": details}]}})
+    }
+    fn at(index: usize, code: Value) -> Value {
+        let mut details: Vec<Value> = (0..index)
+            .map(|_| json!({"modelCode": "other", "usage": 1}))
+            .collect();
+        details.push(json!({"modelCode": code, "usage": 3}));
+        Value::Array(details)
+    }
+    fn served(v: &Value) -> bool {
+        *v != proof::fallback() && v["windows"].is_array()
+    }
+    #[test]
+    fn unhashable_codes_in_the_first_thirty_time_limit_details_delegate() {
+        for code in [
+            json!([]),
+            json!({}),
+            json!(["search-prime"]),
+            json!({"name": "search-prime"}),
+        ] {
+            for index in [0, 29] {
+                let out = proof::scope(|| zai(&payload("TIME_LIMIT", at(index, code.clone()))));
+                assert_eq!(out, proof::fallback(), "{code} at {index}");
+            }
+            // Python reads only details[:30], and only on TIME_LIMIT.
+            let past = proof::scope(|| zai(&payload("TIME_LIMIT", at(30, code.clone()))));
+            assert!(served(&past), "{code} at 30: {past}");
+            let tokens = proof::scope(|| zai(&payload("TOKENS_LIMIT", at(0, code.clone()))));
+            assert!(served(&tokens), "{code} on TOKENS_LIMIT: {tokens}");
+        }
+    }
+    #[test]
+    fn scalar_codes_and_non_object_details_are_still_served() {
+        for details in [
+            at(0, json!("unknown")),
+            at(0, json!("search-prime")),
+            at(0, Value::Null),
+            at(0, json!(7)),
+            json!([[]]),
+            json!([["search-prime"]]),
+        ] {
+            let out = proof::scope(|| zai(&payload("TIME_LIMIT", details.clone())));
+            assert!(served(&out), "{details}: {out}");
+        }
     }
 }
 
