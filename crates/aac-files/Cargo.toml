@@ -9,14 +9,12 @@ publish.workspace = true
 [dependencies]
 aac-core.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
 fs2.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

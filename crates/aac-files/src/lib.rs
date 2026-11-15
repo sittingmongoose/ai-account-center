@@ -1,11 +1,20 @@
-//! Private store registry, advisory ownership and durable same-directory replacement.
-use aac_core::{Cause, Failure, bounded_read};
+//! One file policy (L2): path admission ([`path`]), the hardened read ([`read`]), the private-file
+//! registry shared with TS ([`registry`]) and durable, leased same-folder replacement
+//! ([`OwnedStore`]). Every Rust reader and writer of a file outside the store goes through here;
+//! `scripts/foundation/one-file-policy.mjs` refuses a raw open, link flag or rename elsewhere.
+use aac_core::{Cause, Failure};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+
+pub mod path;
+pub mod read;
+pub mod registry;
+
+use read::{Read, ReadPolicy};
 
 /// Storage classification used for retention and credential separation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +50,31 @@ pub enum BackupClass {
     Sensitive,
 }
 
+/// How a writer makes and checks the folders above its file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Parents {
+    /// The root is canonical; every folder from `/` down is a real folder, never a link; a
+    /// missing folder is made 0700. The target must be a regular file or missing.
+    Private,
+    /// The rule of the Python helper that is still the reference for this file: missing parents
+    /// are made at the umask default and followed as Python's `mkdir(parents=True)` does; the
+    /// file's own folder is made 0700, must be a real folder this user owns, and loses any group
+    /// or other bit. The target is replaced as `os.replace` does (anything but a folder).
+    Reference,
+}
+
+/// Where a writer's kernel lease is taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Lease {
+    /// `<name>.lock` beside the file.
+    File,
+    /// The file's folder itself (`flock` on its descriptor), for folders whose listing another
+    /// implementation reads and counts, where a lock file would change the answer.
+    Folder,
+}
+
 /// A single relative private file and the process role allowed to write it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoreSpec {
@@ -66,51 +100,15 @@ pub struct Registry {
     stores: BTreeMap<PathBuf, StoreSpec>,
 }
 
-/// Resolve a root once with Node's lexical path.resolve semantics: relative paths use the
-/// supplied absolute base, dot segments collapse, and no filesystem symlink is followed.
-/// The result may name a directory that does not exist yet. Store claims still refuse symlinks.
-pub fn resolve_root(base: &Path, selected: &Path) -> Result<PathBuf, Failure> {
-    let path = if selected.is_absolute() {
-        selected.to_path_buf()
-    } else {
-        if !base.is_absolute() {
-            return Err(Failure::new(
-                Cause::Refused,
-                "relative root requires an absolute base",
-            ));
-        }
-        base.join(selected)
-    };
-    canonical_absolute(&path)
-}
-
-fn canonical_absolute(path: &Path) -> Result<PathBuf, Failure> {
-    if !path.is_absolute() {
-        return Err(Failure::new(Cause::Refused, "store root must be absolute"));
-    }
-    let mut result = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if result.file_name().is_some() {
-                    result.pop();
-                }
-            }
-            _ => result.push(part.as_os_str()),
-        }
-    }
-    Ok(result)
-}
-
 fn require_absolute(path: &Path) -> Result<(), Failure> {
-    if canonical_absolute(path)?.as_os_str() != path.as_os_str() {
+    if path::node::absolute(path)?.as_os_str() != path.as_os_str() {
         return Err(Failure::new(Cause::Refused, "store root must be canonical"));
     }
     Ok(())
 }
 
 fn relative(path: &Path) -> bool {
+    use std::path::Component;
     !path.as_os_str().is_empty()
         && path.components().all(|c| matches!(c, Component::Normal(_)))
         && !path.to_string_lossy().contains(['\\', ':'])
@@ -153,25 +151,13 @@ impl Registry {
                 "store belongs to another process role",
             ));
         }
-        ensure_directory(root)?;
-        let file = resolve_root(root, &spec.path)?;
-        let parent = file
-            .parent()
-            .ok_or_else(|| Failure::new(Cause::Refused, "missing store parent"))?;
-        ensure_directory(parent)?;
-        let name = file
-            .file_name()
-            .ok_or_else(|| Failure::new(Cause::Refused, "missing store name"))?;
-        let mut lock_name = name.to_os_string();
-        lock_name.push(".lock");
-        let lock = open_private(&parent.join(lock_name), true)?;
-        FileExt::try_lock_exclusive(&lock)
-            .map_err(|_| Failure::new(Cause::Busy, "store writer already active"))?;
-        Ok(OwnedStore {
-            path: file,
-            spec: spec.clone(),
-            _lock: lock,
-        })
+        OwnedStore::open(
+            root,
+            &spec.path,
+            spec.max_size,
+            Parents::Private,
+            Lease::File,
+        )
     }
 }
 
@@ -181,15 +167,64 @@ impl Registry {
 #[derive(Debug)]
 pub struct OwnedStore {
     path: PathBuf,
-    spec: StoreSpec,
+    max_size: usize,
+    parents: Parents,
     _lock: File,
 }
 
 impl OwnedStore {
+    /// Make the row's folders under `root` by its rule, then take its lease.
+    fn open(
+        root: &Path,
+        relative: &Path,
+        max_size: usize,
+        parents: Parents,
+        lease: Lease,
+    ) -> Result<Self, Failure> {
+        let file = match parents {
+            Parents::Private => {
+                require_absolute(root)?;
+                ensure_directory(root)?;
+                path::node::resolve(root, relative)?
+            }
+            Parents::Reference => {
+                if !root.is_absolute() {
+                    return Err(Failure::new(Cause::Refused, "store root must be absolute"));
+                }
+                root.join(relative)
+            }
+        };
+        let parent = file
+            .parent()
+            .ok_or_else(|| Failure::new(Cause::Refused, "missing store parent"))?;
+        folders(parent, parents)?;
+        let lock = match lease {
+            Lease::File => {
+                let name = file
+                    .file_name()
+                    .ok_or_else(|| Failure::new(Cause::Refused, "missing store name"))?;
+                let mut lock_name = name.to_os_string();
+                lock_name.push(".lock");
+                open_lock(&parent.join(lock_name))?
+            }
+            Lease::Folder => open_folder(parent)?,
+        };
+        FileExt::try_lock_exclusive(&lock)
+            .map_err(|_| Failure::new(Cause::Busy, "store writer already active"))?;
+        Ok(OwnedStore {
+            path: file,
+            max_size,
+            parents,
+            _lock: lock,
+        })
+    }
+
     /// Read only a regular file and enforce the declared cap during streaming.
     pub fn read(&self) -> Result<Vec<u8>, Failure> {
-        require_absolute(&self.path)?;
-        read_bounded(&self.path, self.spec.max_size)
+        if self.parents == Parents::Private {
+            require_absolute(&self.path)?;
+        }
+        read_bounded(&self.path, self.max_size)
     }
 
     /// Replace all bytes durably, retaining the old file on pre-rename failure.
@@ -197,26 +232,47 @@ impl OwnedStore {
         self.write_with(|out| out.write_all(bytes))
     }
 
-    /// Stage bytes through a capped writer, fsync them, rename on the same filesystem, then
-    /// fsync the directory on Unix. Closure failure or unwinding removes the staging file.
-    /// A post-rename directory-sync failure is reported although the new file is visible.
+    /// Stage bytes through a capped writer in a new 0600 file beside the target (`O_EXCL`, a
+    /// random `.<name>.<random>.tmp` name), fsync them, rename on the same filesystem, then
+    /// fsync the folder on Unix. Closure failure or unwinding removes the staging file.
+    /// A post-rename folder-sync failure is reported although the new file is visible.
     pub fn write_with(
         &self,
         write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
     ) -> Result<(), Failure> {
-        require_absolute(&self.path)?;
-        reject_special(&self.path, true)?;
+        self.write_staged(write, &mut |_| Ok(()))
+    }
+
+    /// [`OwnedStore::write_with`] with a hook after each step (the test seam for a write
+    /// interrupted mid-way).
+    fn write_staged(
+        &self,
+        write: impl FnOnce(&mut dyn Write) -> io::Result<()>,
+        step: &mut dyn FnMut(Step) -> io::Result<()>,
+    ) -> Result<(), Failure> {
+        if self.parents == Parents::Private {
+            require_absolute(&self.path)?;
+            reject_special(&self.path, true)?;
+        }
         let parent = self
             .path
             .parent()
             .ok_or_else(|| Failure::new(Cause::Refused, "missing parent"))?;
-        ensure_directory(parent)?;
-        let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+        folders(parent, self.parents)?;
+        let name = self
+            .path
+            .file_name()
+            .ok_or_else(|| Failure::new(Cause::Refused, "missing name"))?;
+        let mut staged = tempfile::Builder::new()
+            .prefix(&format!(".{}.", name.to_string_lossy()))
+            .suffix(".tmp")
+            .tempfile_in(parent)?;
         set_private(staged.as_file())?;
+        step(Step::Staged)?;
         {
             let mut capped = CappedWriter {
                 inner: staged.as_file_mut(),
-                left: self.spec.max_size,
+                left: self.max_size,
                 exceeded: false,
             };
             let result = write(&mut capped);
@@ -229,10 +285,13 @@ impl OwnedStore {
             result?;
             capped.flush()?;
         }
+        step(Step::Written)?;
         staged.as_file().sync_all()?;
+        step(Step::Synced)?;
         staged
             .persist(&self.path)
             .map_err(|_| Failure::new(Cause::NotWritable, "atomic replacement failed"))?;
+        step(Step::Renamed)?;
         sync_directory(parent)?;
         Ok(())
     }
@@ -263,6 +322,15 @@ impl OwnedStore {
     }
 }
 
+/// The steps of one replacement, for the interrupted-write tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    Staged,
+    Written,
+    Synced,
+    Renamed,
+}
+
 struct CappedWriter<'a> {
     inner: &'a mut File,
     left: usize,
@@ -283,14 +351,23 @@ impl Write for CappedWriter<'_> {
     }
 }
 
-/// Read a regular non-symlink file with a streaming byte cap; do not trust its metadata size.
+/// Read a regular non-symlink file with a byte cap, through [`read::read`]; the failure keeps
+/// the classification callers already report.
 pub fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, Failure> {
-    reject_special(path, false)?;
-    let file = open_private(path, false)?;
-    if !file.metadata()?.is_file() {
-        return Err(Failure::new(Cause::Refused, "not a regular file"));
+    match read::read(path, &ReadPolicy::capped(max as u64)) {
+        Read::Bytes(bytes, _) => Ok(bytes),
+        Read::Absent => Err(io::Error::from(io::ErrorKind::NotFound).into()),
+        Read::Unreadable(kind) => Err(io::Error::from(kind).into()),
+        Read::TooLarge => Err(Failure::new(Cause::OutputTooLarge, "byte cap exceeded")),
+        Read::Link | Read::NotRegular => Err(Failure::new(
+            Cause::Refused,
+            "symlink or special file refused",
+        )),
+        Read::Unproved | Read::Foreign | Read::BadMode => Err(Failure::new(
+            Cause::Refused,
+            "file changed while it was opened",
+        )),
     }
-    bounded_read(file, max)
 }
 
 fn reject_special(path: &Path, missing_ok: bool) -> Result<(), Failure> {
@@ -305,14 +382,11 @@ fn reject_special(path: &Path, missing_ok: bool) -> Result<(), Failure> {
     }
 }
 
-fn open_private(path: &Path, create: bool) -> Result<File, Failure> {
-    reject_special(path, create)?;
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .write(create)
-        .create(create)
-        .truncate(false);
+/// Open (or create, 0600) a writer's `<name>.lock` file without following a link.
+fn open_lock(path: &Path) -> Result<File, Failure> {
+    reject_special(path, true)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -324,10 +398,29 @@ fn open_private(path: &Path, create: bool) -> Result<File, Failure> {
     if !file.metadata()?.is_file() {
         return Err(Failure::new(Cause::Refused, "not a regular file"));
     }
-    if create {
-        set_private(&file)?;
-    }
+    set_private(&file)?;
     Ok(file)
+}
+
+/// The folder itself as a lease descriptor: a real folder, never a link.
+fn open_folder(path: &Path) -> Result<File, Failure> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let folder = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(path)?;
+        if !folder.metadata()?.is_dir() {
+            return Err(Failure::new(Cause::Refused, "not a folder"));
+        }
+        Ok(folder)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err(Failure::new(Cause::Refused, "folder leases need Unix"))
+    }
 }
 
 fn set_private(file: &File) -> Result<(), Failure> {
@@ -339,6 +432,13 @@ fn set_private(file: &File) -> Result<(), Failure> {
     #[cfg(not(unix))]
     let _ = file;
     Ok(())
+}
+
+fn folders(parent: &Path, parents: Parents) -> Result<(), Failure> {
+    match parents {
+        Parents::Private => ensure_directory(parent),
+        Parents::Reference => reference_folder(parent),
+    }
 }
 
 fn ensure_directory(path: &Path) -> Result<(), Failure> {
@@ -358,15 +458,7 @@ fn ensure_directory(path: &Path) -> Result<(), Failure> {
                 ));
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let builder = fs::DirBuilder::new();
-                #[cfg(unix)]
-                let builder = {
-                    use std::os::unix::fs::DirBuilderExt;
-                    let mut builder = builder;
-                    builder.mode(0o700);
-                    builder
-                };
-                builder.create(directory)?;
+                private_builder().create(directory)?;
             }
             Err(error) => return Err(error.into()),
         }
@@ -374,12 +466,154 @@ fn ensure_directory(path: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
+fn private_builder() -> fs::DirBuilder {
+    let builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
+        builder.mode(0o700);
+        builder
+    };
+    builder
+}
+
+/// Python's `Path.mkdir(mode=0o700, parents=True, exist_ok=True)` and the helper's check: the
+/// parents at the umask default, the folder itself 0700, a real folder of this user, tightened.
+fn reference_folder(folder: &Path) -> Result<(), Failure> {
+    let refused = || Failure::new(Cause::Refused, "store folder refused");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        fs::create_dir_all(folder.parent().ok_or_else(refused)?)?;
+        match private_builder().create(folder) {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            result => result?,
+        }
+        let meta = fs::symlink_metadata(folder)?;
+        if !meta.is_dir() || meta.file_type().is_symlink() || meta.uid() != path::uid() {
+            return Err(refused());
+        }
+        if meta.mode() & 0o077 != 0 {
+            fs::set_permissions(folder, fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = folder;
+        Err(refused())
+    }
+}
+
 fn sync_directory(path: &Path) -> Result<(), Failure> {
     #[cfg(unix)]
-    File::open(path)?.sync_all()?;
+    open_folder(path)?.sync_all()?;
     // Windows has no portable directory fsync through std. File data is synced before
     // tempfile's atomic replacement; native ACL inheritance stays the administrator's policy.
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Interrupted replacements: whatever step fails, the committed file stays whole and no
+    //! staging file is left; after the rename, the new file is whole and the folder is synced.
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    fn store(root: &Path, parents: Parents, lease: Lease) -> OwnedStore {
+        OwnedStore::open(root, Path::new("d/state.json"), 64, parents, lease).unwrap()
+    }
+
+    fn names(folder: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_write_interrupted_before_its_rename_keeps_the_committed_file() {
+        for (parents, lease, lock) in [
+            (Parents::Private, Lease::File, true),
+            (Parents::Reference, Lease::Folder, false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let store = store(&root, parents, lease);
+            store.write(b"committed").unwrap();
+            for at in [Step::Staged, Step::Written, Step::Synced] {
+                let result = store.write_staged(|out| out.write_all(b"replacement"), &mut |now| {
+                    if now == at {
+                        Err(io::Error::other("interrupted"))
+                    } else {
+                        Ok(())
+                    }
+                });
+                assert!(result.is_err(), "{at:?}");
+                assert_eq!(store.read().unwrap(), b"committed", "{at:?}");
+                let mut expected = vec!["state.json".to_owned()];
+                if lock {
+                    expected.push("state.json.lock".to_owned());
+                }
+                assert_eq!(names(&root.join("d")), expected, "{at:?}");
+            }
+            // After the rename the new file is whole, and the error says the sync did not run.
+            let result = store.write_staged(|out| out.write_all(b"renamed"), &mut |now| {
+                if now == Step::Renamed {
+                    Err(io::Error::other("interrupted"))
+                } else {
+                    Ok(())
+                }
+            });
+            assert!(result.is_err());
+            assert_eq!(store.read().unwrap(), b"renamed");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reference_folders_follow_the_python_helper() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("home/.ccs");
+        let file = Path::new("account-usage/keys/zai-12345678.json");
+        let store = OwnedStore::open(&root, file, 4096, Parents::Reference, Lease::Folder).unwrap();
+        store.write(b"{}").unwrap();
+        let keys = root.join("account-usage/keys");
+        assert_eq!(fs::metadata(&keys).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(
+            fs::metadata(keys.join("zai-12345678.json")).unwrap().mode() & 0o777,
+            0o600
+        );
+        // The parents keep the umask default, as `mkdir(parents=True)` makes them.
+        let parent = fs::metadata(root.join("account-usage")).unwrap().mode() & 0o777;
+        let probe = dir.path().join("probe");
+        fs::create_dir(&probe).unwrap();
+        assert_eq!(parent, fs::metadata(&probe).unwrap().mode() & 0o777);
+        // No lock file joins the listing; the folder lease refuses a second writer.
+        assert_eq!(names(&keys), vec!["zai-12345678.json".to_owned()]);
+        let busy = OwnedStore::open(&root, file, 4096, Parents::Reference, Lease::Folder);
+        assert_eq!(busy.unwrap_err().cause, Cause::Busy);
+        drop(store);
+        // A loose folder is tightened; a linked one is refused.
+        fs::set_permissions(&keys, fs::Permissions::from_mode(0o755)).unwrap();
+        drop(OwnedStore::open(&root, file, 4096, Parents::Reference, Lease::Folder).unwrap());
+        assert_eq!(fs::metadata(&keys).unwrap().mode() & 0o777, 0o700);
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        fs::set_permissions(&elsewhere, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_file(keys.join("zai-12345678.json")).unwrap();
+        fs::remove_dir(&keys).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &keys).unwrap();
+        assert!(reference_folder(&keys).is_err());
+        assert!(OwnedStore::open(&root, file, 4096, Parents::Reference, Lease::Folder).is_err());
+        // Refused before anything touches the link's target: no file, no mode change.
+        assert!(names(&elsewhere).is_empty());
+        assert_eq!(fs::metadata(&elsewhere).unwrap().mode() & 0o777, 0o755);
+    }
 }

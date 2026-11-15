@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "rows": [
+    { "id": "auth-sessions", "root": "ccs", "path": "auth/sessions.json", "class": "credential", "maxBytes": 4194304, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "auth-state", "root": "ccs", "path": "auth/state.json", "class": "credential", "maxBytes": 262144, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "auth-devices", "root": "ccs", "path": "auth/devices.json", "class": "credential", "maxBytes": 262144, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "auth-setup-code", "root": "ccs", "path": "auth/setup-code", "class": "credential", "maxBytes": 262144, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "usage-hub-key", "root": "ccs", "path": "auth/usage-hub-key.json", "class": "credential", "maxBytes": 4096, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "account-keys", "root": "ccs", "path": "account-usage/keys/*.json", "class": "credential", "maxBytes": 4096, "mode": "0600", "owner": "ts", "agent": true, "movesWith": null, "parents": "reference", "lease": "folder" },
+    { "id": "claude-pending", "root": "ccs", "path": "accounts/claude-pending.json", "class": "state", "maxBytes": 262144, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "claude-trash", "root": "ccs", "path": "accounts/trash.json", "class": "state", "maxBytes": 262144, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "claude-desktop-profiles", "root": "ccs", "path": "claude-desktop-profiles.json", "class": "state", "maxBytes": 1048576, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "account-visibility", "root": "ccs", "path": "account-visibility.json", "class": "setting", "maxBytes": 32768, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "dashboard-preferences", "root": "ccs", "path": "dashboard-preferences.json", "class": "setting", "maxBytes": 65536, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "dashboard-preferences-extra-sources", "root": "ccs", "path": "dashboard-preferences-extra-sources.json", "class": "setting", "maxBytes": 65536, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "account-registry", "root": "ccs", "path": "account-usage-accounts.json", "class": "setting", "maxBytes": 65536, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "agent-usage-snapshot", "root": "ccs", "path": "agent-usage-snapshot.json", "class": "setting", "maxBytes": 65536, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "account-refresh-settings", "root": "ccs", "path": "account-refresh-settings.json", "class": "setting", "maxBytes": 4096, "mode": "0600", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" },
+    { "id": "readers-check", "root": "share", "path": "v1/readers/aac/*.json", "class": "state", "maxBytes": 1048576, "mode": "0644", "owner": "ts", "agent": false, "movesWith": null, "parents": "private", "lease": "file" }
+  ]
+}
