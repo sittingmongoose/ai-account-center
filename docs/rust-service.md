@@ -402,6 +402,15 @@ SSH requires an explicit existing identity file (`computers[].transport.key`, or
 `AAC_AGENT_KNOWN_HOSTS_FILE` override those global paths for isolated gates. No path is
 guessed from a home directory. `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes` and the
 shared ControlMaster policy apply; whitespace in option paths is quoted for OpenSSH.
+SSH/SCP run with `-F none`, `ForwardAgent=no`, `GlobalKnownHostsFile=none`,
+`KnownHostsCommand=none`, `PermitLocalCommand=no` and `ClearAllForwardings=yes`.
+There are no inherited `SendEnv` or `SetEnv` rules. Rust endpoints are explicit AAC computer settings.
+The legacy TS transports prefer those settings, otherwise resolve only HostName, User, Port and
+IdentityFile using read-only `ssh -G`, cached in memory for 60 s. Unsupported proxies refuse.
+Discovery may evaluate the user's `Match exec` rules (as the previous SSH path did), with provider
+secrets and agent sockets excluded from its environment; transport itself never reads that config.
+Its pin is the explicitly configured file, or the legacy user known-hosts path written explicitly
+into argv. No key, trust or SSH config file is created or changed.
 Changing configuration or the catalog requires a service restart.
 
 The response is bounded NDJSON: progress, then a result, failure or explicit fallback.

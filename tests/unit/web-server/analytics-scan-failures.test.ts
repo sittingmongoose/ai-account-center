@@ -206,7 +206,7 @@ describe('scan failure causes', () => {
       fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
       fs.writeFileSync(
         path.join(dir, 'bin', 'ssh'),
-        `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '${stderr}' >&2\nexit ${code}\n`,
+        `#!/bin/sh\nif [ "$1" = "-G" ]; then printf 'hostname fixture.invalid\\nuser fixture\\nport 22\\nidentityfile /fixture/key\\n'; exit 0; fi\ncat >/dev/null\nprintf '%s\\n' '${stderr}' >&2\nexit ${code}\n`,
         { mode: 0o755 }
       );
       process.env.PATH = `${path.join(dir, 'bin')}${path.delimiter}${savedPath ?? ''}`;

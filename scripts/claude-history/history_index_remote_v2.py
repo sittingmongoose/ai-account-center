@@ -571,7 +571,38 @@ class BoundProfile:
         probe = "import json,stat,sys;from pathlib import Path\np=json.loads(sys.stdin.read());ok=True\nfor name in p['paths']:\n try:\n  f=Path(name);s=f.lstat();ok=ok and stat.S_ISREG(s.st_mode) and s.st_nlink==1 and all(stat.S_ISDIR(x.lstat().st_mode) and not stat.S_ISLNK(x.lstat().st_mode) for x in (f.parent,*f.parent.parents))\n except OSError:ok=False\nprint(json.dumps({'verified':ok}))\n"
         command = '/usr/bin/python3 -B -c ' + shlex.quote(probe)
         alias = self.policy['ssh'][self.platform]['alias']
-        result = subprocess.run(['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'PermitLocalCommand=no', '-o', 'ClearAllForwardings=yes', '--', alias, command], input=encode({'paths': references}), capture_output=True, timeout=12)
+        endpoint = self.policy['ssh'][self.platform]
+        ssh_home = Path(os.environ.get('CCS_HOME', str(Path.home())))
+        ssh_config = ssh_home / '.ssh/config'
+        discovery = subprocess.run(['ssh', '-G', '-F', str(ssh_config) if ssh_config.is_file() else 'none', '--', alias],
+                                   capture_output=True, timeout=2, env={k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'USER', 'LOGNAME', 'SYSTEMROOT')})
+        fields = {}
+        identities = []
+        for line in discovery.stdout.decode().splitlines():
+            parts = line.split(' ', 1)
+            if len(parts) == 2:
+                fields.setdefault(*parts)
+                if parts[0] == 'identityfile':
+                    identities.append(str(ssh_home / parts[1][2:]) if parts[1].startswith('~/') else parts[1])
+        if discovery.returncode or any(fields.get(k, 'none') != 'none' for k in ('proxyjump', 'proxycommand')):
+            refuse('ssh_configuration_unknown')
+        # One line is the configured IdentityFile; several are OpenSSH's defaults: the first that exists.
+        found = identities[:1] if len(identities) == 1 else [i for i in identities if Path(i).is_file()][:1]
+        identity = os.environ.get('AAC_AGENT_IDENTITY_FILE', found[0] if found else '')
+        if identity.startswith('~/'):
+            identity = str(ssh_home / identity[2:])
+        if not Path(identity).is_absolute():
+            refuse('ssh_configuration_unknown')
+        pin = os.environ.get('AAC_AGENT_KNOWN_HOSTS_FILE', str(ssh_home / '.ssh/known_hosts'))
+        if not Path(pin).is_absolute() or any(c in pin for c in '\n\r%"'):
+            refuse('ssh_configuration_unknown')
+        result = subprocess.run(['ssh', '-T', '-F', 'none', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+            '-o', 'UpdateHostKeys=no', '-o', 'ForwardAgent=no', '-o', 'GlobalKnownHostsFile=none', '-o', 'KnownHostsCommand=none',
+            '-o', 'IdentitiesOnly=yes', '-i', identity, '-o', 'UserKnownHostsFile="' + pin + '"',
+            '-o', 'Hostname=' + endpoint['hostname'], '-l', endpoint['username'], '-p', str(endpoint['port']),
+            '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', '-o', 'ControlMaster=no', '-o', 'ControlPath=none',
+            '-o', 'PermitLocalCommand=no', '-o', 'ClearAllForwardings=yes', '--', alias, command],
+            input=encode({'paths': references}), capture_output=True, timeout=12)
         if result.returncode or len(result.stdout) > 128 or json.loads(result.stdout) != {'verified': True}:
             refuse('transcript_metadata_unverified')
         self.bind()

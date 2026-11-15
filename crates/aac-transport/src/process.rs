@@ -96,7 +96,7 @@ impl SshPolicy {
         }
         let hosts_path = option_path(&self.known_hosts)?;
         let control_path = option_path(&self.run_dir)?;
-        let mut argv: Vec<OsString> = vec!["-T".into()];
+        let mut argv: Vec<OsString> = vec!["-T".into(), "-F".into(), "none".into()];
         for value in [
             "BatchMode=yes",
             "ConnectTimeout=5",
@@ -109,6 +109,11 @@ impl SshPolicy {
             },
             "StrictHostKeyChecking=yes",
             "UpdateHostKeys=no",
+            "ForwardAgent=no",
+            "GlobalKnownHostsFile=none",
+            "KnownHostsCommand=none",
+            "PermitLocalCommand=no",
+            "ClearAllForwardings=yes",
         ] {
             argv.extend(["-o".into(), value.into()]);
         }

@@ -1,3 +1,4 @@
+import { sshOptions } from '../../../src/web-server/services/ssh-policy';
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
 import fs from 'fs';
@@ -82,14 +83,7 @@ describe('additional account usage transport', () => {
       expect(binary).toBe('ssh');
       expect(args).toEqual([
         '-T',
-        '-o',
-        'BatchMode=yes',
-        '-o',
-        'ConnectTimeout=5',
-        '-o',
-        'ConnectionAttempts=1',
-        '-o',
-        'UpdateHostKeys=no',
+        ...sshOptions('work-machine'),
         '-o',
         'ServerAliveInterval=5',
         '-o',
@@ -267,14 +261,7 @@ describe('usage sources on Nas1', () => {
   // Nas1 is a second Ubuntu computer: an ubuntu source on its fixed ssh alias.
   const SSH_OPTIONS = [
     '-T',
-    '-o',
-    'BatchMode=yes',
-    '-o',
-    'ConnectTimeout=5',
-    '-o',
-    'ConnectionAttempts=1',
-    '-o',
-    'UpdateHostKeys=no',
+    ...sshOptions('nas1-agent'),
     '-o',
     'ServerAliveInterval=5',
     '-o',

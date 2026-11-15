@@ -1,64 +1,157 @@
-/**
- * One SSH policy for every dashboard transport (TARGET-DESIGN section 12).
- *
- * Every transport builds its argv here; none spells out ssh options itself.
- * The fixed rules, shared by all of them:
- *
- * - `-T`: no PTY allocation (the Mac sshd refuses PTYs; nothing needs one).
- * - `BatchMode=yes`: never prompt for a password or passphrase; a host that
- *   needs one fails instead of hanging.
- * - `ConnectTimeout=5`, `ConnectionAttempts=1`: one bounded connect attempt.
- * - `UpdateHostKeys=no`: never rewrite trust files, including with an overriding ssh config.
- * - Host keys verify against the user's default known_hosts. No transport
- *   sets StrictHostKeyChecking or UserKnownHostsFile, and none may: a new
- *   host key is a refusal, never an automatic accept.
- * - `--` before the alias, so an alias can never parse as an option, and
- *   exactly one remote command argument after it. Command quoting stays
- *   with each transport's own command builder (fixed paths, enumerated
- *   values, shell-specific quoting helpers).
- *
- * Keepalives are the one per-transport choice, sized to each job:
- *
- * | Transport | Interval | CountMax |
- * | --- | ---: | ---: |
- * | analytics-remote-transport | 5 | 6 |
- * | app-update-hosts (update run) | 10 | 2 |
- * | app-update-hosts (helper query/push) | none | none |
- * | claude-desktop-live-service | 5 | 1 |
- * | claude-desktop-transport | 5 | 1 |
- * | claude-host-transport | 5 | 1 |
- * | account-key-store | 5 | 1 |
- * | muse-account-lifecycle | 5 | 1 |
- * | opencode-console-wallet-service | 5 | 1 |
- * | signin-health-service | 5 | 1 |
- * | additional-usage-transport | 5 | 1 |
- * | usage-failover-transport | 5 | 3 |
- * | status/status-collectors (machine probe, pins) | 5 | 2 |
- *
- * Process timeouts and output caps stay with each transport: they are
- * per-action process budgets, not ssh options. Alias validation stays at
- * the call sites too, each with its own error type, using the one grammar
- * `isSafeUsageSshAlias` in dashboard-hosts.ts.
- */
-
+/** AAC SSH uses isolated options and explicit connection settings; never inherited transport policy. */
 /** The keepalive pair; omit it for jobs that run without one (helper sync). */
 export interface SshKeepalive {
   interval: number;
   countMax: number;
 }
 
-/** The full ssh argv for one remote command: fixed options, keepalive, `--`, alias, command. */
+import os from 'os';
+import path from 'path';
+import fs from 'fs';
+import { execFileSync } from 'child_process';
+import { loadUnifiedConfig } from '../../config/unified-config-loader';
+import { ConfigError } from '../../errors/error-types';
+
+/** No inherited forwarding, commands, environment or alternate host-key sources. Shared with SCP. */
+export const SSH_ISOLATION = [
+  '-F',
+  'none',
+  ...[
+    'BatchMode=yes',
+    'ConnectTimeout=5',
+    'ConnectionAttempts=1',
+    'StrictHostKeyChecking=yes',
+    'UpdateHostKeys=no',
+    'IdentitiesOnly=yes',
+    'ForwardAgent=no',
+    'GlobalKnownHostsFile=none',
+    'KnownHostsCommand=none',
+    'PermitLocalCommand=no',
+    'ClearAllForwardings=yes',
+  ].flatMap((value) => ['-o', value]),
+];
+
+const expandHome = (file: string, home: string) =>
+  file.startsWith('~/') ? path.join(home, file.slice(2)) : file;
+
+const resolved = new Map<string, { until: number; args: string[] }>();
+/** Connection discovery is read-only. -G never connects; only these four output fields survive.
+ * A private CCS_HOME supplies the fixture home in tests; no real SSH home is opened there.
+ * OpenSSH may evaluate Match exec during discovery, as the legacy SSH path did.
+ */
+export function sshConnectionOptions(alias: string): string[] {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(alias)) throw new ConfigError('Invalid SSH alias');
+  const home = process.env.CCS_HOME ?? os.homedir();
+  const config = loadUnifiedConfig();
+  const rows = config?.computers;
+  const values = rows && typeof rows === 'object' ? Object.entries(rows) : [];
+  const definition = values.find(([id, row]) => {
+    if (!row || typeof row !== 'object') return false;
+    const entry = row as { id?: string; sshAlias?: string };
+    return id === alias || entry.id === alias || entry.sshAlias === alias;
+  })?.[1] as
+    { transport?: { host?: string; user?: string; port?: number; key?: string } } | undefined;
+  const explicit = definition?.transport;
+  let pin =
+    process.env.AAC_AGENT_KNOWN_HOSTS_FILE ??
+    config?.agentTransportSsh?.knownHostsFile ??
+    path.join(home, '.ssh/known_hosts');
+  const identity =
+    explicit?.key || process.env.AAC_AGENT_IDENTITY_FILE || config?.agentTransportSsh?.identityFile;
+  const cacheKey = JSON.stringify([home, alias, explicit, identity, pin]);
+  const cached = resolved.get(cacheKey);
+  if (cached && cached.until > Date.now()) return [...cached.args];
+  let hostname = explicit?.host;
+  let user = explicit?.user;
+  let port = explicit?.port;
+  let key = identity || undefined;
+  if (!hostname || !user || !port || !key) {
+    const source = path.join(home, '.ssh/config');
+    // Suppress discovery trust/forwarding/commands too; no provider secrets reach Match exec.
+    const text = execFileSync(
+      'ssh',
+      ['-G', '-F', fs.existsSync(source) ? source : 'none', ...SSH_ISOLATION.slice(2), '--', alias],
+      {
+        encoding: 'utf8',
+        timeout: 1000,
+        maxBuffer: 128 * 1024,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: Object.fromEntries(
+          ['PATH', 'HOME', 'USER', 'LOGNAME', 'SYSTEMROOT', 'WINDIR'].flatMap((name) =>
+            process.env[name] ? [[name, process.env[name]]] : []
+          )
+        ),
+      }
+    );
+    const fields = new Map<string, string>();
+    for (const line of text.split('\n')) {
+      const space = line.indexOf(' ');
+      const name = line.slice(0, space);
+      if (!fields.has(name)) fields.set(name, line.slice(space + 1));
+    }
+    if (
+      ['proxyjump', 'proxycommand'].some((name) => fields.has(name) && fields.get(name) !== 'none')
+    )
+      throw new ConfigError('SSH proxy requires explicit AAC connection configuration');
+    hostname ??= fields.get('hostname');
+    user ??= fields.get('user');
+    port ??= Number(fields.get('port'));
+    // One line is the configured IdentityFile. Several are OpenSSH's defaults (or a list):
+    // use the first that exists; none means no identity, so refuse rather than guess.
+    const identities = text
+      .split('\n')
+      .filter((line) => line.startsWith('identityfile '))
+      .map((line) => expandHome(line.slice('identityfile '.length), home));
+    key ??= identities.length > 1 ? identities.find((file) => fs.existsSync(file)) : identities[0];
+  }
+  key = key && expandHome(key, home);
+  if (process.platform === 'win32') {
+    key = key?.replace(/\\/g, '/');
+    pin = pin.replace(/\\/g, '/');
+  }
+  if (
+    !hostname ||
+    !/^[A-Za-z0-9.:_-]+$/.test(hostname) ||
+    hostname.startsWith('-') ||
+    !user ||
+    !/^[A-Za-z0-9_.-]+$/.test(user) ||
+    typeof port !== 'number' ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535 ||
+    !key ||
+    !path.isAbsolute(key) ||
+    !path.isAbsolute(pin) ||
+    /[\r\n%"\\]/.test(key + pin)
+  )
+    throw new ConfigError('SSH connection requires an explicit endpoint, identity and pin');
+  const args = [
+    '-o',
+    `Hostname=${hostname}`,
+    '-o',
+    `User=${user}`,
+    '-o',
+    `Port=${port}`,
+    '-i',
+    key,
+    '-o',
+    `UserKnownHostsFile="${pin}"`,
+  ];
+  if (resolved.size >= 128) resolved.clear();
+  resolved.set(cacheKey, { until: Date.now() + 60_000, args });
+  return [...args];
+}
+
+/** Identical SSH/SCP isolation and explicit endpoint settings. */
+export function sshOptions(host: string): string[] {
+  return [...SSH_ISOLATION, ...sshConnectionOptions(host)];
+}
+
+/** The full ssh argv for one remote command. */
 export function sshArgv(host: string, command: string, keepalive?: SshKeepalive): string[] {
   return [
     '-T',
-    '-o',
-    'BatchMode=yes',
-    '-o',
-    'ConnectTimeout=5',
-    '-o',
-    'ConnectionAttempts=1',
-    '-o',
-    'UpdateHostKeys=no',
+    ...sshOptions(host),
     ...(keepalive
       ? [
           '-o',

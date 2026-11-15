@@ -13,6 +13,7 @@
  * built by an exported builder the table pins against that builder, and where
  * it is a fixed literal the table spells the literal out.
  */
+import { SSH_ISOLATION, sshConnectionOptions } from '../../../src/web-server/services/ssh-policy';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import * as childProcess from 'child_process';
 import { EventEmitter } from 'events';
@@ -66,17 +67,7 @@ import { ANALYTICS_TOOLS } from '../../../src/web-server/usage/analytics-tools';
 import type { RegistryAccount } from '../../../src/web-server/services/account-registry-v2';
 
 /** The fixed non-interactive option set every transport shares. */
-const BASE_OPTIONS = [
-  '-T',
-  '-o',
-  'BatchMode=yes',
-  '-o',
-  'ConnectTimeout=5',
-  '-o',
-  'ConnectionAttempts=1',
-  '-o',
-  'UpdateHostKeys=no',
-];
+const BASE_OPTIONS = ['-T', ...SSH_ISOLATION];
 const keepalive = (interval: number, countMax: number): string[] => [
   '-o',
   `ServerAliveInterval=${interval}`,
@@ -85,6 +76,7 @@ const keepalive = (interval: number, countMax: number): string[] => [
 ];
 const expectedArgv = (host: string, command: string, alive: string[] = []): string[] => [
   ...BASE_OPTIONS,
+  ...sshConnectionOptions(host),
   ...alive,
   '--',
   host,
@@ -152,6 +144,9 @@ beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-ssh-policy-'));
   process.env.CCS_HOME = home;
   process.env.CCS_DIR = home;
+  // SSH argv builders need an identity in the home; a placeholder, never a key.
+  fs.mkdirSync(path.join(home, '.ssh'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.ssh', 'id_ed25519'), 'fixture placeholder, not a key\n');
 });
 
 afterEach(() => {

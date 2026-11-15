@@ -51,6 +51,9 @@ let agyNativeFails: boolean;
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-lifecycle-routes-'));
   process.env.CCS_HOME = root;
+  // SSH argv builders need an identity in the home; a placeholder, never a key.
+  fs.mkdirSync(path.join(root, '.ssh'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.ssh', 'id_ed25519'), 'fixture placeholder, not a key\n');
   ccsDir = path.join(root, '.ccs');
   codexHome = path.join(root, 'native-codex');
   agyHome = path.join(root, 'agy-home');

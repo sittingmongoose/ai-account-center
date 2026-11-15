@@ -50,6 +50,9 @@ beforeEach(() => {
   cache = fs.mkdtempSync(path.join(os.tmpdir(), 'ccs-remote-sources-'));
   process.env.CCS_HOME = cache;
   delete process.env.CCS_DIR;
+  // SSH argv builders need an identity in the home; a placeholder, never a key.
+  fs.mkdirSync(path.join(cache, '.ssh'), { recursive: true });
+  fs.writeFileSync(path.join(cache, '.ssh', 'id_ed25519'), 'fixture placeholder, not a key\n');
 });
 afterEach(() => {
   for (const [key, value] of Object.entries(previousConfig)) {
