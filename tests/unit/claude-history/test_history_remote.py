@@ -22,8 +22,8 @@ spec.loader.exec_module(h)
 class Ssh(unittest.TestCase):
     def test_transcript_probe_refuses_host_key_updates(self):
         text = SOURCE.read_text()
-        start = text.index("subprocess.run(['ssh'")
-        call = text[start:text.index('], input=', start)]
+        start = text.index("subprocess.run([executable")
+        call = text[start:text.index('input=encode', start)]
         self.assertIn("'UpdateHostKeys=no'", call)
 
 

@@ -53,7 +53,7 @@ describe('muse sign-in flow', () => {
     expect(command.file).toBe('ssh');
     expect(command.args).toEqual([
       '-T',
-      ...sshOptions('mac-host'),
+      ...(await sshOptions('mac-host')),
       '-o',
       'ServerAliveInterval=5',
       '-o',
@@ -63,7 +63,7 @@ describe('muse sign-in flow', () => {
       'PATH="$HOME/.local/bin:$PATH" muse login',
     ]);
     expect(command.pty).toBe(false);
-    expect(command.env.TERM).toBe('dumb');
+    expect(command.env.TERM).toBeUndefined();
     await spec.cleanup('job_0123456789abcdef');
   });
 

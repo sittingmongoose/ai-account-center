@@ -10,7 +10,7 @@ import {
   localComputer,
   isSafeUsageSshAlias,
 } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 import {
   collectAgentWithFallback,
   inventoryKind,
@@ -279,17 +279,21 @@ function validateUsageHost(host: UsageHost): void {
 }
 
 /** A server-resolved process description for the native reset reader's bounded capture/read phases. */
-export function privateUsageInvocation(
+export async function privateUsageInvocation(
   host: UsageHost,
   request: UsageHelperRequest,
   helperSource: string,
   privateRequest: unknown = request
-): { executable: string; args: string[]; payload: { helperSource: string; request: unknown } } {
+): Promise<{
+  executable: string;
+  args: string[];
+  payload: { helperSource: string; request: unknown };
+}> {
   validateUsageHost(host);
   return {
     executable: host.sshHost ? 'ssh' : localUsagePython(request),
     args: host.sshHost
-      ? sshArgv(host.sshHost, usageHelperCommand(host.platform), { interval: 5, countMax: 3 })
+      ? await sshArgv(host.sshHost, usageHelperCommand(host.platform), { interval: 5, countMax: 3 })
       : ['-c', BOOTSTRAP],
     payload: { helperSource, request: privateRequest },
   };
@@ -312,7 +316,7 @@ export async function runPrivateUsageHelper(
     if (Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
     const helperSource = privateSource ?? (await usageHelperBundle());
     if (expired || Date.now() >= deadlineAt) throw new NetworkError('Usage source unavailable.');
-    const invocation = privateUsageInvocation(
+    const invocation = await privateUsageInvocation(
       host,
       request,
       helperSource,
@@ -324,7 +328,9 @@ export async function runPrivateUsageHelper(
       timeoutMs: usageHelperProcessTimeoutMs(request.action),
       deadlineAt,
       maxBytes: MAX_BYTES,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+      env: host.sshHost
+        ? sshEnvironment()
+        : { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
       input,
       coalesce: true,
     });

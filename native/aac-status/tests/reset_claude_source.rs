@@ -338,3 +338,34 @@ fn astra_surface_only_is_not_fable_model() {
 fn astra_unknown_surface_is_not_unscoped() {
     assert_refill_scope("unknown-surface");
 }
+
+#[test]
+fn native_helper_accepts_real_pinned_ssh_argv_and_keeps_a_bound() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, mut command) = setup();
+    let root = dir.path();
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::fs::write(root.join("config.yaml"), serde_json::to_vec(&json!({
+        "version":10,
+        "computers":{"fixture":{"transport":{"host":"127.0.0.1","user":"fixture","port":2222,"key":root.join("key")}}},
+        "agentTransportSsh":{"knownHostsFile":root.join("known_hosts")}
+    })).unwrap()).unwrap();
+    let module = serde_json::to_string(&source_root.join("src/web-server/services/usage-failover-transport.ts")).unwrap();
+    let script = format!("import {{privateUsageInvocation}} from {module}; const value=await privateUsageInvocation({{host:'fixture',platform:'mac',sshHost:'fixture'}},{{version:1,action:'inventory',provider:'claude'}},'fixture-source'); console.log(JSON.stringify(value.args));");
+    let output = std::process::Command::new("bun").args(["-e", &script])
+        .env("CCS_HOME", root).env("CCS_DIR", root).output().unwrap();
+    assert!(output.status.success(), "real SSH argv builder failed");
+    command.args = serde_json::from_slice(&output.stdout).unwrap();
+    // 50 is today's longest policy (explicit endpoint/key, fixture config, keepalive).
+    // 64 admits that policy plus 14 slots of margin, while bounding future callers.
+    assert_eq!(command.args.len(), 50);
+    let bootstrap = "import sys,json,io;p=json.loads(sys.stdin.buffer.read().decode('utf-8'));sys.stdin=io.StringIO(json.dumps(p['request']));exec(compile(p['helperSource'],'managed-fixture','exec'))";
+    let ssh = root.join("ssh");
+    std::fs::write(&ssh, format!("#!/usr/bin/python3\n{bootstrap}\n")).unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+    command.executable = ssh.to_string_lossy().into_owned();
+    let db = root.join("claims.sqlite");
+    assert!(reset_claude_source::read(&db, "claude:reused", &command).is_ok());
+    command.args.resize(65, "fixture".to_owned());
+    assert!(reset_claude_source::read(&db, "claude:reused", &command).is_err());
+}

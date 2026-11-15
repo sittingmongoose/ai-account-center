@@ -976,6 +976,13 @@
       ]
     },
     {
+      "file": "tests/spec/agent/ssh-policy-compatibility.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
+    },
+    {
       "file": "tests/spec/agent/ssh-policy-isolation.test.ts",
       "kind": "HTTP",
       "evidence": [
@@ -3461,6 +3468,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/ssh-capability-cache.test.ts",
+      "kind": "helper",
+      "evidence": [
+        "helper"
+      ]
     },
     {
       "file": "tests/unit/web-server/ssh-connection-options.test.ts",

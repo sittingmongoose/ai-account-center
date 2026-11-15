@@ -6,7 +6,7 @@ import path from 'path';
 import { ConfigError, NetworkError } from '../../errors/error-types';
 import type { DashboardPlatform } from './account-dashboard-types';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 import { collectAgentWithFallback, runKeyStoreAgent } from './agent-verbs';
 import { assertTsWritesRow } from '../../shared/private-files';
 
@@ -242,16 +242,18 @@ export type KeyHelperRunner = (
   input: string | null
 ) => Promise<string>;
 
-export const runKeyHelperOverSsh: KeyHelperRunner = (sshHost, remoteCommand, input) =>
-  new Promise((resolve, reject) => {
+export const runKeyHelperOverSsh: KeyHelperRunner = async (sshHost, remoteCommand, input) => {
+  const sshArgs0 = await sshArgv(sshHost, remoteCommand, { interval: 5, countMax: 1 });
+  return new Promise((resolve, reject) => {
     if (!isSafeUsageSshAlias(sshHost)) {
       reject(new KeyStoreError());
       return;
     }
     const child = execFile(
       'ssh',
-      sshArgv(sshHost, remoteCommand, { interval: 5, countMax: 1 }),
+      sshArgs0,
       {
+        env: sshEnvironment(),
         encoding: 'utf8',
         timeout: HELPER_TIMEOUT_MS,
         maxBuffer: MAX_HELPER_OUTPUT,
@@ -268,6 +270,7 @@ export const runKeyHelperOverSsh: KeyHelperRunner = (sshHost, remoteCommand, inp
     });
     child.stdin?.end(input ?? '');
   });
+};
 
 /** The helper's remote command line: fixed path, enumerated values, never the secret. */
 export function keyHelperCommand(

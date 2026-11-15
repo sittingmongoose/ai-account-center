@@ -1,157 +1,175 @@
-/** AAC SSH uses isolated options and explicit connection settings; never inherited transport policy. */
-/** The keepalive pair; omit it for jobs that run without one (helper sync). */
+/** One SSH/SCP policy: preserve connection config, override trust and forwarding. */
+import os from 'os';
+import path from 'path';
+import fs from 'fs';
+import { execFile } from 'child_process';
+import { loadUnifiedConfig } from '../../config/unified-config-loader';
+import { ConfigError } from '../../errors/error-types';
+
 export interface SshKeepalive {
   interval: number;
   countMax: number;
 }
 
-import os from 'os';
-import path from 'path';
-import fs from 'fs';
-import { execFileSync } from 'child_process';
-import { loadUnifiedConfig } from '../../config/unified-config-loader';
-import { ConfigError } from '../../errors/error-types';
-
-/** No inherited forwarding, commands, environment or alternate host-key sources. Shared with SCP. */
+/** Single-value command-line options take precedence over user/system config. */
 export const SSH_ISOLATION = [
-  '-F',
-  'none',
-  ...[
-    'BatchMode=yes',
-    'ConnectTimeout=5',
-    'ConnectionAttempts=1',
-    'StrictHostKeyChecking=yes',
-    'UpdateHostKeys=no',
-    'IdentitiesOnly=yes',
-    'ForwardAgent=no',
-    'GlobalKnownHostsFile=none',
-    'KnownHostsCommand=none',
-    'PermitLocalCommand=no',
-    'ClearAllForwardings=yes',
-  ].flatMap((value) => ['-o', value]),
-];
+  'BatchMode=yes',
+  'ConnectTimeout=5',
+  'ConnectionAttempts=1',
+  'StrictHostKeyChecking=yes',
+  'UpdateHostKeys=no',
+  'ForwardAgent=no',
+  'ForwardX11=no',
+  'GlobalKnownHostsFile=none',
+  'PermitLocalCommand=no',
+  'ClearAllForwardings=yes',
+  'ControlMaster=no',
+  'ControlPath=none',
+].flatMap((value) => ['-o', value]);
+
+/** Preserve local agent authentication; ForwardAgent=no prevents its remote export. */
+export function sshEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+  windows = process.platform === 'win32'
+): Record<string, string> {
+  const allowed = new Set([
+    'PATH',
+    'HOME',
+    'USER',
+    'LOGNAME',
+    'LANG',
+    'SSH_AUTH_SOCK',
+    ...(windows ? ['SYSTEMROOT', 'USERPROFILE', 'WINDIR'] : []),
+  ]);
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      ([name, value]) => value !== undefined && allowed.has(windows ? name.toUpperCase() : name)
+    )
+  ) as Record<string, string>;
+}
+
+const probes = new Map<string, Promise<string[]>>();
+const warned = new Set<string>();
+/** Bounded, coalesced probe. -F none keeps Match exec and live hosts out of capability checks. */
+async function capabilities(): Promise<string[]> {
+  const env = sshEnvironment();
+  const searchPath = Object.entries(env).find(([name]) => name.toUpperCase() === 'PATH')?.[1] ?? '';
+  let executable: string | undefined;
+  for (const directory of searchPath.split(path.delimiter)) {
+    const candidate = path.resolve(directory, process.platform === 'win32' ? 'ssh.exe' : 'ssh');
+    try {
+      await fs.promises.access(candidate, fs.constants.X_OK);
+      executable = await fs.promises.realpath(candidate);
+      break;
+    } catch {
+      /* Continue through PATH without executing a helper. */
+    }
+  }
+  if (!executable) throw new ConfigError('SSH executable unavailable');
+  const key = executable;
+  let pending = probes.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const args: string[] = [];
+      for (const option of ['KnownHostsCommand=none', 'SetEnv=AAC_SSH_POLICY=1']) {
+        const supported = await new Promise<boolean>((resolve, reject) => {
+          execFile(
+            key,
+            ['-G', '-F', 'none', '-o', option, '--', 'localhost'],
+            {
+              env,
+              encoding: 'utf8',
+              timeout: 2000,
+              maxBuffer: 128 * 1024,
+              windowsHide: true,
+            },
+            (error, _stdout, stderr) => {
+              if (!error) resolve(true);
+              else if (/Bad configuration option:/i.test(String(stderr))) resolve(false);
+              else reject(new ConfigError('SSH capability probe failed'));
+            }
+          );
+        });
+        if (supported) args.push('-o', option);
+        else if (!warned.has(key + option)) {
+          warned.add(key + option);
+          console.warn(`[AAC SSH] ${option.split('=')[0]} unsupported; compatibility downgrade`);
+        }
+      }
+      return args;
+    })();
+    // A failed probe stays cached too: callers never repeatedly pause/retry discovery.
+    probes.set(key, pending);
+  }
+  return pending;
+}
 
 const expandHome = (file: string, home: string) =>
   file.startsWith('~/') ? path.join(home, file.slice(2)) : file;
 
-const resolved = new Map<string, { until: number; args: string[] }>();
-/** Connection discovery is read-only. -G never connects; only these four output fields survive.
- * A private CCS_HOME supplies the fixture home in tests; no real SSH home is opened there.
- * OpenSSH may evaluate Match exec during discovery, as the legacy SSH path did.
- */
+/** Explicit AAC fields override config; otherwise OpenSSH retains every identity/jump/match. */
 export function sshConnectionOptions(alias: string): string[] {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(alias)) throw new ConfigError('Invalid SSH alias');
   const home = process.env.CCS_HOME ?? os.homedir();
   const config = loadUnifiedConfig();
-  const rows = config?.computers;
-  const values = rows && typeof rows === 'object' ? Object.entries(rows) : [];
-  const definition = values.find(([id, row]) => {
-    if (!row || typeof row !== 'object') return false;
-    const entry = row as { id?: string; sshAlias?: string };
-    return id === alias || entry.id === alias || entry.sshAlias === alias;
-  })?.[1] as
-    { transport?: { host?: string; user?: string; port?: number; key?: string } } | undefined;
+  const definition = Object.entries(config?.computers ?? {}).find(
+    ([id, row]) => row && (id === alias || row.id === alias || row.sshAlias === alias)
+  )?.[1];
   const explicit = definition?.transport;
-  let pin =
+  const identity =
+    explicit?.key || process.env.AAC_AGENT_IDENTITY_FILE || config?.agentTransportSsh?.identityFile;
+  const pin =
     process.env.AAC_AGENT_KNOWN_HOSTS_FILE ??
     config?.agentTransportSsh?.knownHostsFile ??
     path.join(home, '.ssh/known_hosts');
-  const identity =
-    explicit?.key || process.env.AAC_AGENT_IDENTITY_FILE || config?.agentTransportSsh?.identityFile;
-  const cacheKey = JSON.stringify([home, alias, explicit, identity, pin]);
-  const cached = resolved.get(cacheKey);
-  if (cached && cached.until > Date.now()) return [...cached.args];
-  let hostname = explicit?.host;
-  let user = explicit?.user;
-  let port = explicit?.port;
-  let key = identity || undefined;
-  if (!hostname || !user || !port || !key) {
-    const source = path.join(home, '.ssh/config');
-    // Suppress discovery trust/forwarding/commands too; no provider secrets reach Match exec.
-    const text = execFileSync(
-      'ssh',
-      ['-G', '-F', fs.existsSync(source) ? source : 'none', ...SSH_ISOLATION.slice(2), '--', alias],
-      {
-        encoding: 'utf8',
-        timeout: 1000,
-        maxBuffer: 128 * 1024,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        env: Object.fromEntries(
-          ['PATH', 'HOME', 'USER', 'LOGNAME', 'SYSTEMROOT', 'WINDIR'].flatMap((name) =>
-            process.env[name] ? [[name, process.env[name]]] : []
-          )
-        ),
-      }
-    );
-    const fields = new Map<string, string>();
-    for (const line of text.split('\n')) {
-      const space = line.indexOf(' ');
-      const name = line.slice(0, space);
-      if (!fields.has(name)) fields.set(name, line.slice(space + 1));
-    }
-    if (
-      ['proxyjump', 'proxycommand'].some((name) => fields.has(name) && fields.get(name) !== 'none')
-    )
-      throw new ConfigError('SSH proxy requires explicit AAC connection configuration');
-    hostname ??= fields.get('hostname');
-    user ??= fields.get('user');
-    port ??= Number(fields.get('port'));
-    // One line is the configured IdentityFile. Several are OpenSSH's defaults (or a list):
-    // use the first that exists; none means no identity, so refuse rather than guess.
-    const identities = text
-      .split('\n')
-      .filter((line) => line.startsWith('identityfile '))
-      .map((line) => expandHome(line.slice('identityfile '.length), home));
-    key ??= identities.length > 1 ? identities.find((file) => fs.existsSync(file)) : identities[0];
+  const optionPath = (file: string) => {
+    const expanded = expandHome(file, home);
+    const value = process.platform === 'win32' ? expanded.replace(/\\/g, '/') : expanded;
+    if (!path.isAbsolute(expanded) || /[\r\n%"\\]/.test(value))
+      throw new ConfigError('SSH paths must be explicit absolute paths');
+    return value;
+  };
+  const args = ['-o', `UserKnownHostsFile="${optionPath(pin)}"`];
+  if (explicit?.host) {
+    if (!/^[A-Za-z0-9.:_-]+$/.test(explicit.host) || explicit.host.startsWith('-'))
+      throw new ConfigError('Invalid SSH hostname');
+    args.push('-o', `Hostname=${explicit.host}`);
   }
-  key = key && expandHome(key, home);
-  if (process.platform === 'win32') {
-    key = key?.replace(/\\/g, '/');
-    pin = pin.replace(/\\/g, '/');
+  if (explicit?.user) {
+    if (!/^[A-Za-z0-9_.-]+$/.test(explicit.user)) throw new ConfigError('Invalid SSH user');
+    args.push('-o', `User=${explicit.user}`);
   }
-  if (
-    !hostname ||
-    !/^[A-Za-z0-9.:_-]+$/.test(hostname) ||
-    hostname.startsWith('-') ||
-    !user ||
-    !/^[A-Za-z0-9_.-]+$/.test(user) ||
-    typeof port !== 'number' ||
-    !Number.isInteger(port) ||
-    port < 1 ||
-    port > 65535 ||
-    !key ||
-    !path.isAbsolute(key) ||
-    !path.isAbsolute(pin) ||
-    /[\r\n%"\\]/.test(key + pin)
-  )
-    throw new ConfigError('SSH connection requires an explicit endpoint, identity and pin');
-  const args = [
-    '-o',
-    `Hostname=${hostname}`,
-    '-o',
-    `User=${user}`,
-    '-o',
-    `Port=${port}`,
-    '-i',
-    key,
-    '-o',
-    `UserKnownHostsFile="${pin}"`,
-  ];
-  if (resolved.size >= 128) resolved.clear();
-  resolved.set(cacheKey, { until: Date.now() + 60_000, args });
-  return [...args];
+  if (explicit?.port !== undefined) {
+    if (!Number.isInteger(explicit.port) || explicit.port < 1 || explicit.port > 65535)
+      throw new ConfigError('Invalid SSH port');
+    args.push('-o', `Port=${explicit.port}`);
+  }
+  if (identity) args.push('-i', optionPath(identity), '-o', 'IdentitiesOnly=yes');
+  return args;
 }
 
-/** Identical SSH/SCP isolation and explicit endpoint settings. */
-export function sshOptions(host: string): string[] {
-  return [...SSH_ISOLATION, ...sshConnectionOptions(host)];
+/** The fixture home selects fixture config; production leaves the complete SSH config intact. */
+export async function sshOptions(host: string): Promise<string[]> {
+  const connection = sshConnectionOptions(host);
+  const fixtureConfig = process.env.CCS_HOME
+    ? ['-F', path.join(process.env.CCS_HOME, '.ssh/config')]
+    : [];
+  // A missing fixture config must not fall through to the user's real home.
+  if (fixtureConfig.length) {
+    if (!fs.existsSync(fixtureConfig[1] ?? 'none')) fixtureConfig[1] = 'none';
+  }
+  return [...SSH_ISOLATION, ...(await capabilities()), ...connection, ...fixtureConfig];
 }
 
-/** The full ssh argv for one remote command. */
-export function sshArgv(host: string, command: string, keepalive?: SshKeepalive): string[] {
+/** One remote command argument; the caller owns quoting and its process deadline. */
+export async function sshArgv(
+  host: string,
+  command: string,
+  keepalive?: SshKeepalive
+): Promise<string[]> {
   return [
     '-T',
-    ...sshOptions(host),
+    ...(await sshOptions(host)),
     ...(keepalive
       ? [
           '-o',

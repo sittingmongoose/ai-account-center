@@ -1,9 +1,9 @@
 {
   "scope": "src/**/*.{ts,tsx,js,jsx,mjs,cjs}",
   "syncFs": {
-    "totalOccurrences": 1116,
+    "totalOccurrences": 1115,
     "filesAffected": 112,
-    "hotpathOccurrences": 544,
+    "hotpathOccurrences": 543,
     "hotpathFilesAffected": 62,
     "topHotpathFiles": [
       {
@@ -363,8 +363,8 @@
     ]
   },
   "legacyShim": {
-    "totalMarkers": 210,
-    "filesAffected": 63,
+    "totalMarkers": 209,
+    "filesAffected": 62,
     "topFiles": [
       {
         "file": "src/web-server/rust-service.ts",
@@ -545,16 +545,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 671,
-      "typedThrows": 219,
+      "totalThrows": 674,
+      "typedThrows": 222,
       "plainThrows": 47,
       "otherThrows": 405,
-      "adoptionRatio": 0.3264,
+      "adoptionRatio": 0.3294,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 394,
-          "typed": 166,
+          "count": 397,
+          "typed": 169,
           "plain": 7
         },
         {
@@ -683,10 +683,10 @@
       ]
     },
     "hotpathConsoleErrors": {
-      "totalOccurrences": 223,
+      "totalOccurrences": 224,
       "exemptOccurrences": 169,
-      "hotpathOccurrences": 54,
-      "filesAffected": 12,
+      "hotpathOccurrences": 55,
+      "filesAffected": 13,
       "topFiles": [
         {
           "file": "src/errors/error-handler.ts",
@@ -735,6 +735,10 @@
         {
           "file": "src/web-server/middleware/auth-middleware.ts",
           "count": 1
+        },
+        {
+          "file": "src/web-server/services/ssh-policy.ts",
+          "count": 1
         }
       ]
     },
@@ -760,7 +764,7 @@
         },
         {
           "file": "src/web-server/services/analytics-remote-transport.ts",
-          "loc": 1660
+          "loc": 1672
         },
         {
           "file": "src/codex-auth/codex-activation-runtime.ts",
@@ -772,7 +776,7 @@
         },
         {
           "file": "src/web-server/status/status-collectors.ts",
-          "loc": 1060
+          "loc": 1069
         },
         {
           "file": "src/web-server/services/usage-failover-service.ts",

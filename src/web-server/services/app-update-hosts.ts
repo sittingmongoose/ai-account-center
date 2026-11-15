@@ -8,7 +8,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import { MAX_OUTPUT, record, type UpdatePlatform } from './app-update-contract';
 import { defaultNativeReleaseFile, readNativeRelease } from '../../antigravity/native-version';
 import { HOST_OS, SSH_ALIASES, helperPlatform } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 
 /**
  * How the dashboard reaches each computer's fixed update helper: the local
@@ -39,11 +39,11 @@ export function antigravityReviewedArgument(releaseFile = defaultNativeReleaseFi
     .join(',');
 }
 
-export function appUpdateInvocation(
+export async function appUpdateInvocation(
   platform: UpdatePlatform,
   reviewed = antigravityReviewedArgument(),
   stateDirectory = path.join(getCcsDir(), 'app-updates')
-): { binary: string; args: string[] } {
+): Promise<{ binary: string; args: string[] }> {
   const local = path.resolve(__dirname, '../../../scripts/app-updates/app_updates.py');
   const review = /^[0-9A-Za-z_.,-]{1,4096}$/.test(reviewed) ? reviewed : '';
   if (platform === 'ubuntu')
@@ -84,7 +84,7 @@ export function appUpdateInvocation(
   }
   return {
     binary: 'ssh',
-    args: sshArgv(host, command, { interval: 10, countMax: 2 }),
+    args: await sshArgv(host, command, { interval: 10, countMax: 2 }),
   };
 }
 
@@ -108,20 +108,22 @@ export interface HostRunControl {
  * final {"results": [...]} line; rejects when the host never produced one.
  * stdin stays open so a "cancel" line can reach the helper (over ssh too).
  */
-export function runHost(platform: UpdatePlatform, control?: HostRunControl): Promise<string> {
-  const command = appUpdateInvocation(platform, undefined, control?.stateDirectory);
+export async function runHost(platform: UpdatePlatform, control?: HostRunControl): Promise<string> {
+  const command = await appUpdateInvocation(platform, undefined, control?.stateDirectory);
   return runHelperProcess(
     command.binary,
     command.args,
-    {
-      ...updaterEnvironment(process.env),
-      PYTHONUTF8: '1',
-      PYTHONIOENCODING: 'utf-8',
-      AAC_UPDATE_PROGRESS: '1',
-      MUSE_NO_AUTO_UPDATE: '1',
-      AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
-      DISABLE_AUTOUPDATER: '1',
-    },
+    command.binary === 'ssh'
+      ? sshEnvironment()
+      : {
+          ...updaterEnvironment(process.env),
+          PYTHONUTF8: '1',
+          PYTHONIOENCODING: 'utf-8',
+          AAC_UPDATE_PROGRESS: '1',
+          MUSE_NO_AUTO_UPDATE: '1',
+          AGY_CLI_DISABLE_AUTO_UPDATE: 'true',
+          DISABLE_AUTOUPDATER: '1',
+        },
     control
   );
 }
@@ -385,12 +387,14 @@ export function localHelperChecksums(root = PACKAGE_ROOT): Record<string, string
   return values;
 }
 
-function sshText(host: string, command: string): Promise<string> {
+async function sshText(host: string, command: string): Promise<string> {
+  const sshArgs0 = await sshArgv(host, command);
   return new Promise((resolve, reject) => {
     execFile(
       'ssh',
-      sshArgv(host, command),
+      sshArgs0,
       {
+        env: sshEnvironment(),
         encoding: 'utf8',
         timeout: HELPER_QUERY_TIMEOUT_MS,
         maxBuffer: 1024 * 1024,
@@ -401,8 +405,9 @@ function sshText(host: string, command: string): Promise<string> {
   });
 }
 
-function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): Promise<void> {
+async function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): Promise<void> {
   // lib is ES2020, so the executor form is the available API here (as in runHost).
+  const sshArgs1 = await sshArgv(host, extract);
   return new Promise((resolve, reject) => {
     let args: string[];
     try {
@@ -415,7 +420,8 @@ function pushHelpers(host: string, extract: string, root = PACKAGE_ROOT): Promis
       stdio: ['ignore', 'pipe', 'ignore'],
       windowsHide: true,
     });
-    const remote = spawn('ssh', sshArgv(host, extract), {
+    const remote = spawn('ssh', sshArgs1, {
+      env: sshEnvironment(),
       stdio: ['pipe', 'ignore', 'ignore'],
       windowsHide: true,
     });

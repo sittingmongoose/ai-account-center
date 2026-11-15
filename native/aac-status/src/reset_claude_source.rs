@@ -37,9 +37,20 @@ fn helper(command: &HelperCommand, request: Value, timeout: Duration) -> Result<
         return Err("credential-host-unavailable");
     }
     let deadline = Instant::now() + timeout;
+    let mut process = Command::new(&command.executable);
+    if Path::new(&command.executable).file_name().is_some_and(|name| name == "ssh" || name == "ssh.exe") {
+        process.env_clear();
+        for (name, value) in std::env::vars_os() {
+            let key = name.to_string_lossy();
+            let key = if cfg!(windows) { key.to_ascii_uppercase() } else { key.into_owned() };
+            if ["PATH", "HOME", "USER", "LOGNAME", "LANG", "SSH_AUTH_SOCK"].contains(&key.as_str())
+                || (cfg!(windows) && ["SYSTEMROOT", "USERPROFILE", "WINDIR"].contains(&key.as_str())) {
+                process.env(name, value);
+            }
+        }
+    }
     let mut child = OwnedChild(
-        Command::new(&command.executable)
-            .args(&command.args)
+        process.args(&command.args)
             .env("PYTHONIOENCODING", "utf-8")
             .env("PYTHONUTF8", "1")
             .stdin(Stdio::piped())

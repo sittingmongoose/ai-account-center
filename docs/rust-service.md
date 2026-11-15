@@ -402,15 +402,31 @@ SSH requires an explicit existing identity file (`computers[].transport.key`, or
 `AAC_AGENT_KNOWN_HOSTS_FILE` override those global paths for isolated gates. No path is
 guessed from a home directory. `StrictHostKeyChecking=yes`, `IdentitiesOnly=yes` and the
 shared ControlMaster policy apply; whitespace in option paths is quoted for OpenSSH.
-SSH/SCP run with `-F none`, `ForwardAgent=no`, `GlobalKnownHostsFile=none`,
-`KnownHostsCommand=none`, `PermitLocalCommand=no` and `ClearAllForwardings=yes`.
-There are no inherited `SendEnv` or `SetEnv` rules. Rust endpoints are explicit AAC computer settings.
-The legacy TS transports prefer those settings, otherwise resolve only HostName, User, Port and
-IdentityFile using read-only `ssh -G`, cached in memory for 60 s. Unsupported proxies refuse.
-Discovery may evaluate the user's `Match exec` rules (as the previous SSH path did), with provider
-secrets and agent sockets excluded from its environment; transport itself never reads that config.
-Its pin is the explicitly configured file, or the legacy user known-hosts path written explicitly
-into argv. No key, trust or SSH config file is created or changed.
+SSH/SCP preserve OpenSSH's connection config: every IdentityFile in order, HostName,
+User, Port, Match and jumps. Explicit AAC fields override their corresponding settings;
+`-i` and `IdentitiesOnly=yes` apply when AAC specifies a key. There is no synchronous
+`ssh -G` alias discovery. Match commands execute asynchronously in the SSH child, inside
+that action's existing process timeout.
+
+Command-line overrides enforce `StrictHostKeyChecking=yes`, `UpdateHostKeys=no`,
+`ForwardAgent=no`, `ForwardX11=no`, `GlobalKnownHostsFile=none`, `PermitLocalCommand=no`
+and `ClearAllForwardings=yes`. The pin is the configured file (legacy TS/Python default:
+`~/.ssh/known_hosts`); alternate global trust and `known_hosts2` do not supplement it.
+A bounded asynchronous no-connect capability probe, cached per executable, enables
+`KnownHostsCommand=none` when supported (OpenSSH 8.1 lacks it). It also probes
+`SetEnv=AAC_SSH_POLICY=1`: the harmless single assignment takes precedence over the
+config's SetEnv list. Unsupported options are omitted with one compatibility warning.
+On a client unable to suppress SetEnv, literal values in its own config can still reach
+the host, as before; AAC process secrets remain excluded.
+
+SSH/SCP receive only PATH, HOME, USER, LOGNAME, LANG and SSH_AUTH_SOCK, plus Windows
+SYSTEMROOT/USERPROFILE/WINDIR. Local agent authentication remains available; agent
+forwarding stays disabled. Local provider verbs retain their existing environment.
+TS/Python use `ControlMaster=no` and `ControlPath=none`, because reusing a user master
+would bypass the AAC pin. Rust uses private 0700 owner-checked control directories and
+short socket paths bound to the pin path, current pin-file identity and policy options.
+Changing that identity selects a new master. Long run paths use an AAC-owned short
+private directory under /tmp on Unix. No key, trust or SSH config file is created or changed.
 Changing configuration or the catalog requires a service restart.
 
 The response is bounded NDJSON: progress, then a result, failure or explicit fallback.

@@ -9,7 +9,7 @@ import {
   type ClaudeDesktopLauncher,
 } from './claude-desktop-profile-service';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
-import { sshArgv } from './ssh-policy';
+import { sshArgv, sshEnvironment } from './ssh-policy';
 import { collectAgentWithFallback, runHistoryAgent } from './agent-verbs';
 
 const SSH_TIMEOUT_MS = 8000;
@@ -59,11 +59,13 @@ async function runDesktopSsh(
   const privatePipe = privateIndexInput !== undefined;
   const timeout = privatePipe ? 30000 : SSH_TIMEOUT_MS;
   let child: ChildProcess | undefined;
+  const sshArgs0 = await sshArgv(checkHost(host), command, { interval: 5, countMax: 1 });
   const run = new Promise<string | Buffer>((resolve, reject) => {
     child = execFile(
       'ssh',
-      sshArgv(checkHost(host), command, { interval: 5, countMax: 1 }),
+      sshArgs0,
       {
+        env: sshEnvironment(),
         encoding: privatePipe ? 'buffer' : 'utf8',
         timeout,
         maxBuffer: privatePipe ? MAX_PRIVATE_INDEX_BYTES : MAX_HISTORY_BYTES,

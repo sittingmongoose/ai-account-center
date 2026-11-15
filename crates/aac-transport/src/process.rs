@@ -1,11 +1,12 @@
 use aac_config::{ComputerConfig, TransportConfig};
 use aac_core::{Cause, Failure, Retry};
+use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicUsize, Ordering},
 };
 use std::time::Duration;
@@ -42,8 +43,104 @@ impl SshPolicy {
         }
     }
 
+    async fn capabilities(&self) -> Result<Vec<OsString>, Failure> {
+        type Probe = Arc<tokio::sync::OnceCell<Result<Vec<OsString>, Failure>>>;
+        static PROBES: OnceLock<Mutex<std::collections::HashMap<(PathBuf, OsString), Probe>>> =
+            OnceLock::new();
+        let path = self
+            .path
+            .clone()
+            .or_else(|| std::env::var_os("PATH"))
+            .unwrap_or_default();
+        let probe = {
+            let mut probes = PROBES
+                .get_or_init(Mutex::default)
+                .lock()
+                .map_err(|_| Failure::new(Cause::Bug, "SSH capability cache unavailable"))?;
+            probes.entry((self.ssh.clone(), path)).or_default().clone()
+        };
+        probe
+            .get_or_init(|| async {
+                let mut args = Vec::new();
+                for option in ["KnownHostsCommand=none", "SetEnv=AAC_SSH_POLICY=1"] {
+                    let mut command = Command::new(&self.ssh);
+                    ssh_environment(&mut command);
+                    if let Some(path) = &self.path {
+                        command.env("PATH", path);
+                    }
+                    command
+                        .args(["-G", "-F", "none", "-o", option, "--", "localhost"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::piped())
+                        .kill_on_drop(true);
+                    let mut child = command.spawn()?;
+                    let stderr = child
+                        .stderr
+                        .take()
+                        .ok_or_else(|| Failure::new(Cause::Bug, "SSH probe stderr absent"))?;
+                    let result = tokio::time::timeout(Duration::from_secs(2), async {
+                        let mut output = Vec::new();
+                        stderr.take(8192).read_to_end(&mut output).await?;
+                        let status = child.wait().await?;
+                        Ok::<_, std::io::Error>((status, output))
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok((status, _))) if status.success() => {
+                            args.extend(["-o".into(), option.into()])
+                        }
+                        Ok(Ok((_, output)))
+                            if String::from_utf8_lossy(&output)
+                                .to_ascii_lowercase()
+                                .contains("bad configuration option:") =>
+                        {
+                            eprintln!(
+                                "[AAC SSH] {} unsupported; compatibility downgrade",
+                                option.split('=').next().unwrap_or("option")
+                            );
+                        }
+                        _ => {
+                            let _ = child.start_kill();
+                            let _ = tokio::time::timeout(Duration::from_millis(150), child.wait())
+                                .await;
+                            return Err(Failure::new(
+                                Cause::Refused,
+                                "SSH capability probe failed",
+                            ));
+                        }
+                    }
+                }
+                Ok(args)
+            })
+            .await
+            .clone()
+    }
+
+    fn control_directory(&self) -> PathBuf {
+        // %C expands to 40 hex characters; leave room for the policy hash on Unix sockets.
+        if self.run_dir.as_os_str().len() <= 40 {
+            return self.run_dir.clone();
+        }
+        let identity = aac_core::sha256_hex(self.run_dir.to_string_lossy().as_bytes());
+        #[cfg(unix)]
+        let root = PathBuf::from("/tmp");
+        #[cfg(not(unix))]
+        let root = std::env::temp_dir();
+        #[cfg(unix)]
+        let owner = aac_files::path::uid();
+        #[cfg(not(unix))]
+        let owner = std::process::id();
+        root.join(format!("aac-cm-{owner}-{}", &identity[..10]))
+    }
+
     fn prepare_control_directory(&self) -> Result<(), Failure> {
-        if !self.run_dir.exists() {
+        Self::prepare_directory(&self.run_dir)?;
+        Self::prepare_directory(&self.control_directory())
+    }
+
+    fn prepare_directory(directory: &Path) -> Result<(), Failure> {
+        if !directory.exists() {
             let builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             let builder = {
@@ -52,13 +149,13 @@ impl SshPolicy {
                 builder.mode(0o700);
                 builder
             };
-            match builder.create(&self.run_dir) {
+            match builder.create(directory) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error.into()),
             }
         }
-        let metadata = std::fs::symlink_metadata(&self.run_dir)?;
+        let metadata = std::fs::symlink_metadata(directory)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Err(Failure::new(
                 Cause::Refused,
@@ -67,8 +164,10 @@ impl SshPolicy {
         }
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o077 != 0 {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            if metadata.permissions().mode() & 0o077 != 0
+                || metadata.uid() != aac_files::path::uid()
+            {
                 return Err(Failure::new(
                     Cause::Refused,
                     "SSH control directory permissions are too broad",
@@ -81,7 +180,59 @@ impl SshPolicy {
     /// Exact target-design 5.1 options, in stable order. Scan keepalive is six, short is two.
     /// The separate identity argv accepts spaces. OpenSSH -o paths accept only literal ASCII
     /// letters/digits and `/._-:`; unsupported quoting, whitespace and expansion are refused.
-    pub fn argv(&self, key: &Path, scan: bool) -> Result<Vec<OsString>, Failure> {
+    pub async fn argv(&self, key: &Path, scan: bool) -> Result<Vec<OsString>, Failure> {
+        let mut argv = self.base_argv(key, scan)?;
+        argv.extend(self.capabilities().await?);
+        let policy_hash = self.policy_hash(&argv).await?;
+        let control = format!(
+            "ControlPath={}",
+            quote_option_path(&format!(
+                "{}/cm-{policy_hash}-%C",
+                option_path(&self.control_directory())?.trim_end_matches('/')
+            ))
+        );
+        argv.extend(["-o".into(), control.into()]);
+        Ok(argv)
+    }
+
+    async fn policy_hash(&self, argv: &[OsString]) -> Result<String, Failure> {
+        let pin = self.known_hosts.clone();
+        let metadata = tokio::task::spawn_blocking(move || match std::fs::metadata(&pin) {
+            Ok(meta) => {
+                let mut identity = format!("{}:{:?}", meta.len(), meta.modified());
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    identity.push_str(&format!(
+                        ":{}:{}:{}:{}",
+                        meta.dev(),
+                        meta.ino(),
+                        meta.ctime(),
+                        meta.ctime_nsec()
+                    ));
+                }
+                Ok(identity)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("absent".to_owned()),
+            Err(error) => Err(Failure::from(error)),
+        })
+        .await
+        .map_err(|_| Failure::new(Cause::Bug, "SSH pin identity unavailable"))??;
+        let mut hash = Sha256::new();
+        hash.update(b"aac-ssh-policy-v2");
+        hash.update(self.known_hosts.to_string_lossy().as_bytes());
+        hash.update(metadata.as_bytes());
+        for arg in argv {
+            hash.update([0]);
+            hash.update(arg.to_string_lossy().as_bytes());
+        }
+        Ok(hash.finalize()[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
+    }
+
+    fn base_argv(&self, key: &Path, scan: bool) -> Result<Vec<OsString>, Failure> {
         if !key.is_absolute()
             || !self.known_hosts.is_absolute()
             || !self.run_dir.is_absolute()
@@ -95,8 +246,8 @@ impl SshPolicy {
             ));
         }
         let hosts_path = option_path(&self.known_hosts)?;
-        let control_path = option_path(&self.run_dir)?;
-        let mut argv: Vec<OsString> = vec!["-T".into(), "-F".into(), "none".into()];
+        option_path(&self.run_dir)?;
+        let mut argv: Vec<OsString> = vec!["-T".into()];
         for value in [
             "BatchMode=yes",
             "ConnectTimeout=5",
@@ -110,8 +261,8 @@ impl SshPolicy {
             "StrictHostKeyChecking=yes",
             "UpdateHostKeys=no",
             "ForwardAgent=no",
+            "ForwardX11=no",
             "GlobalKnownHostsFile=none",
-            "KnownHostsCommand=none",
             "PermitLocalCommand=no",
             "ClearAllForwardings=yes",
         ] {
@@ -129,18 +280,26 @@ impl SshPolicy {
             "-o".into(),
             "ControlMaster=auto".into(),
         ]);
-        let mut control = OsString::from("ControlPath=");
-        control.push(quote_option_path(&format!(
-            "{}/cm-%C",
-            control_path.trim_end_matches('/')
-        )));
-        argv.extend([
-            "-o".into(),
-            control,
-            "-o".into(),
-            "ControlPersist=120".into(),
-        ]);
+        argv.extend(["-o".into(), "ControlPersist=120".into()]);
         Ok(argv)
+    }
+}
+
+/// Only connection/authentication environment reaches SSH or SCP; Local verbs keep theirs.
+fn ssh_environment(command: &mut Command) {
+    command.env_clear();
+    for (name, value) in std::env::vars_os() {
+        let key = name.to_string_lossy();
+        let key = if cfg!(windows) {
+            key.to_ascii_uppercase()
+        } else {
+            key.into_owned()
+        };
+        if ["PATH", "HOME", "USER", "LOGNAME", "LANG", "SSH_AUTH_SOCK"].contains(&key.as_str())
+            || (cfg!(windows) && ["SYSTEMROOT", "USERPROFILE", "WINDIR"].contains(&key.as_str()))
+        {
+            command.env(name, value);
+        }
     }
 }
 
@@ -249,7 +408,7 @@ impl Computer {
             {
                 return Err(Failure::new(Cause::Refused, "invalid SSH endpoint"));
             }
-            policy.argv(key, false)?;
+            policy.base_argv(key, false)?;
         }
         Ok(Self {
             config,
@@ -279,7 +438,7 @@ impl Computer {
         stdin: &[u8],
         options: &CallOptions,
     ) -> Result<ProcessOutput, Failure> {
-        let command = self.command(argv, options)?;
+        let command = self.command(argv, options).await?;
         self.run_command(command, stdin, options, None).await
     }
 
@@ -293,12 +452,12 @@ impl Computer {
         controls: mpsc::Receiver<Vec<u8>>,
         output: mpsc::Sender<Vec<u8>>,
     ) -> Result<ProcessOutput, Failure> {
-        let command = self.command(argv, options)?;
+        let command = self.command(argv, options).await?;
         self.run_command(command, stdin, options, Some(Pipes { controls, output }))
             .await
     }
 
-    fn command(&self, argv: &[OsString], options: &CallOptions) -> Result<Command, Failure> {
+    async fn command(&self, argv: &[OsString], options: &CallOptions) -> Result<Command, Failure> {
         if argv.is_empty() {
             return Err(Failure::new(Cause::Refused, "empty command"));
         }
@@ -316,7 +475,8 @@ impl Computer {
             } => {
                 self.policy.prepare_control_directory()?;
                 let mut cmd = Command::new(&self.policy.ssh);
-                cmd.args(self.policy.argv(key, options.scan)?);
+                ssh_environment(&mut cmd);
+                cmd.args(self.policy.argv(key, options.scan).await?);
                 if let Some(port) = port {
                     cmd.args(["-p", &port.to_string()]);
                 }
@@ -349,10 +509,15 @@ impl Computer {
             return Err(Failure::new(Cause::Refused, "SCP needs SSH transport"));
         };
         let mut command = Command::new(&self.policy.scp);
+        ssh_environment(&mut command);
         // SCP gets the identical SSH options, except SSH's -T (which has another meaning in scp).
-        command
-            .arg("-q")
-            .args(self.policy.argv(key, options.scan)?.into_iter().skip(1));
+        command.arg("-q").args(
+            self.policy
+                .argv(key, options.scan)
+                .await?
+                .into_iter()
+                .skip(1),
+        );
         if let Some(port) = port {
             command.args(["-P", &port.to_string()]);
         }

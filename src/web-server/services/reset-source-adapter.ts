@@ -96,7 +96,7 @@ export function createResetSourceAdapter(): ResetSource {
     }
     return native('resetClaudeSource', {
       ...context,
-      command: privateUsageInvocation(host, transportRequest, source, input),
+      command: await privateUsageInvocation(host, transportRequest, source, input),
     });
   }
   return {

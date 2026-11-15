@@ -43,8 +43,8 @@ describe('package-owned computer registry', () => {
     expect(EXPECTED_RESULTS).toBe(60);
     expect(Object.isFrozen(COMPUTERS.alexis)).toBe(true);
   });
-  it('uses only the fixed Alexis SSH alias and a Windows helper command', () => {
-    const invocation = appUpdateInvocation('alexis', '');
+  it('uses only the fixed Alexis SSH alias and a Windows helper command', async () => {
+    const invocation = await appUpdateInvocation('alexis', '');
     expect(invocation.args.at(-2)).toBe('alexis-windows');
     const script = Buffer.from(invocation.args.at(-1)!.split(' ').at(-1)!, 'base64').toString(
       'utf16le'
