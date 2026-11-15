@@ -6,9 +6,14 @@
 //!
 //! R1: each source holds its latest generation's immutable bounded payload and facts (the request
 //! body is capped at 4 MiB, and at most 16 sources are held). A prepared Home dashboard holds its
-//! text, its parsed value and its byte template, about three times the text (R1b: the template
-//! keeps no second identity copy), plus its view memos (bounded, `aac_views::home::memo`); so the
-//! bound is a small multiple of 4 MiB per source, not 4 MiB. Home's sources are prepared once,
+//! raw text and facts, its parsed value and its byte template (the fixed parts once, each flippable
+//! window twice), about eight times the text for a string-heavy dashboard (measured; R1b: the
+//! template keeps no second identity copy), plus its view memos (bounded per generation,
+//! `aac_views::home::memo`). The bound is therefore a small multiple of 4 MiB per dashboard
+//! source, not 4 MiB, and up to four dashboard sources are possible (`mac|windows` x `0|1`):
+//! four 3.69 MiB fixture dashboards retained +118.6 MiB RSS over a 5.8 MiB idle release service
+//! (Nas1, MEASURE-qwen-lane-2-feed-rss.json), so four sources at the cap can retain on the order
+//! of 128 MiB, beside the other sources' own bounded payloads. Home's sources are prepared once,
 //! when their generation arrives (`aac_views::home::fed`): `home-dashboard-<platform>-<0|1>` (the
 //! dashboard answer per platform and secure transport), `home-opens` (the Claude Open progress) and
 //! `home-antigravity` (the composed Antigravity inventory). A source that names a numeric

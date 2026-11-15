@@ -4,6 +4,7 @@ import { performance } from 'perf_hooks';
 import routes from './rust-service-routes.json';
 import type { RustLease } from './rust-service-lifecycle';
 import {
+  canonicalRoot,
   pushRustFeedText,
   requestRust,
   RUST_VIEW_CAP,
@@ -284,7 +285,9 @@ export class RustService extends RustSupervisor {
         release();
         throw error;
       }
-      const tsMs = now() - tsStarted;
+      // Wonder L5: the user waited for the envelope build before the TS answer, so the served
+      // latency carries it; the Rust path already does (`rustStarted` below).
+      const tsMs = inputMs + (now() - tsStarted);
       const rustStarted = now() - inputMs;
       this.shadowCompare(
         route,
@@ -350,9 +353,9 @@ export class RustService extends RustSupervisor {
     legacy: () => Promise<unknown>
   ): Promise<unknown> {
     let verified = this.forwardable(req, route);
-    // Rust reads its own canonical boot root. Another or symlinked folder (whose one-time
-    // warning TS logs) stays with the TS reader.
-    if (verified && this.lease?.connection.ccsDir !== root) {
+    // Rust reads its own canonical boot root; a symlinked spelling of it names the same boot
+    // (Wonder L4). Another folder (whose one-time warning TS logs) stays with the TS reader.
+    if (verified && this.lease?.connection.ccsDir !== canonicalRoot(root)) {
       this.fallback(route, { kind: 'unavailable', reason: 'root' });
       verified = null;
     }
@@ -411,7 +414,7 @@ export class RustService extends RustSupervisor {
    */
   feedBoot(scope: string): string | null {
     const lease = this.lease;
-    return lease && !this.stopped && lease.connection.ccsDir === scope
+    return lease && !this.stopped && lease.connection.ccsDir === canonicalRoot(scope)
       ? lease.connection.bootId
       : null;
   }

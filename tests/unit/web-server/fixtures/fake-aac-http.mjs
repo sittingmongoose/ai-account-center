@@ -90,6 +90,12 @@ function storeCall(boot, req, res) {
   });
 }
 function start(boot) {
+  // Names only (never values): the spawn-env tests assert which names reached the child.
+  fs.writeFileSync(
+    `${boot.ccsDir}/fixture-spawn-env.json`,
+    JSON.stringify(Object.keys(process.env)),
+    { mode: 0o600 }
+  );
   server.on('request', (req, res) => {
     res.setHeader('x-aac-service-boot', boot.bootId);
     if (req.headers['x-aac-boot-secret'] !== boot.secret) {
@@ -150,6 +156,27 @@ function start(boot) {
           return res.end('{"error":"TypeScript read fallback required"}');
         }
         res.end(storeStatus());
+      });
+      return;
+    }
+    if (req.url === '/api/claude/desktop-profiles' && req.method === 'GET') {
+      res.end('{"profiles":[]}');
+      return;
+    }
+    if (req.url.startsWith('/internal/agent/') && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      req.on('end', () => {
+        const callId = JSON.parse(body).callId;
+        res.setHeader('content-type', 'application/x-ndjson');
+        res.end(
+          JSON.stringify({
+            protocol: 1,
+            id: callId,
+            type: 'result',
+            value: { ok: true, verb: req.url.split('/').pop() },
+          }) + '\n'
+        );
       });
       return;
     }

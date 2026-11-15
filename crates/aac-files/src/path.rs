@@ -124,7 +124,9 @@ pub(crate) enum Walk {
     Link,
     /// `path` is not below `base`.
     Outside,
-    /// A component could not be checked.
+    /// A component could not be checked. The kind is read by the non-Unix read path; Unix pins
+    /// the ancestor chain instead (`read::open_below`), where only the refusal itself matters.
+    #[cfg_attr(unix, allow(dead_code))]
     Failed(std::io::ErrorKind),
 }
 

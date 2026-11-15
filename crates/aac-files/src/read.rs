@@ -1,12 +1,22 @@
-//! The one hardened read (L2). Every Rust reader of a private or reference file opens it here:
-//! one `lstat`, one open with `O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC`, then every decision
-//! on that descriptor's `fstat` plus a (dev, ino) identity check against the `lstat`. There is never
-//! a second path lookup, so a link, FIFO or other file swapped in between cannot change what is read.
+//! The one hardened read (L2). Every Rust reader of a private or reference file opens it here.
+//! With [`Ancestors::NoLinkBelow`] on Unix the folders below the base are opened as a descriptor
+//! chain (`openat`, each `O_NOFOLLOW | O_DIRECTORY`) while they are checked, and the leaf is
+//! lstat'd and opened relative to the pinned parent: a folder swapped for a link at any point
+//! cannot redirect the read (Wonder L12). The leaf itself: one `lstat`, one open with
+//! `O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC`, then every decision on that descriptor's
+//! `fstat` plus a (dev, ino) identity check against the `lstat`, so a link, FIFO or other file
+//! swapped in at the final name cannot change what is read either. With [`Ancestors::Any`] the
+//! caller admitted the folders (or the reference follows them) and the leaf is opened by path;
+//! the identity check still holds for the final name. On Windows the open is the reference's
+//! plain open (no `O_NOFOLLOW`; owner, mode and identity pass trivially); native qualification
+//! is an M4 gate item.
 //!
 //! The policy names the rules; [`Read`] names what was found. Each caller maps a [`Read`] to its
 //! own reference's meaning (absent, unseen, incomplete or a fallback): this module never decides
 //! that a refused file reads as empty.
-use crate::path::{self, Walk};
+use crate::path;
+#[cfg(not(unix))]
+use crate::path::Walk;
 use std::{
     fmt,
     fs::{self, File},
@@ -16,6 +26,97 @@ use std::{
 
 /// The descriptor's own metadata (`fstat`), never the path's.
 pub type Meta = fs::Metadata;
+
+/// The facts every admission check reads, from an `lstat`, an `fstatat` or an `fstat`.
+trait Facts {
+    fn link(&self) -> bool;
+    fn regular(&self) -> bool;
+    fn size(&self) -> u64;
+    fn owner(&self) -> u32;
+    fn bits(&self) -> u32;
+    fn device(&self) -> u64;
+    fn inode(&self) -> u64;
+}
+
+impl Facts for fs::Metadata {
+    fn link(&self) -> bool {
+        self.file_type().is_symlink()
+    }
+    fn regular(&self) -> bool {
+        self.is_file()
+    }
+    fn size(&self) -> u64 {
+        self.len()
+    }
+    #[cfg(unix)]
+    fn owner(&self) -> u32 {
+        use std::os::unix::fs::MetadataExt;
+        self.uid()
+    }
+    #[cfg(not(unix))]
+    fn owner(&self) -> u32 {
+        0
+    }
+    #[cfg(unix)]
+    fn bits(&self) -> u32 {
+        use std::os::unix::fs::MetadataExt;
+        self.mode()
+    }
+    #[cfg(not(unix))]
+    fn bits(&self) -> u32 {
+        0
+    }
+    #[cfg(unix)]
+    fn device(&self) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        self.dev()
+    }
+    #[cfg(not(unix))]
+    fn device(&self) -> u64 {
+        0
+    }
+    #[cfg(unix)]
+    fn inode(&self) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        self.ino()
+    }
+    #[cfg(not(unix))]
+    fn inode(&self) -> u64 {
+        0
+    }
+}
+
+/// An `fstatat` result: the leaf's facts before it is opened, relative to the pinned parent.
+#[cfg(unix)]
+struct RawStat(libc::stat);
+
+#[cfg(unix)]
+impl Facts for RawStat {
+    fn link(&self) -> bool {
+        self.0.st_mode & libc::S_IFMT == libc::S_IFLNK
+    }
+    fn regular(&self) -> bool {
+        self.0.st_mode & libc::S_IFMT == libc::S_IFREG
+    }
+    fn size(&self) -> u64 {
+        u64::try_from(self.0.st_size).unwrap_or(0)
+    }
+    fn owner(&self) -> u32 {
+        self.0.st_uid
+    }
+    fn bits(&self) -> u32 {
+        self.0.st_mode
+    }
+    // dev_t and ino_t are platform-sized (already u64 on Linux, signed on macOS).
+    #[allow(clippy::unnecessary_cast)]
+    fn device(&self) -> u64 {
+        self.0.st_dev as u64
+    }
+    #[allow(clippy::unnecessary_cast)]
+    fn inode(&self) -> u64 {
+        self.0.st_ino as u64
+    }
+}
 
 /// What a link at the final name means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,10 +272,12 @@ pub fn opened_path(file: &File) -> Option<PathBuf> {
     }
 }
 
-/// Where the test seam runs: after every check on the path, before the open (`Open`), and after
-/// every check on the descriptor, before the bytes are read (`Read`).
+/// Where the test seam runs: after the ancestor phase, before the leaf's `lstat` (`Walk`), after
+/// every check on the path, before the open (`Open`), and after every check on the descriptor,
+/// before the bytes are read (`Read`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
+    Walk,
     Open,
     Read,
 }
@@ -204,6 +307,9 @@ fn open_with(
     between: &mut dyn FnMut(Stage),
 ) -> Result<(File, Meta), Read> {
     if let Ancestors::NoLinkBelow(base) = policy.ancestors {
+        #[cfg(unix)]
+        return open_below(base, path, policy, between);
+        #[cfg(not(unix))]
         match path::walk(base, path, false) {
             Walk::Clear => {}
             Walk::Link => return Err(Read::Link),
@@ -211,12 +317,22 @@ fn open_with(
             Walk::Failed(kind) => return Err(Read::Unreadable(kind)),
         }
     }
+    between(Stage::Walk);
+    open_named(path, policy, between)
+}
+
+/// The leaf by its full path: one `lstat`, the path-only admission, then the descriptor checks.
+fn open_named(
+    path: &Path,
+    policy: &ReadPolicy,
+    between: &mut dyn FnMut(Stage),
+) -> Result<(File, Meta), Read> {
     let before = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(Read::Absent),
         Err(error) => return Err(Read::Unreadable(error.kind())),
     };
-    if before.file_type().is_symlink() {
+    if before.link() {
         return Err(match policy.leaf {
             Leaf::Refuse => Read::Link,
             Leaf::Absent => Read::Absent,
@@ -232,13 +348,93 @@ fn open_with(
             Read::Unreadable(error.kind())
         }
     })?;
+    opened_checks(file, &before, policy)
+}
+
+/// The leaf relative to a pinned chain of the folders below `base` (Wonder L12). Each folder is
+/// opened `O_NOFOLLOW | O_DIRECTORY` as it is checked, so a later swap of any of them cannot
+/// redirect the leaf's `lstat` or open. `base` itself may be a link: the caller admitted it (the
+/// walk never checked it). A search-only folder (no read bit) is refused here where the path
+/// walk could still `lstat` through it; the private roots are 0700, and a refusal is the safe
+/// direction.
+#[cfg(unix)]
+fn open_below(
+    base: &Path,
+    path: &Path,
+    policy: &ReadPolicy,
+    between: &mut dyn FnMut(Stage),
+) -> Result<(File, Meta), Read> {
+    let Ok(rest) = path.strip_prefix(base) else {
+        return Err(Read::Unproved);
+    };
+    let parts: Vec<_> = rest.components().collect();
+    let mut dir =
+        open_at(None, base.as_os_str(), libc::O_RDONLY | libc::O_DIRECTORY).map_err(open_error)?;
+    for part in parts.iter().take(parts.len().saturating_sub(1)) {
+        // Check the name, then pin it: a link is refused before the open, and a swap between
+        // the two is caught by the open's own `O_NOFOLLOW | O_DIRECTORY`.
+        let stat = stat_at(&dir, part.as_os_str()).map_err(open_error)?;
+        if stat.link() {
+            return Err(Read::Link);
+        }
+        dir = open_at(
+            Some(&dir),
+            part.as_os_str(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+        )
+        .map_err(|error| match error.raw_os_error() {
+            Some(libc::ELOOP) => Read::Link,
+            // O_DIRECTORY reports a link as ENOTDIR: say which the name became.
+            Some(libc::ENOTDIR) => match stat_at(&dir, part.as_os_str()) {
+                Ok(now) if now.link() => Read::Link,
+                _ => Read::Unreadable(io::ErrorKind::NotADirectory),
+            },
+            _ => open_error(error),
+        })?;
+    }
+    between(Stage::Walk);
+    let leaf = parts
+        .last()
+        .map_or(std::ffi::OsStr::new("."), |part| part.as_os_str());
+    let before = stat_at(&dir, leaf).map_err(open_error)?;
+    if before.link() {
+        return Err(match policy.leaf {
+            Leaf::Refuse => Read::Link,
+            Leaf::Absent => Read::Absent,
+        });
+    }
+    // Decide what the pinned name alone can: an unusual, oversized, foreign or loose file is
+    // never opened.
+    admit(&before, policy)?;
+    between(Stage::Open);
+    let file = open_at(
+        Some(&dir),
+        leaf,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY,
+    )
+    .map_err(|error| {
+        if replaced(&error) {
+            Read::Unproved
+        } else {
+            Read::Unreadable(error.kind())
+        }
+    })?;
+    opened_checks(file, &before, policy)
+}
+
+/// The descriptor's own admission: type, identity against the earlier stat, then owner/mode/size.
+fn opened_checks<B: Facts>(
+    file: File,
+    before: &B,
+    policy: &ReadPolicy,
+) -> Result<(File, Meta), Read> {
     let opened = file
         .metadata()
         .map_err(|error| Read::Unreadable(error.kind()))?;
     if !opened.is_file() {
         return Err(Read::NotRegular);
     }
-    if !same_file(&before, &opened) {
+    if !same_file(before, &opened) {
         return Err(Read::Unproved);
     }
     // The descriptor is authoritative: the same inode may have grown or changed hands.
@@ -246,14 +442,69 @@ fn open_with(
     Ok((file, opened))
 }
 
-fn admit(meta: &Meta, policy: &ReadPolicy) -> Result<(), Read> {
-    if !meta.is_file() {
+/// An open or stat error's read outcome: missing is absent, a non-folder the named unreadable.
+#[cfg(unix)]
+fn open_error(error: io::Error) -> Read {
+    match error.kind() {
+        io::ErrorKind::NotFound => Read::Absent,
+        io::ErrorKind::NotADirectory => Read::Unreadable(io::ErrorKind::NotADirectory),
+        kind => Read::Unreadable(kind),
+    }
+}
+
+/// The leaf's `lstat` relative to the pinned parent (`AT_SYMLINK_NOFOLLOW`).
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn stat_at(dir: &File, name: &std::ffi::OsStr) -> io::Result<RawStat> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "interior NUL in path"))?;
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    let rc = unsafe {
+        libc::fstatat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            &mut stat,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if rc == 0 {
+        Ok(RawStat(stat))
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// One open of the chain: relative to the pinned parent when there is one, `O_CLOEXEC` always.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn open_at(dir: Option<&File>, name: &std::ffi::OsStr, flags: libc::c_int) -> io::Result<File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "interior NUL in path"))?;
+    let fd = unsafe {
+        match dir {
+            Some(dir) => libc::openat(dir.as_raw_fd(), name.as_ptr(), flags | libc::O_CLOEXEC, 0),
+            None => libc::open(name.as_ptr(), flags | libc::O_CLOEXEC, 0),
+        }
+    };
+    if fd < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+}
+
+fn admit<S: Facts>(meta: &S, policy: &ReadPolicy) -> Result<(), Read> {
+    if !meta.regular() {
         return Err(Read::NotRegular);
     }
-    if meta.len() > policy.cap {
+    if meta.size() > policy.cap {
         return Err(Read::TooLarge);
     }
-    if policy.owner == Owner::Mine && path::foreign(meta) {
+    if policy.owner == Owner::Mine && foreign_owner(meta) {
         return Err(Read::Foreign);
     }
     if policy.mode == Mode::Private && loose(meta) {
@@ -262,11 +513,23 @@ fn admit(meta: &Meta, policy: &ReadPolicy) -> Result<(), Read> {
     Ok(())
 }
 
-fn loose(meta: &Meta) -> bool {
+/// Not this process's user; Windows has no such check.
+fn foreign_owner<S: Facts>(meta: &S) -> bool {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        meta.mode() & 0o077 != 0
+        meta.owner() != path::uid()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        false
+    }
+}
+
+fn loose<S: Facts>(meta: &S) -> bool {
+    #[cfg(unix)]
+    {
+        meta.bits() & 0o077 != 0
     }
     #[cfg(not(unix))]
     {
@@ -297,11 +560,10 @@ fn open_descriptor(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
-fn same_file(before: &Meta, opened: &Meta) -> bool {
+fn same_file<B: Facts, O: Facts>(before: &B, opened: &O) -> bool {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        (before.dev(), before.ino()) == (opened.dev(), opened.ino())
+        (before.device(), before.inode()) == (opened.device(), opened.inode())
     }
     #[cfg(not(unix))]
     {
@@ -630,6 +892,39 @@ mod tests {
             read_with(&file, &plain(64), &mut remove),
             Read::Unproved
         ));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_ancestor_swapped_after_the_walk_cannot_redirect_the_read() -> io::Result<()> {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir()?;
+        let base = dir.path();
+        let sub = base.join("sub");
+        fs::create_dir(&sub)?;
+        let file = sub.join("x.json");
+        fs::write(&file, b"original")?;
+        let attacker = base.join("attacker");
+        fs::create_dir(&attacker)?;
+        fs::write(attacker.join("x.json"), b"attacker")?;
+        let moved = base.join("sub.moved");
+        // The finding's window: the folder becomes a link after the ancestor walk and before the
+        // leaf's lstat, so path-only checks follow it consistently (Wonder L12).
+        let mut swap = |stage| {
+            if stage == Stage::Walk {
+                let _ = fs::rename(&sub, &moved);
+                let _ = symlink(&attacker, &sub);
+            }
+        };
+        let policy = plain(64).ancestors(Ancestors::NoLinkBelow(base));
+        let outcome = read_with(&file, &policy, &mut swap);
+        assert!(
+            matches!(&outcome, Read::Bytes(b, _) if b == b"original"),
+            "the swapped ancestor must not redirect the read: {outcome:?}"
+        );
+        // A link already there at the walk is still refused.
+        assert!(matches!(read(&file, &policy), Read::Link));
         Ok(())
     }
 

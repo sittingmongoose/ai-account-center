@@ -195,6 +195,12 @@ An attachment does not terminate the owner on cleanup. The spawning front door
 owns the boot; its stdin closing ends that service. Normal shutdown also sends
 SIGTERM, with a one-second SIGKILL backstop.
 
+The child's environment is an allowlist (`rust-service-env.ts`): home and profile folders,
+the CCS and provider selectors, locale, temp and the Windows system names. The provider keys
+and proxy names a Local agent verb reads join only while the agent transport is on (Wonder
+L1): shadow reads never spawn a Local verb, so the long-lived service holds no provider key
+for them.
+
 The same raw object gate covers the boot input, principal header and each
 embedded route-table entry. The route list itself intentionally remains an
 array; entries are retained as RawValue bytes and then checked as exact objects.
@@ -239,13 +245,15 @@ inert while the service is off.
 | Restart | An owned service that exits is restarted after 1 s, 5 s, 30 s, 2 min, then 10 min; after 5 restarts in an hour TS logs `rust.service.gave_up` and answers alone until the next dashboard start. An attached boot that stops answering is dropped the same way. A process that accepts but never answers (stopped, deadlocked) is caught by its transport timeouts: after 3 in a row on any route, a health probe (500 ms) decides, and a hung process is retired into the same restart budget. Rust's own `deadline` and `busy` declines are replies and never count. Boot folders older than a minute whose socket refuses a connection are swept at start; no PID read from disk is ever signalled. |
 | Build check | Health replies carry `x-aac-service-build: {commit, sha256, protocol, storeSchema}`, with `sha256` the running image's own hash. The descriptor records it. A front door attaches only when the live identity equals the descriptor's, its `sha256` is that of the binary it would start, and the protocol is its own; otherwise it starts its own boot (an in-place upgrade). The public `/api/health` body stays `{"status":"ok"}`. |
 | Feeds, events | `PUT /internal/feed/<source>` `{generation, data, facts}` and `GET /internal/feed/<source>`; `GET /internal/events` streams NDJSON (`facts-needed` when a generation arrives without facts). Only the reserved `{kind: session, id: front-door, role: service}` principal reaches them. Since R1 each source holds its latest generation's payload and facts, immutable; see Home, fed (R1). |
-| Shadow | At most 2 comparisons in flight per route; the rest are skipped and counted. TS answers first, then Rust is asked, so each comparison times both paths on the same request. |
+| Shadow | At most 2 comparisons in flight per route; the rest are skipped and counted. TS answers first, then Rust is asked, so each comparison times both paths on the same request. On a compose route the paired TS timing includes the per-request input-envelope build: the user waits for it before the TS answer (Wonder L5), and the Rust timing includes it in both modes. |
 | Reply floor | `view_reply` in Rust and `sendRustView` in TS: the final bytes, the revalidated-view ETag and `x-aac-view`, written without a parse. Home (R1) is the first route that uses it. |
 
 **Measurement hooks.** `GET /api/diag?bridge=1` (signed-in session) answers the skeleton
 diagnostics plus a `bridge` block: the service state, its build, restarts, the child's RSS,
 the counters and, per route, the paired timings (TS path and Rust path on the same requests,
-from shadow) and Rust-only timings (on). Every minute with traffic, `rust.service.minute`
+from shadow) and Rust-only timings (on). A compose route's paired TS timing carries the
+input-envelope build, since shadow serves it before the TS answer; the Rust timing carries it
+in shadow and on alike. Every minute with traffic, `rust.service.minute`
 logs the same per-route block for that minute, and the event-loop monitor's line adds
 `rustMode` and `rustRssBytes`. Response bodies are never logged.
 
@@ -267,6 +275,16 @@ L2 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 2.2). No answer 
   found (`Bytes`, `Absent`, `Link`, `Foreign`, `BadMode`, `NotRegular`, `TooLarge`,
   `Unreadable`, `Unproved`); each reader maps it to its reference's meaning. Listings use
   `aac_files::read::entries`, which yields at most a count cap and then says so.
+  On Unix the ancestor rule pins each folder below the base as a descriptor chain (`openat`,
+  `O_NOFOLLOW | O_DIRECTORY`, Wonder L12): the leaf is lstat'd and opened relative to the
+  pinned parent, so a folder swapped for a link at any point cannot redirect the read. The
+  leaf's own open is `O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC`, with a (dev, ino)
+  identity check against its lstat. With `Ancestors::Any` the caller admitted the folders (or
+  the reference follows them) and the leaf is opened by path; the identity check still holds
+  for the final name. A search-only folder (no read bit) is refused by the chain where the
+  path walk could lstat through it; the private roots are 0700. On Windows the open is the
+  reference's plain open (owner, mode and identity pass trivially); native qualification is
+  an M4 gate item.
 - **One path rule set.** `aac_files::path`: `python::{double_root, canonical_home, normpath}`,
   `node::resolve`, `linked_below`, `linked_within`, `hop` (one `_local_path` hop), `safe_name`
   and `foreign`.
@@ -488,6 +506,15 @@ nothing below runs.
 - **A window the per-response pass reads differently from its JSON** (an own `undefined` member, a `Date`, a
   non-finite number, a non-enumerable or inherited member) is refused per request (`input`, review L1); a push over
   the transport's 4 MiB cap is refused once per change key (`cap`, review L4).
+- **Retained memory** (Wonder L8): a prepared dashboard holds its raw text and facts, its parsed
+  value and its byte template (flippable windows twice) — about eight times its text for a
+  string-heavy dashboard — plus its bounded view memos. Up to four dashboard sources are possible
+  (`mac|windows` x `0|1`). Measured on Nas1 with four 3.69 MiB fixture dashboards pushed to the real
+  release binary: +118.6 MiB RSS over the 5.8 MiB idle service (8.0x their combined text; the debug
+  build nearly the same), so four sources at the 4 MiB cap can retain on the order of 128 MiB. The
+  other sources hold their own bounded payloads; at most 16 sources are held. The measurement's
+  synthetic opens fixture declines the view (`shape`), so the memos' own cost is not in that number;
+  they are bounded per generation. Evidence: `2026-11-13-rust-rewrite/MEASURE-qwen-lane-2-feed-rss.json`.
 
 The checks: `crates/aac-http/tests/lifecycle.rs` (the fed answer and its ETag, a missing, stale or unproven
 generation, a late push, a restarted service), `aac_views::home::fed` and `js_json` unit tests,

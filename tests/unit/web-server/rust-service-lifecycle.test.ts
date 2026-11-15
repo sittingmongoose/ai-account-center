@@ -12,6 +12,7 @@ import { RustService } from '../../../src/web-server/rust-service';
 import { shortName } from '../../../src/web-server/rust-service-lifecycle';
 import { getRecentLogEntries, clearRecentLogEntries } from '../../../src/services/logging';
 import { rustServiceEnvironment } from '../../../src/web-server/rust-service-env';
+import { requestRustAgent } from '../../../src/web-server/rust-service-transport';
 
 const fake = path.join(import.meta.dir, 'fixtures/fake-aac-http.mjs');
 let scratch = '';
@@ -371,7 +372,7 @@ describe('Rust service environment (L5 review M1)', () => {
     }
   });
 
-  it('passes only the allowlisted names a local agent verb reads', () => {
+  it('passes only the allowlisted names a local agent verb reads, transport on', () => {
     const env = rustServiceEnvironment(
       {
         PATH: '/bin',
@@ -385,7 +386,8 @@ describe('Rust service environment (L5 review M1)', () => {
         LD_PRELOAD: '/fixture/x.so',
         AAC_UNLISTED: 'x',
       },
-      false
+      false,
+      true
     );
     expect(env).toEqual({
       PATH: '/bin',
@@ -394,6 +396,37 @@ describe('Rust service environment (L5 review M1)', () => {
       XDG_CONFIG_HOME: '/fixture/home/.config',
       KIMI_API_KEY: 'fixture-only',
       https_proxy: 'http://proxy.invalid:3128',
+    });
+  });
+
+  it('keeps provider keys and proxies out while the agent transport is off (Wonder L1)', () => {
+    const env = rustServiceEnvironment(
+      {
+        PATH: '/bin',
+        HOME: '/fixture/home',
+        CCS_DIR: '/fixture/home/.ccs',
+        KIMI_API_KEY: 'fixture-only',
+        KIMI_CODE_API_KEY: 'fixture-only',
+        ZAI_API_KEY: 'fixture-only',
+        ZHIPU_API_KEY: 'fixture-only',
+        BAILIAN_TOKEN_PLAN_API_KEY: 'fixture-only',
+        OPENCODE_GO_API_KEY: 'fixture-only',
+        OPENCODE_API_KEY: 'fixture-only',
+        HTTPS_PROXY: 'http://proxy.invalid:3128',
+        https_proxy: 'http://proxy.invalid:3128',
+        HTTP_PROXY: 'http://proxy.invalid:3128',
+        http_proxy: 'http://proxy.invalid:3128',
+        ALL_PROXY: 'socks5://proxy.invalid:1080',
+        all_proxy: 'socks5://proxy.invalid:1080',
+        NO_PROXY: 'localhost',
+        no_proxy: 'localhost',
+      },
+      false
+    );
+    expect(env).toEqual({
+      PATH: '/bin',
+      HOME: '/fixture/home',
+      CCS_DIR: '/fixture/home/.ccs',
     });
   });
 
@@ -409,6 +442,7 @@ describe('Rust service environment (L5 review M1)', () => {
         SSH_AUTH_SOCK: '\\\\.\\pipe\\fixture-agent',
         Node_Options: '--inspect',
       },
+      true,
       true
     );
     expect(env).toEqual({
@@ -418,6 +452,131 @@ describe('Rust service environment (L5 review M1)', () => {
       UserProfile: 'C:\\Users\\fixture',
       HTTPS_PROXY: 'http://a.invalid',
     });
+  });
+});
+
+describe('Spawn environment through the real lifecycle (Wonder L1)', () => {
+  const keys = ['KIMI_API_KEY', 'HTTPS_PROXY', 'AAC_AGENT_TRANSPORT'] as const;
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const name of keys) saved[name] = process.env[name];
+    process.env.KIMI_API_KEY = 'fixture-only';
+    process.env.HTTPS_PROXY = 'http://proxy.invalid:3128';
+    delete process.env.AAC_AGENT_TRANSPORT;
+  });
+  afterEach(() => {
+    for (const name of keys) restoreEnv(name, saved[name]);
+  });
+
+  it('spawns the service without provider keys or proxies while the transport is off', async () => {
+    await started('shadow', binaryCopy());
+    const names = JSON.parse(fs.readFileSync(path.join(ccs, 'fixture-spawn-env.json'), 'utf8'));
+    expect(names).toContain('HOME');
+    expect(names).not.toContain('KIMI_API_KEY');
+    expect(names).not.toContain('HTTPS_PROXY');
+  });
+
+  it('spawns the service with provider keys and proxies when the transport is on', async () => {
+    process.env.AAC_AGENT_TRANSPORT = 'on';
+    await started('shadow', binaryCopy());
+    const names = JSON.parse(fs.readFileSync(path.join(ccs, 'fixture-spawn-env.json'), 'utf8'));
+    expect(names).toContain('KIMI_API_KEY');
+    expect(names).toContain('HTTPS_PROXY');
+  });
+});
+
+describe('Symlinked root through the real lookups (Wonder L4)', () => {
+  function alias(): string {
+    const link = path.join(scratch, 'alias');
+    fs.symlinkSync(ccs, link);
+    return link;
+  }
+
+  it('feedBoot names the boot for a symlinked scope, and still declines another root', async () => {
+    const service = await started('on', binaryCopy());
+    expect(service.feedBoot(alias())).toBe(lease(service)?.connection.bootId);
+    const other = path.join(scratch, 'other');
+    fs.mkdirSync(other, { recursive: true });
+    expect(service.feedBoot(other)).toBeNull();
+  });
+
+  it('ownedValue serves Rust through a symlinked root and keeps another root on TS', async () => {
+    const service = await started('on', binaryCopy());
+    const accept = (body: unknown) => ({ value: body });
+    let legacyRan = false;
+    const legacy = async () => {
+      legacyRan = true;
+      return { ts: true };
+    };
+    const route = '/api/claude/desktop-profiles';
+    const value = await service.ownedValue(request, route, alias(), accept, legacy);
+    expect(value).toEqual({ profiles: [] });
+    expect(legacyRan).toBe(false);
+    const other = path.join(scratch, 'other');
+    fs.mkdirSync(other, { recursive: true });
+    expect(await service.ownedValue(request, route, other, accept, legacy)).toEqual({ ts: true });
+    expect(legacyRan).toBe(true);
+  });
+
+  it('requestRustAgent finds the connection through a symlinked root', async () => {
+    const service = await started('on', binaryCopy());
+    const payload = {
+      computer: {},
+      args: {},
+      deadlineMs: 2000,
+      timeoutMs: 2000,
+      maxBytes: 65536,
+      callId: 'fixture-call',
+    };
+    const result = await requestRustAgent(alias(), 'inventory', payload);
+    expect(result).toBe(JSON.stringify({ ok: true, verb: 'inventory' }));
+    const other = path.join(scratch, 'other');
+    fs.mkdirSync(other, { recursive: true });
+    expect(await requestRustAgent(other, 'inventory', payload)).toBeUndefined();
+    expect(lease(service)).not.toBeNull();
+  });
+});
+
+describe('Shadow envelope cost (Wonder L5)', () => {
+  it('bills the input build to the served TS latency and to the Rust path', async () => {
+    writeSettings('{"refreshIntervalSeconds":90}');
+    const service = await started('shadow', binaryCopy());
+    // A frozen clock makes both paired timings exact: 12 ms of input build, 7 ms of legacy.
+    const perf = globalThis.performance;
+    const realNow = perf.now;
+    let clock = realNow.call(perf);
+    Object.defineProperty(perf, 'now', { value: () => clock, configurable: true });
+    try {
+      const body = await service.compose(
+        request,
+        '/api/accounts/settings',
+        () => {
+          clock += 12;
+          return { snapshot: {} };
+        },
+        () => {
+          clock += 7;
+          return { refreshIntervalSeconds: 90 };
+        },
+        (value) =>
+          typeof value === 'object' &&
+          value !== null &&
+          'refreshIntervalSeconds' in value &&
+          typeof value.refreshIntervalSeconds === 'number'
+      );
+      expect(body).toEqual({ refreshIntervalSeconds: 90 });
+      await until(() => service.stats.shadowed === 1);
+      const route = (service.diagnostics().routes as Record<string, Record<string, unknown>>)[
+        '/api/accounts/settings'
+      ];
+      const paired = route.paired as Record<string, { samples: number; p50Ms: number }>;
+      expect(paired.ts.samples).toBe(1);
+      expect(paired.ts.p50Ms).toBe(19);
+      expect(paired.rust.samples).toBe(1);
+      expect(paired.rust.p50Ms).toBe(12);
+    } finally {
+      Object.defineProperty(perf, 'now', { value: realNow, configurable: true });
+    }
   });
 });
 
