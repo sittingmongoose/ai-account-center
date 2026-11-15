@@ -552,6 +552,45 @@ const fixtureReq = {
   headers: {},
 };
 
+async function seedRuns(store) {
+  const writer = 'ubuntu.r3-spec';
+  const files = Array.from({ length: 10 }, (_, i) => {
+    const ended = T0 + i * 60_000;
+    const id = `${writer}--fixture-${i}`;
+    const doc = {
+      schema: 'agent-reports/run@1',
+      id,
+      writer,
+      seq: 1,
+      writtenAt: new Date(ended).toISOString(),
+      source: 'observed',
+      project: 'r3-fixture',
+      stream: null,
+      task: { id: `fixture-${i}`, type: 'build', title: 'Fixture build' },
+      model: { id: 'openai/gpt-6.1-sol', provider: 'openai', harness: 'codex', effort: 'max' },
+      startedAt: new Date(ended - 60_000).toISOString(),
+      endedAt: new Date(ended).toISOString(),
+      wallSeconds: 60,
+      outcome: 'done',
+      cost: null,
+      scope: {},
+      review: null,
+      flags: [],
+      evidence: [],
+    };
+    const text = JSON.stringify(doc);
+    return {
+      path: `writers/${writer}/runs/${doc.endedAt.slice(0, 10)}/${id}.json`,
+      text,
+      size: Buffer.byteLength(text),
+      mtimeMs: ended,
+    };
+  });
+  const result = await store.runs('runsRecord', { files, nowMs: T0 + DAY });
+  assert.equal(result.recorded, 10, 'measurement ingests real fixture runs');
+  assert.equal((await store.runs('runsQuery')).runs.length, 10, 'measurement query has real rows');
+}
+
 async function measureWorker(mode) {
   const loadBefore = os.loadavg();
   let service, store;
@@ -565,6 +604,7 @@ async function measureWorker(mode) {
   // only within this worker. No source files, provider reads or live collectors are involved.
   for (let i = 0; i < 40; i++) await store.record([observation(T0 + i * 60_000, i)]);
   const query = { fromMs: 0, toMs: T0 + DAY, nowMs: T0 + 40 * 60_000, thinning: { kind: 'none' } };
+  await seedRuns(store);
   let tick = 40;
   const calls = {
     record: () => store.record([observation(T0 + tick++ * 60_000, tick % 100)]),
@@ -680,7 +720,7 @@ async function measure() {
     binary,
     identity: JSON.parse(receipt),
     method:
-      'Five alternating off/on rounds in fresh Node processes, 10 warm-ups + 40 samples per method and real loopback HTTP route. Fixed 40-row fixture; no collectors. RSS after GC, TS + owned Rust child; median of rounds.',
+      'Five alternating off/on rounds in fresh Node processes, 10 warm-ups + 40 samples per method and real loopback HTTP route. Fixed 40-point quota fixture plus 10 run documents; no collectors. RSS after GC, TS + owned Rust child; median of rounds.',
     rows,
     rss: {
       offBytes: rssOff,
