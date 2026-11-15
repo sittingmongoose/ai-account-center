@@ -821,6 +821,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-usage/tests/freshness.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "native/aac-usage/tests/readers.rs",
       "kind": "internal",
       "evidence": [],

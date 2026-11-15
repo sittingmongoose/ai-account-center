@@ -126,6 +126,30 @@ function codexAnswer(complete: boolean, input = 150) {
 const noRemote = async () => ({ mac: null, windows: null, nas1: null, alexis: null });
 
 describe('the scanner on this computer', () => {
+  it('checks freshness with the native reader for every local Analytics tool', async () => {
+    const asked: string[] = [];
+    await loadAnalyticsRemoteSources(MIN_DATE, {
+      cacheDir: path.join(dir, 'all-tools'),
+      hosts: noRemote,
+      force: true,
+      now: () => NOW,
+      localScanner: () => ({ ok: true }),
+      runLocal: async (request) => {
+        asked.push(...request.kinds);
+        return codexAnswer(true);
+      },
+    });
+    expect([...new Set(asked)].sort()).toEqual([
+      'antigravity',
+      'claude',
+      'codex',
+      'cursor',
+      'devin',
+      'muse',
+      'omp',
+      'zcode',
+    ]);
+  });
   // Sol M7 (FIX-ROUND-BIG 6): more experiment folders than the scanner takes, after it took Codex
   // over, hands Codex back to the built-in reader, which then reads it; never neither reader.
   it('hands a kind back to the built-in reader when its roots overflow after a take-over', async () => {
@@ -185,7 +209,16 @@ describe('the scanner on this computer', () => {
       'rollout-2026-11-03T03-38-31-0123456789abcdef.jsonl.zst'
     );
     // A cold computer gets one call per kind; each carries the experiment folders.
-    expect(asked.flatMap((request) => request.kinds).sort()).toEqual(['codex', 'cursor', 'devin']);
+    expect(asked.flatMap((request) => request.kinds).sort()).toEqual([
+      'antigravity',
+      'claude',
+      'codex',
+      'cursor',
+      'devin',
+      'muse',
+      'omp',
+      'zcode',
+    ]);
     expect(asked.find((request) => request.kinds.includes('codex'))?.experimentRoots).toEqual({
       codex: ['/home/u/t3setup/retained-usage/run/codex'],
     });

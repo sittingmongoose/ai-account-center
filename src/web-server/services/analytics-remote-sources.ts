@@ -136,6 +136,16 @@ function applyFreshness(
 ): void {
   if (!found) return;
   const clock = found.freshness;
+  if (clock?.state === 'unknown' && entry.state === 'ok') {
+    entry.state = 'cached';
+    entry.cause = 'freshness_unverified';
+    entry.detail = [
+      entry.detail,
+      'the independent activity check is incomplete; current usage coverage is unverified',
+    ]
+      .filter(Boolean)
+      .join('; ');
+  }
   if (
     clock?.state === 'stale' &&
     ['ok', 'no_usage', 'cached', 'stale'].includes(entry.state) &&
@@ -159,6 +169,10 @@ function applyFreshness(
 }
 
 const NO_READER_LABELS: Record<AnalyticsNoReaderTool, string> = {
+  'claude-desktop': 'Claude desktop',
+  'codex-app': 'Codex app',
+  'cursor-ide': 'Cursor IDE',
+  windsurf: 'Windsurf',
   cursor: 'Cursor',
   'gemini-cli': 'Gemini CLI',
   opencode: 'OpenCode',
@@ -326,7 +340,7 @@ const REMOTE_TARGETS = {
   ...Object.fromEntries(
     REMOTE_ANALYTICS_HOSTS.map((host) => [host, [...ANALYTICS_TOOLS, 'cursor', 'devin']])
   ),
-  ubuntu: ['codex', 'cursor', 'devin'],
+  ubuntu: [...ANALYTICS_TOOLS, 'cursor', 'devin'],
 } as Record<AnalyticsScanHost, AnalyticsRemoteKind[]>;
 
 /**
@@ -334,10 +348,10 @@ const REMOTE_TARGETS = {
  * at its first complete read there (DESIGN 16.0 B). Cursor and Devin have no collector, so the
  * scanner owns them from its first answer.
  */
-const TAKEOVER_KINDS: readonly AnalyticsRemoteKind[] = ['codex'];
+const TAKEOVER_KINDS: readonly AnalyticsRemoteKind[] = ANALYTICS_TOOLS;
 
 /**
- * The kinds the scanner reads on the dashboard's own computer (DESIGN 16.0 B). Codex moves from the
+ * The kinds the scanner reads on the dashboard's own computer (DESIGN 16.0 B). Existing tools move from the
  * TypeScript collector; each kind is owned by the scanner from its first complete read there,
  * which replaces the collector's rows in one step.
  */
@@ -1180,6 +1194,7 @@ function cachedHostSources(
         host,
         state:
           read?.state === 'no_usage' ||
+          read?.state === 'stale' ||
           read?.state === 'not_installed' ||
           read?.state === 'installed_no_logs' ||
           read?.state === 'unreadable' ||
@@ -1200,7 +1215,11 @@ function cachedHostSources(
               : read
                 ? null
                 : detail),
-        ...(read?.state === 'unreadable' ? { cause: 'read_failed' } : {}),
+        ...(read?.state === 'unreadable'
+          ? { cause: 'read_failed' }
+          : read?.cause
+            ? { cause: read.cause }
+            : {}),
         ...found,
       });
     }

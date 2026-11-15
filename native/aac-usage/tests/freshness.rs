@@ -19,6 +19,31 @@ fn freshness_cycle_boundary_and_missing_numbers_are_honest() {
     assert_eq!(freshness(None, None, 0)["state"], "unknown");
 }
 
+#[test]
+fn installed_desktop_clients_are_reported_as_unmeasured_instead_of_omitted() {
+    let home = tempfile::tempdir().unwrap();
+    let env = Env::from([(
+        "XDG_CONFIG_HOME".into(),
+        home.path().join("config").to_string_lossy().into_owned(),
+    )]);
+    // app_dir follows the native OS conventions. No fixture touches the actual user's home.
+    let base = if cfg!(windows) {
+        home.path().join("AppData/Roaming")
+    } else if cfg!(target_os = "macos") {
+        home.path().join("Library/Application Support")
+    } else {
+        home.path().join("config")
+    };
+    for name in ["Claude", "Codex", "Cursor", "Windsurf"] {
+        fs::create_dir_all(base.join(name)).unwrap();
+    }
+    let tools = aac_usage::discover::presence(home.path(), &env, &[], std::time::Duration::from_secs(3));
+    for kind in ["claude-desktop", "codex-app", "cursor-ide", "windsurf"] {
+        assert_eq!(tools[kind]["installed"], true);
+        assert_eq!(tools[kind]["cause"], "no_reader_yet");
+    }
+}
+
 fn scan(home: &Path, prior: Option<&Value>) -> Value {
     let request = protocol::parse_request(
         json!({

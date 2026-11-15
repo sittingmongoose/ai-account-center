@@ -303,6 +303,10 @@ const ROOT_ORIGINS: ReadonlySet<string> = new Set([
 const SIGNALS: ReadonlySet<string> = new Set(['home', 'binary', 't3_instance']);
 /** Tools Analytics has no usage reader for; the scanner reports only where they are present. */
 export const NO_READER_TOOLS = [
+  'claude-desktop',
+  'codex-app',
+  'cursor-ide',
+  'windsurf',
   'cursor',
   'gemini-cli',
   'opencode',

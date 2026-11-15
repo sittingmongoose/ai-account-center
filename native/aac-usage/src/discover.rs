@@ -575,6 +575,24 @@ pub fn freshness(newest_data: Option<i64>, newest_activity: Option<i64>, min_dat
     json!({"state": state, "newestDataMs": newest_data, "newestActivityMs": newest_activity})
 }
 
+fn install_activity(home: &Path, kind: &str) -> Option<i64> {
+    let relative = match kind {
+        "claude" => ".claude",
+        "codex" => ".codex",
+        "omp" => ".omp",
+        "muse" => ".local/share/muse",
+        "zcode" => ".zcode",
+        "antigravity" => ".gemini/antigravity",
+        "cursor" => ".cursor",
+        "devin" => ".local/share/devin",
+        _ => return None,
+    };
+    // Stat a link itself: its target may be an unavailable mount.
+    fs::symlink_metadata(home.join(relative))
+        .ok()
+        .map(|m| util::mtime_ms(&m))
+}
+
 /// Read only T3's provider projection metadata. The tool's own instance configuration resolves
 /// generic ACP drivers (OMP/zcode); titles, requests, responses and auth tables are never read.
 fn t3_activity(home: &Path, kind: &str, instances: &[T3Instance], deadline: Instant) -> Option<i64> {
@@ -643,6 +661,56 @@ pub fn presence(home: &Path, env: &Env, instances: &[T3Instance], budget: Durati
     let deadline = Instant::now() + budget;
     let data = env_dir(env, "XDG_DATA_HOME", home).unwrap_or_else(|| home.join(".local").join("share"));
     let specs = vec![
+        Spec {
+            tool: "claude-desktop",
+            dirs: vec![(
+                app_dir(home, env, "Claude"),
+                Box::new(|n: &str| n.ends_with(".log") || n.ends_with(".jsonl")),
+            )],
+            homes: vec![app_dir(home, env, "Claude")],
+            binaries: &[],
+            drivers: &[],
+            cause: "no_reader_yet",
+        },
+        Spec {
+            tool: "codex-app",
+            dirs: vec![(
+                app_dir(home, env, "Codex"),
+                Box::new(|n: &str| n.ends_with(".log") || n.ends_with(".jsonl")),
+            )],
+            homes: vec![app_dir(home, env, "Codex")],
+            binaries: &[],
+            drivers: &[],
+            cause: "no_reader_yet",
+        },
+        Spec {
+            tool: "cursor-ide",
+            dirs: vec![(
+                app_dir(home, env, "Cursor"),
+                Box::new(|n: &str| n.ends_with(".vscdb") || n.ends_with(".log")),
+            )],
+            homes: vec![app_dir(home, env, "Cursor")],
+            binaries: &[],
+            drivers: &[],
+            cause: "no_reader_yet",
+        },
+        Spec {
+            tool: "windsurf",
+            dirs: vec![
+                (
+                    app_dir(home, env, "Windsurf"),
+                    Box::new(|n: &str| n.ends_with(".vscdb") || n.ends_with(".log")),
+                ),
+                (
+                    home.join(".codeium/windsurf"),
+                    Box::new(|n: &str| n.ends_with(".pb") || n.ends_with(".json")),
+                ),
+            ],
+            homes: vec![app_dir(home, env, "Windsurf"), home.join(".codeium/windsurf")],
+            binaries: &["windsurf"],
+            drivers: &[],
+            cause: "no_reader_yet",
+        },
         Spec {
             tool: "cursor",
             dirs: cursor_chat_roots(home, env)
@@ -879,12 +947,44 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         m.keys().filter(|k| !failed.is_some_and(|f| f.contains(*k))).count()
     }) + failed.map_or(0, |s| s.len());
     let newest = roots.iter().filter_map(|r| r["counts"]["newestMtime"].as_i64()).max();
-    let mut activity = newest;
+    let mut activity = newest.into_iter().chain(install_activity(home, kind)).max();
+    let activity_deadline = collector.deadline().min(Instant::now() + Duration::from_millis(750));
+    let mut activity_limited = false;
+    // Independent metadata also catches log formats the usage reader did not recognize.
+    for (root, _) in collector.root_origins.get(kind).into_iter().flatten() {
+        if collector.absent_roots.contains(&(kind.to_string(), root.clone()))
+            || collector.root_failures.contains_key(&(kind.to_string(), root.clone()))
+        {
+            continue;
+        }
+        let (_, last, cut) = count_files(
+            root,
+            &|n| {
+                [
+                    ".jsonl",
+                    ".jsonl.zst",
+                    ".db",
+                    ".sqlite",
+                    ".db-wal",
+                    ".sqlite-wal",
+                    ".pb",
+                ]
+                .iter()
+                .any(|suffix| n.ends_with(suffix))
+            },
+            activity_deadline,
+        );
+        activity = activity.into_iter().chain((last > 0).then_some(last)).max();
+        activity_limited |= cut;
+        if cut {
+            break;
+        }
+    }
     let mut unmeasured_files = 0usize;
     if kind == "cursor" {
         for root in cursor_chat_roots(home, env) {
-            let (files, last, _) =
-                count_files(&root, &|n| n == "store.db" || n == "store.db-wal", collector.deadline());
+            let (files, last, cut) = count_files(&root, &|n| n == "store.db" || n == "store.db-wal", activity_deadline);
+            activity_limited |= cut;
             unmeasured_files += files;
             activity = activity.into_iter().chain((last > 0).then_some(last)).max();
         }
@@ -898,10 +998,14 @@ pub fn discovery_kind(collector: &Collector, home: &Path, env: &Env, kind: &str,
         .get(kind)
         .and_then(|prints| prints.values().filter_map(|p| p.newest_usage_ms).max());
     let signals = installed_signals(home, env, kind, instances);
+    let mut coverage = freshness(newest_data, activity, collector.min_date_ms);
+    if activity_limited && coverage["state"] != "stale" {
+        coverage["state"] = json!("unknown");
+    }
     json!({
         "installed": !roots.is_empty() || !signals.is_empty(),
         "signals": signals,
-        "freshness": freshness(newest_data, activity, collector.min_date_ms),
+        "freshness": coverage,
         "unmeasuredFiles": unmeasured_files,
         "roots": roots,
         "counts": {
