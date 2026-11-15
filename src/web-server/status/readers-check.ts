@@ -17,6 +17,7 @@ import type { AgentReportsState } from './agent-reports-reader';
 import type { MergedPin } from '../../status-native/pinned';
 import type { RunsState } from '../scoreboard/runs-reader';
 import { isWriterName } from './schema-helpers';
+import { tsWritesRow } from '../../shared/private-files';
 import type { StatusDocsState } from './status-docs';
 
 export const READERS_CHECK_SCHEMA = 'agent-reports/reader@1';
@@ -231,6 +232,8 @@ export class ReadersCheckWriter {
 
   /** Writes every writer's check file, atomically. Never throws. */
   async flush(): Promise<void> {
+    // One writer per registered file (L2): once the row moves to the Rust service, TS stops.
+    if (!tsWritesRow('readers-check')) return;
     const dir = path.join(this.root(), 'v1', 'readers', 'aac');
     const writtenAt = new Date(this.now()).toISOString();
     const target = this.files();

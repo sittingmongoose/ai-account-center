@@ -244,25 +244,30 @@ fn read(path: &Path) -> Option<Value> {
 /// object. Nothing there is silent; a file that is present but not read marks discovery
 /// incomplete, as Python's `read_failed()` does.
 fn read_settings(home: &Path, complete: &mut bool) -> Option<Value> {
+    use aac_files::read::{Ancestors, Owner, Read, ReadPolicy};
     const CAP: usize = 1_048_576;
     let path = home.join(".t3/userdata/settings.json");
     // Python follows a link on this path only while every written target stays inside the home,
     // and otherwise reads no settings at all. Nothing here proves that chain, so a link anywhere
     // below the home, the file included, declines the verb (big review Wonder M1).
-    if crate::files::linked_within(home, &path) {
-        crate::proof::reject();
-        return None;
-    }
-    let value = match crate::files::read_regular(&path, CAP) {
-        crate::files::Regular::Missing => return None,
-        crate::files::Regular::TooLarge => {
+    let policy = ReadPolicy::capped(CAP as u64)
+        .ancestors(Ancestors::NoLinkBelow(home))
+        .owner(Owner::Mine);
+    let value = match aac_files::read::read(&path, &policy) {
+        Read::Link => {
             crate::proof::reject();
             return None;
         }
-        crate::files::Regular::Read(bytes, meta) if !crate::files::foreign(&meta) => {
-            crate::proof::json(&bytes, CAP, true)
+        Read::Absent | Read::Unreadable(std::io::ErrorKind::NotADirectory) => return None,
+        Read::TooLarge => {
+            crate::proof::reject();
+            return None;
         }
-        _ => None,
+        Read::Bytes(bytes, _) => crate::proof::json(&bytes, CAP, true),
+        // Present but not one ordinary file of this user, or unreadable: `read_failed()`.
+        Read::Foreign | Read::NotRegular | Read::BadMode | Read::Unreadable(_) | Read::Unproved => {
+            None
+        }
     };
     if !value.as_ref().is_some_and(Value::is_object) {
         *complete = false;
@@ -483,19 +488,22 @@ fn scan(base: &Path, complete: &mut bool, sibling: Option<&Path>) -> Vec<PathBuf
     if !exists {
         return vec![];
     }
-    let Ok(entries) = fs::read_dir(base) else {
+    let Ok(entries) = aac_files::read::entries(base, 1024) else {
         *complete = false;
         return vec![];
     };
     let mut out = vec![];
-    for (i, entry) in entries.enumerate() {
-        if i >= 1024 {
-            *complete = false;
-            break;
-        }
-        let Ok(entry) = entry else {
-            *complete = false;
-            continue;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(aac_files::read::Listed::TooMany) => {
+                *complete = false;
+                break;
+            }
+            Err(aac_files::read::Listed::Entry(_)) => {
+                *complete = false;
+                continue;
+            }
         };
         let name = entry.file_name();
         let name = name.to_string_lossy();

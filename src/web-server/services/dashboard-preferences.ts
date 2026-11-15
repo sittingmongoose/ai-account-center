@@ -13,6 +13,7 @@ import { ConfigError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { isAccountAnalyticsTimeZone } from './account-analytics-range';
 import { TOOL_TABLE, type TableUsageLogTool } from '../../shared/tables';
+import { assertTsWritesFile } from '../../shared/private-files';
 
 /**
  * Dashboard preferences (Settings): the display time zone, the Claude history
@@ -422,6 +423,7 @@ export function writeDashboardPreferences(
 /** Both files use the same owner-only, fsynced atomic replacement. */
 function writePreferencesFile(name: string, value: unknown, ccsDir: string): void {
   const file = path.join(ccsDir, name);
+  assertTsWritesFile(file, ccsDir);
   const temporary = `${file}.${randomBytes(12).toString('hex')}.tmp`;
   let fd: number | undefined;
   try {

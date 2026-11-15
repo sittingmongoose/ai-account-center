@@ -7,6 +7,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import type http from 'http';
 import { ConfigError } from '../errors/error-types';
 import { requestRust, rustAgent, type RustConnection } from './rust-service-transport';
+import { privateFileOwners, type PrivateFileRole } from '../shared/private-files';
 
 /** The private socket protocol this front door speaks (aac-http `identity::PROTOCOL`). */
 export const RUST_SERVICE_PROTOCOL = 2;
@@ -23,6 +24,14 @@ export interface RustBoot extends RustConnection {
   ccsDir: string;
   binary: string;
   build: RustBuild;
+  /** Each registered private file's writer (L2), as this front door resolved it at start. */
+  files: Readonly<Record<string, PrivateFileRole>>;
+}
+
+/** The same owners in a stable spelling, for the attach check. */
+function ownersKey(files: unknown): string {
+  if (!files || typeof files !== 'object' || Array.isArray(files)) return '';
+  return JSON.stringify(Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
 }
 
 export interface RustLease {
@@ -175,7 +184,9 @@ function readBoot(file: string, ccsDir: string, binary: string): RustBoot | null
       boot.binary !== binary ||
       !/^[a-f0-9]{24}$/.test(boot.bootId) ||
       !/^[a-f0-9]{64}$/.test(boot.secret) ||
-      !parseBuild(JSON.stringify(boot.build))
+      !parseBuild(JSON.stringify(boot.build)) ||
+      // A boot started with other file owners is never attached (L2): one writer per file.
+      ownersKey(boot.files) !== ownersKey(privateFileOwners())
     )
       return null;
     const layout = socketLayout(ccsDir, boot.bootId);
@@ -190,6 +201,7 @@ function readBoot(file: string, ccsDir: string, binary: string): RustBoot | null
       secret: boot.secret,
       bootId: boot.bootId,
       build: boot.build,
+      files: boot.files,
     };
   } catch {
     return null;
@@ -330,6 +342,7 @@ export async function acquireRustServiceDetailed(
     bootId,
     // Filled from the service's own health reply once it answers.
     build: { commit: 'unknown', sha256, protocol: RUST_SERVICE_PROTOCOL, storeSchema: 0 },
+    files: privateFileOwners(),
     agent,
   };
   let child: ChildProcess | undefined;
@@ -401,7 +414,13 @@ export async function acquireRustServiceDetailed(
       if (!closed) for (const listener of exitListeners) listener(code, signal);
     });
     child.stdin?.write(
-      JSON.stringify({ ccsDir, socketPath: boot.socketPath, secret: boot.secret, bootId }) + '\n'
+      JSON.stringify({
+        ccsDir,
+        socketPath: boot.socketPath,
+        secret: boot.secret,
+        bootId,
+        files: boot.files,
+      }) + '\n'
     );
     // The service hashes its own image before it binds; allow a slow disk about 5 s.
     for (let attempt = 0; attempt < 200 && !failed && !closed; attempt++) {

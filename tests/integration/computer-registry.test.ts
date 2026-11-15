@@ -13,6 +13,8 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     for (const folder of [
       'src',
       'config/tables',
+      // The L2 private-file registry the TS writers load.
+      'config/private-files.json',
       'web-dashboard/public',
       'scripts',
       'docs/agent-reports/schemas',

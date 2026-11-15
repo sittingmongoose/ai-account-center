@@ -199,7 +199,7 @@ impl Config {
         } else {
             std::env::current_dir()?
         };
-        let private_dir = aac_files::resolve_root(&base, &selected)?;
+        let private_dir = aac_files::path::node::resolve(&base, &selected)?;
         let original_yaml = match optional_read(&private_dir.join("config.yaml"), 4 * 1024 * 1024)?
         {
             Some(bytes) => String::from_utf8(bytes).map_err(|_| yaml::damaged())?,

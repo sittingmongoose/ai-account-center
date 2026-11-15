@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "aac-config",
  "aac-core",
+ "aac-files",
  "aac-protocol",
  "aac-providers",
  "aac-status",

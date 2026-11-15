@@ -10,13 +10,13 @@ mod json_object;
 #[cfg(unix)]
 mod limits;
 #[cfg(unix)]
-mod private_file;
-#[cfg(unix)]
 mod profile_reads;
 #[cfg(unix)]
 mod read_files;
 #[cfg(unix)]
 mod read_routes;
+#[cfg(unix)]
+mod registered;
 #[cfg(unix)]
 mod table;
 #[cfg(unix)]

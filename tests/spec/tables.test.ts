@@ -256,7 +256,13 @@ describe('a synthetic provider and tool added to the table', () => {
   it('reach every derived TS consumer', async () => {
     const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-l4-synthetic-'));
     try {
-      for (const folder of ['src', 'config/tables', 'web-dashboard/public'])
+      // config/private-files.json: the L2 registry the TS writers load beside the tables.
+      for (const folder of [
+        'src',
+        'config/tables',
+        'config/private-files.json',
+        'web-dashboard/public',
+      ])
         fs.cpSync(path.join(root, folder), path.join(fixture, folder), { recursive: true });
       fs.symlinkSync(path.join(root, 'node_modules'), path.join(fixture, 'node_modules'), 'dir');
       const edit = (name: string, change: (table: Record<string, any>) => void) => {

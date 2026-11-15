@@ -2,6 +2,7 @@
 //! Unproved stores, grammar and IO outcomes delegate the entire inventory to Python.
 use crate::{files, proof};
 use aac_core::Failure;
+use aac_files::read::{Ancestors, Mode, Owner, ReadPolicy};
 use base64::Engine;
 use serde_json::{Value, json};
 use std::{
@@ -48,22 +49,22 @@ fn missing(e: &std::io::Error) -> bool {
 // A symlink is outside this subset, even when Python can safely resolve it. Inspect each
 // component before any open/enumeration so an unsupported store cannot redirect a read.
 fn metadata(path: &Path) -> Option<fs::Metadata> {
-    let mut last = None;
-    for part in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
-        match fs::symlink_metadata(part) {
-            Ok(m) if m.is_symlink() => {
-                proof::reject();
-                return None;
-            }
-            Ok(m) => last = Some(m),
-            Err(e) if missing(&e) => return None,
-            Err(_) => {
-                proof::reject();
-                return None;
-            }
+    if files::linked_within(root_of(path), path) {
+        proof::reject();
+        return None;
+    }
+    match fs::symlink_metadata(path) {
+        Ok(m) => Some(m),
+        Err(e) if missing(&e) => None,
+        Err(_) => {
+            proof::reject();
+            None
         }
     }
-    last
+}
+/// The root this path starts from ("/" on Unix), so a link anywhere on it is seen.
+fn root_of(path: &Path) -> &Path {
+    path.ancestors().last().unwrap_or(path)
 }
 fn exists(path: &Path) -> bool {
     metadata(path).is_some()
@@ -111,40 +112,21 @@ fn read(path: &Path, cap: usize, bom: bool) -> Option<Value> {
     read_with_policy(path, cap, bom, false)
 }
 fn read_with_policy(path: &Path, cap: usize, bom: bool, private: bool) -> Option<Value> {
-    #[cfg(not(unix))]
-    let _ = private;
-    let before = metadata(path)?;
-    if !before.is_file() || before.len() > cap as u64 {
-        proof::reject();
-        return None;
-    }
-    if files::foreign(&before) {
-        proof::reject();
-        return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if private && before.mode() & 0o077 != 0 {
+    // Python's `_read_present`: one ordinary file of this user, of at most `cap` bytes, with no
+    // link anywhere on its path; a private record also has no group or other bit. Absent reads
+    // as absent; everything else is outside this subset and delegates.
+    let policy = ReadPolicy::capped(cap as u64)
+        .ancestors(Ancestors::NoLinkBelow(root_of(path)))
+        .owner(Owner::Mine)
+        .mode(if private { Mode::Private } else { Mode::Any });
+    let bytes = match files::read_with(path, &policy) {
+        files::Regular::Read(bytes, _) => bytes,
+        files::Regular::Missing => return None,
+        _ => {
             proof::reject();
             return None;
         }
-    }
-    // The checked path was an ordinary file; any other outcome now is a race or an IO failure.
-    let files::Regular::Read(bytes, opened) = files::read_regular(path, cap) else {
-        proof::reject();
-        return None;
     };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if private && opened.mode() & 0o077 != 0 {
-            proof::reject();
-            return None;
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = opened;
     let value = document(&bytes, cap, bom)?;
     if !value.is_object() {
         proof::reject();
@@ -160,20 +142,18 @@ fn children(path: &Path, dirs_only: bool, cap: usize) -> Vec<PathBuf> {
         proof::reject();
         return vec![];
     }
-    let Ok(iter) = fs::read_dir(path) else {
+    // Count every entry before filtering, matching Python's raw listing bound.
+    let Ok(iter) = aac_files::read::entries(path, cap) else {
         proof::reject();
         return vec![];
     };
     let mut result = Vec::new();
-    for entry in iter.take(cap + 1) {
+    for entry in iter {
+        // An entry error or one entry past the bound.
         let Ok(entry) = entry else {
             proof::reject();
             return vec![];
         };
-        if result.len() >= cap {
-            proof::reject();
-            return vec![];
-        }
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             proof::reject();
             return vec![];
@@ -181,7 +161,6 @@ fn children(path: &Path, dirs_only: bool, cap: usize) -> Vec<PathBuf> {
         if !proof::ascii(&name) {
             return vec![];
         }
-        // Count every entry before filtering, matching Python's raw listing bound.
         result.push(entry.path());
     }
     result.sort();

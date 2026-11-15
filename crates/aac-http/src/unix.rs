@@ -5,6 +5,7 @@ use crate::{
     table::{Handler, Row},
 };
 use aac_api::{AccountRefreshSettings, VerifiedPrincipal};
+use aac_files::registry::{self, Owners};
 use aac_views::decline::Decline;
 use axum::{
     Json, Router,
@@ -19,6 +20,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs, io,
     os::unix::{
         ffi::OsStrExt,
@@ -52,6 +54,10 @@ pub struct Boot {
     pub secret: String,
     /// Public random correlation id, distinct from the secret.
     pub boot_id: String,
+    /// Each private-file registry row's writer as TS resolved it at start (L2,
+    /// `config/private-files.json`); absent means every row's own `owner`.
+    #[serde(default)]
+    pub files: Option<BTreeMap<String, String>>,
 }
 
 struct Shared {
@@ -96,7 +102,24 @@ fn name_of(path: &Path) -> Option<&str> {
 impl Boot {
     /// Parse only the exact object envelope supplied by TS; arrays are never positional fields.
     pub fn from_json(bytes: &[u8]) -> serde_json::Result<Self> {
-        crate::json_object::from_slice(bytes, &["ccsDir", "socketPath", "secret", "bootId"])
+        crate::json_object::from_slice(
+            bytes,
+            &["ccsDir", "socketPath", "secret", "bootId", "files"],
+        )
+        .or_else(|_| {
+            crate::json_object::from_slice(bytes, &["ccsDir", "socketPath", "secret", "bootId"])
+        })
+    }
+
+    /// Each registry row's writer for this boot. A map that names another row set, or gives a
+    /// row to the service that does not move with a route group, refuses the boot: TS and the
+    /// service must agree on every file's single writer.
+    pub fn owners(&self) -> io::Result<Owners> {
+        let rows = registry::rows().map_err(|_| failure())?;
+        match &self.files {
+            Some(files) => Owners::from_boot(rows, files).map_err(|_| failure()),
+            None => Ok(Owners::defaults(rows)),
+        }
     }
 
     /// The socket lives in `aac-http-<bootId>/http.sock` under either `<ccsDir>/run` or a short
@@ -116,6 +139,7 @@ impl Boot {
         {
             return Err(failure());
         }
+        self.owners()?;
         let uid = fs::metadata(&self.ccs_dir)?.uid();
         let run = self.ccs_dir.join("run");
         private_dir(&run, uid)?;
@@ -315,8 +339,11 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
 }
 
 fn read_settings(root: &Path) -> Result<AccountRefreshSettings, Decline> {
-    let bytes = aac_files::read_bounded(&root.join("account-refresh-settings.json"), 4096)
-        .map_err(|_| Decline::Unsupported)?;
+    let (file, policy) =
+        crate::registered::file(root, "account-refresh-settings").ok_or(Decline::Unsupported)?;
+    let aac_files::read::Read::Bytes(bytes, _) = aac_files::read::read(&file, &policy) else {
+        return Err(Decline::Unsupported);
+    };
     // Require the raw object and exact unique keys before the strict integer DTO parse.
     // Original bytes are retained: no Value normalization or positional struct decoding.
     // These small integers are exact in JS; every other input delegates to the TS owner.
