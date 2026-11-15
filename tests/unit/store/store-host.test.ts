@@ -24,6 +24,7 @@ import {
   openAacStore,
   resetAacStoreForTests,
   storeErrorCode,
+  shareBackupEnv,
 } from '../../../src/store/store-service';
 import { SocketStoreHandle } from '../../../src/store/store-host-client';
 import type { NativeLoadResult } from '../../../src/store/native-loader';
@@ -106,6 +107,12 @@ afterEach(async () => {
 });
 
 describe('the store switch', () => {
+  it('resolves a relative share backup folder as the in-process writer did', () => {
+    expect(shareBackupEnv({ AAC_STORE_SHARE_BACKUP_DIR: 'fixture-backups' }).shareBackupDir).toBe(
+      path.resolve('fixture-backups')
+    );
+    expect(shareBackupEnv({ AAC_STORE_SHARE_BACKUP_DIR: ' off ' }).shareBackupOff).toBe(true);
+  });
   it('reads the env first, then config.yaml, else off', () => {
     expect(rustStoreSwitchOn({ AAC_RUST_STORE: 'on' })).toBe(true);
     expect(rustStoreSwitchOn({ AAC_RUST_STORE: 'off' })).toBe(false);

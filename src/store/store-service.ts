@@ -331,7 +331,7 @@ export function shareBackupEnv(env: NodeJS.ProcessEnv): {
   if (!explicit) return { shareBackupDir: null, shareBackupOff: false };
   return explicit.toLowerCase() === 'off'
     ? { shareBackupDir: null, shareBackupOff: true }
-    : { shareBackupDir: explicit, shareBackupOff: false };
+    : { shareBackupDir: path.resolve(explicit), shareBackupOff: false };
 }
 
 /** Opens the process's store once; later calls return the same state. */
