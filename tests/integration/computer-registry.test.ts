@@ -12,6 +12,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
   try {
     for (const folder of [
       'src',
+      'config/tables',
       'web-dashboard/public',
       'scripts',
       'docs/agent-reports/schemas',

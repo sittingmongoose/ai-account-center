@@ -84,6 +84,7 @@ RUN chmod +x /usr/local/bin/ai-account-center-entrypoint
 
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/config/tables ./config/tables
 COPY --from=build /app/browser-bridge ./browser-bridge
 COPY --from=build /app/README.md ./README.md
 COPY --from=build /app/LICENSE ./LICENSE

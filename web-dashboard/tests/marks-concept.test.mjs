@@ -14,8 +14,9 @@ const repo = path.join(here, '..', '..');
 const icons = fs.readFileSync(path.join(here, '..', 'leptos', 'src', 'ui', 'icons.rs'), 'utf8');
 const marksDir = path.join(here, '..', 'leptos', 'src', 'ui', 'marks');
 const sources = JSON.parse(fs.readFileSync(path.join(marksDir, 'sources.json'), 'utf8'));
-const serverTable = fs.readFileSync(
-  path.join(repo, 'src', 'web-server', 'services', 'dashboard-provider-table.ts'), 'utf8');
+// The server's provider ids are the shared table's dashboard rows (config/tables/providers.json, L4).
+const providerTable = JSON.parse(
+  fs.readFileSync(path.join(repo, 'config', 'tables', 'providers.json'), 'utf8'));
 
 const between = (text, from, to) => text.slice(text.indexOf(from), text.indexOf(to, text.indexOf(from)));
 const markFn = between(icons, 'pub fn ProviderMark(', 'let box_style');
@@ -24,9 +25,9 @@ const lightFn = between(icons, 'fn has_light_art(', '\n}');
 const LIGHT_IDS = new Set([...lightFn.matchAll(/"([a-z0-9-]+)"/g)].map((m) => m[1]));
 const scaleFn = between(icons, 'pub fn mark_scale(', '_ => 1.0');
 const SCALES = Object.fromEntries([...scaleFn.matchAll(/"([a-z0-9-]+)" => ([^,]+),/g)].map((m) => [m[1], m[2].trim()]));
-const tableStart = serverTable.indexOf('DASHBOARD_PROVIDER_IDS');
-const tableBlock = serverTable.slice(tableStart, serverTable.indexOf(']);', tableStart));
-const SERVER_IDS = [...tableBlock.matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]);
+const SERVER_IDS = Object.entries(providerTable.providers)
+  .filter(([, row]) => row.dashboard)
+  .map(([id]) => id);
 
 test('every provider id the server can send has a mark', () => {
   assert.ok(SERVER_IDS.length >= 9, `expected the 9 server ids, saw ${SERVER_IDS.length}`);

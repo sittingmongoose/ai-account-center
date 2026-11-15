@@ -12,6 +12,7 @@ import { getCcsDir } from '../../utils/config-manager';
 import { ConfigError } from '../../errors/error-types';
 import { createLogger } from '../../services/logging';
 import { isAccountAnalyticsTimeZone } from './account-analytics-range';
+import { TOOL_TABLE, type TableUsageLogTool } from '../../shared/tables';
 
 /**
  * Dashboard preferences (Settings): the display time zone, the Claude history
@@ -26,8 +27,11 @@ import { isAccountAnalyticsTimeZone } from './account-analytics-range';
 export const DEFAULT_DASHBOARD_TIME_ZONE = 'America/New_York';
 export const MAX_USAGE_LOG_SOURCES = 64;
 
-export const USAGE_LOG_TOOLS = ['omp', 'muse', 'zcode', 'claude-code', 'codex', 'jsonl'] as const;
-export type UsageLogTool = (typeof USAGE_LOG_TOOLS)[number];
+/** config/tables/tools.json `usageLogTools`, in file order. */
+export const USAGE_LOG_TOOLS = Object.keys(
+  TOOL_TABLE.usageLogTools
+) as readonly TableUsageLogTool[];
+export type UsageLogTool = TableUsageLogTool;
 
 /**
  * The computers an extra usage-log folder can sit on. Nas1 is a second Ubuntu computer,
@@ -38,14 +42,19 @@ export type UsageLogHost = (typeof USAGE_LOG_HOSTS)[number];
 
 /** A dot path into a generic JSONL record (`usage.input_tokens`). */
 const FIELD_PATH = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
-const MAPPING_KEYS = ['timestamp', 'model', 'inputTokens', 'outputTokens', 'cost'] as const;
+/** config/tables/tools.json `usageLogFieldMapping`: the keys a mapping may name, and the required ones. */
+type MappingKey = keyof typeof TOOL_TABLE.usageLogFieldMapping;
+const MAPPING_KEYS = Object.keys(TOOL_TABLE.usageLogFieldMapping) as readonly MappingKey[];
+const REQUIRED_MAPPING_KEYS = MAPPING_KEYS.filter(
+  (key) => TOOL_TABLE.usageLogFieldMapping[key].required
+);
 
 export interface UsageLogSource {
   id: string;
   tool: UsageLogTool;
   host: UsageLogHost;
   path: string;
-  fieldMapping?: Partial<Record<(typeof MAPPING_KEYS)[number], string>>;
+  fieldMapping?: Partial<Record<MappingKey, string>>;
 }
 
 export interface DashboardPreferences {
@@ -94,7 +103,7 @@ function isUsageLogSource(value: unknown, allowRemoteJsonl = false): value is Us
   const mapping = source.fieldMapping as Record<string, unknown>;
   const names = Object.keys(mapping);
   if (names.length === 0 || names.length > MAPPING_KEYS.length) return false;
-  if (typeof mapping.timestamp !== 'string' || typeof mapping.model !== 'string') return false;
+  if (REQUIRED_MAPPING_KEYS.some((key) => typeof mapping[key] !== 'string')) return false;
   return names.every(
     (name) =>
       (MAPPING_KEYS as readonly string[]).includes(name) &&
