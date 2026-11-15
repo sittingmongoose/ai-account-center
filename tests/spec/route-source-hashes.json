@@ -7,7 +7,7 @@
   "src/web-server/routes/account-refresh-settings-routes.ts": "4e4e20fca51aca5b2aae26e170ec3fe0189c065b660fbb0e4ff346f3a2c9cd5e",
   "src/web-server/routes/account-route-guards.ts": "8bf5f0d2be2a93de45df196efff48a86d60b18b64bc0a87bcda47bf464fe6d2e",
   "src/web-server/routes/account-visibility-routes.ts": "844180a2c471a0828185779a5086a5f2dc399128faddbad07c3859798e242d26",
-  "src/web-server/routes/antigravity-routes.ts": "1a296cdcab7b7bddf4c5fde47db3a79dbe0523c6957ff4779a0b58dfc49c598c",
+  "src/web-server/routes/antigravity-routes.ts": "3b696b684328d4b46a4fe4a72b104cbee92bef6ee4e4468d0739c5d26fcc1fb0",
   "src/web-server/routes/api-router.ts": "08bb29961362f1411ff4050741093278341500866c39d736a26c1e30b4d1763c",
   "src/web-server/routes/app-update-routes.ts": "29992da3998ab5f2ec8eaf262f807b31f3a90ad4aa5074dfb34fb41529d03599",
   "src/web-server/routes/auth-device-routes.ts": "64b8ee8ca35ad8f53e2bed618b8220c97fbe964941662958debf529a3e0d1f03",
@@ -21,7 +21,7 @@
   "src/web-server/routes/caller-key.ts": "f321ab6e548bacadc6310f85b6e122aee3de4c8cefed37e67ee17dc2352a0ddb",
   "src/web-server/routes/claude-desktop-routes.ts": "55f976c7d5278947a6f8dcddede94050203f90e701805ccbbd5a25570631f179",
   "src/web-server/routes/codex-routes.ts": "c49b0a4a3cbd76165423140a9abfda25876ead87b7884c5cdae8791934c9b4de",
-  "src/web-server/routes/home-view-routes.ts": "8edddbc026a287d48d470a9cf5aa12c8c71798142c0d7c7bc1a615d8707a5a02",
+  "src/web-server/routes/home-view-routes.ts": "72c6d6a020d089ae71c041990de6d3a71a02ff73ba4619585ac2a8e1c37eefa9",
   "src/web-server/routes/index.ts": "0e5af7ae2b8922270575f49135248e3987e428f79b303bbc1fc1361de84d16e0",
   "src/web-server/routes/reset-claim-routes.ts": "8c2fde59fdcef9964d0f7c40e76a193213e4fca394b8b887acf9f27d785ba8bf",
   "src/web-server/routes/revalidated-view.ts": "58d7382a0314411bb4e6b5cb079b0a8c73de2d9026521679b270e98b21b7923a",
@@ -33,7 +33,7 @@
   "src/web-server/rust-service-lifecycle.ts": "8d6d9cdae0dc5808e8973758faadc83eb35d3f5e6b5fc964841200899aa47f9a",
   "src/web-server/rust-service-routes.json": "95c4166babc0fd657405a86963edba49a40f4162eefbae047aae335fc409258a",
   "src/web-server/rust-service-supervisor.ts": "b57df70d5815527611b6638cc8685e2e81bc9bd5ff9beeba4a87915d3d992996",
-  "src/web-server/rust-service-transport.ts": "0a968de4b2cef24d7091b866ec753e54851013f6e301ea219c3dd92621241601",
-  "src/web-server/rust-service.ts": "f4f530fdec0cd8357c931c7d55816061ea8fa835696614cfebb9bfe8cac67e1c",
+  "src/web-server/rust-service-transport.ts": "a91e66d75c466f22ec3bb1b5c37aae523b2ec8b611645767a97652ee75b3faf5",
+  "src/web-server/rust-service.ts": "6adb6baf80cb081e9ebafa4dafd08ba412e59fd67ec77710d3f4575006d21fbb",
   "src/web-server/usage-hub/usage-hub-router.ts": "0d3ca6665883284813d11ae58e13b533717fb3c12ba1f06e55df63fee4b868fa"
 }
