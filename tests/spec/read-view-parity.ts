@@ -370,13 +370,50 @@ try {
         `raw Status order case ${cases.indexOf(input)} in ${zone}`
       );
     }
+  // Big review (Fable M1): a board time is fs.Stats.mtimeMs, which carries a fraction on ext4, ZFS, NFS and SMB.
+  // Rust must age it as TS does (or decline), never read it as no time. One real file's stat, Fable's synthetic
+  // fraction and an integer control; not part of the golden (a real stat changes every run).
+  const boardFile = path.join(statusDir, 'fixture-board.md');
+  fs.writeFileSync(boardFile, 'board');
+  const stamp = fs.statSync(boardFile).mtimeMs;
+  let fractional = 0;
+  for (const [mtime, at] of [
+    [now - 3600000 + 0.4567, now],
+    [stamp, Math.floor(stamp) + 5000],
+    [stamp, Math.floor(stamp) + 499],
+    [now - 3600000, now],
+  ] as const) {
+    if (!Number.isInteger(mtime)) fractional++;
+    const input = structuredClone(base);
+    input.now = at;
+    input.timeZone = 'UTC';
+    input.reports.tasks[0].doc.board = 'share/fixture/board.md';
+    input.reports.boards = new Map([['share/fixture/board.md', mtime]]);
+    const expected = buildStatusView(input);
+    const age = expected.projects.flatMap((p: any) => p.streams).find((stream: any) => stream.board)
+      ?.board.ageSeconds;
+    assert.equal(typeof age, 'number', 'the TS view ages the board');
+    if (tsOnly) continue;
+    const reply = await requestRust(
+      boot,
+      '/api/status',
+      { kind: 'session', id: 'fixture-admin', role: 'admin' },
+      active,
+      rustStatusInput(input)
+    );
+    assert.equal(reply.status, 200, `board mtime ${mtime}: Rust declined`);
+    assert.equal(JSON.stringify(reply.body), JSON.stringify(expected), `board mtime ${mtime}`);
+  }
+  assert.ok(fractional >= 1, 'at least one board time carries a fraction');
   const file = path.join(root, 'tests/spec/contract/m3-read-views.json');
   const golden =
     JSON.stringify(JSON.parse(JSON.stringify(captured).split(home).join('<fixture>')), null, 2) +
     '\n';
   if (process.argv.includes('--regenerate')) fs.writeFileSync(file, golden);
   else assert.equal(fs.readFileSync(file, 'utf8'), golden, 'raw-reader view golden bytes changed');
-  console.log('18 Scoreboard and 21 Status raw-reader states: parity and bytes passed');
+  console.log(
+    '18 Scoreboard and 21 Status raw-reader states plus 4 board ages: parity and bytes passed'
+  );
 } finally {
   service.stop();
   fs.rmSync(home, { recursive: true, force: true });

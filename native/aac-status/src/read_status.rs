@@ -1,7 +1,7 @@
 //! Status view composition over collected snapshots. Collectors and guarded write protocols keep
 //! their owners; every value and sentence in the read response is composed here.
 use crate::read_context::{
-    Context, Envelope, age, array, fixed, js_whitespace, math_round, number, plural, round_word, s,
+    Context, Envelope, age, age_of, array, fixed, js_whitespace, math_round, number, plural, round_word, s,
 };
 use serde_json::{Value as V, json};
 use std::collections::{HashMap, HashSet};
@@ -57,10 +57,16 @@ impl Inputs {
     }
     fn board(&self, given: &V) -> V {
         if s(given).is_empty() {
-            V::Null
-        } else {
-            json!({"path":given,"ageSeconds":self.age(self.at(&self.data["reports"]["boards"][s(given)]))})
+            return V::Null;
         }
+        let mtime = &self.data["reports"]["boards"][s(given)];
+        // A board time is `fs.Stats.mtimeMs`, fractional on ext4, ZFS, NFS and SMB: age it as
+        // status-view-words.ts `ageSeconds` does, in binary64, rather than as "no time".
+        let age = match mtime.as_f64() {
+            Some(ms) if !mtime.is_i64() && ms.is_finite() && ms.abs() <= 8.64e15 => age_of(self.now as f64 - ms),
+            _ => self.age(self.at(mtime)),
+        };
+        json!({"path":given,"ageSeconds":age})
     }
 }
 fn sentence(text: &str) -> String {

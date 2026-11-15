@@ -44,14 +44,27 @@ impl Context {
     pub fn valid(&self) -> bool {
         !self.missing.get()
     }
+    /// A time in three states: absent (`null`, or a `YYYY-MM-DDT` string the envelope gave no
+    /// finite parse: NaN in TS), a time (a safe integer, or a string with an epoch fact), or
+    /// unreadable. Unreadable (a fractional or unsafe number, another string or type) marks the
+    /// context invalid, so the view declines instead of reading the value as "no time".
     pub fn epoch(&self, value: &V) -> Option<i64> {
         if value.is_null() {
             return None;
         }
-        if let Some(ms) = value.as_i64() {
+        if let Some(ms) = value.as_i64().filter(|ms| ms.unsigned_abs() <= 9_007_199_254_740_991) {
             return Some(ms);
         }
-        self.facts.epochs.get(value.as_str()?).copied()
+        if let Some(text) = value.as_str() {
+            if let Some(ms) = self.facts.epochs.get(text) {
+                return Some(*ms);
+            }
+            if iso_prefixed(text) {
+                return None;
+            }
+        }
+        self.missing.set(true);
+        None
     }
     fn date(&self, ms: i64) -> Option<&Date> {
         let value = self.facts.dates.get(&ms.to_string());
@@ -92,6 +105,19 @@ impl Context {
         }
     }
 }
+/// `/^\d{4}-\d{2}-\d{2}T/`: the strings the presentation envelope gives a `Date.parse` epoch whenever
+/// one is finite (`rust-read-input.ts`), so a missing fact for one of them is NaN, not unknown.
+pub fn iso_prefixed(text: &str) -> bool {
+    let b = text.as_bytes();
+    b.len() >= 11
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'-'
+        && b[5..7].iter().all(u8::is_ascii_digit)
+        && b[7] == b'-'
+        && b[8..10].iter().all(u8::is_ascii_digit)
+        && b[10] == b'T'
+}
+
 /// ECMAScript Math.round on the input binary64 value. Do not add 0.5: that
 /// addition can itself round across a half boundary. Outside (-0.5, 0), subtracting
 /// floor is exact (Sterbenz, or a zero floor); compare that exact fraction instead.
@@ -123,8 +149,13 @@ pub fn round_word(value: f64) -> Option<String> {
 }
 
 pub fn age(now: i64, at: Option<i64>) -> V {
-    at.map(|t| json!(math_round((now - t) as f64 / 1000.0).max(0.0)))
-        .unwrap_or(V::Null)
+    at.map(|t| age_of((now - t) as f64)).unwrap_or(V::Null)
+}
+/// status-view-words.ts `ageSeconds` on a binary64 difference: `Math.max(0, Math.round(d / 1000))`,
+/// whose `Math.max` answers +0 for a negative or -0 rounding (`f64::max` may keep -0).
+pub fn age_of(difference_ms: f64) -> V {
+    let seconds = math_round(difference_ms / 1000.0);
+    json!(if seconds > 0.0 { seconds } else { 0.0 })
 }
 pub fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
@@ -258,6 +289,43 @@ pub fn js_whitespace(c: char) -> bool {
 mod lows_tests {
     use super::js_number;
     use serde_json::{Value, json};
+
+    /// Big review (Fable M1): a time the context cannot read declines the view; it is never "no time".
+    #[test]
+    fn epoch_is_absent_a_time_or_unreadable() {
+        let fresh = || {
+            let facts = json!({"data": {}, "presentation": {
+                "dates": {}, "epochs": {"2026-01-01T00:00:00Z": 1767225600000_i64}, "order": {}}});
+            super::Context::new(serde_json::from_value::<super::Envelope>(facts).unwrap().presentation)
+        };
+        for (value, want) in [
+            (json!(null), None),
+            (json!(1767225600000_i64), Some(1767225600000)),
+            (json!("2026-01-01T00:00:00Z"), Some(1767225600000)),
+            (json!("2026-13-01T00:00:00Z"), None),
+        ] {
+            let ctx = fresh();
+            assert_eq!(ctx.epoch(&value), want, "{value}");
+            assert!(ctx.valid(), "{value} is readable");
+        }
+        for value in [
+            json!(1767225600000.4567),
+            json!(9_007_199_254_740_993_u64),
+            json!("2026-01-05"),
+            json!("yesterday"),
+            json!(true),
+            json!([1]),
+        ] {
+            let ctx = fresh();
+            assert_eq!(ctx.epoch(&value), None, "{value}");
+            assert!(!ctx.valid(), "{value} must decline the view");
+        }
+        // Math.max(0, Math.round(d / 1000)): never -0, whole seconds, ties toward +infinity.
+        assert_eq!(super::age_of(-300.0), json!(0.0));
+        assert!(super::age_of(-300.0).as_f64().is_some_and(f64::is_sign_positive));
+        assert_eq!(super::age_of(3_599_999.543_3), json!(3600.0));
+        assert_eq!(super::age_of(4_999.394), json!(5.0));
+    }
 
     #[test]
     fn js_number_refuses_unproven_forms_and_normalizes_negative_zero() {
