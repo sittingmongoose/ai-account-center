@@ -6,12 +6,12 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1110 |
+| Sync fs occurrences (all) | 1112 |
 | Sync fs files affected (all) | 110 |
-| Sync fs occurrences (runtime hotpaths) | 536 |
+| Sync fs occurrences (runtime hotpaths) | 538 |
 | Sync fs files affected (runtime hotpaths) | 60 |
-| Legacy shim markers | 199 |
-| Legacy shim files affected | 59 |
+| Legacy shim markers | 201 |
+| Legacy shim files affected | 60 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -20,7 +20,7 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | `src/web-server/usage/account-activity-collector.ts` | 123 | chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, opendirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync |
 | `src/web-server/usage/analytics-request-plan.ts` | 28 | existsSync, realpathSync, statSync |
 | `src/web-server/services/app-update-service.ts` | 23 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync |
-| `src/web-server/services/dashboard-preferences.ts` | 19 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync |
+| `src/web-server/services/dashboard-preferences.ts` | 21 | closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync |
 | `src/web-server/services/usage-failover-cache.ts` | 19 | closeSync, fstatSync, lstatSync, mkdirSync, opendirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync |
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
 | `src/web-server/status/answer-signing.ts` | 18 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync |
@@ -51,11 +51,11 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 32.1% (210/654) |
+| typed-error adoption (typed/total throws) | 32.3% (212/656) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 12 |
-| files with createLogger | 44/440 |
+| files with createLogger | 44/442 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 60 |
 | files > 600 LOC | 23 |
