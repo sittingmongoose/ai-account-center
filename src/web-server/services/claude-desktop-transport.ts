@@ -10,6 +10,7 @@ import {
 } from './claude-desktop-profile-service';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
 import { sshArgv } from './ssh-policy';
+import { collectAgentWithFallback, runHistoryAgent } from './agent-verbs';
 
 const SSH_TIMEOUT_MS = 8000;
 const MAX_HISTORY_BYTES = 1024 * 1024;
@@ -332,23 +333,29 @@ export async function runClaudeHistoryHelper(
   );
   if (input.length > MAX_PRIVATE_INDEX_BYTES)
     throw new ValidationError('Claude history helper is unavailable.');
-  // A short fixed bootstrap keeps Windows command-line length bounded. Only
-  // this process's trusted packaged sources are executed; private data and
-  // sources travel in the existing SSH stdin pipe without temporary files.
-  const code =
-    "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));_s=_p['helperSource'];globals()['__ccs_history_helper_source__']=_s;globals()['__ccs_history_node_bridge_source__']=_p.get('nodeBridgeSource');sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(_p['request']).encode('utf-8')),encoding='utf-8');exec(compile(_s,'managed-history-helper','exec'))";
-  let command: string;
-  if (platform === 'mac') {
-    command = `/usr/bin/python3 -c ${quoteShell(code)}`;
-  } else {
-    const script = [
-      "$ErrorActionPreference = 'Stop'",
-      "$python = [IO.Path]::Combine($env:USERPROFILE, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')",
-      'if (-not [IO.File]::Exists($python)) { exit 1 }',
-      `& $python -c '${code.replace(/'/g, "''")}'`,
-      'exit $LASTEXITCODE',
-    ].join('; ');
-    command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
-  }
-  return runDesktopSsh(checkHost(launcher.sshHost), command, input);
+  return collectAgentWithFallback(
+    'claude-history',
+    () => runHistoryAgent({ platform, sshHost: checkHost(launcher.sshHost) }, request),
+    async () => {
+      // A short fixed bootstrap keeps Windows command-line length bounded. Only
+      // this process's trusted packaged sources are executed; private data and
+      // sources travel in the existing SSH stdin pipe without temporary files.
+      const code =
+        "import sys,json,io;_p=json.loads(sys.stdin.buffer.read().decode('utf-8'));_s=_p['helperSource'];globals()['__ccs_history_helper_source__']=_s;globals()['__ccs_history_node_bridge_source__']=_p.get('nodeBridgeSource');sys.stdin=io.TextIOWrapper(io.BytesIO(json.dumps(_p['request']).encode('utf-8')),encoding='utf-8');exec(compile(_s,'managed-history-helper','exec'))";
+      let command: string;
+      if (platform === 'mac') {
+        command = `/usr/bin/python3 -c ${quoteShell(code)}`;
+      } else {
+        const script = [
+          "$ErrorActionPreference = 'Stop'",
+          "$python = [IO.Path]::Combine($env:USERPROFILE, '.ccs', 'claude-session-migration', 'venv', 'Scripts', 'python.exe')",
+          'if (-not [IO.File]::Exists($python)) { exit 1 }',
+          `& $python -c '${code.replace(/'/g, "''")}'`,
+          'exit $LASTEXITCODE',
+        ].join('; ');
+        command = `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+      }
+      return runDesktopSsh(checkHost(launcher.sshHost), command, input);
+    }
+  );
 }

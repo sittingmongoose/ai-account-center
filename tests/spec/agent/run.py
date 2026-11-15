@@ -132,6 +132,9 @@ def main():
             print('BASELINE RED:',case['source'],case['args']['probe'].strip())
     if failures: raise SystemExit(f'{failures} baseline regression cases fail as expected')
     print(f'PASS inventory: {len(cases)} TS golden/Rust cases')
+    if '--part3' in sys.argv:
+        from part3 import main as part3
+        part3(binary)
     if '--scan-bin' in sys.argv:
         scanner = str(pathlib.Path(sys.argv[sys.argv.index('--scan-bin') + 1]).resolve())
         # Source tests supply their own fixture selectors. Never inherit private log roots.

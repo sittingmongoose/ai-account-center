@@ -2259,6 +2259,12 @@
       ]
     },
     {
+      "file": "tests/unit/web-server/agent-part3.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "tests/unit/web-server/agent-usage-golden.test.ts",
       "kind": "internal",
       "evidence": [],

@@ -7,6 +7,7 @@ import { ConfigError, NetworkError } from '../../errors/error-types';
 import type { DashboardPlatform } from './account-dashboard-types';
 import { isSafeUsageSshAlias } from './dashboard-hosts';
 import { sshArgv } from './ssh-policy';
+import { collectAgentWithFallback, runKeyStoreAgent } from './agent-verbs';
 
 /**
  * The AAC-owned API-key store (CONTRACT-registry-lifecycle section 3.2).
@@ -327,13 +328,31 @@ export class RemoteKeyStore implements KeyStoreBackend {
   async put(provider: KeyProvider, keyId: string, secret: string): Promise<StoredKeyInfo> {
     if (!API_KEY_PATTERN.test(secret)) throw new KeyStoreError();
     const command = keyHelperCommand(this.platform, 'put', provider, keyId);
-    const info = parseHelperReply(await this.run(this.sshHost, command, secret), this.platform);
+    const stdout = await collectAgentWithFallback(
+      'key-store',
+      () =>
+        runKeyStoreAgent(
+          { platform: this.platform, sshHost: this.sshHost },
+          { action: 'put', provider, keyId, secret }
+        ),
+      () => this.run(this.sshHost, command, secret)
+    );
+    const info = parseHelperReply(stdout, this.platform);
     if (info.fingerprint !== keyFingerprint(secret)) throw new KeyStoreError();
     return info;
   }
 
   async delete(provider: KeyProvider, keyId: string): Promise<void> {
-    await this.run(this.sshHost, keyHelperCommand(this.platform, 'delete', provider, keyId), null);
+    const command = keyHelperCommand(this.platform, 'delete', provider, keyId);
+    await collectAgentWithFallback(
+      'key-store',
+      () =>
+        runKeyStoreAgent(
+          { platform: this.platform, sshHost: this.sshHost },
+          { action: 'delete', provider, keyId }
+        ),
+      () => this.run(this.sshHost, command, null)
+    );
   }
 
   async info(): Promise<StoredKeyInfo | null> {

@@ -64,7 +64,7 @@ impl Request {
             || !self
                 .verb
                 .bytes()
-                .all(|c| c.is_ascii_lowercase() || c == b'-')
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
             || self.deadline_ms == 0
             || self.deadline_ms > MAX_DEADLINE_MS
             || !self.args.is_object()

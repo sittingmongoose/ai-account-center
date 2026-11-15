@@ -1,5 +1,8 @@
-//! Read-only host agent with bounded, deadline-controlled NDJSON requests.
+//! Host agent with bounded, deadline-controlled NDJSON requests.
+mod history;
 mod inventory;
+mod key_store;
+mod pins;
 mod proof;
 mod quota;
 mod scan;
@@ -174,6 +177,20 @@ fn safe_id(id: &str) -> String {
 
 async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     tokio::task::yield_now().await;
+    if matches!(
+        request.verb.as_str(),
+        "key-store" | "t3-pins" | "claude-history"
+    ) {
+        let args = request.args.clone();
+        let verb = request.verb.clone();
+        return tokio::task::spawn_blocking(move || match verb.as_str() {
+            "key-store" => key_store::run(&args),
+            "t3-pins" => pins::run(&args),
+            _ => history::run(&args),
+        })
+        .await
+        .map_err(|_| Failure::new(Cause::Bug, "agent worker failed"))?;
+    }
     if request.verb == "quota-read" {
         return quota::run(&request.args).await;
     }
