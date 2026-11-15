@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import ts from 'typescript';
 
@@ -21,6 +22,7 @@ interface ImportGraph {
   edges: Map<string, string[]>;
 }
 
+/** Every source the resolver can name: .ts, .tsx and .mts, never declaration files. */
 function walkTypeScriptFiles(directory: string, files: string[] = []): string[] {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const fullPath = path.join(directory, entry.name);
@@ -28,14 +30,14 @@ function walkTypeScriptFiles(directory: string, files: string[] = []): string[] 
       walkTypeScriptFiles(fullPath, files);
       continue;
     }
-    if (entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) {
+    if (/\.(ts|tsx|mts)$/.test(entry.name) && !/\.d\.m?ts$/.test(entry.name)) {
       files.push(path.normalize(fullPath));
     }
   }
   return files;
 }
 
-function resolveRelative(fromFile: string, specifier: string): string | null {
+function resolveRelative(fromFile: string, specifier: string, root: string): string | null {
   if (!specifier.startsWith('.')) return null;
   const base = path.resolve(path.dirname(fromFile), specifier);
   const candidates = [
@@ -48,12 +50,17 @@ function resolveRelative(fromFile: string, specifier: string): string | null {
   for (const candidate of candidates) {
     if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
       const normalized = path.normalize(candidate);
-      return normalized.startsWith(WEB_SERVER_ROOT) ? normalized : null;
+      return normalized.startsWith(root) ? normalized : null;
     }
   }
-  throw new Error(
-    `Unresolved import "${specifier}" from ${path.relative(WEB_SERVER_ROOT, fromFile)}`
-  );
+  throw new Error(`Unresolved import "${specifier}" from ${path.relative(root, fromFile)}`);
+}
+
+/** A module name written as a plain string or a template with no substitutions. */
+function literalText(node: ts.Node | undefined): string | null {
+  return node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    ? node.text
+    : null;
 }
 
 function specifiersIn(file: string): string[] {
@@ -62,7 +69,7 @@ function specifiersIn(file: string): string[] {
     fs.readFileSync(file, 'utf8'),
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TS
+    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
   const specs: string[] = [];
   const visit = (node: ts.Node): void => {
@@ -80,19 +87,19 @@ function specifiersIn(file: string): string[] {
       specs.push(node.moduleReference.expression.text);
     } else if (
       ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      node.arguments[0] &&
-      ts.isStringLiteral(node.arguments[0])
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === 'require')) &&
+      literalText(node.arguments[0]) !== null
     ) {
-      specs.push(node.arguments[0].text);
+      // import('./x'), import(`./x`), require('./x') and require(`./x`).
+      specs.push(literalText(node.arguments[0])!);
     } else if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === 'require' &&
-      node.arguments[0] &&
-      ts.isStringLiteral(node.arguments[0])
+      ts.isImportTypeNode(node) &&
+      ts.isLiteralTypeNode(node.argument) &&
+      literalText(node.argument.literal) !== null
     ) {
-      specs.push(node.arguments[0].text);
+      // A type written as import('./x').Name is an edge, as `import type` is.
+      specs.push(literalText(node.argument.literal)!);
     }
     ts.forEachChild(node, visit);
   };
@@ -100,27 +107,24 @@ function specifiersIn(file: string): string[] {
   return specs;
 }
 
-function buildImportGraph(): ImportGraph {
-  const files = walkTypeScriptFiles(WEB_SERVER_ROOT);
+function buildImportGraph(root = WEB_SERVER_ROOT): ImportGraph {
+  const files = walkTypeScriptFiles(root);
   const known = new Set(files);
   const edges = new Map<string, string[]>();
   for (const file of files) {
     const targets = new Set<string>();
     for (const specifier of specifiersIn(file)) {
-      const resolved = resolveRelative(file, specifier);
-      if (resolved && known.has(resolved) && resolved !== file) targets.add(resolved);
+      const resolved = resolveRelative(file, specifier, root);
+      if (resolved && known.has(resolved)) targets.add(resolved);
     }
     edges.set(file, [...targets].sort());
   }
   return { files, edges };
 }
 
-function relativeToWebServer(file: string): string {
-  return path.relative(WEB_SERVER_ROOT, file).split(path.sep).join('/');
-}
-
-/** Strongly connected components with more than one file (import cycles). */
-function cycleGroups(graph: ImportGraph): string[][] {
+/** Import cycles: strongly connected components with more than one file, or a file importing itself. */
+function cycleGroups(graph: ImportGraph, root = WEB_SERVER_ROOT): string[][] {
+  const relative = (file: string) => path.relative(root, file).split(path.sep).join('/');
   const index = new Map<string, number>();
   const low = new Map<string, number>();
   const stack: string[] = [];
@@ -151,8 +155,8 @@ function cycleGroups(graph: ImportGraph): string[][] {
         onStack.delete(cursor);
         component.push(cursor);
       } while (cursor !== node);
-      if (component.length > 1) {
-        groups.push(component.map(relativeToWebServer).sort());
+      if (component.length > 1 || (graph.edges.get(node) ?? []).includes(node)) {
+        groups.push(component.map(relative).sort());
       }
     }
   };
@@ -179,5 +183,26 @@ describe('src/web-server import cycles', () => {
   it('still sees the named status/ cycle, so the exception is not a no-op', () => {
     const allowed = [...STATUS_CYCLE].sort();
     expect(groups.some((group) => sameGroup(group, allowed))).toBe(true);
+  });
+
+  it('sees template and type-position imports, self-imports and .tsx/.mts files (U3 recheck L1)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-import-cycles-'));
+    try {
+      const write = (name: string, text: string) => fs.writeFileSync(path.join(root, name), text);
+      write('a.ts', 'export const a = () => import(`./b`);\n');
+      write('b.ts', "export type B = import('./a').A;\n");
+      write('self.ts', 'export const self = require(`./self`);\n');
+      write('view.tsx', "import { m } from './model';\nexport const v = m;\n");
+      write('model.mts', "import type { v } from './view';\nexport const m = 1;\n");
+      write('plain.ts', "import { a } from './a';\nexport const p = a;\n");
+      write('types.d.ts', "import './plain';\n");
+      expect(cycleGroups(buildImportGraph(root), root)).toEqual([
+        ['a.ts', 'b.ts'],
+        ['model.mts', 'view.tsx'],
+        ['self.ts'],
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

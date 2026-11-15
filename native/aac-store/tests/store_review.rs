@@ -1670,3 +1670,46 @@ fn distinct_log_corruptions_at_the_same_bounds_log_separately() {
     drop(engine);
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// store-reopen-flake-T1: a child that another test thread forks holds a copy of every open
+/// descriptor until it execs (`a_kill_while_ledgering_many_findings_recovers` spawns them). The
+/// engine's drop must still release the store lock at once, so a reopen right after the drop is
+/// never refused as `lock_held`. The child here waits in its pre-exec hook while the store is
+/// dropped and reopened, which holds that window open on purpose.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_reopen_right_after_drop_succeeds_while_a_forked_child_holds_descriptor_copies() {
+    use std::io::{Read, Write};
+    use std::os::unix::process::CommandExt;
+    let dir = temp_dir("review-reopen-fork");
+    let engine = open(&dir);
+    record(&engine, vec![obs(T0, 10.0)]);
+    engine.close().unwrap();
+    let (mut forked, tell) = std::io::pipe().unwrap();
+    let spawner = std::thread::spawn(move || {
+        let mut command = std::process::Command::new("true");
+        // SAFETY: the hook runs in the forked child before exec and only writes one byte to a
+        // pipe and sleeps (write and nanosleep are async-signal-safe); it allocates nothing.
+        unsafe {
+            command.pre_exec(move || {
+                let _ = (&tell).write(b"f");
+                std::thread::sleep(std::time::Duration::from_millis(1_500));
+                Ok(())
+            });
+        }
+        command.status().unwrap()
+    });
+    let mut byte = [0u8; 1];
+    // The child exists now and holds copies of this process's descriptors, store.lock among them.
+    forked.read_exact(&mut byte).unwrap();
+    drop(engine);
+    let reopened = ops::open_engine(dir.to_str().unwrap(), None, Some(90));
+    let code = reopened.as_ref().err().map(|e| e.code);
+    assert_eq!(code, None, "the reopen right after the drop was refused");
+    let engine = reopened.unwrap();
+    assert_eq!(raw_starts(&engine), vec![T0]);
+    engine.close().unwrap();
+    drop(engine);
+    assert!(spawner.join().unwrap().success());
+    fs::remove_dir_all(dir).unwrap();
+}

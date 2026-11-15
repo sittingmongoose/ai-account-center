@@ -1048,13 +1048,26 @@ describe('consolidated account dashboard', () => {
           )
         )
       );
+      // Every persisted sample comes back through the real reader first. The service then gets
+      // them from memory, so its 100 ms response budget races only promise work: under load a
+      // disk read could outlast the budget and leave the rows empty (cold-dashboard-flake-T1),
+      // which is timing, not the behaviour checked here.
+      const persisted = new Map(
+        await Promise.all(
+          profiles.map(
+            async (profile) =>
+              [profile.id!, await getCachedClaudeDesktopLiveUsage(profile.id!)] as const
+          )
+        )
+      );
+      expect([...persisted.values()].map((sample) => sample?.windows.length)).toEqual([6, 6, 5, 5]);
       const currentAt = new Date().toISOString();
       const service = new AccountDashboardService(
         deps({
           scope: () => root,
           responseBudgetMs: 100,
           listClaudeProfiles: async () => profiles,
-          getCachedLiveClaudeUsage: getCachedClaudeDesktopLiveUsage,
+          getCachedLiveClaudeUsage: async (id) => persisted.get(id) ?? null,
           getLiveClaudeUsage: async (id) => {
             await blocked;
             const sample = samples.find((candidate) => candidate.profileId === id)!;

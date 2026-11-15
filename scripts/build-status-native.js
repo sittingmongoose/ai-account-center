@@ -40,9 +40,24 @@ function cdylibName() {
 
 /**
  * SHA-256 over the crate's build inputs, in a fixed order: its own files, the shared computer registry, and the
- * number layer it composes with (crates/aac-num, whose package fields come from the workspace manifest, L3).
+ * number layer it composes with (crates/aac-num, L3), the one file policy it reads the saved Codex login with
+ * (crates/aac-files and crates/aac-core and the files they embed, L2), and the workspace manifest their package
+ * fields come from.
  */
 function sourceHash() {
+  const hash = crypto.createHash('sha256');
+  for (const rel of sourceFiles()) {
+    hash.update(rel);
+    hash.update('\0');
+    // Line endings do not change the build.
+    hash.update(fs.readFileSync(path.join(CRATE, rel), 'utf8').replace(/\r\n/g, '\n'));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+/** The build inputs `sourceHash` covers, relative to the crate, sorted (the Docker build context keeps them all). */
+function sourceFiles() {
   const files = [
     'Cargo.toml',
     'Cargo.lock',
@@ -51,6 +66,10 @@ function sourceHash() {
     '../../web-dashboard/public/computers.json',
     '../../Cargo.toml',
     '../../crates/aac-num/Cargo.toml',
+    '../../crates/aac-files/Cargo.toml',
+    '../../crates/aac-core/Cargo.toml',
+    '../../config/private-files.json',
+    '../../tests/spec/wire-words.json',
   ];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(path.join(CRATE, dir), { withFileTypes: true })) {
@@ -61,15 +80,9 @@ function sourceHash() {
   };
   walk('src');
   walk('../../crates/aac-num/src');
-  const hash = crypto.createHash('sha256');
-  for (const rel of files.sort()) {
-    hash.update(rel);
-    hash.update('\0');
-    // Line endings do not change the build.
-    hash.update(fs.readFileSync(path.join(CRATE, rel), 'utf8').replace(/\r\n/g, '\n'));
-    hash.update('\0');
-  }
-  return hash.digest('hex');
+  walk('../../crates/aac-files/src');
+  walk('../../crates/aac-core/src');
+  return files.sort();
 }
 
 function fileSha(file) {
@@ -171,4 +184,4 @@ if (require.main === module) {
   else build();
 }
 
-module.exports = { moduleName, sourceHash, assertSourceNote, copyToDist };
+module.exports = { moduleName, sourceHash, sourceFiles, assertSourceNote, copyToDist };

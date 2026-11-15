@@ -134,6 +134,7 @@ dependencies = [
 name = "aac-status"
 version = "0.1.0"
 dependencies = [
+ "aac-files",
  "aac-num",
  "base64 0.22.1",
  "napi-build",

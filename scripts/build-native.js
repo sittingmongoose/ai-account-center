@@ -46,6 +46,8 @@ function sourceHash() {
     'rust-toolchain.toml',
     '../../src/shared/secret-policy.json',
     '../shared/secret_policy.rs',
+    // runs.rs embeds the package's computer table.
+    '../../web-dashboard/public/computers.json',
   ];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(path.join(CRATE, dir), { withFileTypes: true })) {

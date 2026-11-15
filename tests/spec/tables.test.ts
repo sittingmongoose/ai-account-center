@@ -141,6 +141,20 @@ describe('fingerprinted TS hand lists equal the table', () => {
   it("the remote scan's kinds", async () => {
     const transport = await load('src/web-server/services/analytics-remote-transport.ts');
     expect([...transport.PYTHON_KINDS]).toEqual(analyticsTools);
+    // The transport's own runtime kind list (module-private, it validates requests, rows and
+    // discovery) is the table's scanner kinds exactly: discovery keeps a kind only when the
+    // transport accepts it (L4 review L1).
+    const entry = {
+      installed: false,
+      signals: [],
+      roots: [],
+      counts: { roots: 0, filesFound: 0, filesRead: 0, filesFailed: 0, newestMtime: null },
+    };
+    const offered = [...scannerKinds, 'zz-not-a-kind', 'toString'];
+    const discovery = transport.parseAnalyticsDiscovery({
+      kinds: Object.fromEntries(offered.map((kind) => [kind, entry])),
+    });
+    expect(Object.keys(discovery.kinds)).toEqual(scannerKinds);
     const sources = await load('src/web-server/services/analytics-remote-sources.ts');
     expect(sources.analyticsRemoteTargets('nas1')).toEqual(scannerKinds);
   });

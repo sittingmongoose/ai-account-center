@@ -130,9 +130,13 @@ implemented by
 ## Configuration
 
 The dashboard emits `server.event_loop_delay` at info level every 60 seconds. Its context contains
-`p99Ms`, `maxMs`, `meanMs`, `rssBytes`, `heapUsedBytes` and `externalBytes`. Delay values are milliseconds
-over that interval, sampled with `perf_hooks.monitorEventLoopDelay` at 10 ms resolution. The observation
-resets after each log and stops when the server closes. It carries no request, account or credential data.
+`p99Ms`, `maxMs`, `meanMs`, `rssBytes`, `heapUsedBytes` and `externalBytes`, plus fields a running part
+adds (such as the Rust service child's RSS). Delay values are milliseconds of excess timer lag: one unref'd
+JavaScript timer (`src/utils/event-loop-monitor.ts`) ticks every 10 ms and records how late each tick ran,
+0 when on time, rebasing after a stall so one late tick is counted once. `maxMs` and `meanMs` cover every
+tick of the interval; `p99Ms` is taken over the latest 6,000 ticks it retains (48 KB), the whole interval
+unless ticks ran early. The observation resets after each log and stops when the server closes. It carries
+no request, account or credential data.
 
 Dashboard usage helpers, native credential/quota workers and Status commands launch through one private
 IPC command parent. Command arguments, environments, stdin and stderr are never logged by that transport.

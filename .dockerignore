@@ -20,6 +20,8 @@ web-dashboard/leptos/pkg
 coverage
 tests
 **/__tests__
+# ...except the wire table crates/aac-core embeds; the status module's build reads it (L2).
+!tests/spec/wire-words.json
 
 # Environment files (SECURITY: prevent secret leakage)
 .env
@@ -33,6 +35,9 @@ docs
 *.md
 !README.md
 !LICENSE
+# ...except what the server reads at runtime, as the npm package ships it.
+!docs/agent-reports/schemas
+!docs/agent-reports/catalog
 
 # Logs and OS files
 *.log

@@ -915,7 +915,13 @@ class WindowsMuseUpdateTests(unittest.TestCase):
 
     def _warmed_catalog(self):
         """A catalog entry refreshed during the mocked install (mtime after the install start)."""
-        return _fixture_file(self.root / 'Home/.local/share/muse/model-catalog/deadbeef.json', '{"source": "provider_catalog"}')
+        path = _fixture_file(self.root / 'Home/.local/share/muse/model-catalog/deadbeef.json', '{"source": "provider_catalog"}')
+        # As in MuseCatalogWarmTests._warmed: a kernel-assigned mtime can lag the userspace clock
+        # the install start is read from by one tick, and a mocked install is faster than that, so
+        # the catalog could read as written before it (appupd-flake-T1). Stamp the write time.
+        stamp = time.time()
+        os.utime(path, (stamp, stamp))
+        return path
 
     def test_mac_and_linux_muse_same_version_while_its_launcher_updates_reports_busy(self):
         # The POSIX launcher keeps the same lock beside ~/.local/bin/muse; a held lock is busy, not current.
