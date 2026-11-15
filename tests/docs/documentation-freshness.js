@@ -162,7 +162,10 @@ const linkPattern = /!?\[[^\]]*]\(([^)]+)\)/g;
 // Code is not a link: drop fenced blocks and inline code spans before scanning, so prose that
 // quotes Markdown such as `[link](url)` is not read as a link.
 function withoutCode(text) {
-  return text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, '').replace(/(`+)[^`\n]*?\1/g, '');
+  return text
+    .replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, '')
+    .replace(/\\`/g, '')
+    .replace(/(`+)[^`\n]*?\1/g, '');
 }
 
 for (const markdownPath of markdownFiles) {
@@ -185,7 +188,12 @@ for (const markdownPath of markdownFiles) {
     // A link outside the checkout (an absolute path, or one that climbs out) may resolve on the
     // machine that wrote it, but never on CI or for a reader: fail it everywhere.
     const inside = path.relative(root, resolved);
-    if (path.isAbsolute(target) || inside.startsWith('..') || path.isAbsolute(inside)) {
+    if (
+      path.isAbsolute(target) ||
+      inside === '..' ||
+      inside.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(inside)
+    ) {
       failures.push(
         `${path.relative(root, markdownPath)} links outside the repository: ${match[1]}`
       );

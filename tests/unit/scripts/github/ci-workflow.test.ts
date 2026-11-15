@@ -50,4 +50,23 @@ describe('pr ci workflow', () => {
     expect(workflow).not.toContain('CCS_E2E_SKIP_BUILD');
     expect(workflow).not.toContain('test:e2e');
   });
+
+  test('ships the Linux history store and status readers once, before the dist upload', () => {
+    const workflow = fs.readFileSync(resolvePath('../../../../.github/workflows/ci.yml'), 'utf8');
+    const build = workflow.indexOf('run: bun run build:all');
+    const natives = workflow.indexOf('bun run store:build\n          bun run status:build');
+    const upload = workflow.indexOf('name: Upload dist artifact');
+    // tests/spec/read-http-parity.ts refuses a stub store; the modules must be in dist/ before upload.
+    expect(build).toBeGreaterThan(-1);
+    expect(natives).toBeGreaterThan(build);
+    expect(upload).toBeGreaterThan(natives);
+    expect(workflow.match(/bun run store:build/g)?.length).toBe(1);
+  });
+
+  test('keeps the in-checkout Bun cache out of every git-listed scan', () => {
+    const workflow = fs.readFileSync(resolvePath('../../../../.github/workflows/ci.yml'), 'utf8');
+    const ignore = fs.readFileSync(resolvePath('../../../../.gitignore'), 'utf8');
+    expect(workflow).toContain('BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/.bun/install/cache');
+    expect(ignore).toMatch(/^\.bun\/$/m);
+  });
 });
