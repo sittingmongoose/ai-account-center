@@ -195,14 +195,14 @@ fn row_view(fact: &Value, providers: &[Value]) -> Admit<Value> {
     let none = || json!([]);
     let view = match req(fact.get("kind").and_then(Value::as_str))? {
         "codex" => {
+            // The live login signs in again in place; account_active is Remove's refusal only.
             let available = boolean(fact, "available")?;
-            let active = equals(fact, "refusal", "account_active");
             let unavailable = equals(fact, "refusal", "unavailable");
             account_view(
                 row,
                 Value::Null,
                 actions(
-                    available && !active && !unavailable,
+                    available && !unavailable,
                     false,
                     !unavailable,
                     none(),

@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import fs from 'fs';
+import fsPromises from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import * as lockfile from 'proper-lockfile';
@@ -373,47 +374,143 @@ describe('Codex Sign in again', () => {
     }
   });
 
+  it('signs the live login in again in place: the profile and ~/.codex both get it', async () => {
+    addProfile('party', 'party@example.com', 'acct-party');
+    addProfile('gmail', 'gmail@example.com');
+    const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
+    const liveAuth = path.join(codexHome, 'auth.json');
+    fs.copyFileSync(authPath, liveAuth);
+    fs.chmodSync(liveAuth, 0o600);
+    const runner = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
+    const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
+    expect(done).toMatchObject({ state: 'succeeded', accountId: 'codex:party' });
+    for (const file of [authPath, liveAuth]) {
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).tokens.access_token).toBe('access-renewed');
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    }
+    // No temporary file is left in either folder, and the lock is released.
+    expect(fs.readdirSync(codexHome)).toEqual(['auth.json']);
+    expect(fs.readdirSync(path.dirname(authPath))).toEqual(['auth.json']);
+    // The live login stays protected from Remove.
+    invalidateCodexAuthProfilesCache();
+    expect(await lifecycle().removeRefusal('party', false)).toBe('account_active');
+    await expect(lifecycle().remove('party')).rejects.toMatchObject({ code: 'account_active' });
+    expect(instances()).toEqual(['gmail', 'party']);
+  });
+
   it('reads the live login fresh under the lock, never a cached active profile', async () => {
     addProfile('party', 'party@example.com', 'acct-party');
     addProfile('gmail', 'gmail@example.com');
     const subject = lifecycle();
-    // The dashboard summary is cached while nothing is active ...
+    // The dashboard summary is cached while nothing is live ...
     expect(await subject.activeProfile()).toBeNull();
-    // ... then another process activates party without telling this one.
-    fs.copyFileSync(
-      path.join(ccsDir, 'codex-instances', 'party', 'auth.json'),
-      path.join(codexHome, 'auth.json')
-    );
-    const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
-    const before = fs.readFileSync(authPath);
+    // ... then party becomes the live login without telling this process.
+    const liveAuth = path.join(codexHome, 'auth.json');
+    fs.copyFileSync(path.join(ccsDir, 'codex-instances', 'party', 'auth.json'), liveAuth);
     const runner = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
     const done = await finished(runner, runner.start(subject.signInAgainFlow('party')).id);
-    expect(done).toMatchObject({ state: 'failed', error: { code: 'write_failed' } });
-    expect(fs.readFileSync(authPath)).toEqual(before);
-    // A native login that cannot be read is not proof of another account either.
-    fs.writeFileSync(path.join(codexHome, 'auth.json'), '{"OPENAI_API_KEY":"x"}');
-    const unreadable = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
-    const refused = await finished(
-      unreadable,
-      unreadable.start(lifecycle().signInAgainFlow('party')).id
+    expect(done).toMatchObject({ state: 'succeeded' });
+    expect(JSON.parse(fs.readFileSync(liveAuth, 'utf8')).tokens.access_token).toBe(
+      'access-renewed'
     );
-    expect(refused).toMatchObject({ state: 'failed', error: { code: 'write_failed' } });
-    expect(fs.readFileSync(authPath)).toEqual(before);
   });
 
-  it('will not install a new login into the live active profile', async () => {
+  it('refuses another identity for the live login and changes neither file', async () => {
+    const principal = { userId: 'user-party', sub: 'auth0|party', iss: 'https://auth.openai.com' };
     addProfile('party', 'party@example.com', 'acct-party');
     addProfile('gmail', 'gmail@example.com');
-    fs.copyFileSync(
-      path.join(ccsDir, 'codex-instances', 'party', 'auth.json'),
-      path.join(codexHome, 'auth.json')
-    );
     const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
-    const before = fs.readFileSync(authPath);
-    const runner = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
+    const liveAuth = path.join(codexHome, 'auth.json');
+    // The live login knows the person; the older saved copy does not.
+    fs.writeFileSync(liveAuth, login('party@example.com', 'acct-party', 'live', principal));
+    const before = { saved: fs.readFileSync(authPath), live: fs.readFileSync(liveAuth) };
+    for (const auth of [
+      // Another email or workspace: the saved profile refuses it.
+      login('other@example.com', 'acct-party', 'x', principal),
+      login('party@example.com', 'acct-other', 'x', principal),
+      // Same email and workspace, another person: only the live login knows, and refuses it.
+      login('party@example.com', 'acct-party', 'x', { ...principal, userId: 'user-other' }),
+    ]) {
+      const runner = fakeRunner(auth);
+      const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
+      expect(done).toMatchObject({ state: 'failed', error: { code: 'identity_mismatch' } });
+      expect(fs.readFileSync(authPath)).toEqual(before.saved);
+      expect(fs.readFileSync(liveAuth)).toEqual(before.live);
+    }
+    // The same person signs in again, and both files take it.
+    const runner = fakeRunner(login('party@example.com', 'acct-party', 'renewed', principal));
     const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
-    expect(done).toMatchObject({ state: 'failed', error: { code: 'write_failed' } });
-    expect(fs.readFileSync(authPath)).toEqual(before);
+    expect(done).toMatchObject({ state: 'succeeded' });
+    expect(JSON.parse(fs.readFileSync(liveAuth, 'utf8')).tokens.access_token).toBe(
+      'access-renewed'
+    );
+    expect(JSON.parse(fs.readFileSync(authPath, 'utf8')).tokens.access_token).toBe(
+      'access-renewed'
+    );
+  });
+
+  it('leaves a live login of another account, or one it cannot read, alone', async () => {
+    addProfile('party', 'party@example.com', 'acct-party');
+    addProfile('gmail', 'gmail@example.com');
+    const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
+    const liveAuth = path.join(codexHome, 'auth.json');
+    for (const [nonce, live] of [
+      ['one', fs.readFileSync(path.join(ccsDir, 'codex-instances', 'gmail', 'auth.json'), 'utf8')],
+      ['two', '{"OPENAI_API_KEY":"x"}'],
+    ] as const) {
+      fs.writeFileSync(liveAuth, live);
+      invalidateCodexAuthProfilesCache();
+      const runner = fakeRunner(login('party@example.com', 'acct-party', nonce));
+      const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
+      expect(done).toMatchObject({ state: 'succeeded' });
+      expect(JSON.parse(fs.readFileSync(authPath, 'utf8')).tokens.access_token).toBe(
+        `access-${nonce}`
+      );
+      expect(fs.readFileSync(liveAuth, 'utf8')).toBe(live);
+    }
+  });
+
+  it('puts the saved login back when the live login cannot be replaced', async () => {
+    addProfile('party', 'party@example.com', 'acct-party');
+    addProfile('gmail', 'gmail@example.com');
+    const authPath = path.join(ccsDir, 'codex-instances', 'party', 'auth.json');
+    const liveAuth = path.join(codexHome, 'auth.json');
+    fs.copyFileSync(authPath, liveAuth);
+    const before = { saved: fs.readFileSync(authPath), live: fs.readFileSync(liveAuth) };
+    const realRename = fsPromises.rename;
+    let failRestore = false;
+    const rename = spyOn(fsPromises, 'rename').mockImplementation((async (from, to) => {
+      if (to === liveAuth) throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      if (failRestore && to === authPath && String(from).endsWith('.2')) {
+        throw Object.assign(new Error('EIO'), { code: 'EIO' });
+      }
+      return realRename(from, to);
+    }) as typeof fsPromises.rename);
+    try {
+      const runner = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
+      const done = await finished(runner, runner.start(lifecycle().signInAgainFlow('party')).id);
+      expect(done).toMatchObject({ state: 'failed', error: { code: 'write_failed' } });
+      expect(fs.readFileSync(authPath)).toEqual(before.saved);
+      expect(fs.readFileSync(liveAuth)).toEqual(before.live);
+      expect(fs.readdirSync(codexHome)).toEqual(['auth.json']);
+      expect(fs.readdirSync(path.dirname(authPath))).toEqual(['auth.json']);
+      // When even the way back fails, the job says what landed.
+      failRestore = true;
+      const again = fakeRunner(login('party@example.com', 'acct-party', 'renewed'));
+      const partial = await finished(again, again.start(lifecycle().signInAgainFlow('party')).id);
+      expect(partial).toMatchObject({
+        state: 'failed',
+        error: { code: 'live_login_not_updated' },
+      });
+      expect(JSON.parse(fs.readFileSync(authPath, 'utf8')).tokens.access_token).toBe(
+        'access-renewed'
+      );
+      expect(fs.readFileSync(liveAuth)).toEqual(before.live);
+      expect(fs.readdirSync(codexHome)).toEqual(['auth.json']);
+      expect(fs.readdirSync(path.dirname(authPath))).toEqual(['auth.json']);
+    } finally {
+      rename.mockRestore();
+    }
   });
 });
 

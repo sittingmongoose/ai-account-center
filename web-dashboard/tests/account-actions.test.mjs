@@ -85,7 +85,7 @@ test('every server error code has its own calm words, never the server sentence'
 });
 
 test('job failures, unavailable reasons and the local checks', () => {
-  for (const code of ['tool_missing', 'unexpected_output', 'identity_mismatch', 'duplicate_identity', 'timeout', 'provider_denied', 'write_failed', 'server_restarted']) {
+  for (const code of ['tool_missing', 'unexpected_output', 'identity_mismatch', 'duplicate_identity', 'timeout', 'provider_denied', 'write_failed', 'live_login_not_updated', 'server_restarted']) {
     assert.doesNotMatch(jobErrorText({ provider: 'codex', state: 'failed', error: { code } }), /did not finish/, code);
   }
   assert.equal(jobErrorText({ state: 'cancelled', error: null }), 'The sign-in was cancelled. Nothing was saved.');

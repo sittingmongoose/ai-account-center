@@ -229,7 +229,7 @@ test('rows show the status only for an exception, the last sample and the source
   assert.equal(row(vm, 'codex:one').srcSub, 'Ubuntu');
 });
 
-test('Codex rows: Sign in again and Remove are live from the server; the live login is refused inline', () => {
+test('Codex rows: Sign in again and Remove are live from the server; the live login signs in again and refuses Remove inline', () => {
   const accounts = [
     account({ isActive: true }),
     account({
@@ -240,7 +240,7 @@ test('Codex rows: Sign in again and Remove are live from the server; the live lo
     }),
   ];
   const r = registry([
-    reg('codex:one', 'codex', { removeRefusal: 'account_active', actions: { signInAgain: false } }),
+    reg('codex:one', 'codex', { removeRefusal: 'account_active' }),
     reg('codex:two', 'codex'),
   ]);
   const vm = accountsViewModel(data(accounts, { providers: providers() }), { now, registry: r });
@@ -262,13 +262,19 @@ test('Codex rows: Sign in again and Remove are live from the server; the live lo
       ['remove', true, false, false],
     ]
   );
-  // the live login: both open their reason under the row instead of calling the server
+  // the live login signs in again like any other row (switching was retired, so there is no
+  // other account to move to first); only Remove opens its reason under the row
   assert.deepEqual(
-    active.actions.map((a) => [a.act, a.value, a.refused]),
+    active.actions.map((a) => [a.act, a.value, a.enabled, a.refused]),
     [
-      ['refuse', 'codex:one\naccount_active_signin', true],
-      ['refuse', 'codex:one\naccount_active', true],
+      ['signin-again', 'codex:one', true, false],
+      ['refuse', 'codex:one\naccount_active', true, true],
     ]
+  );
+  assert.match(active.actions[0].tip, /live login on Ubuntu is renewed too/);
+  assert.doesNotMatch(
+    active.actions.map((a) => a.tip).join(' '),
+    /another account there first, then sign in again/
   );
   assert.equal(codex.foot[0].act, 'add');
   assert.equal(codex.foot[0].enabled, true);

@@ -367,9 +367,6 @@ export async function signInAgain(
     const state = signInState(env, 'codex', context.secure);
     if (state.unavailableReason) throw new LifecycleHttpError(409, state.unavailableReason);
     const codex = env.codex();
-    if (await codex.isLiveProfile(account.name)) {
-      throw new LifecycleHttpError(409, 'account_active');
-    }
     const running = env.runner().runningForAccount(account.id);
     if (running) throw new LifecycleHttpError(409, 'job_running', { jobId: running.id });
     const job = startJob(env, codex.signInAgainFlow(account.name));
