@@ -333,11 +333,18 @@ fn read_settings(root: &Path) -> Result<AccountRefreshSettings, Decline> {
 struct SocketGuard {
     path: PathBuf,
     inode: u64,
+    /// The boot folder, then a short socket folder: removed when empty, after our socket (L1),
+    /// so a front door that died without cleaning up leaves nothing behind once the service ends.
+    folders: Vec<PathBuf>,
 }
 impl Drop for SocketGuard {
     fn drop(&mut self) {
         if fs::symlink_metadata(&self.path).is_ok_and(|m| m.ino() == self.inode) {
             let _ = fs::remove_file(&self.path);
+            for folder in &self.folders {
+                // Only an empty folder goes; another boot of the same root keeps the short one.
+                let _ = fs::remove_dir(folder);
+            }
         }
     }
 }
@@ -353,9 +360,17 @@ pub async fn serve(
     let rows = crate::table::rows(crate::table::ROUTES)?;
     let identity = Identity::current()?;
     let listener = StdListener::bind(&boot.socket_path)?;
+    let mut folders = Vec::new();
+    if let Some(folder) = boot.socket_path.parent() {
+        folders.push(folder.to_path_buf());
+        if let Some(short) = folder.parent().filter(|p| *p != boot.ccs_dir.join("run")) {
+            folders.push(short.to_path_buf());
+        }
+    }
     let _guard = SocketGuard {
         path: boot.socket_path.clone(),
         inode: fs::symlink_metadata(&boot.socket_path)?.ino(),
+        folders,
     };
     fs::set_permissions(&boot.socket_path, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;

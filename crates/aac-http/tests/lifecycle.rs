@@ -171,6 +171,19 @@ impl Service {
     fn get(&self, path: &str, who: &str) -> Result<Reply> {
         self.call("GET", path, who, None)
     }
+
+    /// End the service as a front door that went away does: its stdin closes.
+    fn finish(mut self) -> Result<()> {
+        drop(self.child.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.child.try_wait()?.is_none() {
+            if Instant::now() >= deadline {
+                return Err("service did not end on stdin EOF".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Ok(())
+    }
 }
 
 #[test]
@@ -408,9 +421,19 @@ fn an_over_long_root_starts_on_a_short_private_socket_folder() -> Result<()> {
         .tempdir_in("/tmp")?;
     let socket = short_socket(base.path(), &root)?;
     assert!(socket.as_os_str().len() <= 100);
-    let s = Service::start_at(root.clone(), socket, &[], vec![dir, base])?;
+    let folder = socket
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("folder")?
+        .to_path_buf();
+    let s = Service::start_at(root.clone(), socket.clone(), &[], vec![dir])?;
     assert_eq!(s.get("/api/diag", &admin())?.status, 200);
-    drop(s);
+    // When the service ends, its socket, boot folder and empty short folder go with it, even if
+    // the front door that made them is gone.
+    s.finish()?;
+    assert!(!socket.exists());
+    assert!(!folder.exists(), "the empty short folder is removed");
+    drop(base);
 
     // A short folder made for another root is refused: the service exits without binding.
     let other = tempfile::tempdir()?;
