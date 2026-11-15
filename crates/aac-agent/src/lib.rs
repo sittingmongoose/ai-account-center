@@ -1,4 +1,5 @@
 //! Host agent with bounded, deadline-controlled NDJSON requests.
+mod failover;
 mod history;
 mod inventory;
 mod key_store;
@@ -74,7 +75,11 @@ pub async fn run(
     let request = match frame {
         Ok(Ok(Some(bytes))) => serde_json::from_slice::<Request>(&bytes)
             .map_err(|_| Failure::new(Cause::Damaged, "invalid agent request JSON"))
-            .and_then(|request| {
+            .and_then(|mut request| {
+                if request.verb == "failover-inventory" && !failover::request_proven(&bytes) {
+                    // Delegate raw spellings/caps before serde can erase their distinction.
+                    request.args = serde_json::json!({"unprovenRawRequest": true});
+                }
                 if bytes.len() >= frame_cap(&request.verb) {
                     Err(Failure::new(
                         Cause::OutputTooLarge,
@@ -179,13 +184,14 @@ async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     tokio::task::yield_now().await;
     if matches!(
         request.verb.as_str(),
-        "key-store" | "t3-pins" | "claude-history"
+        "key-store" | "t3-pins" | "claude-history" | "failover-inventory"
     ) {
         let args = request.args.clone();
         let verb = request.verb.clone();
         return tokio::task::spawn_blocking(move || match verb.as_str() {
             "key-store" => key_store::run(&args),
             "t3-pins" => pins::run(&args),
+            "failover-inventory" => failover::run(&args),
             _ => history::run(&args),
         })
         .await

@@ -12,6 +12,12 @@ import {
 } from './dashboard-hosts';
 import { sshArgv } from './ssh-policy';
 import {
+  collectAgentWithFallback,
+  inventoryKind,
+  runAgentVerb,
+  type AgentCallOptions,
+} from './agent-verbs';
+import {
   DeadlineExceededError,
   PROCESS_SETTLE_GRACE_MS,
   withDeadline,
@@ -255,6 +261,13 @@ export function usageHelperDeadlineMs(action: UsageHelperRequest['action']): num
   return usageHelperProcessTimeoutMs(action) + PROCESS_SETTLE_GRACE_MS;
 }
 
+function validateUsageHost(host: UsageHost): void {
+  if (host.sshHost !== null && !isSafeUsageSshAlias(host.sshHost))
+    throw new ValidationError('Invalid usage host.');
+  if (host.sshHost === null && host.platform !== localUsageHost().platform)
+    throw new ValidationError('Usage source is not local.');
+}
+
 /** A server-resolved process description for the native reset reader's bounded capture/read phases. */
 export function privateUsageInvocation(
   host: UsageHost,
@@ -262,10 +275,7 @@ export function privateUsageInvocation(
   helperSource: string,
   privateRequest: unknown = request
 ): { executable: string; args: string[]; payload: { helperSource: string; request: unknown } } {
-  if (host.sshHost !== null && !isSafeUsageSshAlias(host.sshHost))
-    throw new ValidationError('Invalid usage host.');
-  if (host.sshHost === null && host.platform !== localUsageHost().platform)
-    throw new ValidationError('Usage source is not local.');
+  validateUsageHost(host);
   return {
     executable: host.sshHost ? 'ssh' : localUsagePython(request),
     args: host.sshHost
@@ -282,10 +292,7 @@ export async function runPrivateUsageHelper(
   privateRequest?: unknown,
   callerDeadlineAt?: number
 ): Promise<string> {
-  if (host.sshHost !== null && !isSafeUsageSshAlias(host.sshHost))
-    throw new ValidationError('Invalid usage host.');
-  if (host.sshHost === null && host.platform !== localUsageHost().platform)
-    throw new ValidationError('Usage source is not local.');
+  validateUsageHost(host);
   let expired = false;
   const deadlineAt = Math.min(
     callerDeadlineAt ?? Infinity,
@@ -330,8 +337,23 @@ export async function runUsageHelper(
   request: UsageHelperRequest,
   callerDeadlineAt?: number
 ): Promise<UsageHelperResponse> {
-  const stdout = await runPrivateUsageHelper(host, request, undefined, undefined, callerDeadlineAt);
-  const response = parseUsageHelperResponse(stdout);
+  validateUsageHost(host);
+  const deadlineAt = Math.min(
+    callerDeadlineAt ?? Infinity,
+    Date.now() + usageHelperDeadlineMs(request.action)
+  );
+  const python = async (): Promise<UsageHelperResponse> =>
+    parseUsageHelperResponse(
+      await runPrivateUsageHelper(host, request, undefined, undefined, deadlineAt)
+    );
+  const response =
+    request.action === 'inventory'
+      ? await collectAgentWithFallback(
+          'failover-inventory',
+          () => runFailoverInventoryAgent(host, request, deadlineAt),
+          python
+        )
+      : await python();
   if (response.action !== request.action) throw new ValidationError('Invalid usage response.');
   if (
     response.action === 'inventory' &&
@@ -340,6 +362,55 @@ export async function runUsageHelper(
   )
     throw new ValidationError('Invalid usage response.');
   return response;
+}
+
+/** Validate the native result with the existing public contract before skipping Python. */
+export async function runFailoverInventoryAgent(
+  host: UsageHost,
+  request: UsageHelperRequest,
+  deadlineAt: number,
+  options: Partial<AgentCallOptions> = {}
+): Promise<UsageHelperResponse | null> {
+  if (request.action !== 'inventory') return null;
+  validateUsageHost(host);
+  const remaining = Math.floor(deadlineAt - Date.now());
+  if (remaining <= 0) throw new NetworkError('Usage source unavailable.');
+  const stdout = await withDeadline(
+    runAgentVerb(
+      host,
+      'failover-inventory',
+      { ...request },
+      {
+        ...options,
+        deadlineMs: Math.min(12000, remaining),
+        timeoutMs: remaining,
+        maxBytes: 1024 * 1024,
+      }
+    ),
+    remaining
+  );
+  if (stdout === null || Date.now() >= deadlineAt) return null;
+  if (
+    Object.keys(JSON.parse(stdout)).some(
+      (key) =>
+        ![
+          'version',
+          'action',
+          'candidates',
+          'signInNeededSelectors',
+          'incompleteSelectors',
+        ].includes(key)
+    )
+  )
+    return null;
+  const value = parseUsageHelperResponse(stdout);
+  if (
+    value.action !== 'inventory' ||
+    (value.signInNeededSelectors?.length && request.provider !== 'claude') ||
+    value.candidates.some((candidate) => !inventoryKind(request.provider, candidate.identity.kind))
+  )
+    return null;
+  return value;
 }
 
 export function localUsageHost(): UsageHost {

@@ -15,6 +15,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "libc",
+ "regex",
  "reqwest",
  "security-framework",
  "serde_json",
