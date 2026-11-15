@@ -126,6 +126,17 @@ describe('the store switch', () => {
 });
 
 describe('the hosted open', () => {
+  it('reserves the hosted writer synchronously during background startup', async () => {
+    const service = new RustService('on');
+    services.push(service);
+    const started = service.start(binaryCopy());
+    expect(rustStoreHosted(root)).toBe(true);
+    const opened = await openAacStore({ hostLoad });
+    expect(opened.hosted).toBe(true);
+    await started;
+    expect((await opened.store!.counts()).opens).toBe(1);
+  });
+
   it('opens through the service, never NAPI, and reopens on the restarted boot', async () => {
     const service = new RustService('on', { restartDelaysMs: [250, 10, 10, 10, 10] });
     services.push(service);

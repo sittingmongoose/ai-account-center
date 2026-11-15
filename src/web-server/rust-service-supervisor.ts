@@ -146,8 +146,6 @@ export class RustSupervisor {
       rustStoreSwitchOn() &&
       (process.env.AAC_STORE ?? '').trim().toLowerCase() !== 'off'
     ) {
-      const snapshotDirectory =
-        (await readSnapshotSettings(getCcsDir()).catch(() => null))?.directory ?? null;
       let bindingIdentity: unknown = null;
       try {
         const loaded = loadNativeStore();
@@ -160,10 +158,16 @@ export class RustSupervisor {
         bindingIdentity,
         retentionDays: STORE_RAW_RETENTION_DAYS,
         ...storeOpenEnv(process.env),
-        snapshotDirectory,
+        snapshotDirectory: null,
         ...shareBackupEnv(process.env),
       };
+      // L1 starts in the background. Reserve the hosted writer before the first await,
+      // so an early producer cannot open NAPI while the boot config is still loading.
       setRustStoreHosted(getCcsDir(), true);
+      const snapshotDirectory =
+        (await readSnapshotSettings(getCcsDir()).catch(() => null))?.directory ?? null;
+      if (this.stopped) return;
+      this.storeBoot.snapshotDirectory = snapshotDirectory;
     }
     this.minuteTimer = setInterval(() => this.logMinute(), 60_000);
     this.minuteTimer.unref();
