@@ -315,6 +315,10 @@ pub fn walk_files(
                 }
                 if depth < 64 {
                     pending.push((path, depth + 1));
+                } else {
+                    // The depth cap leaves this folder unread: the tool is partial, never a
+                    // complete read that found nothing (search-bound REVIEW-cheap M1).
+                    collector.usage_partial.insert(kind.to_string());
                 }
             } else if accept(&name) && meta.is_file() && !placeholder(&meta) {
                 found.push(path);
@@ -557,6 +561,8 @@ pub fn walk_t3_files(
             if meta.is_dir() {
                 if depth < 64 {
                     pending.push((real, depth + 1));
+                } else {
+                    collector.usage_partial.insert(kind.to_string());
                 }
             } else if accept(&name) && meta.is_file() && !placeholder(&meta) {
                 match identity(&real) {
