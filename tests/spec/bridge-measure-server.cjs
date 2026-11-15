@@ -37,7 +37,15 @@ Object.assign(process.env, {
 
 // ---- the closed boundary ----------------------------------------------------------------
 os.homedir = () => home;
-const allowed = [home, repo, fs.realpathSync(path.join(repo, 'node_modules')), path.resolve(dist)];
+// The measured build's own checkout (its dist/ and node_modules/) may be another worktree.
+const built = path.dirname(path.resolve(dist));
+const allowed = [home, repo, built, path.resolve(dist), path.dirname(path.resolve(binary))];
+for (const root of [repo, built])
+  try {
+    allowed.push(fs.realpathSync(path.join(root, 'node_modules')));
+  } catch {
+    /* No modules there. */
+  }
 function guard(input) {
   if (typeof input !== 'string' && !(input instanceof URL)) return;
   const target = path.resolve(input instanceof URL ? input.pathname : input);
@@ -187,7 +195,7 @@ delay.enable();
       if (!/^\d+$/.test(entry)) continue;
       try {
         const status = fs.readFileSync(`/proc/${entry}/status`, 'utf8');
-        if (/^Name:\s+aac-http$/m.test(status) && new RegExp(`^PPid:\\s+${process.pid}$`, 'm').test(status))
+        if (/^Name:\s+aac-http\S*$/m.test(status) && new RegExp(`^PPid:\\s+${process.pid}$`, 'm').test(status))
           return Number(entry);
       } catch {
         /* Gone. */
