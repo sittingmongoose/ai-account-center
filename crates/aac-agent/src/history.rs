@@ -88,31 +88,19 @@ fn directory(_path: &Path) -> Checked<Value> {
 
 #[cfg(unix)]
 fn regular(path: &Path, optional: bool, owned: bool) -> Checked<Option<Vec<u8>>> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::unix::fs::MetadataExt;
     directory(path.parent().ok_or(())?)?;
-    let before = match fs::symlink_metadata(path) {
-        Err(e) if optional && e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        value => value.map_err(|_| ())?,
+    let (raw, opened) = match crate::files::read_regular(path, 2_000_000) {
+        crate::files::Regular::Read(raw, opened) => (raw, opened),
+        crate::files::Regular::Missing if optional => return Ok(None),
+        _ => return Err(()),
     };
-    if !before.is_file()
-        || before.len() > 2_000_000
-        || !(before.nlink() == 1 || owned && before.nlink() == 2)
-    {
+    // The helper's own link rule: one name per record (two for the owned copy it keeps).
+    if !(opened.nlink() == 1 || owned && opened.nlink() == 2) {
         return Err(());
     }
-    let f = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|_| ())?;
-    let opened = f.metadata().map_err(|_| ())?;
-    if !opened.is_file() || (opened.dev(), opened.ino()) != (before.dev(), before.ino()) {
-        return Err(());
-    }
-    let mut raw = Vec::new();
-    f.take(2_000_001).read_to_end(&mut raw).map_err(|_| ())?;
     let after = fs::symlink_metadata(path).map_err(|_| ())?;
-    if raw.len() > 2_000_000 || (after.dev(), after.ino()) != (opened.dev(), opened.ino()) {
+    if (after.dev(), after.ino()) != (opened.dev(), opened.ino()) {
         return Err(());
     }
     Ok(Some(raw))
@@ -261,7 +249,9 @@ impl<'a> Bound<'a> {
             Some(f) => PathBuf::from(text(&f["home"])?),
             None => std::env::var_os("HOME").map(PathBuf::from).ok_or(())?,
         };
-        if !home.is_absolute() || !home.to_str().is_some_and(proof::ascii) {
+        // The agent's one home rule (crate::files): Python reads `Path.home()`, which rewrites
+        // other spellings, so only an already-canonical home is proved here.
+        if !home.to_str().is_some_and(crate::files::canonical_home) {
             return Err(());
         }
         let root = if platform == "mac" {
@@ -644,7 +634,7 @@ pub(crate) fn run(args: &Value) -> Result<Value, Failure> {
 #[cfg(unix)]
 fn mac_native() -> Checked<Value> {
     use std::io::{Seek, SeekFrom, Write};
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::os::unix::fs::MetadataExt;
     use std::process::{Command, Stdio};
     let root = Path::new("/Applications/Claude.app/Contents");
     let plist = regular(&root.join("Info.plist"), false, false)?.ok_or(())?;
@@ -677,19 +667,8 @@ fn mac_native() -> Checked<Value> {
     }
     let archive = root.join("Resources/app.asar");
     directory(archive.parent().ok_or(())?)?;
-    let before = fs::symlink_metadata(&archive).map_err(|_| ())?;
-    if !before.is_file() || before.file_type().is_symlink() || before.len() > 1_000_000_000 {
-        return Err(());
-    }
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&archive)
-        .map_err(|_| ())?;
-    let opened = file.metadata().map_err(|_| ())?;
-    if (opened.dev(), opened.ino()) != (before.dev(), before.ino()) {
-        return Err(());
-    }
+    // `before` is the descriptor's own metadata: the checked, opened inode.
+    let (mut file, before) = crate::files::open_regular(&archive, 1_000_000_000).map_err(|_| ())?;
     let mut header = [0u8; 16];
     file.read_exact(&mut header).map_err(|_| ())?;
     let word =

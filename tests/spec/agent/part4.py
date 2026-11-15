@@ -194,6 +194,20 @@ def cases():
             write(h,'.t3/userdata/settings.json',{'providerInstances':{'one':{'driver':'codex','config':{'homePath':raw}}}})
         add('settings-text-bound-' + str(n),'codex',settings_bound,fallback=n>1024,nonempty=True)
     add('alternate-json-escape','codex',lambda h:write(h,'.codex/auth.json',{}).write_text('{"unused":"\\u0061"}'),fallback=True)
+    # Big review L3 (Astra L3 / Sol L3): Python cuts the matching key names to 128 before the
+    # json/dpapi twins collapse; 65 keys with stale twins are 64 slots there, never 65.
+    def twinned_keys(h, count):
+        for i in range(count):
+            p = key(h, 'zai', slot=f'{i:08x}')
+            twin = p.with_suffix('.dpapi'); twin.write_bytes(b'stale'); twin.chmod(0o600)
+    for count in [64, 65]:
+        add(f'key-twins-{count}', 'zai', lambda h, c=count: twinned_keys(h, c), nonempty=True)
+    # Big review L4 (Astra L1 / Sol L4): production omits homeDir, so the environment's home must
+    # pass the explicit rule: Python's Path.home() and abspath normalize these spellings to H.
+    for label, spelling in [('canonical', '${HOME}'), ('inner-double', '${HOME_DOUBLE}'), ('trailing-dot', '${HOME}/.'),
+                            ('trailing-slash', '${HOME}/'), ('dot-dot', '${HOME}/../${HOME_NAME}')]:
+        add('default-home-' + label, 'codex', codex, request={'homeDir': '__omit__', 'testEnvironment': {'HOME': spelling}}, nonempty=True)
+    add('default-home-double-root', 'codex', codex, fallback=True, request={'homeDir': '__omit__', 'testEnvironment': {'HOME': '/${HOME}'}})
     for value in ['non-ascii-\u00e9', 'surrogate-\udcff']:
         add('environment-unproven-' + str(len(rows)),'zai',fallback=True,request={'testEnvironment':{'ZAI_API_KEY':value}},nonempty=True)
     return rows
@@ -218,7 +232,12 @@ def main(binary=None):
             home=Path(tmp); setup(home)
             request=dict(version=1,action='inventory',provider=provider,homeDir=str(home),ccsDir=str(home/'scope'))
             request.update(extra)
-            environment={k:v.replace('${HOME}',str(home)) for k,v in request.pop('testEnvironment',{}).items()}
+            if request.get('homeDir') == '__omit__': del request['homeDir']
+            spell={'${HOME_DOUBLE}':str(home.parent)+'//'+home.name,'${HOME_NAME}':home.name,'${HOME}':str(home)}
+            def spelled(v):
+                for token,text in spell.items(): v=v.replace(token,text)
+                return v
+            environment={k:spelled(v) for k,v in request.pop('testEnvironment',{}).items()}
             # Invalid scope rows can point outside the fixture but fail validation before IO.
             # Valid scope reads always remain in this newly created home.
             saved=image(home) if name not in ('fifo-credential', 'qwen-safari-unreadable') else None

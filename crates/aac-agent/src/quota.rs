@@ -1,11 +1,9 @@
 //! Plan readers. Only an injected client can perform network IO; unproven inputs delegate.
 mod parse;
-use crate::proof;
+use crate::{files, proof};
 use aac_core::{Cause, Failure, UtcMs};
 use serde_json::{Value, json};
 use std::{
-    fs,
-    io::Read,
     path::Path,
     time::{Duration, Instant},
 };
@@ -89,29 +87,18 @@ impl Http for Client {
         })
     }
 }
-fn load(path: &Path) -> Option<Value> {
-    if fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+/// A plan credential document below `home`, through the shared hardened read. Absent reads as
+/// absent; a link (final or below the home), FIFO, other non-file, oversized or failed read is
+/// unproved and delegates, so Python's own reader decides what that store holds.
+fn load(home: &Path, path: &Path) -> Option<Value> {
+    if files::linked_below(home, path) {
         proof::reject();
         return None;
     }
-    match fs::File::open(path) {
-        Ok(file) => {
-            let mut bytes = Vec::new();
-            if file.take((CAP + 1) as u64).read_to_end(&mut bytes).is_err() {
-                proof::reject();
-                return None;
-            }
-            proof::json(&bytes, CAP, false)
-        }
-        Err(e)
-            if matches!(
-                e.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            None
-        }
-        Err(_) => {
+    match files::read_regular(path, CAP) {
+        files::Regular::Missing => None,
+        files::Regular::Read(bytes, _) => proof::json(&bytes, CAP, false),
+        _ => {
             proof::reject();
             None
         }
@@ -125,7 +112,7 @@ fn key_credential(provider: &str, home: &Path, selector: &Value) -> Value {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        use std::os::unix::fs::MetadataExt;
         if provider == "qwen" {
             return proof::fallback();
         }
@@ -137,28 +124,18 @@ fn key_credential(provider: &str, home: &Path, selector: &Value) -> Value {
             return proof::fallback();
         };
         let directory = home.join(".ccs/account-usage/keys");
-        let Ok(info) = fs::symlink_metadata(&directory) else {
+        let Ok(info) = std::fs::symlink_metadata(&directory) else {
             return Value::Null;
         };
         if !info.is_dir() || info.mode() & 0o077 != 0 {
             return Value::Null;
         }
         let path = directory.join(format!("{provider}-{id}.json"));
-        let Ok(file) = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(path)
-        else {
+        // Any record that is not one private ordinary file reads as unreadable, as before.
+        let files::Regular::Read(bytes, info) = files::read_regular(&path, 4096) else {
             return Value::Null;
         };
-        let Ok(info) = file.metadata() else {
-            return Value::Null;
-        };
-        if !info.is_file() || info.mode() & 0o077 != 0 || info.len() > 4096 {
-            return Value::Null;
-        }
-        let mut bytes = Vec::new();
-        if file.take(4097).read_to_end(&mut bytes).is_err() {
+        if info.mode() & 0o077 != 0 {
             return Value::Null;
         }
         let Some(record) = proof::json(&bytes, 4096, false) else {
@@ -223,7 +200,7 @@ fn credential(provider: &str, home: &Path, selector: &Value, isolated: bool) -> 
     {
         return proof::fallback();
     }
-    let auth = load(&home.join(".local/share/opencode/auth.json"));
+    let auth = load(home, &home.join(".local/share/opencode/auth.json"));
     if provider == "qwen"
         && (home.join(".qwen/settings.json").exists()
             || (!isolated && std::env::var("BAILIAN_TOKEN_PLAN_API_KEY").is_ok()))
@@ -248,7 +225,7 @@ fn credential(provider: &str, home: &Path, selector: &Value, isolated: bool) -> 
         }
     }
     if provider == "qwen" {
-        let settings = load(&home.join(".qwen/settings.json"));
+        let settings = load(home, &home.join(".qwen/settings.json"));
         if let Some(secret) = settings
             .as_ref()
             .and_then(|v| v["env"]["BAILIAN_TOKEN_PLAN_API_KEY"].as_str())
@@ -447,7 +424,9 @@ async fn run_inner(args: &Value) -> Result<Value, Failure> {
         .map(str::to_owned)
         .or_else(|| std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).ok())
         .unwrap_or_default();
-    if home.is_empty() || proof::scope(|| json!(proof::ascii(&home))) == proof::fallback() {
+    // Python hashes `str(Path.home())` (or the given home) into the OpenCode session header
+    // and joins store paths under it; only a spelling pathlib leaves unchanged is proved.
+    if proof::scope(|| json!(files::canonical_home(&home))) == proof::fallback() {
         return Ok(proof::fallback());
     }
     #[allow(unused_mut)]
@@ -487,8 +466,21 @@ async fn run_inner(args: &Value) -> Result<Value, Failure> {
     {
         return Ok(proof::fallback());
     }
-    let selected =
-        proof::scope(|| credential(provider, Path::new(&home), &args["credential"], isolated));
+    // Credential discovery does blocking file IO: run it (and its proof scope) on a worker, so the
+    // request deadline and cancellation still answer while a store read is stuck.
+    let selected = {
+        let (provider, home, selector) = (
+            provider.to_owned(),
+            home.clone(),
+            args["credential"].clone(),
+        );
+        crate::blocking(move || {
+            Ok(proof::scope(|| {
+                credential(&provider, Path::new(&home), &selector, isolated)
+            }))
+        })
+        .await?
+    };
     if selected == proof::fallback() {
         return Ok(selected);
     }

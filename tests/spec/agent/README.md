@@ -330,3 +330,25 @@ control through the same comparator. These are bounded representative fixtures,
 not exhaustive filesystem-race or native-platform proofs. Provider HTTP, real
 homes and credential stores, deployment and actual SSH agent execution are not
 exercised. The adapter's fault tests use a fake verified SSH transport.
+
+## Big review fix round 1
+
+All file reads of signin-expiry, failover-inventory, quota-read and claude-history go
+through `crates/aac-agent/src/files.rs`: one no-follow, nonblocking, identity-checked,
+capped descriptor read, and one path rule (a leading `//` delegates; failover normalizes
+an absent `homeDir` the way it normalizes an explicit one; the other verbs delegate a home
+spelling Python's pathlib would rewrite). Each verb still maps an outcome to its own
+reference. Witnesses:
+
+- `quota-review.py`: Kimi rounding ties and their neighbours through the whole collector
+  (CPython `round(x, 8)` is half-even on the exact binary value), and plan credentials
+  behind a final link, a link below the home or a FIFO (fallback, no request sent).
+  `python3 tests/spec/agent/make-round-table.py` rewrites `python-round8.json`, CPython's
+  own answers for the Rust unit test.
+- `deadline_review.py <aac-agent>` (Linux, needs `cc`): `slow-read.c` is preloaded so the
+  first read of one fixture file sleeps 3 s. A 100 ms `deadlineMs` must answer a timeout or
+  the fallback within 1.5 s for signin-expiry and quota-read; the long-deadline control
+  proves the delay happened. `--baseline` expects the old late answer.
+- `part4.py`: `key-twins-*` (Python cuts slot names to 128 before deduplicating) and
+  `default-home-*` (the environment's home spelled with `//`, `/.`, `/`, `/..`).
+- `inventory.json`: `review-big-L6-cpu-grouping` rows from the real TS parser.

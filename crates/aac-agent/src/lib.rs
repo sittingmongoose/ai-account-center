@@ -1,5 +1,6 @@
 //! Host agent with bounded, deadline-controlled NDJSON requests.
 mod failover;
+mod files;
 mod history;
 mod inventory;
 mod key_store;
@@ -180,31 +181,39 @@ fn safe_id(id: &str) -> String {
     }
 }
 
+/// Run blocking file, Keychain or process work on a worker so the request's deadline and cancel
+/// branches stay live; the whole verb (its proof scope and fixture state are thread-local) runs on
+/// that one worker. Main exits after the terminal event, so a stuck read cannot hold the reply.
+pub(crate) async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, Failure> + Send + 'static,
+) -> Result<T, Failure> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| Failure::new(Cause::Bug, "agent worker failed"))?
+}
+
 async fn dispatch(request: &Request) -> Result<serde_json::Value, Failure> {
     tokio::task::yield_now().await;
     if matches!(
         request.verb.as_str(),
-        "key-store" | "t3-pins" | "claude-history" | "failover-inventory"
+        "key-store" | "t3-pins" | "claude-history" | "failover-inventory" | "signin-expiry"
     ) {
         let args = request.args.clone();
         let verb = request.verb.clone();
-        return tokio::task::spawn_blocking(move || match verb.as_str() {
+        return blocking(move || match verb.as_str() {
             "key-store" => key_store::run(&args),
             "t3-pins" => pins::run(&args),
             "failover-inventory" => failover::run(&args),
+            "signin-expiry" => signin::run(&args),
             _ => history::run(&args),
         })
-        .await
-        .map_err(|_| Failure::new(Cause::Bug, "agent worker failed"))?;
+        .await;
     }
     if request.verb == "quota-read" {
         return quota::run(&request.args).await;
     }
     if request.verb == "scan-usage" {
         return scan::run(&request.args).await;
-    }
-    if request.verb == "signin-expiry" {
-        return signin::run(&request.args);
     }
     if request.verb == "inventory" {
         return inventory::run(&request.args).await;

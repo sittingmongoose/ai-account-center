@@ -48,8 +48,30 @@ def main():
     if actual!=target or leaked:
      wrong.append(row['name']);print('BASELINE RED:' if baseline else 'FAIL:',row['name'],'credential leak' if leaked else 'wrong result',flush=True)
     else:print('PASS:',row['name'],flush=True)
+  # Big review L1 (Sol): plan credentials go through the shared no-follow descriptor read. A link
+  # (the file itself or a folder below the home) or a FIFO is unproved: the whole verb delegates,
+  # and the usage service is never contacted for it.
+  for label in ('final-link','ancestor-link','fifo'):
+   with tempfile.TemporaryDirectory(prefix='aac-quota-link-') as directory:
+    home=Path(directory);real=home/'outside/auth.json';real.parent.mkdir()
+    real.write_text(json.dumps({'kimi-code':{'type':'api','key':'fixture-dummy-token'}}))
+    auth=home/'.local/share/opencode/auth.json'
+    if label=='ancestor-link':
+     (home/'.local/share').mkdir(parents=True);(home/'.local/share/opencode').symlink_to(real.parent)
+    else:
+     auth.parent.mkdir(parents=True)
+     if label=='final-link':auth.symlink_to(real)
+     else:os.mkfifo(auth)
+    q.Handler.queue=[q.response({'usage':{'used':3,'limit':2048,'resetTime':q.STAMP}})];q.Handler.calls=[]
+    request={'protocol':1,'verb':'quota-read','id':'quota-review','deadlineMs':15000,'args':{'provider':'kimi-code','platform':'ubuntu','home':str(home),'endpoint':endpoint,'now':q.NOW}}
+    process=subprocess.run([binary],input=json.dumps(request)+'\n',text=True,capture_output=True,timeout=20,env={'PATH':os.defpath,'TOKIO_WORKER_THREADS':'1'})
+    event=json.loads(process.stdout)
+    name='L1-credential-'+label
+    if process.returncode!=0 or event.get('value')!=FALLBACK or q.Handler.calls:
+     wrong.append(name);print('BASELINE RED:' if baseline else 'FAIL:',name,'answered without delegating',flush=True)
+    else:print('PASS:',name,flush=True)
  finally:server.shutdown();server.server_close()
  if wrong:raise SystemExit(f'{len(wrong)} regression cases failed')
  if baseline:raise SystemExit('Baseline unexpectedly passed')
- print(f'quota review parity: {len(TABLE["cases"])} pass, no credential text published')
+ print(f'quota review parity: {len(TABLE["cases"])} table cases + 3 credential-link cases pass, no credential text published')
 if __name__=='__main__':main()

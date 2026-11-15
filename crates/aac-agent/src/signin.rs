@@ -4,7 +4,6 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
-    io::Read,
     path::{Component, Path, PathBuf},
 };
 
@@ -232,36 +231,16 @@ fn read_with_cap(path: &Path, cap: usize, bom: bool) -> Option<Value> {
             .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
             .and_then(|b| crate::proof::json(&b, cap, bom));
     }
-    let before = fs::symlink_metadata(path).ok()?;
-    if before.len() > cap as u64 {
-        crate::proof::reject();
-        return None;
-    }
-    if !before.is_file() {
-        return None;
-    }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path).ok()?;
-    let after = file.metadata().ok()?;
-    if !after.is_file() {
-        return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if (before.dev(), before.ino()) != (after.dev(), after.ino()) {
-            return None;
+    // Python's `_read_regular_bytes`: only an oversized file is unproved; anything else that is
+    // not one ordinary file reads as absent.
+    match crate::files::read_regular(path, cap) {
+        crate::files::Regular::Read(bytes, _) => crate::proof::json(&bytes, cap, bom),
+        crate::files::Regular::TooLarge => {
+            crate::proof::reject();
+            None
         }
+        _ => None,
     }
-    let mut bytes = Vec::new();
-    file.take(cap as u64 + 1).read_to_end(&mut bytes).ok()?;
-    crate::proof::json(&bytes, cap, bom)
 }
 fn json_bytes(bytes: &[u8]) -> Option<Value> {
     crate::proof::json(bytes, 65536, false)
@@ -645,8 +624,7 @@ fn roots(
                         };
                         // pathlib keeps a leading "//" as its own root and refuses the home;
                         // normalizing it to "/" would admit it (big review MED-2).
-                        if expanded.to_string_lossy().starts_with("//") {
-                            crate::proof::reject();
+                        if crate::files::double_root(&expanded.to_string_lossy()) {
                             continue;
                         }
                         let p = normalized(&expanded.to_string_lossy());
@@ -694,9 +672,7 @@ fn roots(
         };
         if let Some((raw, kind)) = selector {
             // Same pathlib "//" root rule as configured homes (big review MED-2).
-            if raw.starts_with("//") {
-                crate::proof::reject();
-            }
+            crate::files::double_root(raw);
             let path = normalized(raw);
             let (exists, failed) = dir_state(&path);
             complete &= !failed;
@@ -982,8 +958,10 @@ fn run_inner(args: &Value) -> Result<Value, Failure> {
             })
             .unwrap_or_else(|| home.join(".ccs")),
     };
-    if !home.to_str().is_some_and(crate::proof::ascii)
-        || !ccs.to_str().is_some_and(crate::proof::ascii)
+    // Python reads both as pathlib paths, which rewrite other spellings; repair commands and
+    // displayed paths use this text, so only already-canonical spellings are proved.
+    if !home.to_str().is_some_and(crate::files::canonical_home)
+        || !ccs.to_str().is_some_and(crate::files::canonical_home)
     {
         return Ok(crate::proof::fallback());
     }

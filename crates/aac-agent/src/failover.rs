@@ -1,14 +1,13 @@
 //! Read-only failover discovery. Only six reconstructed public fields leave this module.
 //! Unproved stores, grammar and IO outcomes delegate the entire inventory to Python.
-use crate::proof;
+use crate::{files, proof};
 use aac_core::Failure;
 use base64::Engine;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs,
-    io::Read,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 const CORE_CAP: usize = 1_048_576;
@@ -29,35 +28,27 @@ const PROVIDERS: &[&str] = &[
 fn matches(pattern: &str, value: &str) -> bool {
     regex::Regex::new(pattern).is_ok_and(|re| re.is_match(value))
 }
-fn normalize(path: &Path) -> PathBuf {
-    let mut result = PathBuf::new();
-    for part in path.components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                result.pop();
-            }
-            part => result.push(part.as_os_str()),
-        }
-    }
-    result
-}
-fn scope(value: Option<&Value>, default: PathBuf) -> Option<PathBuf> {
-    match value {
-        None | Some(Value::Null) => Some(default),
-        Some(Value::String(s))
-            if !s.is_empty()
-                && s.len() <= 4096
-                && s.bytes().all(|c| (0x20..=0x7e).contains(&c))
-                && !s.starts_with("//")
-                && Path::new(s).is_absolute() =>
-        {
-            Some(normalize(Path::new(s)))
-        }
+/// Python's `_scope`: an absent value is the default, which passes the same rule as an explicit
+/// one (Python's `Path.home()` and `os.path.abspath` normalize both); `None` delegates.
+fn scope(value: Option<&Value>, default: &str) -> Option<PathBuf> {
+    let s = match value {
+        None | Some(Value::Null) => default,
+        Some(Value::String(s)) => s.as_str(),
         _ => {
             proof::reject();
-            None
+            return None;
         }
+    };
+    if !s.is_empty()
+        && s.len() <= 4096
+        && s.bytes().all(|c| (0x20..=0x7e).contains(&c))
+        && !files::double_root(s)
+        && Path::new(s).is_absolute()
+    {
+        Some(files::lexical(Path::new(s)))
+    } else {
+        proof::reject();
+        None
     }
 }
 fn missing(e: &std::io::Error) -> bool {
@@ -147,36 +138,21 @@ fn read_with_policy(path: &Path, cap: usize, bom: bool, private: bool) -> Option
             return None;
         }
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let bytes = (|| -> std::io::Result<Vec<u8>> {
-        let file = options.open(path)?;
-        let opened = file.metadata()?;
-        if !opened.is_file() {
-            return Err(std::io::ErrorKind::InvalidData.into());
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            if (before.dev(), before.ino()) != (opened.dev(), opened.ino())
-                || (private && opened.mode() & 0o077 != 0)
-            {
-                return Err(std::io::ErrorKind::InvalidData.into());
-            }
-        }
-        let mut bytes = Vec::new();
-        file.take(cap as u64 + 1).read_to_end(&mut bytes)?;
-        Ok(bytes)
-    })();
-    let Ok(bytes) = bytes else {
+    // The checked path was an ordinary file; any other outcome now is a race or an IO failure.
+    let files::Regular::Read(bytes, opened) = files::read_regular(path, cap) else {
         proof::reject();
         return None;
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if private && opened.mode() & 0o077 != 0 {
+            proof::reject();
+            return None;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = opened;
     let value = document(&bytes, cap, bom)?;
     if !value.is_object() {
         proof::reject();
@@ -439,8 +415,7 @@ fn roots(home: &Path, ccs: &Path, provider: &str) -> Vec<(PathBuf, Vec<String>)>
                     }
                     // Python's pathlib keeps a leading "//" as its own root and refuses the
                     // home; folding it into "/" would turn that refusal into a candidate.
-                    if text.starts_with("//") {
-                        proof::reject();
+                    if files::double_root(text) {
                         continue;
                     }
                     let path = if text == "~" {
@@ -450,7 +425,8 @@ fn roots(home: &Path, ccs: &Path, provider: &str) -> Vec<(PathBuf, Vec<String>)>
                     } else {
                         PathBuf::from(text)
                     };
-                    let path = normalize(&path);
+                    // An expanded "~" can only produce "//" from a home the scope already refused.
+                    let path = files::lexical(&path);
                     if path.is_absolute() && (path.starts_with(home) || path.starts_with(ccs)) {
                         t3.push(path);
                     } else {
@@ -699,6 +675,8 @@ fn plan_candidate(provider: &str, locator: &str, access: &str) -> Option<Value> 
 fn keys(provider: &str, ccs: &Path) -> Vec<Value> {
     let directory = ccs.join("account-usage/keys");
     let entries = children(&directory, false, 512);
+    // Python's `_slots`: the sorted listing's matching non-link names, cut to 128 before the
+    // json/dpapi twins collapse into one slot each.
     let mut slots: Vec<String> = entries
         .iter()
         .filter_map(|p| {
@@ -707,12 +685,22 @@ fn keys(provider: &str, ccs: &Path) -> Vec<Value> {
             let id = rest
                 .strip_suffix(".json")
                 .or_else(|| rest.strip_suffix(".dpapi"))?;
-            matches(r"\A[a-f0-9]{8}\z", id).then(|| id.into())
+            if !matches(r"\A[a-f0-9]{8}\z", id) {
+                return None;
+            }
+            match fs::symlink_metadata(p) {
+                Ok(m) if m.file_type().is_symlink() => None,
+                Ok(_) => Some(id.into()),
+                Err(_) => {
+                    proof::reject();
+                    None
+                }
+            }
         })
         .collect();
+    slots.truncate(128);
     slots.sort();
     slots.dedup();
-    slots.truncate(128);
     let mut found = Vec::new();
     for slot in slots {
         #[cfg(unix)]
@@ -955,13 +943,16 @@ fn collect(args: &Value) -> Value {
     if !cfg!(target_os = "linux") || obj.contains_key("claudeProfile") {
         return proof::fallback();
     }
-    let default = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
+    // The production request omits homeDir: the environment's home passes the explicit rule.
+    let default = std::env::var_os("HOME").unwrap_or_default();
+    let Some(default) = default.to_str() else {
+        return proof::fallback();
+    };
     let Some(home) = scope(obj.get("homeDir"), default).filter(|p| p.is_absolute()) else {
         return proof::fallback();
     };
-    let Some(ccs) = scope(obj.get("ccsDir"), home.join(".ccs")) else {
+    let ccs_default = home.join(".ccs");
+    let Some(ccs) = scope(obj.get("ccsDir"), &ccs_default.to_string_lossy()) else {
         return proof::fallback();
     };
     if !proof::ascii(&home.to_string_lossy()) || !proof::ascii(&ccs.to_string_lossy()) {
