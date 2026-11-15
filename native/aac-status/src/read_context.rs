@@ -192,12 +192,22 @@ pub fn median(values: &[f64]) -> Option<f64> {
         Some((v[n / 2 - 1] + v[n / 2]) / 2.0)
     }
 }
-pub fn js_number(value: f64) -> String {
-    if value != 0.0 && value.abs() < 1e-6 {
+/// JS String(number) only within the counts/significant-number domain exercised by these
+/// composers. Wider shortest-decimal and exponent forms refuse the read for TS fallback.
+pub fn js_number(value: f64) -> Option<String> {
+    if !value.is_finite() || value.abs() > 1e12 || (value != 0.0 && value.abs() < 1e-22) {
+        return None;
+    }
+    if value.fract() != 0.0 && significant(value, 10)? != value {
+        return None;
+    }
+    Some(if value == 0.0 {
+        "0".into()
+    } else if value.abs() < 1e-6 {
         format!("{value:e}")
     } else {
         value.to_string()
-    }
+    })
 }
 pub fn fixed(value: f64, places: u32) -> Option<String> {
     if !value.is_finite() || value.abs() > 1e12 || (value != 0.0 && value.abs() < 1e-22) || places > 6 {
@@ -242,4 +252,36 @@ pub fn js_whitespace(c: char) -> bool {
     matches!(c, '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
         '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' |
         '\u{3000}' | '\u{feff}')
+}
+
+#[cfg(test)]
+mod lows_tests {
+    use super::js_number;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn js_number_refuses_unproven_forms_and_normalizes_negative_zero() {
+        for value in [
+            1e21,
+            -1e21,
+            2251799813685247.2,
+            0.12345678901234567,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1e-23,
+        ] {
+            assert_eq!(serde_json::to_value(js_number(value)).unwrap(), Value::Null, "{value}");
+        }
+        for (value, expected) in [
+            (-0.0, "0"),
+            (0.0, "0"),
+            (1e12, "1000000000000"),
+            (0.25, "0.25"),
+            (1e-7, "1e-7"),
+            (1e-22, "1e-22"),
+        ] {
+            assert_eq!(serde_json::to_value(js_number(value)).unwrap(), json!(expected));
+        }
+    }
 }

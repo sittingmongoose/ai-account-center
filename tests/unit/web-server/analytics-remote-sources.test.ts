@@ -1645,11 +1645,11 @@ describe('analytics remote sources', () => {
     expect(results.find((entry) => entry.tool === 'omp')?.data.hourly[0].inputTokens).toBe(100);
     const mac = states.find((entry) => entry.tool === 'omp' && entry.host === 'mac');
     expect(mac?.state).toBe('ok');
-    expect(mac?.detail).toBeNull();
+    expect(mac?.detail).toContain('remote scan timed out');
     // Nas1's saved aggregates come back like the other hosts', from its own cache file.
     const nas1 = states.find((entry) => entry.tool === 'omp' && entry.host === 'nas1');
     expect(nas1).toMatchObject({ state: 'ok', rowCount: 2 });
-    expect(nas1?.detail).toBeNull();
+    expect(nas1?.detail).toContain('remote scan timed out');
     // Missing requested kinds remain named failed reads, including Cursor.
     expect(states.filter((entry) => entry.host === 'nas1')).toHaveLength(8);
   });

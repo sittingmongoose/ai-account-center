@@ -13,21 +13,13 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     for (const folder of [
       'src',
       'web-dashboard/public',
-      'scripts/agent-usage',
+      'scripts',
       'docs/agent-reports/schemas',
       'native/aac-status/src',
       'web-dashboard/leptos',
     ]) {
       fs.cpSync(path.join(root, folder), path.join(fixture, folder), { recursive: true });
     }
-    fs.mkdirSync(path.join(fixture, 'scripts'), { recursive: true });
-    for (const script of [
-      'build-status-native.js',
-      'build-ui.js',
-      'ui-build-lock.js',
-      'ui-precache.js',
-    ])
-      fs.copyFileSync(path.join(root, 'scripts', script), path.join(fixture, 'scripts', script));
     for (const name of ['Cargo.toml', 'Cargo.lock', 'build.rs', 'rust-toolchain.toml'])
       fs.copyFileSync(
         path.join(root, 'native/aac-status', name),

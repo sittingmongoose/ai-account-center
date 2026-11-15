@@ -53,3 +53,28 @@ it('history fallback dates cached usage by the full read, and keeps every scanne
   });
   expect(grid.find((s) => s.tool === 'cursor')?.state).toBe('installed_no_logs');
 });
+
+it('history fallback explains causes as sentences rather than enum identifiers', () => {
+  for (const [cause, sentence] of [
+    ['unreadable_folder', 'a folder searched for logs could not be read'],
+    ['ssh_unreachable', 'the computer did not answer over ssh'],
+    ['read_failed', 'its logs were found but could not be read'],
+  ]) {
+    const history = coverageOf({
+      computers: [],
+      sources: [
+        {
+          computer: 'nas1',
+          tool: 'codex',
+          state: 'partial',
+          cause,
+          lastReadMs: null,
+          lastCompleteMs: null,
+          oldestMs: null,
+          badSinceMs: null,
+        },
+      ],
+    } as ActivitySources);
+    expect(gridFromStore(history)[0].detail).toBe(sentence);
+  }
+});

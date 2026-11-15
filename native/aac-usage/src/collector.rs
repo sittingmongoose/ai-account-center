@@ -254,7 +254,7 @@ impl Collector {
         // Error paths can lose the entry's type (a failed stat, a raced file, a socket or a
         // SQLite sidecar). Count a folder only with evidence that it is one. Never re-probe
         // an avoided mount; unknown entries remain failures without a false folder claim.
-        if crate::fsx::avoided(directory) || !std::fs::symlink_metadata(directory).is_ok_and(|meta| meta.is_dir()) {
+        if crate::fsx::avoided(directory) || !crate::fsx::metadata(directory).is_ok_and(|meta| meta.is_dir()) {
             self.read_failure(kind, util::filekey(kind, directory));
             return;
         }

@@ -243,6 +243,12 @@ export function scanFailureText(cause: string | null | undefined): string {
       return 'no working Python 3.9 or later on this computer';
     case 'helper_failed':
       return 'the usage reader stopped with an error on this computer';
+    case 'unreadable_folder':
+      return 'a folder searched for logs could not be read';
+    case 'read_failed':
+      return 'its logs were found but could not be read';
+    case 'no_local_usage_records':
+      return 'the tool keeps no local usage records';
     case 'timeout':
       return 'the scan took longer than its time limit';
     case 'bad_response':
@@ -1074,7 +1080,9 @@ function cachedHostSources(
     const unfinished = read?.unfinished?.length
       ? `; ${unfinishedText(read.unfinished, read.unfinishedCount)}`
       : '';
-    const why = `${failed ? `${scanFailureText(failed.cause)} (${failed.at})` : (read?.detail ?? detail)}${unfinished}`;
+    const why = failed
+      ? `${scanFailureText(failed.cause)} (${failed.at})${unfinished}`
+      : (read?.detail ?? `${detail}${unfinished}`);
     const found = { ...sourceCounts(cached.discovery?.kinds[tool]), reader: cached.reader ?? null };
     // The last known per-root quality rides along (RECHECK-BIG-1 M5): a log folder the last real
     // scan could not read stays named on cached cells, never plain "cached". The saved discovery
@@ -1109,7 +1117,9 @@ function cachedHostSources(
         detail:
           !failed && read?.state === 'ok'
             ? (read.detail ?? null)
-            : `${why}; showing previously read aggregates`,
+            : read?.detail && !failed
+              ? why
+              : `${why}; showing previously read aggregates`,
         ...(failed ? { cause: failed.cause } : read?.cause ? { cause: read.cause } : {}),
         ...found,
       });
@@ -1285,7 +1295,18 @@ export function loadAnalyticsRemoteCachedSources(
     results.push(...part.results.filter((entry) => counted(entry.tool)));
     states.push(
       ...withCacheNote(
-        part.states.filter((entry) => counted(entry.tool)),
+        part.states
+          .filter((entry) => counted(entry.tool))
+          .map((entry) =>
+            host === 'ubuntu'
+              ? entry
+              : {
+                  ...entry,
+                  detail: entry.detail?.includes('remote scan timed out')
+                    ? entry.detail
+                    : [entry.detail, 'remote scan timed out'].filter(Boolean).join('; '),
+                }
+          ),
         cached,
         minDateMs
       )
@@ -2094,7 +2115,7 @@ export async function loadAnalyticsRemoteSources(
           const links = (found?.roots ?? []).filter(
             (root) => root.state === 'unreadable' || root.state.startsWith('link_')
           );
-          if (links.length && entry.state !== 'unreadable') {
+          if (links.length && entry.state !== 'unreadable' && entry.cause !== 'unreadable_folder') {
             const note = rootFailureText(links);
             entry.detail = entry.detail ? `${entry.detail}; ${note}` : note;
           }

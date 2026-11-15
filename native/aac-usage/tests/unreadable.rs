@@ -118,3 +118,24 @@ fn folder_under_an_unanswered_mount_is_a_read_failure_without_a_folder_claim() {
     assert!(collector.unreadable_folders.is_empty());
     assert_eq!(collector.read_failures["codex"].len(), 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn unlistable_symlinked_directory_is_a_folder_failure() {
+    use aac_usage::collector::Collector;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    assert_ne!(unsafe { libc::geteuid() }, 0);
+    let home = tempfile::tempdir().unwrap();
+    let directory = home.path().join("protected");
+    let link = home.path().join("linked-logs");
+    fs::create_dir(&directory).unwrap();
+    symlink(&directory, &link).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(aac_usage::fsx::list_dir(&link).is_err());
+    let mut collector = Collector::new(0, 10.0, Default::default());
+    collector.unreadable_folder("codex", &link);
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(collector.unreadable_folders.get("codex").map(|f| f.len()), Some(1));
+    assert!(collector.read_failures.is_empty());
+    assert!(collector.usage_partial.contains("codex"));
+}

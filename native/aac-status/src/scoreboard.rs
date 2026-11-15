@@ -413,7 +413,7 @@ fn name(label: &str, effort: &Option<String>) -> String {
 
 /// JavaScript's Math.round for the non-negative figures this view uses.
 fn js_round(value: f64) -> f64 {
-    (value + 0.5).floor()
+    crate::read_context::math_round(value)
 }
 
 /// JavaScript's largest safe integer (2^53): the range within which every figure this
@@ -2014,4 +2014,21 @@ pub fn group_keys(view: &ViewIn) -> Result<GroupsOut> {
         efforts: identity.efforts.clone(),
         views,
     })
+}
+
+#[cfg(test)]
+mod lows_rounding_tests {
+    use super::checked_round;
+    #[test]
+    fn binary_half_neighbors_and_large_integers_match_math_round() {
+        for (value, expected) in [
+            (0.49999999999999994, 0),
+            (0.5, 1),
+            (-0.5, 0),
+            (-1.5, -1),
+            (4503599627370497.0, 4503599627370497),
+        ] {
+            assert_eq!(checked_round(value).unwrap(), expected, "{value}");
+        }
+    }
 }
