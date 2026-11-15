@@ -98,10 +98,16 @@ afterEach(async () => {
   } catch {
     /* Absent, or another root's folder is in it. */
   }
-  process.env.CCS_HOME = saved.home;
-  process.env.CCS_DIR = saved.dir;
+  restoreEnv('CCS_HOME', saved.home);
+  restoreEnv('CCS_DIR', saved.dir);
   fs.rmSync(scratch, { recursive: true, force: true });
 });
+
+/** Assigning `undefined` stores the string "undefined" and later tests write into the checkout. */
+function restoreEnv(name: 'CCS_HOME' | 'CCS_DIR', value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
 
 describe('Rust service lifecycle (L1)', () => {
   it('restarts a killed service after its backoff and serves again', async () => {
@@ -352,6 +358,18 @@ describe('Rust service lifecycle (L1)', () => {
 });
 
 describe('Rust service environment (L5 review M1)', () => {
+  it('deletes an unset CCS_DIR instead of storing the string undefined', () => {
+    const saved = process.env.CCS_DIR;
+    try {
+      delete process.env.CCS_DIR;
+      restoreEnv('CCS_DIR', undefined);
+      expect(process.env.CCS_DIR).toBeUndefined();
+      expect(Object.hasOwn(process.env, 'CCS_DIR')).toBe(false);
+    } finally {
+      restoreEnv('CCS_DIR', saved);
+    }
+  });
+
   it('passes only the allowlisted names a local agent verb reads', () => {
     const env = rustServiceEnvironment(
       {
@@ -383,9 +401,11 @@ describe('Rust service environment (L5 review M1)', () => {
       {
         Path: 'C:\\Windows',
         SystemRoot: 'C:\\Windows',
+        SystemDrive: 'C:',
         UserProfile: 'C:\\Users\\fixture',
         HTTPS_PROXY: 'http://a.invalid',
         https_proxy: 'http://b.invalid',
+        SSH_AUTH_SOCK: '\\\\.\\pipe\\fixture-agent',
         Node_Options: '--inspect',
       },
       true
@@ -393,6 +413,7 @@ describe('Rust service environment (L5 review M1)', () => {
     expect(env).toEqual({
       Path: 'C:\\Windows',
       SystemRoot: 'C:\\Windows',
+      SystemDrive: 'C:',
       UserProfile: 'C:\\Users\\fixture',
       HTTPS_PROXY: 'http://a.invalid',
     });

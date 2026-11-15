@@ -571,7 +571,7 @@ class BoundProfile:
         probe = "import json,stat,sys;from pathlib import Path\np=json.loads(sys.stdin.read());ok=True\nfor name in p['paths']:\n try:\n  f=Path(name);s=f.lstat();ok=ok and stat.S_ISREG(s.st_mode) and s.st_nlink==1 and all(stat.S_ISDIR(x.lstat().st_mode) and not stat.S_ISLNK(x.lstat().st_mode) for x in (f.parent,*f.parent.parents))\n except OSError:ok=False\nprint(json.dumps({'verified':ok}))\n"
         command = '/usr/bin/python3 -B -c ' + shlex.quote(probe)
         alias = self.policy['ssh'][self.platform]['alias']
-        result = subprocess.run(['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'PermitLocalCommand=no', '-o', 'ClearAllForwardings=yes', '--', alias, command], input=encode({'paths': references}), capture_output=True, timeout=12)
+        result = subprocess.run(['ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', '-o', 'UpdateHostKeys=no', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'PermitLocalCommand=no', '-o', 'ClearAllForwardings=yes', '--', alias, command], input=encode({'paths': references}), capture_output=True, timeout=12)
         if result.returncode or len(result.stdout) > 128 or json.loads(result.stdout) != {'verified': True}:
             refuse('transcript_metadata_unverified')
         self.bind()

@@ -1,5 +1,5 @@
 import { COMPUTERS, LEGACY_STORAGE_HOSTS } from './dashboard-hosts';
-import { LEGACY_MESSAGES } from './app-update-messages';
+import { isLegacyMessage, LEGACY_MESSAGES } from './app-update-messages';
 import { createHash, randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -689,8 +689,7 @@ export class AppUpdateService {
               (appId === 'antigravity-cli' &&
                 candidate === 'updated' &&
                 MESSAGES.updated === row.message) ||
-              (LEGACY_MESSAGES[candidate] !== undefined &&
-                LEGACY_MESSAGES[candidate] === row.message)
+              isLegacyMessage(candidate, row.message)
           ) ?? 'helper_invalid';
         const restored = normalizeAppUpdateResults(
           JSON.stringify({ results: [{ ...row, messageCode: code }] }),
@@ -749,7 +748,7 @@ function legacyRow(row: AppUpdateResult): AppUpdateResult {
       MESSAGES.mac_gui_cleanup_failed,
     ].some((message) => message === row.message)
   )
-    return { ...rest, message: LEGACY_MESSAGES.model_catalog_unrefreshed as string };
+    return { ...rest, message: LEGACY_MESSAGES.model_catalog_unrefreshed?.[0] as string };
   if (
     [
       MESSAGES.version_went_down,

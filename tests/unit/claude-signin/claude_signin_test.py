@@ -16,6 +16,13 @@ NOW = int(time.time() * 1000)
 CFG = dict(runner.DEFAULTS, renewWithinHours=96, verifyAfterHours=9)
 
 
+class Ssh(unittest.TestCase):
+    def test_ssh_never_rewrites_known_hosts(self):
+        args = runner.ssh_args({"ssh": "fixture.invalid"})
+        self.assertIn("UpdateHostKeys=no", args)
+        self.assertEqual(args[:1], ["ssh"])
+
+
 class Home(unittest.TestCase):
     """A fixture home and CCS folder; the real ~/.claude and ~/.ccs are never read."""
 

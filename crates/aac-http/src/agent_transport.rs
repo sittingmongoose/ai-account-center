@@ -308,7 +308,9 @@ impl Agents {
             let ready = self.registry.clone();
             tokio::spawn(async move {
                 // Exactly one initialization job per boot, even if its waiting HTTP request
-                // expires. A slow mount cannot accumulate abandoned config/hash workers.
+                // expires. A missing catalog, a known_hosts file added later, and computer or
+                // identity edits stay unavailable until the service restarts (L5 review L5).
+                // A slow mount cannot accumulate abandoned config/hash workers.
                 let result = tokio::task::spawn_blocking(move || Registry::load(&root))
                     .await
                     .unwrap_or_else(|_| Err(refused()));
@@ -446,16 +448,9 @@ impl Agents {
     }
 
     pub(crate) async fn control(&self, id: &str, bytes: &[u8]) -> Response {
-        let control = if let Ok(c) = crate::json_object::from_slice::<Control>(bytes, &["cancel"]) {
-            c
-        } else if let Ok(c) = crate::json_object::from_slice::<Control>(bytes, &["input"]) {
-            c
-        } else {
+        let Some((control, frame)) = control_line(bytes) else {
             return Json(json!({"accepted":false})).into_response();
         };
-        if bytes.len() > 65536 {
-            return Json(json!({"accepted":false})).into_response();
-        }
         let active = self.active.lock().ok().and_then(|active| {
             active
                 .get(id)
@@ -464,8 +459,6 @@ impl Agents {
         let Some((input, mut done, abort)) = active else {
             return Json(json!({"accepted":false})).into_response();
         };
-        let mut frame = bytes.to_vec();
-        frame.push(b'\n');
         if input.try_send(frame).is_err() {
             return Json(json!({"accepted":false})).into_response();
         }
@@ -491,9 +484,37 @@ impl Agents {
         }
     }
 }
+/// The agent's control line: the parsed [`Control`], written compactly with one trailing newline.
+/// A body such as `{"cancel":\ntrue}` is valid here and must not be forwarded raw, or the agent
+/// reads `{"cancel":` and ends the call as `invalid agent control` (L5 review L3).
+pub(crate) fn control_line(bytes: &[u8]) -> Option<(Control, Vec<u8>)> {
+    if bytes.len() > 65536 {
+        return None;
+    }
+    let control = crate::json_object::from_slice::<Control>(bytes, &["cancel"])
+        .or_else(|_| crate::json_object::from_slice::<Control>(bytes, &["input"]))
+        .ok()?;
+    let mut frame = serde_json::to_vec(&control).ok()?;
+    frame.push(b'\n');
+    Some((control, frame))
+}
+
 struct AbortOnDrop(CancellationToken);
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::control_line;
+    use aac_protocol::Control;
+
+    #[test]
+    fn a_cancel_with_a_newline_is_one_compact_line() {
+        let (control, frame) = control_line(b"{\"cancel\":\ntrue}").expect("control");
+        assert!(matches!(control, Control::Cancel { cancel: true }));
+        assert_eq!(frame, b"{\"cancel\":true}\n");
     }
 }

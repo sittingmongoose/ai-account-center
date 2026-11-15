@@ -38,11 +38,11 @@ export const MESSAGES = {
   host_timeout: 'Timed out: this computer did not finish in time.',
   task_failed: "The Windows updater task stopped before reporting this app's result.",
   held_for_review:
-    'Update held: the newest Antigravity version is waiting for a switching review; the reviewed version stays installed.',
+    'Update held: the newest Antigravity version is waiting for a review; the reviewed version stays installed.',
   held_unchecked:
-    'Update held: the newest Antigravity version could not be checked against the switching review, so nothing was installed.',
+    'Update held: the newest Antigravity version could not be checked against the review, so nothing was installed.',
   updated_unreviewed:
-    'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed. Copies already open keep the old version until restarted.',
+    'Updated, but this Antigravity version has no review yet; Antigravity stays paused until it is reviewed. Copies already open keep the old version until restarted.',
   runtime_unavailable:
     'The Antigravity switching runtime is not running or did not answer, so the managed update could not check for running sessions; nothing was installed.',
   runtime_paused:
@@ -156,16 +156,36 @@ export const MESSAGES = {
 } as const;
 export type MessageCode = keyof typeof MESSAGES;
 
-/** Fixed older wording remains readable in saved jobs. Never emitted for new results. */
-export const LEGACY_MESSAGES: Partial<Record<MessageCode, string>> = {
-  model_catalog_unrefreshed:
+/**
+ * Older wordings of a code, oldest first. A saved row matches any of them and is never emitted
+ * again. A code can keep more than one, so a message can change after its first older wording is stored.
+ */
+export const LEGACY_MESSAGES: Partial<Record<MessageCode, readonly string[]>> = {
+  model_catalog_unrefreshed: [
     'The new models are not registered yet. Open Muse once on this computer, then run Update apps again.',
-  updated_unreviewed:
+  ],
+  held_for_review: [
+    'Update held: the newest Antigravity version is waiting for a switching review; the reviewed version stays installed.',
+  ],
+  held_unchecked: [
+    'Update held: the newest Antigravity version could not be checked against the switching review, so nothing was installed.',
+  ],
+  updated_unreviewed: [
     'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
-  runtime_paused_blocked:
+    'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed. Copies already open keep the old version until restarted.',
+  ],
+  runtime_paused_blocked: [
     'Antigravity switching is paused on an unreviewed build and its runtime is stopped; the update could not safely start without it (a pending switch recovery, a process check that could not finish, or a failed backup), so nothing was installed.',
-  antigravity_acp_updated:
+  ],
+  antigravity_acp_updated: [
     'T3 installed and activated its pinned Antigravity ACP runtime. Existing sessions keep their version; new sessions use the update.',
-  t3_session_issue_unknown:
+  ],
+  t3_session_issue_unknown: [
     'No T3 session in time; no install started. One session may stay valid up to 15 minutes. Check T3.',
+  ],
 };
+
+/** True when `message` is an older wording of `code`. */
+export function isLegacyMessage(code: MessageCode, message: unknown): boolean {
+  return typeof message === 'string' && (LEGACY_MESSAGES[code]?.includes(message) ?? false);
+}

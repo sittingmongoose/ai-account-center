@@ -9,6 +9,7 @@ import {
   collectQuotaWithFallback,
   runSignInAgent,
   collectSignInWithFallback,
+  runInventoryAgent,
 } from '../../../src/web-server/services/agent-verbs';
 import type { UsageHost } from '../../../src/web-server/services/usage-failover-contract';
 import type { ManagedCommandResult } from '../../../src/utils/managed-process';
@@ -205,5 +206,28 @@ describe('plan quota agent', () => {
       expect(result).toBe('python');
       expect(calls).toBe(1);
     }
+  });
+
+  it('caps a status inventory attempt at 8s so the probe fallback keeps a budget', async () => {
+    let timeoutMs = 0;
+    const run = async (_executable: string, _args: string[], options: { timeoutMs: number }) => {
+      timeoutMs = options.timeoutMs;
+      return ok(
+        `${JSON.stringify({
+          protocol: 1,
+          id: 'inventory',
+          type: 'result',
+          value: { schemaVersion: 1, machine: { cores: 1 } },
+        })}\n`
+      );
+    };
+    const value = await runInventoryAgent({ platform: 'linux', sshHost: 'fixture' }, () => true, {
+      run,
+      artifacts: [artifact],
+      mode: 'on',
+      transport: 'off',
+    });
+    expect(timeoutMs).toBe(8000);
+    expect(value).toEqual({ cores: 1 });
   });
 });

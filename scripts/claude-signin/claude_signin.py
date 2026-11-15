@@ -410,7 +410,7 @@ def hosts(cfg):
 
 
 def ssh_args(host, tty=False):
-    args = ["ssh", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=15"]
+    args = ["ssh", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=15", "-o", "UpdateHostKeys=no"]
     args += ["-tt"] if tty else ["-T", "-o", "BatchMode=yes"]
     return args + [host["ssh"]]
 

@@ -286,8 +286,9 @@ fn checked_round(value: f64) -> Result<i64> {
 /// JavaScript's `value.toFixed(places)`: `aac_num::ecma::to_fixed`, the integer n for which n/10^places is
 /// closest to the exact binary value, the larger n on a tie, with the decimals kept ("0.0", not "0"). The
 /// copy this replaces compared n/10^places with the value in binary64 and misread values beside a tie: 0.185
-/// to two places wrote "0.19" where every JavaScript engine writes "0.18" (L3). The domain is unchanged: a
-/// figure whose scaled units leave the safe integer range refuses the input.
+/// to two places wrote "0.19" where every JavaScript engine writes "0.18" (L3). Negative figures moved with
+/// the ties: the old remainder printed "0.-3" and "0.0", and JavaScript prints "-0.3" and "-0.0". The domain
+/// is unchanged: a figure whose scaled units leave the safe integer range refuses the input.
 fn to_fixed(value: f64, places: u32) -> Result<String> {
     let units = value * 10f64.powi(places as i32);
     if beyond_safe(units) {

@@ -18,7 +18,7 @@ if [[ -z "$TASK_SLOT" ]]; then
   exit 75
 fi
 TASK_TEMP=$(mktemp -d)
-TASK_SSH=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30)
+TASK_SSH=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o UpdateHostKeys=no)
 cleanup() {
   ssh "${TASK_SSH[@]}" "$TASK_HOST" "powershell -NoProfile -ExecutionPolicy Bypass -File aac-foundation-$TASK_NAME.ps1 -Name $TASK_NAME -Cleanup" || true
   rm -f "$TASK_TEMP/source.tgz"

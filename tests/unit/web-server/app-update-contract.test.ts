@@ -368,7 +368,7 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
       'claude-desktop',
       't3-code',
     ];
-    const rows = PLATFORMS.filter(platform => platform !== 'alexis').flatMap((platform) =>
+    const rows = PLATFORMS.filter((platform) => platform !== 'alexis').flatMap((platform) =>
       normalizeAppUpdateResults(payload(), platform).filter((row) => before.includes(row.appId))
     );
     expect(rows).toHaveLength(32);
@@ -501,7 +501,11 @@ describe('Update apps contract for ZCode, T3 ACP adapters and in-use rows', () =
   });
 
   it('keeps a Muse update whose model catalog did not refresh as an honest non-success', () => {
-    const row = (messageCode: string, appId: UpdateAppId = 'muse-code', status = 'restart_failed') =>
+    const row = (
+      messageCode: string,
+      appId: UpdateAppId = 'muse-code',
+      status = 'restart_failed'
+    ) =>
       normalizeAppUpdateRow(
         {
           appId,
@@ -909,6 +913,12 @@ describe('older saved paused Antigravity rows', () => {
         status: 'updated',
         message:
           'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed.',
+        updateAttempted: true,
+      },
+      {
+        status: 'updated',
+        message:
+          'Updated, but this Antigravity version has no switching review yet; Antigravity switching is paused until it is reviewed. Copies already open keep the old version until restarted.',
         updateAttempted: true,
       },
       {
