@@ -129,6 +129,14 @@ def cases():
         add('settings-shape-' + repr(value), 'codex', lambda h, f=field, v=value: write(h,'.t3/userdata/settings.json',{f:v}), fallback=True)
     for value in ['relative', 'x'*1025, '\0bad', 0, [], {}]:
         add('settings-path-' + repr(value)[:20], 'codex', lambda h,v=value: write(h,'.t3/userdata/settings.json',{'providerInstances':{'one':{'driver':'codex','config':{'homePath':v}}}}), fallback=True)
+    # REVIEW-M2-part4-cheap M1: pathlib keeps a leading // as its own root, so Python refuses
+    # these homes; the agent must fall back, never return an extra t3 candidate.
+    for prefix in ['/', '//']:
+        for driver, provider in [('codex', 'codex'), ('claudeAgent', 'claude')]:
+            add('settings-path-slashes-' + str(len(prefix) + 1) + '-' + provider, provider,
+                lambda h, p=prefix, d=driver: write(h, '.t3/userdata/settings.json',
+                    {'providerInstances': {'one': {'driver': d, 'config': {'homePath': p + str(h / '.codex-t3/x')}}}}),
+                fallback=True)
     for count in [64, 65]:
         def homes(h,count=count):
             for i in range(count): (h/f'.codex-t3/slot{i:03}').mkdir(parents=True)
@@ -140,6 +148,14 @@ def cases():
         add('omp-' + provider,provider,omp,fallback=True)
     add('muse-capsule','muse',lambda h: (muse(h),write(h,'scope/account-usage/muse-console-session.json',{})),fallback=True)
     add('qwen-session','qwen',lambda h: plan(h,'alibaba-token-plan',json.dumps({'cookie':'sid=synthetic'})),nonempty=True)
+    # REVIEW-M2-part4-cheap M2: Python reads Safari's cookie store for Qwen on every platform;
+    # a present file (readable or not) must fall back, never look like a complete empty answer.
+    safari = 'Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies'
+    def safari_cookies(h, readable):
+        p = h / safari; p.parent.mkdir(parents=True, mode=0o700)
+        p.write_bytes(b'cook\x00\x00\x00\x00'); p.chmod(0o600 if readable else 0o000)
+    add('qwen-safari-cookies', 'qwen', lambda h: safari_cookies(h, True), fallback=True)
+    add('qwen-safari-unreadable', 'qwen', lambda h: safari_cookies(h, False), fallback=True)
     add('antigravity-native','antigravity',lambda h: write(h,'.gemini/antigravity-cli/antigravity-oauth-token',{'auth_method':'consumer','token':{'access_token':'synthetic'},'email':'one@example.test','subject':'123'}),fallback=True,nonempty=True)
     add('opencode-wallet','opencode-wallet',lambda h: write(h,'scope/account-usage/opencode-console-session.json',{}),fallback=True)
     for kwargs in [{'version':2},{'fingerprint':'wrong'},{'secret':'short'},{'unknown':'ignored?' }]:
@@ -205,7 +221,7 @@ def main(binary=None):
             environment={k:v.replace('${HOME}',str(home)) for k,v in request.pop('testEnvironment',{}).items()}
             # Invalid scope rows can point outside the fixture but fail validation before IO.
             # Valid scope reads always remain in this newly created home.
-            saved=image(home) if name != 'fifo-credential' else None
+            saved=image(home) if name not in ('fifo-credential', 'qwen-safari-unreadable') else None
             with mock.patch.dict(os.environ,environment,clear=True), mock.patch('urllib.request.OpenerDirector.open',side_effect=AssertionError('fixture network forbidden')):
                 expected=helper.run(request)
             actual=call(binary,request,environment)
