@@ -545,16 +545,16 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 674,
-      "typedThrows": 222,
+      "totalThrows": 677,
+      "typedThrows": 225,
       "plainThrows": 47,
       "otherThrows": 405,
-      "adoptionRatio": 0.3294,
+      "adoptionRatio": 0.3323,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 397,
-          "typed": 169,
+          "count": 400,
+          "typed": 172,
           "plain": 7
         },
         {
