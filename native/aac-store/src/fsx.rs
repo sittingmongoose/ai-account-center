@@ -126,15 +126,26 @@ pub fn remove_temporaries(dir: &Path) -> Result<usize> {
     Ok(removed)
 }
 
-/// The one-writer lock (`store.lock`), held for the life of the returned file.
+/// The one-writer lock (`store.lock`), held for the life of the returned file. Dropping it
+/// unlocks before the close: a child that another thread forks holds a copy of every descriptor
+/// until it execs, and a lock on that shared open file description outlives a plain close, so a
+/// reopen right after the drop could be refused as `lock_held` (store-reopen-flake-T1). redb
+/// releases its own range locks on close for the same reason.
 pub struct StoreLock {
-    _file: File,
+    file: File,
+}
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        // On an unlock error the close still releases it once every copy is gone, as before.
+        let _ = self.file.unlock();
+    }
 }
 
 pub fn lock_store(dir: &Path) -> Result<StoreLock> {
     let file = open_private(&dir.join("store.lock"), true)?;
     match file.try_lock() {
-        Ok(()) => Ok(StoreLock { _file: file }),
+        Ok(()) => Ok(StoreLock { file }),
         Err(std::fs::TryLockError::WouldBlock) => {
             fail!("lock_held", "another process holds the store lock")
         }

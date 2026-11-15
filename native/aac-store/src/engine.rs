@@ -121,7 +121,6 @@ impl Logs {
 pub struct Engine {
     pub dir: PathBuf,
     pub config: Config,
-    _lock: fsx::StoreLock,
     pub logs: Mutex<Logs>,
     pub db: RwLock<Option<Database>>,
     pub projectors: Vec<Box<dyn Projector>>,
@@ -129,6 +128,8 @@ pub struct Engine {
     pub instance_id: String,
     pub opened_ms: u64,
     pub integrity: Mutex<Json>,
+    /// Last, so it is released after the logs and redb (fields drop in declaration order).
+    _lock: fsx::StoreLock,
 }
 
 pub fn now_ms() -> u64 {
@@ -310,7 +311,6 @@ impl Engine {
         let engine = Engine {
             dir: dir.to_path_buf(),
             config,
-            _lock: lock,
             logs: Mutex::new(Logs { readings, ledger }),
             db: RwLock::new(Some(database)),
             projectors,
@@ -318,6 +318,7 @@ impl Engine {
             instance_id,
             opened_ms: now_ms(),
             integrity: Mutex::new(integrity),
+            _lock: lock,
         };
         let replay_findings = engine.replay()?;
         merge_findings(&mut findings, replay_findings);
