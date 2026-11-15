@@ -271,6 +271,10 @@ function normalize(
   if (source.provider === 'muse' && (!account.email || !account.plan)) invalidIdentity = true;
   account.fetchedAt = timestamp(result.fetchedAt);
   account.sampledAt = timestamp(result.sampledAt);
+  if (status === 'cached') {
+    account.cacheReason =
+      result.failureCode === 'rate_limited' ? 'rate_limited' : 'outcome_unknown';
+  }
   if (source.provider === 'antigravity')
     Object.assign(
       account,
@@ -324,7 +328,7 @@ function normalize(
   };
 }
 
-function copy(account: DashboardAccount, cached = false): DashboardAccount {
+function copy(account: DashboardAccount): DashboardAccount {
   return {
     ...account,
     ...(account.antigravityPlan
@@ -332,7 +336,6 @@ function copy(account: DashboardAccount, cached = false): DashboardAccount {
           antigravityPlan: cloneAntigravityPlan(account.antigravityPlan),
         }
       : {}),
-    status: cached && account.status === 'ok' ? 'cached' : account.status,
     windows: account.windows.map((window) => ({ ...window })),
     capabilities: { codexProfile: null, claudeProfileId: null, claudePlatforms: [] },
   };
@@ -589,6 +592,7 @@ export class AdditionalAccountService {
       cache.result = {
         ...copy(cache.lastGood),
         status: 'cached',
+        cacheReason: 'read_failed',
         message:
           source.provider === 'muse'
             ? null
@@ -634,7 +638,7 @@ export class AdditionalAccountService {
       });
     }
     if (cache.pending) return copy(await cache.pending);
-    return copy(cache.result ?? unavailable(source), true);
+    return copy(cache.result ?? unavailable(source));
   }
 
   async snapshot(

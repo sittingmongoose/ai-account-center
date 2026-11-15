@@ -185,11 +185,28 @@ export function publicDashboardAccount(
     source: 'Antigravity saved login on Ubuntu',
     status,
     ...(identityUnbound ? { statusReason: 'identity_unbound' as const } : {}),
+    ...(status === 'cached'
+      ? {
+          cacheReason:
+            value.cacheReason &&
+            ['read_failed', 'rate_limited', 'refresh_pending', 'source_changed'].includes(
+              value.cacheReason
+            )
+              ? value.cacheReason
+              : ('outcome_unknown' as const),
+        }
+      : {}),
     message:
       status === 'ok'
         ? null
         : status === 'cached'
-          ? 'Showing the last successful Antigravity usage reading.'
+          ? value.cacheReason === 'rate_limited'
+            ? 'Antigravity refresh is rate limited; showing the last successful reading.'
+            : value.cacheReason === 'source_changed'
+              ? 'The new sign-in is being read; showing the last successful Antigravity reading.'
+              : value.cacheReason === 'read_failed'
+                ? 'The Antigravity usage read failed; showing the last successful reading.'
+                : 'The previous Antigravity read outcome was not recorded; showing the saved reading.'
           : status === 'needs_sign_in'
             ? 'This Antigravity profile needs to sign in again.'
             : identityUnbound

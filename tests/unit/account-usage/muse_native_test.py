@@ -50,10 +50,21 @@ class NativeMuseBudgetTests(unittest.TestCase):
         importlib.reload(muse_native)
         second = self.collect(loader, now=1010)
         self.assertEqual(loader.call_count, 1)
-        self.assertEqual(second["sample"]["status"], "cached")
+        self.assertEqual(second["sample"]["status"], "ok")
         self.assertEqual(second["sample"]["sampledAt"], first["sample"]["sampledAt"])
         self.assertEqual(second["observedPlanAt"], first["observedPlanAt"])
         self.assertEqual(second["refreshAfterSeconds"], 290)
+
+    def test_interrupted_native_read_keeps_previous_sample_with_failure_not_success(self):
+        first = self.collect(lambda: {"sample": reading(), "failureCode": None})
+        with self.assertRaises(KeyboardInterrupt):
+            self.collect(Mock(side_effect=KeyboardInterrupt()), now=1301)
+        loader = Mock()
+        retained = self.collect(loader, now=1302)
+        self.assertEqual(retained["sample"]["status"], "cached")
+        self.assertEqual(retained["sample"]["sampledAt"], first["sample"]["sampledAt"])
+        self.assertEqual(retained["failureCode"], "network_error")
+        loader.assert_not_called()
 
     def test_cached_quota_preserves_429_deadline_and_prevents_more_key_mints(self):
         first = self.collect(lambda: {"sample": reading(), "failureCode": None})
@@ -169,7 +180,7 @@ class NativeMuseBudgetTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=3) as pool:
             values = list(pool.map(lambda _: self.collect(loader), range(3)))
         self.assertEqual(loader.call_count, 1)
-        self.assertEqual(sum(row["sample"]["status"] == "ok" for row in values), 1)
+        self.assertTrue(all(row["sample"]["status"] == "ok" for row in values))
         self.assertTrue(all(row["refreshAfterSeconds"] == 300 for row in values))
 
     def test_linked_native_state_is_not_read_or_replaced(self):

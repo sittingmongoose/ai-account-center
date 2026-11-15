@@ -221,7 +221,7 @@ describe('additional account usage service', () => {
     const { service, calls, setTime } = fixture();
     await service.get({ refresh: true });
     setTime(4_999);
-    expect((await service.get({ refresh: true }))[0]?.status).toBe('cached');
+    expect((await service.get({ refresh: true }))[0]?.status).toBe('ok');
     expect(calls).toHaveLength(7);
     setTime(5_000);
     await service.get({ refresh: true });
@@ -970,5 +970,18 @@ describe('additional account usage service', () => {
     const second = new AdditionalAccountService({ ccsDir: secondDir, runSource });
     expect((await first.get())[2]?.platform).toBe('mac');
     expect((await second.get())[2]?.platform).toBe('windows');
+  });
+});
+
+describe('additional quota freshness', () => {
+  it('preserves a successful sample and its clock throughout the source TTL', async () => {
+    const h = fixture();
+    const first = (await h.service.get()).find((a) => a.provider === 'cursor')!;
+    h.setTime(60_000);
+    const next = (await h.service.get()).find((a) => a.provider === 'cursor')!;
+    expect(next.status).toBe('ok');
+    expect(next.sampledAt).toBe(first.sampledAt);
+    expect(next.windows).toEqual(first.windows);
+    expect(h.calls).toHaveLength(7);
   });
 });

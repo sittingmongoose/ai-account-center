@@ -322,6 +322,13 @@ def cmd_show(args):
                else "%s ago" % span(seconds))
         status = STATUS.get(account.get("status"), account.get("status"))
         print("  %s  [%s]  %s, sampled %s" % ("  ".join(who), ", ".join(facts), status, age))
+        if account.get("status") == "cached":
+            reasons = {"read_failed": "last provider read failed or was skipped",
+                       "rate_limited": "provider refresh is rate limited",
+                       "refresh_pending": "next provider read is pending",
+                       "source_changed": "saved sign-in changed; next provider read is pending",
+                       "outcome_unknown": "last provider read outcome was not recorded"}
+            print("    " + reasons.get(account.get("cacheReason"), reasons["outcome_unknown"]))
         if account.get("status") in ("ok", "cached"):
             for window in account.get("windows", []):
                 print(window_line(window, now, account.get("sampledAt"), stale_after))

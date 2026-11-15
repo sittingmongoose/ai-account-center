@@ -397,7 +397,14 @@ export class AccountDashboardService {
           : previous;
       const result = applyClaudeLiveUsage(account, retained ?? null);
       if (result !== account && retained) this.claudeLiveSamples.set(sampleKeys[index], retained);
-      return result === account ? account : { ...result, status: 'cached' as const };
+      return result === account
+        ? account
+        : {
+            ...result,
+            status: 'cached' as const,
+            cacheReason: 'refresh_pending' as const,
+            message: 'The live usage read is pending; showing the last successful reading.',
+          };
     });
     while (this.claudeLiveSamples.size > MAX_SCOPES * 4) {
       const oldest = this.claudeLiveSamples.keys().next().value;
@@ -450,6 +457,14 @@ export class AccountDashboardService {
         }
         if (sample && markSignIn(index, 'windows', false)) publish();
         if (!sample) {
+          if (accounts[index].status === 'cached') {
+            accounts[index] = {
+              ...accounts[index],
+              cacheReason: 'read_failed',
+              message: 'The live usage read failed; showing the last successful reading.',
+            };
+            publish();
+          }
           // A new ID the old installed collector cannot know: say so, instead
           // of a misleading sign-in prompt. Rows that already show live or
           // cached readings are left alone.
@@ -612,7 +627,16 @@ export class AccountDashboardService {
           return accounts;
         });
         const result = await this.bounded(retained, () =>
-          state[key].length ? state[key] : fallback()
+          (state[key].length ? state[key] : fallback()).map((account) =>
+            account.status === 'ok'
+              ? {
+                  ...account,
+                  status: 'cached' as const,
+                  cacheReason: 'read_failed' as const,
+                  message: 'The usage read did not finish; showing the last successful reading.',
+                }
+              : account
+          )
         );
         if (state.generation === generation) state[key] = result;
       })
@@ -708,7 +732,6 @@ export class AccountDashboardService {
       });
     }
     const waitForCollection = collect && (refresh || !Number.isFinite(state.fetchedAt));
-    const usedCache = !waitForCollection || state.pending === null;
     if (waitForCollection && state.pending) await state.pending;
     else if (state.pending) void state.pending.catch(() => {});
     // Account switches invalidate the native summary by live auth file signature.
@@ -765,10 +788,19 @@ export class AccountDashboardService {
     // Validate saved credential revisions on every response, including dashboard
     // cache hits. This synchronous cache projection never starts a provider call.
     if (registeredAntigravity) {
+      const previousAntigravity = state.antigravity;
       state.antigravity = (
         this.deps.getCachedAntigravityAccounts ?? (() => getCachedAntigravityAccounts(scope))
       )().map((account) => {
         const publicAccount = publicDashboardAccount(account);
+        const retained = previousAntigravity.find((row) => row.id === publicAccount.id);
+        if (
+          retained?.status === 'cached' &&
+          publicAccount.status === 'ok' &&
+          retained.sampledAt === publicAccount.sampledAt &&
+          retained.fetchedAt === publicAccount.fetchedAt
+        )
+          return retained;
         return this.deps.getCachedAntigravityAccounts || this.deps.failover === null
           ? publicAccount
           : peekAntigravityUsage(publicAccount, scope, {
@@ -829,7 +861,18 @@ export class AccountDashboardService {
           this.deps.failover ?? undefined
         );
       }
-      if (usedCache && current.status === 'ok') current = { ...current, status: 'cached' };
+      if (
+        !waitForCollection &&
+        now - state.fetchedAt >= refreshIntervalSeconds * 1000 &&
+        current.status === 'ok'
+      ) {
+        current = {
+          ...current,
+          status: 'cached',
+          cacheReason: 'refresh_pending',
+          message: 'The next usage read is pending; showing the last successful reading.',
+        };
+      }
       if (current.provider === 'claude') current = projectClaudeFailoverExtras(current, now);
       return [
         {

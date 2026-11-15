@@ -67,6 +67,9 @@ export interface DashboardAccountLifecycle {
   jobId: string | null;
 }
 
+export type UsageCacheReason =
+  'read_failed' | 'rate_limited' | 'refresh_pending' | 'source_changed' | 'outcome_unknown';
+
 export interface DashboardAccount {
   id: string;
   provider: DashboardProvider;
@@ -90,6 +93,8 @@ export interface DashboardAccount {
   host?: import('./dashboard-hosts').DashboardHost;
   source: string;
   status: DashboardAccountStatus;
+  /** Safe explanation for a retained reading; never a raw provider error. */
+  cacheReason?: UsageCacheReason;
   /** Present only with a precise reason; absent otherwise. */
   statusReason?: DashboardAccountStatusReason;
   /**

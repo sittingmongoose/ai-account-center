@@ -398,6 +398,7 @@ export class OpenCodeConsoleWalletService {
       return {
         ...this.result,
         status: 'cached',
+        cacheReason: 'read_failed',
         message: `Live console wallet usage is unavailable; showing the last saved sample. ${WORKSPACE_NOTE}`,
       };
     }
@@ -416,6 +417,7 @@ export class OpenCodeConsoleWalletService {
       ? {
           ...this.result,
           status: 'cached',
+          cacheReason: 'read_failed',
           message: `Live console wallet usage is unavailable; showing the last saved sample. ${WORKSPACE_NOTE}`,
         }
       : null;
@@ -510,7 +512,6 @@ export class OpenCodeConsoleWalletService {
     const force = opts.refresh === true && now - this.refreshedAt >= DEBOUNCE_MS;
     const expired = now - this.fetchedAt >= (this.result && !this.failed ? TTL_MS : BACKOFF_MS);
     const backoff = (this.failed || !this.result) && now - this.fetchedAt < BACKOFF_MS;
-    let fetched = false;
     if (!this.pending && !backoff && (force || expired)) {
       this.refreshedAt = now;
       const pending = this.collectSource(sshHost, binding).catch(() => null);
@@ -525,14 +526,12 @@ export class OpenCodeConsoleWalletService {
     }
     const pending = this.pending;
     if (pending) {
-      fetched = true;
       await pending;
     }
     if (this.source !== binding || !this.result) return [];
     return [
       {
         ...this.result,
-        status: !fetched && this.result.status === 'ok' ? 'cached' : this.result.status,
         windows: this.result.windows.map((window) => ({ ...window })),
       },
     ];

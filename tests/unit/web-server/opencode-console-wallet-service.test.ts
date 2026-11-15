@@ -135,7 +135,7 @@ describe('optional identity-bound OpenCode console wallet', () => {
     await Promise.all([service.get({ refresh: true }), service.get({ refresh: true })]);
     expect(calls).toBe(1);
     now = 4_999;
-    expect((await service.get({ refresh: true }))[0].status).toBe('cached');
+    expect((await service.get({ refresh: true }))[0].status).toBe('ok');
     expect(calls).toBe(1);
     now = 5_000;
     online = false;
@@ -417,7 +417,7 @@ describe('optional identity-bound OpenCode console wallet', () => {
       expect(quotaCalls).toBe(2);
       offline = true;
       const [saved] = await create().get();
-      expect(saved.status).toBe('cached');
+      expect(saved.status).toBe('ok');
       expect(saved.id).toBe(fresh.id);
       expect(saved.sampledAt).toBe(fresh.sampledAt);
       expect(quotaCalls).toBe(2);

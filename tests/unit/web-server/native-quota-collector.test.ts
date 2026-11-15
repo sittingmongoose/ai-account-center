@@ -389,7 +389,7 @@ describe('cache / TTL', () => {
     clock.now += 5 * 60 * 1000;
     const row = await rowFor('work', deps);
     expect(deps.networkCount()).toBe(1);
-    expect(row?.cached).toBe(true);
+    expect(row?.cached).toBe(false);
   });
 
   it('re-fetches after the TTL expires', async () => {
@@ -729,7 +729,7 @@ describe('getCachedCodexProfileQuotaRows (instant, no-fetch fallback)', () => {
 
     const cached = getCachedCodexProfileQuotaRows(['default', 'ck', 'unknown']);
     expect(cached).toHaveLength(2);
-    expect(cached.every((row) => row.cached === true)).toBe(true);
+    expect(cached.every((row) => row.cached === false)).toBe(true);
     expect(cached.find((row) => row.profile === 'default')?.is_default).toBe(true);
     expect(cached.find((row) => row.profile === 'ck')?.is_default).toBe(false);
     expect(deps.networkCount()).toBe(2);

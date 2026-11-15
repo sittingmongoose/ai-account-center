@@ -296,6 +296,7 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
     Object.assign(value, {
       identityKey: PRIVATE,
       credentialRevision: PRIVATE,
+      cacheReason: PRIVATE,
       raw: PRIVATE,
       source: PRIVATE,
       message: PRIVATE,
@@ -335,7 +336,8 @@ describe('Antigravity HTTP controls on an owned loopback fixture', () => {
         creditsOverage: true,
       },
       status: 'cached',
-      message: 'Showing the last successful Antigravity usage reading.',
+      cacheReason: 'outcome_unknown',
+      message: 'The previous Antigravity read outcome was not recorded; showing the saved reading.',
     });
   });
 

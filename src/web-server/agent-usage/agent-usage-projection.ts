@@ -5,6 +5,7 @@ import type {
   DashboardAccountWindow,
   DashboardPlatform,
   DashboardProvider,
+  UsageCacheReason,
 } from '../services/account-dashboard-types';
 
 /**
@@ -74,8 +75,10 @@ export interface AgentUsageAccount {
   host: DashboardHost;
   /** The account this provider currently uses on its computer. */
   active: boolean;
-  /** ok: fresh; cached: an earlier verified reading; the rest carry no usable reading. */
+  /** ok: successful within the refresh interval; cached: retained after a failed/skipped read. */
   status: DashboardAccountStatus;
+  /** Safe fixed wording only; older v1 snapshots omit this field. */
+  cacheReason?: UsageCacheReason;
   sampledAt: string | null;
   ageSeconds: number | null;
   /** Hidden on the dashboard by its owner; still collected. */
@@ -271,6 +274,17 @@ function accountOf(account: DashboardAccount, now: number): AgentUsageAccount | 
     host: quotaHost(account),
     active: account.isActive === true,
     status: STATUSES.includes(account.status) ? account.status : 'unavailable',
+    ...(account.status === 'cached'
+      ? {
+          cacheReason:
+            account.cacheReason &&
+            ['read_failed', 'rate_limited', 'refresh_pending', 'source_changed'].includes(
+              account.cacheReason
+            )
+              ? account.cacheReason
+              : ('outcome_unknown' as const),
+        }
+      : {}),
     sampledAt,
     ageSeconds: age,
     hidden: account.hidden === true,

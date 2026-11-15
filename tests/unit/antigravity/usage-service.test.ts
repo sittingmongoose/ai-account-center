@@ -7,7 +7,7 @@ import {
   AntigravityUsageService,
   mergeAntigravityAccounts,
 } from '../../../src/antigravity/usage-service';
-import { poolWindow } from '../../../src/antigravity/usage-normalization';
+import { poolWindow, publicDashboardAccount } from '../../../src/antigravity/usage-normalization';
 
 const SAMPLE_TIME = '2026-10-01T17:00:00.000Z';
 
@@ -260,6 +260,9 @@ describe('Antigravity account-specific usage cache', () => {
     });
     const failed = (await f.service.getAccounts({ refresh: true }))[0];
     expect(failed.status).toBe('cached');
+    expect(failed.cacheReason).toBe('read_failed');
+    expect(publicDashboardAccount(failed).cacheReason).toBe('read_failed');
+    expect(publicDashboardAccount(failed).message).toContain('read failed');
     expect(failed.sampledAt).toBe(SAMPLE_TIME);
     expect(failed.fetchedAt).toBe(SAMPLE_TIME);
     expect(failed.message).not.toContain('sentinel');

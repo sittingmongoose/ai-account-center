@@ -179,11 +179,11 @@ def collect(root, access, expected_email, platform, loader, now=None):
                 _write(root, key, state)
                 return _result(state, now, True)
             if state and state["nextRequestAt"] > now:
-                return _result(state, now, True)
+                return _result(state, now, state["failureCode"] is not None)
             previous = state["sample"] if state else None
             previous_plan = state["observedPlan"] if state else None
             previous_plan_at = state["observedPlanAt"] if state else None
-            state = {"version": 2, "key": key, "sample": previous, "failureCode": None,
+            state = {"version": 2, "key": key, "sample": previous, "failureCode": "network_error",
                      "nextRequestAt": now + REFRESH_SECONDS, "observedPlan": previous_plan, "observedPlanAt": previous_plan_at}
             _write(root, key, state)
             try:

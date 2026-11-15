@@ -1422,3 +1422,25 @@ describe('sign-in renewal in usage.md', () => {
     expect(stale).toContain('renewals are not happening until it runs again');
   });
 });
+
+it('publishes safe retained-reading causes without leaking collector messages', () => {
+  const answer = projectAgentUsage(
+    [
+      account({ status: 'cached', cacheReason: 'rate_limited' }),
+      account({ id: 'codex:legacy', status: 'cached', cacheReason: undefined }),
+    ],
+    { now: NOW }
+  );
+  expect(answer.accounts[0].cacheReason).toBe('rate_limited');
+  expect(answer.accounts[1].cacheReason).toBe('outcome_unknown');
+  expect(JSON.stringify(answer)).not.toContain(SENTINEL);
+  const { snapshot } = buildSnapshotFiles(
+    {
+      accounts: [account({ status: 'cached', cacheReason: 'rate_limited' })],
+      history: null,
+      sampledAt: NOW,
+    },
+    60
+  );
+  expect(renderSnapshotMarkdown(snapshot)).toContain('provider refresh is rate limited');
+});

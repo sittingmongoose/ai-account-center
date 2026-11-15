@@ -40,6 +40,20 @@ their account email. Tokens, credentials, file paths and raw provider answers ar
 
 ## Readings and pace
 
+`status: "ok"` means the last provider read succeeded and is still within its
+refresh interval. Serving that successful sample between scheduled reads does
+not make it cached and does not change `sampledAt`. `status: "cached"` means an
+earlier verified sample was retained after a failed or skipped read. Its age
+always comes from the real sample time, never the feed's `generatedAt`.
+
+Version 1 snapshots may include the optional `cacheReason` on a cached account:
+`read_failed`, `rate_limited`, `refresh_pending`, `source_changed`, or
+`outcome_unknown`. These are fixed safe codes, never provider response text.
+The reader and `usage.md` explain the cause alongside the sample age. Older
+snapshots without the field say the previous read outcome was not recorded.
+Existing fields and version stay compatible with older agent readers.
+
+
 Each window carries the provider's own `usedPercent`/`remainingPercent`, amounts (`used`, `limit`,
 `remaining`, `unit`) and `resetAt`. A missing number was not reported, not zero. `resetPassed: true`
 means the reset time has passed since the reading; a new reading is pending.

@@ -69,6 +69,9 @@ function observation(value: unknown, key: string): boolean {
     ) &&
     typeof record.nextAttempt === 'number' &&
     Number.isFinite(record.nextAttempt) &&
+    (record.fresh === undefined || record.fresh === null || typeof record.fresh === 'boolean') &&
+    (record.freshUntil === undefined ||
+      (typeof record.freshUntil === 'number' && Number.isFinite(record.freshUntil))) &&
     (record.primaryFailure === undefined ||
       record.primaryFailure === null ||
       typeof record.primaryFailure === 'string') &&
@@ -86,6 +89,8 @@ function observation(value: unknown, key: string): boolean {
         'primary',
         'saved',
         'nextAttempt',
+        'fresh',
+        'freshUntil',
         'primaryFailure',
         'primarySignIn',
         'observedPlan',

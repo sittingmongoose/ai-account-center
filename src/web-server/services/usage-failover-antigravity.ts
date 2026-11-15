@@ -110,6 +110,7 @@ function project(account: DashboardAccount, reading: DashboardAccount): Dashboar
     ...account,
     plan: reading.plan,
     status: reading.status,
+    cacheReason: reading.cacheReason,
     message: reading.message,
     source: reading.source,
     fetchedAt: reading.fetchedAt,

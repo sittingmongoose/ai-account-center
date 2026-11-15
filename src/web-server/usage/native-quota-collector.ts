@@ -394,10 +394,14 @@ function buildCodexNetworkRow(
   };
 }
 
-/** Return the cached row marked cached=true (used for TTL + stale serving). */
-function serveCached(state: ProviderState): BarSummaryRow | null {
+/** Preserve successful TTL reads; only a failed/skipped read retains an earlier sample. */
+function serveCached(state: ProviderState, retained = false): BarSummaryRow | null {
   if (!state.cachedRow) return null;
-  return { ...state.cachedRow, cached: true };
+  if (retained) state.cachedRow = { ...state.cachedRow, cached: true };
+  return {
+    ...state.cachedRow,
+    cached: state.cachedRow.cached || state.cachedRow.quotaStatus !== 'ok',
+  };
 }
 
 // ============================================================================
@@ -728,7 +732,7 @@ async function collectCodexRowForProfile(
       // Named profile (or default with no local data): serve the last-known row
       // if any, else a dimmed parked row -- never global local data for a named
       // profile.
-      const stale = serveCached(state);
+      const stale = serveCached(state, true);
       if (stale) return stale;
       const parkedRow = buildParkedCodexProfileRow(profile, now);
       state.cachedRow = parkedRow;
@@ -750,7 +754,7 @@ async function collectCodexRowForProfile(
       const backoff = computeBackoffMs(state.backoffAttempt);
       state.cooldownUntil = (deps.now ?? Date.now)() + backoff;
       state.backoffAttempt += 1;
-      return serveCached(state);
+      return serveCached(state, true);
     } finally {
       state.pending = null;
     }
