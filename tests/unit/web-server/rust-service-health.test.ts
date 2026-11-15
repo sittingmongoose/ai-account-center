@@ -52,6 +52,23 @@ describe('route breaker', () => {
     expect(breakers.allow(route)).toBe(true);
   });
 
+  it('checks admission without reserving the half-open probe, and a new boot starts closed', () => {
+    const time = clock();
+    const breakers = new RouteBreakers(time.now);
+    const route = '/api/status';
+    for (let i = 0; i < 3; i++) breakers.failure(route);
+    expect(breakers.blocked(route)).toBe(true);
+    time.advance(BREAKER_OPEN_MS);
+    // Admission may ask any number of times; only dispatch reserves the probe.
+    expect(breakers.blocked(route)).toBe(false);
+    expect(breakers.blocked(route)).toBe(false);
+    expect(breakers.allow(route)).toBe(true);
+    expect(breakers.blocked(route)).toBe(true);
+    breakers.reset();
+    expect(breakers.blocked(route)).toBe(false);
+    expect(breakers.state(route)).toBe('closed');
+  });
+
   it('does not count declines: any reply resets the run of failures', () => {
     const breakers = new RouteBreakers(clock().now);
     const route = '/api/status';

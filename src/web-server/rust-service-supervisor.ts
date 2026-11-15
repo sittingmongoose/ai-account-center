@@ -39,6 +39,9 @@ export function rustServiceMode(explicit?: string): RustServiceMode {
 
 export const logger = createLogger('rust-service');
 
+/** Transport timeouts in a row before the process's health is probed (review L3). */
+export const HUNG_TIMEOUTS = 3;
+
 export class RustSupervisor {
   readonly mode: RustServiceMode;
   /** Counts actual replies; contracts assert this to prevent an accidental all-TS pass. */
@@ -69,6 +72,8 @@ export class RustSupervisor {
   protected removeMonitorFields: (() => void) | null = null;
   protected gaveUp = false;
   protected checking = false;
+  /** Transport timeouts in a row on the current lease, any route (review L3). */
+  protected timeouts = 0;
 
   /** `options` exists for tests: a clock for the breakers and the restart budget, and delays. */
   constructor(
@@ -128,6 +133,9 @@ export class RustSupervisor {
   }
 
   protected adopt(lease: RustLease): void {
+    this.timeouts = 0;
+    // The breakers counted the previous process's failures; a new boot starts closed.
+    this.breakers.reset();
     this.lease = lease;
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
   }
@@ -191,10 +199,12 @@ export class RustSupervisor {
   }
 
   /** A connect failure: is the boot still there? An attached boot has no exit event to watch. */
-  protected checkLease(): void {
+  protected checkLease(cause = 'unreachable'): void {
     const lease = this.lease;
     if (!lease || this.checking || this.stopped) return;
     this.checking = true;
+    // Health uses no blocking permit, so a busy but live service answers it; requestRust's
+    // own 500 ms deadline bounds the probe.
     requestRust(lease.connection, '/api/health', PUBLIC_HEALTH_PRINCIPAL, this.active)
       .then(
         (reply) => reply.status === 200,
@@ -202,8 +212,33 @@ export class RustSupervisor {
       )
       .then((healthy) => {
         this.checking = false;
-        if (!healthy) this.lost(lease, 'unreachable');
+        if (!healthy) this.lost(lease, cause);
       });
+  }
+
+  /** Any reply from the service, a named decline included: the process answers. */
+  protected replied(lease: RustLease): void {
+    if (lease === this.lease) this.timeouts = 0;
+  }
+
+  /**
+   * A transport failure on `lease`. Connect and boot failures check the boot at once. Transport
+   * timeouts (not Rust's own `deadline` declines, which are replies) count across routes: after
+   * three in a row, a bounded health probe decides whether the process is hung (SIGSTOP, a
+   * deadlock, accepting but never answering). A hung one is retired into the restart budget.
+   */
+  protected transportFailed(lease: RustLease, kind: string): void {
+    if (lease !== this.lease) return;
+    if (kind === 'connect' || kind === 'boot') {
+      this.checkLease();
+      return;
+    }
+    if (kind !== 'deadline') return;
+    this.timeouts++;
+    if (this.timeouts >= HUNG_TIMEOUTS) {
+      this.timeouts = 0;
+      this.checkLease('unresponsive');
+    }
   }
 
   protected record(route: string, outcome: RouteOutcome): void {

@@ -9,7 +9,9 @@
  *   long root       a root too long for a Unix socket path still starts;
  *   sweep           boot folders of killed owners are removed;
  *   declines        every decline is counted per route with its named reason;
- *   feeds, events   the front door pushes a generation and hears `facts-needed`.
+ *   feeds, events   the front door pushes a generation and hears `facts-needed`;
+ *   hung            a stopped service is retired after three timeouts and restarted (review L3);
+ *   crash, shadow   a crash while shadow awaits the TS read keeps the TS answer (review M1).
  * The deadline under a stuck read is checked in crates/aac-http/tests/lifecycle.rs, where the
  * slow-read shim can be preloaded (the front door starts the service with a clean environment).
  *
@@ -188,6 +190,58 @@ const checks = {
     const bytes = JSON.stringify(masked(service.diagnostics()), null, 2) + '\n';
     if (process.argv.includes('--regenerate')) fs.writeFileSync(golden, bytes);
     else assert.equal(bytes, fs.readFileSync(golden, 'utf8'), 'bridge diagnostics golden');
+  },
+
+  // Review L3: a process that accepts but never answers is retired and restarted.
+  async hung() {
+    const ccs = root('hung');
+    fs.writeFileSync(path.join(ccs, 'account-refresh-settings.json'), '{"refreshIntervalSeconds":90}');
+    const service = await start();
+    const first = service.lease;
+    assert.deepEqual(await settings(service), { refreshIntervalSeconds: 90 });
+    process.kill(first.pid, 'SIGSTOP');
+    try {
+      for (let i = 0; i < 3; i++) assert.deepEqual(await settings(service), { ts: true });
+      await until(() => service.lease && service.lease !== first);
+      assert.deepEqual(await settings(service), { refreshIntervalSeconds: 90 });
+      assert.equal(service.diagnostics().service.restarts, 1);
+    } finally {
+      for (const signal of ['SIGCONT', 'SIGKILL'])
+        try {
+          process.kill(first.pid, signal);
+        } catch {
+          /* Already gone. */
+        }
+    }
+  },
+
+  // Review M1: the service dies while shadow awaits the TS read; the TS answer still goes out.
+  async crashDuringShadow() {
+    const ccs = root('crash-shadow');
+    const service = await start('shadow');
+    const first = service.lease;
+    let began;
+    let finish;
+    const legacyStarted = new Promise((resolve) => (began = resolve));
+    const held = new Promise((resolve) => (finish = resolve));
+    const route = '/api/claude/desktop-profiles';
+    const answer = service.ownedValue(
+      { ...req, originalUrl: route },
+      route,
+      ccs,
+      (body) => ({ value: body }),
+      () => {
+        began();
+        return held;
+      }
+    );
+    await legacyStarted;
+    process.kill(first.pid, 'SIGKILL');
+    await until(() => service.lease !== first);
+    finish({ ts: 'successful' });
+    assert.deepEqual(await answer, { ts: 'successful' });
+    await until(() => (service.shadowInFlight.get(route) ?? 0) === 0, 2000);
+    assert.equal(service.inFlight, 0);
   },
 
   async feeds() {

@@ -195,6 +195,105 @@ describe('Rust service lifecycle (L1)', () => {
     now += 30_000;
     expect(await settings(service)).toEqual({ refreshIntervalSeconds: 90 });
     expect(route().state).toBe('serving');
+    // One route timing out is not a process failure: health answered, so the boot stays.
+    expect((service.diagnostics().service as Record<string, unknown>).restarts).toBe(0);
+  });
+
+  // Review L1: a request admitted to the half-open probe that never dispatches must not keep it.
+  it('keeps the half-open probe for a request that really goes to Rust', async () => {
+    let now = 1_000_000;
+    writeSettings('"hang"');
+    const service = await started('on', binaryCopy(), { now: () => now });
+    for (let i = 0; i < 3; i++) expect(await settings(service)).toEqual({ ts: true });
+    writeSettings('{"refreshIntervalSeconds":90}');
+    now += 30_000;
+    // Admitted, then refused before any dispatch: an input the builder cannot carry.
+    expect(
+      await service.compose(
+        request,
+        '/api/accounts/settings',
+        null,
+        () => ({ ts: true }),
+        () => true
+      )
+    ).toEqual({ ts: true });
+    // ... and an owned read of another root.
+    expect(
+      await service.ownedValue(
+        request,
+        '/api/accounts/settings',
+        '/elsewhere',
+        () => null,
+        async () => ({
+          ts: true,
+        })
+      )
+    ).toEqual({ ts: true });
+    expect(await settings(service)).toEqual({ refreshIntervalSeconds: 90 });
+  });
+
+  // Review M1, the reviewer's reproduction: the owned child dies while shadow awaits the TS read.
+  for (const helper of ['compose', 'ownedValue'] as const)
+    it(`keeps the TS answer and frees its slot when the service dies during the shadow reference (${helper})`, async () => {
+      const service = await started('shadow', binaryCopy(), { restartDelaysMs: [60_000] });
+      const first = lease(service);
+      expect(first?.owned).toBe(true);
+      let began!: () => void;
+      let finish!: (value: unknown) => void;
+      const legacyStarted = new Promise<void>((resolve) => (began = resolve));
+      const held = new Promise((resolve) => (finish = resolve));
+      const legacy = () => {
+        began();
+        return held;
+      };
+      const route = helper === 'compose' ? '/api/views/home' : '/api/claude/desktop-profiles';
+      const req = { ...request, originalUrl: route } as unknown as Request;
+      const answer =
+        helper === 'compose'
+          ? service.compose(req, route, { data: {}, presentation: {} }, legacy, () => true)
+          : service.ownedValue(
+              req,
+              route,
+              (first as unknown as { connection: { ccsDir: string } }).connection.ccsDir,
+              (body) => ({ value: body }),
+              legacy as () => Promise<unknown>
+            );
+      await legacyStarted;
+      process.kill(first?.pid as number, 'SIGKILL');
+      await until(() => lease(service) === null);
+      finish({ ts: 'successful' });
+      expect(await answer).toEqual({ ts: 'successful' });
+      const inner = service as unknown as { inFlight: number; shadowInFlight: Map<string, number> };
+      // The comparison ends in the background; its slot must come back.
+      await until(() => (inner.shadowInFlight.get(route) ?? 0) === 0, 2000);
+      expect(inner.inFlight).toBe(0);
+      const counted = (service.diagnostics().routes as Record<string, Record<string, unknown>>)[
+        route
+      ];
+      expect(counted.unavailable).toEqual({ down: 1 });
+    });
+
+  // Review L3: a process that accepts but never answers (here: stopped) is retired and restarted.
+  it('retires a hung owned service after sustained timeouts and restarts it', async () => {
+    writeSettings('{"refreshIntervalSeconds":90}');
+    const service = await started('on', binaryCopy(), { restartDelaysMs: [50, 50, 50, 50, 50] });
+    const first = lease(service);
+    expect(await settings(service)).toEqual({ refreshIntervalSeconds: 90 });
+    process.kill(first?.pid as number, 'SIGSTOP');
+    try {
+      for (let i = 0; i < 3; i++) expect(await settings(service)).toEqual({ ts: true });
+      await until(() => lease(service) !== null && lease(service) !== first);
+      expect(lease(service)?.connection.bootId).not.toBe(first?.connection.bootId);
+      expect(await settings(service)).toEqual({ refreshIntervalSeconds: 90 });
+      expect((service.diagnostics().service as Record<string, unknown>).restarts).toBe(1);
+    } finally {
+      for (const signal of ['SIGCONT', 'SIGKILL'] as const)
+        try {
+          process.kill(first?.pid as number, signal);
+        } catch {
+          /* Already gone. */
+        }
+    }
   });
 
   it('names the reason of every decline per route', async () => {

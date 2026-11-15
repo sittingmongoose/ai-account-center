@@ -1,9 +1,11 @@
 //! L1: the front door's feeds and the service's event stream (the "fed" level of the M3 design).
-//! `PUT /internal/feed/<source>` stores a source's latest generation `{generation, data, facts}`;
-//! `GET /internal/feed/<source>` reports which generation is held; `GET /internal/events` streams
+//! `PUT /internal/feed/<source>` takes a source's latest generation `{generation, data, facts}`;
+//! `GET /internal/feed/<source>` reports which generation arrived; `GET /internal/events` streams
 //! NDJSON events to the front door. Only the reserved front-door principal reaches these routes
-//! (the table's `service` role, plus the boot secret). Route groups that compose from feeds (R1
-//! onward) read them here; until then a feed is held and reported, never served.
+//! (the table's `service` role, plus the boot secret). This is a metadata-only stub until R1: it
+//! keeps the generation, the size of `data` and whether facts came, and drops the payload. R1, the
+//! first group that composes from a feed, keeps the immutable bounded data and facts per
+//! generation before anything reads them; until then nothing is served from a feed.
 use aac_views::decline::Decline;
 use axum::body::{Body, Bytes};
 use serde::Deserialize;

@@ -35,7 +35,22 @@ export class RouteBreakers {
     return this.now() < breaker.openUntil || breaker.probing ? 'open' : 'half-open';
   }
 
-  /** May this request go to Rust? After the open period exactly one probe goes. */
+  /** A new boot: the failures counted were the previous process's. */
+  reset(): void {
+    this.breakers.clear();
+  }
+
+  /** Would `allow` refuse now? Reserves nothing (admission checks call this first). */
+  blocked(route: string): boolean {
+    const breaker = this.breakers.get(route);
+    if (!breaker || breaker.openUntil === 0) return false;
+    return this.now() < breaker.openUntil || breaker.probing;
+  }
+
+  /**
+   * May this request go to Rust? After the open period exactly one probe goes. It reserves that
+   * probe, so call it only at dispatch: a reserved probe must end in `success` or `failure`.
+   */
   allow(route: string): boolean {
     const breaker = this.get(route);
     if (breaker.openUntil === 0) return true;
