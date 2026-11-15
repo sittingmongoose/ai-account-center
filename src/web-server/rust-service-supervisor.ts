@@ -16,7 +16,7 @@ import {
   type RustLease,
 } from './rust-service-lifecycle';
 import { RestartBudget, RouteBreakers, RouteStats, type RouteOutcome } from './rust-service-health';
-import { requestRust } from './rust-service-transport';
+import { requestRust, registerRustAgentConnection } from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
 
 export type RustServiceMode = 'off' | 'shadow' | 'on';
@@ -63,6 +63,7 @@ export class RustSupervisor {
   protected readonly breakers: RouteBreakers;
   protected readonly restarts: RestartBudget;
   protected lease: RustLease | null = null;
+  private removeAgentConnection: (() => void) | null = null;
   protected active = new Set<http.ClientRequest>();
   protected inFlight = 0;
   protected readonly shadowInFlight = new Map<string, number>();
@@ -92,7 +93,17 @@ export class RustSupervisor {
   async start(
     binary = process.env.AAC_RUST_SERVICE_BINARY ?? path.join(__dirname, '../native/aac-http')
   ): Promise<void> {
-    if (this.mode === 'off') return;
+    if (this.mode === 'off') {
+      let transport: unknown = process.env.AAC_AGENT_TRANSPORT;
+      if (transport === undefined) {
+        try {
+          transport = loadUnifiedConfig()?.agentTransport;
+        } catch {
+          transport = undefined;
+        }
+      }
+      if (transport !== 'on') return;
+    }
     this.binary = binary;
     this.minuteTimer = setInterval(() => this.logMinute(), 60_000);
     this.minuteTimer.unref();
@@ -132,6 +143,8 @@ export class RustSupervisor {
     this.removeMonitorFields?.();
     this.removeMonitorFields = null;
     for (const request of this.active) request.destroy();
+    this.removeAgentConnection?.();
+    this.removeAgentConnection = null;
     this.lease?.close();
     this.lease = null;
   }
@@ -140,6 +153,13 @@ export class RustSupervisor {
     this.timeouts = 0;
     // The breakers counted the previous process's failures; a new boot starts closed.
     this.breakers.reset();
+    this.removeAgentConnection?.();
+    this.removeAgentConnection = registerRustAgentConnection(
+      lease.connection.ccsDir,
+      lease.connection,
+      this.active,
+      { replied: () => this.replied(lease), failed: (kind) => this.transportFailed(lease, kind) }
+    );
     this.lease = lease;
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
   }
@@ -147,6 +167,8 @@ export class RustSupervisor {
   /** The service died or stopped answering: TS answers until a restart succeeds (L1). */
   protected lost(lease: RustLease, cause: string, context: Record<string, unknown> = {}): void {
     if (this.stopped || this.lease !== lease) return;
+    this.removeAgentConnection?.();
+    this.removeAgentConnection = null;
     this.lease = null;
     lease.close();
     logger.warn('rust.service.lost', 'Rust service stopped; TypeScript answers', {

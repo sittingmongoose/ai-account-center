@@ -397,7 +397,14 @@ export async function acquireRustServiceDetailed(
   try {
     child = spawn(binary, [], {
       stdio: ['pipe', 'ignore', 'ignore'],
-      env: { PATH: process.env.PATH },
+      env: {
+        PATH: process.env.PATH,
+        AAC_AGENT_PACKAGE_ROOT: path.resolve(__dirname, '../..'),
+        AAC_AGENT_CATALOG: path.resolve(__dirname, 'services/agent-artifacts.json'),
+        AAC_AGENT_TRANSPORT: process.env.AAC_AGENT_TRANSPORT,
+        AAC_AGENT_IDENTITY_FILE: process.env.AAC_AGENT_IDENTITY_FILE,
+        AAC_AGENT_KNOWN_HOSTS_FILE: process.env.AAC_AGENT_KNOWN_HOSTS_FILE,
+      },
     });
     let failed = false;
     child.once('error', () => {

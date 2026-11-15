@@ -2,6 +2,8 @@
 #[cfg(unix)]
 mod account_reads;
 #[cfg(unix)]
+mod agent_transport;
+#[cfg(unix)]
 mod feed;
 #[cfg(unix)]
 mod identity;

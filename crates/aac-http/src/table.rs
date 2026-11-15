@@ -25,6 +25,8 @@ pub(crate) enum Handler {
     Feed,
     FeedStatus,
     Events,
+    Agent,
+    AgentControl,
 }
 
 impl Handler {
@@ -43,6 +45,8 @@ impl Handler {
             "feed" => Handler::Feed,
             "feed-status" => Handler::FeedStatus,
             "events" => Handler::Events,
+            "agent" => Handler::Agent,
+            "agent-control" => Handler::AgentControl,
             _ => return None,
         })
     }
@@ -175,6 +179,7 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
         let method = match row.method.as_str() {
             "GET" => axum::http::Method::GET,
             "PUT" => axum::http::Method::PUT,
+            "POST" => axum::http::Method::POST,
             _ => return Err(failure()),
         };
         // Internal routes are the front door's alone; public routes never are.
@@ -183,11 +188,13 @@ pub(crate) fn rows(table: &str) -> io::Result<Vec<Row>> {
             || !word(&row.group)
             || roles.is_empty()
             || row.budget_ms > 10_000
-            || (row.budget_ms == 0 && handler != Handler::Events)
+            || (row.budget_ms == 0 && !matches!(handler, Handler::Events | Handler::Agent))
             || internal != (row.group == "internal")
             || internal != roles.iter().all(|r| *r == Role::Service)
             || (!internal && roles.contains(&Role::Service))
             || (!internal && !row.path.starts_with("/api/"))
+            || (method == axum::http::Method::POST
+                && !matches!(handler, Handler::Agent | Handler::AgentControl))
             || (method == axum::http::Method::PUT && handler != Handler::Feed)
             || rows
                 .iter()
@@ -224,7 +231,7 @@ mod tests {
         assert!(rows.iter().any(|r| r.handler == Handler::Health));
         assert!(
             rows.iter()
-                .all(|r| r.budget_ms > 0 || r.handler == Handler::Events)
+                .all(|r| r.budget_ms > 0 || matches!(r.handler, Handler::Events | Handler::Agent))
         );
         Ok(())
     }

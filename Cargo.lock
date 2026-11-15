@@ -84,12 +84,15 @@ name = "aac-http"
 version = "0.1.0"
 dependencies = [
  "aac-api",
+ "aac-config",
  "aac-core",
  "aac-diag",
  "aac-files",
+ "aac-protocol",
  "aac-providers",
  "aac-status",
  "aac-store",
+ "aac-transport",
  "aac-views",
  "axum",
  "base64 0.22.1",

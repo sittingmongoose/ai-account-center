@@ -549,15 +549,15 @@
   },
   "maintainability": {
     "typedErrors": {
-      "totalThrows": 665,
+      "totalThrows": 667,
       "typedThrows": 215,
       "plainThrows": 47,
-      "otherThrows": 403,
-      "adoptionRatio": 0.3233,
+      "otherThrows": 405,
+      "adoptionRatio": 0.3223,
       "topSubdomainsByThrows": [
         {
           "subdomain": "web-server",
-          "count": 388,
+          "count": 390,
           "typed": 162,
           "plain": 7
         },
@@ -743,7 +743,7 @@
       ]
     },
     "largeFiles": {
-      "countOver400": 62,
+      "countOver400": 63,
       "countOver600": 23,
       "topOver400": [
         {
@@ -775,16 +775,16 @@
           "loc": 1154
         },
         {
+          "file": "src/web-server/status/status-collectors.ts",
+          "loc": 1060
+        },
+        {
           "file": "src/web-server/services/usage-failover-service.ts",
           "loc": 1053
         },
         {
           "file": "src/web-server/model-pricing-data.ts",
           "loc": 1023
-        },
-        {
-          "file": "src/web-server/status/status-collectors.ts",
-          "loc": 973
         },
         {
           "file": "src/web-server/services/account-dashboard-service.ts",
