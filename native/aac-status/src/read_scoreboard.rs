@@ -81,9 +81,9 @@ fn column(runs: &[V], source: &str, benchmark: &V, task: &V, catalog: &V, index:
 fn below(column: &V, min: f64) -> Option<String> {
     let n = number(&column["n"])?;
     if n < min {
-        Some(format!("too little data (n = {})", js_number(n)))
+        Some(format!("too little data (n = {})", js_number(n)?))
     } else if column["source"] == "observed" && column["reviews"] == 0 {
-        Some(format!("no blind review yet (n = {})", js_number(n)))
+        Some(format!("no blind review yet (n = {})", js_number(n)?))
     } else {
         None
     }
@@ -114,6 +114,10 @@ struct Scored {
 }
 fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Option<Vec<V>> {
     let min = number(&catalog["minRuns"])?;
+    js_number(min)?;
+    for column in columns {
+        js_number(number(&column["n"])?)?;
+    }
     let defs = catalog["measures"].as_array()?;
     let weighted: Vec<_> = array(&task["measures"])
         .iter()
@@ -192,21 +196,21 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
     let top = scored.first().map(|e| e.score).unwrap_or(0.0);
     let mut out = columns.to_vec();
     for (at, c) in out.iter_mut().enumerate() {
-        let why = below(c, min).unwrap_or_else(|| {
-            if review_bar(c, min) {
-                format!(
-                    "too few blind reviews yet ({} of {} needed, n = {})",
-                    js_number(reviewed(c)),
-                    js_number(min),
-                    js_number(number(&c["n"]).unwrap_or(0.0))
-                )
-            } else {
-                format!(
-                    "None of this use's measures is known yet (n = {}).",
-                    js_number(number(&c["n"]).unwrap_or(0.0))
-                )
-            }
-        });
+        let why = if let Some(why) = below(c, min) {
+            why
+        } else if review_bar(c, min) {
+            format!(
+                "too few blind reviews yet ({} of {} needed, n = {})",
+                js_number(reviewed(c))?,
+                js_number(min)?,
+                js_number(number(&c["n"]).unwrap_or(0.0))?
+            )
+        } else {
+            format!(
+                "None of this use's measures is known yet (n = {}).",
+                js_number(number(&c["n"]).unwrap_or(0.0))?
+            )
+        };
         c["why"] = json!(why);
         c["ranked"] = json!(false);
         c["rank"] = V::Null;
@@ -217,7 +221,7 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
     }
     for (position, e) in scored.iter().enumerate() {
         let c = &mut out[e.at];
-        let n = js_number(number(&c["n"])?);
+        let n = js_number(number(&c["n"])?)?;
         let cheating = e.marks.iter().find(|m| m.def["id"] == "cheating");
         let weakest = e.marks.iter().min_by(|a, b| a.mark.total_cmp(&b.mark))?;
         let heavy = e
@@ -231,8 +235,8 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
                     "avoid",
                     format!(
                         "Flagged for cheating in {} of {} runs (n = {n}).",
-                        js_number(number(&m.value["of"])?),
-                        js_number(number(&m.value["per"])?)
+                        js_number(number(&m.value["of"])?)?,
+                        js_number(number(&m.value["per"])?)?
                     ),
                 )
             } else if let Some(m) = heavy {
@@ -242,7 +246,7 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
                         "{} is {}% (n = {}).",
                         s(&m.def["label"]),
                         round_word(number(&m.value["value"]).unwrap_or(0.0) * 100.0)?,
-                        js_number(number(&m.value["n"])?)
+                        js_number(number(&m.value["n"])?)?
                     ),
                 )
             } else if e.score < 0.6 {
@@ -250,8 +254,8 @@ fn judge(columns: &[V], usage: &V, task: &V, catalog: &V, ctx: &Context) -> Opti
                     "avoid",
                     format!(
                         "Scores {} against {} for the best row, weakest on {} (n = {n}).",
-                        js_number(significant(e.score, 2)?),
-                        js_number(significant(top, 2)?),
+                        js_number(significant(e.score, 2)?)?,
+                        js_number(significant(top, 2)?)?,
                         s(&weakest.def["label"])
                     ),
                 )

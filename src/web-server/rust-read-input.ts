@@ -1,4 +1,5 @@
 /** Locale/date facts for Rust composition. No source scanning, scoring or view construction. */
+import { ValidationError } from '../errors/error-types';
 import { MACHINE_IDS, MACHINE_LABELS } from './services/dashboard-hosts';
 import type { StatusInputs } from './status/status-view';
 import { normalizeModel } from './scoreboard/model-identity';
@@ -43,9 +44,11 @@ export function rustReadInput(
   const rankAll = options.rankAll ?? true;
   const clockAndDay = options.clockAndDay ?? true;
   const data: unknown = JSON.parse(
-    JSON.stringify(input, (_key, value: unknown) =>
-      value instanceof Map ? Object.fromEntries(value) : value
-    )
+    JSON.stringify(input, (_key, value: unknown) => {
+      if (typeof value === 'number' && !Number.isFinite(value))
+        throw new ValidationError('non-finite Rust read input');
+      return value instanceof Map ? Object.fromEntries(value) : value;
+    })
   );
   const words = new Set(extras);
   const times = new Set<number>();

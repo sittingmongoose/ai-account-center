@@ -437,3 +437,59 @@ describe('recheck 1 leftovers (RECHECK-BIG-1, FIX-ROUND-BIG-2)', () => {
     expect(cells[0].state).toBe('ok');
   });
 });
+
+// analytics-r1-L1: saved details remain one explanation, even while another scan is pending.
+it('says a protected root once on a productive partial cell', async () => {
+  const { cell } = await scans([
+    answer({
+      kinds: { codex: { state: 'ok', partial: true, fingerprints: { [FILE_1]: print } } },
+      discovery: {
+        kinds: {
+          codex: {
+            installed: true,
+            signals: ['home'],
+            roots: [
+              {
+                root: ROOT,
+                origin: 'signature',
+                state: 'unreadable',
+                cause: 'permission_denied',
+                counts: { filesFound: 0, newestMtime: null },
+              },
+            ],
+            counts: { roots: 1, filesFound: 1, filesRead: 1, filesFailed: 0, newestMtime: null },
+          },
+        },
+      },
+    }),
+  ]);
+  expect(cell?.detail?.match(/permission denied/g)).toHaveLength(1);
+});
+
+it('does not add a second showing suffix to a saved partial explanation', async () => {
+  await scans([
+    answer({
+      kinds: {
+        codex: {
+          state: 'ok',
+          partial: true,
+          searchLimit: { read: 5, found: 9 },
+          fingerprints: { [FILE_1]: print },
+        },
+      },
+    }),
+  ]);
+  const cell = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).states.find(
+    (s) => s.host === 'mac' && s.tool === 'codex'
+  );
+  expect(cell?.detail?.match(/showing/g)).toHaveLength(1);
+  expect(cell?.detail).toContain('5 of 9');
+});
+
+it('keeps a timeout note on a previously successful read until the remote answers', async () => {
+  await scans([answer({})]);
+  const cell = loadAnalyticsRemoteCachedSources(MIN_DATE, { cacheDir: cache }).states.find(
+    (s) => s.host === 'mac' && s.tool === 'codex'
+  );
+  expect(cell?.detail).toContain('remote scan timed out');
+});

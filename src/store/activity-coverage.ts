@@ -4,6 +4,7 @@
  * store's last reads.
  */
 import type { ActivitySources } from './usage-report';
+import { scanFailureText } from '../web-server/services/analytics-remote-sources';
 import type {
   AccountAnalyticsHistoryCoverage,
   AccountAnalyticsSource,
@@ -60,12 +61,11 @@ export function gridFromStore(history: StoreActivityCoverage): AccountAnalyticsS
           ? s.lastReadAt
           : null),
       rowCount: 0,
-      detail:
-        state === 'unavailable'
-          ? s.state === 'no_reader'
-            ? 'no local usage log'
-            : (s.cause ?? 'the last read failed')
-          : s.cause,
+      detail: s.cause
+        ? scanFailureText(s.cause)
+        : state === 'unavailable'
+          ? 'the last read failed'
+          : null,
       ...(s.cause ? { cause: s.cause } : {}),
     });
   }

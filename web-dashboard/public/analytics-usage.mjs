@@ -1442,7 +1442,7 @@ export function includedView(payload, now = Date.now()) {
     if (r.state === 'scanning') return { id, text: 'Scanning…', tone: 'scanning', tip: `${why}${last}` };
     // A read with a note (a folder that did not answer, a write-ahead log, a cache cut) says it and is marked.
     if (r.state === 'ok') return { id, text: finite(t) ? `Read ${relTxt(t, now)}` : 'Read', tone: why ? 'cached' : 'ok', tip: [why.trim(), events(r), found(r), last].filter(Boolean).join(' · ') };
-    if (r.state === 'cached') return { id, text: r.cause === 'unreadable_folder' && r.rowCount > 0 ? 'Read, partial' : finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Usage from readable logs is included; a complete read is still pending. ${last}` };
+    if (r.state === 'cached') return { id, text: r.cause === 'unreadable_folder' && r.rowCount > 0 ? 'Read, partial' : finite(t) ? `Cached, ${relTxt(t, now)}` : 'Cached', tone: 'cached', tip: `${why}Usage from readable logs is included. ${last}` };
     if (r.state === 'no_usage') return { id, text: 'No usage in range', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
     if (r.state === 'installed_no_logs') return { id, text: 'Installed, no logs yet', tone: 'quiet', tip: [`${why}${last}`, found(r)].filter(Boolean).join(' ') };
     if (r.state === 'no_reader') return r.cause === 'no_local_usage_records'

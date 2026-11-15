@@ -556,3 +556,17 @@ test('readable usage beside a failed folder is partial, with its last full-read 
     assert.match(cell.tip,/No complete read recorded/);
   }
 });
+
+test('cached protected folders and offline hosts state the gap without promising a complete read', () => {
+  for (const [cause, detail] of [
+    ['unreadable_folder', 'A log folder could not be read (permission denied)'],
+    ['ssh_unreachable', 'The computer did not answer over ssh'],
+  ]) {
+    const inc = includedView(payload({sources:[{tool:'codex',host:'nas1',state:'cached',cause,lastScanAt:at(2),rowCount:42,detail}]}),now);
+    const cell = inc.rows.find(r => r.tool === 'Codex').cells.find(c => c.id === 'nas1');
+    assert.doesNotMatch(cell.tip, /pending|will complete/);
+    assert.match(cell.tip, /Usage from readable logs is included/);
+    assert.match(cell.tip, /Last full read/);
+    assert.ok(cell.tip.includes(detail));
+  }
+});

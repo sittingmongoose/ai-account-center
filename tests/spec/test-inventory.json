@@ -235,7 +235,19 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "native/aac-status/src/read_context.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "native/aac-status/src/scoreboard.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "native/aac-status/src/spend.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -2944,6 +2956,13 @@
       "kind": "HTTP",
       "evidence": [
         "HTTP"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/rust-read-input.test.ts",
+      "kind": "table",
+      "evidence": [
+        "table"
       ]
     },
     {

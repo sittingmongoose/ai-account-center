@@ -63,9 +63,12 @@ else:
             self.assertEqual(pathlib.Path(argv[0]), self.native, 'No managed bridge or real app may run')
             self.assertIn(list(argv[1:]), [['--version'], ['update']])
             return command(argv, *args, **kwargs)
+        path_dirs = [self.launcher.parent, self.native.parent]
+        if not shim_first:
+            path_dirs.reverse()
         env = {'CCS_HOME': str(self.home), 'CCS_DIR': '',
                'AAC_UPDATE_STATE_DIR': str((scope or self.home / '.ccs') / 'app-updates'),
-               'PATH': os.pathsep.join([str(self.launcher.parent if shim_first else self.native.parent), '/usr/bin', '/bin'])}
+               'PATH': os.pathsep.join([str(item) for item in path_dirs] + ['/usr/bin', '/bin'])}
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, env))
             stack.enter_context(mock.patch.object(pathlib.Path, 'home', return_value=self.home))
