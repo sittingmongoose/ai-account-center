@@ -561,6 +561,57 @@ describe('bounded native account activity checkpoints', () => {
     );
   });
 
+  it('preserves cache-only Claude model activity in hourly model breakdowns (U1 recheck L1b)', async () => {
+    const projects = path.join(root, 'claude', 'projects', 'project');
+    fs.mkdirSync(projects, { recursive: true });
+    const usage = (id: string, model: string, input: number, output: number, read: number) => ({
+      type: 'assistant',
+      sessionId: 'claude-session',
+      timestamp: '2026-10-01T15:00:00Z',
+      requestId: `req-${id}`,
+      message: {
+        id,
+        model,
+        usage: {
+          input_tokens: input,
+          output_tokens: output,
+          cache_read_input_tokens: read,
+          cache_creation_input_tokens: 0,
+        },
+      },
+    });
+    fs.writeFileSync(
+      path.join(projects, 'session.jsonl'),
+      [
+        usage('m1', 'claude-sonnet-4-6', 100, 40, 0),
+        // Only cached reads: the model still counts as used in that hour.
+        usage('m2', 'claude-opus-4-6', 0, 0, 20),
+      ]
+        .map((line) => JSON.stringify(line))
+        .join('\n') + '\n'
+    );
+    const data = await collectAccountActivity(
+      { kind: 'claude', projectsDir: path.join(root, 'claude', 'projects') },
+      { minDate: NOW - 31 * 86400000, cacheDir: path.join(root, 'cache') }
+    );
+    expect(data.eventCount).toBe(2);
+    expect(data.hourly).toHaveLength(1);
+    expect(data.hourly[0].cacheReadTokens).toBe(20);
+    expect(data.hourly[0].modelsUsed).toContain('claude-opus-4-6');
+    expect(data.hourly[0].modelBreakdowns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ modelName: 'claude-sonnet-4-6', inputTokens: 100 }),
+        expect.objectContaining({
+          modelName: 'claude-opus-4-6',
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 20,
+        }),
+      ])
+    );
+  });
+
   it('bounds oversized lines, resumes discarding, and keeps subsequent actual usage with an explicit partial result', async () => {
     const fd = fs.openSync(file, 'w');
     fs.writeSync(fd, JSON.stringify(meta()) + '\n' + JSON.stringify(model()) + '\n');
