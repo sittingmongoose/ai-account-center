@@ -853,10 +853,11 @@ fn native_order(value: V) -> V {
 fn native_input(value: V) -> V {
     match value {
         V::Number(number) => {
-            if let Some(value) = number.as_f64() {
-                if value.fract() == 0.0 && value.abs() <= 9007199254740991.0 {
-                    return json!(value as i64);
-                }
+            if let Some(value) = number.as_f64()
+                && value.fract() == 0.0
+                && value.abs() <= 9007199254740991.0
+            {
+                return json!(value as i64);
             }
             V::Number(number)
         }
