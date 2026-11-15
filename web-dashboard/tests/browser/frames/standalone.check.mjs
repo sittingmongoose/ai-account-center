@@ -144,6 +144,18 @@ for (const p of poses)
         y >= p.top - 0.5,
         `${y} >= ${p.top}`
       );
+      if (p.chrome === 'phone') {
+        // leptos-fix1-L1: the frame takes the top inset once (top bar padding; the status strip is a max, not a sum).
+        // A doubled header on an iPhone is iOS keeping its launch geometry (FIX.md, 2026-11-14-leptos-inset), not this.
+        const strip = await t.page.evaluate(
+          () => parseFloat(getComputedStyle(document.body, '::before').height) || 0
+        );
+        await t.check(
+          'the phone top bar and the status strip take the top inset once',
+          Math.abs(y - p.top) <= 0.5 && Math.abs(strip - p.top) <= 0.5,
+          `row ${y}, strip ${strip}, inset ${p.top}`
+        );
+      }
       await darkPixels(t, p, 'page');
       if (p.chrome === 'band') {
         const colors = await t.page.locator('.band-info').evaluate((el) => {
