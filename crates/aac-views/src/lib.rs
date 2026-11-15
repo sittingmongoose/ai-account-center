@@ -8,6 +8,7 @@ pub mod analytics;
 pub mod antigravity;
 pub mod claude_desktop;
 pub mod codex_profiles;
+pub mod decline;
 pub mod home;
 pub mod js;
 pub mod registry;

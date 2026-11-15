@@ -37,6 +37,14 @@ for (const [program, args] of [
     ],
   ]),
   ['bun', ['tests/spec/capture.ts']],
+  // L1: the service lifecycle on the real binary, under Node (the installed runtime), on dist/.
+  [
+    'node',
+    [
+      'tests/spec/rust-lifecycle.mjs',
+      ...(['on', 'shadow'].includes(process.env.AAC_RUST_SERVICE) ? [] : ['--ts-only']),
+    ],
+  ],
 ])
   execFileSync(program, args, {
     cwd,

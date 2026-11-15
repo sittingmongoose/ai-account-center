@@ -361,8 +361,8 @@ describe('compose() for /api/views/home over a private socket', () => {
     expect(seen).toEqual([]);
     const device = { method: 'GET', headers: {}, auth: { kind: 'device', deviceId: 'dev_fixture' } } as unknown as Request;
     expect(await compose(service(), device)).toBeNull();
-    expect((seen[0].principal as { kind: string }).kind).toBe('device');
-    seen = [];
+    // L1: TS gates from the route table's roles too, so a device never reaches the socket here.
+    expect(seen).toEqual([]);
     const big = service();
     expect(await compose(big, req, { data: { pad: 'x'.repeat(4 * 1024 * 1024) }, presentation: {} })).toBeNull();
     expect(big.stats.fallbacks).toBe(1);

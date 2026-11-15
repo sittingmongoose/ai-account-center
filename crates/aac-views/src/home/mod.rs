@@ -1174,8 +1174,13 @@ fn computers() -> R<Vec<(String, String)>> {
 /// GET /api/views/home's Rust candidate for the shared read dispatch: the view, or [`Refuse`] (the page builds its
 /// own view).
 pub fn compose(envelope: Envelope) -> Admit<Value> {
-    let view = build(envelope).map_err(|_| Refuse)?;
-    serde_json::to_value(view).map_err(|_| Refuse)
+    compose_named(envelope).map_err(|_| Refuse)
+}
+
+/// [`compose`] with the named reason of a decline (L1: `x-aac-decline`).
+pub fn compose_named(envelope: Envelope) -> Result<Value, crate::decline::Decline> {
+    let view = build(envelope)?;
+    serde_json::to_value(view).map_err(|_| crate::decline::Decline::Internal)
 }
 
 /// The envelope's data: the page's context and the three answers, exactly these keys.

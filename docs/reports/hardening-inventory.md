@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1112 |
-| Sync fs files affected (all) | 110 |
-| Sync fs occurrences (runtime hotpaths) | 538 |
-| Sync fs files affected (runtime hotpaths) | 60 |
+| Sync fs occurrences (all) | 1121 |
+| Sync fs files affected (all) | 111 |
+| Sync fs occurrences (runtime hotpaths) | 547 |
+| Sync fs files affected (runtime hotpaths) | 61 |
 | Legacy shim markers | 208 |
 | Legacy shim files affected | 61 |
 
@@ -19,13 +19,13 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 |---|---:|---|
 | `src/web-server/usage/account-activity-collector.ts` | 123 | chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, opendirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync |
 | `src/web-server/usage/analytics-request-plan.ts` | 28 | existsSync, realpathSync, statSync |
+| `src/web-server/rust-service-lifecycle.ts` | 23 | existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync |
 | `src/web-server/services/app-update-service.ts` | 23 | chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync |
 | `src/web-server/services/dashboard-preferences.ts` | 21 | closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, renameSync, unlinkSync, writeFileSync |
 | `src/web-server/services/usage-failover-cache.ts` | 19 | closeSync, fstatSync, lstatSync, mkdirSync, opendirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync |
 | `src/commands/bar/install-subcommand.ts` | 18 | cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync |
 | `src/web-server/status/answer-signing.ts` | 18 | chmodSync, closeSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync |
 | `src/web-server/status/writer-lock.ts` | 18 | closeSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync |
-| `src/web-server/rust-service-lifecycle.ts` | 15 | existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync |
 | `src/web-server/services/account-refresh-settings.ts` | 15 | closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync |
 
 ## Top Legacy Shim Marker Files
@@ -55,9 +55,9 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 12 |
-| files with createLogger | 44/447 |
+| files with createLogger | 44/450 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
-| files > 400 LOC | 61 |
+| files > 400 LOC | 62 |
 | files > 600 LOC | 23 |
 
 ### Top Hotpath console.error/warn Files

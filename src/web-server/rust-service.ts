@@ -1,124 +1,163 @@
 /** M3 strangler: existing endpoint guards run before any verified principal is constructed. */
 import type { Request, Response } from 'express';
-import type http from 'http';
-import path from 'path';
-import { createLogger } from '../services/logging';
-import { getCcsDir } from '../utils/config-manager';
+import { performance } from 'perf_hooks';
 import routes from './rust-service-routes.json';
-import { acquireRustService, type RustLease } from './rust-service-lifecycle';
-import { requestRust, type RustReply, type VerifiedRustPrincipal } from './rust-service-transport';
+import type { RustLease } from './rust-service-lifecycle';
+import {
+  requestRust,
+  rustFailureKind,
+  type RustReply,
+  type VerifiedRustPrincipal,
+} from './rust-service-transport';
 import { canonical, orderedLike, principal, validReply } from './rust-service-values';
+import { logger, RustSupervisor } from './rust-service-supervisor';
 export type { VerifiedRustPrincipal } from './rust-service-transport';
 export { skeletonDiagnostics } from './rust-service-values';
+export { rustServiceMode, type RustServiceMode } from './rust-service-supervisor';
 
-export type RustServiceMode = 'off' | 'shadow' | 'on';
-const logger = createLogger('rust-service');
+/** Requests to Rust in flight per front door. */
+const IN_FLIGHT = 16;
+/** Shadow comparisons in flight per route (L1); the rest are skipped and counted. */
+export const SHADOW_IN_FLIGHT = 2;
 
-export class RustService {
-  readonly mode: RustServiceMode;
-  /** Counts actual replies; contracts assert this to prevent an accidental all-TS pass. */
-  readonly stats = { served: 0, shadowed: 0, differences: 0, fallbacks: 0 };
-  private lease: RustLease | null = null;
-  private active = new Set<http.ClientRequest>();
-  private inFlight = 0;
-  private stopped = false;
-  private fallbackLogged = false;
+/** The roles the table admits on a route (TS gates from the same table Rust dispatches from). */
+function routeRoles(route: string): readonly string[] {
+  const row = routes.find((r) => r.path === route && r.owner === 'rust') as
+    { roles?: string[] } | undefined;
+  return row?.roles ?? [];
+}
 
-  constructor(mode: string = process.env.AAC_RUST_SERVICE ?? 'off') {
-    this.mode = mode === 'on' || mode === 'shadow' ? mode : 'off';
-  }
+const now = () => performance.now();
 
-  async start(
-    binary = process.env.AAC_RUST_SERVICE_BINARY ?? path.join(__dirname, '../native/aac-http')
-  ): Promise<void> {
-    if (this.mode === 'off') return;
-    try {
-      this.lease = await acquireRustService(getCcsDir(), binary, this.active);
-    } catch {
-      /* Safe TS fallback. */
-    }
-    if (!this.lease) this.fallback();
-    else logger.info('rust.service.ready', 'Private Rust service ready', { mode: this.mode });
-  }
-
-  stop(): void {
-    this.stopped = true;
-    for (const request of this.active) request.destroy();
-    this.lease?.close();
-    this.lease = null;
-  }
-
-  private fallback(): void {
-    this.stats.fallbacks++;
-    if (this.fallbackLogged) return;
-    this.fallbackLogged = true;
-    logger.warn(
-      'rust.service.fallback',
-      'Rust service absent, busy or unhealthy; TypeScript fallback active',
-      { mode: this.mode }
-    );
-  }
-
+export class RustService extends RustSupervisor {
   /**
    * The shared forwarding gate of every read method: an owned GET/HEAD route, a running service,
-   * a verified principal and a free in-flight slot. Anything else is a logged TS fallback.
+   * a verified principal the table admits, a closed breaker and a free in-flight slot. Anything
+   * else is a TS answer, counted with its reason.
    */
   private forwardable(req: Request, route: string): VerifiedRustPrincipal | null {
     const owned = routes.some((r) => r.path === route && r.method === 'GET' && r.owner === 'rust');
     if (this.mode === 'off' || !owned || this.stopped || !['GET', 'HEAD'].includes(req.method))
       return null;
     const verified = principal(req, route);
-    if (!this.lease || !verified || this.inFlight >= 16) {
-      this.fallback();
+    const reason = !verified
+      ? 'principal'
+      : !routeRoles(route).includes(verified.role)
+        ? 'role'
+        : !this.lease
+          ? 'down'
+          : this.inFlight >= IN_FLIGHT
+            ? 'inflight'
+            : !this.breakers.allow(route)
+              ? 'breaker'
+              : null;
+    if (reason) {
+      this.fallback(route, { kind: 'unavailable', reason });
       return null;
     }
     return verified;
   }
 
-  private forward(route: string, verified: VerifiedRustPrincipal, input?: unknown) {
+  /** Shadow: at most two comparisons in flight per route; the rest are skipped and counted. */
+  private shadowSlot(route: string): (() => void) | null {
+    const used = this.shadowInFlight.get(route) ?? 0;
+    if (used >= SHADOW_IN_FLIGHT) {
+      this.record(route, { kind: 'skipped' });
+      return null;
+    }
+    this.shadowInFlight.set(route, used + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.shadowInFlight.set(route, (this.shadowInFlight.get(route) ?? 1) - 1);
+    };
+  }
+
+  private forward(route: string, verified: VerifiedRustPrincipal, input?: unknown, query = '') {
     const lease = this.lease as RustLease;
     this.inFlight++;
     return requestRust(
       lease.connection,
-      route.replace('{*path}', 'read'),
+      route.replace('{*path}', 'read') + query,
       verified,
       this.active,
       input
-    ).finally(() => {
-      this.inFlight--;
-    });
+    )
+      .then(
+        (reply) => {
+          this.breakers.success(route);
+          return reply;
+        },
+        (error: unknown) => {
+          const kind = rustFailureKind(error);
+          if (this.breakers.failure(route))
+            logger.warn('rust.service.breaker_open', 'Rust route breaker open for 30 s', {
+              route,
+              reason: kind,
+            });
+          if (kind === 'connect' || kind === 'boot') this.checkLease();
+          throw Object.assign(error as object, { rustFailure: kind });
+        }
+      )
+      .finally(() => {
+        this.inFlight--;
+      });
+  }
+
+  private failed(route: string, error: unknown): void {
+    const kind =
+      (error as { rustFailure?: string } | undefined)?.rustFailure ?? rustFailureKind(error);
+    this.fallback(route, { kind: 'failed', reason: kind });
+  }
+
+  /** A non-200 reply: the service's named reason, or `unnamed`. */
+  private declined(route: string, result: RustReply): void {
+    this.fallback(route, { kind: 'declined', reason: result.decline ?? 'unnamed' });
   }
 
   private difference(route: string, status: number, message = 'Rust read response differs'): void {
     this.stats.differences++;
+    this.record(route, { kind: 'different' });
     logger.warn('rust.service.shadow_difference', message, { route, status });
   }
 
   /**
    * Shadow mode: TS already answered `reference`. The Rust reply is compared in the background by
    * serialized bytes (key order included); an unaccepted reply (`undefined`) is a logged fallback,
-   * and a Rust answer where TS answered none is a difference.
+   * and a Rust answer where TS answered none is a difference. Equal answers record the pair of
+   * timings: the TS path and the Rust path on the same request.
    */
   private shadowCompare(
     route: string,
     pending: Promise<RustReply>,
     reference: unknown,
-    accepted: (body: unknown) => unknown
+    accepted: (body: unknown) => unknown,
+    tsMs: number,
+    rustStarted: number,
+    release: () => void
   ): void {
     void pending
       .then((result) => {
+        const rustMs = now() - rustStarted;
         this.stats.shadowed++;
         const value = result.status === 200 ? accepted(result.body) : undefined;
         if (value === undefined) {
-          this.fallback();
+          if (result.status === 200) this.fallback(route, { kind: 'failed', reason: 'refused' });
+          else this.declined(route, result);
           return;
         }
         if (reference === undefined || JSON.stringify(reference) !== JSON.stringify(value))
           this.difference(route, result.status);
+        else {
+          this.record(route, { kind: 'equal' });
+          this.pair(route, tsMs, rustMs);
+        }
       })
-      .catch(() => {
-        this.fallback();
-      });
+      .catch((error: unknown) => {
+        this.failed(route, error);
+      })
+      .finally(release);
   }
 
   /** Immutable reads stay with the existing collector/store owner. Rust assembles a candidate;
@@ -128,11 +167,14 @@ export class RustService {
   async read(req: Request, route: string, expected: unknown, input: unknown): Promise<unknown> {
     const verified = this.forwardable(req, route);
     if (!verified) return expected;
+    const release = this.mode === 'shadow' ? this.shadowSlot(route) : () => {};
+    if (!release) return expected;
+    const started = now();
     const pending = this.forward(route, verified, input);
     const admit = (result: RustReply): unknown => {
       if (this.mode === 'shadow') this.stats.shadowed++;
       if (result.status !== 200) {
-        this.fallback();
+        this.declined(route, result);
         return expected;
       }
       if (canonical(expected) !== canonical(result.body)) {
@@ -141,24 +183,32 @@ export class RustService {
           result.status,
           'Rust read candidate differs; TypeScript fallback active'
         );
-        this.fallback();
+        this.stats.fallbacks++;
         return expected;
       }
-      this.fallbackLogged = false;
-      if (this.mode === 'shadow') return expected;
+      // The TS reference was read before the bridge: only the Rust path is timed here.
+      this.pair(route, null, now() - started);
+      if (this.mode === 'shadow') {
+        this.record(route, { kind: 'equal' });
+        return expected;
+      }
       this.stats.served++;
+      this.record(route, { kind: 'served' });
       return orderedLike(result.body, expected);
     };
     if (this.mode === 'shadow') {
-      void pending.then(admit).catch(() => {
-        this.fallback();
-      });
+      void pending
+        .then(admit)
+        .catch((error: unknown) => {
+          this.failed(route, error);
+        })
+        .finally(release);
       return expected;
     }
     try {
       return admit(await pending);
-    } catch {
-      this.fallback();
+    } catch (error) {
+      this.failed(route, error);
       return expected;
     }
   }
@@ -166,8 +216,8 @@ export class RustService {
   /**
    * Compute in Rust first from immutable inputs the guarded TS handler already read; legacy
    * composition is lazy in on mode. An input the builder cannot carry exactly (null) never
-   * leaves TS. Shadow serves TS and compares the serialized bytes, key order included, in the
-   * background. Collectors, stores and writers remain the owners.
+   * leaves TS. Shadow serves TS first, then asks Rust and compares the serialized bytes, key
+   * order included, in the background. Collectors, stores and writers remain the owners.
    */
   async compose(
     req: Request,
@@ -178,39 +228,57 @@ export class RustService {
   ): Promise<unknown> {
     const verified = this.forwardable(req, route);
     if (!verified) return legacy();
+    const release = this.mode === 'shadow' ? this.shadowSlot(route) : () => {};
+    if (!release) return legacy();
+    const inputStarted = now();
     let resolved: unknown;
     try {
       resolved = typeof input === 'function' ? (input as () => unknown)() : input;
     } catch {
       resolved = null;
     }
+    const inputMs = now() - inputStarted;
     if (resolved === undefined || resolved === null) {
-      this.fallback();
+      release();
+      this.fallback(route, { kind: 'unavailable', reason: 'input' });
       return legacy();
     }
-    const pending = this.forward(route, verified, resolved);
     if (this.mode === 'shadow') {
       let reference: unknown;
+      const tsStarted = now();
       try {
         reference = await legacy();
       } catch (error) {
-        void pending.catch(() => undefined);
+        release();
         throw error;
       }
-      this.shadowCompare(route, pending, reference, (body) => (accepts(body) ? body : undefined));
+      const tsMs = now() - tsStarted;
+      const rustStarted = now() - inputMs;
+      this.shadowCompare(
+        route,
+        this.forward(route, verified, resolved),
+        reference,
+        (body) => (accepts(body) ? body : undefined),
+        tsMs,
+        rustStarted,
+        release
+      );
       return reference;
     }
+    const rustStarted = now() - inputMs;
     try {
-      const result = await pending;
+      const result = await this.forward(route, verified, resolved);
       if (result.status === 200 && accepts(result.body)) {
         this.stats.served++;
-        this.fallbackLogged = false;
+        this.record(route, { kind: 'served' });
+        this.pair(route, null, now() - rustStarted);
         return result.body;
       }
-    } catch {
-      /* Bounded, logged legacy fallback. */
+      if (result.status === 200) this.fallback(route, { kind: 'failed', reason: 'refused' });
+      else this.declined(route, result);
+    } catch (error) {
+      this.failed(route, error);
     }
-    this.fallback();
     return legacy();
   }
 
@@ -253,28 +321,42 @@ export class RustService {
     // Rust reads its own canonical boot root. Another or symlinked folder (whose one-time
     // warning TS logs) stays with the TS reader.
     if (verified && this.lease?.connection.ccsDir !== root) {
-      this.fallback();
+      this.fallback(route, { kind: 'unavailable', reason: 'root' });
       verified = null;
     }
     if (!verified) return legacy();
-    const pending = this.forward(route, verified);
     if (this.mode === 'shadow') {
+      const release = this.shadowSlot(route);
+      if (!release) return legacy();
       let reference: unknown;
+      const tsStarted = now();
       try {
         reference = await legacy();
       } catch (error) {
-        void pending.catch(() => undefined);
+        release();
         throw error;
       }
-      this.shadowCompare(route, pending, reference, (body) => accept(body)?.value);
+      const tsMs = now() - tsStarted;
+      const rustStarted = now();
+      this.shadowCompare(
+        route,
+        this.forward(route, verified),
+        reference,
+        (body) => accept(body)?.value,
+        tsMs,
+        rustStarted,
+        release
+      );
       return reference;
     }
+    const rustStarted = now();
     try {
-      const result = await pending;
+      const result = await this.forward(route, verified);
       const accepted = result.status === 200 ? accept(result.body) : null;
       if (accepted) {
         this.stats.served++;
-        this.fallbackLogged = false;
+        this.record(route, { kind: 'served' });
+        this.pair(route, null, now() - rustStarted);
         try {
           accepted.effect?.();
         } catch {
@@ -282,10 +364,11 @@ export class RustService {
         }
         return accepted.value;
       }
-    } catch {
-      /* Bounded, logged legacy fallback. */
+      if (result.status === 200) this.fallback(route, { kind: 'failed', reason: 'refused' });
+      else this.declined(route, result);
+    } catch (error) {
+      this.failed(route, error);
     }
-    this.fallback();
     return legacy();
   }
 
@@ -305,57 +388,64 @@ export class RustService {
       res.json(tsAnswer());
       return;
     }
-    const verified = principal(req, route);
-    if (!this.lease || !verified || this.inFlight >= 16) {
-      this.fallback();
+    const verified = this.forwardable(req, route);
+    if (!verified) {
       res.json(tsAnswer());
       return;
     }
-    const lease = this.lease;
     const query = req.originalUrl.includes('?')
       ? req.originalUrl.slice(req.originalUrl.indexOf('?'))
       : '';
-    this.inFlight++;
-    const rustAnswer = requestRust(lease.connection, route + query, verified, this.active).finally(
-      () => {
-        this.inFlight--;
-      }
-    );
     if (this.mode === 'shadow') {
+      const release = this.shadowSlot(route);
+      const tsStarted = now();
       const body = tsAnswer();
+      const tsMs = now() - tsStarted;
       res.json(body);
-      void rustAnswer
+      if (!release) return;
+      const rustStarted = now();
+      void this.forward(route, verified, undefined, query)
         .then((result) => {
+          const rustMs = now() - rustStarted;
           this.stats.shadowed++;
           if (result.status !== 200) {
-            this.fallback();
+            this.declined(route, result);
             return;
           }
           if (canonical(body) !== canonical(result.body)) {
             this.stats.differences++;
+            this.record(route, { kind: 'different' });
             logger.warn('rust.service.shadow_difference', 'Rust shadow response differs', {
               route,
               status: result.status,
             });
+          } else {
+            this.record(route, { kind: 'equal' });
+            this.pair(route, tsMs, rustMs);
           }
         })
-        .catch(() => {
-          this.fallback();
-        });
+        .catch((error: unknown) => {
+          this.failed(route, error);
+        })
+        .finally(release);
       return;
     }
+    const rustStarted = now();
     try {
-      const result = await rustAnswer;
+      const result = await this.forward(route, verified, undefined, query);
       if (validReply(route, result)) {
         this.stats.served++;
-        this.fallbackLogged = false;
+        this.record(route, { kind: 'served' });
+        this.pair(route, null, now() - rustStarted);
         res.json(result.body);
         return;
       }
-    } catch {
+      if (result.status === 200) this.fallback(route, { kind: 'failed', reason: 'refused' });
+      else this.declined(route, result);
+    } catch (error) {
       /* Never send a partial or unhealthy service response. */
+      this.failed(route, error);
     }
-    this.fallback();
     res.json(tsAnswer());
   }
 }
@@ -370,6 +460,12 @@ export async function respondWithRust(
   const service: unknown = res.locals.rustService;
   if (service instanceof RustService) await service.respond(req, res, route, answer);
   else res.json(answer());
+}
+
+/** `/api/diag?bridge=1`: the bridge's state, counters and paired timings (L1). */
+export function rustBridgeDiagnostics(res: Response): Record<string, unknown> {
+  const service: unknown = res.locals.rustService;
+  return service instanceof RustService ? service.diagnostics() : { mode: 'off' };
 }
 
 /** Called only after the original endpoint guards and one immutable source read. */

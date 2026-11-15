@@ -282,3 +282,17 @@ bun tests/spec/profile-read-parity.ts --ts-only      # off mode only
 bun tests/spec/profile-read-parity.ts                # off, on, shadow (copied Nas1 binary)
 AAC_M3_MEASURE_OUTPUT=/absolute/result.json bun tests/spec/profile-read-parity.ts --measure
 ```
+
+## L1: service lifecycle and the bridge floor
+
+`rust-lifecycle.mjs` (run last by `run.mjs`) checks the lifecycle on the Nas1-built binary under
+Node, on `dist/`: one kept-alive connection, restart after a kill, the build check on attach, a
+root too long for a socket path, the sweep, named declines with the
+`contract/l1-bridge-diag.json` golden, and feeds and events. With `--ts-only` (off mode) it only
+proves no service starts. `--regenerate` rewrites the golden. The Rust side (deadline under a
+preloaded slow read, the 8-permit bound, cancel, the identity header, short socket folders, the
+service-only internal routes) is `crates/aac-http/tests/lifecycle.rs`.
+
+`bridge-measure.mjs` times a built `dist/` under Node (see `docs/rust-service.md`); it needs no
+Rust build and starts its servers inside the capture's closed boundary
+(`bridge-measure-server.cjs`). `large-home.mjs <dir>` writes the large synthetic home it uses.

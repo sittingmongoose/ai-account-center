@@ -179,7 +179,19 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/feed.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/json_object.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/limits.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -197,7 +209,19 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/table.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/unix.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/src/view_reply.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -207,6 +231,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-http/tests/lifecycle.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
     },
     {
       "file": "crates/aac-http/tests/profile_reads.rs",
@@ -273,6 +304,12 @@
     },
     {
       "file": "crates/aac-views/src/codex_profiles.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-views/src/decline.rs",
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
@@ -3088,6 +3125,25 @@
       "kind": "table",
       "evidence": [
         "table"
+      ]
+    },
+    {
+      "file": "tests/unit/web-server/rust-service-health.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/rust-service-lifecycle.test.ts",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "tests/unit/web-server/rust-view-reply.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
       ]
     },
     {

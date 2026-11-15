@@ -14,8 +14,19 @@ export async function checkRustProxyBoundary(home: string) {
   let observations = 0;
   const pending = new Set<http.ServerResponse>();
   const server = http.createServer((req, res) => {
-    observations++;
     assert.equal(req.headers['x-aac-boot-secret'], secret);
+    // L1: after a connect or boot failure the bridge checks the boot's health (public principal).
+    if (req.url === '/api/health') {
+      assert.deepEqual(JSON.parse(String(req.headers['x-aac-principal'])), {
+        kind: 'session',
+        id: 'public-health',
+        role: 'public',
+      });
+      res.setHeader('x-aac-service-boot', behavior === 'wrong-boot' ? 'bad' : bootId);
+      res.end('{"status":"ok"}');
+      return;
+    }
+    observations++;
     assert.equal(req.headers.cookie, undefined);
     assert.equal(req.headers.authorization, undefined);
     assert.equal(req.headers.origin, undefined);
@@ -67,21 +78,38 @@ export async function checkRustProxyBoundary(home: string) {
   } as unknown as Request;
   const services: RustService[] = [];
   try {
-    const on = service('on');
-    services.push(on);
     let body: unknown;
     const res = {
       json: (value: unknown) => {
         body = value;
       },
     } as Response;
+    // A fresh bridge per fault, so an earlier fault's breaker or lost lease cannot hide this one.
     for (const fault of ['good', 'wrong-boot', 'invalid-json', 'oversize', '503', 'timeout']) {
       behavior = fault;
-      const before = on.stats.fallbacks;
+      const on = service('on');
+      services.push(on);
+      const seen = observations;
       await on.respond(req, res, '/api/accounts/settings', () => ({ refreshIntervalSeconds: 60 }));
       assert.deepEqual(body, { refreshIntervalSeconds: fault === 'good' ? 90 : 60 }, fault);
-      if (fault !== 'good') assert.ok(on.stats.fallbacks > before, fault);
+      assert.equal(observations, seen + 1, `${fault}: the fault reached the socket`);
+      if (fault !== 'good') assert.equal(on.stats.fallbacks, 1, fault);
     }
+    // L1: three transport failures in a row open the route's breaker; the fourth stays in TS.
+    behavior = 'invalid-json';
+    const on = service('on');
+    services.push(on);
+    for (let i = 0; i < 3; i++)
+      await on.respond(req, res, '/api/accounts/settings', () => ({ refreshIntervalSeconds: 60 }));
+    const opened = observations;
+    await on.respond(req, res, '/api/accounts/settings', () => ({ refreshIntervalSeconds: 60 }));
+    assert.equal(observations, opened, 'an open breaker never calls the socket');
+    assert.deepEqual(body, { refreshIntervalSeconds: 60 });
+    const route = (on.diagnostics().routes as Record<string, Record<string, unknown>>)[
+      '/api/accounts/settings'
+    ];
+    assert.deepEqual(route.failed, { reply: 3 });
+    assert.deepEqual(route.unavailable, { breaker: 1 });
     behavior = 'different';
     const shadow = service('shadow');
     services.push(shadow);

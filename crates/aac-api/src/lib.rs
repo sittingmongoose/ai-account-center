@@ -44,6 +44,9 @@ pub enum PrincipalRole {
     Device,
     /// Existing read-only hub scope.
     Hub,
+    /// L1: the TS front door itself on the service's internal routes (feeds and events). Only
+    /// the reserved `{kind: session, id: front-door}` envelope carries it; no caller can.
+    Service,
 }
 
 // Unit enums otherwise also accept serde's externally tagged object representation.
@@ -83,8 +86,9 @@ impl VerifiedPrincipal {
         id_ok
             && match (&self.kind, &self.role) {
                 (PrincipalKind::Session, PrincipalRole::Public) => self.id == "public-health",
+                (PrincipalKind::Session, PrincipalRole::Service) => self.id == "front-door",
                 (PrincipalKind::Session | PrincipalKind::Bar, PrincipalRole::Admin) => {
-                    self.id != "public-health"
+                    self.id != "public-health" && self.id != "front-door"
                 }
                 (PrincipalKind::Device, PrincipalRole::Device)
                 | (PrincipalKind::Hub, PrincipalRole::Hub) => true,

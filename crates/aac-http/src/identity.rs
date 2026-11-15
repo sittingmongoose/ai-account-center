@@ -1,0 +1,65 @@
+//! L1 build check: what this running service is. TS records it in the boot descriptor and an
+//! attaching front door refuses a boot whose identity differs from its own binary's. It travels
+//! only on authenticated replies to `/api/health` as `x-aac-service-build`; the public health
+//! body stays `{"status":"ok"}`.
+use axum::http::HeaderValue;
+use sha2::{Digest, Sha256};
+use std::{fs::File, io, io::Read, path::PathBuf};
+
+/// The private socket protocol. 1: M3; 2: L1 (table dispatch, named declines, feeds, events).
+pub const PROTOCOL: u32 = 2;
+
+/// The header carrying the identity.
+pub(crate) const HEADER: &str = "x-aac-service-build";
+
+/// `{commit, sha256, protocol, storeSchema}`, already encoded as the header value.
+#[derive(Clone)]
+pub(crate) struct Identity(HeaderValue);
+
+/// The running image: on Linux `/proc/self/exe` still names the bytes this process runs even
+/// after an in-place upgrade replaced the file.
+fn executable() -> io::Result<PathBuf> {
+    let proc_exe = PathBuf::from("/proc/self/exe");
+    if proc_exe.exists() {
+        return Ok(proc_exe);
+    }
+    std::env::current_exe()
+}
+
+fn sha256_hex(path: &PathBuf) -> io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 16];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+impl Identity {
+    /// Hash this process's own executable once, at start.
+    pub(crate) fn current() -> io::Result<Self> {
+        let sha256 = sha256_hex(&executable()?)?;
+        let value = serde_json::json!({
+            "commit": env!("AAC_BUILD_COMMIT"),
+            "sha256": sha256,
+            "protocol": PROTOCOL,
+            "storeSchema": aac_store::db::STORE_SCHEMA_VERSION,
+        });
+        HeaderValue::from_str(&value.to_string())
+            .map(Self)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "identity"))
+    }
+
+    pub(crate) fn header(&self) -> HeaderValue {
+        self.0.clone()
+    }
+}

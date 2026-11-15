@@ -1,7 +1,8 @@
 # Optional Rust service (M3 read routes)
 
 The TypeScript dashboard remains the public HTTP server. `ServerOptions.rustService`
-(or `AAC_RUST_SERVICE`) selects `off`, `shadow` or `on`; the default is `off`.
+(or `AAC_RUST_SERVICE`, or `rustService.mode` in `config.yaml`) selects `off`, `shadow` or
+`on`; the default is `off`, and an absent or invalid value stays off.
 `ServerOptions.rustServiceBinary` (or `AAC_RUST_SERVICE_BINARY`) can name an existing
 `aac-http` binary. The packaged default location is `dist/native/aac-http`.
 Starting the dashboard never builds, downloads or installs this binary.
@@ -173,9 +174,16 @@ rewrites or checks it (Bun computes the envelopes, `envelope.ts`).
 ## Boundary and lifecycle
 
 The service binds no TCP port. It accepts only its Unix socket, mode 0600, in a
-0700 random boot directory under the canonical AAC private directory's `run`
-folder. TS refuses symlinked/nonprivate run directories. The Rust listener sets
-0600 before it accepts requests and refuses existing socket paths.
+0700 random boot directory `aac-http-<id>` under the canonical AAC private directory's
+`run` folder. When that socket path would be longer than 100 bytes (a Unix socket path
+must fit 108 bytes on Linux, 104 on macOS), the boot directory goes under a short private
+folder bound to the root by the first 12 hex digits of SHA-256 of its canonical path:
+`$AAC_RUST_RUN_DIR/aac-<hash12>` (for a container, `/run/aac`), else
+`$XDG_RUNTIME_DIR/aac-<hash12>`, else `/tmp/aac-<uid>/<hash12>`. Every folder on the way is
+a real 0700 folder of the root's owner (no links), and Rust checks the name, the hash, the
+mode and the owner again before it binds. The descriptor stays in `<root>/run`. TS refuses
+symlinked/nonprivate run directories. The Rust listener sets 0600 before it accepts requests
+and refuses existing socket paths.
 
 TS sends a new 256-bit secret over the child's stdin pipe, never argv, inherited
 environment or logs. A 0600 `run/aac-http.json` descriptor under the 0700 run folder
@@ -210,11 +218,43 @@ routes. The secret is still mandatory. The socket boundary trusts the OS account
 and its private run folder; it does not isolate mutually hostile processes running
 as that same account.
 
-Requests have a 500 ms total deadline, the response caps above and a maximum of 16
+Requests have a 500 ms total deadline in TS, the response caps above and a maximum of 16
 in flight per front door. TS owns HTTP encoding, cookies, caching, compression,
 ETags and all existing auth/origin/session checks. On Windows, where this service
-is not built, the TS fallback remains available. A failed boot is retried on the
-next dashboard start; there is no restart loop or provider activity.
+is not built, the TS fallback remains available. No lifecycle step refreshes a provider.
+
+## Lifecycle and bridge floor (L1)
+
+L1 of the M3 completion design (`DESIGN-M3-COMPLETE.md` section 2.1). All of it is
+inert while the service is off.
+
+| Piece | Behaviour |
+| --- | --- |
+| Connection | One keep-alive `http.Agent` per boot (16 sockets), replaced when the boot changes. A request on a kept-alive connection the service had closed is retried once on a new one, inside the same 500 ms. |
+| Route table | `rust-service-routes.json` rows carry `group`, `roles`, `budgetMs` and `handler`. Rust builds its dispatch from them (startup refuses a row without a known handler, a read without a budget, a public route open to the `service` role or an internal route open to any other); TS gates forwarding on the same roles. |
+| Deadline | Each route's budget in Rust (400 ms for reads). Blocking work runs on two semaphore pools: 8 permits for reads, 4 for the store group. A full pool is a `busy` decline at once; a task that outlives its budget keeps its permit until it ends, so no more than 8 (or 4) blocking tasks ever exist; work whose request was dropped before it started never runs. The runtime caps blocking threads at 16. |
+| Declines | One `Decline` enum (`aac-views`) sent as `x-aac-decline: <word>` on the private 503: `shape`, `number`, `date`, `zone`, `locale`, `collation`, `stale`, `busy`, `deadline`, `unsupported`, `internal`. TS counts every TS answer per (route, reason) — the service's word, or the bridge's own (`unavailable:down`, `unavailable:breaker`, `failed:deadline`, ...) — and logs `rust.service.route_state` with the route and reason on each change of a route's state. |
+| Breaker | Per route in TS: 3 transport failures or timeouts in a row open it for 30 s, then one probe goes. Declines are replies and never count. |
+| Restart | An owned service that exits is restarted after 1 s, 5 s, 30 s, 2 min, then 10 min; after 5 restarts in an hour TS logs `rust.service.gave_up` and answers alone until the next dashboard start. An attached boot that stops answering is dropped the same way. Boot folders older than a minute whose socket refuses a connection are swept at start; no PID read from disk is ever signalled. |
+| Build check | Health replies carry `x-aac-service-build: {commit, sha256, protocol, storeSchema}`, with `sha256` the running image's own hash. The descriptor records it. A front door attaches only when the live identity equals the descriptor's, its `sha256` is that of the binary it would start, and the protocol is its own; otherwise it starts its own boot (an in-place upgrade). The public `/api/health` body stays `{"status":"ok"}`. |
+| Feeds, events | `PUT /internal/feed/<source>` `{generation, data, facts}` and `GET /internal/feed/<source>`; `GET /internal/events` streams NDJSON (`facts-needed` when a generation arrives without facts). Only the reserved `{kind: session, id: front-door, role: service}` principal reaches them. No route group composes from feeds yet (R1 onward). |
+| Shadow | At most 2 comparisons in flight per route; the rest are skipped and counted. TS answers first, then Rust is asked, so each comparison times both paths on the same request. |
+| Reply floor | `view_reply` in Rust and `sendRustView` in TS: the final bytes, the revalidated-view ETag and `x-aac-view`, written without a parse. No route uses it yet (R1 onward). |
+
+**Measurement hooks.** `GET /api/diag?bridge=1` (signed-in session) answers the skeleton
+diagnostics plus a `bridge` block: the service state, its build, restarts, the child's RSS,
+the counters and, per route, the paired timings (TS path and Rust path on the same requests,
+from shadow) and Rust-only timings (on). Every minute with traffic, `rust.service.minute`
+logs the same per-route block for that minute, and the event-loop monitor's line adds
+`rustMode` and `rustRssBytes`. Response bodies are never logged.
+
+`tests/spec/bridge-measure.mjs` measures a built `dist/` under Node: off and on servers in
+alternating rounds (5 x 40 samples per route) with the load average around each round, a
+16-client, 60 s concurrency row with the server's event-loop p99, RSS of TS and the Rust
+child, shadow paired timings, and (`--heap`) the heap the Status and Scoreboard owners hold
+on the large synthetic home (`tests/spec/large-home.mjs`: 50 profiles, 200 reports, 5,000
+runs, 30 accounts x 12 windows x 90 days). The worker server runs inside the same closed
+boundary as the contract capture.
 
 ## Offline checks
 
@@ -235,6 +275,14 @@ AAC_RUST_SERVICE=off node tests/spec/run.mjs
 AAC_RUST_SERVICE=on node tests/spec/run.mjs
 AAC_RUST_SERVICE=shadow node tests/spec/run.mjs
 ```
+
+`run.mjs` ends with `tests/spec/rust-lifecycle.mjs`, which runs under Node on `dist/` and the
+real binary: keep-alive (20 requests, one connection), a killed service restarted after its
+backoff, an in-place upgrade never attached, a root too long for a socket path, the sweep, the
+named declines with the bridge diagnostics golden (`contract/l1-bridge-diag.json`), and a feed
+answered by `facts-needed`. The deadline under a stuck read, the pool bound and the cancel are
+checked in `crates/aac-http/tests/lifecycle.rs` with an `LD_PRELOAD` slow-read shim (Linux,
+needs `cc`), and in `limits.rs`.
 
 `account-read-parity.ts` runs the four account read routes through the real TS
 routers in all three modes against `contract/m3-part3-account-reads.json`, then
