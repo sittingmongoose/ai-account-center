@@ -128,7 +128,7 @@
   "src/web-server/services/account-analytics-types.ts": "f2daa2d6058191e4325ddf70a22c333c6b77f9f50062ed5f5904f8c0399c7d33",
   "src/web-server/services/account-confirmations.ts": "af0357fa705982e64faa530138ec2f637bf007179ebc1709d015ae56925d6ed5",
   "src/web-server/services/account-dashboard-projection.ts": "504a7d1f07c867c32e9433b7d3463809b0e3e2007d2d3912b6dd3c84a4ca8e7e",
-  "src/web-server/services/account-dashboard-service.ts": "51f072878762a4b3d10a9b0a86905a3343c89f6d9384397459ab4d90d55bdedd",
+  "src/web-server/services/account-dashboard-service.ts": "88c0f6a8c612532ec46638835e7f56f6a9d6bc218a98e6f4f67e6e7515cbe267",
   "src/web-server/services/account-dashboard-state.ts": "59768108f5c1a9cc30230af40182a09fbd879b2f97ac1917dc90c468f51f3164",
   "src/web-server/services/account-dashboard-types.ts": "d89c6936cca563fe375e7e897e3b141b5ac9e5384fc0625595e864efb57703e0",
   "src/web-server/services/account-lifecycle-accounts.ts": "fdc1f1ee9ecdaca3fa90710197c9ed04f47ee1c2aa5e06bf5e1b7a9594853818",
