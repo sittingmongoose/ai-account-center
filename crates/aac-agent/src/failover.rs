@@ -437,6 +437,12 @@ fn roots(home: &Path, ccs: &Path, provider: &str) -> Vec<(PathBuf, Vec<String>)>
                     if text.is_empty() {
                         continue;
                     }
+                    // Python's pathlib keeps a leading "//" as its own root and refuses the
+                    // home; folding it into "/" would turn that refusal into a candidate.
+                    if text.starts_with("//") {
+                        proof::reject();
+                        continue;
+                    }
                     let path = if text == "~" {
                         home.to_path_buf()
                     } else if text.starts_with("~/") || text.starts_with("~\\") {
@@ -822,6 +828,19 @@ fn additional(provider: &str, home: &Path, ccs: &Path) -> Vec<Value> {
         return result;
     }
     if provider == "qwen" {
+        // Python reads Safari's cookie store for Qwen on every platform; that parser is not
+        // ported, so any Safari cookie file (or an unreadable path to it) falls back.
+        let safari = home
+            .join("Library/Containers/com.apple.Safari/Data/Library")
+            .join("Cookies/Cookies.binarycookies");
+        match std::fs::symlink_metadata(&safari) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            _ => return proof_rejected(),
+        }
         // Native browser extraction and private capsules have their own policy/format.
         for path in children(&ccs.join("account-usage"), false, 512) {
             if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
