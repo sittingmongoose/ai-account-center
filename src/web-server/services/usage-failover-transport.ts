@@ -261,6 +261,16 @@ export function usageHelperDeadlineMs(action: UsageHelperRequest['action']): num
   return usageHelperProcessTimeoutMs(action) + PROCESS_SETTLE_GRACE_MS;
 }
 
+/**
+ * What an optional agent attempt must leave the Python reference inside the caller's deadline:
+ * the helper's own process limit plus a second for loading its source and launching. The agent
+ * only gets the time beyond this reserve, so a declined, failed or stalled agent still leaves
+ * Python every millisecond its own limit allows; it loses only the SIGTERM settle grace.
+ */
+export const REFERENCE_RESERVE_MS = usageHelperProcessTimeoutMs('inventory') + 1_000;
+/** Below this the optional attempt is skipped: Python answers with the whole budget. */
+export const AGENT_MIN_MS = 1_000;
+
 function validateUsageHost(host: UsageHost): void {
   if (host.sshHost !== null && !isSafeUsageSshAlias(host.sshHost))
     throw new ValidationError('Invalid usage host.');
@@ -346,11 +356,12 @@ export async function runUsageHelper(
     parseUsageHelperResponse(
       await runPrivateUsageHelper(host, request, undefined, undefined, deadlineAt)
     );
+  // The agent's own deadline ends where the reference's reserve begins; Python keeps the caller's.
   const response =
     request.action === 'inventory'
       ? await collectAgentWithFallback(
           'failover-inventory',
-          () => runFailoverInventoryAgent(host, request, deadlineAt),
+          () => runFailoverInventoryAgent(host, request, deadlineAt - REFERENCE_RESERVE_MS),
           python
         )
       : await python();
@@ -364,6 +375,15 @@ export async function runUsageHelper(
   return response;
 }
 
+/** The keys a native inventory reply may carry: the existing public contract's. */
+const INVENTORY_KEYS = [
+  'version',
+  'action',
+  'candidates',
+  'signInNeededSelectors',
+  'incompleteSelectors',
+];
+
 /** Validate the native result with the existing public contract before skipping Python. */
 export async function runFailoverInventoryAgent(
   host: UsageHost,
@@ -375,6 +395,7 @@ export async function runFailoverInventoryAgent(
   validateUsageHost(host);
   const remaining = Math.floor(deadlineAt - Date.now());
   if (remaining <= 0) throw new NetworkError('Usage source unavailable.');
+  if (remaining < AGENT_MIN_MS) return null;
   const stdout = await withDeadline(
     runAgentVerb(
       host,
@@ -390,19 +411,7 @@ export async function runFailoverInventoryAgent(
     remaining
   );
   if (stdout === null || Date.now() >= deadlineAt) return null;
-  if (
-    Object.keys(JSON.parse(stdout)).some(
-      (key) =>
-        ![
-          'version',
-          'action',
-          'candidates',
-          'signInNeededSelectors',
-          'incompleteSelectors',
-        ].includes(key)
-    )
-  )
-    return null;
+  if (Object.keys(JSON.parse(stdout)).some((key) => !INVENTORY_KEYS.includes(key))) return null;
   const value = parseUsageHelperResponse(stdout);
   if (
     value.action !== 'inventory' ||

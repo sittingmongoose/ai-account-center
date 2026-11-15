@@ -186,7 +186,7 @@
   "src/web-server/services/usage-failover-codex.ts": "b0882189e863d985f8f7509a553b8e24fd321fbe42351943932f6f3345f90615",
   "src/web-server/services/usage-failover-contract.ts": "d380bd293d87b93ef74ea2a4eabcd195bfe7878b8637b86f9563af1ef141387e",
   "src/web-server/services/usage-failover-service.ts": "07935058bf6208fd06a4441871a3d1a98cc3a64c340a4ce3bce9849dd6ce14f4",
-  "src/web-server/services/usage-failover-transport.ts": "7a43e076bf35ed22966cd320adb0bf23d7c43ed3b777a23f1c13608739e486e4",
+  "src/web-server/services/usage-failover-transport.ts": "69fa4d554f86ea71e9a3575bcea04ccf08d1080d1299faa59abe4105f566a490",
   "src/web-server/services/usage-scan-binary.ts": "7dcf2dbcfc0a4845e8bdbcdb5685c0b5d32614fefc0f224d57a3cb3cc9751309",
   "src/web-server/status/agent-reports-reader.ts": "aac616e91219de905fe61497a00f1f2fa051300f662546acef8e019eeb297bf5",
   "src/web-server/status/answer-signing.ts": "645b8dce8b3af3fee36eaac0e164c9f76e3a74b76c6a644d06fe777727a988db",

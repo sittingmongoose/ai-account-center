@@ -3,10 +3,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import {
+  AGENT_MIN_MS,
   localUsageHost,
+  REFERENCE_RESERVE_MS,
   runUsageHelper,
   usageHelperDeadlineMs,
 } from '../../../src/web-server/services/usage-failover-transport';
+import * as agentVerbs from '../../../src/web-server/services/agent-verbs';
 import type { UsageHelperRequest } from '../../../src/web-server/services/usage-failover-contract';
 import { stopProcessBroker } from '../../../src/utils/managed-process';
 import { waitForProcessState } from '../../shared/fixtures/process-state';
@@ -148,4 +151,49 @@ describe.skipIf(process.platform === 'win32')('usage helper end-to-end deadlines
       }
     }, 45_000);
   }
+
+  // Big review M6/L2: an agent that runs to its own timeout must not spend the reference's time.
+  // Only runAgentVerb is replaced; Python is the real bundled helper on the same fixture home.
+  it('runs the real Python reference after an agent that stalls for its whole budget', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-usage-agent-budget-'));
+    roots.push(root);
+    const request: UsageHelperRequest = {
+      version: 1,
+      action: 'inventory',
+      provider: 'codex',
+      homeDir: root,
+      ccsDir: path.join(root, '.ccs'),
+    };
+    const budgets: number[] = [];
+    const agent = spyOn(agentVerbs, 'runAgentVerb').mockImplementation(
+      async (_host, verb, _args, options) => {
+        expect(verb).toBe('failover-inventory');
+        budgets.push(options.timeoutMs ?? Infinity);
+        await delay(options.timeoutMs ?? 0);
+        return null;
+      }
+    );
+    try {
+      const began = performance.now();
+      expect(await runUsageHelper(localUsageHost(), request)).toEqual({
+        version: 1,
+        action: 'inventory',
+        candidates: [],
+      });
+      expect(budgets).toHaveLength(1);
+      expect(budgets[0]).toBeGreaterThanOrEqual(AGENT_MIN_MS);
+      expect(budgets[0]).toBeLessThanOrEqual(
+        usageHelperDeadlineMs('inventory') - REFERENCE_RESERVE_MS
+      );
+      expect(performance.now() - began).toBeLessThan(usageHelperDeadlineMs('inventory'));
+      // A caller budget inside the reserve skips the optional attempt; Python still answers.
+      budgets.length = 0;
+      expect(
+        await runUsageHelper(localUsageHost(), request, Date.now() + REFERENCE_RESERVE_MS)
+      ).toEqual({ version: 1, action: 'inventory', candidates: [] });
+      expect(budgets).toHaveLength(0);
+    } finally {
+      agent.mockRestore();
+    }
+  }, 45_000);
 });
