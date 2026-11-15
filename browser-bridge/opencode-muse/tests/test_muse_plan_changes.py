@@ -226,7 +226,8 @@ class PlanChangeTests(unittest.TestCase):
         muse.sync_browser([COOKIE], root=self.root)
         self.assertFalse(muse.restore_browser_sample(self.root, {"teamId": team, "sample": previous}, now=self.clock))
         _, sample = muse.sync_browser([COOKIE], root=self.root)
-        self.assertEqual((sample["status"], sample["plan"]), ("cached", NEW_PLAN))
+        # Served from the budget after a successful read: current ("ok"), with the new plan.
+        self.assertEqual((sample["status"], sample["plan"]), ("ok", NEW_PLAN))
 
 
 if __name__ == "__main__":

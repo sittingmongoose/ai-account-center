@@ -499,14 +499,15 @@ class EmailLessSyncTests(unittest.TestCase):
         self.dashboard()
         self.assertIsNone(muse.read_binding(self.root))
         response = self.sync(self.ROTATED)
-        self.assertEqual(response["sample"]["status"], "cached")
+        # A reuse inside the refresh budget after a successful read is current, not cached.
+        self.assertEqual(response["sample"]["status"], "ok")
         self.assertEqual(self.capsule_session(), "synthetic-web-session")
         self.later()
         self.USERS = EmailLessSyncTests.USERS
         self.dashboard()  # Email-verified with a userId: pins user-a.
         self.assertIsNotNone(muse.read_binding(self.root))
         response = self.sync(self.ROTATED)
-        self.assertEqual(response["sample"]["status"], "cached")
+        self.assertEqual(response["sample"]["status"], "ok")
         self.assertEqual(self.capsule_session(), "synthetic-rotated-session")
 
 

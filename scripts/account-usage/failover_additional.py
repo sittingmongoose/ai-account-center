@@ -357,7 +357,7 @@ def _muse(credential, result, ccs_dir, client, context):
         return failure
     result.update(email=address_bound, plan=sample["quota"]["tier"],
                   windows=desktop_usage.normalize_muse({"subscription_quota": sample["quota"]}),
-                  status="cached" if sample["cached"] else "ok", sampledAt=sample["sampledAt"], message=sample["message"])
+                  status="cached" if sample.get("retained", sample["cached"]) else "ok", sampledAt=sample["sampledAt"], message=sample["message"])
     return {key: sample[key] for key in ("failureCode", "retryAfterSeconds", "refreshAfterSeconds",
                                        "observedPlan", "observedPlanAt") if key in sample}
 

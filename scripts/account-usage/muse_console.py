@@ -556,12 +556,16 @@ def matches(state, email, plan, team, access):
 
 def state_sample(state, cached, now=None):
     now = time.time() if now is None else now
-    cached = cached and state["lastError"] is not None
+    # cached: served from saved state with no portal read in this call (the capsule pinning in
+    # browser_reading depends on it). retained: that saved reading is kept after a failed or
+    # interrupted read, so it is shown as cached; a reuse inside the refresh budget is current.
+    retained = cached and state["lastError"] is not None
     message = None
-    if cached and state["lastError"] == "rate_limited":
+    if retained and state["lastError"] == "rate_limited":
         message = "Muse is limiting requests; showing the last successful usage reading. Refresh resumes automatically."
     result = {"teamId": state["teamId"], "quota": state["quota"], "sampledAt": state["sampledAt"],
-              "cached": cached, "message": message, "failureCode": state["lastError"] if cached else None}
+              "cached": cached, "retained": retained, "message": message,
+              "failureCode": state["lastError"] if retained else None}
     if state["planVerifiedAt"] is not None:
         result.update(observedPlan=state["plan"], observedPlanAt=state["planVerifiedAt"])
     remaining = min(MAX_RETRY_SECONDS, max(0, state["nextRequestAt"] - now))
@@ -924,7 +928,7 @@ def browser_reading(cookies, requested=None, root=None):
     team = sample["teamId"]
     result = account("muse", "mac")
     result.update(email=expected_email, plan=plan, source="Authenticated Meta web quota on Mac",
-                  status="cached" if sample["cached"] else "ok", message=sample["message"], fetchedAt=utc_now(),
+                  status="cached" if sample["retained"] else "ok", message=sample["message"], fetchedAt=utc_now(),
                   sampledAt=sample["sampledAt"], windows=usage.normalize_muse({"subscription_quota": sample["quota"]}))
     if not result["windows"]:
         raise MuseError("invalid_response")
