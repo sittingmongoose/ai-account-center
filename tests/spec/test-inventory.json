@@ -179,6 +179,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-http/src/read_files.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-http/src/unix.rs",
       "kind": "internal",
       "evidence": [],

@@ -15,7 +15,7 @@ const MAX_VISIBILITY_BYTES: u64 = 32 * 1024;
 const PREFERENCES_FILE: &str = "dashboard-preferences.json";
 const EXTRA_SOURCES_FILE: &str = "dashboard-preferences-extra-sources.json";
 const MAX_PREFERENCES_BYTES: u64 = 64 * 1024;
-const COMPUTERS: &str = include_str!("../../../web-dashboard/public/computers.json");
+pub(crate) const COMPUTERS: &str = include_str!("../../../web-dashboard/public/computers.json");
 
 /// `DASHBOARD_PROVIDER_IDS` (src/web-server/services/dashboard-provider-table.ts).
 const PROVIDERS: &[&str] = &[
@@ -242,6 +242,21 @@ pub(crate) fn visibility(root: &Path) -> Option<Value> {
         Capped::Symlink | Capped::TooLarge | Capped::Bytes { .. } => return None,
     };
     Some(json!({ "visibility": lists, "folderWarnings": warnings }))
+}
+
+/// Every computer's `machineId`, in table order: TS `MACHINE_IDS`
+/// (src/web-server/services/dashboard-hosts.ts) reads the same file.
+pub(crate) fn machine_ids() -> Option<Vec<String>> {
+    machine_ids_in(COMPUTERS)
+}
+
+pub(crate) fn machine_ids_in(table: &str) -> Option<Vec<String>> {
+    let table: Value = serde_json::from_str(table).ok()?;
+    table
+        .as_object()?
+        .values()
+        .map(|computer| Some(computer.as_object()?.get("machineId")?.as_str()?.to_owned()))
+        .collect()
 }
 
 /// The computers an extra usage-log folder can sit on, and each one's OS.
