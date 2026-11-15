@@ -458,6 +458,647 @@
       },
       "expect": "equal",
       "referenceStatus": "ok"
+    },
+    {
+      "name": "final-astra-M1-array-0",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TIME_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z",
+              "usageDetails": [
+                {
+                  "modelCode": [],
+                  "usage": 3
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "fallback",
+      "referenceStatus": "error"
+    },
+    {
+      "name": "final-astra-M1-object-0",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TIME_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z",
+              "usageDetails": [
+                {
+                  "modelCode": {},
+                  "usage": 3
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "fallback",
+      "referenceStatus": "error"
+    },
+    {
+      "name": "final-astra-M1-named-array-29",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TIME_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z",
+              "usageDetails": [
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": [
+                    "search-prime"
+                  ],
+                  "usage": 3
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "fallback",
+      "referenceStatus": "error"
+    },
+    {
+      "name": "final-astra-M1-named-object-29",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TIME_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z",
+              "usageDetails": [
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": {
+                    "name": "search-prime"
+                  },
+                  "usage": 3
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "fallback",
+      "referenceStatus": "error"
+    },
+    {
+      "name": "final-astra-M1-array-30-unread",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TIME_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z",
+              "usageDetails": [
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": "other",
+                  "usage": 1
+                },
+                {
+                  "modelCode": [],
+                  "usage": 3
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "final-astra-M1-tokens-limit-array",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TOKENS_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z",
+              "usageDetails": [
+                {
+                  "modelCode": [],
+                  "usage": 3
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "final-astra-M1-unknown-string",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TIME_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z",
+              "usageDetails": [
+                {
+                  "modelCode": "unknown",
+                  "usage": 3
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
+    },
+    {
+      "name": "final-astra-M1-non-object-detail",
+      "provider": "zai",
+      "payload": {
+        "success": true,
+        "code": 200,
+        "data": {
+          "level": "pro",
+          "limits": [
+            {
+              "type": "TIME_LIMIT",
+              "number": 5,
+              "unit": 3,
+              "usage": 100,
+              "currentValue": 25,
+              "nextResetTime": "2026-01-01T00:00:00Z",
+              "usageDetails": [
+                []
+              ]
+            }
+          ]
+        }
+      },
+      "packs": {
+        "success": true,
+        "data": {
+          "fiveHourResets": [],
+          "weekResets": []
+        }
+      },
+      "expect": "equal",
+      "referenceStatus": "ok"
     }
   ]
 }
