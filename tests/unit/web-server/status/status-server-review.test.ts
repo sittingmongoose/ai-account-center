@@ -703,7 +703,11 @@ describe('an unavailable share', () => {
     expect(outcomes.at(-1)).toBe('share_unavailable');
     const stored = outcomes.filter((outcome) => outcome === 'recorded').length;
     expect(answers.list()).toHaveLength(stored);
-    expect(answers.list().every((e) => e.share.state === 'failed')).toBe(true);
+    // The budget can expire after the durable record but before its first share
+    // attempt. That record stays pending; attempted writes on the hung share fail.
+    for (const saved of answers.list()) {
+      expect(saved.share.state).toBe(saved.share.attempts === 0 ? 'pending' : 'failed');
+    }
     expect(answers.sendList()[0].summary.state).toBe('pending');
     const delivered = () =>
       answers.list().every((e) => e.share.state === 'done') &&
