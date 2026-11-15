@@ -10,7 +10,8 @@
  * same second, checked before the rounds).
  *
  *   node tests/spec/status-measure.mjs --dist <dist> --binary <aac-http> --out <file.json>
- *        [--rounds 10] [--samples 40] [--clients 16] [--seconds 20]
+ *        [--rounds 10] [--samples 40] [--clients 16] [--seconds 20] [--base <aac-http>]
+ * `--base` adds today's envelope path on another build's service (`on:base`, the before of the composer).
  * Called by `read-http-parity.ts --measure`. Fixture data only; the processes it starts are its own.
  */
 import assert from 'node:assert/strict';
@@ -34,6 +35,7 @@ const rounds = Number(option('rounds', 10));
 const samples = Number(option('samples', 40));
 const clients = Number(option('clients', 16));
 const seconds = Number(option('seconds', 20));
+const base = option('base', process.env.AAC_R2_BASE_BINARY ?? null);
 assert.ok(out, '--out <file.json> is required');
 assert.ok(fs.existsSync(binary), `no aac-http at ${binary}`);
 const scratch = fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), 'aac-r2-measure-'));
@@ -48,9 +50,9 @@ function home(name) {
   return { root, summary: JSON.parse(made.stdout) };
 }
 
-function start(mode, root) {
+function start(mode, root, label = mode, bin = binary) {
   return new Promise((resolve, reject) => {
-    const child = fork(path.join(here, 'status-measure-server.cjs'), [dist, binary, mode, root], {
+    const child = fork(path.join(here, 'status-measure-server.cjs'), [dist, bin, mode, root], {
       execArgv: ['--expose-gc'],
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
@@ -121,10 +123,12 @@ try {
   const fixture = home('off').summary;
   home('on');
   home('fed');
+  if (base) home('base');
   const servers = [
     await start('off', path.join(scratch, 'off')),
     await start('on', path.join(scratch, 'on')),
     await start('fed', path.join(scratch, 'fed')),
+    ...(base ? [await start('on', path.join(scratch, 'base'), 'on:base', path.resolve(base))] : []),
   ];
   // Warm up, and check the fed server's answers: on one read, the fed path's bytes are today's builder's.
   for (const worker of servers)
@@ -214,6 +218,13 @@ try {
     host: os.hostname(),
     cpus: os.cpus().length,
     binarySha256: spawnSync('sha256sum', [binary], { encoding: 'utf8' }).stdout.split(' ')[0],
+    ...(base
+      ? {
+          baseBinarySha256: spawnSync('sha256sum', [base], { encoding: 'utf8' }).stdout.split(
+            ' '
+          )[0],
+        }
+      : {}),
     fixture,
     viewBytes: sizes,
     fedVerified: verified.length,
