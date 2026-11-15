@@ -251,6 +251,7 @@ describe('what the scanner says about failures reaches the cell', () => {
     });
     const { cell } = await scans([limited]);
     expect(cell?.detail).not.toContain('0 of more');
+    expect(cell?.detail).not.toContain('0 folders checked');
     expect(cell?.detail).toContain('additional folders may remain');
     expect(cell?.detail).not.toContain('logs in the others are not counted');
   });

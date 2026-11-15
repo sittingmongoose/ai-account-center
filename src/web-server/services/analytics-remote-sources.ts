@@ -2072,7 +2072,7 @@ export async function loadAnalyticsRemoteSources(
                     : kind?.unreadableRecords
                       ? `${kind.unreadableRecords.toLocaleString('en-US')} ${tool === 'cursor' ? 'Cursor runs' : 'replies'} could not be read (${tool === 'cursor' ? "their token counts fit neither of the SDK's two conventions, or their usage JSON is damaged" : 'their token counts or time are missing'}); they are counted as unreadable, never guessed`
                       : limit
-                        ? `search limit reached: ${limit.found === null ? `${limit.read.toLocaleString('en-US')} folders checked; additional folders may remain` : `${limit.read.toLocaleString('en-US')} of ${limit.found.toLocaleString('en-US')} folders checked`}; discovery is incomplete; ${kept ? 'showing what was read' : 'nothing counted yet'}`
+                        ? `search limit reached: ${limit.found === null ? 'additional folders may remain' : `${limit.read.toLocaleString('en-US')} of ${limit.found.toLocaleString('en-US')} folders checked`}; discovery is incomplete; ${kept ? 'showing what was read' : 'nothing counted yet'}`
                         : tool === 'codex' && kind?.compressedUnread
                           ? `${kind.compressedUnread} compressed Codex logs could not be read on this computer (needs Python 3.14 or the zstd tool); ${kept ? 'showing previously read aggregates' : 'waiting for readable logs'}`
                           : kind?.readFailures
