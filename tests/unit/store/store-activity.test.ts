@@ -1,3 +1,4 @@
+import { loadStoreTestModule } from '../../support/store-handle';
 /**
  * Analytics usage history in the store (docs/store.md section 12), with the real native module
  * (dist/native, built by `bun run store:build`). Skipped, and said so, when this computer has no
@@ -7,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
+import { nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
 import {
   ActivityIngestor,
@@ -31,7 +32,7 @@ import type { AccountDashboard } from '../../../src/web-server/services/account-
 import type { AnalyticsRemoteSourceState } from '../../../src/web-server/services/analytics-remote-sources';
 
 const MODULE = path.resolve(__dirname, '../../../dist/native', nativeModuleName());
-const loaded = loadNativeStore({ env: {}, file: MODULE });
+const loaded = loadStoreTestModule({ env: {}, file: MODULE });
 if (!loaded.module)
   console.warn(`[!] ${MODULE} is not built: the activity history tests are skipped (bun run store:build).`);
 const maybe = loaded.module ? describe : describe.skip;

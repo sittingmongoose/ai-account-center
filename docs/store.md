@@ -11,7 +11,7 @@ record of what happened, and **redb** tables are projections of that log that an
 Puppet Master's storage plan (`Plans/storage-plan.md`: seglog, projectors, redb), so AAC is that plan's
 first working trial. Section 2.7 lists what is mirrored and what is left out.
 
-**Boundary.** The store is a storage library: a small Rust crate (`native/aac-store/`) loaded by the
+**Boundary.** The store is a storage library: a small Rust crate (`crates/aac-store/`) loaded by the
 TypeScript server as a native Node module (napi-rs). It appends, projects, queries and maintains, and
 nothing else. Routes, authentication, collectors, provider parsing, switching, signing and every product
 rule stay in TypeScript. The crate makes no network or provider calls. The TypeScript server
@@ -255,7 +255,7 @@ recovered.
 | Manifest with watermark; intents for every destructive step; folder fsync on create, rename and unlink | mirrored |
 | Projector checkpoints `{segment_generation, segment_name, byte_offset, last_sequence_id, last_event_id, survivor_prefix_sha256, projector_schema_version}` committed with the projection | mirrored |
 | Store version admission, `blocked_newer_store`, no downgrade in place | mirrored |
-| Storage value registry | mirrored as `native/aac-store/registry.json`: one row per table and event type with key shape, value schema, version, producer, consumers, retention and authority class (all AAC tables are `derived_rebuildable`) |
+| Storage value registry | mirrored as `crates/aac-store/registry.json`: one row per table and event type with key shape, value schema, version, producer, consumers, retention and authority class (all AAC tables are `derived_rebuildable`) |
 | Uncompressed frames in the first profile | changed: whole sealed segments are compressed (frames inside unchanged) |
 | One app-global seglog plus successor-generation compaction for retention | changed: two logs by retention class; expiry deletes whole sealed segments |
 | Canonical non-rebuildable redb families, mandatory backup snapshots before mutation | left out: every AAC table is rebuildable from the logs |
@@ -585,8 +585,8 @@ whole and atomically:
 ### 9.1 Crate
 
 ```
-native/aac-store/
-  Cargo.toml, Cargo.lock, rust-toolchain.toml (1.99.1, the web dashboard's pin), build.rs (napi-build)
+crates/aac-store/
+  Cargo.toml (a workspace member since R3: the root Cargo.lock pins it), rust-toolchain.toml (1.99.1, the web dashboard's pin), build.rs (napi-build)
   registry.json             value registry (2.7)
   src/lib.rs                napi exports only
   src/log/                  frame, canonical msgpack, segment, manifest, writer, reader, recovery, compress
@@ -611,7 +611,7 @@ need a C compiler (checked in phase 0; the pure-Rust `ruzstd` is the fallback).
 | `scripts/build-native.js` | `cargo build --release --locked` for the host target; copies the result to `dist/native/aac-store.<platform>-<arch>.node`; records its SHA-256 for `deployed-build.json`. Runs inside `bun run build` and `build:all` |
 | Platforms | `linux-x64` first and required on the dashboard VM (built there at deploy, as the WebAssembly UI is). Then `win32-x64` (through the Windows build recipe) and `darwin-arm64`, optional: missing means 4.10 |
 | `verify-bundle.js` | fails the build when the host's `.node` is missing or its hash does not match |
-| Package | `files` adds `native/aac-store/` sources (as `web-dashboard/` sources are listed) so an install can rebuild |
+| Package | `files` adds `crates/aac-store/` sources (as `web-dashboard/` sources are listed) so an install can rebuild |
 | Loader | `src/store/native-loader.ts` picks the file by `process.platform` and `process.arch`, checks the export version, and returns `null` on any failure (4.10). Works under Node and Bun (both load N-API modules) |
 
 ### 9.3 Tests
@@ -632,7 +632,7 @@ All tests use a temporary `CCS_HOME`, never the real home.
 ### 9.4 CI parity and the build lane
 
 `scripts/ci-parity-gate.sh` and `.github/workflows/ci.yml` gain `cargo fmt --check`, `cargo clippy
---locked -D warnings` and `cargo test --locked` for `native/aac-store`, and the build gains the `.node`.
+--locked -D warnings` and `cargo test --locked` for `crates/aac-store`, and the build gains the `.node`.
 The Rust toolchain is already installed for the WebAssembly UI. Expect a first cold build of about two
 minutes (redb, zstd) and seconds after that with `target/` cached; the pre-push gate grows by that much.
 
@@ -679,7 +679,7 @@ Phases 0 and 1 are built on branch `t3/aac-store`. Phases 2 to 5 remain design.
 | Backups (4.7) | `<root>/pool/<log>/<segment>` plus `<root>/sets/<id>/backup.json`; local root `store/backups/`; share root `share/ai-account-center/store-backups/<instance>` (or `AAC_STORE_SHARE_BACKUP_DIR`), used only when `share/ai-account-center` exists beside the usage snapshot folder | an unmounted share never grows a local folder |
 | CLI (8.2) | `ai-account-center dashboard store status|check|backup|restore <dir>` | it follows `dashboard usage-snapshot`; status uses `AAC_DASHBOARD_URL` and `AAC_DEVICE_TOKEN` while the dashboard runs |
 | Analytics (8.1) | `/api/accounts/analytics` keeps its 31-day range; the 90 days are served by `/api/usage/*` | no Slint range change in this phase |
-| Build (9.2) | `bun run store:build` compiles into `native/aac-store/prebuilt/` (gitignored, with a `.json` note of its sources) and copies into `dist/native/`; every `build` copies an existing prebuilt module; `verify-bundle` warns when it is absent | `build:all` and `prepack` delete `dist/`; the Linux module cannot be built yet |
+| Build (9.2) | `bun run store:build` compiles into `crates/aac-store/prebuilt/` (gitignored, with a `.json` note of its sources) and copies into `dist/native/`; every `build` copies an existing prebuilt module; `verify-bundle` warns when it is absent | `build:all` and `prepack` delete `dist/`; the Linux module cannot be built yet |
 | CI gate (9.4) | `bun run store:check` and `store:build` in the parity gate and GitHub CI; `AAC_STORE_RUST=off` skips them | machines that may not run Rust builds |
 | MessagePack | the decoder caps nesting at 64 (PM: iterative, no cap) | AAC payloads are shallow |
 | Folder fsync | Unix fsyncs folders; Windows cannot, and relies on NTFS metadata journaling | |
@@ -865,7 +865,7 @@ bun run store:build
 
 It needs cargo with rustup (the crate's `rust-toolchain.toml` pins 1.99.1 and installs it), a C
 compiler for zstd (`build-essential`), and glibc no newer than the VM's. No napi CLI is needed: cargo
-builds the cdylib and the script copies it as `.node`. Copy `native/aac-store/prebuilt/` to the VM's
+builds the cdylib and the script copies it as `.node`. Copy `crates/aac-store/prebuilt/` to the VM's
 checkout when built elsewhere; the next `bun run build` puts it in `dist/native/`. Until then the VM's
 dashboard keeps its JSON history.
 
@@ -1048,3 +1048,43 @@ be established, export generation fails before publication, preserving the last 
 Unreadable segments classify rebuild status as degraded with their sequence loss bounds.
 Repeated integrity checks include known loss findings, so a later CLI check cannot print an
 all-clear for previously detected corruption.
+
+## 15. Optional Rust store host (R3)
+
+The default remains the in-process NAPI writer. With `rustService.mode: on` and
+`rustService.store: on` in `config.yaml`, `aac-http` owns the same store files.
+`AAC_RUST_STORE=on|off` overrides that store setting; `shadow` never hosts a store.
+`AAC_STORE=off` still disables the store. Restart the dashboard after changing a setting.
+
+`AacStore` keeps its API and uses `SocketStoreHandle` for the JSON method contract at
+`POST /internal/store/<method>`. Only the boot-secret-authenticated front door with
+its service principal may call this internal route. Store requests queue on four
+blocking permits, have 16 MiB request / 64 MiB reply caps, and are never retried
+across a transport failure: an unanswered write may have committed. While the
+service restarts, calls report `service_down`; no NAPI writer is opened alongside it.
+The fifth crash within the restart budget hands the files back to NAPI, logs
+`store.host_fallback`, and resumes TypeScript maintenance. The kernel store lock
+refuses any competing writer, including a service restarting while NAPI holds it.
+
+The boot compares the NAPI module's compiled commit, store schema and binding
+version against the service's store library before opening or migrating files.
+The socket handle checks them again against the service health identity before
+its first open on each boot, and before a fallback. Build both artifacts from the
+same commit. A legacy module without this identity still works with hosting off.
+
+Rust runs the first maintenance pass after three minutes, then every 15 minutes,
+with the existing daily backup, share copy and weekly verify/compaction/redb
+snapshot cadence and meta keys. `/api/store/status` reads this Engine directly.
+Shutdown stops TS producers, drains admitted socket calls, awaits the idempotent
+store close, then stops the service. Setting `store: off` and restarting restores
+the NAPI path. Rollback across a schema migration still needs its rollback copy.
+
+The fixture gate is `node tests/spec/store-host.mjs`, after `build:server` and
+Nas1-built native modules and `aac-http --features parity-fixtures`. It runs the
+existing store suites through both handles, four in-flight SIGKILL drills, the
+five-crash fallback, backup restore and restart-race exclusion. The pause files
+exist only in fixture-feature binaries; release builds have no drill hooks.
+`--drills-only` skips the suite replay. `--measure --out=/absolute/path.json`
+measures five alternating off/on rounds under Node with a release binary.
+A seven-day install soak, including weekly maintenance and the share backup,
+remains a separate turn-on gate; R3 leaves the switch off.

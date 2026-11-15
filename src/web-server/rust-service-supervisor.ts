@@ -16,8 +16,19 @@ import {
   type RustLease,
 } from './rust-service-lifecycle';
 import { RestartBudget, RouteBreakers, RouteStats, type RouteOutcome } from './rust-service-health';
-import { requestRust, registerRustAgentConnection } from './rust-service-transport';
+import {
+  notifyRustStoreGaveUp,
+  registerRustStoreConnection,
+  requestRust,
+  registerRustAgentConnection,
+  setRustStoreHosted,
+  type RustStoreBootInput,
+} from './rust-service-transport';
 import { settlePrivateFileOwners } from '../shared/private-files';
+import { rustStoreSwitchOn } from './rust-service-groups';
+import { loadNativeStore } from '../store/native-loader';
+import { shareBackupEnv, storeOpenEnv, STORE_RAW_RETENTION_DAYS } from '../store/store-service';
+import { readSnapshotSettings } from './agent-usage/agent-usage-settings';
 
 export type RustServiceMode = 'off' | 'shadow' | 'on';
 
@@ -82,6 +93,9 @@ export class RustSupervisor {
   protected readonly restarts: RestartBudget;
   protected lease: RustLease | null = null;
   private removeAgentConnection: (() => void) | null = null;
+  private removeStoreConnection: (() => void) | null = null;
+  /** R3: the store host's boot input, resolved once in `start`; null keeps the store in TS. */
+  protected storeBoot: RustStoreBootInput | null = null;
   protected active = new Set<http.ClientRequest>();
   protected inFlight = 0;
   protected readonly shadowInFlight = new Map<string, number>();
@@ -125,6 +139,36 @@ export class RustSupervisor {
       if (transport !== 'on') return;
     }
     this.binary = binary;
+    // R3: the store host's boot input, resolved once: its own switch, mode on (no shadow
+    // for the one writer) and the store not disabled. Everything else keeps the store here.
+    if (
+      this.mode === 'on' &&
+      rustStoreSwitchOn() &&
+      (process.env.AAC_STORE ?? '').trim().toLowerCase() !== 'off'
+    ) {
+      let bindingIdentity: unknown = null;
+      try {
+        const loaded = loadNativeStore();
+        const text = loaded.module?.buildIdentity?.();
+        if (text) bindingIdentity = JSON.parse(text);
+      } catch {
+        /* The service rejects an unproved binding before opening the store. */
+      }
+      this.storeBoot = {
+        bindingIdentity,
+        retentionDays: STORE_RAW_RETENTION_DAYS,
+        ...storeOpenEnv(process.env),
+        snapshotDirectory: null,
+        ...shareBackupEnv(process.env),
+      };
+      // L1 starts in the background. Reserve the hosted writer before the first await,
+      // so an early producer cannot open NAPI while the boot config is still loading.
+      setRustStoreHosted(getCcsDir(), true);
+      const snapshotDirectory =
+        (await readSnapshotSettings(getCcsDir()).catch(() => null))?.directory ?? null;
+      if (this.stopped) return;
+      this.storeBoot.snapshotDirectory = snapshotDirectory;
+    }
     this.minuteTimer = setInterval(() => this.logMinute(), 60_000);
     this.minuteTimer.unref();
     // The Rust child's RSS joins the event-loop monitor's minute line (design 4.2).
@@ -135,7 +179,8 @@ export class RustSupervisor {
         getCcsDir(),
         binary,
         this.active,
-        this.acquisition.signal
+        this.acquisition.signal,
+        this.storeBoot
       );
       failure = result.failure;
       if (this.stopped) {
@@ -161,6 +206,8 @@ export class RustSupervisor {
       reason: failure ?? 'unhealthy',
     });
     if (failure === 'unhealthy' || failure === 'spawn') this.scheduleRestart();
+    // R3: no restart is coming for the other failures, so the store falls back at once.
+    else if (this.storeBoot) notifyRustStoreGaveUp(getCcsDir());
   }
 
   stop(): void {
@@ -175,6 +222,9 @@ export class RustSupervisor {
     for (const request of this.active) request.destroy();
     this.removeAgentConnection?.();
     this.removeAgentConnection = null;
+    this.removeStoreConnection?.();
+    this.removeStoreConnection = null;
+    if (this.storeBoot) setRustStoreHosted(getCcsDir(), false);
     this.lease?.close();
     this.lease = null;
   }
@@ -194,6 +244,21 @@ export class RustSupervisor {
       this.active,
       { replied: () => this.replied(lease), failed: (kind) => this.transportFailed(lease, kind) }
     );
+    // R3: the store's socket handle resolves this boot per call. An attached boot is
+    // registered as such, never driven: its store belongs to the owning front door.
+    this.removeStoreConnection?.();
+    this.removeStoreConnection = this.storeBoot
+      ? registerRustStoreConnection(
+          lease.connection.ccsDir,
+          lease.connection,
+          this.active,
+          {
+            replied: () => this.replied(lease),
+            failed: (kind) => this.transportFailed(lease, kind),
+          },
+          lease.owned
+        )
+      : null;
     this.lease = lease;
     lease.onExit((code, signal) => this.lost(lease, 'exit', { code, signal }));
   }
@@ -203,6 +268,8 @@ export class RustSupervisor {
     if (this.stopped || this.lease !== lease) return;
     this.removeAgentConnection?.();
     this.removeAgentConnection = null;
+    this.removeStoreConnection?.();
+    this.removeStoreConnection = null;
     this.lease = null;
     lease.close();
     logger.warn('rust.service.lost', 'Rust service stopped; TypeScript answers', {
@@ -215,13 +282,17 @@ export class RustSupervisor {
   protected scheduleRestart(): void {
     if (this.stopped || this.restartTimer || this.gaveUp || !this.binary) return;
     const delay = this.restarts.next();
-    if (delay === null) {
+    // R3's fifth crash consumes the last restart slot as a handoff to NAPI. Do not
+    // start another writer only to crash it a sixth time before automatic rollback.
+    if (delay === null || (this.storeBoot !== null && this.restarts.used >= 5)) {
       this.gaveUp = true;
       logger.error(
         'rust.service.gave_up',
         'Rust service restarted too often; off until the next dashboard start',
         { restarts: this.restarts.used }
       );
+      // R3: the dead service released the store lock; TS opens it in process (design 1.3).
+      if (this.storeBoot) notifyRustStoreGaveUp(getCcsDir());
       return;
     }
     const binary = this.binary;
@@ -233,7 +304,8 @@ export class RustSupervisor {
             getCcsDir(),
             binary,
             this.active,
-            this.acquisition.signal
+            this.acquisition.signal,
+            this.storeBoot
           );
           failure = result.failure;
           if (result.lease) {

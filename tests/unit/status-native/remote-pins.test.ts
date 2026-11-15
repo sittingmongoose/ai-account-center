@@ -16,7 +16,7 @@ import { nativeStatusModuleName } from '../../../src/status-native/native-loader
 /** The module `bun run status:build` leaves behind; this check needs the real parser. */
 const PREBUILT = path.join(
   import.meta.dir,
-  '../../../native/aac-status/prebuilt',
+  '../../../crates/aac-status/prebuilt',
   nativeStatusModuleName()
 );
 const hasModule = fs.existsSync(PREBUILT);

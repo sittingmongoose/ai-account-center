@@ -4,7 +4,7 @@
  * Today's TypeScript collectors' rows become contract reports (`buildActivityReports`) that the
  * Rust store checks and decides on; the page's activity is read back from the store
  * (`storeActivityAnswer`) and shaped by the existing projection. Ingest decisions, retention,
- * day close, bucketing and coverage are all in `native/aac-store/src/activity.rs`.
+ * day close, bucketing and coverage are all in `crates/aac-store/src/activity.rs`.
  */
 import { createHash } from 'crypto';
 import type { AacStore } from './store-service';

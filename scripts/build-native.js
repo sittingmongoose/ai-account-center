@@ -4,15 +4,15 @@
  * The history store's native module (docs/store.md 9.2).
  *
  *   node scripts/build-native.js            (bun run store:build)
- *     Compiles native/aac-store with cargo for this computer, keeps the result in
- *     native/aac-store/prebuilt/aac-store.<platform>-<arch>.node (with a .json note of the
+ *     Compiles crates/aac-store with cargo for this computer, keeps the result in
+ *     crates/aac-store/prebuilt/aac-store.<platform>-<arch>.node (with a .json note of the
  *     sources it was built from), checks that Node loads it, and copies it into dist/native/.
  *
  *   node scripts/build-native.js --copy-only   (every `build` runs this)
  *     Copies an existing prebuilt module into dist/native/ without compiling. A machine with
  *     no prebuilt module builds a dashboard that runs without stored history.
  *
- * Needs for a compile: cargo with the toolchain in native/aac-store/rust-toolchain.toml
+ * Needs for a compile: cargo with the toolchain in crates/aac-store/rust-toolchain.toml
  * (rustup installs it), a C compiler (zstd is C), and on Linux glibc as on the target machine:
  * build on the machine that runs the dashboard, or one with the same or an older glibc.
  */
@@ -22,7 +22,7 @@ const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const CRATE = path.join(ROOT, 'native', 'aac-store');
+const CRATE = path.join(ROOT, 'crates', 'aac-store');
 const PREBUILT = path.join(CRATE, 'prebuilt');
 const DIST = path.join(ROOT, 'dist', 'native');
 const BINDING_VERSION = 2;
@@ -41,11 +41,12 @@ function cdylibName() {
 function sourceHash() {
   const files = [
     'Cargo.toml',
-    'Cargo.lock',
+    '../../Cargo.toml',
+    '../../Cargo.lock',
     'build.rs',
     'rust-toolchain.toml',
     '../../src/shared/secret-policy.json',
-    '../shared/secret_policy.rs',
+    '../../native/shared/secret_policy.rs',
     // runs.rs embeds the package's computer table.
     '../../web-dashboard/public/computers.json',
   ];
@@ -77,13 +78,14 @@ function checkLoads(file) {
     process.execPath,
     [
       '-e',
-      `const m = require(${JSON.stringify(file)}); if (m.bindingVersion() !== ${BINDING_VERSION}) process.exit(3);`,
+      `const m = require(${JSON.stringify(file)}); if (m.bindingVersion() !== ${BINDING_VERSION} || typeof m.buildIdentity !== "function") process.exit(3); console.log(m.buildIdentity());`,
     ],
     { encoding: 'utf8' }
   );
   if (result.status !== 0) {
     throw new Error(`Node could not load ${path.basename(file)}: ${(result.stderr || '').trim()}`);
   }
+  return JSON.parse(result.stdout);
 }
 
 function copyToDist() {
@@ -122,7 +124,7 @@ function build() {
     ? path.resolve(process.env.CARGO_TARGET_DIR)
     : path.join(CRATE, 'target');
   console.log('[i] Building the history store module (cargo build --release --locked)...');
-  const result = spawnSync('cargo', ['build', '--release', '--locked'], {
+  const result = spawnSync('cargo', ['build', '-p', 'aac-store', '--release', '--locked'], {
     cwd: CRATE,
     stdio: 'inherit',
     env: { ...process.env, CARGO_TARGET_DIR: target },
@@ -135,7 +137,7 @@ function build() {
   // Node chooses its loader by extension, so the temporary copy keeps `.node`.
   const temporary = destination.replace(/\.node$/, `.tmp-${process.pid}.node`);
   fs.copyFileSync(artifact, temporary);
-  checkLoads(temporary);
+  const buildIdentity = checkLoads(temporary);
   fs.renameSync(temporary, destination);
   const rustc = spawnSync('rustc', ['--version'], { encoding: 'utf8', cwd: CRATE });
   const note = {
@@ -143,11 +145,12 @@ function build() {
     sha256: fileSha(destination),
     sourceSha256: sourceHash(),
     bindingVersion: BINDING_VERSION,
+    buildIdentity,
     rustc: (rustc.stdout || '').trim() || null,
     builtAt: new Date().toISOString(),
   };
   fs.writeFileSync(`${destination}.json`, `${JSON.stringify(note, null, 2)}\n`);
-  console.log(`[OK] Built native/aac-store/prebuilt/${name}`);
+  console.log(`[OK] Built crates/aac-store/prebuilt/${name}`);
   copyToDist();
 }
 

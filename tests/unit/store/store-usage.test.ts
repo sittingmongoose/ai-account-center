@@ -1,3 +1,4 @@
+import { loadStoreTestModule } from '../../support/store-handle';
 /**
  * The history store with the real native module (dist/native, built by `bun run store:build`).
  * Skipped, and said so, when this computer has no module. Every store lives in a temporary
@@ -10,7 +11,7 @@ import * as path from 'path';
 import * as zlib from 'zlib';
 import express from 'express';
 import type { Server } from 'http';
-import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
+import { nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore } from '../../../src/store/store-service';
 import { buildRollupExports } from '../../../src/store/usage-exports';
 import { backfillUsageHistory } from '../../../src/store/usage-backfill';
@@ -38,11 +39,13 @@ import type {
 import type { AccountAnalyticsActivity } from '../../../src/web-server/services/account-analytics-types';
 
 const MODULE = path.resolve(__dirname, '../../../dist/native', nativeModuleName());
-const loaded = loadNativeStore({ env: {}, file: MODULE });
+const loaded = loadStoreTestModule({ env: {}, file: MODULE });
 const haveModule = loaded.module !== null;
 if (!haveModule)
   console.warn(`[!] ${MODULE} is not built: the store tests are skipped (bun run store:build).`);
 
+// These full-history fixtures check completeness, with extra I/O time for the socket handle.
+const LARGE_FIXTURE_TIMEOUT_MS = process.env.AAC_TEST_STORE_HANDLE === 'socket' ? 180_000 : 60_000;
 const MIN = 60_000;
 const HOUR = 3_600_000;
 const START = Date.parse('2026-10-01T10:00:00Z');
@@ -448,7 +451,7 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
     } finally {
       await store.close();
     }
-  }, 60_000);
+  }, LARGE_FIXTURE_TIMEOUT_MS);
 
   it('the burn route finds every series, however many hourly points they hold', async () => {
     const dir = fs.mkdtempSync(path.join(sandbox, 'burn-'));
@@ -507,7 +510,7 @@ describe.skipIf(!haveModule)('history store with the native module', () => {
       if (open) await new Promise<void>((resolve) => open.close(() => resolve()));
       await store.close();
     }
-  }, 60_000);
+  }, LARGE_FIXTURE_TIMEOUT_MS);
 
   it('later CLI checks continue to report known segment corruption', async () => {
     const home = fs.mkdtempSync(path.join(sandbox, 'check-corruption-'));

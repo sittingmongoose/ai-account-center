@@ -28,7 +28,10 @@ use std::{
         net::UnixListener as StdListener,
     },
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use subtle::ConstantTimeEq;
@@ -58,6 +61,10 @@ pub struct Boot {
     /// `config/private-files.json`); absent means every row's own `owner`.
     #[serde(default)]
     pub files: Option<BTreeMap<String, String>>,
+    /// R3: the store host's config as TS resolved it at start; absent (or null) keeps the
+    /// store in the TS process.
+    #[serde(default)]
+    pub store: Option<crate::store_host::StoreBoot>,
 }
 
 struct Shared {
@@ -66,6 +73,8 @@ struct Shared {
     identity: Identity,
     feeds: Feeds,
     agents: Arc<crate::agent_transport::Agents>,
+    /// R3: the hosted store, when the boot carries its config.
+    store: Option<Arc<crate::store_host::StoreHost>>,
 }
 
 #[derive(Clone)]
@@ -105,8 +114,20 @@ impl Boot {
     pub fn from_json(bytes: &[u8]) -> serde_json::Result<Self> {
         crate::json_object::from_slice(
             bytes,
-            &["ccsDir", "socketPath", "secret", "bootId", "files"],
+            &["ccsDir", "socketPath", "secret", "bootId", "files", "store"],
         )
+        .or_else(|_| {
+            crate::json_object::from_slice(
+                bytes,
+                &["ccsDir", "socketPath", "secret", "bootId", "files"],
+            )
+        })
+        .or_else(|_| {
+            crate::json_object::from_slice(
+                bytes,
+                &["ccsDir", "socketPath", "secret", "bootId", "store"],
+            )
+        })
         .or_else(|_| {
             crate::json_object::from_slice(bytes, &["ccsDir", "socketPath", "secret", "bootId"])
         })
@@ -141,6 +162,23 @@ impl Boot {
             return Err(failure());
         }
         self.owners()?;
+        // R3: the hosted store is this root's store folder, never a path from anywhere
+        // else; its job folders are absolute when named.
+        if let Some(store) = &self.store
+            && (store.binding_identity != aac_store::build_identity()
+                || store.binding_identity["commit"] == "unknown"
+                || store.dir != self.ccs_dir.join("store")
+                || store
+                    .snapshot_directory
+                    .as_ref()
+                    .is_some_and(|d| !d.is_absolute())
+                || store
+                    .share_backup_dir
+                    .as_ref()
+                    .is_some_and(|d| !d.is_absolute()))
+        {
+            return Err(failure());
+        }
         let uid = fs::metadata(&self.ccs_dir)?.uid();
         let run = self.ccs_dir.join("run");
         private_dir(&run, uid)?;
@@ -232,6 +270,16 @@ fn decline(handler: Handler, reason: Decline) -> Response {
     response
 }
 
+/// R3: a store call's error reply, the binding's `<code>: <message>` in an `error` field.
+/// Not a decline: TS's store handle turns it back into the rejection the NAPI call gave.
+fn store_error(error: &str) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": error })),
+    )
+        .into_response()
+}
+
 /// One row's endpoint: the table's roles, then its handler under its budget.
 async fn endpoint(state: AppState, row: Arc<Row>, req: Request) -> Response {
     let Some(principal) = req.extensions().get::<VerifiedPrincipal>().cloned() else {
@@ -280,6 +328,81 @@ async fn handle(state: AppState, row: Arc<Row>, req: Request) -> Response {
                     .await
             } else {
                 shared.agents.call(name, &bytes).await
+            }
+        }
+        // R3: the store host's method contract, the NAPI binding's over the socket. No
+        // deadline (the table's budget is 0): backup and maintain take as long as they
+        // took in process. Errors keep the binding's `<code>: <message>` shape.
+        Handler::Store => {
+            let Some(host) = &shared.store else {
+                return store_error("service_down: the store host is not enabled on this boot");
+            };
+            let path = req.uri().path().to_owned();
+            let method = path.strip_prefix("/internal/store/").unwrap_or_default();
+            if method.is_empty()
+                || method.len() > 32
+                || !method.bytes().all(|b| b.is_ascii_alphanumeric())
+            {
+                return store_error("invalid: unknown method");
+            }
+            let Ok(bytes) = to_bytes(req.into_body(), crate::store_host::STORE_INPUT_CAP).await
+            else {
+                return store_error("invalid: store request too large");
+            };
+            let Ok(args) = String::from_utf8(bytes.to_vec()) else {
+                return store_error("invalid: store request is not text");
+            };
+            match host.call(method.to_owned(), args).await {
+                Ok(text) => (
+                    StatusCode::OK,
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    text,
+                )
+                    .into_response(),
+                Err(error) => store_error(&error),
+            }
+        }
+        // R3: a body without the writer snapshot gets store status from the hosted Engine
+        // in process. A snapshot body stays the pre-R3 writer-validated read (store off).
+        Handler::StoreStatus => {
+            let query = req.uri().query().is_some();
+            let Ok(bytes) = to_bytes(req.into_body(), INPUT_CAP).await else {
+                return decline(row.handler, Decline::Shape);
+            };
+            let snapshot_shaped = crate::json_object::from_slice::<
+                serde_json::Map<String, serde_json::Value>,
+            >(&bytes, &["snapshot"])
+            .is_ok();
+            if snapshot_shaped {
+                let path = "/api/store/status".to_owned();
+                let root = shared.boot.ccs_dir.clone();
+                return match shared
+                    .limits
+                    .blocking(row.pool, move || {
+                        crate::read_routes::answer(
+                            Handler::StoreStatus,
+                            &path,
+                            query,
+                            &root,
+                            &bytes,
+                        )
+                    })
+                    .await
+                {
+                    Ok(value) => Json(value).into_response(),
+                    Err(reason) => decline(row.handler, reason),
+                };
+            }
+            let Some(host) = shared.store.clone() else {
+                return decline(row.handler, Decline::Unsupported);
+            };
+            match shared
+                .limits
+                .blocking(row.pool, move || host.status_value())
+                .await
+            {
+                Ok(value) => Json(value).into_response(),
+                Err(reason) => decline(row.handler, reason),
             }
         }
         Handler::Health => {
@@ -491,12 +614,14 @@ pub async fn serve(
     listener.set_nonblocking(true)?;
     let listener = UnixListener::from_std(listener)?;
     let agents = Arc::new(crate::agent_transport::Agents::new(boot.ccs_dir.clone()));
+    let store = boot.store.clone().map(crate::store_host::StoreHost::new);
     let state = AppState(Arc::new(Shared {
         boot,
         limits: Limits::new(),
         identity,
         feeds: Feeds::new(),
         agents,
+        store: store.clone(),
     }));
     // One method router per path, so a path with a GET and a PUT row is registered once.
     let mut paths: Vec<(String, MethodRouter<AppState>)> = Vec::new();
@@ -528,14 +653,82 @@ pub async fn serve(
         .layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state);
     tracing::info!(target: "aac_http", "private service ready");
-    axum::serve(listener, router)
+    // R3: the hosted store opens beside the HTTP service (its calls wait for the open),
+    // its jobs run on TS's cadence, and the engine closes cleanly when the service ends.
+    let jobs_stop = Arc::new(AtomicBool::new(false));
+    if let Some(host) = &store {
+        let opener = Arc::clone(host);
+        tokio::task::spawn_blocking(move || opener.open_at_boot());
+        let jobs = Arc::clone(host);
+        let stop = Arc::clone(&jobs_stop);
+        tokio::spawn(async move { store_jobs(jobs, stop).await });
+    }
+    let served = axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
-        .await
+        .await;
+    jobs_stop.store(true, Ordering::Release);
+    if let Some(host) = store {
+        let _ = tokio::task::spawn_blocking(move || host.close_engine()).await;
+    }
+    served
+}
+
+/// R3: the store jobs loop — the first pass minutes after start, then every 15 minutes,
+/// as TS's maintenance loop ran. Each pass is one blocking task; the flag ends the loop
+/// when the service ends.
+async fn store_jobs(host: Arc<crate::store_host::StoreHost>, stop: Arc<AtomicBool>) {
+    tokio::time::sleep(Duration::from_millis(crate::store_host::FIRST_PASS_MS)).await;
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        let pass = Arc::clone(&host);
+        let _ =
+            tokio::task::spawn_blocking(move || pass.job_pass(aac_store::engine::now_ms())).await;
+        tokio::time::sleep(Duration::from_millis(crate::store_host::MAINTAIN_EVERY_MS)).await;
+    }
 }
 
 #[cfg(test)]
 mod dto_tests {
     use super::*;
+    #[test]
+    fn store_binding_identity_is_checked_before_any_open() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = tempfile::tempdir()?;
+        let root = fs::canonicalize(root.path())?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+        let run = root.join("run");
+        fs::create_dir(&run)?;
+        fs::set_permissions(&run, fs::Permissions::from_mode(0o700))?;
+        let folder = run.join("aac-http-abcdefabcdefabcdefabcdef");
+        fs::create_dir(&folder)?;
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700))?;
+        let mut raw = serde_json::json!({
+            "ccsDir": root, "socketPath": folder.join("http.sock"),
+            "secret": "c".repeat(64), "bootId": "abcdefabcdefabcdefabcdef",
+            "store": {"dir": root.join("store"), "retentionDays": 0,
+                      "bindingIdentity": aac_store::build_identity()},
+        });
+        assert!(
+            Boot::from_json(&serde_json::to_vec(&raw)?)?
+                .validate()
+                .is_ok()
+        );
+        for field in ["commit", "storeSchema", "bindingVersion"] {
+            let original = raw["store"]["bindingIdentity"][field].clone();
+            raw["store"]["bindingIdentity"][field] = serde_json::json!("mismatch");
+            assert!(
+                Boot::from_json(&serde_json::to_vec(&raw)?)?
+                    .validate()
+                    .is_err()
+            );
+            assert!(!root.join("store").exists());
+            raw["store"]["bindingIdentity"][field] = original;
+        }
+        Ok(())
+    }
+
     #[test]
     fn short_name_matches_the_front_door() {
         // tests/unit/web-server/rust-service-health.test.ts: shortName('/home/fixture/.ccs')

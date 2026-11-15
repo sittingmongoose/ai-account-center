@@ -13,7 +13,7 @@ switch accounts: account switching (Codex activation and auto-switch,
 Antigravity activation and auto-switch) was removed on 2026-11-14, because the
 agents pick their own accounts; do not add it back. The TypeScript server stays; the web UI is Leptos
 **0.9** (client-side rendered) compiled to WebAssembly. Native bars remain Swift and WPF. Every new
-server piece is written in Rust as a native module like `native/aac-store`.
+server piece is written in Rust as a native module like `crates/aac-store`.
 Existing TypeScript modules are not ported unless the owner asks.
 
 The primary command is `ai-account-center dashboard`; `ccs config` is compatible.

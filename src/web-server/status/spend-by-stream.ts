@@ -1,6 +1,6 @@
 /**
  * The Status view's `spendByStream` field through the aac-status native module
- * (native/aac-status/src/spend.rs): a pure function over the SpendView this server already
+ * (crates/aac-status/src/spend.rs): a pure function over the SpendView this server already
  * builds, every word decided there. Any failure — no module, a rejected call, an answer
  * that is not the composer's own shape — is the contract's fixed unavailable shape; nothing
  * here throws, guesses, or builds a figure of its own.

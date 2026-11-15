@@ -9,7 +9,7 @@ import { StatusDocsReader } from '../../../src/web-server/status/status-docs';
 /** The module `bun run status:build` leaves behind; the gate check needs the real reader. */
 const PREBUILT = path.join(
   import.meta.dir,
-  '../../../native/aac-status/prebuilt',
+  '../../../crates/aac-status/prebuilt',
   nativeStatusModuleName()
 );
 const hasModule = fs.existsSync(PREBUILT);

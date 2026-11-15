@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** Must equal the crate's BINDING_VERSION (native/aac-store/src/node.rs). */
+/** Must equal the crate's BINDING_VERSION (crates/aac-store/src/node.rs). */
 export const STORE_BINDING_VERSION = 2;
 
 export interface NativeStoreHandle {
@@ -15,6 +15,8 @@ export interface NativeStoreHandle {
 export interface NativeStoreModule {
   NativeStore: new () => NativeStoreHandle;
   bindingVersion(): number;
+  /** R3 compiled identity. Older modules still work with the store host off. */
+  buildIdentity?(): string;
 }
 
 export type StoreUnavailableReason = 'disabled' | 'missing' | 'incompatible' | 'load_failed';

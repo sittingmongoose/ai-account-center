@@ -9,7 +9,7 @@
       "src/web-server/services/account-analytics-history.ts"
     ],
     "events": [
-      "native/aac-store/src/log.rs"
+      "crates/aac-store/src/log.rs"
     ]
   },
   "sessions": [

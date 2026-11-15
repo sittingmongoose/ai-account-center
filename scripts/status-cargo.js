@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Cargo checks for the status readers crate, run inside native/aac-status so rustup uses the
+ * Cargo checks for the status readers crate, run inside crates/aac-status so rustup uses the
  * crate's pinned toolchain (rust-toolchain.toml is read from the working folder, not from
  * --manifest-path). Named after scripts/store-cargo.js on the aac-store branch.
  *
@@ -11,7 +11,7 @@
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const CRATE = path.resolve(__dirname, '..', 'native', 'aac-status');
+const CRATE = path.resolve(__dirname, '..', 'crates', 'aac-status');
 
 function cargo(args) {
   const result = spawnSync('cargo', args, { cwd: CRATE, stdio: 'inherit' });
@@ -22,14 +22,14 @@ function cargo(args) {
   if (result.status !== 0) process.exit(result.status || 1);
 }
 
-const TEST = ['test', '--release', '--locked', '--no-default-features'];
+const TEST = ['test', '-p', 'aac-status', '--release', '--locked', '--no-default-features'];
 
 const mode = process.argv[2];
 if (mode === 'test') {
   cargo(TEST);
 } else if (mode === 'check') {
-  cargo(['fmt', '--check']);
-  cargo(['clippy', '--release', '--all-targets', '--locked', '--', '-D', 'warnings']);
+  cargo(['fmt', '-p', 'aac-status', '--check']);
+  cargo(['clippy', '-p', 'aac-status', '--release', '--all-targets', '--locked', '--', '-D', 'warnings']);
   cargo(TEST);
 } else {
   console.error('Usage: node scripts/status-cargo.js test|check');

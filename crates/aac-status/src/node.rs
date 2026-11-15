@@ -1,5 +1,5 @@
 //! The Node binding: one handle, one async `call(method, json)`. Work runs on libuv's thread
-//! pool, so no reader call blocks the JavaScript event loop. Copied from native/aac-store.
+//! pool, so no reader call blocks the JavaScript event loop. Copied from crates/aac-store.
 
 use crate::ops;
 use napi::bindgen_prelude::*;

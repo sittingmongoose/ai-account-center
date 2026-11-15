@@ -63,11 +63,11 @@ __pycache__/
 *.pyc
 
 # History store crate (docs/store.md): build output and machine-specific prebuilt modules
-native/aac-store/target/
-native/aac-store/prebuilt/
+crates/aac-store/target/
+crates/aac-store/prebuilt/
 # Status readers crate: build output and machine-specific prebuilt modules
-native/aac-status/target/
-native/aac-status/prebuilt/
+crates/aac-status/target/
+crates/aac-status/prebuilt/
 
 # Rust rewrite foundation workspace
 /target/

@@ -18,7 +18,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
       'web-dashboard/public',
       'scripts',
       'docs/agent-reports/schemas',
-      'native/aac-status/src',
+      'crates/aac-status/src',
       'web-dashboard/leptos',
       // The number layer the status readers compose with is one of their build inputs (L3).
       'crates/aac-num',
@@ -29,12 +29,13 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     ]) {
       fs.cpSync(path.join(root, folder), path.join(fixture, folder), { recursive: true });
     }
-    for (const name of ['Cargo.toml', 'Cargo.lock', 'build.rs', 'rust-toolchain.toml'])
+    for (const name of ['Cargo.toml', 'build.rs', 'rust-toolchain.toml'])
       fs.copyFileSync(
-        path.join(root, 'native/aac-status', name),
-        path.join(fixture, 'native/aac-status', name)
+        path.join(root, 'crates/aac-status', name),
+        path.join(fixture, 'crates/aac-status', name)
       );
-    fs.copyFileSync(path.join(root, 'Cargo.toml'), path.join(fixture, 'Cargo.toml'));
+    for (const name of ['Cargo.toml', 'Cargo.lock'])
+      fs.copyFileSync(path.join(root, name), path.join(fixture, name));
     fs.symlinkSync(path.join(root, 'node_modules'), path.join(fixture, 'node_modules'), 'dir');
     const file = path.join(fixture, 'web-dashboard/public/computers.json');
     const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -165,7 +166,7 @@ it('every per-computer consumer picks up a hypothetical extra Linux entry', asyn
     expect(labels.future).toBe('Future Linux');
     // Both separately compiled Rust consumers embed this same table, never parallel allowlists.
     for (const source of [
-      'native/aac-status/src/computers.rs',
+      'crates/aac-status/src/computers.rs',
       'web-dashboard/leptos/src/status.rs',
     ])
       expect(fs.readFileSync(path.join(root, source), 'utf8')).toContain('public/computers.json');

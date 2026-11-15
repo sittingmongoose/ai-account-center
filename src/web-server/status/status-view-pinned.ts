@@ -1,5 +1,5 @@
 /**
- * The pinned composer's structured additions to each update (native/aac-status/src/pinned.rs), passed through
+ * The pinned composer's structured additions to each update (crates/aac-status/src/pinned.rs), passed through
  * unchanged: every wait apart, the human update's clock apart from the heartbeat's, and whose board it is.
  */
 

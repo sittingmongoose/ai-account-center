@@ -6,10 +6,10 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| Sync fs occurrences (all) | 1116 |
-| Sync fs files affected (all) | 112 |
-| Sync fs occurrences (runtime hotpaths) | 544 |
-| Sync fs files affected (runtime hotpaths) | 62 |
+| Sync fs occurrences (all) | 1117 |
+| Sync fs files affected (all) | 113 |
+| Sync fs occurrences (runtime hotpaths) | 545 |
+| Sync fs files affected (runtime hotpaths) | 63 |
 | Legacy shim markers | 210 |
 | Legacy shim files affected | 63 |
 
@@ -51,14 +51,14 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 32.6% (219/671) |
+| typed-error adoption (typed/total throws) | 32.4% (219/677) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 12 |
-| files with createLogger | 44/456 |
+| files with createLogger | 44/457 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
-| files > 400 LOC | 64 |
-| files > 600 LOC | 24 |
+| files > 400 LOC | 65 |
+| files > 600 LOC | 25 |
 
 ### Top Hotpath console.error/warn Files
 

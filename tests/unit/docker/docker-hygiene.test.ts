@@ -64,6 +64,9 @@ describe('the build context excludes private and rebuilt trees', () => {
   it('keeps machine-specific native artifacts out of the context', () => {
     expect(entries).toContain('native/*/target');
     expect(entries).toContain('native/*/prebuilt');
+    expect(entries).toContain('target');
+    expect(entries).toContain('crates/*/target');
+    expect(entries).toContain('crates/*/prebuilt');
   });
 });
 
@@ -74,8 +77,8 @@ describe('the image build fails loudly when a native module is missing', () => {
   });
 
   it('gates packaging on a shell test -f for each prebuilt module, not a listing', () => {
-    expect(dockerfile).toMatch(/test -f native\/aac-store\/prebuilt\/\*\.node/);
-    expect(dockerfile).toMatch(/test -f native\/aac-status\/prebuilt\/\*\.node/);
+    expect(dockerfile).toMatch(/test -f crates\/aac-store\/prebuilt\/\*\.node/);
+    expect(dockerfile).toMatch(/test -f crates\/aac-status\/prebuilt\/\*\.node/);
     expect(dockerfile).not.toMatch(/^\s*(RUN\s+)?ls\s+native\//m);
   });
 });
@@ -154,7 +157,7 @@ describe('the image carries every file the server and its native build read', ()
   it('reads .dockerignore as Docker does', () => {
     expect(ignoredByContext('tests/unit/docker/docker-hygiene.test.ts')).toBe(true);
     expect(ignoredByContext('docs/README.md')).toBe(true);
-    expect(ignoredByContext('native/aac-status/target/release/x')).toBe(true);
+    expect(ignoredByContext('crates/aac-status/target/release/x')).toBe(true);
     expect(ignoredByContext('src/web-server/__tests__/x.ts')).toBe(true);
     expect(ignoredByContext('src/web-server/index.ts')).toBe(false);
     expect(ignoredByContext('README.md')).toBe(false);
@@ -176,7 +179,7 @@ describe('the image carries every file the server and its native build read', ()
   it('keeps every status-module build input in the build context', () => {
     const { sourceFiles } = require('../../../scripts/build-status-native.js');
     const inputs = (sourceFiles() as string[]).map((rel) =>
-      path.posix.normalize(path.posix.join('native/aac-status', rel))
+      path.posix.normalize(path.posix.join('crates/aac-status', rel))
     );
     expect(inputs).toContain('tests/spec/wire-words.json');
     expect(inputs.filter(ignoredByContext)).toEqual([]);

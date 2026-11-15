@@ -11,6 +11,9 @@ dist
 *.tsbuildinfo
 native/*/target
 native/*/prebuilt
+target
+crates/*/target
+crates/*/prebuilt
 web-dashboard/target
 web-dashboard/pkg
 web-dashboard/leptos/target

@@ -547,3 +547,13 @@ cases, the 4 board ages and the prototype name through the fed path, plus a nega
 `status-read-parity.mjs` (end to end on the real binary and the real owner). `status-measure.mjs` times off, the
 M3 envelope path and the fed path under Node on the large home (`read-http-parity.ts --measure` runs it).
 
+
+## R3: store ownership
+
+`rustService.store: on` (`AAC_RUST_STORE=on` overrides) under `mode: on` moves
+the history writer and its periodic jobs into this service. Off is the default;
+shadow keeps the NAPI writer. The boot validates the binding's compiled identity
+before opening the store. The internal store-method route retains the kernel
+single-writer lock and automatically rolls back to NAPI after five crashes.
+See [store.md, optional Rust store host](store.md#15-optional-rust-store-host-r3)
+for the method contract, caps, shutdown order, fixture drills and turn-on soak.

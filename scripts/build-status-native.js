@@ -4,15 +4,15 @@
  * The status readers' native module, after the history store's build-native.js recipe.
  *
  *   node scripts/build-status-native.js            (bun run status:build)
- *     Compiles native/aac-status with cargo for this computer, keeps the result in
- *     native/aac-status/prebuilt/aac-status.<platform>-<arch>.node (with a .json note of the
+ *     Compiles crates/aac-status with cargo for this computer, keeps the result in
+ *     crates/aac-status/prebuilt/aac-status.<platform>-<arch>.node (with a .json note of the
  *     sources it was built from), checks that Node loads it, and copies it into dist/native/.
  *
  *   node scripts/build-status-native.js --copy-only   (every `build` runs this)
  *     Copies an existing prebuilt module into dist/native/ without compiling. A machine with
  *     no prebuilt module builds a dashboard that runs without the status readers.
  *
- * Needs for a compile: cargo with the toolchain in native/aac-status/rust-toolchain.toml
+ * Needs for a compile: cargo with the toolchain in crates/aac-status/rust-toolchain.toml
  * (rustup installs it), a C compiler (bundled SQLite is C), and on Linux glibc as on the
  * target machine: build on the machine that runs the dashboard, or one with the same or an
  * older glibc.
@@ -23,7 +23,7 @@ const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const CRATE = path.join(ROOT, 'native', 'aac-status');
+const CRATE = path.join(ROOT, 'crates', 'aac-status');
 const PREBUILT = path.join(CRATE, 'prebuilt');
 const DIST = path.join(ROOT, 'dist', 'native');
 const BINDING_VERSION = 1;
@@ -60,14 +60,14 @@ function sourceHash() {
 function sourceFiles() {
   const files = [
     'Cargo.toml',
-    'Cargo.lock',
+    '../../Cargo.lock',
     'build.rs',
     'rust-toolchain.toml',
     '../../web-dashboard/public/computers.json',
     '../../Cargo.toml',
-    '../../crates/aac-num/Cargo.toml',
-    '../../crates/aac-files/Cargo.toml',
-    '../../crates/aac-core/Cargo.toml',
+    '../aac-num/Cargo.toml',
+    '../aac-files/Cargo.toml',
+    '../aac-core/Cargo.toml',
     '../../config/private-files.json',
     '../../tests/spec/wire-words.json',
   ];
@@ -79,9 +79,9 @@ function sourceFiles() {
     }
   };
   walk('src');
-  walk('../../crates/aac-num/src');
-  walk('../../crates/aac-files/src');
-  walk('../../crates/aac-core/src');
+  walk('../aac-num/src');
+  walk('../aac-files/src');
+  walk('../aac-core/src');
   return files.sort();
 }
 
@@ -150,7 +150,7 @@ function build() {
     ? path.resolve(process.env.CARGO_TARGET_DIR)
     : path.join(CRATE, 'target');
   console.log('[i] Building the status readers module (cargo build --release --locked)...');
-  const result = spawnSync('cargo', ['build', '--release', '--locked'], {
+  const result = spawnSync('cargo', ['build', '-p', 'aac-status', '--release', '--locked'], {
     cwd: CRATE,
     stdio: 'inherit',
     env: { ...process.env, CARGO_TARGET_DIR: target },
@@ -175,7 +175,7 @@ function build() {
     builtAt: new Date().toISOString(),
   };
   fs.writeFileSync(`${destination}.json`, `${JSON.stringify(note, null, 2)}\n`);
-  console.log(`[OK] Built native/aac-status/prebuilt/${name}`);
+  console.log(`[OK] Built crates/aac-status/prebuilt/${name}`);
   copyToDist();
 }
 

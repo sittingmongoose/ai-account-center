@@ -1,7 +1,7 @@
 /**
  * Analytics usage history (docs/store.md section 12): the page's activity read back from the store
  * and shaped by the existing projection. Bucketing, coverage and gaps are computed in Rust
- * (`native/aac-store/src/activity.rs`); this only forwards.
+ * (`crates/aac-store/src/activity.rs`); this only forwards.
  */
 import type { AacStore } from './store-service';
 import type { ActivityRange } from './usage-report';

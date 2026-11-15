@@ -1,13 +1,14 @@
+import { loadStoreTestModule } from '../../support/store-handle';
 import { expect, it } from 'bun:test';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { secretPolicyCases as cases } from '../../fixtures/secret-policy-cases';
-import { loadNativeStore, nativeModuleName } from '../../../src/store/native-loader';
+import { nativeModuleName } from '../../../src/store/native-loader';
 import { AacStore, type StoreReportCapture } from '../../../src/store/store-service';
 
-const loaded = loadNativeStore({
+const loaded = loadStoreTestModule({
   env: {},
   file: path.resolve(__dirname, '../../../dist/native', nativeModuleName()),
 });
@@ -15,7 +16,8 @@ const loaded = loadNativeStore({
 (loaded.module ? it : it.skip)(
   'native API refuses reader secret fixtures without appending or retaining their content',
   async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-capture-secrets-'));
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-capture-secrets-'));
+    const root = path.join(scratch, 'store');
     const handle = new loaded.module!.NativeStore();
     try {
       await handle.call('open', JSON.stringify({ dir: root }));
@@ -77,7 +79,7 @@ const loaded = loadNativeStore({
       }
     } finally {
       await handle.call('close', '{}');
-      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(scratch, { recursive: true, force: true });
     }
   }
 );

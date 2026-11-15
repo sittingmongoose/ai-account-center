@@ -212,7 +212,7 @@ tests/unit/web-server/scoreboard/scoreboard-view.test.ts`).
 ```
 
 **ByModel** (`byModel`, the model-by-job matrix for the Leptos page, every word decided in
-`native/aac-status/src/scoreboard.rs` from this same view; CONTRACT-spend-bymodel.md):
+`crates/aac-status/src/scoreboard.rs` from this same view; CONTRACT-spend-bymodel.md):
 `{ defaultView: "pipeline", intro, readNote: [ Run ], readLink, bandSummary, views: [ { id:
 "pipeline" | "pm-users", label, short, meta: [ Run ], picks: [ { job, jobLabel, model: { label,
 effort, mark } | null, noneLabel, why: [ Run ] } ], jobs: [ { id, label } ], models: [ { key, model,

@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# Only drill binaries pause inside store operations.
+parity-fixtures = ["aac-store/parity-fixtures"]
+
 [lints]
 workspace = true
 
@@ -20,8 +24,8 @@ aac-protocol.workspace = true
 aac-transport.workspace = true
 aac-providers.workspace = true
 aac-views.workspace = true
-aac-store = { path = "../../native/aac-store", default-features = false }
-aac-status = { path = "../../native/aac-status", default-features = false }
+aac-store.workspace = true
+aac-status.workspace = true
 base64 = "0.22"
 libc.workspace = true
 serde.workspace = true

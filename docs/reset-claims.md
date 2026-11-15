@@ -55,7 +55,7 @@ cached account card label. Provider `reset` without proof is
 `claimed-unconfirmed`; `providerSuccess` distinguishes this from a timeout.
 Missing spent grants remain unconfirmed rather than inferring a zero count.
 
-The native module (`native/aac-status/src/reset*.rs`) owns policy, normalization,
+The native module (`crates/aac-status/src/reset*.rs`) owns policy, normalization,
 confirmation consumption, limits, durable account serialization and audit.
 The TypeScript router only delegates I/O and native calls. The private
 `reset-source-adapter` resolves accounts from the existing registry/manifest;
@@ -153,7 +153,7 @@ selection and fresh verification. Tests use temporary homes and synthetic
 protocol material; they do not invoke real provider refresh or writes.
 
 The real Node binding also has a completely offline scenario:
-`node native/aac-status/tests/reset_abi.cjs /absolute/path/to/test-module.node`.
+`node crates/aac-status/tests/reset_abi.cjs /absolute/path/to/test-module.node`.
 Use a native artifact built in an isolated target directory. It exercises only
 `resetClaims` with generated nonces and synthetic snapshots, never source or
 provider methods. It verifies exact selection, one-shot confirmation, durable

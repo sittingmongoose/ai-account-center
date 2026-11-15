@@ -898,6 +898,13 @@
     ]
   },
   {
+    "word": "degraded",
+    "cause": null,
+    "sources": [
+      "src/web-server/routes/store-routes.ts:state"
+    ]
+  },
+  {
     "word": "deleting",
     "cause": null,
     "sources": [
@@ -956,6 +963,7 @@
       "src/status-native/native-loader.ts:reason",
       "src/store/native-loader.ts:StoreUnavailableReason",
       "src/store/native-loader.ts:reason",
+      "src/store/store-service.ts:reason",
       "src/web-server/index.ts:opened.reason"
     ]
   },
@@ -2047,7 +2055,8 @@
     "word": "lock_held",
     "cause": "held",
     "sources": [
-      "src/commands/store-command.ts:storeErrorCode(error)"
+      "src/commands/store-command.ts:storeErrorCode(error)",
+      "src/store/store-service.ts:reason"
     ]
   },
   {
@@ -3465,6 +3474,7 @@
     "word": "ready",
     "cause": null,
     "sources": [
+      "src/web-server/routes/store-routes.ts:state",
       "src/web-server/rust-service-supervisor.ts:state",
       "src/web-server/services/account-dashboard-state.ts:state",
       "src/web-server/services/account-dashboard-types.ts:DashboardAccountLifecycleState",
@@ -4450,6 +4460,13 @@
     "cause": null,
     "sources": [
       "src/web-server/services/signin-job-types.ts:SignInJobErrorCode"
+    ]
+  },
+  {
+    "word": "service_down",
+    "cause": null,
+    "sources": [
+      "src/store/store-service.ts:storeErrorCode(error)"
     ]
   },
   {

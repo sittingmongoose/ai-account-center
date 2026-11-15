@@ -29,7 +29,7 @@ const sessions = functions('src/web-server/usage/analytics-session-key.ts', [
 ]);
 const hashes = functions('src/web-server/usage/activity-cells.ts', ['analyticsSessionHash']);
 const accounts = functions('src/web-server/services/account-analytics-history.ts', ['accountAnalyticsIdentity']);
-const eventSource = 'native/aac-store/src/log.rs';
+const eventSource = 'crates/aac-store/src/log.rs';
 if (!readFileSync(resolve(root, eventSource), 'utf8').includes('format!("{}-{:016x}", self.short, self.next_seq)')) {
   throw new Error('store event-id algorithm changed');
 }

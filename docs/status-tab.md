@@ -442,7 +442,7 @@ last good copy for 2 minutes; NUL bytes, over 512 KB, a secret, a schema other t
   listed). Without a report the section is empty (`periods: []`).
 
 **Spend by stream** (`spendByStream`, a sibling of `pinned`): the same estimates as a per-stream table, every word
-decided in `native/aac-status/src/spend.rs` over the `spend` view above plus `nowMs`, the dashboard's UTC offset and
+decided in `crates/aac-status/src/spend.rs` over the `spend` view above plus `nowMs`, the dashboard's UTC offset and
 the usage snapshot's account order (CONTRACT-spend-bymodel.md). One period per accepted report period: columns are the
 account meters the streams use (Claude weekly, Claude 5-hour, other providers), rows are streams by their largest
 share of a weekly limit with the bucket row ("Not tied to a stream") last, and `lead`/`summary`/`foot` word it. Cells

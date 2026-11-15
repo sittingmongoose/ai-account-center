@@ -224,9 +224,17 @@ fn list_literals(text: &str, words: &[&str]) -> Vec<String> {
 fn workspace_crates_hold_no_table_list_literals() {
     let words = table_words();
     let mut files = Vec::new();
+    // aac-store and aac-status joined the workspace in R3 as the NAPI crates they were in
+    // native/; their hand lists stay checked for equality instead (secret.rs below, the
+    // Status corpora), as Leptos's are. Deriving them from this crate is later L4 work.
+    const CHECKED_NOT_SCANNED: [&str; 3] = ["aac-providers", "aac-store", "aac-status"];
     for entry in fs::read_dir(root().join("crates")).expect("crates") {
         let path = entry.expect("crate").path();
-        if path.file_name().is_some_and(|n| n != "aac-providers") && path.join("src").is_dir() {
+        if path
+            .file_name()
+            .is_some_and(|n| !CHECKED_NOT_SCANNED.iter().any(|skip| n == *skip))
+            && path.join("src").is_dir()
+        {
             rust_files(&path.join("src"), &mut files);
         }
     }
@@ -277,7 +285,7 @@ fn native_hand_lists_equal_the_table() {
     if SYNTHETIC {
         return;
     }
-    let secret = source("native/aac-store/src/secret.rs");
+    let secret = source("crates/aac-store/src/secret.rs");
     let mut account = literals(
         &secret,
         "pub const ACCOUNT_PROVIDERS: [&str; ",
