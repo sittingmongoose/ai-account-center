@@ -119,3 +119,9 @@ still needs release-packaging checks.
 | Tool | Issue and evidence | Real false pass? | Status |
 | --- | --- | --- | --- |
 | OMP cached-root fixture | The unchanged `worker/sessions` 512-root revalidation case in `tests/unit/web-server/usage/omp-session-root-discovery.test.ts` exceeded Bun's default 5-second test timeout once (5.91 s) during the full fast bucket. All six cases passed in isolation (2.59 s total; the case took 1.48 s). [Timeout evidence](/mnt/Cursor/share/ai-account-center/2026-11-15-analytics-search-bound/fast-timeout.txt), [isolated recheck](/mnt/Cursor/share/ai-account-center/2026-11-15-analytics-search-bound/omp-revalidation.txt). | No; timing failure only, no product failure demonstrated. | Open for the six-hour tool batch: remove dependence on shared-runner scheduling while preserving the root-cap and rediscovery assertions. No timeout or assertion was weakened here. |
+
+## Big review fix round 1 (2026-11-15)
+
+| Tool | Issue and evidence | Real false pass? | Status |
+| --- | --- | --- | --- |
+| File-read shadow count | `tests/spec/read-file-parity.ts:211-213` waits at most 1 s (200 x 5 ms) for eight background shadow comparisons. One full `AAC_RUST_SERVICE=shadow node tests/spec/run.mjs` on the VM at load average 31 failed `shadowed >= 8`; two isolated reruns and the next full shadow run passed with 11 comparisons and 0 differences, on the same binary. | No; a timing failure only, no difference or product failure shown. | Open for the six-hour tool batch: await the shadow comparisons' own settlement instead of a fixed sleep budget. No assertion was weakened here. |
