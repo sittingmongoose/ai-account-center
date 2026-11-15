@@ -356,6 +356,13 @@ export async function acquireRustServiceDetailed(
     } catch {
       /* Best effort. */
     }
+    // A short socket folder of this root goes too once no other boot of the root uses it.
+    if (layout.folders.length > 1)
+      try {
+        fs.rmdirSync(layout.folders[layout.folders.length - 2]);
+      } catch {
+        /* Not empty, or already gone. */
+      }
   };
   const close = () => {
     if (closed) return;

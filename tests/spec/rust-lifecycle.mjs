@@ -72,6 +72,18 @@ async function until(check, ms = 10_000) {
   }
 }
 
+/** Timings, sizes and the build vary per run; the counters and states are the golden. */
+function masked(value, key = '') {
+  if (Array.isArray(value)) return value.map((v) => masked(v));
+  if (value && typeof value === 'object')
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, masked(v, k)]));
+  if (['p50Ms', 'p95Ms'].includes(key) && value !== null) return '<ms>';
+  if (key === 'rssBytes' && value !== null) return '<bytes>';
+  if (key === 'sha256') return '<sha256>';
+  if (key === 'commit') return '<commit>';
+  return value;
+}
+
 const checks = {
   async keepAlive() {
     const ccs = root('keep-alive');
@@ -116,8 +128,13 @@ const checks = {
     const same = await start('on', copy);
     assert.equal(same.lease?.owned, false, 'the same build attaches');
     assert.equal(same.lease.connection.bootId, owner.lease.connection.bootId);
-    // An in-place upgrade: the file's bytes change, the running boot keeps the old ones.
-    fs.appendFileSync(copy, Buffer.from([0]));
+    // An in-place upgrade renames new bytes over the path (a running image cannot be rewritten);
+    // the running boot keeps the old ones.
+    const next = `${copy}.next`;
+    fs.copyFileSync(copy, next);
+    fs.appendFileSync(next, Buffer.from([0]));
+    fs.chmodSync(next, 0o755);
+    fs.renameSync(next, copy);
     const upgraded = await start('on', copy);
     assert.equal(upgraded.lease?.owned, true, 'a boot of another build is never attached');
     assert.notEqual(upgraded.lease.connection.bootId, owner.lease.connection.bootId);
@@ -166,6 +183,11 @@ const checks = {
     assert.deepEqual(route.declined, { number: 1, shape: 1, unsupported: 1 });
     assert.equal(route.served, 1);
     assert.equal(route.state, 'declined:unsupported');
+    // The diag golden: /api/diag?bridge=1's block for this sequence, timings and build masked.
+    const golden = path.join(repo, 'tests/spec/contract/l1-bridge-diag.json');
+    const bytes = JSON.stringify(masked(service.diagnostics()), null, 2) + '\n';
+    if (process.argv.includes('--regenerate')) fs.writeFileSync(golden, bytes);
+    else assert.equal(bytes, fs.readFileSync(golden, 'utf8'), 'bridge diagnostics golden');
   },
 
   async feeds() {
@@ -196,11 +218,19 @@ try {
     console.log('rust-lifecycle: off mode starts no service');
   } else {
     assert.ok(fs.existsSync(binary), 'needs the Nas1-built aac-http in dist/native');
+    const failed = [];
     for (const [name, check] of Object.entries(checks)) {
-      await check();
-      console.log(`rust-lifecycle: ${name} passed`);
+      try {
+        await check();
+        console.log(`rust-lifecycle: ${name} passed`);
+      } catch (error) {
+        failed.push(name);
+        console.log(`rust-lifecycle: ${name} FAILED: ${String(error?.message ?? error).split('\n')[0]}`);
+      }
       for (const service of services.splice(0)) service.stop();
+      await new Promise((r) => setTimeout(r, 100));
     }
+    assert.deepEqual(failed, [], 'every lifecycle check passes');
     console.log(`rust-lifecycle: ${Object.keys(checks).length} checks passed under Node ${process.version}`);
   }
 } finally {

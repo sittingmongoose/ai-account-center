@@ -3109,6 +3109,13 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/rust-view-reply.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/scoreboard/by-model.test.ts",
       "kind": "internal",
       "evidence": [],

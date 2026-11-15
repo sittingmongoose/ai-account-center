@@ -615,8 +615,17 @@ try {
       200,
       'attachment cleanup leaves owner alive'
     );
-    // Remove only our fixture socket to prove a real connection failure takes the TS fallback.
-    fs.unlinkSync(JSON.parse(before).socketPath);
+    // L1: the connection is kept alive, so a removed socket file no longer breaks it. Kill our
+    // own service child instead: a real crash must take the TS fallback until the restart.
+    const lease = (instance.rustService as unknown as { lease: { pid: number } | null }).lease;
+    assert.ok(lease?.pid, 'the front door owns its fixture boot');
+    process.kill(lease.pid, 'SIGKILL');
+    for (
+      let i = 0;
+      i < 100 && (instance.rustService as unknown as { lease: unknown }).lease === lease;
+      i++
+    )
+      await new Promise((r) => setTimeout(r, 10));
     const fallbacks = instance.rustService.stats.fallbacks;
     assert.equal(
       await (await fetch(base + '/api/accounts/settings', { headers })).text(),

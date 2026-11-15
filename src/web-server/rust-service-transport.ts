@@ -30,6 +30,10 @@ export interface RustReply {
   decline: string | null;
   /** L1: the service's build identity, carried on health replies (`x-aac-service-build`). */
   build: string | null;
+  /** L1 reply floor: the bytes as sent, and a view route's `ETag` and `x-aac-view`. */
+  bytes?: Buffer;
+  etag?: string | null;
+  view?: string | null;
 }
 
 /** Total deadline per request, the retry of a reused connection included. */
@@ -116,12 +120,18 @@ function once(
         }
         const decline = response.headers['x-aac-decline'];
         const build = response.headers['x-aac-service-build'];
+        const etag = response.headers.etag;
+        const view = response.headers['x-aac-view'];
+        const bytes = Buffer.concat(chunks);
         try {
           resolve({
             status: response.statusCode ?? 503,
-            body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+            body: JSON.parse(bytes.toString('utf8')),
             decline: typeof decline === 'string' ? decline : null,
             build: typeof build === 'string' ? build : null,
+            bytes,
+            etag: typeof etag === 'string' ? etag : null,
+            view: typeof view === 'string' ? view : null,
           });
         } catch {
           reject(new RustTransportError('reply', 'Rust service invalid response'));

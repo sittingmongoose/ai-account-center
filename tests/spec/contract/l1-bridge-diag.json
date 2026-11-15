@@ -1,0 +1,54 @@
+{
+  "mode": "on",
+  "service": {
+    "state": "ready",
+    "owned": true,
+    "build": {
+      "commit": "<commit>",
+      "sha256": "<sha256>",
+      "protocol": 2,
+      "storeSchema": 2
+    },
+    "restarts": 0,
+    "rssBytes": "<bytes>"
+  },
+  "stats": {
+    "served": 1,
+    "shadowed": 0,
+    "differences": 0,
+    "fallbacks": 3
+  },
+  "routes": {
+    "/api/accounts/settings": {
+      "state": "declined:unsupported",
+      "served": 1,
+      "equal": 0,
+      "different": 0,
+      "skipped": 0,
+      "declined": {
+        "number": 1,
+        "shape": 1,
+        "unsupported": 1
+      },
+      "failed": {},
+      "unavailable": {},
+      "paired": {
+        "ts": {
+          "samples": 0,
+          "p50Ms": null,
+          "p95Ms": null
+        },
+        "rust": {
+          "samples": 0,
+          "p50Ms": null,
+          "p95Ms": null
+        }
+      },
+      "rustOnly": {
+        "samples": 1,
+        "p50Ms": "<ms>",
+        "p95Ms": "<ms>"
+      }
+    }
+  }
+}
