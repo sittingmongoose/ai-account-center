@@ -413,6 +413,29 @@ impl Computer {
 
     async fn run_command(
         &self,
+        command: Command,
+        stdin: &[u8],
+        options: &CallOptions,
+        pipes: Option<Pipes>,
+    ) -> Result<ProcessOutput, Failure> {
+        // This task owns completion and breaker accounting even if the HTTP receiver goes away.
+        let computer = self.clone();
+        let input = stdin.to_vec();
+        let options = options.clone();
+        let mut completion = CancelOnDrop(Some(options.cancel.clone()));
+        let result = tokio::spawn(async move {
+            computer
+                .run_command_owned(command, &input, &options, pipes)
+                .await
+        })
+        .await
+        .map_err(|_| Failure::new(Cause::Bug, "transport completion task failed"))?;
+        completion.0 = None;
+        result
+    }
+
+    async fn run_command_owned(
+        &self,
         mut command: Command,
         stdin: &[u8],
         options: &CallOptions,
@@ -585,15 +608,15 @@ impl Computer {
             };
             tokio::select! {
                 biased;
-                _ = options.cancel.cancelled() => Err(Failure::new(Cause::Cancelled, "request cancelled")),
                 _ = tokio::time::sleep_until(options.deadline) => Err(Failure::new(Cause::Timeout, "transport deadline exceeded")),
+                _ = options.cancel.cancelled() => Err(Failure::new(Cause::Cancelled, "request cancelled")),
                 output = work => output,
             }
         };
         if result.is_err() {
             kill_tree(pid);
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_millis(150), child.wait()).await;
         }
         guard.0 = None;
         result
@@ -732,4 +755,14 @@ pub(crate) fn encode_powershell(source: &str) -> String {
         });
     }
     out
+}
+
+// Dropping a caller requests cleanup; the owned task still reaps and accounts the outcome.
+struct CancelOnDrop(Option<CancellationToken>);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.0.take() {
+            cancel.cancel();
+        }
+    }
 }

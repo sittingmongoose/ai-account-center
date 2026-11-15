@@ -228,6 +228,20 @@ def gates(agent, service):
             events=s.call(id='burst'+str(n))
             assert [e.get('data',{}).get('n') for e in events[:-1]]==list(range(16)), events
             assert events[-1]['type']=='result'
+    # Max L1: six HTTP deadlines, three transport timeouts, then an open circuit.
+    with Service(agent, service) as s:
+        assert s.call(id='timeout-warm')[-1]['type'] == 'result'
+        s.scenario.write_text('ignore-cancel')
+        before = len(s.traces())
+        for n in range(6):
+            payload = s.payload(id='timeout-' + str(n), deadline=1000)
+            payload['timeoutMs'] = 1000
+            status, raw = s.ask('/internal/agent/health', payload)
+            assert status == 200 and json.loads(raw.splitlines()[-1])['type'] == 'fallback', raw
+            expected = before + min(n + 1, 3)
+            assert len(s.traces()) == expected, ('timeout breaker', n, s.traces())
+        for trace in s.traces():
+            assert not Path('/proc', str(trace['pid'])).exists(), 'owned child survived deadline'
     for scenario in ['stream', 'ignore-cancel']:
 
         with Service(agent, service, scenario=scenario) as s:

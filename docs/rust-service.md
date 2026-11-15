@@ -428,7 +428,7 @@ also cancels its owned transport. Fixtures exercise a far-process recorder, not 
 
 `python3 tests/spec/agent/transport.py <fixture-agent> <aac-http>` runs the unchanged
 agent corpora directly and through the private socket/SSH recorder and compares their
-counts. It also checks pooled reuse, breaker, byte/hash caps, no shipping, authentication,
+counts. It also checks six HTTP hangs opening the three-failure circuit, pooled reuse, breaker, byte/hash caps, no shipping, authentication,
 progress/input and acknowledged cancellation. All binaries stay on the build host.
 
 ## Home, fed (R1)
