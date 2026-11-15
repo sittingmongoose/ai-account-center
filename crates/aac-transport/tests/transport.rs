@@ -613,7 +613,6 @@ fn regression_m4_option_paths_survive_openssh_parsing_or_are_refused() {
     );
     assert!(config.lines().any(|line| line == "stricthostkeychecking true" || line == "stricthostkeychecking yes"));
     for path in [
-        "/fixture/with space",
         "/fixture/with\"quote",
         "/fixture/with'quote",
         "/fixture/with\\escape",
@@ -631,4 +630,70 @@ fn regression_m4_option_paths_survive_openssh_parsing_or_are_refused() {
             );
         }
     }
+}
+
+#[test]
+fn l5_openssh_option_paths_with_spaces_are_one_literal_path() {
+    let policy = SshPolicy::new("/fixture/known hosts".into(), "/fixture/run space".into());
+    let output = std::process::Command::new("/usr/bin/ssh")
+        .args(["-G", "-F", "/dev/null"])
+        .args(policy.argv(Path::new("/fixture/key with space"), false).unwrap())
+        .arg("fixture.invalid").output().unwrap();
+    assert!(output.status.success());
+    let config = String::from_utf8(output.stdout).unwrap();
+    assert!(config.lines().any(|l| l == "userknownhostsfile /fixture/known hosts"));
+    assert!(config.lines().any(|l| l.starts_with("controlpath /fixture/run space/cm-")));
+}
+
+#[tokio::test]
+async fn l5_early_exit_keeps_87_instead_of_epipe_and_does_not_open_breaker() {
+    let fixture = Fixture::new();
+    let ssh = fixture.root.path().join("ssh");
+    std::fs::write(&ssh, "#!/bin/sh\nexit 87\n").unwrap();
+    for _ in 0..4 {
+        let output = fixture.computer.execute(&["fixed-launcher".into()], &vec![b'x';1024*1024], &fixture.options()).await.unwrap();
+        assert_eq!(output.code, Some(87));
+    }
+}
+
+#[tokio::test]
+async fn l5_second_call_reuses_a_verified_handshake() {
+    let fixture = Fixture::new();
+    let (artifact, scenario) = fixture.artifact();
+    fixture.scenario(scenario);
+    let client = AgentClient::new(fixture.computer.clone(), artifact);
+    let request = Request { protocol:1, verb:"health".into(), id:"reuse".into(), deadline_ms:1000, args:json!({}) };
+    client.call(&request, &fixture.options()).await.unwrap();
+    client.clone().call(&request, &fixture.options()).await.unwrap();
+    let traces=fixture.traces();
+    let probes=traces.iter().filter(|t| t["tool"]=="ssh" && t["argv"].as_array().unwrap().last().unwrap().as_str().unwrap().contains("probe")).count();
+    assert_eq!(probes,1,"one verified handshake per shared client");
+}
+
+#[tokio::test]
+async fn l5_existing_only_never_prepares_uploads_or_changes_remote_cache() {
+    for wrong in [false,true] {
+        let fixture=Fixture::new();
+        let (artifact, mut scenario)=fixture.artifact();
+        if wrong {
+            std::fs::write(fixture.root.path().join("installed"), b"fixture binary bytes").unwrap();
+            scenario["wrongHandshake"]=json!("version");
+        }
+        fixture.scenario(scenario);
+        assert!(AgentClient::existing(fixture.computer.clone(),artifact).ensure(&fixture.options()).await.is_err());
+        let traces=fixture.traces();
+        assert_eq!(traces.len(),1);
+        assert_eq!(traces[0]["tool"],"ssh");
+        assert!(!fixture.root.path().join("upload.part").exists());
+    }
+}
+
+#[tokio::test]
+async fn l5_powershell_smart_quotes_are_refused_before_ssh() {
+    let fixture=Fixture::for_os(OperatingSystem::Windows);
+    for quote in ['\u{2018}','\u{2019}','\u{201a}','\u{201b}'] {
+        let result=fixture.computer.execute(&["fixed".into(),format!("x{quote}; injected").into()],&[],&fixture.options()).await;
+        assert!(matches!(result,Err(e) if e.cause==Cause::Refused));
+    }
+    assert!(fixture.traces().is_empty());
 }

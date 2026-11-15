@@ -11,7 +11,7 @@ use std::sync::{
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -112,7 +112,7 @@ impl SshPolicy {
             argv.extend(["-o".into(), value.into()]);
         }
         let mut hosts = OsString::from("UserKnownHostsFile=");
-        hosts.push(hosts_path);
+        hosts.push(quote_option_path(&hosts_path));
         argv.extend([
             "-o".into(),
             hosts,
@@ -124,7 +124,7 @@ impl SshPolicy {
             "ControlMaster=auto".into(),
         ]);
         let mut control = OsString::from("ControlPath=");
-        control.push(format!("{}/cm-%C", control_path.trim_end_matches('/')));
+        control.push(quote_option_path(&format!("{}/cm-%C", control_path.trim_end_matches('/'))));
         argv.extend([
             "-o".into(),
             control,
@@ -143,7 +143,7 @@ fn option_path(path: &Path) -> Result<String, Failure> {
     let text = text.replace('\\', "/");
     if !text
         .bytes()
-        .all(|c| c.is_ascii_alphanumeric() || b"/._-:".contains(&c))
+        .all(|c| c.is_ascii_alphanumeric() || b"/._-: ".contains(&c))
     {
         return Err(Failure::new(
             Cause::Refused,
@@ -151,6 +151,10 @@ fn option_path(path: &Path) -> Result<String, Failure> {
         ));
     }
     Ok(text.to_owned())
+}
+
+fn quote_option_path(text: &str) -> String {
+    if text.contains(' ') { format!("\"{text}\"") } else { text.to_owned() }
 }
 
 /// Per-call controls; the absolute deadline also covers waiting for a channel slot.
@@ -262,6 +266,25 @@ impl Computer {
         stdin: &[u8],
         options: &CallOptions,
     ) -> Result<ProcessOutput, Failure> {
+        let command = self.command(argv, options)?;
+        self.run_command(command, stdin, options, None).await
+    }
+
+    /// Execute with bounded later stdin frames and a bounded stdout chunk stream. The caller
+    /// drains stdout concurrently. Completion includes the child's exit, never just a frame.
+    pub async fn execute_controlled(
+        &self,
+        argv: &[OsString],
+        stdin: &[u8],
+        options: &CallOptions,
+        controls: mpsc::Receiver<Vec<u8>>,
+        output: mpsc::Sender<Vec<u8>>,
+    ) -> Result<ProcessOutput, Failure> {
+        let command = self.command(argv, options)?;
+        self.run_command(command, stdin, options, Some(Pipes { controls, output })).await
+    }
+
+    fn command(&self, argv: &[OsString], options: &CallOptions) -> Result<Command, Failure> {
         if argv.is_empty() {
             return Err(Failure::new(Cause::Refused, "empty command"));
         }
@@ -293,7 +316,7 @@ impl Computer {
             }
         };
         self.set_path(&mut command);
-        self.run_command(command, stdin, options).await
+        Ok(command)
     }
 
     pub(crate) async fn scp(
@@ -328,7 +351,7 @@ impl Computer {
         );
         command.arg("--").arg(local).arg(destination);
         self.set_path(&mut command);
-        self.run_command(command, &[], options).await
+        self.run_command(command, &[], options, None).await
     }
 
     fn set_path(&self, command: &mut Command) {
@@ -346,7 +369,12 @@ impl Computer {
                 .map(|s| {
                     s.to_str()
                         .ok_or_else(|| Failure::new(Cause::Refused, "non-UTF8 remote argv"))
-                        .map(|s| format!("'{}'", s.replace('\'', "''")))
+                        .and_then(|s| {
+                            if s.chars().any(|c| ('\u{2018}'..='\u{201b}').contains(&c)) {
+                                return Err(Failure::new(Cause::Refused, "unsupported PowerShell quote"));
+                            }
+                            Ok(format!("'{}'", s.replace('\'', "''")))
+                        })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let source = format!("& {}; exit $LASTEXITCODE", args.join(" "));
@@ -371,6 +399,7 @@ impl Computer {
         mut command: Command,
         stdin: &[u8],
         options: &CallOptions,
+        pipes: Option<Pipes>,
     ) -> Result<ProcessOutput, Failure> {
         let _permit = tokio::select! {
             biased;
@@ -390,7 +419,7 @@ impl Computer {
             .kill_on_drop(true);
         #[cfg(unix)]
         command.process_group(0);
-        let result = self.capture(&mut command, stdin, options).await;
+        let result = self.capture(&mut command, stdin, options, pipes).await;
         self.after_call(&result, probing)?;
         result
     }
@@ -454,6 +483,7 @@ impl Computer {
         command: &mut Command,
         stdin: &[u8],
         options: &CallOptions,
+        pipes: Option<Pipes>,
     ) -> Result<ProcessOutput, Failure> {
         let mut child = command.spawn().map_err(|_| {
             Failure::new(Cause::SshUnreachable, "transport process could not start")
@@ -475,18 +505,43 @@ impl Computer {
         let used = Arc::new(AtomicUsize::new(0));
         let result = {
             let work = async {
-                let send = async {
-                    input.write_all(stdin).await.map_err(|_| {
-                        Failure::new(Cause::SshUnreachable, "transport stdin closed")
-                    })?;
-                    drop(input);
-                    Ok::<_, Failure>(())
+                let (mut controls, output_stream) = match pipes {
+                    Some(pipes) => (Some(pipes.controls), Some(pipes.output)),
+                    None => (None, None),
                 };
-                let (_, stdout, stderr, status) = tokio::try_join!(
-                    send,
-                    capture_bytes(output, options.output_cap, used.clone()),
-                    capture_bytes(error, options.output_cap, used),
-                    async { child.wait().await.map_err(Failure::from) }
+                let send = async {
+                    input.write_all(stdin).await?;
+                    if let Some(controls) = controls.as_mut() {
+                        let mut total = 0usize;
+                        while let Some(frame) = controls.recv().await {
+                            total = total.saturating_add(frame.len());
+                            if frame.len() > 65536 || total > 1024 * 1024 {
+                                return Err(std::io::Error::other("control cap exceeded"));
+                            }
+                            input.write_all(&frame).await?;
+                        }
+                    }
+                    Ok::<_, std::io::Error>(())
+                };
+                tokio::pin!(send);
+                // Exit takes priority over EPIPE. A controlled writer lives until exit and must
+                // not keep a completed child alive waiting for another control.
+                let wait = async {
+                    tokio::select! {
+                        status = child.wait() => status.map_err(Failure::from),
+                        sent = &mut send => {
+                            let status = child.wait().await?;
+                            if status.success() && sent.is_err() {
+                                return Err(Failure::new(Cause::SshUnreachable, "transport stdin closed"));
+                            }
+                            Ok(status)
+                        }
+                    }
+                };
+                let (stdout, stderr, status) = tokio::try_join!(
+                    capture_bytes(output, options.output_cap, used.clone(), output_stream),
+                    capture_bytes(error, options.output_cap, used, None),
+                    wait
                 )?;
                 if status.code() == Some(255)
                     && matches!(self.config.transport, TransportConfig::Ssh { .. })
@@ -569,6 +624,7 @@ async fn capture_bytes(
     mut input: impl AsyncRead + Unpin,
     max: usize,
     used: Arc<AtomicUsize>,
+    stream: Option<mpsc::Sender<Vec<u8>>>,
 ) -> Result<Vec<u8>, Failure> {
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 8192];
@@ -585,7 +641,15 @@ async fn capture_bytes(
             ));
         }
         bytes.extend_from_slice(&buffer[..n]);
+        if let Some(stream) = &stream {
+            stream.send(buffer[..n].to_vec()).await.map_err(|_| Failure::new(Cause::Cancelled, "agent receiver closed"))?;
+        }
     }
+}
+
+struct Pipes {
+    controls: mpsc::Receiver<Vec<u8>>,
+    output: mpsc::Sender<Vec<u8>>,
 }
 
 fn kill_tree(pid: Option<u32>) {

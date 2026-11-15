@@ -4,6 +4,17 @@ use aac_core::{Cause, Failure};
 use aac_protocol::{EXIT_AGENT_MISSING, Event, Handshake, PROTOCOL_VERSION, Request, frame_cap};
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::{Mutex, mpsc};
+
+/// The single package policy shared with the labelled TS fallback.
+pub fn artifact_cap() -> usize {
+    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        serde_json::from_str::<serde_json::Value>(include_str!("../../../config/agent-transport-policy.json"))
+            .ok().and_then(|v| v["artifactMaxBytes"].as_u64()).and_then(|n| usize::try_from(n).ok()).unwrap_or(0)
+    })
+}
 
 /// An artifact verified locally against an explicit SHA-256 manifest and handshake.
 /// Binary contents are never formatted in diagnostics; the source path is used only for SCP.
@@ -48,7 +59,7 @@ impl AgentArtifact {
     }
 
     fn verify(&self) -> Result<(), Failure> {
-        let bytes = aac_files::read_bounded(&self.path, 64 * 1024 * 1024)?;
+        let bytes = aac_files::read_bounded(&self.path, artifact_cap())?;
         if aac_core::sha256_hex(&bytes) != self.hash {
             return Err(Failure::new(
                 Cause::AgentMismatch,
@@ -65,12 +76,20 @@ impl AgentArtifact {
 pub struct AgentClient {
     computer: Computer,
     artifact: AgentArtifact,
+    allow_shipping: bool,
+    ready: Arc<Mutex<bool>>,
 }
 
 impl AgentClient {
     /// Pair a computer with a locally verified artifact; this does not contact it.
     pub fn new(computer: Computer, artifact: AgentArtifact) -> Self {
-        Self { computer, artifact }
+        Self { computer, artifact, allow_shipping: true, ready: Arc::new(Mutex::new(false)) }
+    }
+
+    /// Use only an already installed, pinned agent. Exit 87 or an old handshake refuses;
+    /// this policy never prepares a cache, invokes SCP, or changes a remote file.
+    pub fn existing(computer: Computer, artifact: AgentArtifact) -> Self {
+        Self { allow_shipping: false, ..Self::new(computer, artifact) }
     }
 
     /// Check SHA-256 and handshake before every use. Exit 87 permits exactly one upload to
@@ -83,7 +102,12 @@ impl AgentClient {
             _ = tokio::time::sleep_until(options.deadline) => return Err(Failure::new(Cause::Timeout, "shipping deadline exceeded")),
             lease = self.computer.shipping_lock() => lease,
         };
-        self.ensure_locked(options).await
+        self.artifact.verify()?;
+        let mut ready = self.ready.lock().await;
+        if *ready { return Ok(()); }
+        self.ensure_locked(options).await?;
+        *ready = true;
+        Ok(())
     }
 
     async fn ensure_locked(&self, options: &CallOptions) -> Result<(), Failure> {
@@ -108,6 +132,9 @@ impl AgentClient {
         }
         if output.code != Some(EXIT_AGENT_MISSING) {
             return Err(Failure::new(Cause::AgentMismatch, "agent launcher failed"));
+        }
+        if !self.allow_shipping {
+            return Err(Failure::new(Cause::AgentMismatch, "existing agent missing or damaged"));
         }
         let prepared = self
             .computer
@@ -188,6 +215,58 @@ impl AgentClient {
             self.launcher("run")
         };
         let output = self.computer.execute(&argv, &input, options).await?;
+        if output.code == Some(EXIT_AGENT_MISSING) { *self.ready.lock().await = false; }
+        self.events(request, output)
+    }
+
+    /// Same verified call with bounded later stdin frames. Validated progress is streamed;
+    /// terminal events are returned only after the child exits and all output is checked.
+    pub async fn call_controlled(
+        &self,
+        request: &Request,
+        options: &CallOptions,
+        controls: mpsc::Receiver<Vec<u8>>,
+        progress: mpsc::Sender<Event>,
+    ) -> Result<Vec<Event>, Failure> {
+        request.validate()?;
+        self.ensure(options).await?;
+        let mut input = serde_json::to_vec(request).map_err(|_| Failure::new(Cause::Refused, "request encoding failed"))?;
+        if input.len() >= frame_cap(&request.verb) { return Err(Failure::new(Cause::OutputTooLarge, "agent request cap exceeded")); }
+        input.push(b'\n');
+        let argv = if matches!(self.computer.config.transport, TransportConfig::Local) {
+            vec![self.artifact.path.as_os_str().into()]
+        } else { self.launcher("run") };
+        let (sender, mut chunks) = mpsc::channel(4);
+        let execute = self.computer.execute_controlled(&argv, &input, options, controls, sender);
+        tokio::pin!(execute);
+        let mut buffer = Vec::new();
+        let mut terminal = false;
+        let mut output = None;
+        loop {
+            tokio::select! {
+                result = &mut execute, if output.is_none() => { output = Some(result?); },
+                chunk = chunks.recv() => {
+                    let Some(chunk) = chunk else { break; };
+                    buffer.extend(chunk);
+                    while let Some(n) = buffer.iter().position(|c| *c == b'\n') {
+                        if terminal || n >= frame_cap(&request.verb) { return Err(Failure::new(Cause::AgentMismatch, "invalid agent event ordering or size")); }
+                        let event: Event = serde_json::from_slice(&buffer[..n]).map_err(|_| Failure::new(Cause::AgentMismatch, "invalid agent event JSON"))?;
+                        check_event(request, &event)?;
+                        terminal = !matches!(event, Event::Progress { .. });
+                        if !terminal { progress.send(event).await.map_err(|_| Failure::new(Cause::Cancelled, "agent receiver closed"))?; }
+                        buffer.drain(..=n);
+                    }
+                    if buffer.len() >= frame_cap(&request.verb) { return Err(Failure::new(Cause::OutputTooLarge, "agent event cap exceeded")); }
+                }
+            }
+        }
+        let output = match output { Some(output) => output, None => execute.await? };
+        if output.code == Some(EXIT_AGENT_MISSING) { *self.ready.lock().await = false; }
+        self.events(request, output)
+    }
+
+    fn events(&self, request: &Request, output: ProcessOutput) -> Result<Vec<Event>, Failure> {
+        let cap = frame_cap(&request.verb);
         let mut events = Vec::new();
         let mut terminal = false;
         for line in output
@@ -281,4 +360,14 @@ if [ '{mode}' = run ]; then exec "$f"; else exec "$f" --version; fi"#
             vec!["sh".into(), "-c".into(), script.into()]
         }
     }
+}
+
+fn check_event(request: &Request, event: &Event) -> Result<(), Failure> {
+    let (protocol, id) = match event {
+        Event::Progress { protocol, id, .. } | Event::Result { protocol, id, .. } | Event::Failure { protocol, id, .. } => (protocol, id),
+    };
+    if *protocol != PROTOCOL_VERSION || id != &request.id {
+        return Err(Failure::new(Cause::AgentMismatch, "agent event correlation mismatch"));
+    }
+    Ok(())
 }
