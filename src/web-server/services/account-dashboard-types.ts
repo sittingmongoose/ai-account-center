@@ -228,6 +228,8 @@ export interface CodexAutoSwitchDashboardStatus {
 export interface DashboardServerInfo {
   version: string;
   commit: string | null;
+  /** D7: the screens this server builds itself (`home`: GET /api/views/home). Absent when it builds none. */
+  views?: string[];
 }
 
 export interface AccountDashboard {

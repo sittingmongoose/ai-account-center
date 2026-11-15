@@ -418,15 +418,8 @@ pub struct HeadlineCounts {
     pub stale_sources: u32,
 }
 
-/// A piece of a line with its own weight and tone ("**3 questions** for you").
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Run {
-    #[serde(deserialize_with = "nullable")]
-    pub text: String,
-    pub strong: bool,
-    pub tone: Option<String>,
-}
+/// A piece of a line with its own weight and tone ("**3 questions** for you"): aac-api's, which Home's server view writes.
+pub use aac_api::home::Run;
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

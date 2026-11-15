@@ -165,8 +165,10 @@ dependencies = [
 name = "aac-views"
 version = "0.1.0"
 dependencies = [
+ "aac-api",
  "aac-core",
  "aac-status",
+ "serde",
  "serde_json",
 ]
 

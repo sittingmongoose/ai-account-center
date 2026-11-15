@@ -994,6 +994,20 @@
     "milestone": "M3"
   },
   {
+    "method": "GET",
+    "path": "/api/views/home",
+    "roles": [
+      "signed-out",
+      "session",
+      "device",
+      "bar",
+      "hub"
+    ],
+    "handlerFile": "src/web-server/routes/home-view-routes.ts",
+    "writes": false,
+    "milestone": "M3"
+  },
+  {
     "method": "ALL",
     "path": "/v0/management/{*splat}",
     "roles": [

@@ -12,7 +12,7 @@
 // ms}), `chrome` ({statusLead, statusStrong, statusMore}) and `signed-out` ({state: 'expired'|'default', reason}).
 // Until the first answer nothing is sent for Home but the chrome's "Refreshing": the page shows its loading state,
 // never zeros.
-import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel, isCatalogPending } from './view-model.mjs';
+import { dashboardViewModel, detailsViewModel, chromeView, updateViewModel, intervalLabel, parseIntervalLabel, isCatalogPending, homeFormatProbe } from './view-model.mjs';
 import { needToasts } from './claude-signins.mjs';
 import { accountsViewModel } from './accounts-view.mjs';
 import { transportOf } from './transport.mjs';
@@ -21,9 +21,14 @@ import { createAccountsController } from './accounts-controller.mjs';
 import { signOutFailureText, copyText } from './account-actions.mjs';
 import { createClaudeOpen, openProgress } from './claude-open.mjs';
 import { PAGE_ACTIONS } from './frame-seam.mjs';
-import { setDisplayTimeZone } from './time-format.mjs';
+import { setDisplayTimeZone, getDisplayTimeZone } from './time-format.mjs';
 import { installRow as installRowFor, isAppleMobile } from './device.mjs';
 
+/** D7: this browser last read a dashboard answer that offered the server's Home view (GET /api/views/home). */
+const HOME_VIEW_KEY = 'aac.homeServerView';
+function readHomeOffer(storage) {
+  try { return storage?.getItem(HOME_VIEW_KEY) === '1'; } catch { return false; }
+}
 /** Below this window width Details takes one Back entry (bridge.js belowD). */
 export const OVERLAY_HISTORY_BELOW = 1280;
 /** The frame's own commands (frame.rs): Refresh, Update apps and Sign out from the header. */
@@ -73,6 +78,12 @@ export function createFrameDashboard({
   let data = null;
   let profiles = [];
   let antigravityInventory = null;
+  // D7: the server builds Home (GET /api/views/home) when its dashboard answer says so (`server.views`); the page
+  // then makes that one read, and draws the server's view while no Claude Open runs and the page's context is the one
+  // the view was built for. Otherwise, or when the server declines (view null), it builds its own as before. The offer
+  // is remembered (HOME_VIEW_KEY), so the first read after a reload asks too; nothing is stored while it is off.
+  let homeOffered = readHomeOffer(storage);
+  let serverHome = null;
   let updateJob = null;
   let updateStatusPending = false;
   let updateCompletionId = null;
@@ -249,10 +260,28 @@ export function createFrameDashboard({
   function context(extra = {}) {
     return { profiles, platform, antigravityInventory, refreshing: !!refreshing && extra.refreshing !== false, intervalSeconds: refreshIntervalSeconds, username, host, openProgress: openProgress(claudeOpen.views(), profiles), ...extra };
   }
+  /** What only this page knows for the server's Home view (aac-api `HomeContext`). */
+  function homeContext() {
+    return { now: now(), timeZone: getDisplayTimeZone(), platform, intervalSeconds: refreshIntervalSeconds, username, host, formatProbe: homeFormatProbe() };
+  }
+  /** The server's view is the page's only for the context it was built in (the clock aside: it was read just now). */
+  function sameHomeContext(sent) {
+    const { now: _sent, ...was } = sent;
+    const { now: _now, ...is } = homeContext();
+    return JSON.stringify(was) === JSON.stringify(is);
+  }
+  function rememberHomeOffer(offered) {
+    homeOffered = offered;
+    try { if (offered) storage?.setItem(HOME_VIEW_KEY, '1'); else storage?.removeItem(HOME_VIEW_KEY); } catch {}
+  }
   function render() {
     if (!data || stopped) return;
     for (const item of needToasts(data, seenSignInNeeds)) toast(item.kind, item.title, item.body, 20000);
-    pushModel('dashboard', JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))));
+    // The server's view is for the answer it came with, the page's context it was built in and no Open in progress:
+    // drawn once, right after that read.
+    const built = serverHome && serverHome.data === data && openProgress(claudeOpen.views(), profiles).size === 0 && sameHomeContext(serverHome.context) ? serverHome.json : null;
+    serverHome = null;
+    pushModel('dashboard', built ?? JSON.stringify(dashboardViewModel(data, context({ refreshing: false }))));
     if (openDetailsId) renderDetails(openDetailsId);
     renderAccounts();
   }
@@ -313,14 +342,35 @@ export function createFrameDashboard({
     renderChrome(true);
     const operation = (async () => {
       try {
-        const [next, inventory, antigravityProfiles] = await Promise.all([
-          request(`/api/accounts/dashboard?platform=${platform}&refresh=${force}`),
-          request('/api/claude/desktop-profiles').catch(() => ({ profiles })),
-          request('/api/antigravity/profiles').catch(() => null),
-          gate,
-        ]);
+        let reply = null;
+        let sent = null;
+        if (homeOffered) {
+          // The first read waits for the saved time zone and interval: the server builds the view in them.
+          if (gate) await gate;
+          sent = homeContext();
+          try {
+            reply = await request(`/api/views/home?platform=${platform}&refresh=${force}`, { headers: { 'X-AAC-Home-Context': encodeURIComponent(JSON.stringify(sent)) } });
+          } catch (error) {
+            // A sign-out, a dropped session or no connection is the refresh's answer. Anything else (the server stopped
+            // offering it after a restart with the switch off, or it could not answer this time): read the three
+            // answers as before, and ask for the server's view again once a dashboard answer offers it.
+            if (gone() || error?.network || error?.status === 401) throw error;
+            rememberHomeOffer(false);
+          }
+        }
+        if (reply && (reply.schemaVersion !== 1 || !reply.dashboard)) throw new Error('Unsupported account dashboard response.');
+        const [next, inventory, antigravityProfiles] = reply
+          ? [reply.dashboard, Array.isArray(reply.profiles) ? { profiles: reply.profiles } : { profiles }, reply.antigravity ?? null]
+          : await Promise.all([
+            request(`/api/accounts/dashboard?platform=${platform}&refresh=${force}`),
+            request('/api/claude/desktop-profiles').catch(() => ({ profiles })),
+            request('/api/antigravity/profiles').catch(() => null),
+            gate,
+          ]);
         if (generation !== refreshGeneration || !authenticated) return;
         if (next?.schemaVersion !== 1 || !Array.isArray(next.accounts)) throw new Error('Unsupported account dashboard response.');
+        rememberHomeOffer(Array.isArray(next.server?.views) && next.server.views.includes('home'));
+        serverHome = reply?.view && typeof reply.view === 'object' && !Array.isArray(reply.view) ? { data: next, json: JSON.stringify(reply.view), context: sent } : null;
         serverData = next;
         data = next;
         // The server accepted the session just now: a later sign-out within the lifetime ended early.

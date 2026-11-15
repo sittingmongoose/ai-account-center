@@ -17,5 +17,6 @@
   { "method": "GET", "path": "/api/codex/profiles/quotas", "owner": "rust" },
   { "method": "GET", "path": "/api/antigravity/profiles", "owner": "rust" },
   { "method": "GET", "path": "/api/antigravity/profiles/quotas", "owner": "rust" },
+  { "method": "GET", "path": "/api/views/home", "owner": "rust" },
   { "method": "*", "path": "*", "owner": "ts-fallback" }
 ]

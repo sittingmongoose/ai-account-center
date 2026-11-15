@@ -155,6 +155,7 @@ async fn route(State(state): State<AppState>, req: Request) -> Response {
         | "/api/accounts/preferences"
         | "/api/accounts/registry"
         | "/api/accounts/analytics"
+        | "/api/views/home"
             if !principal.dashboard_session() =>
         {
             (
@@ -166,9 +167,8 @@ async fn route(State(state): State<AppState>, req: Request) -> Response {
         "/api/accounts/visibility"
         | "/api/accounts/preferences"
         | "/api/accounts/registry"
-        | "/api/accounts/analytics" => {
-            crate::read_routes::answer(req, state.0.ccs_dir.clone()).await
-        }
+        | "/api/accounts/analytics"
+        | "/api/views/home" => crate::read_routes::answer(req, state.0.ccs_dir.clone()).await,
         // The two GETs a paired device may call (the TS /api guard's device scope), then the
         // four that need the signed-in dashboard session.
         "/api/claude/desktop-profiles" | "/api/antigravity/profiles"
@@ -300,6 +300,7 @@ pub async fn serve(
                         | "/api/codex/profiles/quotas"
                         | "/api/antigravity/profiles"
                         | "/api/antigravity/profiles/quotas"
+                        | "/api/views/home"
                 )
             {
                 return Err(failure());

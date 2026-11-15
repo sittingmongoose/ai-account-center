@@ -197,15 +197,23 @@ function fingerprintInputs(root, inputs, label, relativePath = path) {
   return { sha256: hash.digest('hex'), files: files.length };
 }
 
-/** Fingerprint the Leptos app and its shared computer registry (public/computers.json). */
+/**
+ * Fingerprint the Leptos app, its shared computer registry (public/computers.json) and the view types it shares with
+ * the Rust server (crates/aac-api and the workspace manifest it inherits from, D7).
+ */
 function leptosFingerprint(leptosCrate) {
-  // Validate the crate itself before widening the root to include the shared registry.
+  // Validate the crate itself before widening the root to include the shared inputs.
   fingerprintInputs(leptosCrate, LEPTOS_INPUTS, 'Leptos');
+  const web = path.dirname(leptosCrate);
+  const crate = `${path.basename(web)}/${path.basename(leptosCrate)}`;
   return fingerprintInputs(
-    path.dirname(leptosCrate),
+    path.dirname(web),
     [
-      ...LEPTOS_INPUTS.map((input) => `${path.basename(leptosCrate)}/${input}`),
-      'public/computers.json',
+      ...LEPTOS_INPUTS.map((input) => `${crate}/${input}`),
+      `${path.basename(web)}/public/computers.json`,
+      'Cargo.toml',
+      'crates/aac-api/Cargo.toml',
+      'crates/aac-api/src',
     ],
     'Leptos'
   );

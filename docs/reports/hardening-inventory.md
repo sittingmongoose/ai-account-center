@@ -10,8 +10,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 | Sync fs files affected (all) | 110 |
 | Sync fs occurrences (runtime hotpaths) | 538 |
 | Sync fs files affected (runtime hotpaths) | 60 |
-| Legacy shim markers | 201 |
-| Legacy shim files affected | 60 |
+| Legacy shim markers | 208 |
+| Legacy shim files affected | 61 |
 
 ## Top Runtime Hotpath Sync fs Files
 
@@ -32,8 +32,8 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | File | Marker Count |
 |---|---:|
+| `src/web-server/rust-service.ts` | 27 |
 | `src/commands/bar/__tests__/native-app-paths.test.ts` | 24 |
-| `src/web-server/rust-service.ts` | 21 |
 | `src/web-server/usage/account-activity-collector.ts` | 20 |
 | `src/utils/config-manager.ts` | 13 |
 | `src/web-server/services/app-update-service.ts` | 9 |
@@ -51,11 +51,11 @@ Scope: `src/**/*.{ts,tsx,js,jsx,mjs,cjs}`
 
 | Metric | Value |
 |---|---:|
-| typed-error adoption (typed/total throws) | 32.3% (212/656) |
+| typed-error adoption (typed/total throws) | 32.4% (213/657) |
 | typed-error adoption (P4 locked subdomains) | 0.0% (0/0), target 40% |
 | hotpath console.error/warn occurrences | 54 (223 total, 169 CLI-UX exempt) |
 | hotpath console.error/warn files | 12 |
-| files with createLogger | 44/442 |
+| files with createLogger | 44/445 |
 | subdomains with zero createLogger | 10 (antigravity, bin, config, cursor, management, shared, status-native, targets, types, utils) |
 | files > 400 LOC | 61 |
 | files > 600 LOC | 23 |

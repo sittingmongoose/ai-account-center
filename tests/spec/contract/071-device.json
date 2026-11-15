@@ -1,20 +1,19 @@
 {
   "request": {
-    "method": "ALL",
-    "path": "/v0/management/fixture-missing",
-    "role": "device",
-    "body": {}
+    "method": "GET",
+    "path": "/api/views/home",
+    "role": "device"
   },
   "response": {
     "body": {
-      "code": "invalid_management_key",
-      "error": "The management key is not valid."
+      "code": "device_scope",
+      "error": "This action needs a signed-in dashboard session."
     },
     "headers": {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
       "etag": "<etag>"
     },
-    "status": 401
+    "status": 403
   }
 }

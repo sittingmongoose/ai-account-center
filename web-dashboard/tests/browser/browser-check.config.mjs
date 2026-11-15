@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { startRustBuilder } from './rust-home-builder.mjs';
 
 export default (ctx) => {
 	const root = ctx.args.repo ? path.resolve(ctx.args.repo) : path.resolve(ctx.configDir, '..', '..', '..');
@@ -15,6 +16,16 @@ export default (ctx) => {
 		throw new Error(`no built dashboard in ${root}/dist: run bun run build:server, and build or copy dist/ui (see web-dashboard/tests/browser/README.md)`);
 	}
 	if (ctx.fleet) throw new Error('--host: the dashboard listens on 127.0.0.1 and setup is loopback-only, so a browser on another machine can\'t use it. Run from a checkout on that machine.');
+	// D7 switch: `--set rustHome=1` runs the server with the Rust service and its Home view on (AAC_RUST_SERVICE=on,
+	// AAC_RUST_HOME_VIEW=on) and the binary in dist/native/aac-http, or `--set rustBinary=<path>`. Off by default, and
+	// then explicitly off, so a shell variable cannot turn it on unseen.
+	const rustHome = !!ctx.args.rustHome && ctx.args.rustHome !== '0';
+	const rustBinary = path.resolve(String(ctx.args.rustBinary || path.join(root, 'dist', 'native', 'aac-http')));
+	if (rustHome && !fs.existsSync(rustBinary)) throw new Error(`rustHome: no aac-http binary at ${rustBinary} (build it on a build host: cargo build --release --locked -p aac-http)`);
+	let builder = null;
+	/** Per page: the Home inputs a check stubbed (path -> JSON). */
+	const homeStubs = new WeakMap();
+	const HOME_INPUTS = new Set(['/api/accounts/dashboard', '/api/claude/desktop-profiles', '/api/antigravity/profiles']);
 	return {
 		name: 'aac',
 		async setup() {
@@ -46,6 +57,9 @@ export default (ctx) => {
 				const { writeScoreboardFixture } = await import(pathToFileURL(path.join(root, 'scripts', 'scoreboard-fixture.mjs')).href);
 				writeScoreboardFixture(reports);
 			}
+			// D7 (`--set rustHome=1`): the kit's own Rust service builds Home from the data checks stub in the page
+			// (rust-home-builder.mjs); the server under test never sees that data.
+			if (rustHome) builder = await startRustBuilder(rustBinary, root);
 			return { home, reports, port: +ctx.args.port || (await ctx.freePort()) };
 		},
 		// CCS_HOME alone is not enough: some provider collectors read the real home (CLI logins, usage files, ssh keys
@@ -55,9 +69,18 @@ export default (ctx) => {
 			env: { CCS_HOME: s.home, HOME: s.home, USERPROFILE: s.home, APPDATA: path.join(s.home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(s.home, 'AppData', 'Local'), XDG_CONFIG_HOME: path.join(s.home, '.config'), XDG_DATA_HOME: path.join(s.home, '.local', 'share'), XDG_STATE_HOME: path.join(s.home, '.local', 'state'), XDG_CACHE_HOME: path.join(s.home, '.cache'), CODEX_HOME: path.join(s.home, '.codex'), CLAUDE_CONFIG_DIR: path.join(s.home, '.claude'), AAC_AGENT_REPORTS_DIR: s.reports, AAC_PM_MAIL_REGISTRY_DIR: path.join(s.reports, 'pm-mail-registry'), AAC_STATUS_DOORBELL: 'off',
 				// `--set realPins=1`: this machine's real T3 pins, opened read-only by the status module (the other machines'
 				// pins come over ssh, set up above).
-				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}) }
+				...(ctx.args.realPins ? { AAC_T3_STATE_DB: path.join(os.homedir(), '.t3', 'userdata', 'statev2.sqlite') } : {}),
+				...(rustHome
+					? { AAC_RUST_SERVICE: 'on', AAC_RUST_HOME_VIEW: 'on', AAC_RUST_SERVICE_BINARY: rustBinary }
+					: { AAC_RUST_SERVICE: 'off', AAC_RUST_HOME_VIEW: 'off' }) }
 		}),
 		async teardown(_, s) {
+			if (builder) {
+				// what the kit's Rust service did with the stubbed Home data, for the run's report
+				fs.writeFileSync(path.join(ctx.dir, 'rust-home.json'), `${JSON.stringify(builder.stats, null, 1)}\n`);
+				builder.stop();
+				builder = null;
+			}
 			if (!s || !s.home) return;
 			// The realPins link to ~/.ssh goes first, by itself, so removing the home can never reach the real folder.
 			const ssh = path.join(s.home, '.ssh');
@@ -70,7 +93,7 @@ export default (ctx) => {
 		// A video with preload="metadata" stops its own request once it has the metadata (net::ERR_ABORTED).
 		failedRequests: { fail: false, allow: [/\/api\/status\/files\/.*\.(mp4|webm)\b/] },
 		// Each test starts with no API stubs: accounts-clicks' synthetic accounts must not reach smoke's empty Home, even after a test that threw
-		async beforeEach(t) { await t.page.unrouteAll({ behavior: 'ignoreErrors' }); },
+		async beforeEach(t) { await t.page.unrouteAll({ behavior: 'ignoreErrors' }); homeStubs.delete(t.page); },
 		helpers: {
 			// Sign in for real: on an unconfigured home, loopback setup turns dashboard sign-in on and starts a session
 			// (POST /api/auth/setup); afterwards the same credentials sign in. Cookies land in this page's context.
@@ -96,8 +119,45 @@ export default (ctx) => {
 				else await t.until(`${page} ready (sign-in page)`, () => !!document.querySelector('.signin-page input[name="username"]'), null, { timeout: 60000, hard: true });
 				return true;
 			},
-			// Synthetic API answers (shape them like src/web-server/services/*-types.ts; made-up names only)
-			async stub(t, apiPath, json) { await t.page.route((u) => new URL(u).pathname === apiPath, (r) => r.fulfill({ json })); },
+			// Synthetic API answers (shape them like src/web-server/services/*-types.ts; made-up names only). With
+			// `--set rustHome=1`, Home's three answers also feed GET /api/views/home: the dashboard offers the server
+			// view (and the page is told it was offered before, so its first read asks), and the kit's Rust service
+			// builds that view from the stubbed data (startRustBuilder above).
+			async stub(t, apiPath, json) {
+				if (!builder || !HOME_INPUTS.has(apiPath)) {
+					await t.page.route((u) => new URL(u).pathname === apiPath, (r) => r.fulfill({ json }));
+					return;
+				}
+				let stubs = homeStubs.get(t.page);
+				if (!stubs) {
+					stubs = new Map();
+					homeStubs.set(t.page, stubs);
+					await t.page.addInitScript(() => { try { localStorage.setItem('aac.homeServerView', '1'); } catch {} });
+					await t.page.route((u) => new URL(u).pathname === '/api/views/home', async (route) => {
+						const request = route.request();
+						const url = new URL(request.url());
+						const read = async (p) => {
+							if (stubs.has(p)) return stubs.get(p);
+							// the page's own request headers, cookie included, to the real route
+							const answer = await route.fetch({ url: new URL(p, url).href });
+							return answer.ok() ? answer.json() : null;
+						};
+						const json = await builder.reply({
+							dashboard: await read('/api/accounts/dashboard'),
+							profiles: (await read('/api/claude/desktop-profiles'))?.profiles ?? null,
+							antigravity: await read('/api/antigravity/profiles'),
+							contextHeader: request.headers()['x-aac-home-context'],
+							platform: url.searchParams.get('platform') ?? 'mac',
+						});
+						await route.fulfill({ json });
+					});
+				}
+				const offered = apiPath === '/api/accounts/dashboard' ? builder.offered(json) : json;
+				stubs.set(apiPath, offered);
+				await t.page.route((u) => new URL(u).pathname === apiPath, (r) => r.fulfill({ json: offered }));
+			},
+			/** `--set rustHome=1`: what the kit's Rust service built and refused so far (null with the switch off). */
+			rustHome() { return builder ? structuredClone(builder.stats) : null; },
 			// Details reads each account's reset inventory (GET /api/accounts/<id>/reset-claims). A server without the
 			// native reset backend (the VM) answers 503; this answers as a backend with nothing to report ('unavailable'),
 			// so Details draws the dashboard's own reset rows, as on that 503, without a console error. For checks of

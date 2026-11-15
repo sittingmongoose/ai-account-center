@@ -7,53 +7,16 @@
 //! moves from the one before, at once. Every move uses the non-overshooting ease-out `cubic-bezier(0.2, 0.8, 0.2, 1)`:
 //! the fill never shows more than the reading, not even for a frame. Nothing runs once a move has settled.
 
-use crate::api::nullable;
 use leptos::prelude::*;
-use serde::Deserialize;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::Closure;
 
-/// One window's reading as view-model.mjs `meterView` words it (view model v2, `MeterView`). `key` empty is an
-/// intentionally empty slot (a Pro account in the Fable column); `has_value` false is a real window with no reading.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct MeterView {
-    #[serde(deserialize_with = "nullable")]
-    pub key: String,
-    #[serde(deserialize_with = "nullable")]
-    pub label: String,
-    #[serde(deserialize_with = "nullable")]
-    pub full_label: String,
-    pub has_value: bool,
-    pub value: Option<f64>,
-    #[serde(deserialize_with = "nullable")]
-    pub value_text: String,
-    #[serde(deserialize_with = "nullable")]
-    pub over_text: String,
-    #[serde(deserialize_with = "nullable")]
-    pub reset: String,
-    #[serde(deserialize_with = "nullable")]
-    pub reset_exact: String,
-    pub reset_soon: bool,
-    #[serde(deserialize_with = "nullable")]
-    pub na_text: String,
-    #[serde(deserialize_with = "nullable")]
-    pub na_sub: String,
-    #[serde(deserialize_with = "nullable")]
-    pub amount: String,
-    #[serde(deserialize_with = "nullable")]
-    pub left: String,
-    #[serde(deserialize_with = "nullable")]
-    pub sampled: String,
-    #[serde(deserialize_with = "nullable")]
-    pub source: String,
-    #[serde(deserialize_with = "nullable")]
-    pub caption: String,
-    #[serde(deserialize_with = "nullable")]
-    pub caption_tip: String,
-}
+/// One window's reading as view-model.mjs `meterView` words it (aac-api `MeterView`, shared with the Rust server). `key`
+/// empty is an intentionally empty slot (a Pro account in the Fable column); `has_value` false is a real window with
+/// no reading.
+pub use aac_api::home::MeterView;
 
 /// Severity of a used share (theme.slint `severity`): calm under 80, warn from 80, crit from 95, over past 100.
 pub fn severity_of(used: f64) -> &'static str {

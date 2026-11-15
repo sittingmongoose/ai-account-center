@@ -1,7 +1,10 @@
 import type { Request, Response, Router } from 'express';
 import { createApiRouter } from './api-router';
 import { authKind } from '../middleware/request-auth';
-import type { AntigravityApiDependencies } from '../../antigravity/usage-contract';
+import type {
+  AntigravityApiDependencies,
+  AntigravityInventory,
+} from '../../antigravity/usage-contract';
 import { publicDashboardAccount } from '../../antigravity/usage-normalization';
 import { publicInventory, publicQuotas } from '../../antigravity/public-reads';
 import { composeWithRust } from '../rust-service';
@@ -13,6 +16,21 @@ import {
 } from '../rust-profile-input';
 
 export { publicDashboardAccount as publicAccount, publicInventory, publicQuotas };
+
+/**
+ * GET /profiles' answer for the runtime's inventory: the runtime owns the read; the M3 Rust
+ * service may compose the public copy. GET /api/views/home (D7) composes Home's copy the same way.
+ */
+function publicInventoryAnswer(req: Request, res: Response, inventory: AntigravityInventory) {
+  return composeWithRust(
+    req,
+    res,
+    '/api/antigravity/profiles',
+    () => rustAntigravityInventoryInput(inventory),
+    () => publicInventory(inventory),
+    isRustAntigravityInventory
+  );
+}
 
 /** A browser session, or a paired device token on a tray route (the /api guard checks scope). */
 function authenticated(req: Request, res: Response): boolean {
@@ -38,18 +56,7 @@ export function createAntigravityRouter(
       return;
     }
     try {
-      // The runtime owns the read; the M3 Rust service may compose the public copy.
-      const inventory = await deps.getInventory();
-      res.json(
-        await composeWithRust(
-          req,
-          res,
-          '/api/antigravity/profiles',
-          () => rustAntigravityInventoryInput(inventory),
-          () => publicInventory(inventory),
-          isRustAntigravityInventory
-        )
-      );
+      res.json(await publicInventoryAnswer(req, res, await deps.getInventory()));
     } catch {
       res.status(500).json({ error: 'Antigravity accounts could not be read safely.' });
     }
@@ -88,12 +95,23 @@ export function createAntigravityRouter(
 
 import { getAntigravityRuntime } from '../../antigravity/runtime-service';
 
-export default createAntigravityRouter({
-  getInventory: async () =>
+/** The runtime's inventory, or the empty Ubuntu one when no runtime runs. */
+async function runtimeInventory(): Promise<AntigravityInventory> {
+  return (
     getAntigravityRuntime()?.getInventory() ?? {
       schemaVersion: 1,
       hostId: 'ubuntu',
       profiles: [],
-    },
+    }
+  );
+}
+
+/** Home's Antigravity inventory (D7): GET /profiles' answer, composed the same way. */
+export async function readAntigravityInventory(req: Request, res: Response): Promise<unknown> {
+  return publicInventoryAnswer(req, res, await runtimeInventory());
+}
+
+export default createAntigravityRouter({
+  getInventory: runtimeInventory,
   getAccounts: (options) => getAntigravityRuntime()?.getAccounts(options) ?? Promise.resolve([]),
 });

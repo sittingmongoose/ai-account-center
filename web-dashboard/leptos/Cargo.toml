@@ -12,6 +12,8 @@ license = "MIT"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# The view types the Rust server writes (D7): a shape drift between server and page is a compile error.
+aac-api = { path = "../../crates/aac-api" }
 leptos = { version = "=0.9.0-rc1", features = ["csr"] }
 wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "=0.4.80"

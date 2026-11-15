@@ -1,0 +1,13 @@
+{
+  "decline/case-map": "case-map",
+  "decline/collation": "collation",
+  "decline/date": "date",
+  "decline/date-only": "date",
+  "decline/facts": "fact",
+  "decline/locale": "locale",
+  "decline/open-progress": "open-progress",
+  "decline/proto-key": "proto-key",
+  "decline/shape-no-accounts": "shape",
+  "decline/shape-null-account": "shape",
+  "decline/type": "type"
+}

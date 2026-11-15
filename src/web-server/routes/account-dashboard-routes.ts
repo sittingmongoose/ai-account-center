@@ -6,6 +6,7 @@ import {
   type AccountDashboardRequestContext,
 } from '../services/account-dashboard-service';
 import { isSecureTransport } from '../middleware/secure-transport';
+import { withOfferedViews } from '../views/offered-views';
 import type {
   AccountDashboard,
   ClaudeDashboardPlatform,
@@ -39,10 +40,13 @@ export function createAccountDashboardRouter(deps: AccountDashboardRouterDeps = 
     res.setHeader('Cache-Control', 'no-store');
     try {
       res.json(
-        await (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
-          // providers[].signIn: flows that carry a key or code need a secure transport.
-          secureTransport: isSecureTransport(req),
-        })
+        withOfferedViews(
+          await (deps.getDashboard ?? getAccountDashboard)(platform, refresh === 'true', {
+            // providers[].signIn: flows that carry a key or code need a secure transport.
+            secureTransport: isSecureTransport(req),
+          }),
+          res
+        )
       );
     } catch {
       res.status(500).json({ error: 'Account usage could not be read safely.' });

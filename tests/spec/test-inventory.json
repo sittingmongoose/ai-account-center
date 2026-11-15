@@ -111,6 +111,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-api/src/home.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-api/src/lib.rs",
       "kind": "internal",
       "evidence": [],
@@ -192,9 +198,10 @@
     },
     {
       "file": "crates/aac-http/tests/socket.rs",
-      "kind": "internal",
-      "evidence": [],
-      "behaviourTest": "uncovered"
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
     },
     {
       "file": "crates/aac-protocol/tests/protocol.rs",
@@ -235,6 +242,12 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "crates/aac-views/src/home/windows.rs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
       "file": "crates/aac-views/src/js.rs",
       "kind": "internal",
       "evidence": [],
@@ -245,6 +258,13 @@
       "kind": "internal",
       "evidence": [],
       "behaviourTest": "uncovered"
+    },
+    {
+      "file": "crates/aac-views/tests/home_spec.rs",
+      "kind": "table",
+      "evidence": [
+        "table"
+      ]
     },
     {
       "file": "macos-bar/Sources/CCSBarApp/PanelSelfTest.swift",
@@ -2898,6 +2918,14 @@
       "behaviourTest": "uncovered"
     },
     {
+      "file": "tests/unit/web-server/home-view-routes.test.ts",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP",
+        "table"
+      ]
+    },
+    {
       "file": "tests/unit/web-server/hung-disk-deadlines.test.ts",
       "kind": "helper",
       "evidence": [
@@ -3823,6 +3851,13 @@
       ]
     },
     {
+      "file": "web-dashboard/tests/browser/checks/home-server-view.check.mjs",
+      "kind": "HTTP",
+      "evidence": [
+        "HTTP"
+      ]
+    },
+    {
       "file": "web-dashboard/tests/browser/checks/overlay-close.check.mjs",
       "kind": "HTTP",
       "evidence": [
@@ -3993,6 +4028,19 @@
       "kind": "safety",
       "evidence": [
         "safety"
+      ]
+    },
+    {
+      "file": "web-dashboard/tests/home-server-view.test.mjs",
+      "kind": "internal",
+      "evidence": [],
+      "behaviourTest": "uncovered"
+    },
+    {
+      "file": "web-dashboard/tests/home-view-spec.test.mjs",
+      "kind": "table",
+      "evidence": [
+        "table"
       ]
     },
     {

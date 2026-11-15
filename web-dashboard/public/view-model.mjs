@@ -104,15 +104,32 @@ const money = new Intl.NumberFormat(undefined, {
   currency: 'USD',
   maximumFractionDigits: 2,
 });
-const dateTime = lazyFormat({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-const clockTime = lazyFormat({ hour: 'numeric', minute: '2-digit' });
-const dayClock = lazyFormat({
-  weekday: 'short',
-  month: 'short',
-  day: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-});
+const DATE_TIME = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+const CLOCK_TIME = { hour: 'numeric', minute: '2-digit' };
+const DAY_CLOCK = { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+const dateTime = lazyFormat(DATE_TIME);
+const clockTime = lazyFormat(CLOCK_TIME);
+const dayClock = lazyFormat(DAY_CLOCK);
+/**
+ * What this browser's formatters write for fixed values (UTC instants), in order: two decimals, compact, money, the
+ * date and time, the clock, the day and clock, the day (claude-signins.mjs), and the collation of four letters. The
+ * server builds Home (aac-views::home) only when its en-US formatters write exactly these.
+ */
+export function homeFormatProbe() {
+  const utc = (options) => new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' });
+  const first = Date.UTC(2026, 0, 5, 0, 7);
+  const second = Date.UTC(2026, 0, 5, 13, 7);
+  return [
+    nf2.format(-1234.567),
+    nfCompact.format(1234567),
+    money.format(-1234.5),
+    utc(DATE_TIME).format(first),
+    utc(CLOCK_TIME).format(second),
+    utc(DAY_CLOCK).format(second),
+    utc({ month: 'short', day: 'numeric' }).format(first),
+    ['b', 'a', 'B', '_'].sort((a, b) => a.localeCompare(b)).join(''),
+  ];
+}
 const PLATFORM = { ...HOST_LABELS, linux: 'Linux' };
 
 export const platformLabel = (id) =>
