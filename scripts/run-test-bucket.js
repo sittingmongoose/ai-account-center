@@ -47,6 +47,8 @@ const slowTests = [
   'tests/unit/web-server/status/status-server-review.test.ts',
   // Spawns a stand-in Rust service on Unix sockets and waits on restart backoff timers.
   'tests/unit/web-server/rust-service-lifecycle.test.ts',
+  // R3 hosts a stand-in service on a Unix socket and exercises crash/restart timers.
+  'tests/unit/store/store-host.test.ts',
   // Binds loopback ports to compare the view writers through Express.
   'tests/unit/web-server/rust-view-reply.test.ts',
   // Reads package.json at the repo root.
