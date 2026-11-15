@@ -91,3 +91,25 @@ fn optional_time_bound_does_not_assert_that_unknown_log_roots_are_unread() {
         "a time cutoff has not established any unread log root"
     );
 }
+
+// Search-bound REVIEW-cheap M1: a forwarded candidate whose log lies below the reader's depth
+// cap must give the usage or say partial, never a complete empty read.
+#[test]
+fn deep_known_candidate_never_looks_complete() {
+    let home = tempfile::tempdir().unwrap();
+    let mut folder = home.path().join("z-lab/codex");
+    for _ in 0..65 {
+        folder = folder.join("d");
+    }
+    write(&folder.join("rollout-fixture.jsonl"), &rollout());
+    let unrelated = home.path().join("a-unrelated");
+    fs::create_dir(&unrelated).unwrap();
+    for n in 0..20_010 {
+        fs::write(unrelated.join(format!("file-{n:05}")), "").unwrap();
+    }
+    let answer = scan(home.path(), json!({}));
+    assert!(
+        answer["rows"].as_array().unwrap().iter().any(|r| r["i"] == 123) || answer["kinds"]["codex"]["partial"] == true,
+        "{answer}"
+    );
+}
