@@ -93,8 +93,7 @@ fn client(path: &std::path::Path, body: &str) {
 
 fn fixture_policy(root: &std::path::Path, bin: &std::path::Path) -> SshPolicy {
     let mut policy = SshPolicy::new(root.join("known_hosts"), root.join("control"));
-    policy.path =
-        Some(std::env::join_paths([bin, std::path::Path::new("/usr/bin")]).unwrap());
+    policy.path = Some(std::env::join_paths([bin, std::path::Path::new("/usr/bin")]).unwrap());
     policy
 }
 
