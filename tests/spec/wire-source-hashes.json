@@ -154,7 +154,7 @@
   "src/web-server/services/analytics-remote-transport.ts": "837b3b740cf000bc882d2379aaa446ca32b2ed54af8fe436115d01d78d24db14",
   "src/web-server/services/app-update-contract.ts": "aa506b28c9030a5969af88a3eeadd8fe4c898dd4ba971ebe96127ef4d44a3279",
   "src/web-server/services/app-update-diagnostics.ts": "70b7ea04cc46864ec89f56ec711699c0af9d852c93d7a758186cef946c34b9cd",
-  "src/web-server/services/app-update-service.ts": "f4ddede0f7399048f38094ca122ac543d4e568e2bb41a5774f2a0fb00459c346",
+  "src/web-server/services/app-update-service.ts": "b83d48b7061a0373ad2b8be5ce42916186426f1a5f99e2460e7724ebc0d60670",
   "src/web-server/services/claude-account-lifecycle.ts": "13cf7c476dc68ef2c148215825902f51c54a13cfa499bd2db3b813466c013f84",
   "src/web-server/services/claude-account-records.ts": "5e5c3c140fdbb6c889c0843ab83208828bec14e43519a9bf682a39587933be22",
   "src/web-server/services/claude-account-stores.ts": "0d153e5246d971af4fe1a7f4f194e7098513554b207ed178078d06bbb31b6439",
